@@ -204,6 +204,13 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const classification = forcedTier
       ? { kind: "classified" as const, tier: forcedTier, source: "inline" as const }
       : await getPipeline(ctx).classify(promptText);
+
+    // Always show classification result — helps debug binding issues.
+    if (classification.kind === "classified") {
+      const tag = classification.source === "inline" ? "!" : classification.source;
+      console.error(`[bifrost] classify: ${classification.tier} [${tag}]`);
+    }
+
     endClassify({ kind: classification.kind, tier: classification.kind !== "unclassified" ? classification.tier : undefined });
     uiDone(ctx);
 

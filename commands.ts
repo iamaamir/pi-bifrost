@@ -286,7 +286,10 @@ async function handleInit(
   log(ctx, `Bifrost active with ${Object.keys(state.config.models ?? {}).length} tier(s). Try a prompt.`);
 
   // Clear the init widget so it doesn't persist in the TUI.
-  if (ctx.hasUI) ctx.ui.setWidget("bifrost-output", []);
+  if (ctx.hasUI) {
+    ctx.ui.setWidget("bifrost-output", []);
+    ctx.ui.setWidget("bifrost-probe", []);
+  }
 }
 
 async function handleBenchmark(
@@ -492,6 +495,12 @@ export function createCommandRouter(
       } else if (ok.length > 0) {
         log(ctx, `All ${ok.length} models responded successfully.`);
       }
+
+      // Clear the probe widget so results don't persist in the TUI.
+      if (ctx.hasUI) {
+        ctx.ui.setWidget("bifrost-probe", []);
+        ctx.ui.setWidget("bifrost-output", []);
+      }
     }),
 
     // Init
@@ -541,7 +550,29 @@ export function createCommandRouter(
       );
     }),
 
-    // Preview
+    // Debug — show loaded config state
+    exact("debug", (_, ctx) => {
+      const rules = state.config.rules ?? [];
+      const tiers = Object.keys(state.config.models ?? {});
+      const lines = [
+        "--- config ---",
+        `cwd: ${process.cwd()}`,
+        `enabled: ${state.enabled}`,
+        `pinned: ${state.pinned}`,
+        `classifierEnabled: ${state.classifierEnabled}`,
+        `default: ${state.config.default}`,
+        `strategy: ${state.config.strategy}`,
+        `tiers: ${tiers.join(", ")}`,
+        `debug: ${JSON.stringify(state.config.debug)}`,
+        `cache: ${state.cacheEntries.length} entries`,
+        "",
+        `rules (${rules.length}):`,
+        ...rules.map((r, i) => `  ${i}: "${r.pattern}" → "${r.model}"`),
+        "---",
+      ];
+      uiOutput(ctx, lines);
+      log(ctx, "debug info printed above");
+    }),
     prefix("preview", (args, ctx) => handlePreview(args, ctx, state)),
   ];
 
