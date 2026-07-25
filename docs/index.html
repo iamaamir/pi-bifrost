@@ -306,8 +306,8 @@
             <p>All 7 strategies use model metadata — token cost, context size — not API calls. Every routing decision is free. No tokens burned on the router itself.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">📊 </span>Debug any routing decision</h3>
-            <p>JSONL trace logs which model was picked and why. Timestamps, classification source, tier, strategy. AI-parseable. If a surprise model fires, you can trace exactly why.</p>
+            <h3><span aria-hidden="true">📊 </span>Trace every routing decision</h3>
+            <p>JSONL log captures which model was picked and why. Timestamps, classification source, tier, strategy. AI-parseable. If a surprise model fires, you can trace exactly why.</p>
           </div>
           <div class="card">
             <h3><span aria-hidden="true">🎯 </span>Pin models to prompts</h3>
@@ -388,8 +388,9 @@
 
       <section aria-labelledby="commands-heading">
         <h2 id="commands-heading">Commands</h2>
+        <p>The most used commands for daily work. Full reference in <a href="https://github.com/iamaamir/pi-bifrost">README</a>.</p>
+
         <table>
-          <caption style="text-align:left; margin-bottom:8px; color:var(--muted); font-size:0.85rem">Bifrost slash commands</caption>
           <thead>
             <tr>
               <th scope="col">Command</th>
@@ -397,17 +398,12 @@
             </tr>
           </thead>
           <tbody>
-            <tr><td><code>/bifrost init</code></td><td>Probe models, generate config</td></tr>
-            <tr><td><code>/bifrost probe</code></td><td>Test which models actually respond</td></tr>
-            <tr><td><code>/bifrost preview &lt;prompt&gt;</code></td><td>See what would happen without sending</td></tr>
-            <tr><td><code>/bifrost on</code> / <code>off</code></td><td>Enable / disable routing</td></tr>
-            <tr><td><code>/bifrost pin</code> / <code>unpin</code></td><td>Lock current model / resume routing</td></tr>
+            <tr><td><code>/bifrost init</code></td><td>Probe models and write config — one-time setup</td></tr>
+            <tr><td><code>/bifrost preview &lt;prompt&gt;</code></td><td>See what model would be picked without sending</td></tr>
+            <tr><td><code>/bifrost on</code> / <code>off</code></td><td>Enable or disable routing</td></tr>
+            <tr><td><code>/bifrost pin</code> / <code>unpin</code></td><td>Lock current model / resume automatic routing</td></tr>
             <tr><td><code>/bifrost reload</code></td><td>Reload config after editing</td></tr>
-            <tr><td><code>/bifrost debug</code></td><td>Show loaded config, rules, and pipeline state</td></tr>
-            <tr><td><code>/bifrost cache stats</code></td><td>Show classification cache size</td></tr>
-            <tr><td><code>/bifrost cache clear</code></td><td>Clear classification cache</td></tr>
-            <tr><td><code>/bifrost classifier on</code> / <code>off</code></td><td>Enable / disable LLM classifier</td></tr>
-            <tr><td><code>/bifrost classifier status</code></td><td>Show classifier state and model</td></tr>
+            <tr><td><code>/bifrost classifier off</code></td><td>Disable LLM classifier, use regex only</td></tr>
             <tr><td><code>/bifrost</code></td><td>Show current status</td></tr>
           </tbody>
         </table>
