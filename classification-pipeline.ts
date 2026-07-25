@@ -59,7 +59,19 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
   async function classify(text: string): Promise<ClassificationResult> {
     if (tiers.length === 0) return { kind: "unclassified" };
 
-    // Stage 1: cache lookup
+    // Stage 1: pre-check regex for direct model references only
+    // Runs before cache — explicit bindings beat LLM or cached guesses.
+    {
+      const endPre = debugMeasure("pipeline", "regex_pre");
+      const pre = regexClassify(text, regexRules);
+      endPre({ match: !!pre, tier: pre });
+      if (pre && pre.includes("/") && !tiers.includes(pre)) {
+        debug("pipeline", "result", { source: "regex", tier: pre, direct: true });
+        return { kind: "classified", tier: pre, source: "regex" };
+      }
+    }
+
+    // Stage 2: cache lookup
     const endCache = debugMeasure("pipeline", "cache");
     const cached = cacheLookup(text);
     endCache({ hit: !!cached });
@@ -68,7 +80,7 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
       return { kind: "classified", tier: cached, source: "cache" };
     }
 
-    // Stage 2: LLM classifier — try each model in priority order
+    // Stage 3: LLM classifier — try each model in priority order
     for (const model of classifierModels) {
       try {
         const endLLM = debugMeasure("pipeline", "classifier.attempt");
