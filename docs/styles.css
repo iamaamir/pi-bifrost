@@ -621,10 +621,6 @@ th {
     flex-direction: column;
     padding: 0.7rem;
   }
-
-  .copy-button {
-    width: 100%;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
