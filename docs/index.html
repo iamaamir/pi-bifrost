@@ -275,6 +275,36 @@
         </div>
       </section>
 
+      <section aria-labelledby="privacy-heading">
+        <h2 id="privacy-heading">Privacy &amp; behavior</h2>
+        <div class="grid">
+          <div class="card">
+            <h3>Does the classifier see the full prompt?</h3>
+            <p>Yes. The complete prompt text is sent to the classifier model to determine which tier fits. This is necessary for accurate routing — a classifier can't judge complexity from a summary.</p>
+          </div>
+          <div class="card">
+            <h3>Does classification send data to another provider?</h3>
+            <p>Only if you enable the LLM classifier. The classifier model runs on a provider you choose in config — same as any other pi model. If you disable it or use regex-only routing, no prompt data leaves your machine beyond what pi already sends for normal chat.</p>
+          </div>
+          <div class="card">
+            <h3>Are prompts stored or logged?</h3>
+            <p>Not by Bifrost. Prompt text is used only for in-memory classification and optional cache lookups (stored locally in <code>.pi/bifrost-cache.jsonl</code> as normalized fingerprints, not raw text). If debug logging is enabled, timings and routing decisions are written to <code>.pi/bifrost-debug.jsonl</code>, but prompt text is never logged.</p>
+          </div>
+          <div class="card">
+            <h3>What happens when classification fails?</h3>
+            <p>The pipeline has four layers: direct bindings → cache → LLM classifier → regex fallback → default tier. If every layer fails, Bifrost doesn't route and pi uses its default model. A warning is shown. The classifier model errors (timeout, rate limit, unavailable) are caught individually — the next model in the list is tried.</p>
+          </div>
+          <div class="card">
+            <h3>How often does it pick an unsuitable model?</h3>
+            <p>Uncommon in practice. The LLM classifier is configured with your tier names and picks the most fitting one. If it consistently misclassifies, adjust your config: tighten regex rules, add a direct binding, or pin a tier. The <code>/bifrost preview</code> command shows what would be picked before you send.</p>
+          </div>
+          <div class="card">
+            <h3>Are tool calls and conversation context considered?</h3>
+            <p>Not yet. Each prompt is classified independently of conversation history. Tool call outputs and previous messages do not influence tier selection. This is a deliberate simplification — context-aware routing is planned for a future release, but it adds complexity and potential for unexpected model switches mid-conversation.</p>
+          </div>
+        </div>
+      </section>
+
       <div id="install" class="install">
         <h2>Install</h2>
         <pre><code>pi install npm:pi-bifrost</code></pre>
