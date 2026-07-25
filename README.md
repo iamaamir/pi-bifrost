@@ -5,13 +5,13 @@ Automatic model routing for [pi](https://pi.dev). Reads your prompt, picks the r
 ## Install
 
 ```bash
-pi install ./pi-bifrost
+pi install npm:pi-bifrost
 ```
 
-Or test first:
+Or from source:
 
 ```bash
-pi -e ./pi-bifrost/index.ts
+pi install git:github.com/iamaamir/pi-bifrost
 ```
 
 ## Setup
