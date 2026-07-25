@@ -184,6 +184,14 @@
           <h3>📊 Production observability</h3>
           <p>Performance API traces, JSONL debug logs. Every decision timestamped. AI-parseable.</p>
         </div>
+        <div class="card">
+          <h3>🎯 Direct model bindings</h3>
+          <p>Assign specific models to specific prompts via regex rules. <code>\bcommit\b → opencode/glm-5.1</code>.</p>
+        </div>
+        <div class="card">
+          <h3>⚡ Inline override</h3>
+          <p>Prefix any prompt with <code>!frontier</code> or <code>!economical</code> to force a tier for one message. No config change.</p>
+        </div>
       </div>
     </header>
 
@@ -247,6 +255,11 @@
           <tr><td><code>/bifrost on</code> / <code>off</code></td><td>Enable / disable routing</td></tr>
           <tr><td><code>/bifrost pin</code> / <code>unpin</code></td><td>Lock current model / resume routing</td></tr>
           <tr><td><code>/bifrost reload</code></td><td>Reload config after editing</td></tr>
+          <tr><td><code>/bifrost debug</code></td><td>Show loaded config, rules, and pipeline state</td></tr>
+          <tr><td><code>/bifrost cache stats</code></td><td>Show classification cache size</td></tr>
+          <tr><td><code>/bifrost cache clear</code></td><td>Clear classification cache</td></tr>
+          <tr><td><code>/bifrost classifier on</code> / <code>off</code></td><td>Enable / disable LLM classifier</td></tr>
+          <tr><td><code>/bifrost classifier status</code></td><td>Show classifier state and model</td></tr>
           <tr><td><code>/bifrost</code></td><td>Show current status</td></tr>
         </tbody>
       </table>
@@ -255,6 +268,8 @@
     <section>
       <h2>Config</h2>
       <p>Everything lives in <code>.pi/bifrost.json</code>. Editor autocomplete works in VS Code, Zed, Cursor.</p>
+
+      <p style="font-size:0.85rem; margin-top:-8px; color:var(--muted)">Prefix any prompt with <code>!tiername</code> to force a tier for one message. Set <code>"model": "provider/id"</code> in a rule to bypass tier selection and route directly to a specific model.</p>
 
       <pre><code>{
   "enabled": true,
@@ -294,12 +309,20 @@
           <p>Init tests every model with a real request. Only working models make it into your config.</p>
         </div>
         <div class="card">
+          <h3>🎯 Direct bindings</h3>
+          <p>Route specific prompts to specific models via <code>model: "provider/id"</code> in rules. Bypasses tier selection.</p>
+        </div>
+        <div class="card">
+          <h3>⚡ Inline override</h3>
+          <p>Type <code>!economical &lt;prompt&gt;</code> to force a tier for one message. Works in any chat.</p>
+        </div>
+        <div class="card">
           <h3>🧠 Dual classifier</h3>
-          <p>LLM reads your prompt for accuracy. Regex catches what the LLM misses. Cache avoids repeat work.</p>
+          <p>LLM reads your prompt for accuracy. Regex catches what the LLM misses. Direct bindings win both.</p>
         </div>
         <div class="card">
           <h3>🔍 Debug logging</h3>
-          <p>JSONL trace of every decision, timing, and model switch. AI-parseable.</p>
+          <p>JSONL trace of every decision, timing, and model switch. AI-parseable. <code>/bifrost debug</code> for live state.</p>
         </div>
       </div>
     </section>
@@ -310,7 +333,7 @@
         <a href="https://www.npmjs.com/package/pi-bifrost">npm</a> &middot;
         <a href="https://pi.dev/packages">pi.dev/packages</a>
       </p>
-      <p style="margin-top:8px"><span class="badge badge-purple">MIT</span> <span class="badge badge-green">v0.1.3</span></p>
+      <p style="margin-top:8px"><span class="badge badge-purple">MIT</span> <span class="badge badge-green">v0.1.6</span></p>
     </footer>
 
   </div>
