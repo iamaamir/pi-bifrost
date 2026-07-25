@@ -197,6 +197,50 @@
     .badge-green { background: #065f4620; color: #6ee7b7; border: 1px solid #065f46; }
     .badge-purple { background: #7c3aed20; color: #a78bfa; border: 1px solid #7c3aed; }
 
+    /* Pipeline diagram */
+    .pipeline {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      max-width: 500px;
+    }
+    .pipeline-step {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .pipeline-box {
+      flex: 0 0 260px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 16px;
+    }
+    .pipeline-box strong {
+      display: block;
+      font-size: 0.85rem;
+      margin-bottom: 2px;
+    }
+    .pipeline-box span {
+      display: block;
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+    .pipeline-box.match { border-color: #6ee7b7; border-left: 3px solid #6ee7b7; }
+    .pipeline-box.accent { border-color: #a78bfa; border-left: 3px solid #a78bfa; }
+    .pipeline-box.neutral { border-color: var(--muted); }
+    .pipeline-arrow {
+      color: #6ee7b7;
+      font-weight: bold;
+      font-size: 1rem;
+      min-width: 20px;
+    }
+    .pipeline-arrow-fallback {
+      color: #fca5a5;
+      font-size: 0.85rem;
+      min-width: 20px;
+    }
+
     footer {
       border-top: 1px solid var(--border);
       padding: 32px 0;
@@ -400,33 +444,81 @@
 }</code></pre>
       </section>
 
-      <section aria-labelledby="arch-heading">
-        <h2 id="arch-heading">Architecture</h2>
-        <p style="margin-bottom:12px">Bifrost runs in-process as a pi extension. No proxy, no daemon, no external service. Classification and routing happen synchronously before each prompt is sent.</p>
-        <div class="grid">
+      <section aria-labelledby="routing-heading">
+        <h2 id="routing-heading">How routing works</h2>
+        <p style="margin-bottom:16px">Every prompt flows through a pipeline. Each stage either returns a result or passes to the next.</p>
+
+        <div class="pipeline">
+          <div class="pipeline-step">
+            <div class="pipeline-box match">
+              <strong>Direct binding</strong>
+              <span>Rule with <code>provider/id</code>?</span>
+            </div>
+            <div class="pipeline-arrow">✓</div>
+            <div class="pipeline-arrow-fallback">✗</div>
+          </div>
+          <div class="pipeline-step">
+            <div class="pipeline-box">
+              <strong>Cache</strong>
+              <span>Seen this prompt before?</span>
+            </div>
+            <div class="pipeline-arrow">✓</div>
+            <div class="pipeline-arrow-fallback">✗</div>
+          </div>
+          <div class="pipeline-step">
+            <div class="pipeline-box accent">
+              <strong>LLM classifier</strong>
+              <span>Cheap model picks a tier</span>
+            </div>
+            <div class="pipeline-arrow">✓</div>
+            <div class="pipeline-arrow-fallback">✗</div>
+          </div>
+          <div class="pipeline-step">
+            <div class="pipeline-box">
+              <strong>Regex rules</strong>
+              <span>Keyword patterns match</span>
+            </div>
+            <div class="pipeline-arrow">✓</div>
+            <div class="pipeline-arrow-fallback">✗</div>
+          </div>
+          <div class="pipeline-step">
+            <div class="pipeline-box neutral">
+              <strong>Default tier</strong>
+              <span>Fallback when nothing matches</span>
+            </div>
+          </div>
+        </div>
+
+        <p style="margin-top:12px; font-size:0.85rem; color:var(--muted)">
+          <span style="color:#6ee7b7">✓</span> = return this tier &nbsp;&nbsp;
+          <span style="color:#fca5a5">✗</span> = pass to next stage<br>
+          <span style="color:#a78bfa">●</span> Configurable — classifier model, threshold, method
+        </p>
+
+        <div class="grid" style="margin-top:24px">
           <div class="card">
-            <h3>Pipeline order</h3>
-            <p>Direct model refs (pre-check) → cache → LLM classifier → regex fallback → default tier. Each stage only runs if the previous one didn't match. Average classification: ~2ms (regex/cache) to ~300ms (LLM).</p>
+            <h3>Classification time</h3>
+            <p>Cache hit: <strong>~2ms</strong>. Regex: <strong>~1ms</strong>. LLM classifier: <strong>~100–500ms</strong> depending on model. Direct bindings cost nothing beyond the regex check.</p>
           </div>
           <div class="card">
-            <h3>Selection strategies</h3>
-            <p>All 7 strategies use model metadata (cost per token, context window size) — zero API calls, zero tokens spent on routing. Models sorted by probe speed at init so <code>fastest</code> picks the snappiest responder.</p>
+            <h3>Supported providers</h3>
+            <p>Any provider pi supports: opencode, opencode-go, lmstudio, ollama, openai, anthropic, Google, and any custom provider registered via <code>pi.registerProvider()</code>.</p>
           </div>
           <div class="card">
-            <h3>Cache</h3>
-            <p>Up to 500 recent classifications cached locally with fuzzy matching (Jaccard similarity, default threshold 0.85). Cache is persisted to <code>.pi/bifrost-cache.jsonl</code> and survives restarts.</p>
+            <h3>Limitations</h3>
+            <p>No conversation context awareness (yet). No per-user routing. No budget enforcement (planned). The LLM classifier costs a few tokens per prompt — disable it if every millisecond counts.</p>
           </div>
           <div class="card">
-            <h3>Debugging</h3>
-            <p>Every decision recorded to <code>.pi/bifrost-debug.jsonl</code> — classification source, tier, selected model, timing. AI-parseable. Run <code>/bifrost debug</code> for a live config dump.</p>
+            <h3>Troubleshooting</h3>
+            <p><code>/bifrost preview &lt;prompt&gt;</code> shows what would fire. <code>/bifrost debug</code> dumps loaded config. <code>/bifrost classifier off</code> disables LLM if it's misbehaving. Debug logs at <code>.pi/bifrost-debug.jsonl</code>.</p>
           </div>
-          <div class="card">
-            <h3>Config merge</h3>
-            <p>Config loads from four layers: extension defaults → global agent → project <code>.pi/</code> → project root. Each overrides the last. Merged recursively so per-project overrides coexist with global settings.</p>
-          </div>
-          <div class="card">
-            <h3>Zero dependencies at runtime</h3>
-            <p>Bifrost bundles no runtime dependencies. It uses only pi's built-in APIs (<code>@earendil-works/pi-ai</code>, <code>@earendil-works/pi-coding-agent</code>) and Node.js standard library.</p>
+          <div class="card" style="grid-column:1/-1">
+            <h3>Source &amp; issues</h3>
+            <p>
+              <a href="https://github.com/iamaamir/pi-bifrost">github.com/iamaamir/pi-bifrost</a> —
+              <a href="https://github.com/iamaamir/pi-bifrost/issues">report a bug</a> —
+              <a href="https://github.com/iamaamir/pi-bifrost/discussions">discussions</a>
+            </p>
           </div>
         </div>
       </section>
