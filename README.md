@@ -7,6 +7,7 @@ Automatic model routing for [pi](https://pi.dev). Reads your prompt, picks the r
 - **Probe-first init** — tests every model before writing config. No dead providers in your tier lists.
 - **Zero-token routing** — 7 selection strategies, all metadata-based. Routing decisions cost nothing.
 - **Production observability** — Performance API traces, JSONL debug logs. AI-parseable.
+- **Direct bindings** — assign specific models to specific prompts via regex rules or inline `!<tier>` prefix.
 
 ## Install
 
@@ -117,7 +118,59 @@ Regex patterns that map prompts to tiers. First match wins. Case insensitive.
 }
 ```
 
-Or use a separate `.pi/bifrost-routes.json` file — it overrides inline rules.
+### Routing rules
+
+Regex patterns that map prompts to tiers. First match wins. Case insensitive.
+
+```json
+{
+  "rules": [
+    {
+      "pattern": "\\b(debug|fix|implement|refactor|architect)\\b",
+      "model": "frontier"
+    },
+    {
+      "pattern": "\\b(explain|summarize|format|hello)\\b",
+      "model": "economical"
+    }
+  ]
+}
+```
+
+Rules can also live in a separate `.pi/bifrost-routes.json` file — it overrides inline rules.
+
+### Direct model bindings
+
+Instead of a tier name, use a model reference (`provider/id`) — the matched prompt routes directly to that exact model, bypassing tier selection entirely.
+
+```json
+{
+  "rules": [
+    {
+      "pattern": "\\bcommit\\b",
+      "model": "opencode-go/glm-5.1"
+    },
+    {
+      "pattern": "\\btest\\b",
+      "model": "opencode/deepseek-v4-flash-free"
+    }
+  ]
+}
+```
+
+Useful for `/commit`, `/test`, `/explain` — any pattern where you want a specific model every time. The value must contain `/` to be treated as a direct reference.
+
+### Inline override
+
+Prefix a prompt with `!<tier>` to force a specific tier for that one message. No config change needed.
+
+```
+!frontier debug this race condition
+!economical summarize this
+!frontier implement the auth module
+```
+
+The tier must match a key in your `models` config. The prefix is stripped before routing so the prompt is classified and sent without the `!` marker.
 
 ### Classifier
 
