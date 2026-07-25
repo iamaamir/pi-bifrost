@@ -1,6 +1,6 @@
 # Bifrost
 
-Automatic model routing for [pi](https://pi.dev). Reads your prompt, picks the right model, switches automatically.
+Automatic model routing for [pi](https://pi.dev). Routes each prompt to a model based on task complexity, price, speed, or context length.
 
 **Why Bifrost over other model routers:**
 

@@ -1,7 +1,7 @@
 {
   "name": "pi-bifrost",
   "version": "0.1.6",
-  "description": "Query-aware model router for pi — inspects each prompt and switches to the best available model automatically.",
+  "description": "Route each Pi prompt to a model based on task complexity, price, speed, or context length. Smart model router for pi.",
   "type": "module",
   "license": "MIT",
   "author": {
