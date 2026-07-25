@@ -275,20 +275,21 @@
 
       <section aria-labelledby="what-heading">
         <h2 id="what-heading">What it does</h2>
-        <p>You type a prompt. Bifrost inspects it — is this a complex task like debugging or architecture? Or something simple like formatting or a greeting? It classifies every prompt into a <strong>tier</strong>, then selects the best available model for that tier using configurable strategies. The model switches before your prompt is sent. You never touch <code>/model</code>.</p>
+        <p>Every prompt you type is different. Debugging a race condition needs a powerful model with deep reasoning. Formatting code or summarising a file doesn't — a cheap, fast model works fine.</p>
+        <p>Bifrost reads your prompt before it's sent, classifies it by complexity, and switches pi to the best model for that task. You never touch <code>/model</code>. The right model is already selected.</p>
 
         <div class="grid-3" style="margin-top:24px">
           <div class="card">
-            <h3><span aria-hidden="true">🧠 </span>Classify</h3>
-            <p>LLM or regex reads your prompt and picks a tier.</p>
+            <h3><span aria-hidden="true">🧠 </span>Prompt is classified</h3>
+            <p>LLM or regex reads your prompt and assigns it to a tier — <code>frontier</code> for hard tasks, <code>economical</code> for simple ones, or any tier you define.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">🎯 </span>Select</h3>
-            <p>Strategy picks the best model: cheapest, fastest, largest context.</p>
+            <h3><span aria-hidden="true">🎯 </span>Best model is selected</h3>
+            <p>Your chosen strategy picks the best model from the tier: cheapest, fastest, largest context, or random. Every decision uses metadata only — no API calls.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">🔄 </span>Switch</h3>
-            <p>Model changes automatically before the prompt is sent.</p>
+            <h3><span aria-hidden="true">🔄 </span>Model switches automatically</h3>
+            <p>Before your prompt reaches the LLM, pi switches to the selected model. You just type. The model changes behind the scenes.</p>
           </div>
         </div>
       </section>
@@ -297,24 +298,24 @@
         <h2 id="features-heading">Why Bifrost</h2>
         <div class="grid-3">
           <div class="card">
-            <h3><span aria-hidden="true">🔬 </span>Probe-first init</h3>
-            <p>Tests every model with a real request before writing config. No dead providers, no phantom models.</p>
+            <h3><span aria-hidden="true">🔬 </span>Never configure a dead model</h3>
+            <p>Bifrost tests every model with a real request before writing your config. Models that fail, time out, or need API keys you don't have are excluded automatically.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">⚡ </span>Zero-token routing</h3>
-            <p>7 selection strategies — cheapest, fastest, largest context — all metadata-based. Routing costs nothing.</p>
+            <h3><span aria-hidden="true">⚡ </span>Routing costs nothing</h3>
+            <p>All 7 strategies use model metadata — token cost, context size — not API calls. Every routing decision is free. No tokens burned on the router itself.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">📊 </span>Production observability</h3>
-            <p>Performance API traces, JSONL debug logs. Every decision timestamped. AI-parseable.</p>
+            <h3><span aria-hidden="true">📊 </span>Debug any routing decision</h3>
+            <p>JSONL trace logs which model was picked and why. Timestamps, classification source, tier, strategy. AI-parseable. If a surprise model fires, you can trace exactly why.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">🎯 </span>Direct model bindings</h3>
-            <p>Assign specific models to specific prompts via regex rules. <code>\bcommit\b</code> → <code>opencode/glm-5.1</code>.</p>
+            <h3><span aria-hidden="true">🎯 </span>Pin models to prompts</h3>
+            <p>Bind <code>/commit</code> to your best model and <code>/explain</code> to your cheapest. Regex rules assign specific models to specific prompts, bypassing tier selection entirely.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">⚡ </span>Inline override</h3>
-            <p>Prefix any prompt with <code>!frontier</code> or <code>!economical</code> to force a tier for one message. No config change.</p>
+            <h3><span aria-hidden="true">⚡ </span>Override mid-sentence</h3>
+            <p>Type <code>!frontier debug this</code> to force the expensive model for one message. No config edit, no unpin. The override is stripped before routing so the prompt is clean.</p>
           </div>
         </div>
       </section>
@@ -497,20 +498,20 @@
 
         <div class="grid" style="margin-top:24px">
           <div class="card">
-            <h3>Classification time</h3>
-            <p>Cache hit: <strong>~2ms</strong>. Regex: <strong>~1ms</strong>. LLM classifier: <strong>~100–500ms</strong> depending on model. Direct bindings cost nothing beyond the regex check.</p>
+            <h3>Classification takes ~2–500ms</h3>
+            <p>Cache hits and regex matches resolve in ~1–2ms. LLM classification takes 100–500ms depending on model. Direct bindings cost nothing beyond a regex check. You only pay for classification if you enable the LLM classifier.</p>
           </div>
           <div class="card">
-            <h3>Supported providers</h3>
-            <p>Any provider pi supports: opencode, opencode-go, lmstudio, ollama, openai, anthropic, Google, and any custom provider registered via <code>pi.registerProvider()</code>.</p>
+            <h3>Works with any pi provider</h3>
+            <p>No provider-specific logic. If pi can talk to a model, Bifrost can route to it. opencode, opencode-go, lmstudio, ollama, openai, anthropic, Google, custom providers — all supported.</p>
           </div>
           <div class="card">
-            <h3>Limitations</h3>
-            <p>No conversation context awareness (yet). No per-user routing. No budget enforcement (planned). The LLM classifier costs a few tokens per prompt — disable it if every millisecond counts.</p>
+            <h3>What it doesn't do (yet)</h3>
+            <p>No conversation context awareness — each prompt is classified independently. No per-user routing or team policies. No budget enforcement. These are planned for v0.3+. For now, the classifier is optional and can be disabled if every millisecond matters.</p>
           </div>
           <div class="card">
             <h3>Troubleshooting</h3>
-            <p><code>/bifrost preview &lt;prompt&gt;</code> shows what would fire. <code>/bifrost debug</code> dumps loaded config. <code>/bifrost classifier off</code> disables LLM if it's misbehaving. Debug logs at <code>.pi/bifrost-debug.jsonl</code>.</p>
+            <p><code>/bifrost preview &lt;prompt&gt;</code> shows what would fire before you send it. <code>/bifrost debug</code> dumps loaded config and rules. <code>/bifrost classifier off</code> disables the LLM if it's misbehaving. Debug logs at <code>.pi/bifrost-debug.jsonl</code> capture every decision.</p>
           </div>
           <div class="card" style="grid-column:1/-1">
             <h3>Source &amp; issues</h3>
