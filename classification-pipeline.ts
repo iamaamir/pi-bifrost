@@ -57,10 +57,8 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
   } = deps;
 
   async function classify(text: string): Promise<ClassificationResult> {
-    if (tiers.length === 0) return { kind: "unclassified" };
-
-    // Stage 1: pre-check regex for direct model references only
-    // Runs before cache — explicit bindings beat LLM or cached guesses.
+    // Stage 1: pre-check regex for direct model references only.
+    // Runs before tiers check — direct bindings work even with zero tiers.
     {
       const endPre = debugMeasure("pipeline", "regex_pre");
       const pre = regexClassify(text, regexRules);
@@ -70,6 +68,8 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
         return { kind: "classified", tier: pre, source: "regex" };
       }
     }
+
+    if (tiers.length === 0) return { kind: "unclassified" };
 
     // Stage 2: cache lookup
     const endCache = debugMeasure("pipeline", "cache");
