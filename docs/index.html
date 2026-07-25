@@ -31,7 +31,7 @@
       --surface: #141416;
       --border: #2a2a2e;
       --text: #e4e4e7;
-      --muted: #88889a;
+      --muted: #a0a0b4;
       --accent: #7c3aed;
       --accent-glow: #a78bfa;
     }
@@ -45,6 +45,37 @@
     }
     a { color: var(--accent-glow); text-decoration: none; }
     a:hover { text-decoration: underline; }
+    /* Visible focus ring for keyboard nav */
+    :focus-visible {
+      outline: 2px solid var(--accent-glow);
+      outline-offset: 2px;
+    }
+    /* Visually hidden but accessible to screen readers */
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+    /* Skip link — visible on focus for keyboard users */
+    .skip-link {
+      position: absolute;
+      top: -100%;
+      left: 8px;
+      background: var(--surface);
+      color: var(--text);
+      padding: 8px 16px;
+      border-radius: 0 0 8px 8px;
+      border: 1px solid var(--border);
+      z-index: 100;
+      font-size: 0.9rem;
+    }
+    .skip-link:focus {
+      top: 0;
+    }
     code {
       font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, Consolas, monospace;
       font-size: 0.9em;
@@ -73,6 +104,7 @@
       font-size: 3rem;
       font-weight: 700;
       letter-spacing: -0.03em;
+      color: #c084fc;
       background: linear-gradient(135deg, var(--accent-glow), #c084fc, #818cf8);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
@@ -165,113 +197,133 @@
   </style>
 </head>
 <body>
+
+  <a href="#main" class="skip-link">Skip to content</a>
+
   <div class="container">
 
-    <header>
+    <header role="banner">
       <h1>Bifrost</h1>
       <p>Reads your prompt, picks the right model, switches automatically.</p>
-
-      <div class="grid-3" style="margin-top:32px; text-align:left">
-        <div class="card">
-          <h3>🔬 Probe-first init</h3>
-          <p>Tests every model with a real request before writing config. No dead providers, no phantom models.</p>
-        </div>
-        <div class="card">
-          <h3>⚡ Zero-token routing</h3>
-          <p>7 selection strategies — cheapest, fastest, largest context — all metadata-based. Routing costs nothing.</p>
-        </div>
-        <div class="card">
-          <h3>📊 Production observability</h3>
-          <p>Performance API traces, JSONL debug logs. Every decision timestamped. AI-parseable.</p>
-        </div>
-        <div class="card">
-          <h3>🎯 Direct model bindings</h3>
-          <p>Assign specific models to specific prompts via regex rules. <code>\bcommit\b → opencode/glm-5.1</code>.</p>
-        </div>
-        <div class="card">
-          <h3>⚡ Inline override</h3>
-          <p>Prefix any prompt with <code>!frontier</code> or <code>!economical</code> to force a tier for one message. No config change.</p>
-        </div>
-      </div>
     </header>
 
-    <div class="install">
-      <h2>Install</h2>
-      <pre><code>pi install npm:pi-bifrost</code></pre>
-    </div>
+    <main id="main">
 
-    <section>
-      <h2>What it does</h2>
-      <p>You type a prompt. Bifrost inspects it — is this a complex task like debugging or architecture? Or something simple like formatting or a greeting? It classifies every prompt into a <strong>tier</strong>, then selects the best available model for that tier using configurable strategies. The model switches before your prompt is sent. You never touch <code>/model</code>.</p>
+      <section aria-labelledby="features-heading">
+        <h2 id="features-heading" class="sr-only">Features</h2>
+        <div class="grid-3">
+          <div class="card">
+            <h3><span aria-hidden="true">🔬 </span>Probe-first init</h3>
+            <p>Tests every model with a real request before writing config. No dead providers, no phantom models.</p>
+          </div>
+          <div class="card">
+            <h3><span aria-hidden="true">⚡ </span>Zero-token routing</h3>
+            <p>7 selection strategies — cheapest, fastest, largest context — all metadata-based. Routing costs nothing.</p>
+          </div>
+          <div class="card">
+            <h3><span aria-hidden="true">📊 </span>Production observability</h3>
+            <p>Performance API traces, JSONL debug logs. Every decision timestamped. AI-parseable.</p>
+          </div>
+          <div class="card">
+            <h3><span aria-hidden="true">🎯 </span>Direct model bindings</h3>
+            <p>Assign specific models to specific prompts via regex rules. <code>\bcommit\b → opencode/glm-5.1</code>.</p>
+          </div>
+          <div class="card">
+            <h3><span aria-hidden="true">⚡ </span>Inline override</h3>
+            <p>Prefix any prompt with <code>!frontier</code> or <code>!economical</code> to force a tier for one message. No config change.</p>
+          </div>
+        </div>
+      </section>
 
-      <div class="grid-3" style="margin-top:24px">
-        <div class="card">
-          <h3>🧠 Classify</h3>
-          <p>LLM or regex reads your prompt and picks a tier.</p>
-        </div>
-        <div class="card">
-          <h3>🎯 Select</h3>
-          <p>Strategy picks the best model: cheapest, fastest, largest context.</p>
-        </div>
-        <div class="card">
-          <h3>🔄 Switch</h3>
-          <p>Model changes automatically before the prompt is sent.</p>
-        </div>
+      <div class="install">
+        <h2>Install</h2>
+        <pre><code>pi install npm:pi-bifrost</code></pre>
       </div>
-    </section>
 
-    <section>
-      <h2>Setup</h2>
-      <p>One command. It probes every model you have access to, finds the ones that actually work, and writes a config.</p>
-      <pre><code>/bifrost init</code></pre>
-      <p style="font-size:0.85rem; margin-top:8px">Say yes. Done. Bifrost is now routing every prompt.</p>
-    </section>
+      <section aria-labelledby="what-heading">
+        <h2 id="what-heading">What it does</h2>
+        <p>You type a prompt. Bifrost inspects it — is this a complex task like debugging or architecture? Or something simple like formatting or a greeting? It classifies every prompt into a <strong>tier</strong>, then selects the best available model for that tier using configurable strategies. The model switches before your prompt is sent. You never touch <code>/model</code>.</p>
 
-    <section>
-      <h2>Selection Strategies</h2>
-      <p>How Bifrost picks from a tier's model list. Set globally or per-tier.</p>
+        <div class="grid-3" style="margin-top:24px">
+          <div class="card">
+            <h3><span aria-hidden="true">🧠 </span>Classify</h3>
+            <p>LLM or regex reads your prompt and picks a tier.</p>
+          </div>
+          <div class="card">
+            <h3><span aria-hidden="true">🎯 </span>Select</h3>
+            <p>Strategy picks the best model: cheapest, fastest, largest context.</p>
+          </div>
+          <div class="card">
+            <h3><span aria-hidden="true">🔄 </span>Switch</h3>
+            <p>Model changes automatically before the prompt is sent.</p>
+          </div>
+        </div>
+      </section>
 
-      <table>
-        <thead><tr><th>Strategy</th><th>Picks</th></tr></thead>
-        <tbody>
-          <tr><td><code>cheapest</code></td><td>Lowest input + output cost</td></tr>
-          <tr><td><code>cheapest_input</code></td><td>Lowest input cost</td></tr>
-          <tr><td><code>cheapest_output</code></td><td>Lowest output cost</td></tr>
-          <tr><td><code>largest_context</code></td><td>Biggest context window</td></tr>
-          <tr><td><code>random</code></td><td>Random pick</td></tr>
-          <tr><td><code>first</code> / <code>fastest</code></td><td>First in list (init orders by speed)</td></tr>
-        </tbody>
-      </table>
-    </section>
+      <section aria-labelledby="setup-heading">
+        <h2 id="setup-heading">Setup</h2>
+        <p>One command. It probes every model you have access to, finds the ones that actually work, and writes a config.</p>
+        <pre><code>/bifrost init</code></pre>
+        <p style="font-size:0.85rem; margin-top:8px">Say yes. Done. Bifrost is now routing every prompt.</p>
+      </section>
 
-    <section>
-      <h2>Commands</h2>
-      <table>
-        <thead><tr><th>Command</th><th>What it does</th></tr></thead>
-        <tbody>
-          <tr><td><code>/bifrost init</code></td><td>Probe models, generate config</td></tr>
-          <tr><td><code>/bifrost probe</code></td><td>Test which models actually respond</td></tr>
-          <tr><td><code>/bifrost preview &lt;prompt&gt;</code></td><td>See what would happen without sending</td></tr>
-          <tr><td><code>/bifrost on</code> / <code>off</code></td><td>Enable / disable routing</td></tr>
-          <tr><td><code>/bifrost pin</code> / <code>unpin</code></td><td>Lock current model / resume routing</td></tr>
-          <tr><td><code>/bifrost reload</code></td><td>Reload config after editing</td></tr>
-          <tr><td><code>/bifrost debug</code></td><td>Show loaded config, rules, and pipeline state</td></tr>
-          <tr><td><code>/bifrost cache stats</code></td><td>Show classification cache size</td></tr>
-          <tr><td><code>/bifrost cache clear</code></td><td>Clear classification cache</td></tr>
-          <tr><td><code>/bifrost classifier on</code> / <code>off</code></td><td>Enable / disable LLM classifier</td></tr>
-          <tr><td><code>/bifrost classifier status</code></td><td>Show classifier state and model</td></tr>
-          <tr><td><code>/bifrost</code></td><td>Show current status</td></tr>
-        </tbody>
-      </table>
-    </section>
+      <section aria-labelledby="strategies-heading">
+        <h2 id="strategies-heading">Selection Strategies</h2>
+        <p>How Bifrost picks from a tier's model list. Set globally or per-tier.</p>
 
-    <section>
-      <h2>Config</h2>
-      <p>Everything lives in <code>.pi/bifrost.json</code>. Editor autocomplete works in VS Code, Zed, Cursor.</p>
+        <table>
+          <caption style="text-align:left; margin-bottom:8px; color:var(--muted); font-size:0.85rem">Available strategies for selecting a model from a tier</caption>
+          <thead>
+            <tr>
+              <th scope="col">Strategy</th>
+              <th scope="col">Picks</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>cheapest</code></td><td>Lowest input + output cost</td></tr>
+            <tr><td><code>cheapest_input</code></td><td>Lowest input cost</td></tr>
+            <tr><td><code>cheapest_output</code></td><td>Lowest output cost</td></tr>
+            <tr><td><code>largest_context</code></td><td>Biggest context window</td></tr>
+            <tr><td><code>random</code></td><td>Random pick</td></tr>
+            <tr><td><code>first</code> / <code>fastest</code></td><td>First in list (init orders by speed)</td></tr>
+          </tbody>
+        </table>
+      </section>
 
-      <p style="font-size:0.85rem; margin-top:-8px; color:var(--muted)">Prefix any prompt with <code>!tiername</code> to force a tier for one message. Set <code>"model": "provider/id"</code> in a rule to bypass tier selection and route directly to a specific model.</p>
+      <section aria-labelledby="commands-heading">
+        <h2 id="commands-heading">Commands</h2>
+        <table>
+          <caption style="text-align:left; margin-bottom:8px; color:var(--muted); font-size:0.85rem">Bifrost slash commands</caption>
+          <thead>
+            <tr>
+              <th scope="col">Command</th>
+              <th scope="col">What it does</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>/bifrost init</code></td><td>Probe models, generate config</td></tr>
+            <tr><td><code>/bifrost probe</code></td><td>Test which models actually respond</td></tr>
+            <tr><td><code>/bifrost preview &lt;prompt&gt;</code></td><td>See what would happen without sending</td></tr>
+            <tr><td><code>/bifrost on</code> / <code>off</code></td><td>Enable / disable routing</td></tr>
+            <tr><td><code>/bifrost pin</code> / <code>unpin</code></td><td>Lock current model / resume routing</td></tr>
+            <tr><td><code>/bifrost reload</code></td><td>Reload config after editing</td></tr>
+            <tr><td><code>/bifrost debug</code></td><td>Show loaded config, rules, and pipeline state</td></tr>
+            <tr><td><code>/bifrost cache stats</code></td><td>Show classification cache size</td></tr>
+            <tr><td><code>/bifrost cache clear</code></td><td>Clear classification cache</td></tr>
+            <tr><td><code>/bifrost classifier on</code> / <code>off</code></td><td>Enable / disable LLM classifier</td></tr>
+            <tr><td><code>/bifrost classifier status</code></td><td>Show classifier state and model</td></tr>
+            <tr><td><code>/bifrost</code></td><td>Show current status</td></tr>
+          </tbody>
+        </table>
+      </section>
 
-      <pre><code>{
+      <section aria-labelledby="config-heading">
+        <h2 id="config-heading">Config</h2>
+        <p>Everything lives in <code>.pi/bifrost.json</code>. Editor autocomplete works in VS Code, Zed, Cursor.</p>
+
+        <p style="font-size:0.85rem; margin-top:-8px; color:var(--muted)">Prefix any prompt with <code>!tiername</code> to force a tier for one message. Set <code>"model": "provider/id"</code> in a rule to bypass tier selection and route directly to a specific model.</p>
+
+        <pre><code>{
   "enabled": true,
   "default": "economical",
   "strategy": "first",
@@ -295,39 +347,41 @@
     "model": "opencode/mimo-v2.5-free"
   }
 }</code></pre>
-    </section>
+      </section>
 
-    <section>
-      <h2>Built with</h2>
-      <div class="grid">
-        <div class="card">
-          <h3>⚡ Zero-token strategies</h3>
-          <p>All 7 selection strategies use model metadata only — no API calls, no tokens spent on routing.</p>
+      <section aria-labelledby="built-heading">
+        <h2 id="built-heading">Built with</h2>
+        <div class="grid">
+          <div class="card">
+            <h3><span aria-hidden="true">⚡ </span>Zero-token strategies</h3>
+            <p>All 7 selection strategies use model metadata only — no API calls, no tokens spent on routing.</p>
+          </div>
+          <div class="card">
+            <h3><span aria-hidden="true">📊 </span>Probe-verified</h3>
+            <p>Init tests every model with a real request. Only working models make it into your config.</p>
+          </div>
+          <div class="card">
+            <h3><span aria-hidden="true">🎯 </span>Direct bindings</h3>
+            <p>Route specific prompts to specific models via <code>model: "provider/id"</code> in rules. Bypasses tier selection.</p>
+          </div>
+          <div class="card">
+            <h3><span aria-hidden="true">⚡ </span>Inline override</h3>
+            <p>Type <code>!economical &lt;prompt&gt;</code> to force a tier for one message. Works in any chat.</p>
+          </div>
+          <div class="card">
+            <h3><span aria-hidden="true">🧠 </span>Dual classifier</h3>
+            <p>LLM reads your prompt for accuracy. Regex catches what the LLM misses. Direct bindings win both.</p>
+          </div>
+          <div class="card">
+            <h3><span aria-hidden="true">🔍 </span>Debug logging</h3>
+            <p>JSONL trace of every decision, timing, and model switch. AI-parseable. <code>/bifrost debug</code> for live state.</p>
+          </div>
         </div>
-        <div class="card">
-          <h3>📊 Probe-verified</h3>
-          <p>Init tests every model with a real request. Only working models make it into your config.</p>
-        </div>
-        <div class="card">
-          <h3>🎯 Direct bindings</h3>
-          <p>Route specific prompts to specific models via <code>model: "provider/id"</code> in rules. Bypasses tier selection.</p>
-        </div>
-        <div class="card">
-          <h3>⚡ Inline override</h3>
-          <p>Type <code>!economical &lt;prompt&gt;</code> to force a tier for one message. Works in any chat.</p>
-        </div>
-        <div class="card">
-          <h3>🧠 Dual classifier</h3>
-          <p>LLM reads your prompt for accuracy. Regex catches what the LLM misses. Direct bindings win both.</p>
-        </div>
-        <div class="card">
-          <h3>🔍 Debug logging</h3>
-          <p>JSONL trace of every decision, timing, and model switch. AI-parseable. <code>/bifrost debug</code> for live state.</p>
-        </div>
-      </div>
-    </section>
+      </section>
 
-    <footer>
+    </main>
+
+    <footer role="contentinfo">
       <p>
         <a href="https://github.com/iamaamir/pi-bifrost">GitHub</a> &middot;
         <a href="https://www.npmjs.com/package/pi-bifrost">npm</a> &middot;
