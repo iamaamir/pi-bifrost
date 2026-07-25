@@ -1,536 +1,446 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Bifrost — Automatic model routing for pi</title>
-  <meta name="description" content="Automatically route each Pi prompt to a model based on task complexity, price, speed, or context length. Bifrost is the smart model router for pi." />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="robots" content="index, follow" />
-  <meta name="theme-color" content="#0a0a0b" />
-  <meta property="og:title" content="Bifrost — Automatic model routing for pi" />
-  <meta property="og:description" content="Automatically route each Pi prompt to a model based on task complexity, price, speed, or context length. No config switching required." />
-  <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://iamaamir.github.io/pi-bifrost/" />
-  <meta name="twitter:card" content="summary" />
-  <link rel="canonical" href="https://iamaamir.github.io/pi-bifrost/" />
-  <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "SoftwareApplication",
-    "name": "Bifrost",
-    "description": "Query-aware model router for the pi coding agent.",
-    "applicationCategory": "DeveloperTool",
-    "operatingSystem": "Any",
-    "url": "https://iamaamir.github.io/pi-bifrost/",
-    "author": { "@type": "Person", "name": "Aamir", "url": "https://github.com/iamaamir" }
-  }
-  </script>
-  <style>
-    :root {
-      --bg: #0a0a0b;
-      --surface: #141416;
-      --border: #2a2a2e;
-      --text: #e4e4e7;
-      --muted: #a0a0b4;
-      --accent: #7c3aed;
-      --accent-glow: #a78bfa;
-    }
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      line-height: 1.6;
-      -webkit-font-smoothing: antialiased;
-    }
-    a { color: var(--accent-glow); text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    /* Visible focus ring for keyboard nav */
-    :focus-visible {
-      outline: 2px solid var(--accent-glow);
-      outline-offset: 2px;
-    }
-    /* Primary CTA */
-    .cta-button {
-      display: inline-block;
-      background: linear-gradient(135deg, var(--accent), #6d28d9);
-      color: #fff;
-      font-size: 1rem;
-      font-weight: 600;
-      padding: 12px 28px;
-      border-radius: 8px;
-      text-decoration: none;
-      transition: transform 0.15s, box-shadow 0.15s;
-    }
-    .cta-button:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 4px 20px rgba(124, 58, 237, 0.4);
-      text-decoration: none;
-    }
-    /* Visually hidden but accessible to screen readers */
-    .sr-only {
-      position: absolute;
-      width: 1px;
-      height: 1px;
-      overflow: hidden;
-      clip: rect(0, 0, 0, 0);
-      white-space: nowrap;
-      border: 0;
-    }
-    /* Skip link — visible on focus for keyboard users */
-    .skip-link {
-      position: absolute;
-      top: -100%;
-      left: 8px;
-      background: var(--surface);
-      color: var(--text);
-      padding: 8px 16px;
-      border-radius: 0 0 8px 8px;
-      border: 1px solid var(--border);
-      z-index: 100;
-      font-size: 0.9rem;
-    }
-    .skip-link:focus {
-      top: 0;
-    }
-    code {
-      font-family: "SF Mono", "Fira Code", "Fira Mono", Menlo, Consolas, monospace;
-      font-size: 0.9em;
-      background: var(--surface);
-      padding: 2px 6px;
-      border-radius: 4px;
-      border: 1px solid var(--border);
-    }
-    pre {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 16px 20px;
-      overflow-x: auto;
-      font-size: 0.85rem;
-      line-height: 1.7;
-    }
-    pre code { background: none; border: none; padding: 0; }
-    .container { max-width: 800px; margin: 0 auto; padding: 0 24px; }
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Pi-Bifrost | Model routing for Pi</title>
+    <meta
+      name="description"
+      content="Pi-Bifrost routes Pi coding-agent prompts by task complexity, model cost, context window, configured order, and availability."
+    >
+    <meta name="robots" content="index, follow">
+    <meta name="theme-color" content="#111a23">
+    <meta property="og:title" content="Pi-Bifrost | Model routing for Pi">
+    <meta
+      property="og:description"
+      content="A small, inspectable model-routing extension for the Pi coding agent."
+    >
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://iamaamir.github.io/pi-bifrost/">
+    <meta name="twitter:card" content="summary">
+    <link rel="canonical" href="https://iamaamir.github.io/pi-bifrost/">
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="./styles.css">
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Pi-Bifrost",
+        "description": "Query-aware model router extension for the Pi coding agent.",
+        "applicationCategory": "DeveloperTool",
+        "operatingSystem": "Any",
+        "url": "https://iamaamir.github.io/pi-bifrost/",
+        "downloadUrl": "https://www.npmjs.com/package/pi-bifrost",
+        "license": "https://opensource.org/license/mit"
+      }
+    </script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
 
-    header {
-      padding: 80px 0 40px;
-      text-align: center;
-    }
-    header h1 {
-      font-size: 3rem;
-      font-weight: 700;
-      letter-spacing: -0.03em;
-      color: #c084fc;
-      background: linear-gradient(135deg, var(--accent-glow), #c084fc, #818cf8);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-      background-clip: text;
-    }
-    header p {
-      color: var(--muted);
-      font-size: 1.15rem;
-      margin-top: 12px;
-      max-width: 500px;
-      margin-left: auto;
-      margin-right: auto;
-    }
-
-    .install {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 24px;
-      margin-bottom: 48px;
-    }
-    .install h2 { font-size: 1.1rem; margin-bottom: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; font-weight: 500; }
-
-    section {
-      margin-bottom: 56px;
-    }
-    section h2 {
-      font-size: 1.5rem;
-      font-weight: 600;
-      margin-bottom: 16px;
-      letter-spacing: -0.02em;
-    }
-    section p { color: var(--muted); margin-bottom: 16px; }
-
-    .grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 16px;
-    }
-    .grid-3 {
-      display: grid;
-      grid-template-columns: 1fr 1fr 1fr;
-      gap: 16px;
-    }
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 20px;
-    }
-    .card h3 { font-size: 0.95rem; margin-bottom: 6px; font-weight: 600; }
-    .card p { font-size: 0.85rem; margin: 0; }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.9rem;
-    }
-    th, td {
-      text-align: left;
-      padding: 10px 14px;
-      border-bottom: 1px solid var(--border);
-    }
-    th { color: var(--muted); font-weight: 500; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; }
-
-    .badge {
-      display: inline-block;
-      padding: 2px 10px;
-      border-radius: 12px;
-      font-size: 0.75rem;
-      font-weight: 500;
-    }
-    .badge-green { background: #065f4620; color: #6ee7b7; border: 1px solid #065f46; }
-    .badge-purple { background: #7c3aed20; color: #a78bfa; border: 1px solid #7c3aed; }
-
-    /* Pipeline diagram */
-    .pipeline {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      max-width: 500px;
-    }
-    .pipeline-step {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-    .pipeline-box {
-      flex: 0 0 260px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 16px;
-    }
-    .pipeline-box strong {
-      display: block;
-      font-size: 0.85rem;
-      margin-bottom: 2px;
-    }
-    .pipeline-box span {
-      display: block;
-      font-size: 0.78rem;
-      color: var(--muted);
-    }
-    .pipeline-box.match { border-color: #6ee7b7; border-left: 3px solid #6ee7b7; }
-    .pipeline-box.accent { border-color: #a78bfa; border-left: 3px solid #a78bfa; }
-    .pipeline-box.neutral { border-color: var(--muted); }
-    .pipeline-arrow {
-      color: #6ee7b7;
-      font-weight: bold;
-      font-size: 1rem;
-      min-width: 20px;
-    }
-    .pipeline-arrow-fallback {
-      color: #fca5a5;
-      font-size: 0.85rem;
-      min-width: 20px;
-    }
-
-    footer {
-      border-top: 1px solid var(--border);
-      padding: 32px 0;
-      text-align: center;
-      color: var(--muted);
-      font-size: 0.85rem;
-      margin-top: 64px;
-    }
-    footer a { color: var(--muted); }
-
-    @media (max-width: 640px) {
-      header h1 { font-size: 2rem; }
-      .grid, .grid-3 { grid-template-columns: 1fr; }
-    }
-  </style>
-</head>
-<body>
-
-  <a href="#main" class="skip-link">Skip to content</a>
-
-  <div class="container">
-
-    <header role="banner">
-      <h1>Bifrost</h1>
-      <p>Automatically route each Pi prompt to a model based on task complexity, price, speed, or context length.</p>
-      <p style="margin-top:24px">
-        <a href="#install" class="cta-button">Get started →</a>
-      </p>
+    <header class="site-header">
+      <nav class="wrap nav" aria-label="Primary">
+        <a class="wordmark" href="#top">Pi-Bifrost</a>
+        <div class="nav-links">
+          <a href="#routing">How it works</a>
+          <a href="#install">Install</a>
+          <a href="https://github.com/iamaamir/pi-bifrost">GitHub</a>
+        </div>
+      </nav>
     </header>
 
-    <main id="main">
-
-      <section aria-labelledby="what-heading">
-        <h2 id="what-heading">What it does</h2>
-        <p>Every prompt you type is different. Debugging a race condition needs a powerful model with deep reasoning. Formatting code or summarising a file doesn't — a cheap, fast model works fine.</p>
-        <p>Bifrost reads your prompt before it's sent, classifies it by complexity, and switches pi to the best model for that task. You never touch <code>/model</code>. The right model is already selected.</p>
-
-        <div class="grid-3" style="margin-top:24px">
-          <div class="card">
-            <h3>Prompt is classified</h3>
-            <p>LLM or regex reads your prompt and assigns it to a tier — <code>frontier</code> for hard tasks, <code>economical</code> for simple ones, or any tier you define.</p>
-          </div>
-          <div class="card">
-            <h3>Best model is selected</h3>
-            <p>Your chosen strategy picks the best model from the tier: cheapest, fastest, largest context, or random. Every decision uses metadata only — no API calls.</p>
-          </div>
-          <div class="card">
-            <h3>Model switches automatically</h3>
-            <p>Before your prompt reaches the LLM, pi switches to the selected model. You just type. The model changes behind the scenes.</p>
-          </div>
+    <main id="main" tabindex="-1">
+      <section class="hero wrap" id="top" aria-labelledby="hero-title">
+        <h1 id="hero-title">Pi-Bifrost</h1>
+        <p class="lede">
+          A model-routing extension for the Pi coding agent. Pi-Bifrost classifies
+          each prompt into a configured tier, then applies one selection strategy
+          to the matching models available in Pi.
+        </p>
+        <div class="hero-actions">
+          <a href="#install">Install</a>
+          <a href="https://github.com/iamaamir/pi-bifrost">GitHub and documentation</a>
         </div>
       </section>
 
-      <section aria-labelledby="features-heading">
-        <h2 id="features-heading">Why Bifrost</h2>
-        <div class="grid-3">
-          <div class="card">
-            <h3>Never configure a dead model</h3>
-            <p>Bifrost tests every model with a real request before writing your config. Models that fail, time out, or need API keys you don't have are excluded automatically.</p>
-          </div>
-          <div class="card">
-            <h3>Routing costs nothing</h3>
-            <p>All 7 strategies use model metadata — token cost, context size — not API calls. Every routing decision is free. No tokens burned on the router itself.</p>
-          </div>
-          <div class="card">
-            <h3>Trace every routing decision</h3>
-            <p>JSONL log captures which model was picked and why. Timestamps, classification source, tier, strategy. AI-parseable. If a surprise model fires, you can trace exactly why.</p>
-          </div>
-          <div class="card">
-            <h3>Pin models to prompts</h3>
-            <p>Bind <code>/commit</code> to your best model and <code>/explain</code> to your cheapest. Regex rules assign specific models to specific prompts, bypassing tier selection entirely.</p>
-          </div>
-          <div class="card">
-            <h3>Override mid-sentence</h3>
-            <p>Type <code>!frontier debug this</code> to force the expensive model for one message. No config edit, no unpin. The override is stripped before routing so the prompt is clean.</p>
-          </div>
+      <section
+        class="section wrap"
+        id="routing"
+        aria-labelledby="routing-title"
+      >
+        <div class="section-heading">
+          <h2 id="routing-title">How Pi-Bifrost routes a prompt</h2>
+          <p>
+            Routing has two stages: classify the prompt into a tier, then select
+            one model from that tier. Classification can run with rules alone or
+            use the optional LLM classifier.
+          </p>
+        </div>
+
+        <ol class="routing-flow">
+          <li>
+            <span class="step-number">1</span>
+            <div>
+              <h3>Check direct bindings</h3>
+              <p>
+                A regex rule targeting an exact <code>provider/id</code> wins
+                immediately. It bypasses tier classification and model-selection
+                strategies.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">2</span>
+            <div>
+              <h3>Check the classification cache</h3>
+              <p>
+                A matching cached LLM classification reuses its tier and skips a
+                new classifier call.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">3</span>
+            <div>
+              <h3>Classify into a tier</h3>
+              <div class="classification-paths">
+                <section aria-labelledby="rules-only-title">
+                  <h4 id="rules-only-title">Classifier off</h4>
+                  <ol>
+                    <li>Skip the LLM classifier.</li>
+                    <li>Use the first regex rule that matches the prompt.</li>
+                    <li>Use the configured default tier if no rule matches.</li>
+                  </ol>
+                  <p>No additional model call.</p>
+                </section>
+                <section aria-labelledby="classifier-on-title">
+                  <h4 id="classifier-on-title">Classifier on</h4>
+                  <ol>
+                    <li>Send the current prompt and tier names to the configured classifier.</li>
+                    <li>Use the returned tier when it matches the configuration.</li>
+                    <li>On failure, try the next classifier, then regex rules, then the default tier.</li>
+                  </ol>
+                  <p>May use tokens and add latency on a cache miss.</p>
+                </section>
+              </div>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">4</span>
+            <div>
+              <h3>Select a model from the tier</h3>
+              <p>
+                Tier patterns are resolved against Pi's available model registry.
+                One configured strategy selects by cost, context window, list
+                order, or random choice.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">5</span>
+            <div>
+              <h3>Switch Pi's active model</h3>
+              <p>
+                Pi-Bifrost activates the selected model before the prompt is sent.
+                If no model matches or activation fails, Pi keeps its current model.
+              </p>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <section class="section wrap" aria-labelledby="capabilities-title">
+        <div class="section-heading compact">
+          <h2 id="capabilities-title">Controls</h2>
+        </div>
+
+        <div class="feature-list">
+          <article>
+            <h3>Probe at setup</h3>
+            <p>
+              <code>/bifrost init</code> sends a tiny request to supported
+              OpenAI-compatible and Mistral models. Working results are used to
+              build tier lists; unsupported API types are skipped.
+            </p>
+          </article>
+          <article>
+            <h3>Select from metadata</h3>
+            <p>
+              Choose by input cost, output cost, combined cost, context window,
+              random choice, or configured list order. Policies can differ by
+              tier.
+            </p>
+          </article>
+          <article>
+            <h3>Preview and override</h3>
+            <p>
+              Preview a route without sending. Prefix one prompt with
+              <code>!frontier</code>, or pin the active model until you run
+              <code>/bifrost unpin</code>.
+            </p>
+          </article>
+          <article>
+            <h3>Routing diagnostics</h3>
+            <p>
+              Optional local JSONL logs record timing and routing metadata for
+              troubleshooting. They are disabled by default and are not a hosted
+              observability service.
+            </p>
+          </article>
         </div>
       </section>
 
-      <section aria-labelledby="privacy-heading">
-        <h2 id="privacy-heading">Privacy &amp; behavior</h2>
-        <div class="grid">
-          <div class="card">
-            <h3>Does the classifier see the full prompt?</h3>
-            <p>Yes. The complete prompt text is sent to the classifier model to determine which tier fits. This is necessary for accurate routing — a classifier can't judge complexity from a summary.</p>
+      <section
+        class="section install-section"
+        id="install"
+        aria-labelledby="install-title"
+      >
+        <div class="wrap">
+          <div class="section-heading compact">
+            <h2 id="install-title">Install</h2>
+            <p>Install the package, then initialize it in Pi.</p>
           </div>
-          <div class="card">
-            <h3>Does classification send data to another provider?</h3>
-            <p>Only if you enable the LLM classifier. The classifier model runs on a provider you choose in config — same as any other pi model. If you disable it or use regex-only routing, no prompt data leaves your machine beyond what pi already sends for normal chat.</p>
-          </div>
-          <div class="card">
-            <h3>Are prompts stored or logged?</h3>
-            <p>Not by Bifrost. Prompt text is used only for in-memory classification and optional cache lookups (stored locally in <code>.pi/bifrost-cache.jsonl</code> as normalized fingerprints, not raw text). If debug logging is enabled, timings and routing decisions are written to <code>.pi/bifrost-debug.jsonl</code>, but prompt text is never logged.</p>
-          </div>
-          <div class="card">
-            <h3>What happens when classification fails?</h3>
-            <p>The pipeline has four layers: direct bindings → cache → LLM classifier → regex fallback → default tier. If every layer fails, Bifrost doesn't route and pi uses its default model. A warning is shown. The classifier model errors (timeout, rate limit, unavailable) are caught individually — the next model in the list is tried.</p>
-          </div>
-          <div class="card">
-            <h3>How often does it pick an unsuitable model?</h3>
-            <p>Uncommon in practice. The LLM classifier is configured with your tier names and picks the most fitting one. If it consistently misclassifies, adjust your config: tighten regex rules, add a direct binding, or pin a tier. The <code>/bifrost preview</code> command shows what would be picked before you send.</p>
-          </div>
-          <div class="card">
-            <h3>Are tool calls and conversation context considered?</h3>
-            <p>Not yet. Each prompt is classified independently of conversation history. Tool call outputs and previous messages do not influence tier selection. This is a deliberate simplification — context-aware routing is planned for a future release, but it adds complexity and potential for unexpected model switches mid-conversation.</p>
-          </div>
+
+          <ol class="install-list">
+            <li>
+              <span>1</span>
+              <div class="command">
+                <code>pi install npm:pi-bifrost</code>
+                <button
+                  class="copy-button"
+                  type="button"
+                  data-copy="pi install npm:pi-bifrost"
+                >
+                  Copy<span class="sr-only"> install command</span>
+                </button>
+              </div>
+            </li>
+            <li>
+              <span>2</span>
+              <div class="command">
+                <code>/bifrost init</code>
+                <button
+                  class="copy-button"
+                  type="button"
+                  data-copy="/bifrost init"
+                >
+                  Copy<span class="sr-only"> setup command</span>
+                </button>
+              </div>
+            </li>
+          </ol>
         </div>
       </section>
 
-      <div id="install" class="install">
-        <h2>Install</h2>
-        <pre><code>pi install npm:pi-bifrost</code></pre>
-        <p style="color:var(--muted); font-size:0.9rem; margin-top:12px">Run <code>/bifrost init</code>, say yes. Done.</p>
-      </div>
+      <section class="section wrap" id="trust" aria-labelledby="trust-title">
+        <div class="section-heading compact">
+          <h2 id="trust-title">Privacy and failure behavior</h2>
+        </div>
 
-      <section aria-labelledby="setup-heading">
-        <h2 id="setup-heading">Setup</h2>
-        <p>One command. It probes every model you have access to, finds the ones that actually work, and writes a config.</p>
-        <pre><code>/bifrost init</code></pre>
-        <p style="font-size:0.85rem; margin-top:8px">Say yes. Done. Bifrost is now routing every prompt.</p>
+        <dl class="notes-list">
+          <div>
+            <dt>Classifier scope</dt>
+            <dd>
+              The optional classifier receives the complete current prompt, tier
+              names, and classifier instructions. It does not receive
+              conversation history, prior messages, or tool output.
+            </dd>
+          </div>
+          <div>
+            <dt>Local data</dt>
+            <dd>
+              The cache may store normalized, sorted prompt words in
+              <code>.pi/bifrost-cache.jsonl</code>. Debug logs contain routing
+              metadata, timings, and prompt length, not the prompt body.
+            </dd>
+          </div>
+          <div>
+            <dt>Classification failure</dt>
+            <dd>
+              Pi-Bifrost tries the next classifier candidate, then regex rules,
+              then the default tier. If nothing resolves, Pi keeps its current
+              model.
+            </dd>
+          </div>
+          <div>
+            <dt>Model failure</dt>
+            <dd>
+              If no candidate matches or the selected model cannot be activated,
+              Pi keeps its current model. Pi-Bifrost does not retry another routing
+              candidate at send time.
+            </dd>
+          </div>
+          <div>
+            <dt>Credentials</dt>
+            <dd>
+              Registry models use credentials managed by Pi. A custom classifier
+              <code>endpoint</code> is treated as an unauthenticated
+              OpenAI-compatible endpoint.
+            </dd>
+          </div>
+        </dl>
       </section>
 
-      <section aria-labelledby="strategies-heading">
-        <h2 id="strategies-heading">Selection Strategies</h2>
-        <p>How Bifrost picks from a tier's model list. Set globally or per-tier.</p>
+      <section
+        class="section wrap reference"
+        id="reference"
+        aria-labelledby="reference-title"
+      >
+        <div class="section-heading compact">
+          <h2 id="reference-title">Configuration and commands</h2>
+          <p>
+            A tier is a key in <code>models</code>, such as
+            <code>frontier</code>. A route rule uses the property
+            <code>model</code>: its value can be a tier name or an exact
+            <code>provider/id</code>. There is no <code>tier</code> property on
+            a route rule.
+          </p>
+        </div>
 
-        <table>
-          <caption style="text-align:left; margin-bottom:8px; color:var(--muted); font-size:0.85rem">Available strategies for selecting a model from a tier</caption>
-          <thead>
-            <tr>
-              <th scope="col">Strategy</th>
-              <th scope="col">Picks</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td><code>cheapest</code></td><td>Lowest input + output cost</td></tr>
-            <tr><td><code>cheapest_input</code></td><td>Lowest input cost</td></tr>
-            <tr><td><code>cheapest_output</code></td><td>Lowest output cost</td></tr>
-            <tr><td><code>largest_context</code></td><td>Biggest context window</td></tr>
-            <tr><td><code>random</code></td><td>Random pick</td></tr>
-            <tr><td><code>first</code> / <code>fastest</code></td><td>First in list (init orders by speed)</td></tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section aria-labelledby="commands-heading">
-        <h2 id="commands-heading">Commands</h2>
-        <p>The most used commands for daily work. Full reference in <a href="https://github.com/iamaamir/pi-bifrost">README</a>.</p>
-
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">Command</th>
-              <th scope="col">What it does</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr><td><code>/bifrost init</code></td><td>Probe models and write config — one-time setup</td></tr>
-            <tr><td><code>/bifrost preview &lt;prompt&gt;</code></td><td>See what model would be picked without sending</td></tr>
-            <tr><td><code>/bifrost on</code> / <code>off</code></td><td>Enable or disable routing</td></tr>
-            <tr><td><code>/bifrost pin</code> / <code>unpin</code></td><td>Lock current model / resume automatic routing</td></tr>
-            <tr><td><code>/bifrost reload</code></td><td>Reload config after editing</td></tr>
-            <tr><td><code>/bifrost classifier off</code></td><td>Disable LLM classifier, use regex only</td></tr>
-            <tr><td><code>/bifrost</code></td><td>Show current status</td></tr>
-          </tbody>
-        </table>
-      </section>
-
-      <section aria-labelledby="config-heading">
-        <h2 id="config-heading">Config</h2>
-        <p>Everything lives in <code>.pi/bifrost.json</code>. Editor autocomplete works in VS Code, Zed, Cursor.</p>
-
-        <p style="font-size:0.85rem; margin-top:-8px; color:var(--muted)">Prefix any prompt with <code>!tiername</code> to force a tier for one message. Set <code>"model": "provider/id"</code> in a rule to bypass tier selection and route directly to a specific model.</p>
-
-        <pre><code>{
+        <details open>
+          <summary>Configuration example</summary>
+          <div class="code-heading">
+            <span>.pi/bifrost.json</span>
+            <button
+              class="copy-button"
+              type="button"
+              data-copy-target="config-example"
+            >
+              Copy<span class="sr-only"> configuration example</span>
+            </button>
+          </div>
+          <pre><code id="config-example">{
   "enabled": true,
   "default": "economical",
   "strategy": "first",
   "categoryStrategies": { "economical": "cheapest" },
   "models": {
     "economical": [
-      "opencode/deepseek-v4-flash-free",
+      "ollama/qwen2.5-coder:latest",
       "lmstudio/openai/gpt-oss-20b"
     ],
     "frontier": [
-      "opencode-go/glm-5.1",
-      "opencode-go/grok-4.5"
+      "openai-codex/gpt-5.4",
+      "opencode-go/kimi-k3"
     ]
   },
   "rules": [
-    { "pattern": "\\b(debug|fix|implement)\\b", "model": "frontier" },
-    { "pattern": "\\b(explain|format|hello)\\b", "model": "economical" }
+    {
+      "pattern": "\\b(debug|fix|race condition)\\b",
+      "model": "frontier"
+    }
   ],
   "classifier": {
     "enabled": true,
-    "model": "opencode/mimo-v2.5-free"
+    "model": "opencode/deepseek-v4-flash-free",
+    "method": "auto"
   }
 }</code></pre>
+        </details>
+
+        <details open>
+          <summary>Selection strategies</summary>
+          <section
+            class="table-scroll"
+            tabindex="0"
+            aria-label="Selection strategies table"
+          >
+            <table>
+              <caption class="sr-only">
+                Pi-Bifrost selection strategies
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">Name</th>
+                  <th scope="col">Behavior</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>cheapest</code></td>
+                  <td>Lowest combined input and output cost</td>
+                </tr>
+                <tr>
+                  <td><code>cheapest_input</code></td>
+                  <td>Lowest input cost</td>
+                </tr>
+                <tr>
+                  <td><code>cheapest_output</code></td>
+                  <td>Lowest output cost</td>
+                </tr>
+                <tr>
+                  <td><code>largest_context</code></td>
+                  <td>Largest context window</td>
+                </tr>
+                <tr>
+                  <td><code>random</code></td>
+                  <td>Random available candidate</td>
+                </tr>
+                <tr>
+                  <td><code>first</code></td>
+                  <td>First available candidate in list order</td>
+                </tr>
+                <tr>
+                  <td><code>fastest</code></td>
+                  <td>
+                    Alias for <code>first</code>; init orders generated lists
+                    using one setup-time probe
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+        </details>
+
+        <details open>
+          <summary>Common commands</summary>
+          <dl class="command-reference">
+            <div>
+              <dt><code>/bifrost preview &lt;prompt&gt;</code></dt>
+              <dd>Preview without sending</dd>
+            </div>
+            <div>
+              <dt><code>/bifrost pin</code> / <code>unpin</code></dt>
+              <dd>Pause or resume routing</dd>
+            </div>
+            <div>
+              <dt><code>/bifrost classifier off</code></dt>
+              <dd>Use regex without LLM classification</dd>
+            </div>
+            <div>
+              <dt><code>/bifrost probe</code></dt>
+              <dd>Run availability checks</dd>
+            </div>
+            <div>
+              <dt><code>/bifrost reload</code></dt>
+              <dd>Reload config</dd>
+            </div>
+            <div>
+              <dt><code>/bifrost debug</code></dt>
+              <dd>Print config state and route rules</dd>
+            </div>
+          </dl>
+        </details>
       </section>
-
-      <section aria-labelledby="routing-heading">
-        <h2 id="routing-heading">How routing works</h2>
-        <p style="margin-bottom:16px">Every prompt flows through a pipeline. Each stage either returns a result or passes to the next.</p>
-
-        <div class="pipeline">
-          <div class="pipeline-step">
-            <div class="pipeline-box match">
-              <strong>Direct binding</strong>
-              <span>Rule with <code>provider/id</code>?</span>
-            </div>
-            <div class="pipeline-arrow">[ok]</div>
-            <div class="pipeline-arrow-fallback">[no]</div>
-          </div>
-          <div class="pipeline-step">
-            <div class="pipeline-box">
-              <strong>Cache</strong>
-              <span>Seen this prompt before?</span>
-            </div>
-            <div class="pipeline-arrow">[ok]</div>
-            <div class="pipeline-arrow-fallback">[no]</div>
-          </div>
-          <div class="pipeline-step">
-            <div class="pipeline-box accent">
-              <strong>LLM classifier</strong>
-              <span>Cheap model picks a tier</span>
-            </div>
-            <div class="pipeline-arrow">[ok]</div>
-            <div class="pipeline-arrow-fallback">[no]</div>
-          </div>
-          <div class="pipeline-step">
-            <div class="pipeline-box">
-              <strong>Regex rules</strong>
-              <span>Keyword patterns match</span>
-            </div>
-            <div class="pipeline-arrow">[ok]</div>
-            <div class="pipeline-arrow-fallback">[no]</div>
-          </div>
-          <div class="pipeline-step">
-            <div class="pipeline-box neutral">
-              <strong>Default tier</strong>
-              <span>Fallback when nothing matches</span>
-            </div>
-          </div>
-        </div>
-
-        <p style="margin-top:12px; font-size:0.85rem; color:var(--muted)">
-          <span style="color:#6ee7b7">[ok]</span> = return this tier &nbsp;&nbsp;
-          <span style="color:#fca5a5">[no]</span> = pass to next stage<br>
-          <span style="color:#a78bfa">[*]</span> Configurable — classifier model, threshold, method
-        </p>
-
-        <div class="grid" style="margin-top:24px">
-          <div class="card">
-            <h3>Classification takes ~2–500ms</h3>
-            <p>Cache hits and regex matches resolve in ~1–2ms. LLM classification takes 100–500ms depending on model. Direct bindings cost nothing beyond a regex check. You only pay for classification if you enable the LLM classifier.</p>
-          </div>
-          <div class="card">
-            <h3>Works with any pi provider</h3>
-            <p>No provider-specific logic. If pi can talk to a model, Bifrost can route to it. opencode, opencode-go, lmstudio, ollama, openai, anthropic, Google, custom providers — all supported.</p>
-          </div>
-          <div class="card">
-            <h3>What it doesn't do (yet)</h3>
-            <p>No conversation context awareness — each prompt is classified independently. No per-user routing or team policies. No budget enforcement. These are planned for v0.3+. For now, the classifier is optional and can be disabled if every millisecond matters.</p>
-          </div>
-          <div class="card">
-            <h3>Troubleshooting</h3>
-            <p><code>/bifrost preview &lt;prompt&gt;</code> shows what would fire before you send it. <code>/bifrost debug</code> dumps loaded config and rules. <code>/bifrost classifier off</code> disables the LLM if it's misbehaving. Debug logs at <code>.pi/bifrost-debug.jsonl</code> capture every decision.</p>
-          </div>
-          <div class="card" style="grid-column:1/-1">
-            <h3>Source &amp; issues</h3>
-            <p>
-              <a href="https://github.com/iamaamir/pi-bifrost">github.com/iamaamir/pi-bifrost</a> —
-              <a href="https://github.com/iamaamir/pi-bifrost/issues">report a bug</a> —
-              <a href="https://github.com/iamaamir/pi-bifrost/discussions">discussions</a>
-            </p>
-          </div>
-        </div>
-      </section>
-
     </main>
 
-    <footer role="contentinfo">
-      <p>
-        <a href="https://github.com/iamaamir/pi-bifrost">GitHub</a> &middot;
-        <a href="https://www.npmjs.com/package/pi-bifrost">npm</a> &middot;
-        <a href="https://pi.dev/packages">pi.dev/packages</a>
-      </p>
-      <p style="margin-top:8px"><span class="badge badge-purple">MIT</span> <span class="badge badge-green">v0.1.6</span></p>
+    <footer class="site-footer">
+      <div class="wrap footer-inner">
+        <p>Pi-Bifrost <span>v0.1.6</span></p>
+        <div>
+          <a href="https://github.com/iamaamir/pi-bifrost">GitHub</a>
+          <a href="https://www.npmjs.com/package/pi-bifrost">npm</a>
+          <a href="https://opensource.org/license/mit">MIT</a>
+        </div>
+      </div>
     </footer>
 
-  </div>
-</body>
+    <div
+      class="sr-only"
+      id="copy-status"
+      aria-live="polite"
+      aria-atomic="true"
+    ></div>
+    <script src="./site.js" defer></script>
+  </body>
 </html>
