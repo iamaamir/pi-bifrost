@@ -280,15 +280,15 @@
 
         <div class="grid-3" style="margin-top:24px">
           <div class="card">
-            <h3><span aria-hidden="true">🧠 </span>Prompt is classified</h3>
+            <h3>Prompt is classified</h3>
             <p>LLM or regex reads your prompt and assigns it to a tier — <code>frontier</code> for hard tasks, <code>economical</code> for simple ones, or any tier you define.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">🎯 </span>Best model is selected</h3>
+            <h3>Best model is selected</h3>
             <p>Your chosen strategy picks the best model from the tier: cheapest, fastest, largest context, or random. Every decision uses metadata only — no API calls.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">🔄 </span>Model switches automatically</h3>
+            <h3>Model switches automatically</h3>
             <p>Before your prompt reaches the LLM, pi switches to the selected model. You just type. The model changes behind the scenes.</p>
           </div>
         </div>
@@ -298,23 +298,23 @@
         <h2 id="features-heading">Why Bifrost</h2>
         <div class="grid-3">
           <div class="card">
-            <h3><span aria-hidden="true">🔬 </span>Never configure a dead model</h3>
+            <h3>Never configure a dead model</h3>
             <p>Bifrost tests every model with a real request before writing your config. Models that fail, time out, or need API keys you don't have are excluded automatically.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">⚡ </span>Routing costs nothing</h3>
+            <h3>Routing costs nothing</h3>
             <p>All 7 strategies use model metadata — token cost, context size — not API calls. Every routing decision is free. No tokens burned on the router itself.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">📊 </span>Trace every routing decision</h3>
+            <h3>Trace every routing decision</h3>
             <p>JSONL log captures which model was picked and why. Timestamps, classification source, tier, strategy. AI-parseable. If a surprise model fires, you can trace exactly why.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">🎯 </span>Pin models to prompts</h3>
+            <h3>Pin models to prompts</h3>
             <p>Bind <code>/commit</code> to your best model and <code>/explain</code> to your cheapest. Regex rules assign specific models to specific prompts, bypassing tier selection entirely.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">⚡ </span>Override mid-sentence</h3>
+            <h3>Override mid-sentence</h3>
             <p>Type <code>!frontier debug this</code> to force the expensive model for one message. No config edit, no unpin. The override is stripped before routing so the prompt is clean.</p>
           </div>
         </div>
@@ -451,32 +451,32 @@
               <strong>Direct binding</strong>
               <span>Rule with <code>provider/id</code>?</span>
             </div>
-            <div class="pipeline-arrow">✓</div>
-            <div class="pipeline-arrow-fallback">✗</div>
+            <div class="pipeline-arrow">[ok]</div>
+            <div class="pipeline-arrow-fallback">[no]</div>
           </div>
           <div class="pipeline-step">
             <div class="pipeline-box">
               <strong>Cache</strong>
               <span>Seen this prompt before?</span>
             </div>
-            <div class="pipeline-arrow">✓</div>
-            <div class="pipeline-arrow-fallback">✗</div>
+            <div class="pipeline-arrow">[ok]</div>
+            <div class="pipeline-arrow-fallback">[no]</div>
           </div>
           <div class="pipeline-step">
             <div class="pipeline-box accent">
               <strong>LLM classifier</strong>
               <span>Cheap model picks a tier</span>
             </div>
-            <div class="pipeline-arrow">✓</div>
-            <div class="pipeline-arrow-fallback">✗</div>
+            <div class="pipeline-arrow">[ok]</div>
+            <div class="pipeline-arrow-fallback">[no]</div>
           </div>
           <div class="pipeline-step">
             <div class="pipeline-box">
               <strong>Regex rules</strong>
               <span>Keyword patterns match</span>
             </div>
-            <div class="pipeline-arrow">✓</div>
-            <div class="pipeline-arrow-fallback">✗</div>
+            <div class="pipeline-arrow">[ok]</div>
+            <div class="pipeline-arrow-fallback">[no]</div>
           </div>
           <div class="pipeline-step">
             <div class="pipeline-box neutral">
@@ -487,9 +487,9 @@
         </div>
 
         <p style="margin-top:12px; font-size:0.85rem; color:var(--muted)">
-          <span style="color:#6ee7b7">✓</span> = return this tier &nbsp;&nbsp;
-          <span style="color:#fca5a5">✗</span> = pass to next stage<br>
-          <span style="color:#a78bfa">●</span> Configurable — classifier model, threshold, method
+          <span style="color:#6ee7b7">[ok]</span> = return this tier &nbsp;&nbsp;
+          <span style="color:#fca5a5">[no]</span> = pass to next stage<br>
+          <span style="color:#a78bfa">[*]</span> Configurable — classifier model, threshold, method
         </p>
 
         <div class="grid" style="margin-top:24px">
