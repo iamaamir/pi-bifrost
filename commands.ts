@@ -7,7 +7,7 @@ import { DEFAULT_RULES, loadConfig } from "./config.js";
 import type { CacheEntry } from "./cache.js";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.js";
 import type { ClassificationPipeline } from "./classification-pipeline.js";
-import { debug, debugMeasure } from "./debug.ts";
+import { setupDebug, debug, debugMeasure } from "./debug.ts";
 import { runProbe, PROBE_PROMPT_TEXT } from "./probe.js";
 import {
   findCandidates,
@@ -405,6 +405,8 @@ export function createCommandRouter(
     exact("reload", (_, ctx) => {
       const done = debugMeasure("command", "reload");
       state.config = loadConfig(process.cwd(), state.extensionDir);
+      // Re-init debug — user may have updated debug config since startup.
+      setupDebug(state.config.debug ?? { enabled: false }, process.cwd());
       state.enabled = state.config.enabled ?? true;
       state.classifierEnabled = state.config.classifier?.enabled ?? true;
       state.pinned = false;

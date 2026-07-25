@@ -1,6 +1,6 @@
 {
   "name": "pi-bifrost",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Query-aware model router for pi — inspects each prompt and switches to the best available model automatically.",
   "type": "module",
   "license": "MIT",
