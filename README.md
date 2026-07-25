@@ -1,6 +1,12 @@
 # Bifrost
 
-Automatic model routing for [pi](https://pi.dev). Reads your prompt, picks the right model, switches automatically. No thinking required.
+Automatic model routing for [pi](https://pi.dev). Reads your prompt, picks the right model, switches automatically.
+
+**Why Bifrost over other model routers:**
+
+- **Probe-first init** — tests every model before writing config. No dead providers in your tier lists.
+- **Zero-token routing** — 7 selection strategies, all metadata-based. Routing decisions cost nothing.
+- **Production observability** — Performance API traces, JSONL debug logs. AI-parseable.
 
 ## Install
 
