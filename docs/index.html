@@ -50,6 +50,23 @@
       outline: 2px solid var(--accent-glow);
       outline-offset: 2px;
     }
+    /* Primary CTA */
+    .cta-button {
+      display: inline-block;
+      background: linear-gradient(135deg, var(--accent), #6d28d9);
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 600;
+      padding: 12px 28px;
+      border-radius: 8px;
+      text-decoration: none;
+      transition: transform 0.15s, box-shadow 0.15s;
+    }
+    .cta-button:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 4px 20px rgba(124, 58, 237, 0.4);
+      text-decoration: none;
+    }
     /* Visually hidden but accessible to screen readers */
     .sr-only {
       position: absolute;
@@ -205,40 +222,12 @@
     <header role="banner">
       <h1>Bifrost</h1>
       <p>Automatically route each Pi prompt to a model based on task complexity, price, speed, or context length.</p>
+      <p style="margin-top:24px">
+        <a href="#install" class="cta-button">Get started →</a>
+      </p>
     </header>
 
     <main id="main">
-
-      <section aria-labelledby="features-heading">
-        <h2 id="features-heading" class="sr-only">Features</h2>
-        <div class="grid-3">
-          <div class="card">
-            <h3><span aria-hidden="true">🔬 </span>Probe-first init</h3>
-            <p>Tests every model with a real request before writing config. No dead providers, no phantom models.</p>
-          </div>
-          <div class="card">
-            <h3><span aria-hidden="true">⚡ </span>Zero-token routing</h3>
-            <p>7 selection strategies — cheapest, fastest, largest context — all metadata-based. Routing costs nothing.</p>
-          </div>
-          <div class="card">
-            <h3><span aria-hidden="true">📊 </span>Production observability</h3>
-            <p>Performance API traces, JSONL debug logs. Every decision timestamped. AI-parseable.</p>
-          </div>
-          <div class="card">
-            <h3><span aria-hidden="true">🎯 </span>Direct model bindings</h3>
-            <p>Assign specific models to specific prompts via regex rules. <code>\bcommit\b → opencode/glm-5.1</code>.</p>
-          </div>
-          <div class="card">
-            <h3><span aria-hidden="true">⚡ </span>Inline override</h3>
-            <p>Prefix any prompt with <code>!frontier</code> or <code>!economical</code> to force a tier for one message. No config change.</p>
-          </div>
-        </div>
-      </section>
-
-      <div class="install">
-        <h2>Install</h2>
-        <pre><code>pi install npm:pi-bifrost</code></pre>
-      </div>
 
       <section aria-labelledby="what-heading">
         <h2 id="what-heading">What it does</h2>
@@ -259,6 +248,38 @@
           </div>
         </div>
       </section>
+
+      <section aria-labelledby="features-heading">
+        <h2 id="features-heading">Why Bifrost</h2>
+        <div class="grid-3">
+          <div class="card">
+            <h3><span aria-hidden="true">🔬 </span>Probe-first init</h3>
+            <p>Tests every model with a real request before writing config. No dead providers, no phantom models.</p>
+          </div>
+          <div class="card">
+            <h3><span aria-hidden="true">⚡ </span>Zero-token routing</h3>
+            <p>7 selection strategies — cheapest, fastest, largest context — all metadata-based. Routing costs nothing.</p>
+          </div>
+          <div class="card">
+            <h3><span aria-hidden="true">📊 </span>Production observability</h3>
+            <p>Performance API traces, JSONL debug logs. Every decision timestamped. AI-parseable.</p>
+          </div>
+          <div class="card">
+            <h3><span aria-hidden="true">🎯 </span>Direct model bindings</h3>
+            <p>Assign specific models to specific prompts via regex rules. <code>\bcommit\b</code> → <code>opencode/glm-5.1</code>.</p>
+          </div>
+          <div class="card">
+            <h3><span aria-hidden="true">⚡ </span>Inline override</h3>
+            <p>Prefix any prompt with <code>!frontier</code> or <code>!economical</code> to force a tier for one message. No config change.</p>
+          </div>
+        </div>
+      </section>
+
+      <div id="install" class="install">
+        <h2>Install</h2>
+        <pre><code>pi install npm:pi-bifrost</code></pre>
+        <p style="color:var(--muted); font-size:0.9rem; margin-top:12px">Run <code>/bifrost init</code>, say yes. Done.</p>
+      </div>
 
       <section aria-labelledby="setup-heading">
         <h2 id="setup-heading">Setup</h2>
