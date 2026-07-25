@@ -1,0 +1,45 @@
+{
+  "$schema": "./schema.json",
+  "enabled": true,
+  "default": "economical",
+  "strategy": "first",
+  "categoryStrategies": {
+    "economical": "cheapest"
+  },
+  "classifier": {
+    "enabled": true,
+    "model": "opencode/deepseek-v4-flash-free",
+    "method": "auto",
+    "maxTokens": 20,
+    "temperature": 0,
+    "fallbackToRegex": true
+  },
+  "cache": {
+    "enabled": true,
+    "maxEntries": 500,
+    "threshold": 0.85
+  },
+  "debug": {
+    "enabled": false
+  },
+  "models": {
+    "economical": [
+      "ollama/qwen2.5-coder:latest",
+      "lmstudio/openai/gpt-oss-20b"
+    ],
+    "frontier": [
+      "openai-codex/gpt-5.4",
+      "opencode-go/kimi-k3"
+    ]
+  },
+  "rules": [
+    {
+      "pattern": "\\b(plan|design|architect|refactor|debug|fix|implement|complex|performance|memory leak|race condition)\\b",
+      "model": "frontier"
+    },
+    {
+      "pattern": "\\b(explain|summarize|define|what is|how to|format|lint|convert|hello|idea)\\b",
+      "model": "economical"
+    }
+  ]
+}

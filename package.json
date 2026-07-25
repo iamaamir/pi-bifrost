@@ -1,0 +1,31 @@
+{
+  "name": "pi-bifrost",
+  "version": "0.1.0",
+  "description": "query-aware model router for the pi",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "model-router"
+  ],
+  "license": "MIT",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "minPiVersion": "0.80.8"
+  },
+  "scripts": {
+    "test": "node --test --experimental-strip-types tests/cache.test.ts tests/classifier.test.ts tests/routing.test.ts tests/pipeline.test.ts tests/commands.test.ts",
+    "test:integration": "cd .. && node --test pi-bifrost/tests/integration.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1"
+  }
+}

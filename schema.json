@@ -1,0 +1,189 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://pi.dev/schemas/bifrost.json",
+  "title": "Bifrost Model Router Config",
+  "description": "Configuration for the pi-bifrost query-aware model router. Maps user prompts to model tiers via regex rules and an optional LLM classifier. Merged from extension defaults → global → project-local → root.",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "description": "Enable or disable the model router. When disabled, all requests use the default model.",
+      "default": true
+    },
+    "default": {
+      "type": "string",
+      "description": "Model tier to use when no rule matches and the classifier returns no category. Must match a key in 'models'.",
+      "default": "economical",
+      "examples": ["economical", "frontier"]
+    },
+    "strategy": {
+      "type": "string",
+      "enum": ["first", "cheapest", "cheapest_input", "cheapest_output", "largest_context", "random", "fastest"],
+      "description": "Model selection strategy. 'first'/'fastest' picks first candidate (list should be pre-sorted). 'cheapest' sorts by input+output cost. 'cheapest_input' by input cost. 'cheapest_output' by output cost. 'largest_context' by context window. 'random' picks randomly.",
+      "default": "first"
+    },
+    "categoryStrategies": {
+      "type": "object",
+      "description": "Per-tier strategy overrides. Keys must match tier names in 'models'. If a tier is not listed here, 'strategy' is used.",
+      "default": { "economical": "cheapest" },
+      "additionalProperties": {
+        "type": "string",
+        "enum": ["first", "cheapest", "cheapest_input", "cheapest_output", "largest_context", "random", "fastest"]
+      }
+    },
+    "models": {
+      "type": "object",
+      "description": "Model tiers. Each key is a tier name (e.g. 'frontier', 'economical'). Values are provider/model patterns — either a single string or an ordered array of candidate patterns.",
+      "default": {},
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string" },
+          {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        ]
+      },
+      "examples": [
+        {
+          "frontier": ["opencode/deepseek-v4-flash-free"],
+          "economical": ["ollama/qwen2.5-coder:latest", "lmstudio/openai/gpt-oss-20b"]
+        }
+      ]
+    },
+    "rules": {
+      "type": "array",
+      "description": "Regex-based routing rules applied in order. First matching rule determines the model tier. Case-insensitive matching. If no rule matches, the 'default' tier is used. Prefer using bifrost-routes.json for project-specific rules — it overrides this field.",
+      "x-aiHints": {
+        "danger": "Wrong regex can misroute all requests. Test with /bifrost preview <prompt> before committing.",
+        "atomic": true
+      },
+      "items": {
+        "$ref": "#/definitions/RouteRule"
+      }
+    },
+    "classifier": {
+      "$ref": "#/definitions/ClassifierConfig"
+    },
+    "cache": {
+      "$ref": "#/definitions/CacheConfig"
+    },
+    "debug": {
+      "$ref": "#/definitions/DebugConfig"
+    }
+  },
+  "definitions": {
+    "RouteRule": {
+      "type": "object",
+      "required": ["pattern", "model"],
+      "additionalProperties": false,
+      "properties": {
+        "pattern": {
+          "type": "string",
+          "description": "JavaScript regex pattern (without flags, double-escaped). Matched case-insensitively against the user's prompt. Example: '\\\\b(debug|fix|refactor)\\\\b'"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model tier name. Must match a key in the 'models' map."
+        }
+      }
+    },
+    "ClassifierConfig": {
+      "type": "object",
+      "description": "LLM-based classifier that inspects user prompts and selects a tier before falling back to regex rules. Set 'enabled: false' to use regex-only routing.",
+      "required": ["model"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable the LLM classifier. When disabled, only regex rules are used.",
+          "default": true
+        },
+        "model": {
+          "type": "string",
+          "description": "Model pattern for the classifier. Use the cheapest model you trust — each classification costs tokens. Example: 'ollama/qwen2.5-coder:latest'"
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "Optional base URL for the classifier when the model is not in pi's model registry. Example: 'http://127.0.0.1:1234/v1'. When set, only method='direct' works for that endpoint."
+        },
+        "method": {
+          "type": "string",
+          "enum": ["direct", "subprocess", "auto"],
+          "description": "How to invoke the classifier. 'direct' uses a fast OpenAI-compatible HTTP call (needs compatible API). 'subprocess' spawns a fresh pi CLI (slower but supports any provider). 'auto' tries direct first, falls back to subprocess.",
+          "default": "auto"
+        },
+        "maxTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Max output tokens for the classifier. Keep it low — only need the category name back.",
+          "default": 20
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Temperature for classifier sampling. 0 for deterministic category selection.",
+          "default": 0
+        },
+        "fallbackToRegex": {
+          "type": "boolean",
+          "description": "Fall back to regex rules when the classifier fails or returns an unknown category.",
+          "default": true
+        },
+        "systemPrompt": {
+          "type": "string",
+          "description": "Custom system prompt for the classifier. Override to change how categories are presented to the LLM.",
+          "default": "You are a routing classifier. Pick the category that best matches the task complexity and type. Respond with only the exact category name. No explanation, no punctuation."
+        }
+      }
+    },
+    "CacheConfig": {
+      "type": "object",
+      "description": "Fuzzy classification cache. Repeated or similar prompts reuse the cached category instead of calling the classifier again.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable the classification cache.",
+          "default": true
+        },
+        "maxEntries": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000,
+          "description": "Maximum number of cached entries. Oldest entries (by last use) are evicted first.",
+          "default": 500
+        },
+        "threshold": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Jaccard similarity threshold for fuzzy cache matches. 0 = any prompt matches. 1 = only exact token matches.",
+          "default": 0.85
+        },
+        "path": {
+          "type": "string",
+          "description": "Custom path for the cache file. Absolute, ~-prefixed, or relative to project root. Default: .pi/bifrost-cache.jsonl"
+        }
+      }
+    },
+    "DebugConfig": {
+      "type": "object",
+      "description": "Structured debug logging. Appends JSONL lines to a file for performance analysis and troubleshooting. Disabled by default.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable debug logging.",
+          "default": false
+        },
+        "path": {
+          "type": "string",
+          "description": "Custom path for the debug log file. Default: .pi/bifrost-debug.jsonl"
+        }
+      }
+    }
+  }
+}
