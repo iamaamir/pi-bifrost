@@ -171,8 +171,21 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const text = event.text.trim();
     if (text.startsWith("/")) return { action: "continue" };
 
+    // Inline tier override: !f forces frontier, !e forces economical.
+    let forcedTier: string | undefined;
+    let promptText = text;
+    const inlineMatch = text.match(/^!([a-z]+)\s+/);
+    if (inlineMatch) {
+      const candidate = inlineMatch[1];
+      if (state.config.models?.[candidate]) {
+        forcedTier = candidate;
+        promptText = text.slice(inlineMatch[0].length);
+        debug("input", "inline_override", { tier: forcedTier });
+      }
+    }
+
     const endInput = debugMeasure("input", "total");
-    debug("input", "prompt", { length: text.length });
+    debug("input", "prompt", { length: promptText.length });
 
     if (state.classifierEnabled) {
       const endRefresh = debugMeasure("input", "registry.refresh");
@@ -188,7 +201,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
     uiBusy(ctx, "Bifrost classifying...");
     const endClassify = debugMeasure("input", "classify");
-    const classification = await getPipeline(ctx).classify(text);
+    const classification = forcedTier
+      ? { kind: "classified" as const, tier: forcedTier, source: "inline" as const }
+      : await getPipeline(ctx).classify(promptText);
     endClassify({ kind: classification.kind, tier: classification.kind !== "unclassified" ? classification.tier : undefined });
     uiDone(ctx);
 
@@ -221,7 +236,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       const maxEntries = state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES;
       if (state.config.cache?.enabled ?? true) {
         const endCacheSave = debugMeasure("input", "cacheSave");
-        state.cacheEntries = updateCache(state.cacheEntries, text, tier, maxEntries);
+        state.cacheEntries = updateCache(state.cacheEntries, promptText, tier, maxEntries);
         saveCache(cachePath(process.cwd(), state.config.cache?.path), state.cacheEntries);
         invalidatePipeline();
         endCacheSave({ entries: state.cacheEntries.length });

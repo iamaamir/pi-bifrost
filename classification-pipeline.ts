@@ -4,7 +4,7 @@ import { debug, debugMeasure } from "./debug.ts";
 
 // ── ADT result type ────────────────────────────────────────────
 
-export type ClassificationSource = "cache" | "classifier" | "regex";
+export type ClassificationSource = "cache" | "classifier" | "regex" | "inline";
 
 export type ClassificationResult =
   | { readonly kind: "classified"; readonly tier: string; readonly source: ClassificationSource }
@@ -89,9 +89,17 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
     const endRegex = debugMeasure("pipeline", "regex");
     const regex = regexClassify(text, regexRules);
     endRegex({ match: !!regex, tier: regex });
-    if (regex && tiers.includes(regex)) {
-      debug("pipeline", "result", { source: "regex", tier: regex });
-      return { kind: "classified", tier: regex, source: "regex" };
+    if (regex) {
+      if (tiers.includes(regex)) {
+        // Tier name match — route through strategy.
+        debug("pipeline", "result", { source: "regex", tier: regex });
+        return { kind: "classified", tier: regex, source: "regex" };
+      }
+      if (regex.includes("/")) {
+        // Direct model reference (e.g. "opencode-go/glm-5.1" in rule).
+        debug("pipeline", "result", { source: "regex", tier: regex, direct: true });
+        return { kind: "classified", tier: regex, source: "regex" };
+      }
     }
 
     // Stage 4: default fallback

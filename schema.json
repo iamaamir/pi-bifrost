@@ -84,7 +84,7 @@
         },
         "model": {
           "type": "string",
-          "description": "Model tier name. Must match a key in the 'models' map."
+          "description": "Model tier name OR a direct model reference (e.g. 'opencode-go/glm-5.1'). If the value contains '/', it's treated as an exact provider/id lookup and bypasses tier selection. Otherwise, it must match a key in the 'models' map."
         }
       }
     },

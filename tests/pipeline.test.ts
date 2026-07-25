@@ -158,6 +158,35 @@ describe("classification-pipeline", () => {
       }
     });
 
+    it("matches regex rule with direct model reference", async () => {
+      const p = createPipeline(
+        deps({
+          regexRules: [{ pattern: "\\bcommit\\b", model: "opencode-go/glm-5.1" }],
+        }),
+      );
+      const r = await p.classify("commit the changes");
+      assert.equal(r.kind, "classified");
+      if (r.kind === "classified") {
+        assert.equal(r.tier, "opencode-go/glm-5.1");
+        assert.equal(r.source, "regex");
+      }
+    });
+
+    it("direct model reference bypasses tier lookup", async () => {
+      // Model reference "unknown/model" is not in tiers, should still match.
+      const p = createPipeline(
+        deps({
+          regexRules: [{ pattern: ".*", model: "custom/model" }],
+          tiers: ["frontier"],
+        }),
+      );
+      const r = await p.classify("anything");
+      assert.equal(r.kind, "classified");
+      if (r.kind === "classified") {
+        assert.equal(r.tier, "custom/model");
+      }
+    });
+
     it("falls through to default when no rule matches", async () => {
       const p = createPipeline(
         deps({

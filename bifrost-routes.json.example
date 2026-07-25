@@ -1,0 +1,10 @@
+[
+  {
+    "pattern": "\\b(plan|design|architect|refactor|debug|fix|implement|complex|performance|memory leak|race condition)\\b",
+    "model": "frontier"
+  },
+  {
+    "pattern": "\\b(explain|summarize|define|what is|how to|format|lint|convert|hello|idea)\\b",
+    "model": "economical"
+  }
+]
