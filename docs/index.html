@@ -400,32 +400,33 @@
 }</code></pre>
       </section>
 
-      <section aria-labelledby="built-heading">
-        <h2 id="built-heading">Built with</h2>
+      <section aria-labelledby="arch-heading">
+        <h2 id="arch-heading">Architecture</h2>
+        <p style="margin-bottom:12px">Bifrost runs in-process as a pi extension. No proxy, no daemon, no external service. Classification and routing happen synchronously before each prompt is sent.</p>
         <div class="grid">
           <div class="card">
-            <h3><span aria-hidden="true">⚡ </span>Zero-token strategies</h3>
-            <p>All 7 selection strategies use model metadata only — no API calls, no tokens spent on routing.</p>
+            <h3>Pipeline order</h3>
+            <p>Direct model refs (pre-check) → cache → LLM classifier → regex fallback → default tier. Each stage only runs if the previous one didn't match. Average classification: ~2ms (regex/cache) to ~300ms (LLM).</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">📊 </span>Probe-verified</h3>
-            <p>Init tests every model with a real request. Only working models make it into your config.</p>
+            <h3>Selection strategies</h3>
+            <p>All 7 strategies use model metadata (cost per token, context window size) — zero API calls, zero tokens spent on routing. Models sorted by probe speed at init so <code>fastest</code> picks the snappiest responder.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">🎯 </span>Direct bindings</h3>
-            <p>Route specific prompts to specific models via <code>model: "provider/id"</code> in rules. Bypasses tier selection.</p>
+            <h3>Cache</h3>
+            <p>Up to 500 recent classifications cached locally with fuzzy matching (Jaccard similarity, default threshold 0.85). Cache is persisted to <code>.pi/bifrost-cache.jsonl</code> and survives restarts.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">⚡ </span>Inline override</h3>
-            <p>Type <code>!economical &lt;prompt&gt;</code> to force a tier for one message. Works in any chat.</p>
+            <h3>Debugging</h3>
+            <p>Every decision recorded to <code>.pi/bifrost-debug.jsonl</code> — classification source, tier, selected model, timing. AI-parseable. Run <code>/bifrost debug</code> for a live config dump.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">🧠 </span>Dual classifier</h3>
-            <p>LLM reads your prompt for accuracy. Regex catches what the LLM misses. Direct bindings win both.</p>
+            <h3>Config merge</h3>
+            <p>Config loads from four layers: extension defaults → global agent → project <code>.pi/</code> → project root. Each overrides the last. Merged recursively so per-project overrides coexist with global settings.</p>
           </div>
           <div class="card">
-            <h3><span aria-hidden="true">🔍 </span>Debug logging</h3>
-            <p>JSONL trace of every decision, timing, and model switch. AI-parseable. <code>/bifrost debug</code> for live state.</p>
+            <h3>Zero dependencies at runtime</h3>
+            <p>Bifrost bundles no runtime dependencies. It uses only pi's built-in APIs (<code>@earendil-works/pi-ai</code>, <code>@earendil-works/pi-coding-agent</code>) and Node.js standard library.</p>
           </div>
         </div>
       </section>
