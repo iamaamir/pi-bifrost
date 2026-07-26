@@ -1,0 +1,30 @@
+{
+  "$schema": "../schema.json",
+  "enabled": true,
+  "default": "economical",
+  "strategy": "first",
+  "classifier": {
+    "enabled": false,
+    "model": "ollama/qwen2.5-coder:latest"
+  },
+  "models": {
+    "economical": [
+      "ollama/qwen2.5-coder:latest",
+      "lmstudio/openai/gpt-oss-20b"
+    ],
+    "frontier": [
+      "ollama/deepseek-r1:latest",
+      "lmstudio/openai/gpt-oss-120b"
+    ]
+  },
+  "rules": [
+    {
+      "pattern": "\\b(debug|fix|race condition|refactor|architect|implement)\\b",
+      "model": "frontier"
+    },
+    {
+      "pattern": "\\b(explain|summarize|format|convert|hello)\\b",
+      "model": "economical"
+    }
+  ]
+}

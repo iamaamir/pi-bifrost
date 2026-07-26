@@ -1,0 +1,14 @@
+[
+  {
+    "pattern": "\\b(component|css|layout|responsive|accessibility)\\b",
+    "model": "frontend"
+  },
+  {
+    "pattern": "\\b(schema|migration|query|transaction|index)\\b",
+    "model": "backend"
+  },
+  {
+    "pattern": "\\b(deploy|docker|terraform|kubernetes|pipeline)\\b",
+    "model": "infrastructure"
+  }
+]

@@ -1,0 +1,40 @@
+{
+  "$schema": "../schema.json",
+  "enabled": true,
+  "default": "quick",
+  "strategy": "first",
+  "categoryStrategies": {
+    "quick": "cheapest",
+    "deep": "largest_context",
+    "long-context": "largest_context"
+  },
+  "classifier": {
+    "enabled": true,
+    "model": "opencode/deepseek-v4-flash-free",
+    "method": "auto",
+    "fallbackToRegex": true
+  },
+  "models": {
+    "quick": [
+      "ollama/qwen2.5-coder:latest",
+      "lmstudio/openai/gpt-oss-20b"
+    ],
+    "deep": [
+      "openai-codex/gpt-5.4",
+      "opencode-go/kimi-k3"
+    ],
+    "long-context": [
+      "provider/replace-with-large-context-model"
+    ]
+  },
+  "rules": [
+    {
+      "pattern": "\\b(repository|codebase|whole project|large log|migration|trace|conversation history)\\b",
+      "model": "long-context"
+    },
+    {
+      "pattern": "\\b(debug|fix|race condition|refactor|architect|implement)\\b",
+      "model": "deep"
+    }
+  ]
+}

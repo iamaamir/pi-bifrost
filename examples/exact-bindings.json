@@ -1,0 +1,28 @@
+{
+  "$schema": "../schema.json",
+  "enabled": true,
+  "default": "economical",
+  "strategy": "first",
+  "models": {
+    "economical": [
+      "ollama/qwen2.5-coder:latest"
+    ],
+    "frontier": [
+      "openai-codex/gpt-5.4"
+    ]
+  },
+  "rules": [
+    {
+      "pattern": "\\b(commit|changelog|release notes)\\b",
+      "model": "openai-codex/gpt-5.4"
+    },
+    {
+      "pattern": "\\b(test|lint|format)\\b",
+      "model": "ollama/qwen2.5-coder:latest"
+    },
+    {
+      "pattern": "\\b(security audit|threat model|credential leak)\\b",
+      "model": "frontier"
+    }
+  ]
+}

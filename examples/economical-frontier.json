@@ -1,0 +1,43 @@
+{
+  "$schema": "../schema.json",
+  "enabled": true,
+  "default": "economical",
+  "strategy": "first",
+  "categoryStrategies": {
+    "economical": "cheapest",
+    "frontier": "largest_context"
+  },
+  "classifier": {
+    "enabled": true,
+    "model": "opencode/deepseek-v4-flash-free",
+    "method": "auto",
+    "maxTokens": 20,
+    "temperature": 0,
+    "fallbackToRegex": true
+  },
+  "cache": {
+    "enabled": true,
+    "maxEntries": 500,
+    "threshold": 0.85
+  },
+  "models": {
+    "economical": [
+      "ollama/qwen2.5-coder:latest",
+      "lmstudio/openai/gpt-oss-20b"
+    ],
+    "frontier": [
+      "openai-codex/gpt-5.4",
+      "opencode-go/kimi-k3"
+    ]
+  },
+  "rules": [
+    {
+      "pattern": "\\b(debug|fix|race condition|refactor|architect|implement)\\b",
+      "model": "frontier"
+    },
+    {
+      "pattern": "\\b(explain|summarize|format|convert|hello)\\b",
+      "model": "economical"
+    }
+  ]
+}
