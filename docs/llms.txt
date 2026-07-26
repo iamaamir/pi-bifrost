@@ -1,0 +1,55 @@
+# Pi-Bifrost
+
+> Query-aware model routing extension for the Pi coding agent.
+
+Pi-Bifrost classifies prompts into configured tiers, selects an available model, and switches Pi's active model before sending. It is designed for predictable, inspectable routing with manual overrides and safe fallbacks.
+
+## Links
+
+- Landing page: https://iamaamir.github.io/pi-bifrost/
+- Source and documentation: https://github.com/iamaamir/pi-bifrost
+- npm package: https://www.npmjs.com/package/pi-bifrost
+- License: https://opensource.org/license/mit
+
+## Install
+
+```sh
+pi install npm:pi-bifrost
+```
+
+Initialize inside Pi:
+
+```text
+/bifrost init
+```
+
+## Routing
+
+1. Direct regex bindings can target an exact `provider/id`.
+2. Cached classifications can be reused.
+3. Prompts can be classified with regex rules or an optional LLM classifier.
+4. A model is selected from the matching tier.
+5. Pi activates the selected model before sending.
+
+Metadata-based routing does not require an additional model call. LLM classification is optional and may add tokens and latency on cache misses.
+
+## Selection strategies
+
+Supported strategies include `cheapest`, `cheapest_input`, `cheapest_output`, `largest_context`, `random`, `first`, and `fastest`.
+
+## Controls
+
+- `/bifrost preview <prompt>` previews a route without sending.
+- `/bifrost pin` pauses routing.
+- `/bifrost unpin` resumes routing.
+- `/bifrost classifier off` disables LLM classification.
+- `/bifrost probe` checks model availability.
+- `/bifrost reload` reloads configuration.
+
+## Failure behavior
+
+If classification fails, Pi-Bifrost tries configured fallbacks, then keeps Pi's current model if no route resolves. If no matching model can be activated, Pi keeps its current model.
+
+## Privacy
+
+The optional classifier receives the current prompt, tier names, and classifier instructions. It does not receive conversation history, prior messages, or tool output. Local cache and debug logging are optional.
