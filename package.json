@@ -38,6 +38,7 @@
     "test:integration": "node --test --experimental-strip-types tests/integration/integration.test.mjs",
     "test:ui": "python3 scripts/ui-smoke.py",
     "test:ui:agent-tui": "bash scripts/ui-smoke-agent-tui.sh",
+    "test:ui:reliability": "bash scripts/ui-reliability-fake-provider.sh",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "release": "node --experimental-strip-types scripts/release.mjs"
