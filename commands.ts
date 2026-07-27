@@ -9,7 +9,8 @@ import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD
 import type { ClassificationPipeline } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
 import { runProbe, PROBE_PROMPT_TEXT } from "./probe.ts";
-import { setBifrostModeStatus } from "./ux-status.ts";
+import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
+import { showBifrostResult } from "./result-viewer.ts";
 import {
   findCandidates,
   getStrategy,
@@ -65,6 +66,11 @@ function uiOutput(ctx: ExtensionContext, lines: string[]) {
   } else {
     for (const line of lines) console.error(`[bifrost] ${line}`);
   }
+}
+
+async function uiResult(ctx: ExtensionContext, title: string, lines: string[]): Promise<void> {
+  if (await showBifrostResult(ctx, title, lines)) return;
+  for (const line of lines) console.error(`[bifrost] ${line}`);
 }
 
 export function clearBifrostWidgets(ctx: ExtensionContext) {
@@ -327,9 +333,15 @@ async function handleBenchmark(
   }
 
   clearBifrostWidgets(ctx);
+  setBifrostStatus(ctx, "benchmarking prompt...", "accent");
   uiBusy(ctx, "Classifying benchmark prompt...");
-  const classification = await state.getPipeline(ctx).classify(prompt);
-  uiDone(ctx);
+  let classification;
+  try {
+    classification = await state.getPipeline(ctx).classify(prompt);
+  } finally {
+    uiDone(ctx);
+    syncBifrostModeStatus(ctx, state);
+  }
   const tier = classification.kind !== "unclassified" ? classification.tier : undefined;
   const source = classification.kind === "classified" ? classification.source : "fallback";
 
@@ -348,7 +360,7 @@ async function handleBenchmark(
   }
 
   lines.push("-----------------");
-  uiOutput(ctx, lines);
+  await uiResult(ctx, "Bifrost benchmark", lines);
 }
 
 async function handlePreview(
@@ -363,9 +375,15 @@ async function handlePreview(
   }
 
   clearBifrostWidgets(ctx);
+  setBifrostStatus(ctx, "previewing prompt...", "accent");
   uiBusy(ctx, "Classifying preview prompt...");
-  const classification = await state.getPipeline(ctx).classify(prompt);
-  uiDone(ctx);
+  let classification;
+  try {
+    classification = await state.getPipeline(ctx).classify(prompt);
+  } finally {
+    uiDone(ctx);
+    syncBifrostModeStatus(ctx, state);
+  }
   if (classification.kind === "unclassified") {
     log(ctx, "no tier matched", "warning");
     return;
@@ -374,7 +392,7 @@ async function handlePreview(
   const source = classification.kind === "classified" ? classification.source : "fallback";
   const display = resolveTierDisplay(tier, state.config, ctx);
 
-  uiOutput(ctx, [
+  await uiResult(ctx, "Bifrost preview", [
     "--- preview ---",
     `prompt:    ${prompt}`,
     `source:    ${source}`,

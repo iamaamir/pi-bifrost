@@ -56,7 +56,7 @@ If you manually switch models with `/model`, Bifrost pins itself and stops routi
 
 ## UI smoke test
 
-Run `npm run test:ui` to capture Pi TUI screenshots for startup, dashboard, disabled, classify, and pinned states. Output lands in `screenshots/ui-smoke/`.
+Run `npm run test:ui` to capture Pi TUI screenshots for startup, dashboard, preview, disabled, classify, and pinned states. Output lands in `screenshots/ui-smoke/`.
 
 UI backlog and priorities: [`docs/ui-enhancements.md`](docs/ui-enhancements.md).
 

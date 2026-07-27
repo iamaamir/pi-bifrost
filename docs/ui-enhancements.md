@@ -7,7 +7,8 @@ Inventory of user-facing extension improvements. Ordered by user value, then imp
 - Footer status: mode and transient classification progress.
 - `/bifrost` dashboard: mode, current model, contextual quick actions.
 - Autocomplete: subcommands and descriptions.
-- Widgets: init, probe, preview, benchmark, providers, debug.
+- Scrollable ephemeral overlay: preview and benchmark results; no session entries or LLM context.
+- Widgets: init, probe, providers, debug.
 - Notifications: command result, warning, error.
 - PTY smoke: startup, dashboard, disabled, classify, pinned.
 
@@ -29,7 +30,7 @@ Inventory of user-facing extension improvements. Ordered by user value, then imp
 | Status | Enhancement | Outcome | Notes |
 |---|---|---|---|
 | Done | Footer mode/progress | Mode plus classification activity visible | One Bifrost `setStatus`; Pi footer stays intact. |
-| Next | Last decision | Dashboard shows tier/source/model/duration | Keep ephemeral; no LLM context. |
+| Next — prioritized | Last decision | Dashboard shows tier/source/model/duration and bypass reason | Update after every normal prompt; ephemeral only, no LLM context or durable session entry. |
 | Next | Decision trace | Cache → classifier → regex → default explanation | Reuse debug events; redact prompt by default. |
 | Next | Switch feedback | Brief previous → selected model notice | Suppress no-op switches; distinguish manual pin. |
 | Next | Bypass explanation | Explain disabled/pinned/no-match/missing-model | Show actual reason, not generic status. |
@@ -43,7 +44,7 @@ Inventory of user-facing extension improvements. Ordered by user value, then imp
 | Done | Probe progress widget | Counts/errors/recent models | Remove at completion. |
 | Next | Probe summary card | Health counts, duration, report age/path, retry | Compact default; drill-down optional. |
 | Next | Init review screen | Compare proposal before config write | Highlight uncategorized/overwrite impact. |
-| Next | Preview card | Tier/source/model/alternatives/costs | Current text widget is dense. |
+| Done | Preview/benchmark result viewer | Scrollable tier/source/model/alternatives/costs | Ephemeral overlay; full output remains reachable with ↑↓/jk. |
 | Next | Benchmark comparison | Sort/filter candidate metadata | Never run models for this view. |
 | Next | Result lifecycle | Pin, dismiss, copy, rerun | Prevent stale widgets covering editor. |
 
@@ -88,7 +89,7 @@ Inventory of user-facing extension improvements. Ordered by user value, then imp
 | Next | Sanitized diagnostics export | Config/probe/debug bundle | Exclude prompts/cache by default. |
 | Next | Metrics summary | Cache/classifier/regex/default distribution | Session scope first; show sample size. |
 | Done | Command picker unit tests | Completion and recovery behavior | `tests/bifrost-commands.test.ts`. |
-| Done | PTY smoke harness | Key TUI screenshots | `npm run test:ui`. |
+| Done | PTY smoke harness | Key TUI screenshots, including result overlay | `npm run test:ui`. |
 | Next | Dashboard ANSI assertion | Assert selector content in smoke capture | Improve parser frame fidelity first. |
 | Next | Interaction smoke | Select actions, cancel, destructive confirmations | Temp config/cache only. |
 | Next | Width/theme matrix | 80/120/160 columns, default/high contrast | Screenshot and text snapshots. |
@@ -105,8 +106,8 @@ Inventory of user-facing extension improvements. Ordered by user value, then imp
 
 ## Suggested order
 
-1. `help`, nested completion, contextual dashboard ordering.
-2. Last-decision panel plus bypass/switch feedback.
-3. Probe/init/preview cards and confirmations.
-4. Config health/repair plus cache/classifier dashboards.
+1. Last-decision dashboard row: tier, source, model, elapsed time, and bypass reason. Ephemeral only.
+2. `help`, nested completion, contextual dashboard ordering, and cache-clear confirmation.
+3. Probe/init cards plus config health/recovery.
+4. Cache/classifier dashboards and routing metrics.
 5. Interaction smoke, width/theme matrix, UI release checklist.

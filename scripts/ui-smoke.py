@@ -477,6 +477,8 @@ def main() -> int:
     captures = [
         ("startup", True, []),
         ("dashboard", True, [(1.0, "/bifrost\r")]),
+        ("preview", True, [(0.5, "/bifrost classifier off\r"), (0.5, "/bifrost preview hello\r")]),
+        ("preview-dismiss", True, [(0.5, "/bifrost classifier off\r"), (0.5, "/bifrost preview hello\r"), (0.5, "\x1b")]),
         ("disabled", False, []),
         ("classify", True, [(1.0, "hello\r")]),
         ("pinned", True, [(1.0, "\x10")]),
