@@ -23,7 +23,7 @@ const ROOT = join(SCRIPT_DIR, "..");
 function run(cmd, silent = false) {
   try {
     const result = execSync(cmd, { cwd: ROOT, encoding: "utf-8", stdio: silent ? "pipe" : "inherit" });
-    return result.trim();
+    return (result || "").trim();
   } catch (err) {
     console.error(`[release] Command failed: ${cmd}`);
     throw err;
