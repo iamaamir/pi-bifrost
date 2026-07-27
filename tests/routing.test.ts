@@ -214,6 +214,31 @@ describe("routing", () => {
       assert.equal(result.fallbackReason, "requested_tier_unhealthy");
       assert.equal(result.skipped[0]?.key, "anthropic/claude-opus");
     });
+
+    it("returns all_tiers_exhausted when both tiers have no healthy candidates", () => {
+      const broken = makeModel("anthropic", "claude-opus", 15);
+      const alsoBroken = makeModel("openai", "gpt-4.1-mini", 1);
+      const ctx = makeCtx([broken, alsoBroken]);
+      const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 60 };
+      const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+      let state = emptyReliabilityState();
+      state = recordModelFailure(state, modelKey(broken), cfg, now, "probe", "timeout");
+      state = recordModelFailure(state, modelKey(alsoBroken), cfg, now, "probe", "timeout");
+
+      const result = resolveModelWithFallback(ctx, {
+        requestedTier: "frontier",
+        requestedPattern: ["anthropic/claude-opus"],
+        requestedStrategy: "first",
+        defaultTier: "economical",
+        defaultPattern: ["openai/gpt-4.1-mini"],
+        defaultStrategy: "first",
+        reliabilityState: state,
+        reliabilityConfig: cfg,
+        now,
+      });
+      assert.equal(result.selected, undefined);
+      assert.equal(result.fallbackReason, "all_tiers_exhausted");
+    });
   });
 
   describe("getStrategy", () => {

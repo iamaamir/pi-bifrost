@@ -12,6 +12,8 @@ export interface ReliabilityConfig {
 export interface ReliabilityRecord {
   failures: number[];
   openUntil?: number;
+  trialActive?: boolean;
+  cooldownMultiplier?: number;
   lastFailureAt?: number;
   lastFailureSource?: string;
   lastFailureReason?: string;
@@ -26,6 +28,8 @@ export interface ReliabilityState {
 
 export interface CircuitState {
   open: boolean;
+  halfOpen: boolean;
+  trialActive: boolean;
   openUntil?: number;
   recentFailures: number;
 }
@@ -74,6 +78,8 @@ function normalizeRecord(raw: unknown): ReliabilityRecord | undefined {
   return {
     failures,
     openUntil,
+    trialActive: typeof record.trialActive === "boolean" ? record.trialActive : undefined,
+    cooldownMultiplier: typeof record.cooldownMultiplier === "number" && Number.isFinite(record.cooldownMultiplier) && record.cooldownMultiplier > 0 ? record.cooldownMultiplier : undefined,
     lastFailureAt,
     lastFailureSource: typeof record.lastFailureSource === "string" ? record.lastFailureSource : undefined,
     lastFailureReason: typeof record.lastFailureReason === "string" ? record.lastFailureReason : undefined,
@@ -94,6 +100,8 @@ export function getCircuitState(
   const openUntil = record?.openUntil;
   return {
     open: !!openUntil && openUntil > now,
+    halfOpen: !!openUntil && openUntil <= now && !record?.trialActive,
+    trialActive: !!record?.trialActive,
     openUntil,
     recentFailures: failures.length,
   };
@@ -111,10 +119,11 @@ export function recordModelFailure(
   if (!resolved.enabled) return state;
 
   const current = state.models[model] ?? { failures: [] };
+  const wasTrial = current.trialActive;
+  const multiplier = wasTrial ? (current.cooldownMultiplier ?? 1) * 2 : (current.cooldownMultiplier ?? 1);
+  const cooldownMs = resolved.cooldownMinutes * 60_000 * multiplier;
   const failures = [...pruneFailures(current.failures, now, resolved.windowMinutes), now];
-  const openUntil = failures.length >= resolved.failureThreshold
-    ? now + resolved.cooldownMinutes * 60_000
-    : current.openUntil;
+  const openUntil = failures.length >= resolved.failureThreshold ? now + cooldownMs : current.openUntil;
 
   return {
     ...state,
@@ -124,6 +133,8 @@ export function recordModelFailure(
         ...current,
         failures,
         openUntil,
+        trialActive: false,
+        cooldownMultiplier: wasTrial ? multiplier : current.cooldownMultiplier,
         lastFailureAt: now,
         lastFailureSource: source,
         lastFailureReason: reason,
@@ -161,8 +172,28 @@ export function recordModelSuccess(
         ...current,
         failures: [],
         openUntil: undefined,
+        trialActive: false,
+        cooldownMultiplier: undefined,
         lastSuccessAt: now,
         lastSuccessSource: source,
+      },
+    },
+  };
+}
+
+export function beginTrial(
+  state: ReliabilityState,
+  model: string,
+): ReliabilityState {
+  const current = state.models[model];
+  if (!current) return state;
+  return {
+    ...state,
+    models: {
+      ...state.models,
+      [model]: {
+        ...current,
+        trialActive: true,
       },
     },
   };

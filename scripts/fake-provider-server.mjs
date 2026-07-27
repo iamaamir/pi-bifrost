@@ -12,11 +12,13 @@ function json(response, status, body, headers = {}) {
 
 function sse(response, content = "ok") {
   response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-  response.write(`data: ${JSON.stringify({ id: "fake", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content }, finish_reason: null }] })}\n\n`);
+  response.write(`data: ${JSON.stringify({ id: "fake", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content }, finish_reason: "stop" }] })}\n\n`);
   response.end("data: [DONE]\n\n");
 }
 
 const server = http.createServer((request, response) => {
+  response.on("error", () => {});
+  request.on("error", () => {});
   if (request.url === "/_stats") return json(response, 200, { attempts: Object.fromEntries(attempts), stats });
   if (request.method !== "POST" || request.url !== "/v1/chat/completions") return json(response, 404, { error: "not found" });
   let body = "";
@@ -29,7 +31,7 @@ const server = http.createServer((request, response) => {
     stats.push({ model, attempt });
     if (model === "quota") return json(response, 429, { error: { message: "quota exhausted" } }, { "retry-after": "1" });
     if (model === "fail") return json(response, 500, { error: { message: "simulated provider failure" } });
-    if (model === "fail-then-ok" && attempt === 1) return json(response, 503, { error: { message: "simulated transient failure" } });
+    if (model === "fail-then-ok" && attempt === 1) return json(response, 500, { error: { message: "simulated transient failure" } });
     if (model === "partial") {
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.write(`data: ${JSON.stringify({ id: "fake", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: "partial" }, finish_reason: null }] })}\n\n`);

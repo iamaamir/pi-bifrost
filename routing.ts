@@ -152,7 +152,7 @@ export interface RoutedModelResolution {
   selected: Model<Api> | undefined;
   strategy: RoutingStrategy;
   skipped: SkippedCandidate[];
-  fallbackReason?: "requested_tier_unhealthy" | "requested_tier_unavailable";
+  fallbackReason?: "requested_tier_unhealthy" | "requested_tier_unavailable" | "all_tiers_exhausted";
   primary: HealthyModelResolution;
   fallback?: HealthyModelResolution;
 }
@@ -229,9 +229,17 @@ export function resolveModelWithFallback(
   }
 
   const requestedUnavailable = primary.candidates.length === 0;
-  const fallbackReason = requestedUnavailable
+  let fallbackReason: RoutedModelResolution["fallbackReason"] = requestedUnavailable
     ? "requested_tier_unavailable"
     : (primary.skipped.length > 0 ? "requested_tier_unhealthy" : undefined);
+
+  // Compute final reason after evaluating fallback
+  const resolveFinalReason = (fb: HealthyModelResolution): RoutedModelResolution["fallbackReason"] => {
+    if (fb.selected) return fallbackReason;
+    if (requestedUnavailable && fb.candidates.length === 0) return "requested_tier_unavailable";
+    if (fb.skipped.length > 0 || primary.skipped.length > 0) return "all_tiers_exhausted";
+    return fallbackReason;
+  };
 
   if (!options.defaultTier || options.defaultTier === options.requestedTier) {
     return {
@@ -261,7 +269,7 @@ export function resolveModelWithFallback(
       ? (options.defaultStrategy ?? options.requestedStrategy)
       : options.requestedStrategy,
     skipped: [...primary.skipped, ...fallback.skipped],
-    fallbackReason,
+    fallbackReason: resolveFinalReason(fallback),
     primary,
     fallback,
   };

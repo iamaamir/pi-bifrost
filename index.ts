@@ -30,9 +30,11 @@ import {
 } from "./routing.js";
 import {
   loadReliability,
+  beginTrial,
   recordSetModelOutcome,
   reliabilityPath,
   saveReliability,
+  getCircuitState,
 } from "./reliability.js";
 import { createCommandRouter, getBifrostCommandCompletions, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.js";
 import { setupDebug, debug, debugMeasure } from "./debug.js";
@@ -314,6 +316,16 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       });
       const model = resolved.selected;
       const selectedTier = resolved.selectedTier ?? tier;
+
+      // If selected model is half-open, mark trial in progress
+      if (model) {
+        const circuit = getCircuitState(state.reliabilityState, modelKey(model), Date.now(), state.config.reliability);
+        if (circuit.halfOpen && !circuit.trialActive) {
+          state.reliabilityState = beginTrial(state.reliabilityState, modelKey(model));
+          saveReliability(state.reliabilityPath, state.reliabilityState);
+        }
+      }
+
       if (!model) {
         state.forceRegistryRefresh = true;
         debug("input", "no_model", { tier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped.length });

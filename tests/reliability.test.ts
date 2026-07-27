@@ -10,6 +10,7 @@ import {
   loadReliability,
   recordModelFailure,
   recordModelSuccess,
+  beginTrial,
   reliabilityPath,
   saveReliability,
 } from "../reliability.ts";
@@ -131,5 +132,39 @@ describe("reliability", () => {
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
+  });
+
+  it("half-open: allows one trial after cooldown, closes on success", () => {
+    const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 60 };
+    const key = "openai/gpt-5.4";
+    const t0 = Date.UTC(2026, 0, 1, 12, 0, 0);
+    let state = recordModelFailure(emptyReliabilityState(), key, cfg, t0, "probe", "timeout");
+    assert.equal(getCircuitState(state, key, t0, cfg).open, true);
+    assert.equal(getCircuitState(state, key, t0, cfg).halfOpen, false);
+    const t1 = t0 + 61 * 60_000;
+    assert.equal(getCircuitState(state, key, t1, cfg).open, false);
+    assert.equal(getCircuitState(state, key, t1, cfg).halfOpen, true);
+    assert.equal(getCircuitState(state, key, t1, cfg).trialActive, false);
+    state = beginTrial(state, key);
+    assert.equal(getCircuitState(state, key, t1, cfg).trialActive, true);
+    state = recordModelSuccess(state, key, t1 + 1, "trial");
+    const closed = getCircuitState(state, key, t1 + 1, cfg);
+    assert.equal(closed.open, false);
+    assert.equal(closed.halfOpen, false);
+    assert.equal(closed.trialActive, false);
+  });
+
+  it("half-open: trial failure reopens circuit with double cooldown", () => {
+    const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 60 };
+    const key = "openai/gpt-5.4";
+    const t0 = Date.UTC(2026, 0, 1, 12, 0, 0);
+    let state = recordModelFailure(emptyReliabilityState(), key, cfg, t0, "probe", "timeout");
+    const t1 = t0 + 61 * 60_000;
+    state = beginTrial(state, key);
+    state = recordModelFailure(state, key, cfg, t1, "trial", "timeout");
+    const circuit = getCircuitState(state, key, t1, cfg);
+    assert.equal(circuit.open, true);
+    assert.equal(circuit.openUntil, t1 + 120 * 60_000);
+    assert.equal(circuit.trialActive, false);
   });
 });
