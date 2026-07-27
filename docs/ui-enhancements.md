@@ -31,6 +31,7 @@ Inventory of user-facing extension improvements. Ordered by user value, then imp
 |---|---|---|---|
 | Done | Footer mode/progress | Mode plus classification activity visible | One Bifrost `setStatus`; Pi footer stays intact. |
 | Next — prioritized | Last decision | Dashboard shows tier/source/model/duration and bypass reason | Update after every normal prompt; ephemeral only, no LLM context or durable session entry. |
+| Next | Thinking-level visibility | Show effective level and preserve/clamp reason after routing | Preserve Pi behavior by default; see [`ADR 0004`](adr/0004-thinking-level-routing.md). |
 | Next | Decision trace | Cache → classifier → regex → default explanation | Reuse debug events; redact prompt by default. |
 | Next | Switch feedback | Brief previous → selected model notice | Suppress no-op switches; distinguish manual pin. |
 | Next | Bypass explanation | Explain disabled/pinned/no-match/missing-model | Show actual reason, not generic status. |

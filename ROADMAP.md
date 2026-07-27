@@ -24,6 +24,18 @@ Also support inline override: "frontier debug this" forces frontier, "economical
 
 ---
 
+### Thinking-level preservation and visibility
+
+Model selection can cause Pi to preserve or capability-clamp its thinking level. A target that does not support the current level may be clamped upward (for example `medium` → `high`), affecting latency and cost.
+
+First expose effective level and clamp reason in routing feedback. Preserve Pi behavior by default. Any tier-level thinking policy must be explicit, opt-in, capability-aware, and never silently rewrite user preferences.
+
+Full evidence, design questions, and acceptance criteria: [`docs/adr/0004-thinking-level-routing.md`](docs/adr/0004-thinking-level-routing.md).
+
+**Effort:** Low for visibility · Medium for optional policy · **Reach:** Every routed reasoning-capable model
+
+---
+
 ### Reliability v1 — health-aware selection & circuit breaker
 
 **Next priority.** Before sending a prompt, select only candidates that are not known-bad:
