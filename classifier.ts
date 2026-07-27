@@ -2,6 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { spawn } from "node:child_process";
 import { debug } from "./debug.ts";
+import { promptWithMinimalSession } from "./session-fallback.ts";
 
 // ── Classifier model — union type, no type-cast lies ─────────
 
@@ -124,8 +125,22 @@ async function classifyWithDirectHttp(
       .trim();
 
     if (!content) {
-      debug("classifier", "registry.empty_response", { model: classifierId(classifierModel) });
-      return undefined;
+      const fallbackText = await promptWithMinimalSession(
+        classifierModel.model,
+        userPrompt,
+        { cwd: ctx.cwd, systemPrompt },
+      );
+      if (!fallbackText?.trim()) {
+        debug("classifier", "registry.empty_response", { model: classifierId(classifierModel) });
+        return undefined;
+      }
+      const fallbackResult = extractCategory(fallbackText, categories);
+      debug("classifier", "registry.session_done", {
+        model: classifierId(classifierModel),
+        raw: fallbackText.slice(0, 100),
+        tier: fallbackResult,
+      });
+      return fallbackResult;
     }
 
     const result = extractCategory(content, categories);
