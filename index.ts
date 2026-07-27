@@ -28,12 +28,11 @@ import {
   modelKey,
   resolveModel,
 } from "./routing.js";
-import { createCommandRouter, log, uiBusy, uiDone, type BifrostState } from "./commands.js";
+import { createCommandRouter, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.js";
 import { setupDebug, debug, debugMeasure } from "./debug.js";
 import { parseInlineOverride } from "./inline-override.js";
 import {
   REGISTRY_REFRESH_TTL_MS,
-  setBifrostStatus,
   setBifrostWorkingMessage,
   shouldRefreshRegistry,
 } from "./ux-status.js";
@@ -164,6 +163,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     },
   });
 
+  pi.on("session_start", async (_event, ctx) => {
+    syncBifrostModeStatus(ctx, state);
+    clearBifrostWidgets(ctx);
+  });
+
   pi.on("model_select", async (_event, ctx) => {
     if (selfSelecting) {
       selfSelecting = false;
@@ -173,6 +177,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
     state.pinned = true;
     debug("bifrost", "model_select", { model: modelKey(ctx.model) });
+    syncBifrostModeStatus(ctx, state);
+    clearBifrostWidgets(ctx);
     log(
       ctx,
       `Model manually changed to ${modelKey(ctx.model)}; Bifrost pinned.`,
@@ -181,8 +187,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   pi.on("input", async (event, ctx) => {
     if (event.source === "extension") return { action: "continue" };
+    clearBifrostWidgets(ctx);
     if (!state.enabled || state.pinned) {
       debug("input", "bypass", { enabled: state.enabled, pinned: state.pinned });
+      syncBifrostModeStatus(ctx, state);
       return { action: "continue" };
     }
 
@@ -196,6 +204,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       debug("input", "inline_override", { tier: forcedTier });
     }
 
+    // Inline override should strip the tier keyword from what LLM sees.
+    const defaultAction = forcedTier
+      ? { action: "transform" as const, text: promptText }
+      : { action: "continue" as const };
+
     const endInput = debugMeasure("input", "total");
     debug("input", "prompt", { length: promptText.length });
 
@@ -205,7 +218,6 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
     try {
       if (shouldRefresh) {
-        setBifrostStatus(ctx, "checking available models…", "accent");
         setBifrostWorkingMessage(ctx, "Bifrost checking models...");
         const endRefresh = debugMeasure("input", "registry.refresh");
         try {
@@ -220,7 +232,6 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         }
       }
 
-      setBifrostStatus(ctx, forcedTier ? `using forced tier ${forcedTier}…` : "classifying prompt…", "accent");
       uiBusy(ctx, forcedTier ? `Bifrost using ${forcedTier}...` : "Bifrost classifying...");
       setBifrostWorkingMessage(ctx, forcedTier ? `Bifrost using ${forcedTier}...` : "Bifrost classifying...");
       const endClassify = debugMeasure("input", "classify");
@@ -238,11 +249,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       setBifrostWorkingMessage(ctx, undefined);
 
       if (classification.kind === "unclassified") {
-        setBifrostStatus(ctx, "no tier matched, using current model", "warning");
         log(ctx, "Bifrost: no tier matched — using default model", "warning");
         debug("input", "unclassified");
+        syncBifrostModeStatus(ctx, state);
         endInput();
-        return { action: "continue" };
+        return defaultAction;
       }
 
       const tier = classification.tier;
@@ -252,15 +263,14 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       const pattern = state.config.models?.[tier] ?? tier;
       const strategy = getStrategy(state.config.categoryStrategies, state.config.strategy, tier);
 
-      setBifrostStatus(ctx, `selecting ${tier} tier…`, "accent");
       const model = resolveModel(ctx, pattern, strategy);
       if (!model) {
         state.forceRegistryRefresh = true;
         debug("input", "no_model", { tier });
-        setBifrostStatus(ctx, `tier ${tier} matched, but no model is available`, "warning");
         log(ctx, `Bifrost: tier "${tier}" matched but no model available`, "warning");
+        syncBifrostModeStatus(ctx, state);
         endInput();
-        return { action: "continue" };
+        return defaultAction;
       }
 
       if (
@@ -278,15 +288,14 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       }
 
       if (modelKey(model) === modelKey(ctx.model)) {
-        setBifrostStatus(ctx, `${tier} → ${modelKey(model)} already active`, "success");
         uiDone(ctx);
+        syncBifrostModeStatus(ctx, state);
         log(ctx, `Bifrost: ${tier} → ${modelKey(model)} (already active, ${source})`);
         debug("input", "model_unchanged", { model: modelKey(model) });
         endInput({ model: modelKey(model), tier, strategy, source });
-        return { action: "continue" };
+        return defaultAction;
       }
 
-      setBifrostStatus(ctx, `switching to ${modelKey(model)}…`, "accent");
       uiBusy(ctx, `Bifrost routing to ${modelKey(model)}...`);
       setBifrostWorkingMessage(ctx, `Bifrost routing to ${modelKey(model)}...`);
       selfSelecting = true;
@@ -298,22 +307,23 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       if (!ok) {
         selfSelecting = false;
         state.forceRegistryRefresh = true;
-        setBifrostStatus(ctx, `could not switch to ${modelKey(model)}`, "error");
+        syncBifrostModeStatus(ctx, state);
         log(ctx, `Bifrost: no API key for ${modelKey(model)}`, "error");
         endInput({ model: modelKey(model), ok: false });
-        return { action: "continue" };
+        return defaultAction;
       }
 
       const doneMsg = classification.kind === "classified"
         ? `Bifrost: ${tier} → ${modelKey(model)} (${classification.source})`
         : `Bifrost: ${tier} → ${modelKey(model)} (fallback)`;
-      setBifrostStatus(ctx, `${tier} → ${modelKey(model)}`, "success");
+      syncBifrostModeStatus(ctx, state);
       log(ctx, doneMsg);
       endInput({ model: modelKey(model), tier, strategy, source });
-      return { action: "continue" };
+      return defaultAction;
     } finally {
       uiDone(ctx);
       setBifrostWorkingMessage(ctx, undefined);
+      syncBifrostModeStatus(ctx, state);
     }
   });
 }

@@ -9,6 +9,7 @@ import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD
 import type { ClassificationPipeline } from "./classification-pipeline.js";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
 import { runProbe, PROBE_PROMPT_TEXT } from "./probe.js";
+import { setBifrostModeStatus } from "./ux-status.js";
 import {
   findCandidates,
   getStrategy,
@@ -66,6 +67,17 @@ function uiOutput(ctx: ExtensionContext, lines: string[]) {
   }
 }
 
+export function clearBifrostWidgets(ctx: ExtensionContext) {
+  if (ctx.mode === "tui" && ctx.hasUI) {
+    ctx.ui.setWidget("bifrost-output", []);
+    ctx.ui.setWidget("bifrost-probe", []);
+  }
+}
+
+export function syncBifrostModeStatus(ctx: ExtensionContext, state: Pick<BifrostState, "enabled" | "pinned" | "classifierEnabled">) {
+  setBifrostModeStatus(ctx, state);
+}
+
 // ── Shared tier-resolution + display ───────────────────────
 
 function resolveTierDisplay(
@@ -93,6 +105,8 @@ async function handleInit(
   ctx: ExtensionContext,
   state: BifrostState,
 ): Promise<void> {
+  clearBifrostWidgets(ctx);
+
   // Try to load cached probe results. If stale or missing, run probe inline.
   const probePath = join(process.cwd(), ".pi", "bifrost-probe.json");
   let workingModels: { provider: string; model: string; cost: { input: number; output: number }; duration_ms: number }[] = [];
@@ -312,6 +326,7 @@ async function handleBenchmark(
     return;
   }
 
+  clearBifrostWidgets(ctx);
   uiBusy(ctx, "Classifying benchmark prompt...");
   const classification = await state.getPipeline(ctx).classify(prompt);
   uiDone(ctx);
@@ -347,6 +362,7 @@ async function handlePreview(
     return;
   }
 
+  clearBifrostWidgets(ctx);
   uiBusy(ctx, "Classifying preview prompt...");
   const classification = await state.getPipeline(ctx).classify(prompt);
   uiDone(ctx);
@@ -396,18 +412,26 @@ export function createCommandRouter(
   const routes: CommandEntry[] = [
     exact("on", (_, ctx) => {
       state.enabled = true;
+      syncBifrostModeStatus(ctx, state);
+      clearBifrostWidgets(ctx);
       log(ctx, "Bifrost enabled");
     }),
     exact("off", (_, ctx) => {
       state.enabled = false;
+      syncBifrostModeStatus(ctx, state);
+      clearBifrostWidgets(ctx);
       log(ctx, "Bifrost disabled");
     }),
     exact("pin", (_, ctx) => {
       state.pinned = true;
+      syncBifrostModeStatus(ctx, state);
+      clearBifrostWidgets(ctx);
       log(ctx, "Bifrost pinned");
     }),
     exact("unpin", (_, ctx) => {
       state.pinned = false;
+      syncBifrostModeStatus(ctx, state);
+      clearBifrostWidgets(ctx);
       log(ctx, "Bifrost unpinned");
     }),
     exact("reload", (_, ctx) => {
@@ -420,6 +444,8 @@ export function createCommandRouter(
       state.pinned = false;
       state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path));
       state.invalidatePipeline();
+      syncBifrostModeStatus(ctx, state);
+      clearBifrostWidgets(ctx);
       done();
       debug("command", "reloaded", {
         enabled: state.enabled,
@@ -453,6 +479,7 @@ export function createCommandRouter(
         log(ctx, "No models available in registry.", "warning");
         return;
       }
+      clearBifrostWidgets(ctx);
       uiBusy(ctx, `Probing ${available.length} models...`);
       log(ctx, `Probing ${available.length} model(s) with "${PROBE_PROMPT_TEXT}"...`);
 
@@ -535,12 +562,14 @@ export function createCommandRouter(
     exact("classifier on", (_, ctx) => {
       state.classifierEnabled = true;
       state.invalidatePipeline();
+      syncBifrostModeStatus(ctx, state);
       debug("command", "classifier_toggle", { enabled: true });
       log(ctx, "LLM classifier enabled");
     }),
     exact("classifier off", (_, ctx) => {
       state.classifierEnabled = false;
       state.invalidatePipeline();
+      syncBifrostModeStatus(ctx, state);
       debug("command", "classifier_toggle", { enabled: false });
       log(ctx, "LLM classifier disabled; regex fallback active");
     }),
