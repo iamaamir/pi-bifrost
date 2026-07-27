@@ -37,6 +37,8 @@ Done. Bifrost is now routing your prompts.
 
 You type a prompt. Bifrost classifies it as `frontier` (hard) or `economical` (easy), picks the best available model for that tier, and switches pi's model before the prompt is sent. You just type — the model changes behind the scenes.
 
+If a model fails repeatedly (probe timeout, auth error, provider stream failure), Bifrost opens a circuit breaker and routes around it until a cooldown period expires or a probe confirms it's healthy again. The dashboard shows open-circuit count in its title.
+
 If you manually switch models with `/model`, Bifrost pins itself and stops routing. `/bifrost unpin` to resume.
 
 ## Commands
@@ -228,8 +230,42 @@ Writes `.pi/bifrost-debug.jsonl` — one JSON line per event. Timings, tiers, de
     "maxEntries": 500,
     "threshold": 0.85
   },
+  "reliability": {
+    "enabled": true,
+    "failureThreshold": 3,
+    "windowMinutes": 5,
+    "cooldownMinutes": 60
+  },
   "debug": { "enabled": false }
 }
 ```
+
+### Reliability: circuit breaker for flaky models
+
+Tracks model health across probe results and runtime failures. Models that fail repeatedly are temporarily skipped (circuit open) and Bifrost falls back to the default tier.
+
+```json
+{
+  "reliability": {
+    "enabled": true,
+    "failureThreshold": 3,
+    "windowMinutes": 5,
+    "cooldownMinutes": 60
+  }
+}
+```
+
+**How it works:**
+- Records failures from probe timeouts, `setModel` auth errors, and provider stream errors
+- Opens circuit after `failureThreshold` failures within `windowMinutes`
+- Open-circuit models are excluded from routing; Bifrost falls back to default tier
+- Circuit closes automatically after `cooldownMinutes` — next request attempts a trial
+- Successful trial closes the circuit; repeated failure doubles cooldown
+- State persists in `.pi/bifrost-reliability.json`
+- Disabled reliability (`"enabled": false`) is a clean no-op — no tracking, no persistence
+
+The dashboard shows open-circuit count in the title. `/bifrost preview` and `/bifrost debug` display skipped candidates with remaining cooldown.
+
+See [`examples/economical-frontier-reliability.json`](examples/economical-frontier-reliability.json) for a complete config.
 
 Every field is optional. Config merges from: extension default → global (`~/.pi/agent/bifrost.json`) → project (`.pi/bifrost.json`).
