@@ -2,7 +2,44 @@
 
 These recipes show decisions Bifrost can automate. They are templates, not universal model lists. Replace model patterns with models available in your Pi registry.
 
-Install Bifrost first:
+## Reliability: circuit breaker for flaky models
+
+Adds model health tracking and automatic fallback. Models with repeated failures are skipped temporarily (circuit open). Probes close circuits on success.
+
+```json
+"reliability": {
+  "enabled": true,
+  "failureThreshold": 3,
+  "windowMinutes": 5,
+  "cooldownMinutes": 60
+}
+```
+
+**What this does:**
+- Records probe failures and runtime failures (`setModel` errors)
+- Opens circuit after `failureThreshold` failures in `windowMinutes`
+- Skips open-circuit models, falls back to default tier
+- Circuit closes on successful probe or timeout (`cooldownMinutes`)
+- Persists breaker state in `.pi/bifrost-reliability.json`
+
+See full example: `economical-frontier-reliability.json`
+
+## Recipes
+
+### `economical-frontier-reliability.json`
+
+Extends `economical-frontier.json` with reliability configuration.
+
+Try:
+
+```text
+/bifrost preview fix this race condition
+/bifrost preview summarize this file
+```
+
+If a model fails repeatedly (e.g., network timeout or auth error), it will be skipped temporarily and the system falls back to the default tier.
+
+## Install Bifrost first:
 
 ```text
 pi install npm:pi-bifrost
