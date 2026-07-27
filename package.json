@@ -38,7 +38,8 @@
     "test:integration": "cd .. && node --test pi-bifrost/tests/integration.test.mjs",
     "test:ui": "python3 scripts/ui-smoke.py",
     "typecheck": "tsc --noEmit",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "release": "node --experimental-strip-types scripts/release.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
