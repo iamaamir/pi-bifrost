@@ -67,10 +67,6 @@ export function setBifrostWorkingMessage(ctx: ExtensionContext, message?: string
   ctx.ui.setWorkingMessage(message);
 }
 
-function currentModelKey(ctx: ExtensionContext): string {
-  return ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "no-model";
-}
-
 function modeLabel(state: BifrostModeState): { tone: "warning" | "success"; text: string } {
   if (!state.enabled) return { tone: "warning", text: "off" };
   if (state.pinned) return { tone: "warning", text: "pinned" };
@@ -82,18 +78,6 @@ export function setBifrostModeStatus(ctx: ExtensionContext, state: BifrostModeSt
   if (!ctx.hasUI) return;
 
   const label = modeLabel(state);
-  const left = statusText(ctx, label.tone, label.text);
-
-  ctx.ui.setFooter((tui, theme, footerData) => {
-    const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
-
-    return {
-      dispose: unsubscribe,
-      invalidate() {},
-      render(_width: number): string[] {
-        const right = theme.fg("dim", `current=${currentModelKey(ctx)}`);
-        return [`${left}  ${right}`];
-      },
-    };
-  });
+  const text = statusText(ctx, label.tone, label.text);
+  ctx.ui.setWidget("bifrost-state", [text]);
 }
