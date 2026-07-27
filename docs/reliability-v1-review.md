@@ -2,7 +2,7 @@
 
 ## Verdict
 
-**Changes are promising but not merge-ready.** Health-aware selection, default-tier fallback, persisted state, probe integration, UI visibility, schema support, and test coverage are all present. Resolve P1 findings before merge.
+**Historical review; P1 remediation merged in `c37aff58`.** Health-aware selection, default-tier fallback, persisted state, probe integration, UI visibility, schema support, and test coverage are present. Remaining work is policy refinement, not a merge blocker.
 
 ## What was reviewed
 
@@ -54,7 +54,9 @@ A thrown failure skips `recordModelFailure`, `saveReliability`, `selfSelecting =
 
 **Impact:** Missing credentials do not open circuit; repeated routing can keep selecting broken model. `selfSelecting` may remain true, causing next real manual model selection to be ignored.
 
-**Required fix:** Wrap `pi.setModel()` in `try/catch/finally` at switch scope. On either returned `false` or thrown rejection:
+**Resolution:** `c37aff58` wraps `pi.setModel()` failure handling, clears selection guard, records/saves a sanitized failure reason, and adds return-false/throw coverage.
+
+**Original required fix:** Wrap `pi.setModel()` in `try/catch/finally` at switch scope. On either returned `false` or thrown rejection:
 
 1. clear `selfSelecting`;
 2. record/save failure with sanitized error reason;
@@ -93,7 +95,9 @@ The existing corrupt-file test covers invalid JSON syntax only, not valid JSON w
 
 **Impact:** User-editable/corrupted state file can break every routed prompt instead of failing open.
 
-**Required fix:** Parse and normalize records defensively at load time. Accept only finite numeric failure timestamps, finite numeric `openUntil`, and string metadata; otherwise drop invalid values/records and return usable empty state. Also make `pruneFailures()` robust against non-array input as final boundary.
+**Resolution:** `c37aff58` normalizes persisted records and makes failure pruning resilient to non-array/non-finite input. Tests cover malformed-but-valid JSON.
+
+**Original required fix:** Parse and normalize records defensively at load time. Accept only finite numeric failure timestamps, finite numeric `openUntil`, and string metadata; otherwise drop invalid values/records and return usable empty state. Also make `pruneFailures()` robust against non-array input as final boundary.
 
 **Required test:** load valid JSON with `failures: "invalid"`, `failures: {}`, and mixed invalid timestamps. Assert routing continues and malformed fields are discarded.
 
@@ -129,7 +133,11 @@ This creates harmful routing behavior:
 
 The model is faulty from user perspective, but current circuit state remains healthy. This can cause repeated broken turns and route a recovery question back to the same provider/model.
 
-**Required fix:** add a post-selection failure feedback loop for future routing. Pi `agent_end` includes completed low-level-run messages, while `agent_settled` fires only after Pi has exhausted automatic retry/compaction/queued continuation. Track a Bifrost-owned run health record:
+**Resolution:** `c37aff58` adds `RuntimeReliabilityTracker`. It observes terminal assistant errors for Bifrost-selected model on `agent_end`, then records a hard failure only at `agent_settled`. A later successful Pi retry clears pending failure; tests cover final error, recovered retry, and unrelated model error.
+
+**Remaining policy gap:** recovered retry is treated as non-hard-failure and is not persisted as degraded telemetry yet. Add that only with an explicit threshold/weight policy.
+
+**Original required fix:** add a post-selection failure feedback loop for future routing. Pi `agent_end` includes completed low-level-run messages, while `agent_settled` fires only after Pi has exhausted automatic retry/compaction/queued continuation. Track a Bifrost-owned run health record:
 
 - Capture selected model key before request starts; do not infer it later from mutable `ctx.model`.
 - On `agent_end`, inspect terminal assistant failure metadata (`stopReason: "error"` / error message) and record candidate failure/recovery evidence for that run.
