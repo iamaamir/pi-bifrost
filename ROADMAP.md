@@ -4,7 +4,7 @@
 
 *Make routing feel transparent and controllable. The 10% of users who care about which model fires when need to see it and override it.*
 
-### Direct model bindings
+### [x] Direct model bindings
 Per-prompt model overrides. Bind specific models to specific prompt patterns. `"when I say /commit, use glm-5.1"`. `"when I type /test, use gpt-oss-20b"`.
 
 ```json
@@ -24,14 +24,46 @@ Also support inline override: "frontier debug this" forces frontier, "economical
 
 ---
 
-### Fallback chains & circuit breaker
-Model fails → try next in tier. 3 failures in 5 min → remove from rotation for 1 hour. Tier dead → cascade to default. In-process, no proxy latency. The differentiator for reliability-conscious teams.
+### Reliability v1 — health-aware selection & circuit breaker
+
+**Next priority.** Before sending a prompt, select only candidates that are not known-bad:
+
+- Record probe failures and observed provider failures.
+- 3 failures in 5 minutes → open model circuit for 1 hour.
+- Skip open-circuit models, try next candidate in tier, then configured fallback/default tier.
+- Show selected, skipped, and fallback reason in Bifrost status/dashboard.
+- Persist breaker state deliberately; never silently rewrite user model config.
+
+This is pre-send resilience: routing avoids models already known to be unhealthy. It adds no proxy latency and has no duplicate-request risk.
 
 ```json
-{ "models": { "frontier": { "patterns": [...], "fallback": "economical" } } }
+{
+  "reliability": {
+    "failureThreshold": 3,
+    "windowMinutes": 5,
+    "cooldownMinutes": 60
+  }
+}
 ```
 
-**Effort:** Medium · **Reach:** Teams who can't afford silent failures
+**Effort:** Medium · **Reach:** Every user affected by flaky providers
+
+---
+
+### Reliability v2 — safe request retry (research gate)
+
+Do **not** blindly re-send a submitted prompt after provider failure. Pi-Bifrost selects a model before the agent request, while a failed request may already have streamed output or triggered tools. Automatic replay can duplicate work.
+
+First validate Pi extension hooks for provider-error interception and turn replay. Only ship retry when all are true:
+
+- failure occurs before assistant or tool output;
+- retry is explicitly enabled;
+- exact prompt/attachments can be replayed once on a fallback model;
+- user sees retry/fallback outcome.
+
+Until then, record failure, open circuit when warranted, and route subsequent prompts away from that model.
+
+**Effort:** Research first · **Reach:** Reliability-conscious teams
 
 ---
 
