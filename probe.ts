@@ -23,6 +23,14 @@ export const PROBE_PROMPT_TEXT = PROBE_PROMPT;
 const PROBE_TIMEOUT_MS = 10_000;
 const PROBE_MAX_TOKENS = 5;
 
+function assistantText(message: { content: Array<{ type: string; text?: string }> }): string {
+  return message.content
+    .filter((c): c is { type: "text"; text: string } => c.type === "text")
+    .map((c) => c.text)
+    .join("\n");
+}
+
+
 export async function runProbe(
   ctx: ExtensionContext,
   onProgress?: (done: number, total: number, last: ProbeResult) => void,
@@ -66,69 +74,59 @@ async function probeOne(
     duration_ms: 0,
   };
 
-  // Only probe OpenAI-compatible HTTP models.
   const api = model.api as string | undefined;
-  if (
-    !api ||
-    (!api.startsWith("openai-") && api !== "mistral-conversations")
-  ) {
-    base.error = `unsupported api: ${api}`;
+  if (!api) {
+    base.error = "unsupported api: undefined";
     return base;
   }
 
   const start = performance.now();
   try {
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    const apiKey = auth.ok ? auth.apiKey : undefined;
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json",
-      ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-      ...(auth.ok && auth.headers ? auth.headers : {}),
-    };
-
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-
     try {
-      let baseUrl = model.baseUrl.endsWith("/")
-        ? model.baseUrl
-        : `${model.baseUrl}/`;
-      // Guard against providers that already include the endpoint path.
-      if (baseUrl.endsWith("/chat/completions/") || baseUrl.endsWith("/v1/chat/completions/")) {
-        // URL is already the full chat/completions endpoint.
-      } else {
-        baseUrl = new URL("chat/completions", baseUrl).toString();
-      }
-      const url = baseUrl;
-
-      const response = await fetch(url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          model: model.id,
-          messages: [{ role: "user", content: PROBE_PROMPT }],
-          max_tokens: PROBE_MAX_TOKENS,
-          temperature: 0,
-          stream: false,
-        }),
-        signal: controller.signal,
-      });
-
-      base.duration_ms = +(performance.now() - start).toFixed(1);
-
-      if (!response.ok) {
-        const body = await response.text().catch(() => "");
+      const provider = ctx.modelRegistry.getProvider(model.provider);
+      if (!provider) {
         base.status = "error";
-        base.error = `HTTP ${response.status}: ${body.slice(0, 200)}`;
+        base.error = `unknown provider: ${model.provider}`;
+        return base;
+      }
+      const auth = await ctx.modelRegistry.getProviderAuth(model.provider);
+      if (!auth) {
+        base.status = "error";
+        base.error = "auth unavailable";
         return base;
       }
 
-      const data = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-        usage?: { total_tokens?: number };
-      };
-      base.status = "ok";
-      base.tokens = data.usage?.total_tokens;
+      const stream = provider.streamSimple(
+        model,
+        {
+          messages: [{ role: "user", content: PROBE_PROMPT, timestamp: Date.now() }],
+        },
+        {
+          maxTokens: PROBE_MAX_TOKENS,
+          temperature: 0,
+          signal: controller.signal,
+          cacheRetention: "none",
+          apiKey: auth.auth.apiKey,
+          headers: auth.auth.headers,
+          env: auth.env,
+        },
+      );
+      const response = await stream.result();
+      base.duration_ms = +(performance.now() - start).toFixed(1);
+      const text = assistantText(response);
+      if (!text.trim()) {
+        base.status = "error";
+        base.error = "empty response";
+        return base;
+      }
+      base.status = response.stopReason === "error" ? "error" : "ok";
+      if (response.stopReason === "error") {
+        base.error = response.errorMessage ?? "model error";
+      } else {
+        base.tokens = response.usage.totalTokens;
+      }
     } finally {
       clearTimeout(timer);
     }

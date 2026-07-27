@@ -162,9 +162,12 @@ async function handleInit(
     probeAge = "just now";
 
     const ok = results.filter((r) => r.status === "ok").length;
-    log(ctx, `Probe complete: ${ok}/${results.length} models responded.`);
+    const errors = results.filter((r) => r.status === "error").length;
+    const timeouts = results.filter((r) => r.status === "timeout").length;
+    const skipped = results.filter((r) => r.status === "skipped").length;
+    log(ctx, `Probe complete: ok=${ok} error=${errors} timeout=${timeouts} skipped=${skipped}.`);
     if (ok === 0) {
-      log(ctx, "Zero models responded. Check API keys, network, and credits.", "error");
+      log(ctx, "No usable models found. Check API keys, network, and credits.", "error");
       log(ctx, "Proceeding with full registry — most models will likely be unreachable.", "warning");
       probeLoaded = false;
     }

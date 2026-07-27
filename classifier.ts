@@ -89,25 +89,57 @@ async function classifyWithDirectHttp(
   prompt: string,
   options: ClassifierOptions = {},
 ): Promise<string | undefined> {
-  if (!isOpenAiCompatibleEndpoint(classifierModel)) {
-    return undefined;
-  }
-
-  // Auth: only for registry models. Endpoint config assumes no auth needed.
-  let apiKey: string | undefined;
-  let authHeaders: Record<string, string> = {};
-  if (classifierModel.kind === "registry") {
-    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(classifierModel.model);
-    if (auth.ok) {
-      apiKey = auth.apiKey;
-      authHeaders = auth.headers ?? {};
-    }
-  }
-
   const systemPrompt = options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
   const maxTokens = options.maxTokens ?? 20;
   const temperature = options.temperature ?? 0;
   const userPrompt = classificationPrompt(categories, prompt);
+
+  if (classifierModel.kind === "registry") {
+    const provider = ctx.modelRegistry.getProvider(classifierModel.model.provider);
+    if (!provider) return undefined;
+    const auth = await ctx.modelRegistry.getProviderAuth(classifierModel.model.provider);
+    if (!auth) return undefined;
+
+    const stream = provider.streamSimple(
+      classifierModel.model,
+      {
+        systemPrompt,
+        messages: [{ role: "user", content: userPrompt, timestamp: Date.now() }],
+      },
+      {
+        maxTokens,
+        temperature,
+        signal: ctx.signal,
+        cacheRetention: "none",
+        apiKey: auth.auth.apiKey,
+        headers: auth.auth.headers,
+        env: auth.env,
+      },
+    );
+    const response = await stream.result();
+    const content = response.content
+      .filter((c: { type: string; text?: string }): c is { type: "text"; text: string } => c.type === "text")
+      .map((c: { text: string }) => c.text)
+      .join("\n")
+      .trim();
+
+    if (!content) {
+      debug("classifier", "registry.empty_response", { model: classifierId(classifierModel) });
+      return undefined;
+    }
+
+    const result = extractCategory(content, categories);
+    debug("classifier", "registry.done", {
+      model: classifierId(classifierModel),
+      raw: content.slice(0, 100),
+      tier: result,
+    });
+    return result;
+  }
+
+  if (!isOpenAiCompatibleEndpoint(classifierModel)) {
+    return undefined;
+  }
 
   const body = {
     model: classifierId(classifierModel),
@@ -123,16 +155,11 @@ async function classifyWithDirectHttp(
   const base = classifierBaseUrl(classifierModel);
   const baseUrl = base.endsWith("/") ? base : `${base}/`;
   const url = new URL("chat/completions", baseUrl).toString();
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-    ...authHeaders,
-  };
 
   try {
     const response = await fetch(url, {
       method: "POST",
-      headers,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
       signal: ctx.signal ?? (typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
         ? AbortSignal.timeout(30_000)
