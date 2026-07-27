@@ -476,6 +476,7 @@ def capture(name: str, enabled: bool, actions: Iterable[tuple[float, str]] = ())
 def main() -> int:
     captures = [
         ("startup", True, []),
+        ("dashboard", True, [(1.0, "/bifrost\r")]),
         ("disabled", False, []),
         ("classify", True, [(1.0, "hello\r")]),
         ("pinned", True, [(1.0, "\x10")]),

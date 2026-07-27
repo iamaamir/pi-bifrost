@@ -73,6 +73,21 @@ describe("bifrost command ui", () => {
     assert(items.some((item) => item.value === "classifier status" && item.description === "Show classifier state"));
   });
 
+  it("opens dashboard for root command", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    const dispatch = createCommandRouter(state as never);
+
+    await dispatch("", ctx as never);
+
+    const select = calls.find((call) => call.kind === "select");
+    assert(select, "dashboard should open");
+    assert.match(String(select?.title ?? ""), /Bifrost · on · model none/);
+    assert.equal(select?.options?.length, 8);
+    assert((select?.options ?? []).some((option) => option.includes("Disable routing")));
+    assert.equal(state.enabled, false);
+  });
+
   it("shows picker for unknown subcommand", async () => {
     const { ctx, calls } = makeCtx();
     const state = makeState();

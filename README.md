@@ -43,7 +43,7 @@ If you manually switch models with `/model`, Bifrost pins itself and stops routi
 
 | Command | What it does |
 |---------|-------------|
-| `/bifrost` | Show current status |
+| `/bifrost` | Open mode/model dashboard and quick actions |
 | `/bifrost init` | Probe models and generate config |
 | `/bifrost probe` | Test which models actually respond |
 | `/bifrost preview <prompt>` | See what would happen without sending |
@@ -56,7 +56,9 @@ If you manually switch models with `/model`, Bifrost pins itself and stops routi
 
 ## UI smoke test
 
-Run `npm run test:ui` to capture Pi TUI screenshots for startup, disabled, classify, and pinned states. Output lands in `screenshots/ui-smoke/`.
+Run `npm run test:ui` to capture Pi TUI screenshots for startup, dashboard, disabled, classify, and pinned states. Output lands in `screenshots/ui-smoke/`.
+
+UI backlog and priorities: [`docs/ui-enhancements.md`](docs/ui-enhancements.md).
 
 ## Config
 

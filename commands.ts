@@ -444,11 +444,29 @@ function formatBifrostCommandChoice(command: CommandSpec): string {
   return `/bifrost ${command.value}${hint} — ${command.description}`;
 }
 
-async function pickBifrostCommand(ctx: ExtensionContext): Promise<CommandSpec | undefined> {
+function dashboardCommands(state: Pick<BifrostState, "enabled" | "pinned">): CommandSpec[] {
+  const values = [
+    state.enabled ? "off" : "on",
+    state.pinned ? "unpin" : "pin",
+    "preview",
+    "providers",
+    "probe",
+    "init",
+    "classifier status",
+    "reload",
+  ];
+  return values.map((value) => BIFROST_COMMAND_OPTIONS.find((command) => command.value === value)!);
+}
+
+async function pickBifrostCommand(
+  ctx: ExtensionContext,
+  title = "Bifrost commands",
+  options: readonly CommandSpec[] = BIFROST_COMMAND_OPTIONS,
+): Promise<CommandSpec | undefined> {
   if (!ctx.hasUI) return undefined;
-  const selected = await ctx.ui.select("Bifrost commands", BIFROST_COMMAND_OPTIONS.map(formatBifrostCommandChoice));
+  const selected = await ctx.ui.select(title, options.map(formatBifrostCommandChoice));
   if (!selected) return undefined;
-  return BIFROST_COMMAND_OPTIONS.find((command) => formatBifrostCommandChoice(command) === selected);
+  return options.find((command) => formatBifrostCommandChoice(command) === selected);
 }
 
 // ── Route table ─────────────────────────────────────────────
@@ -662,11 +680,31 @@ export function createCommandRouter(
     const sub = trimmed.toLowerCase();
 
     if (!trimmed) {
-      debug("command", "status");
-      log(
+      debug("command", "dashboard");
+      if (!ctx.hasUI) {
+        log(
+          ctx,
+          `Bifrost: enabled=${state.enabled} pinned=${state.pinned} current=${modelKey(ctx.model)}`,
+        );
+        return;
+      }
+
+      const mode = !state.enabled ? "off" : state.pinned ? "pinned" : "on";
+      const selected = await pickBifrostCommand(
         ctx,
-        `Bifrost: enabled=${state.enabled} pinned=${state.pinned} current=${modelKey(ctx.model)}`,
+        `Bifrost · ${mode} · model ${modelKey(ctx.model)}`,
+        dashboardCommands(state),
       );
+      if (!selected) return;
+
+      if (selected.argumentHint) {
+        ctx.ui.setEditorText(`/bifrost ${selected.value} `);
+        return;
+      }
+
+      const route = routes.find((entry) => entry.value === selected.value);
+      if (!route) return;
+      await route.handler(route.value, ctx);
       return;
     }
 
