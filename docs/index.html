@@ -205,6 +205,14 @@
               observability service.
             </p>
           </article>
+          <article>
+            <h3>Routes around flaky models</h3>
+            <p>
+              Models that keep failing (timeouts, auth errors, provider issues) are
+              skipped for a while. Bifrost remembers which ones and tries them
+              again after a cooldown. Your default tier always works as a fallback.
+            </p>
+          </article>
         </div>
       </section>
 
@@ -284,8 +292,9 @@
             <dt>Model failure</dt>
             <dd>
               If no candidate matches or the selected model cannot be activated,
-              Pi keeps its current model. Pi-Bifrost does not retry another routing
-              candidate at send time.
+              Pi keeps its current model. Bifrost also records repeated failures and
+              temporarily skips unreliable models — after a cooldown, it tries them
+              again automatically. Your default tier always works as a fallback.
             </dd>
           </div>
           <div>
@@ -352,6 +361,12 @@
     "enabled": true,
     "model": "opencode/deepseek-v4-flash-free",
     "method": "auto"
+  },
+  "reliability": {
+    "enabled": true,
+    "failureThreshold": 3,
+    "windowMinutes": 5,
+    "cooldownMinutes": 60
   }
 }</code></pre>
         </details>
