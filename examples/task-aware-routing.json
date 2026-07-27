@@ -1,0 +1,243 @@
+{
+  "$schema": "../schema.json",
+  "_comment": "TEMPLATE: 14-category task-aware routing. Replace every provider/id placeholder with models available in your Pi registry, then copy to .pi/bifrost.json.",
+  "enabled": true,
+  "default": "general",
+  "strategy": "first",
+
+  "categoryStrategies": {
+    "general": "cheapest",
+    "architecture": "first",
+    "implementation": "first",
+    "debugging": "first",
+    "code_review": "first",
+    "reasoning": "first",
+    "frontend": "first",
+    "testing": "cheapest_output",
+    "summarisation": "cheapest_input",
+    "writing": "cheapest_output",
+    "quick": "random",
+    "long_context": "largest_context",
+    "free_pool": "random",
+    "premium": "first"
+  },
+
+  "classifier": {
+    "enabled": true,
+    "model": "provider/your-cheap-classifier-model",
+    "method": "auto",
+    "maxTokens": 20,
+    "temperature": 0,
+    "fallbackToRegex": true,
+    "systemPrompt": "You are the routing control plane for a software-engineering assistant. Select exactly one category from the available category names based on the primary work required, not isolated keywords. architecture: system design, technical planning, API or database design, distributed systems, scalability, infrastructure, migrations, security architecture, major refactors, repository-wide decisions and architectural trade-offs. implementation: writing or modifying production code, implementing features, ordinary refactoring and completing code. debugging: diagnosing failures, bugs, crashes, stack traces, build failures, incorrect behaviour, race conditions, deadlocks, memory leaks, incidents and root-cause analysis. code_review: reviewing existing code, diffs, commits, pull requests, security, correctness, maintainability and performance. reasoning: difficult analysis, algorithms, mathematics, proofs, decision-making, comparisons and complex trade-offs that are not mainly architecture or code modification. frontend: UI, UX, CSS, Tailwind, React, Vue, Svelte, components, dashboards, landing pages and responsive visual implementation. testing: generating tests, test plans, mocks, fixtures and improving coverage. summarisation: reducing large source files, logs, documents or transcripts into shorter output. writing: documentation, READMEs, tutorials, proposals, release notes and other substantial prose. quick: formatting, extraction, classification, translation, conversion, renaming, small edits and simple questions. long_context: an entire repository, many files, a very long document or an explicitly oversized context. free_pool: the user explicitly requests free-only or zero-cost processing. premium: the user explicitly requests maximum quality or says cost does not matter. general: mixed or ordinary requests that do not clearly fit another category. For multi-part prompts, select the category corresponding to the hardest and most consequential part. Return only the exact category name, with no explanation or punctuation."
+  },
+
+  "cache": {
+    "enabled": true,
+    "maxEntries": 1500,
+    "threshold": 0.92
+  },
+
+  "reliability": {
+    "enabled": true,
+    "failureThreshold": 2,
+    "windowMinutes": 5,
+    "cooldownMinutes": 30
+  },
+
+  "debug": {
+    "enabled": false
+  },
+
+  "models": {
+    "general": [
+      "provider/strong-coding-model",
+      "provider/cheap-coding-model"
+    ],
+
+    "architecture": [
+      "provider/strong-coding-model",
+      "provider/very-large-model"
+    ],
+
+    "implementation": [
+      "provider/strong-coding-model",
+      "provider/cheap-coding-model"
+    ],
+
+    "debugging": [
+      "provider/strong-coding-model",
+      "provider/very-large-model"
+    ],
+
+    "code_review": [
+      "provider/strong-coding-model",
+      "provider/cheap-coding-model"
+    ],
+
+    "reasoning": [
+      "provider/very-large-model",
+      "provider/strong-coding-model"
+    ],
+
+    "frontend": [
+      "provider/frontend-model",
+      "provider/strong-coding-model"
+    ],
+
+    "testing": [
+      "provider/free-coding-model",
+      "provider/cheap-coding-model"
+    ],
+
+    "summarisation": [
+      "provider/free-fast-model",
+      "provider/cheap-coding-model"
+    ],
+
+    "writing": [
+      "provider/free-fast-model",
+      "provider/cheap-coding-model"
+    ],
+
+    "quick": [
+      "provider/free-fast-model",
+      "provider/free-coding-model"
+    ],
+
+    "long_context": [
+      "provider/very-large-model",
+      "provider/strong-coding-model"
+    ],
+
+    "free_pool": [
+      "provider/free-fast-model",
+      "provider/free-coding-model"
+    ],
+
+    "premium": [
+      "provider/best-available-model",
+      "provider/very-large-model",
+      "provider/strong-coding-model"
+    ]
+  },
+
+  "rules": [
+    {
+      "pattern": "(^|\\s)\\/?commit(?:\\s|$)|\\b(commit message|conventional commit|git commit message)\\b",
+      "model": "quick"
+    },
+    {
+      "pattern": "(^|\\s)\\/?changelog(?:\\s|$)|\\b(generate changelog|update changelog|release notes from commits)\\b",
+      "model": "quick"
+    },
+    {
+      "pattern": "(^|\\s)\\/?format(?:\\s|$)|\\b(prettify|reformat|format this json|format this yaml)\\b",
+      "model": "quick"
+    },
+    {
+      "pattern": "\\b(json to yaml|yaml to json|csv to json|json to csv|convert this data)\\b",
+      "model": "quick"
+    },
+    {
+      "pattern": "\\b(fix lint|lint errors?|eslint errors?|prettier errors?|stylelint errors?)\\b",
+      "model": "quick"
+    },
+    {
+      "pattern": "\\b(write a regex|create a regex|regular expression for|regex pattern for)\\b",
+      "model": "quick"
+    },
+    {
+      "pattern": "\\b(generate mock data|create mock data|sample json|dummy data|fixture data)\\b",
+      "model": "quick"
+    },
+    {
+      "pattern": "\\b(translate this|proofread this|fix grammar|grammar check|rewrite this sentence)\\b",
+      "model": "quick"
+    },
+    {
+      "pattern": "\\b(classify these|extract fields?|extract values?|extract entities|parse this text)\\b",
+      "model": "quick"
+    },
+    {
+      "pattern": "\\b(system architecture|software architecture|architect this|architect a|distributed system design|microservices architecture|database architecture|database design|schema design|api design|migration architecture|scalability plan|capacity planning)\\b",
+      "model": "architecture"
+    },
+    {
+      "pattern": "\\b(review this code|review this diff|review this pull request|review this pr|code review|security review of this code)\\b",
+      "model": "code_review"
+    },
+    {
+      "pattern": "\\b(frontend|front-end|landing page|dashboard ui|ui component|user interface|responsive design|tailwind component|css layout|react component|vue component|svelte component)\\b",
+      "model": "frontend"
+    },
+    {
+      "pattern": "\\b(mathematical proof|prove that|formal proof|complex reasoning|logical puzzle|derive the equation|algorithmic proof)\\b",
+      "model": "reasoning"
+    },
+    {
+      "pattern": "\\b(race condition|deadlock|memory leak|segmentation fault|heisenbug|concurrency bug|production incident|root cause analysis|performance regression)\\b",
+      "model": "debugging"
+    },
+    {
+      "pattern": "\\b(security audit|threat model|vulnerability analysis|authentication flaw|authorization flaw|sql injection|cross-site scripting|\\bxss\\b|\\bcsrf\\b|remote code execution|privilege escalation)\\b",
+      "model": "debugging"
+    },
+    {
+      "pattern": "\\b(maximum quality|highest quality|best available model|strongest model|premium model|ignore cost|cost does not matter|cost isn't important|spare no expense)\\b",
+      "model": "premium"
+    },
+    {
+      "pattern": "\\b(use a free model|free model only|no paid model|zero cost|spend nothing|do not spend)\\b",
+      "model": "free_pool"
+    },
+    {
+      "pattern": "\\b(entire repository|whole repository|full repository|entire codebase|whole codebase|full codebase|all files|hundreds of files|large context|long context|very large document|over 256k|more than 256k|>\\s*256k)\\b",
+      "model": "long_context"
+    },
+    {
+      "pattern": "\\b(technical design|design document|design doc|scalability|distributed systems?|microservices?|migration strategy|capacity planning|security architecture|repository-wide refactor|major refactor|data model design|service boundaries)\\b",
+      "model": "architecture"
+    },
+    {
+      "pattern": "\\b(debug|diagnose|fix bug|stack trace|runtime error|compile error|build error|failing build|exception|crash|incorrect output|unexpected behaviou?r|flaky test)\\b",
+      "model": "debugging"
+    },
+    {
+      "pattern": "\\b(implement|implementation|write code|generate code|add feature|build feature|create function|create class|refactor|optimi[sz]e code|complete this code|finish this implementation)\\b",
+      "model": "implementation"
+    },
+    {
+      "pattern": "\\b(review code|review a diff|review a pull request|review a pr|audit this code|maintainability review|code quality review|find issues in this code)\\b",
+      "model": "code_review"
+    },
+    {
+      "pattern": "\\b(unit tests?|integration tests?|end-to-end tests?|e2e tests?|test cases?|write tests?|generate tests?|test plan|test coverage|mock tests?|test fixtures?)\\b",
+      "model": "testing"
+    },
+    {
+      "pattern": "\\b(summari[sz]e|condense|digest|tl;?dr|executive summary|summari[sz]e these logs|summari[sz]e this document)\\b",
+      "model": "summarisation"
+    },
+    {
+      "pattern": "\\b(write documentation|generate documentation|write a readme|create a readme|tutorial|long-form explanation|proposal|technical article|blog post|release announcement)\\b",
+      "model": "writing"
+    },
+    {
+      "pattern": "\\b(reasoning|analyse|analyze|evaluate|investigate|compare approaches|compare options|trade-?offs?|decision matrix|algorithm|complexity analysis|mathematics?|derive|proof|solve this problem)\\b",
+      "model": "reasoning"
+    },
+    {
+      "pattern": "\\b(ui|ux|frontend|front-end|landing page|dashboard|responsive layout|visual design|web design|css|tailwind)\\b",
+      "model": "frontend"
+    },
+    {
+      "pattern": "\\b(format|convert|translate|rewrite|grammar|extract|classify|rename|simple explanation|quick answer|briefly|hello)\\b",
+      "model": "quick"
+    },
+    {
+      "pattern": "\\b(code|coding|function|class|module|typescript|javascript|python|rust|golang|java|c\\+\\+|sql|react|vue|angular|node\\.js|svelte)\\b",
+      "model": "general"
+    }
+  ]
+}

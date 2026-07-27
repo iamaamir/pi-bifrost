@@ -35,13 +35,83 @@ export interface BifrostConfig {
 export const DEFAULT_RULES: RouteRule[] = [
   {
     pattern:
-      "\\b(plan|design|architect|refactor|debug|fix|implement|complex|performance|memory leak|race condition)\\b",
+      "(^|\\s)\\/?commit(?:\\s|$)|\\b(commit message|conventional commit|git commit message)\\b",
+    model: "quick",
+  },
+  {
+    pattern:
+      "(^|\\s)\\/?format(?:\\s|$)|\\b(prettify|reformat|format this json|format this yaml|format this code)\\b",
+    model: "quick",
+  },
+  {
+    pattern:
+      "\\b(json to yaml|yaml to json|csv to json|json to csv|convert this data)\\b",
+    model: "quick",
+  },
+  {
+    pattern:
+      "\\b(fix lint|lint errors?|eslint errors?|prettier errors?|stylelint errors?)\\b",
+    model: "quick",
+  },
+  {
+    pattern:
+      "\\b(generate mock data|create mock data|sample json|dummy data|fixture data)\\b",
+    model: "quick",
+  },
+  {
+    pattern:
+      "\\b(translate this|proofread this|fix grammar|grammar check|rewrite this sentence)\\b",
+    model: "quick",
+  },
+  {
+    pattern:
+      "\\b(classify these|extract fields?|extract values?|extract entities|parse this text)\\b",
+    model: "quick",
+  },
+  {
+    pattern:
+      "(^|\\s)\\/?test(?:\\s|$)|\\b(unit tests?|integration tests?|e2e tests?|test cases?|write tests?|generate tests?|test coverage|test fixtures?)\\b",
+    model: "general",
+  },
+  {
+    pattern:
+      "(^|\\s)\\/?review(?:\\s|$)|\\b(review this code|review this diff|review this pull request|review this pr|code review|audit this code|security review of this code)\\b",
     model: "frontier",
   },
   {
     pattern:
-      "\\b(explain|summarize|define|what is|how to|format|lint|convert|hello|idea)\\b",
-    model: "economical",
+      "(^|\\s)\\/?debug(?:\\s|$)|\\b(debug|diagnose|fix bug|stack trace|runtime error|compile error|build error|failing build|exception|crash|incorrect output|unexpected behaviou?r|flaky test)\\b",
+    model: "frontier",
+  },
+  {
+    pattern:
+      "(^|\\s)\\/?arch(?:\\s|$)|\\b(system architecture|software architecture|architect this|architect a|distributed system design|microservices architecture|database architecture|database design|schema design|api design|migration architecture|scalability plan|capacity planning|repository-wide refactor|major refactor)\\b",
+    model: "frontier",
+  },
+  {
+    pattern:
+      "\\b(race condition|deadlock|memory leak|segmentation fault|heisenbug|concurrency bug|production incident|root cause analysis|performance regression)\\b",
+    model: "frontier",
+  },
+  {
+    pattern:
+      "\\b(security audit|threat model|vulnerability analysis|authentication flaw|authorization flaw|sql injection|cross-site scripting|\\bxss\\b|\\bcsrf\\b|remote code execution|privilege escalation)\\b",
+    model: "frontier",
+  },
+  {
+    pattern:
+      "\\b(mathematical proof|prove that|formal proof|complex reasoning|logical puzzle|derive the equation|algorithmic proof)\\b",
+    model: "frontier",
+  },
+  {
+    pattern:
+      "\\b(maximum quality|highest quality|best available model|strongest model|ignore cost|cost does not matter|cost isn't important|spare no expense)\\b",
+    model: "frontier",
+  },
+  {
+    pattern:
+      "\\b(use a free model|free model only|no paid model|zero cost|spend nothing|do not spend)\\b",
+    model: "quick",
   },
 ];
 
@@ -207,9 +277,13 @@ export function loadConfig(
 ): BifrostConfig {
   const base: BifrostConfig = {
     enabled: true,
-    default: "economical",
+    default: "general",
     strategy: "first",
-    categoryStrategies: { economical: "cheapest" },
+    categoryStrategies: {
+      quick: "random",
+      general: "first",
+      frontier: "first",
+    },
     models: {},
     rules: DEFAULT_RULES,
   };

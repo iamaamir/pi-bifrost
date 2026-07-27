@@ -17,6 +17,28 @@ Also support inline override: "frontier debug this" forces frontier, "economical
 
 ---
 
+### Default config overhaul — task-aware routing
+
+Replace the weak two-tier `economical`/`frontier` default with a minimal 3-tier config:
+
+- `quick` — formatting, extraction, classification, commit messages, simple edits, explicit free-only requests. Strategy: `random`.
+- `general` — writing code, tests, docs, summaries, ordinary refactoring. Strategy: `first`.
+- `frontier` — architecture, debugging, code review, security, complex reasoning, explicit premium requests. Strategy: `first`.
+
+Ship together with:
+
+- Tier-based rules only (no hardcoded model IDs) so `/bifrost init` works for any registry.
+- `DEFAULT_RULES` as the single source of truth; shipped `bifrost.json` omits `rules`.
+- Updated `guessTier` cost bands: `<1 → quick`, `1–5 → general`, `>5 → frontier`.
+- Empty `models` arrays in the default config, populated by `/bifrost init`.
+- Rich 14-tier task-aware config and detailed classifier prompt moved to `examples/`.
+
+**Effort:** Low · **Reach:** Every new install
+
+**Status:** ✅ Shipped in v0.2.2 via updated `bifrost.json`, `config.ts`, `routing.ts`, `commands.ts`, and new examples.
+
+---
+
 ### Usage stats & cost visibility
 `/bifrost stats` — per-model usage, cost estimates, cache hit rate, routing decisions over time. After each prompt: `⎇ frontier → claude-opus ($0.008)`. Prove Bifrost saves money. Convince teams. Optimize budgets.
 

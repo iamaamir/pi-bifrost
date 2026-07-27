@@ -1,0 +1,85 @@
+{
+  "$schema": "../schema.json",
+  "_comment": "TEMPLATE: override the classifier system prompt with detailed task-intent descriptions. Replace model placeholders with your Pi registry models.",
+  "enabled": true,
+  "default": "general",
+  "strategy": "first",
+
+  "categoryStrategies": {
+    "quick": "random",
+    "general": "first",
+    "frontier": "first"
+  },
+
+  "classifier": {
+    "enabled": true,
+    "model": "provider/your-cheap-classifier-model",
+    "method": "auto",
+    "maxTokens": 20,
+    "temperature": 0,
+    "fallbackToRegex": true,
+    "systemPrompt": "You route software-engineering prompts to exactly one tier: quick, general, or frontier. Respond with only the tier name.\n\nquick: formatting, conversion, extraction, classification, renaming, simple edits, grammar fixes, commit messages, hello/greeting, or any trivial request that does not require reasoning about code behavior.\ngeneral: writing or modifying production code, implementing features, ordinary refactoring, unit/integration tests, documentation, summaries, explanations, or mixed coding tasks.\nfrontier: system architecture, API/database design, distributed systems, migrations, scalability, security audits, threat modeling, code review, complex debugging, production incidents, root-cause analysis, race conditions, memory leaks, complex algorithms, mathematical proofs, or explicit requests for maximum quality.\n\nFor multi-part prompts, pick the tier matching the hardest and most consequential part. Return only the exact tier name, with no explanation or punctuation."
+  },
+
+  "cache": {
+    "enabled": true,
+    "maxEntries": 500,
+    "threshold": 0.88
+  },
+
+  "reliability": {
+    "enabled": true,
+    "failureThreshold": 3,
+    "windowMinutes": 5,
+    "cooldownMinutes": 60
+  },
+
+  "debug": {
+    "enabled": false
+  },
+
+  "models": {
+    "quick": [
+      "provider/free-fast-model",
+      "provider/free-coding-model"
+    ],
+
+    "general": [
+      "provider/strong-coding-model",
+      "provider/cheap-coding-model"
+    ],
+
+    "frontier": [
+      "provider/best-available-model",
+      "provider/very-large-model",
+      "provider/strong-coding-model"
+    ]
+  },
+
+  "rules": [
+    {
+      "pattern": "(^|\\s)\\/?commit(?:\\s|$)|\\b(commit message|conventional commit|git commit message)\\b",
+      "model": "quick"
+    },
+    {
+      "pattern": "(^|\\s)\\/?format(?:\\s|$)|\\b(prettify|reformat|format this json|format this yaml|format this code)\\b",
+      "model": "quick"
+    },
+    {
+      "pattern": "(^|\\s)\\/?test(?:\\s|$)|\\b(unit tests?|integration tests?|e2e tests?)\\b",
+      "model": "general"
+    },
+    {
+      "pattern": "(^|\\s)\\/?debug(?:\\s|$)|\\b(stack trace|crash|memory leak|flaky test)\\b",
+      "model": "frontier"
+    },
+    {
+      "pattern": "(^|\\s)\\/?arch(?:\\s|$)|\\b(system architecture|api design|migration strategy)\\b",
+      "model": "frontier"
+    },
+    {
+      "pattern": "\\b(review this code|code review|audit this code)\\b",
+      "model": "frontier"
+    }
+  ]
+}

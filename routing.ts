@@ -300,17 +300,17 @@ export function classify(text: string, rules: readonly RouteRule[]): string | un
 /**
  * Cost thresholds for tier assignment during `/bifrost init`.
  * Models with cost above FRONTIER are suggested as frontier;
- * below ECONOMICAL as economical. Everything else is uncategorized
- * and the user assigns manually. No name-based guessing — naming
- * conventions change; cost is the stable signal.
+ * below QUICK as quick; everything in between as general. Anything
+ * still uncategorized the user assigns manually. No name-based
+ * guessing — naming conventions change; cost is the stable signal.
  */
 const FRONTIER_COST_THRESHOLD = 5; // $/1M tokens (input + output)
-const ECONOMICAL_COST_THRESHOLD = 1;
+const QUICK_COST_THRESHOLD = 1;
 
 /** Assign a model to a tier based solely on token cost. */
-export function guessTier(model: Model<Api>): "frontier" | "economical" | undefined {
+export function guessTier(model: Model<Api>): "frontier" | "general" | "quick" | undefined {
   const cost = (model.cost?.input ?? 0) + (model.cost?.output ?? 0);
   if (cost > FRONTIER_COST_THRESHOLD) return "frontier";
-  if (cost < ECONOMICAL_COST_THRESHOLD) return "economical";
-  return undefined;
+  if (cost < QUICK_COST_THRESHOLD) return "quick";
+  return "general";
 }

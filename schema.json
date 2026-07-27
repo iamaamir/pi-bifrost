@@ -13,8 +13,8 @@
     "default": {
       "type": "string",
       "description": "Model tier to use when no rule matches and the classifier returns no category. Must match a key in 'models'.",
-      "default": "economical",
-      "examples": ["economical", "frontier"]
+      "default": "general",
+      "examples": ["quick", "general", "frontier"]
     },
     "strategy": {
       "type": "string",
@@ -25,7 +25,7 @@
     "categoryStrategies": {
       "type": "object",
       "description": "Per-tier strategy overrides. Keys must match tier names in 'models'. If a tier is not listed here, 'strategy' is used.",
-      "default": { "economical": "cheapest" },
+      "default": { "quick": "random", "general": "first", "frontier": "first" },
       "additionalProperties": {
         "type": "string",
         "enum": ["first", "cheapest", "cheapest_input", "cheapest_output", "largest_context", "random", "fastest"]
@@ -33,7 +33,7 @@
     },
     "models": {
       "type": "object",
-      "description": "Model tiers. Each key is a tier name (e.g. 'frontier', 'economical'). Values are provider/model patterns — either a single string or an ordered array of candidate patterns.",
+      "description": "Model tiers. Each key is a tier name (e.g. 'quick', 'general', 'frontier'). Values are provider/model patterns — either a single string or an ordered array of candidate patterns.",
       "default": {},
       "additionalProperties": {
         "oneOf": [
@@ -46,8 +46,9 @@
       },
       "examples": [
         {
-          "frontier": ["opencode/deepseek-v4-flash-free"],
-          "economical": ["ollama/qwen2.5-coder:latest", "lmstudio/openai/gpt-oss-20b"]
+          "quick": ["opencode/deepseek-v4-flash-free"],
+          "general": ["opencode-go/deepseek-v4-pro", "openai-codex/gpt-5.4-mini"],
+          "frontier": ["openai-codex/gpt-5.6-sol", "opencode-go/glm-5.2"]
         }
       ]
     },

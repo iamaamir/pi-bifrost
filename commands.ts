@@ -158,6 +158,33 @@ function resolveTierDisplay(
   };
 }
 
+// ── Init proposal builder (exported for tests) ──────────────
+
+export function buildInitProposal(
+  models: Record<string, string[]>,
+  classifierModel: string,
+  extensionDir: string,
+): Record<string, unknown> {
+  return {
+    $schema: `${extensionDir.replace(/\/$/, "")}/schema.json`,
+    enabled: true,
+    default: "general",
+    strategy: "first" as RoutingStrategy,
+    categoryStrategies: {
+      quick: "random" as RoutingStrategy,
+      general: "first" as RoutingStrategy,
+      frontier: "first" as RoutingStrategy,
+    },
+    classifier: {
+      enabled: true,
+      model: classifierModel,
+      method: "auto" as const,
+    },
+    models,
+    rules: DEFAULT_RULES,
+  };
+}
+
 // ── Command handlers ────────────────────────────────────────
 
 async function handleInit(
@@ -312,20 +339,7 @@ async function handleInit(
     }
   }
 
-  const proposal = {
-    $schema: `${state.extensionDir.replace(/\/$/, "")}/schema.json`,
-    enabled: true,
-    default: "economical",
-    strategy: "first" as RoutingStrategy,
-    categoryStrategies: { economical: "cheapest" as RoutingStrategy },
-    classifier: {
-      enabled: true,
-      model: classifierModel,
-      method: "auto" as const,
-    },
-    models,
-    rules: DEFAULT_RULES,
-  };
+  const proposal = buildInitProposal(models, classifierModel, state.extensionDir);
 
   const totalAssigned = Object.values(models).reduce((s, v) => s + v.length, 0);
   uiOutput(ctx, [

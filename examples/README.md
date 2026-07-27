@@ -134,6 +134,44 @@ Try:
 
 Tradeoff: exact bindings are predictable but less flexible when model availability changes.
 
+### `task-aware-routing.json`
+
+Use when you want fine-grained routing across many task types without maintaining per-project rules.
+
+- 14 categories: `architecture`, `implementation`, `debugging`, `code_review`, `reasoning`, `frontend`, `testing`, `summarisation`, `writing`, `quick`, `long_context`, `free_pool`, `premium`, and `general`.
+- Per-category selection strategies (e.g. `cheapest_input` for summarisation, `largest_context` for long_context).
+- Task-tuned classifier system prompt and regex fallback rules.
+- Model lists use placeholder `provider/...` patterns — replace them with models from your Pi registry.
+
+Try:
+
+```text
+/bifrost preview review this pull request
+/bifrost preview debug this memory leak
+/bifrost preview summarize these logs
+/bifrost preview use a free model only
+```
+
+Tradeoff: more categories to maintain, but routing matches task shape closely.
+
+### `advanced-classifier-prompt.json`
+
+Use when the built-in classifier prompt is too terse for your workflow and you want the LLM to route by task intent rather than isolated keywords.
+
+- Overrides `classifier.systemPrompt` with a detailed 3-tier task description.
+- Keeps the same `quick` / `general` / `frontier` model tiers as the default config.
+- Works best when the classifier model is capable enough to follow nuanced instructions.
+
+Try:
+
+```text
+/bifrost preview design a migration strategy for this database
+/bifrost preview write unit tests for this function
+/bifrost preview format this json
+```
+
+Tradeoff: more tokens per classification, but sharper routing on ambiguous prompts.
+
 ### `project-routes.json`
 
 Use when each repository needs different routing rules.

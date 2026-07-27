@@ -68,16 +68,24 @@ Everything lives in `.pi/bifrost.json`. Editor autocomplete works in VS Code, Ze
 
 ### Tiers and models
 
+The default config ships with three tiers. Run `/bifrost init` to populate them from your Pi registry, or edit the arrays manually.
+
 ```json
 {
   "models": {
-    "economical": [
+    "quick": [
       "opencode/deepseek-v4-flash-free",
-      "lmstudio/openai/gpt-oss-20b"
+      "opencode/mimo-v2.5-free"
+    ],
+    "general": [
+      "opencode-go/deepseek-v4-pro",
+      "opencode-go/glm-5.2",
+      "openai-codex/gpt-5.4-mini"
     ],
     "frontier": [
-      "opencode-go/glm-5.1",
-      "opencode-go/grok-4.5"
+      "openai-codex/gpt-5.6-sol",
+      "opencode-go/glm-5.2",
+      "opencode-go/deepseek-v4-pro"
     ]
   }
 }
@@ -102,7 +110,9 @@ How Bifrost picks from the list. Set globally or per-tier:
 {
   "strategy": "first",
   "categoryStrategies": {
-    "economical": "cheapest"
+    "quick": "random",
+    "general": "first",
+    "frontier": "first"
   }
 }
 ```
@@ -115,31 +125,28 @@ Regex patterns that map prompts to tiers. First match wins. Case insensitive.
 {
   "rules": [
     {
-      "pattern": "\\b(debug|fix|implement|refactor|architect)\\b",
+      "pattern": "(^|\\s)\\/?commit(?:\\s|$)|\\b(commit message|conventional commit)\\b",
+      "model": "quick"
+    },
+    {
+      "pattern": "(^|\\s)\\/?format(?:\\s|$)|\\b(format this json|format this code)\\b",
+      "model": "quick"
+    },
+    {
+      "pattern": "(^|\\s)\\/?test(?:\\s|$)|\\b(unit tests?|integration tests?|e2e tests?)\\b",
+      "model": "general"
+    },
+    {
+      "pattern": "(^|\\s)\\/?debug(?:\\s|$)|\\b(stack trace|crash|memory leak|flaky test)\\b",
       "model": "frontier"
     },
     {
-      "pattern": "\\b(explain|summarize|format|hello)\\b",
-      "model": "economical"
-    }
-  ]
-}
-```
-
-### Routing rules
-
-Regex patterns that map prompts to tiers. First match wins. Case insensitive.
-
-```json
-{
-  "rules": [
-    {
-      "pattern": "\\b(debug|fix|implement|refactor|architect)\\b",
+      "pattern": "(^|\\s)\\/?arch(?:\\s|$)|\\b(system architecture|api design|migration strategy)\\b",
       "model": "frontier"
     },
     {
-      "pattern": "\\b(explain|summarize|format|hello)\\b",
-      "model": "economical"
+      "pattern": "\\b(review this code|code review|audit this code)\\b",
+      "model": "frontier"
     }
   ]
 }
