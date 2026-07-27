@@ -7,7 +7,7 @@ Automatic model routing for [pi](https://pi.dev). Routes each prompt to a model 
 - **Probe-first init** — tests every model before writing config. No dead providers in your tier lists.
 - **Zero-token routing** — 7 selection strategies, all metadata-based. Routing decisions cost nothing.
 - **Production observability** — Performance API traces, JSONL debug logs. AI-parseable.
-- **Direct bindings** — assign specific models to specific prompts via regex rules or inline `!<tier>` prefix.
+- **Direct bindings** — assign specific models to specific prompts via regex rules or inline tier name prefix.
 
 ## Install
 
@@ -162,15 +162,15 @@ Useful for `/commit`, `/test`, `/explain` — any pattern where you want a speci
 
 ### Inline override
 
-Prefix a prompt with `!<tier>` to force a specific tier for that one message. No config change needed.
+Type a tier name as the first word to force that tier for one message. No config change needed.
 
 ```
-!frontier debug this race condition
-!economical summarize this
-!frontier implement the auth module
+frontier debug this race condition
+economical summarize this
+frontier implement the auth module
 ```
 
-The tier must match a key in your `models` config. The prefix is stripped before routing so the prompt is classified and sent without the `!` marker.
+The tier name is stripped before routing — the rest goes to your prompt clean.
 
 ### Classifier
 

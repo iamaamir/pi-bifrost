@@ -130,7 +130,7 @@ Tradeoff: project-local rules keep routing relevant, but they need maintenance a
 Automation is always reversible:
 
 ```text
-!frontier implement the auth module
+frontier implement the auth module
 /bifrost pin
 /bifrost unpin
 /bifrost classifier off

@@ -171,15 +171,16 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const text = event.text.trim();
     if (text.startsWith("/")) return { action: "continue" };
 
-    // Inline tier override: !f forces frontier, !e forces economical.
+    // Inline tier override: "frontier debug this" forces that tier for one prompt.
+    // Pi reserves / for commands, ! for bash. Just type the tier name as first word.
     let forcedTier: string | undefined;
     let promptText = text;
-    const inlineMatch = text.match(/^!([a-z]+)\s+/);
-    if (inlineMatch) {
-      const candidate = inlineMatch[1];
+    const firstWord = text.match(/^([a-z]+)\s+/i);
+    if (firstWord) {
+      const candidate = firstWord[1].toLowerCase();
       if (state.config.models?.[candidate]) {
         forcedTier = candidate;
-        promptText = text.slice(inlineMatch[0].length);
+        promptText = text.slice(firstWord[0].length);
         debug("input", "inline_override", { tier: forcedTier });
       }
     }

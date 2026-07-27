@@ -94,8 +94,8 @@ export function loadConfig(
   const configs = [
     readJson<BifrostConfig>(join(extensionDir, "bifrost.json")),
     readJson<BifrostConfig>(join(getAgentDir(), "bifrost.json")),
-    readJson<BifrostConfig>(join(cwd, CONFIG_DIR_NAME, "bifrost.json")),
     readJson<BifrostConfig>(join(cwd, "bifrost.json")),
+    readJson<BifrostConfig>(join(cwd, CONFIG_DIR_NAME, "bifrost.json")),
   ];
 
   let merged = base as unknown as Record<string, unknown>;

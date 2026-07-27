@@ -11,7 +11,7 @@ Per-prompt model overrides. Bind specific models to specific prompt patterns. `"
 { "pattern": "\\bcommit\\b", "model": "opencode-go/glm-5.1" }
 ```
 
-Also support inline prefix: `!f debug this` forces frontier, `!e hello` forces economical. No `/bifrost pin` dance needed.
+Also support inline override: "frontier debug this" forces frontier, "economical hello" forces economical. No `/bifrost pin` dance needed.
 
 **Effort:** Low · **Reach:** Every user who's ever manually switched models
 
