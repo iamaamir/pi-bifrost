@@ -425,7 +425,7 @@ else if (store.getCircuitState(settled.model).trialActive) store.recordSettled(s
 
 Implementation review against the accepted interface and gate above. Suite green (158/158), `tsc --noEmit` clean. Caller migration complete: no `saveReliability` / `loadReliability` outside `reliability-store.ts`, `reliability.ts` I/O, and test fixtures.
 
-### Verdict: **Approve with minor fixes.**
+### Verdict: **Approved.** Findings F1, F2, F4, F5, F6 closed in commit `a49f8d2b`; F3 accepted as-is. 160/160 tests, `tsc` clean. Track via the table below.
 
 ### Gate implementation status
 
@@ -437,7 +437,7 @@ Implementation review against the accepted interface and gate above. Suite green
 | Settle success Policy A (trial-only) | `:96-102`, 3 tests | ✅ |
 | Writes take no `config` param | `:84, :89, :96, :104, :109` | ✅ |
 | `getState(): Readonly<…>` | `:64` (shallow — see F3) | ✅ |
-| `reload` handles path swap | `:131-135` | ⚠️ **F1** broken on no-arg |
+| `reload` handles path swap | `:131-135` | ✅ (F1 fixed `a49f8d2b`) |
 | Injectable `io` + `now` | `:34-40, :52-53` | ✅ |
 | Pure `reliability.ts` tests green | — | ✅ |
 | No caller `saveReliability` outside store + I/O | grep clean | ✅ |
@@ -449,19 +449,22 @@ Implementation review against the accepted interface and gate above. Suite green
 
 ### Findings
 
-**F1 — `reload()` no-arg branch corrupts path (medium; unreachable today).**
-`reliability-store.ts:134`: `reliabilityPath(dirname(this.pathValue), …)` re-derives path relative to the file's *parent directory*, so `/proj/.pi/bifrost-reliability.json` becomes `/proj/.pi/.pi/bifrost-reliability.json` (verified by repro). Both production call sites pass `cwd`, so unreachable — but a sharp edge. **Fix:** make `cwd` required, or drop the else branch (keep `pathValue` unchanged when `cwd` absent).
+**F1 — `reload()` no-arg branch corrupts path (medium; unreachable today).** ✅ Fixed `a49f8d2b`
+Dropped the `else` re-derivation branch; `pathValue` only changes when `cwd` is passed.
 
-**F2 — `applyOutcomes` change-detection is mostly dead (nit).** `:111-122`
-`recordModelSuccess/Failure` always spread a new state object for non-disabled mutations, so `next !== this.stateValue` is effectively always true. The `changed` flag only fires for the disabled case. Either drop the flag (single `persist()` at end) or document it as an enabled short-circuit.
+**F2 — `applyOutcomes` change-detection is mostly dead (nit).** ✅ Documented `a49f8d2b`
+Comment added explaining the `changed` flag short-circuits the disabled case.
 
-**F3 — `Readonly<ReliabilityState>` is shallow (known per ADR).** `getState().models[k].failures.push(x)` still typechecks. Acceptable for v1; optional `Object.freeze` in dev builds for a runtime guard.
+**F3 — `Readonly<ReliabilityState>` is shallow (known per ADR).** Accepted as-is for v1; optional `Object.freeze` in dev builds later.
 
-**F4 — `beginTrial` has no `enabled` check (minor; pre-existing).** `:104-107`. Disabled reliability + stale open circuit would still persist a trial. Routing skips CB when disabled so hard to hit; `if (this.configValue?.enabled === false) return;` would close it. Not a regression.
+**F4 — `beginTrial` has no `enabled` check (minor; pre-existing).** ✅ Fixed `a49f8d2b`
+`if (this.configValue?.enabled === false) return;` added.
 
-**F5 — Test gaps.** Path-swap reload; `updateConfig` affecting later writes; two store instances on one real temp file (ADR matrix row 4). None present.
+**F5 — Test gaps.** ✅ Fixed `a49f8d2b`
+Added path-swap reload test + two-instance integration test.
 
-**F6 — Log line only on failure (intentional).** `index.ts:186-188` — matches Policy A silent clean settle. Add a comment that this is intentional.
+**F6 — Log line only on failure (intentional).** ✅ Commented `a49f8d2b`
+Policy A silent-clean-settle comment added in `index.ts`.
 
 ### Non-findings (verified correct)
 
@@ -473,6 +476,4 @@ Implementation review against the accepted interface and gate above. Suite green
 
 ### Recommended actions
 
-1. **F1 (required before merge):** fix `reload()` else-branch or require `cwd`.
-2. **F5 (same PR if easy):** add path-swap reload test + two-instance integration test.
-3. F2, F4, F6: follow-up nits / comments.
+All complete. No outstanding work from this review.
