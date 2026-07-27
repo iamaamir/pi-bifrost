@@ -19,6 +19,7 @@ import {
 import {
   loadConfig,
   loadRules,
+  validateConfig,
   type BifrostConfig,
 } from "./config.js";
 import {
@@ -110,6 +111,14 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   }
 
   const config = bootConfig;
+
+  // Validate config on startup. Errors are logged; the extension
+  // continues with best-effort routing for warnings.
+  const configIssues = validateConfig(config);
+  for (const issue of configIssues) {
+    const tag = issue.severity === "error" ? "error" : "warning";
+    console.error(`[bifrost/config] ${tag}: ${issue.message}`);
+  }
   const cacheEntries = loadCache(cachePath(process.cwd(), config.cache?.path));
   let selfSelecting = false;
   let pipeline: ClassificationPipeline | undefined;

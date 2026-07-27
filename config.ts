@@ -43,6 +43,96 @@ export const DEFAULT_RULES: RouteRule[] = [
   },
 ];
 
+export const ALL_STRATEGIES: readonly RoutingStrategy[] = [
+  "first",
+  "cheapest",
+  "cheapest_input",
+  "cheapest_output",
+  "largest_context",
+  "random",
+  "fastest",
+];
+
+export interface ConfigIssue {
+  readonly severity: "error" | "warning";
+  readonly message: string;
+}
+
+/**
+ * Validate a resolved BifrostConfig. Returns issues (errors stop
+ * the extension from starting, warnings are logged only).
+ */
+export function validateConfig(
+  config: BifrostConfig,
+): ConfigIssue[] {
+  const issues: ConfigIssue[] = [];
+  const modelKeys = Object.keys(config.models ?? {});
+
+  if (modelKeys.length === 0) {
+    issues.push({
+      severity: "error",
+      message:
+        'No tiers configured in "models". Add at least one tier to .pi/bifrost.json.',
+    });
+  }
+
+  if (config.default && !modelKeys.includes(config.default)) {
+    issues.push({
+      severity: "error",
+      message: `Default tier "${config.default}" not found in models [${modelKeys.join(", ")}].`,
+    });
+  }
+
+  if (config.categoryStrategies) {
+    for (const tier of Object.keys(config.categoryStrategies)) {
+      if (!modelKeys.includes(tier)) {
+        issues.push({
+          severity: "error",
+          message: `Category strategy for tier "${tier}" — tier not found in models [${modelKeys.join(", ")}].`,
+        });
+      }
+    }
+  }
+
+  const strat = config.strategy;
+  if (strat && !ALL_STRATEGIES.includes(strat as RoutingStrategy)) {
+    issues.push({
+      severity: "warning",
+      message: `Unknown strategy "${strat}" — falling back to "first".`,
+    });
+  }
+
+  if (config.cache?.threshold !== undefined && (config.cache.threshold < 0 || config.cache.threshold > 1)) {
+    issues.push({
+      severity: "error",
+      message: `Cache threshold must be between 0 and 1, got ${config.cache.threshold}.`,
+    });
+  }
+
+  if (config.cache?.maxEntries !== undefined && config.cache.maxEntries < 1) {
+    issues.push({
+      severity: "warning",
+      message: `Cache maxEntries is ${config.cache.maxEntries}, should be > 0.`,
+    });
+  }
+
+  if (config.rules) {
+    for (let i = 0; i < config.rules.length; i++) {
+      const rule = config.rules[i];
+      try {
+        new RegExp(rule.pattern, "i");
+      } catch {
+        issues.push({
+          severity: "error",
+          message: `Invalid regex in rule #${i}: "${rule.pattern}".`,
+        });
+      }
+    }
+  }
+
+  return issues;
+}
+
 export function readJson<T>(path: string): T | undefined {
   if (!existsSync(path)) return undefined;
   try {
