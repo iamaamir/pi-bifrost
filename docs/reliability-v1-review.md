@@ -115,23 +115,38 @@ When `reliability.enabled` is false:
 
 ---
 
-### P2 — “runtime failure” coverage is not real provider-request coverage
+### P1 — no post-selection provider-failure feedback loop
 
 `tests/runtime-reliability.test.ts` directly calls `recordModelFailure(..., "setModel", ...)`; it does not exercise extension runtime behavior. `setModel` auth/selection failure is not a provider request failure.
 
-The roadmap says V1 records probe failures and observed provider failures. Current implementation records:
+This creates harmful routing behavior:
 
-- probe `error`/`timeout` results;
-- `setModel()` false return only (and currently not thrown rejection; see P1).
+1. Bifrost selects model X successfully.
+2. X hits quota, connection reset, or `Streaming response failed` during generation.
+3. Pi retries X; it may eventually fail, or repeatedly recover only after retry.
+4. User asks a follow-up such as “what happened?”
+5. Bifrost has no health signal from failed/degraded request and can select X again.
 
-It does **not** observe agent/provider request failures after model selection.
+The model is faulty from user perspective, but current circuit state remains healthy. This can cause repeated broken turns and route a recovery question back to the same provider/model.
 
-**Suggested decision:** either:
+**Required fix:** add a post-selection failure feedback loop for future routing. Pi `agent_end` includes completed low-level-run messages, while `agent_settled` fires only after Pi has exhausted automatic retry/compaction/queued continuation. Track a Bifrost-owned run health record:
 
-1. narrow V1 documentation to “probe and model-selection health”, rename test accordingly; or
-2. add a validated Pi lifecycle listener for assistant/provider errors, only if it is safe and supported by target Pi versions.
+- Capture selected model key before request starts; do not infer it later from mutable `ctx.model`.
+- On `agent_end`, inspect terminal assistant failure metadata (`stopReason: "error"` / error message) and record candidate failure/recovery evidence for that run.
+- Defer circuit mutation until `agent_settled`, so Pi's own retries are not counted as independent user-visible failures.
+- If final settlement still failed, record a hard failure and persist it. Future prompts then skip/open-circuit model normally.
+- If Pi recovered after retry, record degraded/recovered telemetry. Decide explicitly whether repeated recovered failures count toward a lower-weight or normal threshold; do not pretend they are clean success.
+- Never replay current prompt automatically in V1. A stream may have emitted text or triggered tools, so replay risks duplicate work.
 
-Do not claim provider-runtime failure coverage until it exists.
+**Required tests:**
+
+1. terminal stream error after successful selection opens/advances circuit only after final `agent_settled`;
+2. Pi retry that succeeds does not mark hard failure;
+3. repeated recovered retries affect documented degraded-health policy;
+4. follow-up routing skips model after hard circuit opens;
+5. event sequence cannot attribute prior model failure to a later model switch.
+
+Do not claim provider-runtime failure coverage until this exists.
 
 ---
 
