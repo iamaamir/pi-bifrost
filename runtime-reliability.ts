@@ -14,7 +14,7 @@ function modelKey(message: AssistantOutcome): string | undefined {
 /** Tracks one Bifrost-routed agent run across Pi's internal retries. */
 export interface RuntimeFailure {
   model: string;
-  reason: string;
+  reason?: string;
 }
 
 export class RuntimeReliabilityTracker {
@@ -42,11 +42,13 @@ export class RuntimeReliabilityTracker {
       : undefined;
   }
 
+  /** Returns model on both success and failure. reason undefined = clean settle. */
   settle(): RuntimeFailure | undefined {
     const failure = this.pendingFailure;
     const model = this.selectedModel;
     this.selectedModel = undefined;
     this.pendingFailure = undefined;
-    return failure && model ? { model, reason: failure } : undefined;
+    if (!model) return undefined;
+    return { model, reason: failure };
   }
 }

@@ -28,14 +28,7 @@ import {
   modelKey,
   resolveModelWithFallback,
 } from "./routing.js";
-import {
-  loadReliability,
-  beginTrial,
-  recordSetModelOutcome,
-  reliabilityPath,
-  saveReliability,
-  getCircuitState,
-} from "./reliability.js";
+import { ReliabilityStore } from "./reliability-store.js";
 import { createCommandRouter, getBifrostCommandCompletions, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.js";
 import { setupDebug, debug, debugMeasure } from "./debug.js";
 import { parseInlineOverride } from "./inline-override.js";
@@ -135,8 +128,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     console.error(`[bifrost/config] ${tag}: ${issue.message}`);
   }
   const cacheEntries = loadCache(cachePath(process.cwd(), config.cache?.path));
-  const loadedReliabilityPath = reliabilityPath(process.cwd(), config.reliability?.path);
-  const reliabilityState = loadReliability(loadedReliabilityPath);
+  const reliabilityStore = new ReliabilityStore({ cwd: process.cwd(), config: config.reliability });
   let selfSelecting = false;
   const runtimeReliability = new RuntimeReliabilityTracker();
   let pipeline: ClassificationPipeline | undefined;
@@ -160,8 +152,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     classifierEnabled: config.classifier?.enabled ?? true,
     pinned: false,
     cacheEntries,
-    reliabilityState,
-    reliabilityPath: loadedReliabilityPath,
+    reliabilityStore,
     extensionDir,
     getPipeline,
     invalidatePipeline,
@@ -189,18 +180,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
-    const failure = runtimeReliability.settle();
-    if (!failure || !state.enabled || state.config.reliability?.enabled === false) return;
-    state.reliabilityState = recordSetModelOutcome(
-      state.reliabilityState,
-      failure.model,
-      state.config.reliability,
-      Date.now(),
-      false,
-      failure.reason,
-    );
-    saveReliability(state.reliabilityPath, state.reliabilityState);
-    log(ctx, `Bifrost: recorded provider failure for ${failure.model}; future prompts may route around it.`, "warning");
+    const settled = runtimeReliability.settle();
+    if (!settled || !state.enabled || state.config.reliability?.enabled === false) return;
+    state.reliabilityStore.recordSettled(settled.model, settled.reason);
+    if (settled.reason) {
+      log(ctx, `Bifrost: recorded provider failure for ${settled.model}; future prompts may route around it.`, "warning");
+    }
   });
 
   pi.on("model_select", async (_event, ctx) => {
@@ -311,7 +296,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         defaultTier,
         defaultPattern,
         defaultStrategy,
-        reliabilityState: state.reliabilityState,
+        reliabilityState: state.reliabilityStore.getState(),
         reliabilityConfig: state.config.reliability,
       });
       const model = resolved.selected;
@@ -319,10 +304,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
       // If selected model is half-open, mark trial in progress
       if (model) {
-        const circuit = getCircuitState(state.reliabilityState, modelKey(model), Date.now(), state.config.reliability);
+        const circuit = state.reliabilityStore.getCircuitState(modelKey(model));
         if (circuit.halfOpen && !circuit.trialActive) {
-          state.reliabilityState = beginTrial(state.reliabilityState, modelKey(model));
-          saveReliability(state.reliabilityPath, state.reliabilityState);
+          state.reliabilityStore.beginTrial(modelKey(model));
         }
       }
 
@@ -382,15 +366,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         const reason = setModelError
           ? `setModel threw: ${String(setModelError).slice(0, 200)}`
           : "setModel returned false";
-        state.reliabilityState = recordSetModelOutcome(
-          state.reliabilityState,
-          modelKey(model),
-          state.config.reliability,
-          Date.now(),
-          false,
-          reason,
-        );
-        saveReliability(state.reliabilityPath, state.reliabilityState);
+        state.reliabilityStore.recordFailure(modelKey(model), "setModel", reason);
         syncBifrostModeStatus(ctx, state);
         log(ctx, `Bifrost: no API key for ${modelKey(model)}`, "error");
         endInput({ model: modelKey(model), ok: false });

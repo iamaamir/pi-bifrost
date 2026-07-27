@@ -24,13 +24,13 @@ describe("runtime reliability tracker", () => {
     tracker.begin("openai/gpt-5.4");
     tracker.observe([failed()]);
     tracker.observe([succeeded]);
-    assert.equal(tracker.settle(), undefined);
+    assert.deepEqual(tracker.settle(), { model: "openai/gpt-5.4", reason: undefined });
   });
 
   it("ignores failures from models Bifrost did not select", () => {
     const tracker = new RuntimeReliabilityTracker();
     tracker.begin("openai/gpt-5.4");
     tracker.observe([{ ...failed(), model: "gpt-4.1-mini" }]);
-    assert.equal(tracker.settle(), undefined);
+    assert.deepEqual(tracker.settle(), { model: "openai/gpt-5.4", reason: undefined });
   });
 });

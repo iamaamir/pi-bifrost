@@ -8,7 +8,7 @@ import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
 import type { ClassificationPipeline } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
-import { runProbe, PROBE_PROMPT_TEXT, type ProbeResult } from "./probe.ts";
+import { runProbe, PROBE_PROMPT_TEXT } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
 import { showBifrostResult } from "./result-viewer.ts";
 import {
@@ -19,14 +19,7 @@ import {
   type HealthyModelResolution,
   type RoutingStrategy,
 } from "./routing.ts";
-import {
-  getCircuitState,
-  loadReliability,
-  recordModelFailure,
-  recordModelSuccess,
-  reliabilityPath,
-  saveReliability,
-} from "./reliability.ts";
+import type { ReliabilityStore } from "./reliability-store.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
@@ -36,8 +29,7 @@ export interface BifrostState {
   classifierEnabled: boolean;
   pinned: boolean;
   cacheEntries: CacheEntry[];
-  reliabilityState: import("./reliability.ts").ReliabilityState;
-  reliabilityPath: string;
+  reliabilityStore: ReliabilityStore;
   extensionDir: string;
   getPipeline: (ctx: ExtensionContext) => ClassificationPipeline;
   invalidatePipeline: () => void;
@@ -95,27 +87,7 @@ export function syncBifrostModeStatus(ctx: ExtensionContext, state: Pick<Bifrost
 }
 
 function openCircuitCount(state: BifrostState, now = Date.now()): number {
-  const reliabilityState = state.reliabilityState;
-  if (!reliabilityState) return 0;
-  if (state.config.reliability?.enabled === false) return 0;
-  return Object.keys(reliabilityState.models).filter((key) =>
-    getCircuitState(reliabilityState, key, now, state.config.reliability).open
-  ).length;
-}
-
-function applyProbeReliability(state: BifrostState, results: ProbeResult[], now = Date.now()): void {
-  if (state.config.reliability?.enabled === false) return;
-  let next = state.reliabilityState;
-  for (const result of results) {
-    const key = `${result.provider}/${result.model}`;
-    if (result.status === "ok") {
-      next = recordModelSuccess(next, key, now, "probe");
-    } else if (result.status === "error" || result.status === "timeout") {
-      next = recordModelFailure(next, key, state.config.reliability, now, "probe", result.error ?? result.status);
-    }
-  }
-  state.reliabilityState = next;
-  saveReliability(state.reliabilityPath, state.reliabilityState);
+  return state.reliabilityStore.openCircuitCount(now);
 }
 
 function formatCandidateLines(
@@ -159,7 +131,7 @@ function resolveTierDisplay(
     defaultTier,
     defaultPattern,
     defaultStrategy,
-    reliabilityState: state.reliabilityState,
+    reliabilityState: state.reliabilityStore.getState(),
     reliabilityConfig: state.config.reliability,
   });
 
@@ -251,7 +223,14 @@ async function handleInit(
       }
     });
     uiDone(ctx);
-    applyProbeReliability(state, results);
+    state.reliabilityStore.applyOutcomes(
+      results.map((r) =>
+        r.status === "ok"
+          ? { model: `${r.provider}/${r.model}`, ok: true as const, source: "probe" }
+          : { model: `${r.provider}/${r.model}`, ok: false as const, source: "probe", reason: r.error ?? r.status }
+      ),
+      Date.now()
+    );
 
     workingModels = results
       .filter((r) => r.status === "ok")
@@ -388,8 +367,7 @@ async function handleInit(
   state.config = loadConfig(process.cwd(), state.extensionDir);
   state.enabled = state.config.enabled ?? true;
   state.classifierEnabled = state.config.classifier?.enabled ?? true;
-  state.reliabilityPath = reliabilityPath(process.cwd(), state.config.reliability?.path);
-  state.reliabilityState = loadReliability(state.reliabilityPath);
+  state.reliabilityStore.reload(state.config.reliability, process.cwd());
   state.invalidatePipeline();
 
   log(ctx, "wrote .pi/bifrost.json and reloaded config");
@@ -624,8 +602,7 @@ export function createCommandRouter(
       state.classifierEnabled = state.config.classifier?.enabled ?? true;
       state.pinned = false;
       state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path));
-      state.reliabilityPath = reliabilityPath(process.cwd(), state.config.reliability?.path);
-      state.reliabilityState = loadReliability(state.reliabilityPath);
+      state.reliabilityStore.reload(state.config.reliability, process.cwd());
       state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
@@ -668,7 +645,14 @@ export function createCommandRouter(
 
       const { results, path } = await runProbe(ctx);
       uiDone(ctx);
-      applyProbeReliability(state, results);
+      state.reliabilityStore.applyOutcomes(
+        results.map((r) =>
+          r.status === "ok"
+            ? { model: `${r.provider}/${r.model}`, ok: true as const, source: "probe" }
+            : { model: `${r.provider}/${r.model}`, ok: false as const, source: "probe", reason: r.error ?? r.status }
+        ),
+        Date.now()
+      );
 
       const ok = results.filter((r) => r.status === "ok");
       const errs = results.filter((r) => r.status === "error");

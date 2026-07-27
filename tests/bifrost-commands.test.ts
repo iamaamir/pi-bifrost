@@ -54,6 +54,18 @@ function makeCtx() {
   return { ctx: ctx as never, calls };
 }
 
+function makeStore(reliabilityState?: Record<string, { failures: number[]; openUntil?: number }>, enabled = true) {
+  const store = {
+    getState: () => ({ version: 1 as const, models: reliabilityState ?? {} }),
+    openCircuitCount: (now?: number) => {
+      if (!enabled) return 0;
+      const t = now ?? Date.now();
+      return Object.entries(reliabilityState ?? {}).filter(([, r]) => r.openUntil && r.openUntil > t).length;
+    },
+  };
+  return store;
+}
+
 function makeState() {
   return {
     config: { models: {}, reliability: { enabled: true, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60 } },
@@ -61,8 +73,7 @@ function makeState() {
     classifierEnabled: true,
     pinned: false,
     cacheEntries: [],
-    reliabilityState: { version: 1, models: {} as Record<string, { failures: number[]; openUntil?: number }> },
-    reliabilityPath: ".pi/bifrost-reliability.json",
+    reliabilityStore: makeStore(),
     extensionDir: ".",
     getPipeline: () => ({ classify: async () => ({ kind: "unclassified" as const }) }),
     invalidatePipeline: () => {},
@@ -107,10 +118,8 @@ describe("bifrost command ui", () => {
   it("shows open circuit count in dashboard title", async () => {
     const { ctx, calls } = makeCtx();
     const state = makeState();
-    state.reliabilityState.models["openai/gpt-5.4"] = {
-      failures: [Date.now()],
-      openUntil: Date.now() + 60_000,
-    };
+    const t = Date.now();
+    state.reliabilityStore = makeStore({ "openai/gpt-5.4": { failures: [t], openUntil: t + 60_000 } });
     const dispatch = createCommandRouter(state as never);
 
     await dispatch("", ctx as never);
@@ -123,10 +132,8 @@ describe("bifrost command ui", () => {
   it("prints open circuit count in debug output", async () => {
     const { ctx, calls } = makeCtx();
     const state = makeState();
-    state.reliabilityState.models["openai/gpt-5.4"] = {
-      failures: [Date.now()],
-      openUntil: Date.now() + 60_000,
-    };
+    const t = Date.now();
+    state.reliabilityStore = makeStore({ "openai/gpt-5.4": { failures: [t], openUntil: t + 60_000 } });
     const dispatch = createCommandRouter(state as never);
 
     await dispatch("debug", ctx as never);
@@ -139,10 +146,7 @@ describe("bifrost command ui", () => {
     const { ctx, calls } = makeCtx();
     const state = makeState();
     state.config.reliability.enabled = false;
-    state.reliabilityState.models["openai/gpt-5.4"] = {
-      failures: [Date.now()],
-      openUntil: Date.now() + 60_000,
-    };
+    state.reliabilityStore = makeStore({ "openai/gpt-5.4": { failures: [Date.now()], openUntil: Date.now() + 60_000 } }, false);
     const dispatch = createCommandRouter(state as never);
 
     await dispatch("debug", ctx as never);
