@@ -34,7 +34,7 @@
     "image": "https://iamaamir.github.io/pi-bifrost/social-card.png"
   },
   "scripts": {
-    "test": "node --test --experimental-strip-types tests/cache.test.ts tests/classifier.test.ts tests/routing.test.ts tests/pipeline.test.ts tests/commands.test.ts tests/inline-override.test.ts tests/config.test.ts tests/probe.test.ts tests/ux-status.test.ts",
+    "test": "node --test --experimental-strip-types tests/cache.test.ts tests/classifier.test.ts tests/routing.test.ts tests/pipeline.test.ts tests/commands.test.ts tests/bifrost-commands.test.ts tests/inline-override.test.ts tests/config.test.ts tests/probe.test.ts tests/ux-status.test.ts",
     "test:integration": "cd .. && node --test pi-bifrost/tests/integration.test.mjs",
     "test:ui": "python3 scripts/ui-smoke.py",
     "typecheck": "tsc --noEmit",

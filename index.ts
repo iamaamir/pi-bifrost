@@ -28,7 +28,7 @@ import {
   modelKey,
   resolveModel,
 } from "./routing.js";
-import { createCommandRouter, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.js";
+import { createCommandRouter, getBifrostCommandCompletions, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.js";
 import { setupDebug, debug, debugMeasure } from "./debug.js";
 import { parseInlineOverride } from "./inline-override.js";
 import {
@@ -159,6 +159,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   pi.registerCommand("bifrost", {
     description: "Bifrost model router control",
+    getArgumentCompletions: getBifrostCommandCompletions,
     handler: async (args, ctx) => {
       await handleCommand(args, ctx);
     },

@@ -1,9 +1,9 @@
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { RoutingStrategy, RouteRule } from "./routing.js";
-import type { CacheOptions } from "./cache.js";
-import type { DebugConfig } from "./debug.js";
+import type { RoutingStrategy, RouteRule } from "./routing.ts";
+import type { CacheOptions } from "./cache.ts";
+import type { DebugConfig } from "./debug.ts";
 
 type ClassifierMethod = "direct" | "subprocess" | "auto";
 
