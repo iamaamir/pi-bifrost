@@ -1,25 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { ClassifierModel } from "../classifier.ts";
 import { createPipeline, type PipelineDeps } from "../classification-pipeline.ts";
-
-function makeModel(provider: string, id: string): ClassifierModel {
-  return {
-    kind: "registry",
-    model: {
-      provider,
-      id,
-      name: id,
-      api: "openai-completions",
-      baseUrl: "http://localhost:1234/v1",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 4096,
-    },
-  } as ClassifierModel;
-}
+import { makeClassifierModel } from "./helpers.ts";
 
 function deps(overrides: Partial<PipelineDeps> = {}): PipelineDeps {
   return {
@@ -76,7 +58,7 @@ describe("classification-pipeline", () => {
       let calls = 0;
       const p = createPipeline(
         deps({
-          classifierModels: [makeModel("a", "m1"), makeModel("b", "m2")],
+          classifierModels: [makeClassifierModel("a", "m1"), makeClassifierModel("b", "m2")],
           classifyWithLLM: async (model) => {
             calls++;
             if (model.kind === "registry" && model.model.id === "m1") return "frontier";
@@ -97,7 +79,7 @@ describe("classification-pipeline", () => {
       let calls: string[] = [];
       const p = createPipeline(
         deps({
-          classifierModels: [makeModel("a", "m1"), makeModel("b", "m2")],
+          classifierModels: [makeClassifierModel("a", "m1"), makeClassifierModel("b", "m2")],
           classifyWithLLM: async (model) => {
             calls.push(model.kind === "registry" ? model.model.id : model.id);
             if (model.kind === "registry" && model.model.id === "m2") return "economical";
@@ -116,7 +98,7 @@ describe("classification-pipeline", () => {
     it("validates classifier result against known tiers", async () => {
       const p = createPipeline(
         deps({
-          classifierModels: [makeModel("a", "m1")],
+          classifierModels: [makeClassifierModel("a", "m1")],
           classifyWithLLM: async () => "unknown",
           defaultTier: "economical",
         }),
@@ -208,7 +190,7 @@ describe("classification-pipeline", () => {
       const p = createPipeline(
         deps({
           cacheLookup: () => "frontier",
-          classifierModels: [makeModel("a", "m1")],
+          classifierModels: [makeClassifierModel("a", "m1")],
           classifyWithLLM: async () => { classifierCalled = true; return "economical"; },
         }),
       );
@@ -223,7 +205,7 @@ describe("classification-pipeline", () => {
     it("classifier beats regex", async () => {
       const p = createPipeline(
         deps({
-          classifierModels: [makeModel("a", "m1")],
+          classifierModels: [makeClassifierModel("a", "m1")],
           classifyWithLLM: async () => "economical",
           regexRules: [{ pattern: ".*", model: "frontier" }],
         }),
@@ -268,7 +250,7 @@ describe("classification-pipeline", () => {
     it("catches classifier throw and falls through to regex", async () => {
       const p = createPipeline(
         deps({
-          classifierModels: [makeModel("a", "m1")],
+          classifierModels: [makeClassifierModel("a", "m1")],
           classifyWithLLM: async () => { throw new Error("boom"); },
           regexRules: [{ pattern: ".*", model: "frontier" }],
         }),
@@ -283,7 +265,7 @@ describe("classification-pipeline", () => {
     it("catches classifier throw and falls through to default", async () => {
       const p = createPipeline(
         deps({
-          classifierModels: [makeModel("a", "m1")],
+          classifierModels: [makeClassifierModel("a", "m1")],
           classifyWithLLM: async () => { throw new Error("boom"); },
           defaultTier: "economical",
         }),

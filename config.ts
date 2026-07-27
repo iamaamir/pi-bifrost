@@ -143,28 +143,36 @@ export function readJson<T>(path: string): T | undefined {
   }
 }
 
-export function mergeConfig<T extends Record<string, unknown>>(
-  base: T,
-  override: T,
-): T {
-  const merged: T = { ...base };
-  for (const key of Object.keys(override) as Array<keyof T>) {
-    const baseVal = base[key];
-    const overrideVal = override[key];
-    if (overrideVal === undefined) continue;
-    if (
-      typeof baseVal === "object" &&
-      baseVal !== null &&
-      !Array.isArray(baseVal) &&
-      typeof overrideVal === "object" &&
-      overrideVal !== null &&
-      !Array.isArray(overrideVal)
-    ) {
-      merged[key] = { ...baseVal, ...overrideVal } as T[typeof key];
-    } else {
-      merged[key] = overrideVal as T[typeof key];
-    }
-  }
+/**
+ * Shallow-merge a nested object field only when at least one side defines it.
+ * Keeps `undefined` when both sides are undefined (preserves "not set" vs "{}").
+ */
+function mergeObj<T extends object>(
+  base: T | undefined,
+  override: T | undefined,
+): T | undefined {
+  if (base === undefined && override === undefined) return undefined;
+  return { ...base, ...override } as T;
+}
+
+/**
+ * Merge two BifrostConfig layers. Later layers win for primitives and
+ * arrays; nested objects (models, classifier, cache, debug, strategies)
+ * are shallow-merged key-by-key so per-tier overrides layer correctly.
+ */
+export function mergeConfig(
+  base: BifrostConfig,
+  override: BifrostConfig,
+): BifrostConfig {
+  const merged: BifrostConfig = { ...base, ...override };
+  merged.categoryStrategies = mergeObj(
+    base.categoryStrategies,
+    override.categoryStrategies,
+  );
+  merged.models = mergeObj(base.models, override.models);
+  merged.classifier = mergeObj(base.classifier, override.classifier);
+  merged.cache = mergeObj(base.cache, override.cache);
+  merged.debug = mergeObj(base.debug, override.debug);
   return merged;
 }
 
@@ -188,11 +196,11 @@ export function loadConfig(
     readJson<BifrostConfig>(join(cwd, CONFIG_DIR_NAME, "bifrost.json")),
   ];
 
-  let merged = base as unknown as Record<string, unknown>;
+  let merged: BifrostConfig = base;
   for (const cfg of configs) {
-    if (cfg) merged = mergeConfig(merged, cfg as unknown as Record<string, unknown>);
+    if (cfg) merged = mergeConfig(merged, cfg);
   }
-  return merged as unknown as BifrostConfig;
+  return merged;
 }
 
 export function loadRules(cwd: string, config: BifrostConfig): RouteRule[] {

@@ -1,7 +1,5 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   findOneModel,
   findCandidates,
@@ -12,41 +10,7 @@ import {
   getStrategy,
   classify,
 } from "../routing.ts";
-
-function makeModel(
-  provider: string,
-  id: string,
-  inputCost = 0,
-  outputCost = 0,
-  contextWindow = 128000,
-): Model<Api> {
-  return {
-    provider,
-    id,
-    name: id,
-    api: "openai-completions" as Api,
-    baseUrl: "http://localhost:1234/v1",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: inputCost, output: outputCost, cacheRead: 0, cacheWrite: 0 },
-    contextWindow,
-    maxTokens: 4096,
-  } as unknown as Model<Api>;
-}
-
-function makeRegistry(models: Model<Api>[]) {
-  return {
-    find: (provider: string, id: string) =>
-      models.find((m) => m.provider === provider && m.id === id),
-    getAvailable: () => models,
-  };
-}
-
-function makeCtx(models: Model<Api>[]): ExtensionContext {
-  return {
-    modelRegistry: makeRegistry(models),
-  } as unknown as ExtensionContext;
-}
+import { makeCtx, makeModel } from "./helpers.ts";
 
 describe("routing", () => {
   describe("modelKey", () => {

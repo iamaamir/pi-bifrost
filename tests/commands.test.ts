@@ -13,38 +13,7 @@ import {
   modelKey,
   guessTier,
 } from "../routing.ts";
-import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-
-function makeModel(
-  provider: string,
-  id: string,
-  inputCost = 0,
-  outputCost = 0,
-): Model<Api> {
-  return {
-    provider,
-    id,
-    name: id,
-    api: "openai-completions" as Api,
-    baseUrl: "http://localhost:1234/v1",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: inputCost, output: outputCost, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128000,
-    maxTokens: 4096,
-  } as unknown as Model<Api>;
-}
-
-function makeCtx(models: Model<Api>[]): ExtensionContext {
-  return {
-    modelRegistry: {
-      find: (provider: string, id: string) =>
-        models.find((m) => m.provider === provider && m.id === id),
-      getAvailable: () => models,
-    },
-  } as unknown as ExtensionContext;
-}
+import { makeCtx, makeModel, withoutCost } from "./helpers.ts";
 
 describe("commands helpers", () => {
   describe("guessTier", () => {
@@ -69,8 +38,7 @@ describe("commands helpers", () => {
     });
 
     it("handles missing cost fields gracefully", () => {
-      const m = makeModel("any", "no-cost", 0, 0);
-      (m as any).cost = undefined;
+      const m = withoutCost(makeModel("any", "no-cost", 0, 0));
       assert.equal(guessTier(m), "economical");
     });
 
