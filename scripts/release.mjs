@@ -17,11 +17,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
-const DIR = join(fileURLToPath(import.meta.url), "..");
+const SCRIPT_DIR = join(fileURLToPath(import.meta.url), "..");
+const ROOT = join(SCRIPT_DIR, "..");
 
 function run(cmd, silent = false) {
   try {
-    const result = execSync(cmd, { cwd: DIR, encoding: "utf-8", stdio: silent ? "pipe" : "inherit" });
+    const result = execSync(cmd, { cwd: ROOT, encoding: "utf-8", stdio: silent ? "pipe" : "inherit" });
     return result.trim();
   } catch (err) {
     console.error(`[release] Command failed: ${cmd}`);
@@ -86,7 +87,7 @@ async function main() {
   }
 
   // ── 0. Verify this is a git repo ────────────────────────────────
-  if (!existsSync(join(DIR, ".git"))) {
+  if (!existsSync(join(ROOT, ".git"))) {
     console.error("[release] Not a git repository. Run from the project root.");
     process.exit(1);
   }
@@ -106,7 +107,7 @@ async function main() {
   run("npm run typecheck");
 
   // ── 3. Determine new version ──────────────────────────────────────
-  const pkgPath = join(DIR, "package.json");
+  const pkgPath = join(ROOT, "package.json");
   const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
   const currentVersion = pkg.version;
 
