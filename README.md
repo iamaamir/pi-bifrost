@@ -54,6 +54,10 @@ If you manually switch models with `/model`, Bifrost pins itself and stops routi
 | `/bifrost cache clear` | Clear classification cache |
 | `/bifrost classifier status` | Show classifier state |
 
+## UI smoke test
+
+Run `npm run test:ui` to capture Pi TUI screenshots for startup, disabled, classify, and pinned states. Output lands in `screenshots/ui-smoke/`.
+
 ## Config
 
 Everything lives in `.pi/bifrost.json`. Editor autocomplete works in VS Code, Zed, Cursor.
