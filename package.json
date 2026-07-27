@@ -1,6 +1,6 @@
 {
   "name": "pi-bifrost",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Query-aware model routing extension for Pi. Select models by task complexity, cost, context, speed, or configured order.",
   "type": "module",
   "license": "MIT",
