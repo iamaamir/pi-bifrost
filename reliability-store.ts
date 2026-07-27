@@ -1,4 +1,3 @@
-import { dirname } from "node:path";
 import {
   getCircuitState,
   recordModelFailure,
@@ -102,12 +101,16 @@ export class ReliabilityStore {
   }
 
   beginTrial(model: string): void {
+    if (this.configValue?.enabled === false) return;
     this.stateValue = beginTrial(this.stateValue, model);
     this.persist();
   }
 
   applyOutcomes(outcomes: readonly ReliabilityOutcome[], now?: number): void {
     const t = now ?? this.nowFn();
+    // Track whether any outcome actually changed state to avoid a no-op persist.
+    // recordModelSuccess/Failure always spreads new state when enabled, so the
+    // changed flag mainly short-circuits the disabled case.
     let changed = false;
     for (const outcome of outcomes) {
       if (outcome.ok) {
@@ -131,7 +134,6 @@ export class ReliabilityStore {
   reload(config?: ReliabilityConfig, cwd?: string): void {
     if (config !== undefined) this.configValue = config;
     if (cwd !== undefined) this.pathValue = reliabilityPath(cwd, this.configValue?.path);
-    else this.pathValue = reliabilityPath(dirname(this.pathValue), this.configValue?.path);
     this.stateValue = this.pruneStaleTrials(this.io.load(this.pathValue));
   }
 

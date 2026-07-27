@@ -182,6 +182,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   pi.on("agent_settled", async (_event, ctx) => {
     const settled = runtimeReliability.settle();
     if (!settled || !state.enabled || state.config.reliability?.enabled === false) return;
+    // Policy A: failure logged, clean settle silent (trial-only success).
+    // Intentional — normal routing produces no log noise.
     state.reliabilityStore.recordSettled(settled.model, settled.reason);
     if (settled.reason) {
       log(ctx, `Bifrost: recorded provider failure for ${settled.model}; future prompts may route around it.`, "warning");

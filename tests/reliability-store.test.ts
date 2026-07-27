@@ -4,6 +4,7 @@ import {
   DEFAULT_RELIABILITY,
   emptyReliabilityState,
   recordModelFailure,
+  type ReliabilityState,
 } from "../reliability.ts";
 import { ReliabilityStore, type ReliabilityIo } from "../reliability-store.ts";
 
@@ -112,6 +113,32 @@ describe("reliability store", () => {
     const store = new ReliabilityStore({ cwd: "/tmp", config: cfg, io });
     store.reload(cfg, "/tmp");
     assert.equal(store.getState().models["x"]?.lastSuccessAt, 42);
+  });
+
+  it("reload swaps path when cwd changes", () => {
+    const io: ReliabilityIo = {
+      load: (path: string) => ({ version: 1, models: {}, _path: path } as unknown as ReturnType<ReliabilityIo["load"]>),
+      save: () => {},
+    };
+    const store = new ReliabilityStore({ cwd: "/proj-a", config: cfg, io });
+    assert.match(store.path, /proj-a/);
+    store.reload(cfg, "/proj-b");
+    assert.match(store.path, /proj-b/);
+  });
+
+  it("two store instances on same file see each other after persist", () => {
+    const writes: ReliabilityState[] = [];
+    const shared: { state: ReliabilityState } = { state: emptyReliabilityState() };
+    const io: ReliabilityIo = {
+      load: () => shared.state,
+      save: (_p, s) => { shared.state = s; writes.push(s); },
+    };
+    const storeA = new ReliabilityStore({ cwd: "/tmp", config: cfg, io });
+    storeA.recordFailure(key, "probe", "timeout", 1000);
+    // Second store loads same state
+    const storeB = new ReliabilityStore({ cwd: "/tmp", config: cfg, io });
+    assert.equal(storeB.getState().models[key]?.lastFailureReason, "timeout");
+    assert.equal(writes.length, 1);
   });
 
   it("pruneStaleTrials clears trialActive when openUntil expired", () => {
