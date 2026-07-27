@@ -26,11 +26,18 @@ import {
   findCandidates,
   getStrategy,
   modelKey,
-  resolveModel,
+  resolveModelWithFallback,
 } from "./routing.js";
+import {
+  loadReliability,
+  recordSetModelOutcome,
+  reliabilityPath,
+  saveReliability,
+} from "./reliability.js";
 import { createCommandRouter, getBifrostCommandCompletions, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.js";
 import { setupDebug, debug, debugMeasure } from "./debug.js";
 import { parseInlineOverride } from "./inline-override.js";
+import { RuntimeReliabilityTracker } from "./runtime-reliability.js";
 import {
   REGISTRY_REFRESH_TTL_MS,
   setBifrostStatus,
@@ -126,7 +133,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     console.error(`[bifrost/config] ${tag}: ${issue.message}`);
   }
   const cacheEntries = loadCache(cachePath(process.cwd(), config.cache?.path));
+  const loadedReliabilityPath = reliabilityPath(process.cwd(), config.reliability?.path);
+  const reliabilityState = loadReliability(loadedReliabilityPath);
   let selfSelecting = false;
+  const runtimeReliability = new RuntimeReliabilityTracker();
   let pipeline: ClassificationPipeline | undefined;
 
   function getPipeline(ctx: ExtensionContext): ClassificationPipeline {
@@ -148,6 +158,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     classifierEnabled: config.classifier?.enabled ?? true,
     pinned: false,
     cacheEntries,
+    reliabilityState,
+    reliabilityPath: loadedReliabilityPath,
     extensionDir,
     getPipeline,
     invalidatePipeline,
@@ -168,6 +180,25 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     syncBifrostModeStatus(ctx, state);
     clearBifrostWidgets(ctx);
+  });
+
+  pi.on("agent_end", async (event) => {
+    runtimeReliability.observe(event.messages);
+  });
+
+  pi.on("agent_settled", async (_event, ctx) => {
+    const failure = runtimeReliability.settle();
+    if (!failure || !state.enabled || state.config.reliability?.enabled === false) return;
+    state.reliabilityState = recordSetModelOutcome(
+      state.reliabilityState,
+      failure.model,
+      state.config.reliability,
+      Date.now(),
+      false,
+      failure.reason,
+    );
+    saveReliability(state.reliabilityPath, state.reliabilityState);
+    log(ctx, `Bifrost: recorded provider failure for ${failure.model}; future prompts may route around it.`, "warning");
   });
 
   pi.on("model_select", async (_event, ctx) => {
@@ -265,12 +296,29 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         : "fallback";
       const pattern = state.config.models?.[tier] ?? tier;
       const strategy = getStrategy(state.config.categoryStrategies, state.config.strategy, tier);
+      const defaultTier = state.config.default;
+      const defaultPattern = defaultTier ? (state.config.models?.[defaultTier] ?? defaultTier) : undefined;
+      const defaultStrategy = defaultTier
+        ? getStrategy(state.config.categoryStrategies, state.config.strategy, defaultTier)
+        : strategy;
 
-      const model = resolveModel(ctx, pattern, strategy);
+      const resolved = resolveModelWithFallback(ctx, {
+        requestedTier: tier,
+        requestedPattern: pattern,
+        requestedStrategy: strategy,
+        defaultTier,
+        defaultPattern,
+        defaultStrategy,
+        reliabilityState: state.reliabilityState,
+        reliabilityConfig: state.config.reliability,
+      });
+      const model = resolved.selected;
+      const selectedTier = resolved.selectedTier ?? tier;
       if (!model) {
         state.forceRegistryRefresh = true;
-        debug("input", "no_model", { tier });
-        log(ctx, `Bifrost: tier "${tier}" matched but no model available`, "warning");
+        debug("input", "no_model", { tier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped.length });
+        const why = resolved.fallbackReason ? ` (${resolved.fallbackReason})` : "";
+        log(ctx, `Bifrost: tier "${tier}" matched but no healthy model available${why}`, "warning");
         syncBifrostModeStatus(ctx, state);
         endInput();
         return defaultAction;
@@ -293,9 +341,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       if (modelKey(model) === modelKey(ctx.model)) {
         uiDone(ctx);
         syncBifrostModeStatus(ctx, state);
-        log(ctx, `Bifrost: ${tier} → ${modelKey(model)} (already active, ${source})`);
-        debug("input", "model_unchanged", { model: modelKey(model) });
-        endInput({ model: modelKey(model), tier, strategy, source });
+        const reason = resolved.fallbackReason ? `, ${resolved.fallbackReason}` : "";
+        log(ctx, `Bifrost: ${tier} → ${modelKey(model)} (already active, ${source}${reason})`);
+        debug("input", "model_unchanged", { model: modelKey(model), selectedTier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped.length });
+        runtimeReliability.begin(modelKey(model));
+        endInput({ model: modelKey(model), tier: selectedTier, strategy, source });
         return defaultAction;
       }
 
@@ -303,25 +353,50 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       setBifrostWorkingMessage(ctx, `Bifrost routing to ${modelKey(model)}...`);
       selfSelecting = true;
       const endSwitch = debugMeasure("input", "setModel");
-      const ok = await pi.setModel(model);
+      let ok = false;
+      let setModelError: unknown;
+      try {
+        ok = await pi.setModel(model);
+      } catch (err) {
+        setModelError = err;
+        debug("input", "setModel.throw", { model: modelKey(model), error: String(err) });
+      }
       endSwitch({ model: modelKey(model), ok });
       uiDone(ctx);
       setBifrostWorkingMessage(ctx, undefined);
       if (!ok) {
         selfSelecting = false;
         state.forceRegistryRefresh = true;
+        const reason = setModelError
+          ? `setModel threw: ${String(setModelError).slice(0, 200)}`
+          : "setModel returned false";
+        state.reliabilityState = recordSetModelOutcome(
+          state.reliabilityState,
+          modelKey(model),
+          state.config.reliability,
+          Date.now(),
+          false,
+          reason,
+        );
+        saveReliability(state.reliabilityPath, state.reliabilityState);
         syncBifrostModeStatus(ctx, state);
         log(ctx, `Bifrost: no API key for ${modelKey(model)}`, "error");
         endInput({ model: modelKey(model), ok: false });
         return defaultAction;
       }
 
+      const detail = [
+        selectedTier !== tier ? `selected tier ${selectedTier}` : undefined,
+        resolved.fallbackReason,
+        resolved.skipped.length > 0 ? `${resolved.skipped.length} skipped` : undefined,
+      ].filter(Boolean).join(", ");
       const doneMsg = classification.kind === "classified"
-        ? `Bifrost: ${tier} → ${modelKey(model)} (${classification.source})`
-        : `Bifrost: ${tier} → ${modelKey(model)} (fallback)`;
+        ? `Bifrost: ${tier} → ${modelKey(model)} (${classification.source}${detail ? `; ${detail}` : ""})`
+        : `Bifrost: ${tier} → ${modelKey(model)} (fallback${detail ? `; ${detail}` : ""})`;
       syncBifrostModeStatus(ctx, state);
       log(ctx, doneMsg);
-      endInput({ model: modelKey(model), tier, strategy, source });
+      runtimeReliability.begin(modelKey(model));
+      endInput({ model: modelKey(model), tier: selectedTier, strategy, source });
       return defaultAction;
     } finally {
       uiDone(ctx);

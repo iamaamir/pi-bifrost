@@ -5,11 +5,14 @@ import {
   findCandidates,
   selectModel,
   resolveModel,
+  resolveHealthyModel,
+  resolveModelWithFallback,
   modelKey,
   modelCost,
   getStrategy,
   classify,
 } from "../routing.ts";
+import { emptyReliabilityState, recordModelFailure, DEFAULT_RELIABILITY } from "../reliability.ts";
 import { makeCtx, makeModel } from "./helpers.ts";
 
 describe("routing", () => {
@@ -160,6 +163,56 @@ describe("routing", () => {
       ]);
       const m = resolveModel(ctx, ["anthropic/missing", "anthropic/claude-sonnet"], "first");
       assert.equal(modelKey(m), "anthropic/claude-sonnet");
+    });
+  });
+
+  describe("resolveHealthyModel", () => {
+    it("skips open-circuit candidates and picks next healthy model", () => {
+      const a = makeModel("anthropic", "claude-opus", 15);
+      const b = makeModel("anthropic", "claude-sonnet", 3);
+      const ctx = makeCtx([a, b]);
+      const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60 };
+      const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+      let state = emptyReliabilityState();
+      state = recordModelFailure(state, modelKey(a), cfg, now, "probe", "timeout");
+      state = recordModelFailure(state, modelKey(a), cfg, now + 60_000, "probe", "timeout");
+      state = recordModelFailure(state, modelKey(a), cfg, now + 120_000, "probe", "timeout");
+
+      const result = resolveHealthyModel(ctx, ["anthropic/claude-opus", "anthropic/claude-sonnet"], "first", state, cfg, now + 120_000);
+      assert.equal(modelKey(result.selected), "anthropic/claude-sonnet");
+      assert.equal(result.skipped[0]?.key, "anthropic/claude-opus");
+      assert.equal(result.skipped[0]?.reason, "open_circuit");
+    });
+  });
+
+  describe("resolveModelWithFallback", () => {
+    it("falls back to default tier when requested tier is fully open-circuit", () => {
+      const broken = makeModel("anthropic", "claude-opus", 15);
+      const fallback = makeModel("openai", "gpt-4.1-mini", 1);
+      const ctx = makeCtx([broken, fallback]);
+      const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60 };
+      const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+      let state = emptyReliabilityState();
+      state = recordModelFailure(state, modelKey(broken), cfg, now, "probe", "timeout");
+      state = recordModelFailure(state, modelKey(broken), cfg, now + 60_000, "probe", "timeout");
+      state = recordModelFailure(state, modelKey(broken), cfg, now + 120_000, "probe", "timeout");
+
+      const result = resolveModelWithFallback(ctx, {
+        requestedTier: "frontier",
+        requestedPattern: ["anthropic/claude-opus"],
+        requestedStrategy: "first",
+        defaultTier: "economical",
+        defaultPattern: ["openai/gpt-4.1-mini"],
+        defaultStrategy: "first",
+        reliabilityState: state,
+        reliabilityConfig: cfg,
+        now: now + 120_000,
+      });
+
+      assert.equal(modelKey(result.selected), "openai/gpt-4.1-mini");
+      assert.equal(result.selectedTier, "economical");
+      assert.equal(result.fallbackReason, "requested_tier_unhealthy");
+      assert.equal(result.skipped[0]?.key, "anthropic/claude-opus");
     });
   });
 

@@ -87,6 +87,46 @@ describe("validateConfig", () => {
     assert.ok(errors[0].message.includes('Invalid regex'));
   });
 
+  it("errors on invalid reliability window", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      reliability: { windowMinutes: 0 },
+    });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes("windowMinutes"));
+  });
+
+  it("errors on non-integer reliability window", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      reliability: { windowMinutes: 1.5 },
+    });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes("integer"));
+  });
+
+  it("errors on non-integer reliability threshold", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      reliability: { failureThreshold: NaN },
+    });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes("integer"));
+  });
+
+  it("errors on non-integer reliability cooldown", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      reliability: { cooldownMinutes: 1.5 },
+    });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes("integer"));
+  });
+
   it("allows multiple issues", () => {
     const issues = validateConfig({
       models: {},

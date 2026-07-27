@@ -8,17 +8,25 @@ import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
 import type { ClassificationPipeline } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
-import { runProbe, PROBE_PROMPT_TEXT } from "./probe.ts";
+import { runProbe, PROBE_PROMPT_TEXT, type ProbeResult } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
 import { showBifrostResult } from "./result-viewer.ts";
 import {
-  findCandidates,
   getStrategy,
   guessTier,
   modelKey,
-  selectModel,
+  resolveModelWithFallback,
+  type HealthyModelResolution,
   type RoutingStrategy,
 } from "./routing.ts";
+import {
+  getCircuitState,
+  loadReliability,
+  recordModelFailure,
+  recordModelSuccess,
+  reliabilityPath,
+  saveReliability,
+} from "./reliability.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
@@ -28,6 +36,8 @@ export interface BifrostState {
   classifierEnabled: boolean;
   pinned: boolean;
   cacheEntries: CacheEntry[];
+  reliabilityState: import("./reliability.ts").ReliabilityState;
+  reliabilityPath: string;
   extensionDir: string;
   getPipeline: (ctx: ExtensionContext) => ClassificationPipeline;
   invalidatePipeline: () => void;
@@ -84,24 +94,96 @@ export function syncBifrostModeStatus(ctx: ExtensionContext, state: Pick<Bifrost
   setBifrostModeStatus(ctx, state);
 }
 
+function openCircuitCount(state: BifrostState, now = Date.now()): number {
+  const reliabilityState = state.reliabilityState;
+  if (!reliabilityState) return 0;
+  if (state.config.reliability?.enabled === false) return 0;
+  return Object.keys(reliabilityState.models).filter((key) =>
+    getCircuitState(reliabilityState, key, now, state.config.reliability).open
+  ).length;
+}
+
+function applyProbeReliability(state: BifrostState, results: ProbeResult[], now = Date.now()): void {
+  if (state.config.reliability?.enabled === false) return;
+  let next = state.reliabilityState;
+  for (const result of results) {
+    const key = `${result.provider}/${result.model}`;
+    if (result.status === "ok") {
+      next = recordModelSuccess(next, key, now, "probe");
+    } else if (result.status === "error" || result.status === "timeout") {
+      next = recordModelFailure(next, key, state.config.reliability, now, "probe", result.error ?? result.status);
+    }
+  }
+  state.reliabilityState = next;
+  saveReliability(state.reliabilityPath, state.reliabilityState);
+}
+
+function formatCandidateLines(
+  resolution: HealthyModelResolution,
+  selectedKey: string | undefined,
+): string[] {
+  const skipped = new Map(resolution.skipped.map((item) => [item.key, item]));
+  return resolution.candidates.map((m) => {
+    const key = modelKey(m);
+    const skippedCandidate = skipped.get(key);
+    if (skippedCandidate) {
+      const until = skippedCandidate.openUntil
+        ? new Date(skippedCandidate.openUntil).toISOString()
+        : "unknown";
+      return `xx ${key} (open circuit until ${until})`;
+    }
+    const marker = key === selectedKey ? "=>" : "  ";
+    return `${marker} ${key} ($${(m.cost.input + m.cost.output).toFixed(2)}/1M tokens, ctx ${m.contextWindow})`;
+  });
+}
+
 // ── Shared tier-resolution + display ───────────────────────
 
 function resolveTierDisplay(
   tier: string,
-  config: BifrostConfig,
+  state: BifrostState,
   ctx: ExtensionContext,
 ) {
-  const pattern = config.models?.[tier] ?? tier;
-  const strategy = getStrategy(config.categoryStrategies, config.strategy, tier);
-  const candidates = findCandidates(ctx, pattern);
-  const selected = selectModel(candidates, strategy);
+  const pattern = state.config.models?.[tier] ?? tier;
+  const strategy = getStrategy(state.config.categoryStrategies, state.config.strategy, tier);
+  const defaultTier = state.config.default;
+  const defaultPattern = defaultTier ? (state.config.models?.[defaultTier] ?? defaultTier) : undefined;
+  const defaultStrategy = defaultTier
+    ? getStrategy(state.config.categoryStrategies, state.config.strategy, defaultTier)
+    : strategy;
 
-  const lines = candidates.map((m) => {
-    const marker = m === selected ? "=>" : "  ";
-    return `${marker} ${modelKey(m)} ($${(m.cost.input + m.cost.output).toFixed(2)}/1M tokens, ctx ${m.contextWindow})`;
+  const resolved = resolveModelWithFallback(ctx, {
+    requestedTier: tier,
+    requestedPattern: pattern,
+    requestedStrategy: strategy,
+    defaultTier,
+    defaultPattern,
+    defaultStrategy,
+    reliabilityState: state.reliabilityState,
+    reliabilityConfig: state.config.reliability,
   });
 
-  return { strategy, candidateLines: lines, selected: selected ? modelKey(selected) : "none" };
+  const selectedKey = resolved.selected ? modelKey(resolved.selected) : undefined;
+  const requestedCandidateLines = formatCandidateLines(
+    resolved.primary,
+    resolved.selectedTier === tier ? selectedKey : undefined,
+  );
+  const fallbackCandidateLines = resolved.fallback
+    ? formatCandidateLines(
+        resolved.fallback,
+        resolved.selectedTier && resolved.selectedTier !== tier ? selectedKey : undefined,
+      )
+    : [];
+
+  return {
+    strategy,
+    selected: selectedKey ?? "none",
+    selectedTier: resolved.selectedTier ?? "none",
+    fallbackReason: resolved.fallbackReason,
+    requestedCandidateLines,
+    fallbackCandidateLines,
+    defaultTier,
+  };
 }
 
 // ── Command handlers ────────────────────────────────────────
@@ -169,6 +251,7 @@ async function handleInit(
       }
     });
     uiDone(ctx);
+    applyProbeReliability(state, results);
 
     workingModels = results
       .filter((r) => r.status === "ok")
@@ -305,6 +388,8 @@ async function handleInit(
   state.config = loadConfig(process.cwd(), state.extensionDir);
   state.enabled = state.config.enabled ?? true;
   state.classifierEnabled = state.config.classifier?.enabled ?? true;
+  state.reliabilityPath = reliabilityPath(process.cwd(), state.config.reliability?.path);
+  state.reliabilityState = loadReliability(state.reliabilityPath);
   state.invalidatePipeline();
 
   log(ctx, "wrote .pi/bifrost.json and reloaded config");
@@ -354,9 +439,14 @@ async function handleBenchmark(
   ];
 
   for (const tierName of categories) {
-    const display = resolveTierDisplay(tierName, state.config, ctx);
-    lines.push(`  ${tierName} (${display.strategy}):`);
-    lines.push(...display.candidateLines);
+    const display = resolveTierDisplay(tierName, state, ctx);
+    lines.push(`  ${tierName} (${display.strategy} → ${display.selectedTier}):`);
+    if (display.fallbackReason) lines.push(`    fallback: ${display.fallbackReason}`);
+    lines.push(...display.requestedCandidateLines.map((line) => `    ${line}`));
+    if (display.fallbackCandidateLines.length > 0 && display.defaultTier && display.defaultTier !== tierName) {
+      lines.push(`    fallback candidates (${display.defaultTier}):`);
+      lines.push(...display.fallbackCandidateLines.map((line) => `    ${line}`));
+    }
   }
 
   lines.push("-----------------");
@@ -390,19 +480,27 @@ async function handlePreview(
   }
   const tier = classification.tier;
   const source = classification.kind === "classified" ? classification.source : "fallback";
-  const display = resolveTierDisplay(tier, state.config, ctx);
+  const display = resolveTierDisplay(tier, state, ctx);
 
-  await uiResult(ctx, "Bifrost preview", [
+  const lines = [
     "--- preview ---",
     `prompt:    ${prompt}`,
     `source:    ${source}`,
     `tier:      ${tier}`,
     `strategy:  ${display.strategy}`,
-    `candidates:`,
-    ...display.candidateLines,
-    `selected:  ${display.selected}`,
-    "---------------",
-  ]);
+    `selected tier: ${display.selectedTier}`,
+    ...(display.fallbackReason ? [`fallback:  ${display.fallbackReason}`] : []),
+    `requested candidates (${tier}):`,
+    ...display.requestedCandidateLines,
+  ];
+  if (display.fallbackCandidateLines.length > 0 && display.defaultTier && display.defaultTier !== tier) {
+    lines.push(`fallback candidates (${display.defaultTier}):`);
+    lines.push(...display.fallbackCandidateLines);
+  }
+  lines.push(`selected:  ${display.selected}`);
+  lines.push("---------------");
+
+  await uiResult(ctx, "Bifrost preview", lines);
 }
 
 // ── Command type ────────────────────────────────────────────
@@ -526,6 +624,8 @@ export function createCommandRouter(
       state.classifierEnabled = state.config.classifier?.enabled ?? true;
       state.pinned = false;
       state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path));
+      state.reliabilityPath = reliabilityPath(process.cwd(), state.config.reliability?.path);
+      state.reliabilityState = loadReliability(state.reliabilityPath);
       state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
@@ -568,6 +668,7 @@ export function createCommandRouter(
 
       const { results, path } = await runProbe(ctx);
       uiDone(ctx);
+      applyProbeReliability(state, results);
 
       const ok = results.filter((r) => r.status === "ok");
       const errs = results.filter((r) => r.status === "error");
@@ -682,6 +783,8 @@ export function createCommandRouter(
         `tiers: ${tiers.join(", ")}`,
         `debug: ${JSON.stringify(state.config.debug)}`,
         `cache: ${state.cacheEntries.length} entries`,
+        `reliability: ${JSON.stringify(state.config.reliability ?? {})}`,
+        `openCircuits: ${openCircuitCount(state)}`,
         "",
         `rules (${rules.length}):`,
         ...rules.map((r, i) => `  ${i}: "${r.pattern}" → "${r.model}"`),
@@ -710,7 +813,7 @@ export function createCommandRouter(
       const mode = !state.enabled ? "off" : state.pinned ? "pinned" : "on";
       const selected = await pickBifrostCommand(
         ctx,
-        `Bifrost · ${mode} · model ${modelKey(ctx.model)}`,
+        `Bifrost · ${mode} · model ${modelKey(ctx.model)}${openCircuitCount(state) > 0 ? ` · circuits ${openCircuitCount(state)} open` : ""}`,
         dashboardCommands(state),
       );
       if (!selected) return;

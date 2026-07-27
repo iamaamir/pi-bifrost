@@ -70,6 +70,9 @@
     },
     "debug": {
       "$ref": "#/definitions/DebugConfig"
+    },
+    "reliability": {
+      "$ref": "#/definitions/ReliabilityConfig"
     }
   },
   "definitions": {
@@ -166,6 +169,40 @@
         "path": {
           "type": "string",
           "description": "Custom path for the cache file. Absolute, ~-prefixed, or relative to project root. Default: .pi/bifrost-cache.jsonl"
+        }
+      }
+    },
+    "ReliabilityConfig": {
+      "type": "object",
+      "description": "Health-aware model selection and circuit breaker. Tracks repeated probe/runtime failures, opens circuits for unhealthy models, and skips them before routing.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable circuit-breaker based model health filtering.",
+          "default": true
+        },
+        "failureThreshold": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Open model circuit after this many failures within windowMinutes.",
+          "default": 3
+        },
+        "windowMinutes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Rolling failure window, in minutes.",
+          "default": 5
+        },
+        "cooldownMinutes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How long an opened circuit stays open before model becomes eligible again.",
+          "default": 60
+        },
+        "path": {
+          "type": "string",
+          "description": "Custom path for persisted reliability state. Default: .pi/bifrost-reliability.json"
         }
       }
     },

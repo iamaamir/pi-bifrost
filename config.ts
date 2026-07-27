@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { RoutingStrategy, RouteRule } from "./routing.ts";
 import type { CacheOptions } from "./cache.ts";
 import type { DebugConfig } from "./debug.ts";
+import type { ReliabilityConfig } from "./reliability.ts";
 
 type ClassifierMethod = "direct" | "subprocess" | "auto";
 
@@ -28,6 +29,7 @@ export interface BifrostConfig {
   classifier?: ClassifierConfig;
   cache?: CacheOptions;
   debug?: DebugConfig;
+  reliability?: ReliabilityConfig;
 }
 
 export const DEFAULT_RULES: RouteRule[] = [
@@ -116,6 +118,28 @@ export function validateConfig(
     });
   }
 
+  const reliability = config.reliability;
+  if (reliability?.failureThreshold !== undefined && (!Number.isInteger(reliability.failureThreshold) || reliability.failureThreshold < 1)) {
+    issues.push({
+      severity: "error",
+      message: `Reliability failureThreshold must be an integer >= 1, got ${reliability.failureThreshold}.`,
+    });
+  }
+
+  if (reliability?.windowMinutes !== undefined && (!Number.isInteger(reliability.windowMinutes) || reliability.windowMinutes < 1)) {
+    issues.push({
+      severity: "error",
+      message: `Reliability windowMinutes must be an integer >= 1, got ${reliability.windowMinutes}.`,
+    });
+  }
+
+  if (reliability?.cooldownMinutes !== undefined && (!Number.isInteger(reliability.cooldownMinutes) || reliability.cooldownMinutes < 1)) {
+    issues.push({
+      severity: "error",
+      message: `Reliability cooldownMinutes must be an integer >= 1, got ${reliability.cooldownMinutes}.`,
+    });
+  }
+
   if (config.rules) {
     for (let i = 0; i < config.rules.length; i++) {
       const rule = config.rules[i];
@@ -173,6 +197,7 @@ export function mergeConfig(
   merged.classifier = mergeObj(base.classifier, override.classifier);
   merged.cache = mergeObj(base.cache, override.cache);
   merged.debug = mergeObj(base.debug, override.debug);
+  merged.reliability = mergeObj(base.reliability, override.reliability);
   return merged;
 }
 

@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { getCircuitState, type ReliabilityConfig, type ReliabilityState } from "./reliability.ts";
 
 export type RoutingStrategy =
   | "first"
@@ -130,6 +131,140 @@ export function resolveModel(
   strategy: RoutingStrategy,
 ): Model<Api> | undefined {
   return selectModel(findCandidates(ctx, pattern), strategy);
+}
+
+export interface SkippedCandidate {
+  key: string;
+  reason: "open_circuit";
+  openUntil?: number;
+}
+
+export interface HealthyModelResolution {
+  selected: Model<Api> | undefined;
+  candidates: Model<Api>[];
+  healthyCandidates: Model<Api>[];
+  skipped: SkippedCandidate[];
+}
+
+export interface RoutedModelResolution {
+  requestedTier: string;
+  selectedTier?: string;
+  selected: Model<Api> | undefined;
+  strategy: RoutingStrategy;
+  skipped: SkippedCandidate[];
+  fallbackReason?: "requested_tier_unhealthy" | "requested_tier_unavailable";
+  primary: HealthyModelResolution;
+  fallback?: HealthyModelResolution;
+}
+
+export function resolveHealthyModel(
+  ctx: ExtensionContext,
+  pattern: string | string[] | undefined,
+  strategy: RoutingStrategy,
+  reliabilityState: ReliabilityState | undefined,
+  reliabilityConfig: ReliabilityConfig | undefined,
+  now = Date.now(),
+): HealthyModelResolution {
+  const candidates = findCandidates(ctx, pattern);
+  if (!reliabilityState || reliabilityConfig?.enabled === false) {
+    return {
+      selected: selectModel(candidates, strategy),
+      candidates,
+      healthyCandidates: candidates,
+      skipped: [],
+    };
+  }
+
+  const healthyCandidates: Model<Api>[] = [];
+  const skipped: SkippedCandidate[] = [];
+  for (const candidate of candidates) {
+    const circuit = getCircuitState(reliabilityState, modelKey(candidate), now, reliabilityConfig);
+    if (circuit.open) {
+      skipped.push({ key: modelKey(candidate), reason: "open_circuit", openUntil: circuit.openUntil });
+      continue;
+    }
+    healthyCandidates.push(candidate);
+  }
+
+  return {
+    selected: selectModel(healthyCandidates, strategy),
+    candidates,
+    healthyCandidates,
+    skipped,
+  };
+}
+
+export function resolveModelWithFallback(
+  ctx: ExtensionContext,
+  options: {
+    requestedTier: string;
+    requestedPattern: string | string[] | undefined;
+    requestedStrategy: RoutingStrategy;
+    defaultTier?: string;
+    defaultPattern?: string | string[] | undefined;
+    defaultStrategy?: RoutingStrategy;
+    reliabilityState?: ReliabilityState;
+    reliabilityConfig?: ReliabilityConfig;
+    now?: number;
+  },
+): RoutedModelResolution {
+  const now = options.now ?? Date.now();
+  const primary = resolveHealthyModel(
+    ctx,
+    options.requestedPattern,
+    options.requestedStrategy,
+    options.reliabilityState,
+    options.reliabilityConfig,
+    now,
+  );
+  if (primary.selected) {
+    return {
+      requestedTier: options.requestedTier,
+      selectedTier: options.requestedTier,
+      selected: primary.selected,
+      strategy: options.requestedStrategy,
+      skipped: primary.skipped,
+      primary,
+    };
+  }
+
+  const requestedUnavailable = primary.candidates.length === 0;
+  const fallbackReason = requestedUnavailable
+    ? "requested_tier_unavailable"
+    : (primary.skipped.length > 0 ? "requested_tier_unhealthy" : undefined);
+
+  if (!options.defaultTier || options.defaultTier === options.requestedTier) {
+    return {
+      requestedTier: options.requestedTier,
+      selected: undefined,
+      strategy: options.requestedStrategy,
+      skipped: primary.skipped,
+      fallbackReason,
+      primary,
+    };
+  }
+
+  const fallback = resolveHealthyModel(
+    ctx,
+    options.defaultPattern,
+    options.defaultStrategy ?? options.requestedStrategy,
+    options.reliabilityState,
+    options.reliabilityConfig,
+    now,
+  );
+
+  return {
+    requestedTier: options.requestedTier,
+    selectedTier: fallback.selected ? options.defaultTier : undefined,
+    selected: fallback.selected,
+    strategy: fallback.selected
+      ? (options.defaultStrategy ?? options.requestedStrategy)
+      : options.requestedStrategy,
+    skipped: [...primary.skipped, ...fallback.skipped],
+    fallbackReason,
+    primary,
+    fallback,
+  };
 }
 
 export function getStrategy(
