@@ -86,6 +86,17 @@ describe("commands helpers", () => {
         Object.keys(proposal.models).sort(),
       );
     });
+
+    it("default matches first populated tier", () => {
+      const models = { quick: ["a"], frontier: ["b"] };
+      const proposal = buildInitProposal(models, "provider/c", ".") as { default: string };
+      assert.equal(proposal.default, "quick");
+    });
+
+    it("default falls back to general when models are empty", () => {
+      const proposal = buildInitProposal({}, "provider/c", ".") as { default: string };
+      assert.equal(proposal.default, "general");
+    });
   });
 
   describe("selectModel with cheapest strategy", () => {

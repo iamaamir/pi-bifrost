@@ -160,21 +160,32 @@ function resolveTierDisplay(
 
 // ── Init proposal builder (exported for tests) ──────────────
 
+/** Default strategy per tier when generating init proposals. */
+const PROPOSAL_STRATEGIES: Record<string, RoutingStrategy> = {
+  quick: "random",
+  general: "first",
+  frontier: "first",
+  economical: "cheapest",
+};
+
 export function buildInitProposal(
   models: Record<string, string[]>,
   classifierModel: string,
   extensionDir: string,
 ): Record<string, unknown> {
+  const tierKeys = Object.keys(models);
+  // Pick the first populated tier as default, or fall back to first key.
+  const defaultTier = tierKeys.length > 0 ? tierKeys[0] : "general";
+  const categoryStrategies: Record<string, RoutingStrategy> = {};
+  for (const t of tierKeys) {
+    categoryStrategies[t] = PROPOSAL_STRATEGIES[t] ?? "first";
+  }
   return {
     $schema: `${extensionDir.replace(/\/$/, "")}/schema.json`,
     enabled: true,
-    default: "general",
+    default: defaultTier,
     strategy: "first" as RoutingStrategy,
-    categoryStrategies: {
-      quick: "random" as RoutingStrategy,
-      general: "first" as RoutingStrategy,
-      frontier: "first" as RoutingStrategy,
-    },
+    categoryStrategies,
     classifier: {
       enabled: true,
       model: classifierModel,
