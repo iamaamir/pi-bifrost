@@ -29,6 +29,7 @@ import {
 } from "./routing.js";
 import { createCommandRouter, log, uiBusy, uiDone, type BifrostState } from "./commands.js";
 import { setupDebug, debug, debugMeasure } from "./debug.js";
+import { parseInlineOverride } from "./inline-override.js";
 
 // ── Pipeline builder (composition root) ────────────────────────
 
@@ -173,16 +174,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
     // Inline tier override: "frontier debug this" forces that tier for one prompt.
     // Pi reserves / for commands, ! for bash. Just type the tier name as first word.
-    let forcedTier: string | undefined;
-    let promptText = text;
-    const firstWord = text.match(/^([a-z]+)\s+/i);
-    if (firstWord) {
-      const candidate = firstWord[1].toLowerCase();
-      if (state.config.models?.[candidate]) {
-        forcedTier = candidate;
-        promptText = text.slice(firstWord[0].length);
-        debug("input", "inline_override", { tier: forcedTier });
-      }
+    const { forcedTier, promptText } = parseInlineOverride(text, state.config.models);
+    if (forcedTier) {
+      debug("input", "inline_override", { tier: forcedTier });
     }
 
     const endInput = debugMeasure("input", "total");
