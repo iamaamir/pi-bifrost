@@ -24,9 +24,6 @@ function makeCtx() {
         setWorkingMessage: (value?: string) => {
           calls.push({ kind: "working", key: "working", value });
         },
-        setWidget: (key?: string, value?: unknown) => {
-          calls.push({ kind: "widget", key, value });
-        },
       },
     },
   } as const;
@@ -59,19 +56,19 @@ describe("ux status helpers", () => {
   it("renders persistent mode state", () => {
     const { ctx, calls } = makeCtx();
     setBifrostModeStatus(ctx as never, { enabled: true, pinned: false, classifierEnabled: true });
-    assert.equal(calls[0]?.kind, "widget");
+    assert.equal(calls[0]?.kind, "status");
     assert.equal(calls[0]?.key, "bifrost-state");
     assert.match(String(calls[0]?.value ?? ""), /Bifrost · on/);
 
     calls.length = 0;
     setBifrostModeStatus(ctx as never, { enabled: false, pinned: false, classifierEnabled: true });
-    assert.equal(calls[0]?.kind, "widget");
+    assert.equal(calls[0]?.kind, "status");
     assert.equal(calls[0]?.key, "bifrost-state");
     assert.match(String(calls[0]?.value ?? ""), /Bifrost · off/);
 
     calls.length = 0;
     setBifrostModeStatus(ctx as never, { enabled: true, pinned: true, classifierEnabled: true });
-    assert.equal(calls[0]?.kind, "widget");
+    assert.equal(calls[0]?.kind, "status");
     assert.equal(calls[0]?.key, "bifrost-state");
     assert.match(String(calls[0]?.value ?? ""), /Bifrost · pinned/);
   });

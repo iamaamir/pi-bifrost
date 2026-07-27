@@ -79,5 +79,5 @@ export function setBifrostModeStatus(ctx: ExtensionContext, state: BifrostModeSt
 
   const label = modeLabel(state);
   const text = statusText(ctx, label.tone, label.text);
-  ctx.ui.setWidget("bifrost-state", [text]);
+  ctx.ui.setStatus("bifrost-state", text);
 }

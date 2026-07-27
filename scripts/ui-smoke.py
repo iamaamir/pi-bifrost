@@ -45,6 +45,10 @@ class Screen:
         self.row = 0
         self.col = 0
         self.saved = (0, 0)
+        self.saved_screen: list[list[Cell]] | None = None
+        self.saved_fg = (208, 208, 208)
+        self.saved_bg = (15, 15, 15)
+        self.alt_screen = False
         self.fg = (208, 208, 208)
         self.bg = (15, 15, 15)
 
@@ -52,6 +56,23 @@ class Screen:
         self.rows = [[Cell() for _ in range(self.width)] for _ in range(self.height)]
         self.row = 0
         self.col = 0
+
+    def save_screen(self) -> None:
+        self.saved_screen = [[Cell(cell.ch, cell.fg, cell.bg) for cell in row] for row in self.rows]
+        self.saved_fg = self.fg
+        self.saved_bg = self.bg
+
+    def restore_screen(self) -> None:
+        if self.saved_screen is None:
+            self.clear_all()
+            self.fg = (208, 208, 208)
+            self.bg = (15, 15, 15)
+            self.alt_screen = False
+            return
+        self.rows = [[Cell(cell.ch, cell.fg, cell.bg) for cell in row] for row in self.saved_screen]
+        self.fg = self.saved_fg
+        self.bg = self.saved_bg
+        self.alt_screen = False
 
     def clear_line(self, mode: int) -> None:
         if not (0 <= self.row < self.height):
@@ -159,6 +180,17 @@ class Screen:
 
         if final == "m":
             self.apply_sgr(ints or [0])
+            return
+
+        if final in ("h", "l") and ints and ints[0] in (1047, 1048, 1049):
+            if final == "h":
+                self.save_screen()
+                self.alt_screen = True
+                self.clear_all()
+                self.fg = (208, 208, 208)
+                self.bg = (15, 15, 15)
+            else:
+                self.restore_screen()
             return
 
     def apply_sgr(self, codes: list[int]) -> None:
@@ -445,6 +477,7 @@ def main() -> int:
     captures = [
         ("startup", True, []),
         ("disabled", False, []),
+        ("classify", True, [(1.0, "hello\r")]),
         ("pinned", True, [(1.0, "\x10")]),
     ]
     results = []

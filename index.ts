@@ -33,6 +33,7 @@ import { setupDebug, debug, debugMeasure } from "./debug.js";
 import { parseInlineOverride } from "./inline-override.js";
 import {
   REGISTRY_REFRESH_TTL_MS,
+  setBifrostStatus,
   setBifrostWorkingMessage,
   shouldRefreshRegistry,
 } from "./ux-status.js";
@@ -232,6 +233,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         }
       }
 
+      setBifrostStatus(ctx, forcedTier ? `using ${forcedTier}...` : "classifying prompt...", "accent");
       uiBusy(ctx, forcedTier ? `Bifrost using ${forcedTier}...` : "Bifrost classifying...");
       setBifrostWorkingMessage(ctx, forcedTier ? `Bifrost using ${forcedTier}...` : "Bifrost classifying...");
       const endClassify = debugMeasure("input", "classify");
