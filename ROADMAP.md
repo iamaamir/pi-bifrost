@@ -36,6 +36,16 @@ Full evidence, design questions, and acceptance criteria: [`docs/adr/0004-thinki
 
 ---
 
+### PTY test harness evolution
+
+An isolated `agent-tui` POC passed startup, dashboard, preview, and Escape-dismissal scenarios while the existing Python smoke remained unchanged. Use it as the future behavioral TUI driver: real terminal emulation plus semantic waits. Keep Python screenshots during migration.
+
+Do not promote it to required CI until agent-tui installation is pinned and Pi settings/model/provider behavior is deterministic. Full evidence, findings, and migration gate: [`docs/agent-tui-evaluation.md`](docs/agent-tui-evaluation.md).
+
+**Effort:** Medium · **Reach:** Every TUI change and release gate
+
+---
+
 ### Reliability v1 — health-aware selection & circuit breaker
 
 **Next priority.** Before sending a prompt, select only candidates that are not known-bad:

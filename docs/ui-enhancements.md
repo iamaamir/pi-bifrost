@@ -92,10 +92,10 @@ Inventory of user-facing extension improvements. Ordered by user value, then imp
 | Done | Command picker unit tests | Completion and recovery behavior | `tests/bifrost-commands.test.ts`. |
 | Done | PTY smoke harness | Key TUI screenshots, including result overlay | `npm run test:ui`. |
 | Next | Dashboard ANSI assertion | Assert selector content in smoke capture | Improve parser frame fidelity first. |
-| Next | Interaction smoke | Select actions, cancel, destructive confirmations | Temp config/cache only. |
+| Next | Interaction smoke | Select actions, cancel, destructive confirmations | Use agent-tui semantic waits; retain Python screenshots during migration. See [`agent-tui evaluation`](agent-tui-evaluation.md). |
 | Next | Width/theme matrix | 80/120/160 columns, default/high contrast | Screenshot and text snapshots. |
 | Next | README UX guide | Dashboard, autocomplete, recovery examples | Derive docs from metadata where possible. |
-| Next | UI release checklist | Unit, typecheck, smoke, screenshot review | Gate UI changes before release. |
+| Next | UI release checklist | Unit, typecheck, smoke, screenshot review | Gate UI changes before release; add pinned agent-tui/Pi fixture gate after POC migration. |
 
 ## Avoid unless requirement changes
 
