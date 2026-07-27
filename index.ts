@@ -31,6 +31,12 @@ import {
 import { createCommandRouter, log, uiBusy, uiDone, type BifrostState } from "./commands.js";
 import { setupDebug, debug, debugMeasure } from "./debug.js";
 import { parseInlineOverride } from "./inline-override.js";
+import {
+  REGISTRY_REFRESH_TTL_MS,
+  setBifrostStatus,
+  setBifrostWorkingMessage,
+  shouldRefreshRegistry,
+} from "./ux-status.js";
 
 // ── Pipeline builder (composition root) ────────────────────────
 
@@ -145,6 +151,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     extensionDir,
     getPipeline,
     invalidatePipeline,
+    lastRegistryRefreshAt: undefined,
+    forceRegistryRefresh: false,
   };
 
   const handleCommand = createCommandRouter(state);
@@ -191,95 +199,121 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const endInput = debugMeasure("input", "total");
     debug("input", "prompt", { length: promptText.length });
 
-    if (state.classifierEnabled) {
-      const endRefresh = debugMeasure("input", "registry.refresh");
-      try {
-        await ctx.modelRegistry.refresh();
-        invalidatePipeline();
-        endRefresh();
-      } catch (err) {
-        debug("input", "registry.refresh.error", { error: String(err) });
-        console.error(`[bifrost] model registry refresh failed: ${err}`);
+    const shouldRefresh = state.classifierEnabled
+      ? shouldRefreshRegistry(state, Date.now(), REGISTRY_REFRESH_TTL_MS)
+      : false;
+
+    try {
+      if (shouldRefresh) {
+        setBifrostStatus(ctx, "checking available models…", "accent");
+        setBifrostWorkingMessage(ctx, "Bifrost checking models...");
+        const endRefresh = debugMeasure("input", "registry.refresh");
+        try {
+          await ctx.modelRegistry.refresh();
+          state.lastRegistryRefreshAt = Date.now();
+          state.forceRegistryRefresh = false;
+          invalidatePipeline();
+          endRefresh();
+        } catch (err) {
+          debug("input", "registry.refresh.error", { error: String(err) });
+          console.error(`[bifrost] model registry refresh failed: ${err}`);
+        }
       }
-    }
 
-    uiBusy(ctx, "Bifrost classifying...");
-    const endClassify = debugMeasure("input", "classify");
-    const classification = forcedTier
-      ? { kind: "classified" as const, tier: forcedTier, source: "inline" as const }
-      : await getPipeline(ctx).classify(promptText);
+      setBifrostStatus(ctx, forcedTier ? `using forced tier ${forcedTier}…` : "classifying prompt…", "accent");
+      uiBusy(ctx, forcedTier ? `Bifrost using ${forcedTier}...` : "Bifrost classifying...");
+      setBifrostWorkingMessage(ctx, forcedTier ? `Bifrost using ${forcedTier}...` : "Bifrost classifying...");
+      const endClassify = debugMeasure("input", "classify");
+      const classification = forcedTier
+        ? { kind: "classified" as const, tier: forcedTier, source: "inline" as const }
+        : await getPipeline(ctx).classify(promptText);
 
-    // Always show classification result — helps debug binding issues.
-    if (classification.kind === "classified") {
-      const tag = classification.source === "inline" ? "!" : classification.source;
-      console.error(`[bifrost] classify: ${classification.tier} [${tag}]`);
-    }
-
-    endClassify({ kind: classification.kind, tier: classification.kind !== "unclassified" ? classification.tier : undefined });
-    uiDone(ctx);
-
-    if (classification.kind === "unclassified") {
-      log(ctx, "Bifrost: no tier matched — using default model", "warning");
-      debug("input", "unclassified");
-      endInput();
-      return { action: "continue" };
-    }
-
-    const tier = classification.tier;
-    const source = classification.kind === "classified"
-      ? classification.source
-      : "fallback";
-    const pattern = state.config.models?.[tier] ?? tier;
-    const strategy = getStrategy(state.config.categoryStrategies, state.config.strategy, tier);
-    const model = resolveModel(ctx, pattern, strategy);
-    if (!model) {
-      debug("input", "no_model", { tier });
-      log(ctx, `Bifrost: tier "${tier}" matched but no model available`, "warning");
-      endInput();
-      return { action: "continue" };
-    }
-
-    // Only cache LLM classifier results (regex is deterministic).
-    if (
-      classification.kind === "classified" &&
-      classification.source === "classifier"
-    ) {
-      const maxEntries = state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES;
-      if (state.config.cache?.enabled ?? true) {
-        const endCacheSave = debugMeasure("input", "cacheSave");
-        state.cacheEntries = updateCache(state.cacheEntries, promptText, tier, maxEntries);
-        saveCache(cachePath(process.cwd(), state.config.cache?.path), state.cacheEntries);
-        invalidatePipeline();
-        endCacheSave({ entries: state.cacheEntries.length });
+      if (classification.kind === "classified") {
+        const tag = classification.source === "inline" ? "!" : classification.source;
+        console.error(`[bifrost] classify: ${classification.tier} [${tag}]`);
       }
-    }
 
-    if (modelKey(model) === modelKey(ctx.model)) {
+      endClassify({ kind: classification.kind, tier: classification.kind !== "unclassified" ? classification.tier : undefined });
       uiDone(ctx);
-      log(ctx, `Bifrost: ${tier} → ${modelKey(model)} (already active, ${source})`);
-      debug("input", "model_unchanged", { model: modelKey(model) });
+      setBifrostWorkingMessage(ctx, undefined);
+
+      if (classification.kind === "unclassified") {
+        setBifrostStatus(ctx, "no tier matched, using current model", "warning");
+        log(ctx, "Bifrost: no tier matched — using default model", "warning");
+        debug("input", "unclassified");
+        endInput();
+        return { action: "continue" };
+      }
+
+      const tier = classification.tier;
+      const source = classification.kind === "classified"
+        ? classification.source
+        : "fallback";
+      const pattern = state.config.models?.[tier] ?? tier;
+      const strategy = getStrategy(state.config.categoryStrategies, state.config.strategy, tier);
+
+      setBifrostStatus(ctx, `selecting ${tier} tier…`, "accent");
+      const model = resolveModel(ctx, pattern, strategy);
+      if (!model) {
+        state.forceRegistryRefresh = true;
+        debug("input", "no_model", { tier });
+        setBifrostStatus(ctx, `tier ${tier} matched, but no model is available`, "warning");
+        log(ctx, `Bifrost: tier "${tier}" matched but no model available`, "warning");
+        endInput();
+        return { action: "continue" };
+      }
+
+      if (
+        classification.kind === "classified" &&
+        classification.source === "classifier"
+      ) {
+        const maxEntries = state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES;
+        if (state.config.cache?.enabled ?? true) {
+          const endCacheSave = debugMeasure("input", "cacheSave");
+          state.cacheEntries = updateCache(state.cacheEntries, promptText, tier, maxEntries);
+          saveCache(cachePath(process.cwd(), state.config.cache?.path), state.cacheEntries);
+          invalidatePipeline();
+          endCacheSave({ entries: state.cacheEntries.length });
+        }
+      }
+
+      if (modelKey(model) === modelKey(ctx.model)) {
+        setBifrostStatus(ctx, `${tier} → ${modelKey(model)} already active`, "success");
+        uiDone(ctx);
+        log(ctx, `Bifrost: ${tier} → ${modelKey(model)} (already active, ${source})`);
+        debug("input", "model_unchanged", { model: modelKey(model) });
+        endInput({ model: modelKey(model), tier, strategy, source });
+        return { action: "continue" };
+      }
+
+      setBifrostStatus(ctx, `switching to ${modelKey(model)}…`, "accent");
+      uiBusy(ctx, `Bifrost routing to ${modelKey(model)}...`);
+      setBifrostWorkingMessage(ctx, `Bifrost routing to ${modelKey(model)}...`);
+      selfSelecting = true;
+      const endSwitch = debugMeasure("input", "setModel");
+      const ok = await pi.setModel(model);
+      endSwitch({ model: modelKey(model), ok });
+      uiDone(ctx);
+      setBifrostWorkingMessage(ctx, undefined);
+      if (!ok) {
+        selfSelecting = false;
+        state.forceRegistryRefresh = true;
+        setBifrostStatus(ctx, `could not switch to ${modelKey(model)}`, "error");
+        log(ctx, `Bifrost: no API key for ${modelKey(model)}`, "error");
+        endInput({ model: modelKey(model), ok: false });
+        return { action: "continue" };
+      }
+
+      const doneMsg = classification.kind === "classified"
+        ? `Bifrost: ${tier} → ${modelKey(model)} (${classification.source})`
+        : `Bifrost: ${tier} → ${modelKey(model)} (fallback)`;
+      setBifrostStatus(ctx, `${tier} → ${modelKey(model)}`, "success");
+      log(ctx, doneMsg);
       endInput({ model: modelKey(model), tier, strategy, source });
       return { action: "continue" };
+    } finally {
+      uiDone(ctx);
+      setBifrostWorkingMessage(ctx, undefined);
     }
-
-    uiBusy(ctx, `Bifrost routing to ${modelKey(model)}...`);
-    selfSelecting = true;
-    const endSwitch = debugMeasure("input", "setModel");
-    const ok = await pi.setModel(model);
-    endSwitch({ model: modelKey(model), ok });
-    uiDone(ctx);
-    if (!ok) {
-      selfSelecting = false;
-      log(ctx, `Bifrost: no API key for ${modelKey(model)}`, "error");
-      endInput({ model: modelKey(model), ok: false });
-      return { action: "continue" };
-    }
-
-    const doneMsg = classification.kind === "classified"
-      ? `Bifrost: ${tier} → ${modelKey(model)} (${classification.source})`
-      : `Bifrost: ${tier} → ${modelKey(model)} (fallback)`;
-    log(ctx, doneMsg);
-    endInput({ model: modelKey(model), tier, strategy, source });
-    return { action: "continue" };
   });
 }

@@ -29,6 +29,8 @@ export interface BifrostState {
   extensionDir: string;
   getPipeline: (ctx: ExtensionContext) => ClassificationPipeline;
   invalidatePipeline: () => void;
+  lastRegistryRefreshAt?: number;
+  forceRegistryRefresh?: boolean;
 }
 
 export function log(
