@@ -4,6 +4,13 @@ type ResultTheme = Pick<ExtensionContext["ui"]["theme"], "fg">;
 
 const MAX_VISIBLE_LINES = 10;
 
+/** Match legacy Esc plus Kitty CSI-u and xterm modifyOtherKeys encodings. */
+export function isEscapeKey(data: string): boolean {
+  return data === "\x1b"
+    || /^\x1b\[27(?:;1)?u$/.test(data)
+    || data === "\x1b[27;1;27~";
+}
+
 export function wrapResultLines(lines: readonly string[], width: number): string[] {
   const safeWidth = Math.max(1, width);
   const wrapped: string[] = [];
@@ -46,7 +53,7 @@ class ResultViewer {
   }
 
   handleInput(data: string): void {
-    if (data === "\x1b" || data === "\x03") {
+    if (isEscapeKey(data) || data === "\x03") {
       this.done();
       return;
     }

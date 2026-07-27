@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { wrapResultLines } from "../result-viewer.ts";
+import { isEscapeKey, wrapResultLines } from "../result-viewer.ts";
 
 describe("result viewer", () => {
   it("wraps long lines without dropping text", () => {
@@ -18,5 +18,13 @@ describe("result viewer", () => {
       "",
       "candidates:",
     ]);
+  });
+
+  it("recognizes terminal escape encodings", () => {
+    assert.equal(isEscapeKey("\x1b"), true);
+    assert.equal(isEscapeKey("\x1b[27u"), true);
+    assert.equal(isEscapeKey("\x1b[27;1u"), true);
+    assert.equal(isEscapeKey("\x1b[27;1;27~"), true);
+    assert.equal(isEscapeKey("j"), false);
   });
 });
