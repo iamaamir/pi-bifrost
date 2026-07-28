@@ -199,7 +199,7 @@ export function buildInitProposal(
 // ── Command handlers ────────────────────────────────────────
 
 async function handleInit(
-  _args: string,
+  args: string,
   ctx: ExtensionContext,
   state: BifrostState,
 ): Promise<void> {
@@ -370,12 +370,13 @@ async function handleInit(
     log(ctx, `${uncategorized.length} model(s) uncategorized — edit .pi/bifrost.json to assign them.`);
   }
 
-  if (!ctx.hasUI) {
-    log(ctx, "run in TUI or use --write (not implemented) to persist", "warning");
+  const writeWithoutPrompt = args.trim().split(/\s+/).includes("--write");
+  if (!ctx.hasUI && !writeWithoutPrompt) {
+    log(ctx, "run in TUI or use --write to persist", "warning");
     return;
   }
 
-  const ok = await ctx.ui.confirm(
+  const ok = writeWithoutPrompt || await ctx.ui.confirm(
     "Write config?",
     "Write proposed config to .pi/bifrost.json?",
   );
