@@ -732,6 +732,74 @@ th {
   }
 }
 
+/* ── Bifrost bridge animation ──────────────────── */
+
+.bridge-figure {
+  --bf-blue: #75b5dc;
+  --bf-mint: #85c8aa;
+  --bf-rose: #c77b80;
+  --bf-amber: #d6ad72;
+  margin: 0;
+  border: 1px solid var(--line);
+  background: radial-gradient(circle at 55% 45%, #29475b3d, transparent 38%), var(--surface);
+}
+
+.bridge-figure canvas {
+  display: block;
+  width: 100%;
+  height: min(28rem, 54vw);
+  min-height: 20rem;
+}
+
+.bridge-figure .bf-desc {
+  border-top: 1px solid var(--line);
+  padding: .8rem 1.1rem;
+  min-height: 4rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  transition: background .25s;
+}
+
+.bridge-figure .bf-label {
+  font: .82rem var(--mono);
+  letter-spacing: .02em;
+}
+
+.bridge-figure .bf-detail {
+  margin: .25rem 0 0;
+  color: var(--muted);
+  font-size: .9rem;
+  line-height: 1.4;
+}
+
+.bridge-figure .bf-label::before {
+  content: "● ";
+  color: var(--bf-blue);
+}
+
+.bridge-figure .bf-content {
+  transition: opacity .6s ease;
+}
+
+.bridge-figure .bf-desc.bf-fading .bf-content {
+  opacity: 0;
+}
+
+.bridge-figure .bf-s0 { background: color-mix(in srgb, var(--bf-blue) 5%, transparent); }
+.bridge-figure .bf-s1 { background: color-mix(in srgb, var(--bf-rose) 5%, transparent); }
+.bridge-figure .bf-s2 { background: color-mix(in srgb, var(--bf-mint) 5%, transparent); }
+.bridge-figure .bf-s3 { background: color-mix(in srgb, var(--bf-amber) 5%, transparent); }
+
+.bridge-figure .bf-s0 .bf-label { color: var(--bf-blue); }
+.bridge-figure .bf-s1 .bf-label { color: var(--bf-rose); }
+.bridge-figure .bf-s2 .bf-label { color: var(--bf-mint); }
+.bridge-figure .bf-s3 .bf-label { color: var(--bf-amber); }
+
+.bridge-figure .bf-s1 .bf-label::before { color: var(--bf-rose); }
+.bridge-figure .bf-s2 .bf-label::before { color: var(--bf-mint); }
+.bridge-figure .bf-s3 .bf-label::before { color: var(--bf-amber); }
+
 @media (prefers-contrast: more) {
   :root {
     --muted: #c5cdd3;
