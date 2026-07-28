@@ -730,7 +730,12 @@ export function createCommandRouter(
     }),
 
     // Init
-    exact("init", "Probe models and generate config", (args, ctx) => handleInit(args, ctx, state)),
+    {
+      value: "init",
+      description: "Probe models and generate config",
+      match: (sub) => sub === "init" || sub.startsWith("init "),
+      handler: (args, ctx) => handleInit(args, ctx, state),
+    },
 
     // Benchmark
     prefix("benchmark", "Classify a benchmark prompt", (args, ctx) => handleBenchmark(args, ctx, state), "<prompt>"),
