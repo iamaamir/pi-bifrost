@@ -10,7 +10,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/iamaamir/pi-bifrost"
+    "url": "git+https://github.com/iamaamir/pi-bifrost.git"
   },
   "homepage": "https://iamaamir.github.io/pi-bifrost/",
   "bugs": {

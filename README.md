@@ -1,13 +1,20 @@
 # Bifrost
 
-Automatic model routing for [pi](https://pi.dev). Routes each prompt to a model based on task complexity, price, speed, or context length.
+Pi-Bifrost is **native model routing for [Pi](https://pi.dev)**. Before generation starts, it switches Pi's actual active model to one from your configuration.
 
-**Why Bifrost over other model routers:**
+```text
+"summarize this file"         → your quick model
+"debug this race condition"   → your frontier model
+```
 
-- **Probe-first init** — tests every model before writing config. No dead providers in your tier lists.
-- **Zero-token routing** — 7 selection strategies, all metadata-based. Routing decisions cost nothing.
-- **Production observability** — Performance API traces, JSONL debug logs. AI-parseable.
-- **Direct bindings** — assign specific models to specific prompts via regex rules or inline tier name prefix.
+**Why it is different:**
+
+- **Native model switch** — Pi uses selected provider/model for turn, not a virtual profile or prompt-side delegation.
+- **Persistent circuit breaker** — repeated probe, activation, and stream failures survive restart; one half-open trial controls recovery.
+- **No automatic replay** — Bifrost routes future prompts around uncertain failures. It never silently repeats edits, commands, or external side effects.
+- **Inspectable control** — preview route, pin current model, or force a tier for one message.
+- **Model-agnostic setup** — `/bifrost init` probes supported models available through Pi, then proposes tier lists without hardcoded maintainer model IDs.
+- **Host-real verification** — unit tests, Pi TUI smoke tests, and fake-provider SSE E2E cover routing and reliability behavior.
 
 ## Install
 
@@ -35,11 +42,11 @@ Done. Bifrost is now routing your prompts.
 
 ## What it does
 
-You type a prompt. Bifrost classifies it as `frontier` (hard) or `economical` (easy), picks the best available model for that tier, and switches pi's model before the prompt is sent. You just type — the model changes behind the scenes.
+Bifrost first applies direct rules and recent classification-cache matches. If needed, regex rules or optional LLM classification choose a configured tier such as `quick`, `general`, or `frontier`. One policy then selects a matching Pi model by list order, cost, context window, or random choice. Pi switches before your prompt is sent.
 
-If a model fails repeatedly (probe timeout, auth error, provider stream failure), Bifrost opens a circuit breaker and routes around it until a cooldown period expires or a probe confirms it's healthy again. The dashboard shows open-circuit count in its title.
+You stay in control: run `/bifrost preview <prompt>` to inspect a decision, prefix one prompt with a tier name to force it, or use `/bifrost pin` after switching models manually.
 
-If you manually switch models with `/model`, Bifrost pins itself and stops routing. `/bifrost unpin` to resume.
+If a model repeatedly fails (probe timeout, auth error, provider stream failure), Bifrost opens its circuit and routes future prompts to other candidates until cooldown and a recovery trial. It never reruns your failed prompt automatically.
 
 ## Commands
 
@@ -181,7 +188,7 @@ Type a tier name as the first word to force that tier for one message. No config
 
 ```
 frontier debug this race condition
-economical summarize this
+quick summarize this
 frontier implement the auth module
 ```
 
@@ -200,7 +207,7 @@ An LLM that reads your prompt and picks a tier. More accurate than regex, costs 
 }
 ```
 
-If the classifier fails or is disabled, regex rules take over. Both paths cache results so repeat prompts skip the check entirely.
+If the classifier fails or is disabled, regex rules take over. Successful LLM classifier results enter the local classification cache, so similar repeat prompts can skip another classifier call.
 
 ### Debug logging
 
@@ -210,7 +217,7 @@ If the classifier fails or is disabled, regex rules take over. Both paths cache 
 }
 ```
 
-Writes `.pi/bifrost-debug.jsonl` — one JSON line per event. Timings, tiers, decisions. Useful for understanding what Bifrost is doing.
+Writes `.pi/bifrost-debug.jsonl` — one JSON line per event with routing reason, selected tier/model, and timing. It does not store prompt bodies. Useful for understanding what Bifrost is doing.
 
 ### Full config reference
 
@@ -218,9 +225,9 @@ Writes `.pi/bifrost-debug.jsonl` — one JSON line per event. Timings, tiers, de
 {
   "$schema": "../pi-bifrost/schema.json",
   "enabled": true,
-  "default": "economical",
+  "default": "general",
   "strategy": "first",
-  "categoryStrategies": { "economical": "cheapest" },
+  "categoryStrategies": { "quick": "cheapest", "general": "first", "frontier": "first" },
   "models": { ... },
   "rules": [ ... ],
   "classifier": {
@@ -274,5 +281,43 @@ Tracks model health across probe results and runtime failures. Models that fail 
 The dashboard shows open-circuit count in the title. `/bifrost preview` and `/bifrost debug` display skipped candidates with remaining cooldown.
 
 See [`examples/economical-frontier-reliability.json`](examples/economical-frontier-reliability.json) for a complete config.
+
+## FAQ
+
+### What does Bifrost's local cache store?
+
+Bifrost maintains a **local routing-classification cache**. After a successful LLM classification, it stores a normalized prompt and its selected tier. Similar future prompts can reuse that tier and skip the classifier call. It does not store model answers.
+
+The project-local cache is `.pi/bifrost-cache.jsonl`. Entries contain lowercased, punctuation-stripped, sorted prompt words, selected tier, last-use timestamp, and hit count. Default limit is 500 entries; entries use exact matching first, then token-set similarity (default threshold `0.85`) and are evicted least-recently-used first. Use `/bifrost cache stats` to inspect it or `/bifrost cache clear` to remove it.
+
+### Do I need multiple models?
+
+No. One healthy configured model is enough to start. Multiple models and tiers let Bifrost choose different candidates for routine, general, and demanding work. `/bifrost init` shows its proposed configuration before it writes anything.
+
+### Does Bifrost cache assistant responses, tool output, or prompts for replay?
+
+No. Repository state, tool output, and user intent can change even when prompt text is similar. Bifrost does not reuse old assistant responses or automatically replay a failed prompt; that could repeat edits, commands, or external side effects.
+
+### What about provider prompt caching?
+
+Provider prompt/prefix caching is managed by Pi and each model provider. Bifrost does not claim a universal prompt-cache implementation. It routes before the turn; providers decide whether a request qualifies for their own caching and billing behavior.
+
+### What is stored locally, and can I disable it?
+
+Classification-cache entries contain normalized prompt words, chosen tier, last-use timestamp, and hit count. Normalized prompts can still contain sensitive terms, so disable it for sensitive projects or move it with `cache.path`:
+
+```json
+{
+  "cache": {
+    "enabled": false
+  }
+}
+```
+
+Clear the cache after substantial tier/rule changes if you want every prompt classified fresh.
+
+### What happens if a model fails?
+
+Bifrost records probe, activation, and settled stream failures in `.pi/bifrost-reliability.json`. After repeated failures, it opens that model's circuit and routes future prompts to healthy candidates. After cooldown, exactly one half-open trial can prove recovery. Bifrost does not silently rerun the failed prompt.
 
 Every field is optional. Config merges from: extension default → global (`~/.pi/agent/bifrost.json`) → project (`.pi/bifrost.json`).

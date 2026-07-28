@@ -1,161 +1,104 @@
 # Roadmap
 
-## v0.2 — Power User Bridge
+This roadmap is grouped by status, not by version. Each item links to its ADR when one exists, and each item lists an effort estimate (Low / Medium / High) plus the user it reaches. Items move up when paired with a concrete user report; speculative features stay in **Backlog / Intentionally deferred** until reported.
 
-*Make routing feel transparent and controllable. The 10% of users who care about which model fires when need to see it and override it.*
+## How we decide what to build
 
-### [x] Direct model bindings
-Per-prompt model overrides. Bind specific models to specific prompt patterns. `"when I say /commit, use glm-5.1"`. `"when I type /test, use gpt-oss-20b"`.
+We keep Bifrost a **configuration-first router**, not a policy engine. See [`docs/product-philosophy.md`](docs/product-philosophy.md): explicit configuration → observable signal → advisory recommendation → explicit opt-in → bounded automation.
 
-```json
-{ "pattern": "\\bcommit\\b", "model": "opencode-go/glm-5.1" }
-```
+A feature earns a slot when:
 
-Also support inline override: "frontier debug this" forces frontier, "economical hello" forces economical. No `/bifrost pin` dance needed.
+1. A real user reports a routing outcome they could not predict or fix with current config.
+2. The fix composes with the pure-CB boundary (ADR 0005) and the minimal-default identity (ADR 0006).
+3. Its effect is inspectable, overridable, and covered by deterministic scenarios before it automates a routing choice.
+4. Its cost (state, infra, breaking change) is small enough to ship in one PR.
 
-**Effort:** Low · **Reach:** Every user who's ever manually switched models
-
----
-
-### Default config overhaul — task-aware routing
-
-Replace the weak two-tier `economical`/`frontier` default with a minimal 3-tier config:
-
-- `quick` — formatting, extraction, classification, commit messages, simple edits, explicit free-only requests. Strategy: `random`.
-- `general` — writing code, tests, docs, summaries, ordinary refactoring. Strategy: `first`.
-- `frontier` — architecture, debugging, code review, security, complex reasoning, explicit premium requests. Strategy: `first`.
-
-Ship together with:
-
-- Tier-based rules only (no hardcoded model IDs) so `/bifrost init` works for any registry.
-- `DEFAULT_RULES` as the single source of truth; shipped `bifrost.json` omits `rules`.
-- Updated `guessTier` cost bands: `<1 → quick`, `1–5 → general`, `>5 → frontier`.
-- Empty `models` arrays in the default config, populated by `/bifrost init`.
-- Rich 14-tier task-aware config and detailed classifier prompt moved to `examples/`.
-
-**Effort:** Low · **Reach:** Every new install
-
-**Status:** ✅ Shipped in v0.2.2 via updated `bifrost.json`, `config.ts`, `routing.ts`, `commands.ts`, and new examples.
+Features that need an eval harness, persistent analytics, telemetry infra, or upstream Pi changes go to **Research / Unknowns** until that stack exists.
 
 ---
 
-### Usage stats & cost visibility
-`/bifrost stats` — per-model usage, cost estimates, cache hit rate, routing decisions over time. After each prompt: `⎇ frontier → claude-opus ($0.008)`. Prove Bifrost saves money. Convince teams. Optimize budgets.
+## Shipped
 
-**Effort:** Medium · **Reach:** Every user who needs to justify tool spend
+### v0.1 — core router
+- [x] Probe-first init — tests models before writing config.
+- [x] 7 selection strategies — `first`, `cheapest`, `cheapest_input`, `cheapest_output`, `largest_context`, `random`, `fastest`.
+- [x] LLM + regex dual classifier with fuzzy Jaccard cache.
+- [x] Direct model bindings — `"model": "provider/id"` rules bypass tier selection. Inline overrides (`frontier ...`, `economical ...`).
+- [x] Performance API debug logging — JSONL, AI-parseable.
+- [x] Strict TypeScript (`tsc --noEmit` clean), npm + GitHub distribution.
+
+### v0.2.x — reliability + minimal defaults
+- [x] **Reliability v1 — circuit breaker.** Probe/runtime failures recorded; circuit opens after N failures in M minutes; open-circuit models are skipped with fallback to default tier. State persisted in `.pi/bifrost-reliability.json`. See [`docs/adr/0005-reliability-store.md`](docs/adr/0005-reliability-store.md).
+- [x] **Default config overhaul.** Replaced the bloated research config with a 3-tier minimal default (`quick`/`general`/`frontier`), no hardcoded model IDs, `DEFAULT_RULES` is the single source of truth, `/bifrost init` and `guessTier` aligned to the new names. See [`docs/adr/0006-default-config.md`](docs/adr/0006-default-config.md).
+
+---
+
+## In progress (v0.3 — transparency & safety)
+
+Four small ADRs. Each is a building block: traces make the rest debuggable; the other three fix specific sharp edges the latest reviews uncovered.
+
+### [ADR 0007 — Explainable decision traces](docs/adr/0007-decision-traces.md)
+`/bifrost preview` today prints a flattened summary. Promote it to a structured, machine-readable trace: stage timings (`cache`, `classifier`, `regex`, `fallback`), inputs, route taken, candidates filtered by reliability, strategy choice, and selected model. Same data shown to the user; same data available to tests. **Effort:** Low · **Reach:** every user who debugs a misroute.
+
+### [ADR 0008 — Direct-rule fallback chains](docs/adr/0008-direct-rule-fallback-chains.md)
+A rule today binds to a single `provider/id`; if that model is circuit-open, routing falls to the default tier silently. Let `model` accept an ordered list `["A", "B", "C"]` so B is tried after A is filtered by reliability, then C, then the default tier. Composes with ReliabilityStore; no new infra. **Effort:** Low-Medium · **Reach:** every user with direct bindings.
+
+### [ADR 0009 — Config linter](docs/adr/0009-config-linter.md)
+`/bifrost validate` (offline, no probes) reports: regex compile errors, tier names referenced in `rules`/`categoryStrategies` but missing from `models`, classifier `model` not resolvable from registry, conflicting strategies (e.g. `random` on a tier with one model), duplicate rule patterns, unreachable rules after a catch-all. Distinct from runtime `validateConfig` which is an error gate; linter is advisory. **Effort:** Low · **Reach:** every user editing `bifrost.json`.
+
+### [ADR 0010 — Classifier confidence and graceful downgrade](docs/adr/0010-classifier-confidence.md)
+The LLM classifier today returns a tier or nothing. Let it emit `<tier>:<conf 0–1>`; below a configured threshold (`classifier.minConfidence`, default 0.6) we downgrade to regex rules instead of trusting the call. Composes with the trace ADR: the confidence number flows into the trace. **Effort:** Low-Medium · **Reach:** every user who has watched the classifier pick a wrong tier on a hard prompt.
 
 ---
 
-### Thinking-level preservation and visibility
+## Research / Unknowns — needs upstream or external evidence
 
-Model selection can cause Pi to preserve or capability-clamp its thinking level. A target that does not support the current level may be clamped upward (for example `medium` → `high`), affecting latency and cost.
+These stay parked until the listed dependency is resolved.
 
-First expose effective level and clamp reason in routing feedback. Preserve Pi behavior by default. Any tier-level thinking policy must be explicit, opt-in, capability-aware, and never silently rewrite user preferences.
+### Thinking-level routing
+**ADR candidate, not yet implemented.** When Bifrost routes to a reasoning-capable model, Pi can clamp or elevate thinking level. Need to expose effective level + clamp reason in routing feedback; any policy must be opt-in. Waiting on: nothing — ADR 0004 is documented and ready. Moved to In progress when picked up. See [`docs/adr/0004-thinking-level-routing.md`](docs/adr/0004-thinking-level-routing.md). **Effort:** Low for visibility.
 
-Full evidence, design questions, and acceptance criteria: [`docs/adr/0004-thinking-level-routing.md`](docs/adr/0004-thinking-level-routing.md).
-
-**Effort:** Low for visibility · Medium for optional policy · **Reach:** Every routed reasoning-capable model
-
----
+### Reliability v2 — safe request retry
+Re-sending a prompt after a provider failure risks duplicating work (output may have streamed, tools may have fired). Blocked on Pi extension hooks for pre-output error interception and turn replay. Until then, fail-fast + record + circuit-open. **Effort:** Research first.
 
 ### PTY test harness evolution
-
-An isolated `agent-tui` POC passed startup, dashboard, preview, and Escape-dismissal scenarios while the existing Python smoke remained unchanged. Use it as the future behavioral TUI driver: real terminal emulation plus semantic waits. Keep Python screenshots during migration.
-
-Do not promote it to required CI until agent-tui installation is pinned and Pi settings/model/provider behavior is deterministic. Full evidence, findings, and migration gate: [`docs/agent-tui-evaluation.md`](docs/agent-tui-evaluation.md).
-
-**Effort:** Medium · **Reach:** Every TUI change and release gate
+`agent-tui` POC passed startup/dashboard/preview scenarios; existing Python smoke remains the gate. Promotion blocked on pinning `agent-tui` install and deterministic Pi behavior in CI. See [`docs/agent-tui-evaluation.md`](docs/agent-tui-evaluation.md). **Effort:** Medium.
 
 ---
 
-### Reliability v1 — health-aware selection & circuit breaker
+## Backlog — picked up when reported
 
-**Next priority.** Before sending a prompt, select only candidates that are not known-bad:
-
-- Record probe failures and observed provider failures.
-- 3 failures in 5 minutes → open model circuit for 1 hour.
-- Skip open-circuit models, try next candidate in tier, then configured fallback/default tier.
-- Show selected, skipped, and fallback reason in Bifrost status/dashboard.
-- Persist breaker state deliberately; never silently rewrite user model config.
-
-This is pre-send resilience: routing avoids models already known to be unhealthy. It adds no proxy latency and has no duplicate-request risk.
-
-```json
-{
-  "reliability": {
-    "failureThreshold": 3,
-    "windowMinutes": 5,
-    "cooldownMinutes": 60
-  }
-}
-```
-
-**Effort:** Medium · **Reach:** Every user affected by flaky providers
-
----
-
-### Reliability v2 — safe request retry (research gate)
-
-Do **not** blindly re-send a submitted prompt after provider failure. Pi-Bifrost selects a model before the agent request, while a failed request may already have streamed output or triggered tools. Automatic replay can duplicate work.
-
-First validate Pi extension hooks for provider-error interception and turn replay. Only ship retry when all are true:
-
-- failure occurs before assistant or tool output;
-- retry is explicitly enabled;
-- exact prompt/attachments can be replayed once on a fallback model;
-- user sees retry/fallback outcome.
-
-Until then, record failure, open circuit when warranted, and route subsequent prompts away from that model.
-
-**Effort:** Research first · **Reach:** Reliability-conscious teams
-
----
-
-## v0.3 — Team & Trust
+### Usage stats & cost visibility
+`/bifrost stats` — per-model usage, cost estimates, cache hit rate, routing decisions over time. Inline telemetry after each prompt: `⎇ frontier → claude-opus ($0.008)`. Proves saving, justifies tool spend. **Effort:** Medium · **Reach:** teams justifying API costs. Need a local JSONL store; no cloud.
 
 ### Budget enforcement
-Daily/monthly spend caps. At 80% → auto-downgrade. At 100% → lock to free tier. Tracked in `.pi/bifrost-budget.jsonl`. Makes Bifrost safe for teams with junior devs.
-
-```json
-{ "budget": { "daily": 2.00, "onExceeded": "downgrade" } }
-```
-
-**Effort:** Medium · **Reach:** Teams managing API costs
-
----
+Daily/monthly spend caps in `.pi/bifrost-budget.jsonl`. At 80% → auto-downgrade default tier; at 100% → lock to free tier. Composes with usage stats. **Effort:** Medium · **Reach:** teams with junior devs.
 
 ### Team policy layer
-`.pi/bifrost-policy.json` that enforces constraints across the team. Allowed models per tier, minimum cache settings, required classifier. Team lead commits; dev configs validated against it at load.
-
-**Effort:** Medium-High · **Reach:** Teams of 3+
-
----
-
-### Context-aware routing
-Detect conversation mode — debugging session stays on frontier, TDD red-green-refactor auto-escalates. Non-interactive mode (CI/CD) forces economical and disables classifier.
-
-**Effort:** High · **Reach:** Power users in long sessions
-
----
-
-## v0.4 — Intelligence
+`.pi/bifrost-policy.json` committed by a team lead; dev configs validated against it at load. Allowed models per tier, minimum cache settings, required classifier. **Effort:** Medium-High · **Reach:** teams of 3+.
 
 ### Multi-turn stickiness
-Once classified as `frontier`, stay there for N messages unless the prompt type diverges significantly. Sliding window + embedding similarity. Reduces re-classification overhead.
-
-### Time-window routing
-Route by time of day. `frontier` during deep work (8-12), `economical` during meetings.
+Once classified as `frontier`, stay for N messages unless the prompt diverges significantly (sliding window + embedding similarity). Reduces re-classification overhead and keeps a debugging session from bouncing tiers. **Effort:** Medium · **Reach:** power users in long sessions.
 
 ### Context-size guard
-Before switching to a smaller-context model, check if current context fits. Warn or refuse if it would truncate the conversation history.
+Before switching to a smaller-context model, check that current context fits. Warn or refuse if it would truncate history. **Effort:** Medium · **Reach:** long sessions with large context.
+
+### Time-window routing
+Route by time of day (`frontier` during deep work, `economical` during meetings). Cheap to add; compelling for a narrow audience. **Effort:** Low.
 
 ---
 
-## Already shipped (v0.1)
+## Intentionally deferred — saw these proposed, holding
 
-- [x] Probe-first init — tests models before writing config
-- [x] 7 selection strategies — cheapest, fastest, largest_context, random
-- [x] LLM + regex dual classifier with fuzzy cache
-- [x] Performance API debug logging — JSONL, AI-parseable
-- [x] Strict TypeScript typechecking
-- [x] npm + GitHub distribution
+The proposed "confidence-aware policy engine" expansion included 17 features. Several need infrastructure Bifrost does not own and should not own as a config-first router extension. Holding until a concrete user report makes one of these the cheapest fix.
+
+- **Weighted multi-dimensional scoring** (quality × cost × latency × reliability × context × suitability). Needs per-model quality scores from an eval harness we don't have. Until then the discrete `strategy` enum covers what we can measure today.
+- **Model suitability profiles.** Same dependency — needs quality scores.
+- **Quota-aware routing.** Needs per-provider quota telemetry; pi not an LLM gateway.
+- **Shadow evaluation + automatic data-driven tuning.** Needs labelled routing data and an offline eval stack. Out of scope until a separate observability story lands.
+- **Routing analytics.** Overlaps with usage stats; defer the routing-quality analytics until stats ships.
+- **Token estimation + expected total-cost projection.** Token estimation alone is a small add; full cost projection requires output-token prediction which is rarely accurate enough to drive routing. Defer the projection; revisit estimation if a real need appears.
+- **Multi-intent classification with configurable priority.** The current classifier already picks "the hardest and most consequential part" of a multi-part prompt. Defer until a mis-multi-intent report arrives.
+- **Round-robin / weighted-random load balancing.** `random` already added in ADR 0006 for the `quick` tier. Round-robin needs cross-session state; revisit only on reported rate-limit pain.
+
+These are not "no"; they are "not yet." Any one becomes a candidate ADR the day a user files a bug whose cheapest fix is that feature.

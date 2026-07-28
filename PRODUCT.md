@@ -16,6 +16,10 @@ Pi-Bifrost is a model-routing extension for Pi. It classifies the current prompt
 
 Lean, precise, and candid. The voice is technical and confident without exaggerated performance, cost, or reliability claims.
 
+## Product Philosophy
+
+Follow [`docs/product-philosophy.md`](docs/product-philosophy.md). Bifrost evolves from explicit configuration through observable, advisory, opt-in, and only then bounded automation. Every routing signal must remain inspectable, overridable, and testable.
+
 ## Anti-references
 
 Generic SaaS templates, decorative control-console layouts, oversized type, unsupported metrics, vague AI claims, equal-card marketing grids, and any treatment heavier than the extension itself. The page should feel related to pi.dev without copying its identity.
