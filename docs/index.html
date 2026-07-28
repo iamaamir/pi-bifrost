@@ -60,6 +60,7 @@
         <a class="wordmark" href="#top">Pi-Bifrost</a>
         <div class="nav-links">
           <a href="#routing">How it works</a>
+          <a href="#faq">FAQ</a>
           <a href="#install">Install</a>
           <a href="https://github.com/iamaamir/pi-bifrost">GitHub</a>
         </div>
@@ -68,15 +69,28 @@
 
     <main id="main" tabindex="-1">
       <section class="hero wrap" id="top" aria-labelledby="hero-title">
-        <h1 id="hero-title">Pi-Bifrost</h1>
+        <p class="eyebrow">Model routing for Pi</p>
+        <h1 id="hero-title">Pi-Bifrost picks a suitable model for each task.</h1>
         <p class="lede">
-          A model-routing extension for the Pi coding agent. Pi-Bifrost classifies
-          each prompt into a configured tier, then applies one selection strategy
-          to the matching models available in Pi.
+          Bifrost is an extension for the Pi coding agent. It chooses from models
+          you configure before each prompt: fast or low-cost models for routine
+          work, stronger models for hard code, without changing Pi's model by hand.
         </p>
+        <div class="route-preview" aria-label="Examples of Bifrost model routing">
+          <div class="route-example">
+            <code>summarize this file</code>
+            <span aria-hidden="true">→</span>
+            <strong>use a faster model</strong>
+          </div>
+          <div class="route-example">
+            <code>debug this race condition</code>
+            <span aria-hidden="true">→</span>
+            <strong>use a stronger model</strong>
+          </div>
+        </div>
         <div class="hero-actions">
-          <a href="#install">Install</a>
-          <a href="https://github.com/iamaamir/pi-bifrost">GitHub and documentation</a>
+          <a href="#install">Install in Pi</a>
+          <a href="#routing">See how Bifrost stays safe</a>
         </div>
       </section>
 
@@ -86,80 +100,51 @@
         aria-labelledby="routing-title"
       >
         <div class="section-heading">
-          <h2 id="routing-title">How Pi-Bifrost routes a prompt</h2>
+          <h2 id="routing-title">Routing that remembers failure.</h2>
           <p>
-            Routing has two stages: classify the prompt into a tier, then select
-            one model from that tier. Classification can run with rules alone or
-            use the optional LLM classifier.
+            Routing does more than choose a tier. It changes Pi's actual active
+            model before generation, carries model health across restarts, and
+            avoids repeating work that may already have side effects.
           </p>
         </div>
 
+        <ul class="proof-strip" aria-label="Pi-Bifrost reliability guarantees">
+          <li><strong>Direct</strong><span>switches Pi's actual model</span></li>
+          <li><strong>Persistent</strong><span>remembers failures after restart</span></li>
+          <li><strong>Safe</strong><span>never replays a failed prompt</span></li>
+        </ul>
+
         <ol class="routing-flow">
           <li>
-            <span class="step-number">1</span>
+            <span class="step-number">01</span>
             <div>
-              <h3>Check direct bindings</h3>
+              <h3>Switch Pi before generation</h3>
               <p>
-                A regex rule targeting an exact <code>provider/id</code> wins
-                immediately. It bypasses tier classification and model-selection
-                strategies.
+                Bifrost resolves a tier from direct rules, local classification,
+                regex, or optional LLM classification, then calls Pi's model API.
+                Pi shows the actual selected provider/model, not a virtual profile.
               </p>
             </div>
           </li>
           <li>
-            <span class="step-number">2</span>
+            <span class="step-number">02</span>
             <div>
-              <h3>Check the classification cache</h3>
+              <h3>Keep failure memory after restart</h3>
               <p>
-                A matching cached LLM classification reuses its tier and skips a
-                new classifier call.
+                Probe, activation, and settled stream failures feed a persisted
+                circuit breaker. After configured repeated failures, Bifrost skips
+                that model until cooldown permits one half-open recovery trial.
               </p>
             </div>
           </li>
           <li>
-            <span class="step-number">3</span>
+            <span class="step-number">03</span>
             <div>
-              <h3>Classify into a tier</h3>
-              <div class="classification-paths">
-                <section aria-labelledby="rules-only-title">
-                  <h4 id="rules-only-title">Classifier off</h4>
-                  <ol>
-                    <li>Skip the LLM classifier.</li>
-                    <li>Use the first regex rule that matches the prompt.</li>
-                    <li>Use the configured default tier if no rule matches.</li>
-                  </ol>
-                  <p>No additional model call.</p>
-                </section>
-                <section aria-labelledby="classifier-on-title">
-                  <h4 id="classifier-on-title">Classifier on</h4>
-                  <ol>
-                    <li>Send the current prompt and tier names to the configured classifier.</li>
-                    <li>Use the returned tier when it matches the configuration.</li>
-                    <li>On failure, try the next classifier, then regex rules, then the default tier.</li>
-                  </ol>
-                  <p>May use tokens and add latency on a cache miss.</p>
-                </section>
-              </div>
-            </div>
-          </li>
-          <li>
-            <span class="step-number">4</span>
-            <div>
-              <h3>Select a model from the tier</h3>
+              <h3>Reroute future turns, never hidden replays</h3>
               <p>
-                Tier patterns are resolved against Pi's available model registry.
-                One configured strategy selects by cost, context window, list
-                order, or random choice.
-              </p>
-            </div>
-          </li>
-          <li>
-            <span class="step-number">5</span>
-            <div>
-              <h3>Switch Pi's active model</h3>
-              <p>
-                Pi-Bifrost activates the selected model before the prompt is sent.
-                If no model matches or activation fails, Pi keeps its current model.
+                A failed turn can have edited files, called tools, or touched an
+                external system. Bifrost records failure and routes later prompts
+                around it instead of silently running your work twice.
               </p>
             </div>
           </li>
@@ -168,49 +153,48 @@
 
       <section class="section wrap" aria-labelledby="capabilities-title">
         <div class="section-heading compact">
-          <h2 id="capabilities-title">Controls</h2>
+          <h2 id="capabilities-title">See route. Change route.</h2>
+          <p>Automation stays in Pi, under your configuration and control.</p>
         </div>
 
         <div class="feature-list">
           <article>
-            <h3>Probe at setup</h3>
+            <h3>Preview, pin, or force a tier</h3>
             <p>
-              <code>/bifrost init</code> sends a tiny request to supported
-              OpenAI-compatible and Mistral models. Working results are used to
-              build tier lists; unsupported API types are skipped.
+              Run <code>/bifrost preview</code> before sending. Pin your active
+              model, or prefix one prompt with <code>frontier</code> to override
+              routing once without editing config.
             </p>
           </article>
           <article>
-            <h3>Select from metadata</h3>
+            <h3>Start from models that respond</h3>
             <p>
-              Choose by input cost, output cost, combined cost, context window,
-              random choice, or configured list order. Policies can differ by
-              tier.
+              <code>/bifrost init</code> probes supported models available through
+              Pi and proposes tier lists from successful results. Review proposal
+              before it writes config.
             </p>
           </article>
           <article>
-            <h3>Preview and override</h3>
+            <h3>Choose policy, not hardcoded models</h3>
             <p>
-              Preview a route without sending. Type
-              <code>frontier debug this</code> to force the expensive model for one message,
-              or pin the active model until you run
-              <code>/bifrost unpin</code>.
+              Use cost, context, order, or random selection per tier. Your own Pi
+              registry and configuration determine candidates.
             </p>
           </article>
           <article>
-            <h3>Routing diagnostics</h3>
+            <h3>Record useful diagnostics locally</h3>
             <p>
-              Optional local JSONL logs record timing and routing metadata for
-              troubleshooting. They are disabled by default and are not a hosted
-              observability service.
+              Optional local JSONL debug logs record routing reason, selected
+              tier/model, and timing, not prompt bodies. They are local files,
+              not a hosted observability service.
             </p>
           </article>
           <article>
-            <h3>Routes around flaky models</h3>
+            <h3>Avoid repeatedly failing models</h3>
             <p>
-              Models that keep failing (timeouts, auth errors, provider issues) are
-              skipped for a while. Bifrost remembers which ones and tries them
-              again after a cooldown. Your default tier always works as a fallback.
+              After configured repeated failures, Bifrost temporarily skips a
+              model and later allows one recovery trial. It does not replay a
+              failed prompt automatically.
             </p>
           </article>
         </div>
@@ -224,7 +208,7 @@
         <div class="wrap">
           <div class="section-heading compact">
             <h2 id="install-title">Install</h2>
-            <p>Install the package, then initialize it in Pi.</p>
+            <p>Install package, then let Pi-Bifrost propose a config from models available in Pi. It writes only after your confirmation.</p>
           </div>
 
           <ol class="install-list">
@@ -308,6 +292,105 @@
         </dl>
       </section>
 
+      <section class="section wrap faq" id="faq" aria-labelledby="faq-title">
+        <div class="section-heading compact">
+          <h2 id="faq-title">Frequently asked questions</h2>
+          <p>
+            Bifrost caches routing decisions locally, keeps provider caching in
+            the provider layer, and never silently replays your work.
+          </p>
+        </div>
+
+        <details>
+          <summary>What does Pi-Bifrost's local cache store?</summary>
+          <div class="faq-answer">
+            <p>
+              Pi-Bifrost maintains a <strong>local routing-classification cache</strong>.
+              After a successful classifier result, it saves a normalized prompt
+              and selected tier. Similar future prompts can skip the classifier
+              call and route immediately. It does not store model answers.
+            </p>
+            <p>
+              The project-local file is <code>.pi/bifrost-cache.jsonl</code>.
+              By default it keeps up to 500 entries, checks exact matches first,
+              then uses token-set similarity, and evicts least-recently-used
+              entries. Use <code>/bifrost cache stats</code> to inspect it or
+              <code>/bifrost cache clear</code> to remove it.
+            </p>
+          </div>
+        </details>
+
+        <details>
+          <summary>Do I need multiple models?</summary>
+          <div class="faq-answer">
+            <p>
+              No. One healthy configured model is enough to start. Multiple models
+              and tiers let Pi-Bifrost choose different candidates for routine,
+              general, and demanding work. <code>/bifrost init</code> shows its
+              proposed configuration before it writes anything.
+            </p>
+          </div>
+        </details>
+
+        <details>
+          <summary>Does Pi-Bifrost cache assistant answers or replay failed prompts?</summary>
+          <div class="faq-answer">
+            <p>
+              No. Your failed prompt is never silently replayed, so Bifrost does
+              not repeat edits, commands, or external side effects. Files, tool
+              output, branch, and user intent can change even when prompt text
+              looks the same.
+            </p>
+            <p>
+              When a model fails, Pi-Bifrost records it and routes future prompts
+              to healthy candidates instead of silently rerunning your work.
+            </p>
+          </div>
+        </details>
+
+        <details>
+          <summary>What about provider prompt caching?</summary>
+          <div class="faq-answer">
+            <p>
+              Provider prompt or prefix caching belongs to Pi and the selected
+              provider. Pi-Bifrost routes before the turn; it does not claim a
+              universal provider-cache implementation or alter provider billing
+              behavior.
+            </p>
+          </div>
+        </details>
+
+        <details>
+          <summary>What is stored locally, and can I disable it?</summary>
+          <div class="faq-answer">
+            <p>
+              Classification-cache entries contain lowercased, punctuation-stripped,
+              sorted prompt words, selected tier, last-use timestamp, and hit count.
+              They can still contain sensitive terms. Disable caching for sensitive
+              projects with <code>"cache": { "enabled": false }</code>, or choose
+              a different location with <code>cache.path</code>.
+            </p>
+            <p>
+              Clear the cache after substantial tier or rule changes when you
+              want every prompt classified fresh.
+            </p>
+          </div>
+        </details>
+
+        <details>
+          <summary>How does model reliability work?</summary>
+          <div class="faq-answer">
+            <p>
+              Pi-Bifrost persists probe, model-activation, and settled stream
+              failures in <code>.pi/bifrost-reliability.json</code>. Repeated
+              failures open a circuit, so unhealthy candidates are skipped on
+              later prompts. After cooldown, one half-open trial can prove a
+              model recovered.
+            </p>
+          </div>
+        </details>
+      </section>
+
       <section
         class="section wrap reference"
         id="reference"
@@ -338,12 +421,18 @@
           </div>
           <pre><code id="config-example">{
   "enabled": true,
-  "default": "economical",
+  "default": "general",
   "strategy": "first",
-  "categoryStrategies": { "economical": "cheapest" },
+  "categoryStrategies": {
+    "quick": "cheapest",
+    "general": "first",
+    "frontier": "first"
+  },
   "models": {
-    "economical": [
-      "ollama/qwen2.5-coder:latest",
+    "quick": [
+      "ollama/qwen2.5-coder:latest"
+    ],
+    "general": [
       "lmstudio/openai/gpt-oss-20b"
     ],
     "frontier": [
@@ -416,8 +505,8 @@
                 <tr>
                   <td><code>fastest</code></td>
                   <td>
-                    Alias for <code>first</code>; init orders generated lists
-                    using one setup-time probe
+                    Alias for <code>first</code>; uses init's one-time
+                    probe-sorted list, not live latency measurement
                   </td>
                 </tr>
               </tbody>

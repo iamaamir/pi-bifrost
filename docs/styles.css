@@ -206,18 +206,106 @@ li code {
 }
 
 .hero {
-  min-height: min(38rem, 72dvh);
+  min-height: min(43rem, 82dvh);
   display: flex;
   flex-direction: column;
   justify-content: center;
   padding-block: clamp(3.5rem, 8vw, 5.5rem);
 }
 
+.eyebrow {
+  margin-bottom: 0.75rem;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.hero h1 {
+  max-width: 18ch;
+  font-size: clamp(2.5rem, 5vw, 3.7rem);
+}
+
 .lede {
-  max-width: 43rem;
-  margin-bottom: 1.25rem;
+  max-width: 42rem;
+  margin-bottom: 1.75rem;
   color: var(--muted);
-  font-size: 1rem;
+  font-size: 1.08rem;
+}
+
+.proof-strip {
+  max-width: 43rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 0;
+  margin: 0 0 1.5rem;
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+  list-style: none;
+}
+
+.proof-strip li {
+  min-width: 0;
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.75rem 0.85rem;
+}
+
+.proof-strip li:first-child {
+  padding-left: 0;
+}
+
+.proof-strip li + li {
+  border-left: 1px solid var(--line);
+}
+
+.proof-strip strong {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+}
+
+.proof-strip span {
+  color: var(--faint);
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+.route-preview {
+  max-width: 43rem;
+  margin: 0 0 1.75rem;
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.route-example {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 1rem;
+  padding: 0.8rem 0;
+}
+
+.route-example + .route-example {
+  border-top: 1px solid var(--line);
+}
+
+.route-example code {
+  color: var(--text);
+  font-size: 0.86rem;
+}
+
+.route-example span {
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 1.1rem;
+}
+
+.route-example strong {
+  color: var(--success);
+  font-size: 0.82rem;
 }
 
 .hero-actions {
@@ -272,14 +360,15 @@ li code {
 
 .routing-flow > li {
   display: grid;
-  grid-template-columns: 2rem minmax(0, 1fr);
+  grid-template-columns: 2.5rem minmax(0, 1fr);
   gap: 1rem;
   padding-block: 1.35rem;
   border-bottom: 1px solid var(--line);
 }
 
 .step-number {
-  color: var(--faint);
+  padding-top: 0.1rem;
+  color: var(--accent);
   font-size: 0.75rem;
 }
 
@@ -291,45 +380,7 @@ li code {
   max-width: 44rem;
   margin-bottom: 0;
   color: var(--muted);
-  font-size: 0.84rem;
-}
-
-.classification-paths {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-top: 1rem;
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-}
-
-.classification-paths section {
-  padding: 1.15rem 1.5rem 1.15rem 0;
-}
-
-.classification-paths section + section {
-  padding-right: 0;
-  padding-left: 1.5rem;
-  border-left: 1px solid var(--line);
-}
-
-.classification-paths h4 {
-  margin: 0 0 0.75rem;
-  font-size: 0.83rem;
-}
-
-.classification-paths ol {
-  display: grid;
-  gap: 0.45rem;
-  padding-left: 1.15rem;
-  margin-bottom: 1rem;
-  color: var(--muted);
-  font-size: 0.8rem;
-}
-
-.classification-paths section > p {
-  color: var(--accent);
-  font-family: var(--mono);
-  font-size: 0.72rem;
+  font-size: 0.9rem;
 }
 
 .feature-list {
@@ -447,12 +498,29 @@ li code {
   font-size: 0.84rem;
 }
 
-.reference details {
+.reference details,
+.faq details {
   border-top: 1px solid var(--line);
 }
 
-.reference details:last-child {
+.reference details:last-child,
+.faq details:last-child {
   border-bottom: 1px solid var(--line);
+}
+
+.faq-answer {
+  max-width: 43rem;
+  padding: 0 0 1.5rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.faq-answer p:last-child {
+  margin-bottom: 0;
+}
+
+.faq-answer strong {
+  color: var(--text);
 }
 
 summary {
@@ -591,22 +659,31 @@ th {
     display: none;
   }
 
-  .feature-list {
+  .proof-strip {
     grid-template-columns: 1fr;
   }
 
-  .classification-paths {
-    grid-template-columns: 1fr;
+  .proof-strip li,
+  .proof-strip li:first-child {
+    padding: 0.6rem 0;
   }
 
-  .classification-paths section,
-  .classification-paths section + section {
-    padding: 1rem 0;
+  .proof-strip li + li {
+    border-top: 1px solid var(--line);
     border-left: 0;
   }
 
-  .classification-paths section + section {
-    border-top: 1px solid var(--line);
+  .route-example {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.75rem;
+  }
+
+  .route-example strong {
+    grid-column: 1 / -1;
+  }
+
+  .feature-list {
+    grid-template-columns: 1fr;
   }
 
   .feature-list article,
