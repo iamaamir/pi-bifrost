@@ -23,6 +23,11 @@ let debugPath: string | null = null;
 const maxSizeBytes: number = DEFAULT_MAX_SIZE_MB * 1024 * 1024;
 let startupDone = false;
 const patternRunId = process.env.BIFROST_PATTERN_RUN_ID;
+const subagentRunId = process.env.PI_SUBAGENT_RUN_ID;
+const runCorrelation = {
+  ...(patternRunId ? { pattern_run_id: patternRunId } : {}),
+  ...(subagentRunId ? { subagent_run_id: subagentRunId } : {}),
+};
 
 // ── Async write buffer ────────────────────────────────────────────
 
@@ -109,7 +114,7 @@ export function setupDebug(cfg: DebugConfig, cwd: string) {
 
     // Flush remaining on exit (sync — exit hook cannot do async I/O).
     process.on("exit", () => {
-      buffer.push(JSON.stringify({ ts: new Date().toISOString(), module: "bifrost", event: "shutdown", entryType: "event", ...(patternRunId ? { pattern_run_id: patternRunId } : {}) }));
+      buffer.push(JSON.stringify({ ts: new Date().toISOString(), module: "bifrost", event: "shutdown", entryType: "event", ...runCorrelation }));
       flushSync();
     });
   }
@@ -125,9 +130,9 @@ export function debug(
 ) {
   if (!debugEnabled) return;
   try {
-    buffer.push(JSON.stringify({ ts: new Date().toISOString(), module, event, entryType: "event", ...(patternRunId ? { pattern_run_id: patternRunId } : {}), ...meta }));
+    buffer.push(JSON.stringify({ ts: new Date().toISOString(), module, event, entryType: "event", ...runCorrelation, ...meta }));
   } catch {
-    buffer.push(JSON.stringify({ ts: new Date().toISOString(), module, event, entryType: "event", ...(patternRunId ? { pattern_run_id: patternRunId } : {}), _meta_error: "unserializable" }));
+    buffer.push(JSON.stringify({ ts: new Date().toISOString(), module, event, entryType: "event", ...runCorrelation, _meta_error: "unserializable" }));
   }
   scheduleFlush();
 }
@@ -151,7 +156,7 @@ export function debugMeasure(module: string, event: string) {
           module,
           event,
           entryType: "measure",
-          ...(patternRunId ? { pattern_run_id: patternRunId } : {}),
+          ...runCorrelation,
           duration_ms: +entry.duration.toFixed(3),
           ...meta,
         };
