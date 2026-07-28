@@ -22,6 +22,7 @@ let debugEnabled = false;
 let debugPath: string | null = null;
 const maxSizeBytes: number = DEFAULT_MAX_SIZE_MB * 1024 * 1024;
 let startupDone = false;
+const patternRunId = process.env.BIFROST_PATTERN_RUN_ID;
 
 // ── Async write buffer ────────────────────────────────────────────
 
@@ -108,7 +109,7 @@ export function setupDebug(cfg: DebugConfig, cwd: string) {
 
     // Flush remaining on exit (sync — exit hook cannot do async I/O).
     process.on("exit", () => {
-      buffer.push(JSON.stringify({ ts: new Date().toISOString(), module: "bifrost", event: "shutdown", entryType: "event" }));
+      buffer.push(JSON.stringify({ ts: new Date().toISOString(), module: "bifrost", event: "shutdown", entryType: "event", ...(patternRunId ? { pattern_run_id: patternRunId } : {}) }));
       flushSync();
     });
   }
@@ -124,9 +125,9 @@ export function debug(
 ) {
   if (!debugEnabled) return;
   try {
-    buffer.push(JSON.stringify({ ts: new Date().toISOString(), module, event, entryType: "event", ...meta }));
+    buffer.push(JSON.stringify({ ts: new Date().toISOString(), module, event, entryType: "event", ...(patternRunId ? { pattern_run_id: patternRunId } : {}), ...meta }));
   } catch {
-    buffer.push(JSON.stringify({ ts: new Date().toISOString(), module, event, entryType: "event", _meta_error: "unserializable" }));
+    buffer.push(JSON.stringify({ ts: new Date().toISOString(), module, event, entryType: "event", ...(patternRunId ? { pattern_run_id: patternRunId } : {}), _meta_error: "unserializable" }));
   }
   scheduleFlush();
 }
@@ -150,6 +151,7 @@ export function debugMeasure(module: string, event: string) {
           module,
           event,
           entryType: "measure",
+          ...(patternRunId ? { pattern_run_id: patternRunId } : {}),
           duration_ms: +entry.duration.toFixed(3),
           ...meta,
         };
