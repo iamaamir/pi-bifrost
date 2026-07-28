@@ -115,7 +115,7 @@ The classifier returns a ranked list `["general:0.5", "frontier:0.4", "quick:0.1
 **Pros:** More information; could drive future weighted scoring.
 **Cons:** More parser surface, more prompt surface (the model has to rank), more cache-key questions. Out of scope for a binary threshold feature. Rejected — defer to "Intentionally deferred."
 
-### Option D: Two-stage classifier (tier + difficulty) 
+### Option D: Two-stage classifier (tier + difficulty)
 Separate classifier calls for tier and difficulty/risk; route on the cross.
 
 **Pros:** More signal.
