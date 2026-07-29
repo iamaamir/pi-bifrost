@@ -1,5 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { resolveStoragePath, readTextFile, writeTextFile } from "./storage.ts";
 
 export interface CacheEntry {
   normalized: string;
@@ -37,9 +36,9 @@ function tokenSet(text: string): Set<string> {
 }
 
 export function loadCache(path: string): CacheEntry[] {
-  if (!existsSync(path)) return [];
   try {
-    const text = readFileSync(path, "utf-8");
+    const text = readTextFile(path);
+    if (text === undefined) return [];
     const entries = text
       .split("\n")
       .filter(Boolean)
@@ -65,10 +64,8 @@ export function loadCache(path: string): CacheEntry[] {
 
 export function saveCache(path: string, entries: CacheEntry[]) {
   try {
-    const dir = dirname(path);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const lines = entries.map((e) => JSON.stringify(e)).join("\n");
-    writeFileSync(path, lines ? lines + "\n" : "", "utf-8");
+    writeTextFile(path, lines ? lines + "\n" : "");
   } catch (err) {
     console.error(`[bifrost] failed to save cache: ${err}`);
   }
@@ -160,12 +157,5 @@ export function updateCache(
 }
 
 export function cachePath(cwd: string, configuredPath?: string): string {
-  if (configuredPath) {
-    if (configuredPath.startsWith("/")) return configuredPath;
-    if (configuredPath.startsWith("~")) {
-      return (process.env.HOME ?? "/tmp") + configuredPath.slice(1);
-    }
-    return join(cwd, configuredPath);
-  }
-  return join(cwd, ".pi", "bifrost-cache.jsonl");
+  return resolveStoragePath(cwd, configuredPath, ".pi/bifrost-cache.jsonl");
 }

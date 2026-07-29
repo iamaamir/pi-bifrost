@@ -1,6 +1,6 @@
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { readJsonFile } from "./storage.ts";
 import type { RoutingStrategy, RouteRule } from "./routing.ts";
 import type { CacheOptions } from "./cache.ts";
 import type { DebugConfig } from "./debug.ts";
@@ -228,9 +228,8 @@ export function validateConfig(
 }
 
 export function readJson<T>(path: string): T | undefined {
-  if (!existsSync(path)) return undefined;
   try {
-    return JSON.parse(readFileSync(path, "utf-8")) as T;
+    return readJsonFile<T>(path);
   } catch (err) {
     console.error(`[bifrost] failed to parse ${path}: ${err}`);
     return undefined;

@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   normalize,
   lookupCache,
@@ -7,6 +10,7 @@ import {
   findCachedCategory,
   updateCache,
   cachePath,
+  loadCache,
 } from "../cache.ts";
 
 describe("cache", () => {
@@ -137,12 +141,42 @@ describe("cache", () => {
     });
 
     it("expands leading tilde", () => {
+      const home = process.env.HOME;
       process.env.HOME = "/home/user";
-      assert.equal(cachePath("/project", "~/cache.jsonl"), "/home/user/cache.jsonl");
+      try {
+        assert.equal(cachePath("/project", "~/cache.jsonl"), "/home/user/cache.jsonl");
+      } finally {
+        process.env.HOME = home;
+      }
     });
 
     it("joins relative path to cwd", () => {
       assert.equal(cachePath("/project", "cache.jsonl"), "/project/cache.jsonl");
+    });
+  });
+
+  describe("loadCache", () => {
+    it("returns empty array for missing file", () => {
+      const cwd = mkdtempSync(join(tmpdir(), "bifrost-cache-"));
+      try {
+        assert.deepEqual(loadCache(join(cwd, ".pi", "bifrost-cache.jsonl")), []);
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+
+    it("skips corrupt lines and keeps valid entries", () => {
+      const cwd = mkdtempSync(join(tmpdir(), "bifrost-cache-"));
+      try {
+        const path = join(cwd, ".pi", "bifrost-cache.jsonl");
+        mkdirSync(join(cwd, ".pi"), { recursive: true });
+        writeFileSync(path, "{not json\n{\"normalized\":\"hello\",\"category\":\"quick\",\"lastUsed\":1,\"hits\":2}\n", "utf8");
+        const entries = loadCache(path);
+        assert.equal(entries.length, 1);
+        assert.equal(entries[0].category, "quick");
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
     });
   });
 });

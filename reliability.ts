@@ -1,5 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { resolveStoragePath, readJsonFile, writeJsonFile } from "./storage.ts";
 
 export interface ReliabilityConfig {
   enabled?: boolean;
@@ -212,18 +211,12 @@ export function recordSetModelOutcome(
 }
 
 export function reliabilityPath(cwd: string, configuredPath?: string): string {
-  if (configuredPath) {
-    if (configuredPath.startsWith("/")) return configuredPath;
-    if (configuredPath.startsWith("~")) return (process.env.HOME ?? "/tmp") + configuredPath.slice(1);
-    return join(cwd, configuredPath);
-  }
-  return join(cwd, ".pi", "bifrost-reliability.json");
+  return resolveStoragePath(cwd, configuredPath, ".pi/bifrost-reliability.json");
 }
 
 export function loadReliability(path: string): ReliabilityState {
-  if (!existsSync(path)) return emptyReliabilityState();
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf-8")) as Partial<ReliabilityState>;
+    const parsed = readJsonFile<Partial<ReliabilityState>>(path);
     if (parsed?.version !== 1 || typeof parsed.models !== "object" || !parsed.models) {
       return emptyReliabilityState();
     }
@@ -241,9 +234,7 @@ export function loadReliability(path: string): ReliabilityState {
 
 export function saveReliability(path: string, state: ReliabilityState): void {
   try {
-    const dir = dirname(path);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(path, JSON.stringify(state, null, 2) + "\n", "utf-8");
+    writeJsonFile(path, state);
   } catch (err) {
     console.error(`[bifrost] failed to save reliability state: ${err}`);
   }

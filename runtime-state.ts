@@ -1,5 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { resolveStoragePath, readJsonFile, writeJsonFile } from "./storage.ts";
 
 /**
  * Runtime mode state that must survive extension reload and Pi restart.
@@ -20,13 +19,13 @@ export const DEFAULT_RUNTIME_STATE: RuntimeModeState = {
 };
 
 export function runtimeStatePath(cwd: string): string {
-  return join(cwd, ".pi", "bifrost-state.json");
+  return resolveStoragePath(cwd, undefined, ".pi/bifrost-state.json");
 }
 
 export function loadRuntimeState(path: string, fallback: RuntimeModeState = DEFAULT_RUNTIME_STATE): RuntimeModeState {
-  if (!existsSync(path)) return { ...fallback };
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf-8")) as Partial<RuntimeModeState>;
+    const parsed = readJsonFile<Partial<RuntimeModeState>>(path);
+    if (!parsed) return { ...fallback };
     return {
       enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : fallback.enabled,
       pinned: typeof parsed.pinned === "boolean" ? parsed.pinned : fallback.pinned,
@@ -43,9 +42,7 @@ export function loadRuntimeState(path: string, fallback: RuntimeModeState = DEFA
 
 export function saveRuntimeState(path: string, state: RuntimeModeState): void {
   try {
-    const dir = dirname(path);
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-    writeFileSync(path, JSON.stringify(state, null, 2) + "\n", "utf-8");
+    writeJsonFile(path, state);
   } catch (err) {
     console.error(`[bifrost] failed to save runtime state: ${err}`);
   }

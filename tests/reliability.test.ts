@@ -90,6 +90,16 @@ describe("reliability", () => {
     }
   });
 
+  it("returns empty state for missing persisted file", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-reliability-"));
+    try {
+      const path = reliabilityPath(cwd);
+      assert.deepEqual(loadReliability(path), emptyReliabilityState());
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("returns empty state for corrupt persisted file", () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-reliability-"));
     try {
