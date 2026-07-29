@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-A="${AGENT_TUI_BIN:-$(command -v agent-tui || true)}"
-PI="${PI_BIN:-$(command -v pi || true)}"
-[[ -n "$A" && -n "$PI" ]] || { echo 'set AGENT_TUI_BIN and PI_BIN' >&2; exit 1; }
+resolve_binary(){ node "$ROOT/scripts/resolve-test-binary.mjs" "$1" "$2" "$ROOT"; }
+A="$(resolve_binary AGENT_TUI_BIN agent-tui)"
+PI="$(resolve_binary PI_BIN pi)"
 tmp="$(mktemp -d)"; home="$tmp/home"; work="$tmp/work"
 mkdir -p "$home/.pi/agent" "$work"
 node "$ROOT/scripts/fake-provider-server.mjs" >"$tmp/server.json" & server=$!
@@ -21,6 +21,31 @@ cleanup(){ "$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" 
 poll_until(){ local path="$1" needle="$2" max="${3:-60}"; for _ in $(seq 1 "$max"); do [[ -f "$path" ]] && grep -q "$needle" "$path" && return 0; sleep 1; done; echo "timed out" >&2; return 1; }
 start_pi(){ "$A" --json daemon start >/dev/null; local run; run=$($A --json run --cwd "$work" --cols 120 --rows 36 --env "PI_CODING_AGENT_DIR=$home/.pi/agent" --env "PI_SKIP_VERSION_CHECK=1" -- "$PI" -e "$ROOT" --approve --no-session --no-tools --provider fake --model healthy); node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>console.log(JSON.parse(s).session_id))' <<<"$run"; }
 prompt(){ "$A" --session "$1" type "$2" >/dev/null; "$A" --session "$1" press Escape Enter >/dev/null; }
+
+wait_mode_state(){
+  local path="$1" enabled="$2" pinned="$3" classifier="$4" max="${5:-60}"
+  for _ in $(seq 1 "$max"); do
+    if [[ -f "$path" ]] && node -e '
+const fs = require("node:fs");
+const [statePath, enabled, pinned, classifier] = process.argv.slice(1);
+const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+const expect = {
+  enabled: enabled === "true",
+  pinned: pinned === "true",
+  classifierEnabled: classifier === "true",
+};
+for (const [key, value] of Object.entries(expect)) {
+  if (state[key] !== value) process.exit(1);
+}
+' "$path" "$enabled" "$pinned" "$classifier" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "FAIL: runtime state mismatch in $path" >&2
+  node -e 'const fs = require("node:fs"); const path = process.argv[1]; console.error(fs.readFileSync(path, "utf8"));' "$path" >&2 || true
+  exit 1
+}
 
 # ── Scenario 1: terminal stream failure opens circuit ──
 echo '--- scenario 1: stream failure ---'
@@ -66,6 +91,38 @@ if grep -q 'openUntil' "$work/.pi/bifrost-reliability.json" 2>/dev/null; then
   echo 'FAIL: circuit opened for healthy model' >&2; exit 1
 fi
 echo 'scenario 3: pass'
+"$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true
+
+# ── Scenario 4: runtime mode survives reloads ──
+echo '--- scenario 4: mode persistence across reloads ---'
+rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json"
+cat >"$work/bifrost.json" <<'EOF'
+{"enabled":true,"default":"economical","strategy":"cheapest","classifier":{"enabled":false},"reliability":{"failureThreshold":1,"windowMinutes":5,"cooldownMinutes":60},"models":{"economical":["fake/healthy"]},"rules":[{"pattern":"ok","model":"economical"}]}
+EOF
+sid=$(start_pi)
+"$A" --session "$sid" wait 'Bifrost · on · classifier off' --assert --timeout 15000 >/dev/null
+prompt "$sid" '/bifrost off'
+"$A" --session "$sid" wait 'Bifrost · off' --assert --timeout 15000 >/dev/null
+wait_mode_state "$work/.pi/bifrost-state.json" false false false
+prompt "$sid" '/reload'
+"$A" --session "$sid" wait 'Bifrost · off' --assert --timeout 15000 >/dev/null
+wait_mode_state "$work/.pi/bifrost-state.json" false false false
+prompt "$sid" '/bifrost reload'
+"$A" --session "$sid" wait 'Bifrost · off' --assert --timeout 15000 >/dev/null
+wait_mode_state "$work/.pi/bifrost-state.json" false false false
+prompt "$sid" '/bifrost on'
+"$A" --session "$sid" wait 'Bifrost · on · classifier off' --assert --timeout 15000 >/dev/null
+wait_mode_state "$work/.pi/bifrost-state.json" true false false
+prompt "$sid" '/bifrost pin'
+"$A" --session "$sid" wait 'Bifrost · pinned' --assert --timeout 15000 >/dev/null
+wait_mode_state "$work/.pi/bifrost-state.json" true true false
+prompt "$sid" '/reload'
+"$A" --session "$sid" wait 'Bifrost · pinned' --assert --timeout 15000 >/dev/null
+wait_mode_state "$work/.pi/bifrost-state.json" true true false
+prompt "$sid" '/bifrost reload'
+"$A" --session "$sid" wait 'Bifrost · pinned' --assert --timeout 15000 >/dev/null
+wait_mode_state "$work/.pi/bifrost-state.json" true true false
+echo 'scenario 4: pass'
 "$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true
 
 echo 'all reliability E2E scenarios: pass'

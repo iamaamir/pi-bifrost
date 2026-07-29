@@ -4,16 +4,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-AGENT_TUI_BIN="${AGENT_TUI_BIN:-$(command -v agent-tui || true)}"
-PI_BIN="${PI_BIN:-$(command -v pi || true)}"
+resolve_binary(){ node "$ROOT/scripts/resolve-test-binary.mjs" "$1" "$2" "$ROOT"; }
+AGENT_TUI_BIN="${AGENT_TUI_BIN:-$(resolve_binary AGENT_TUI_BIN agent-tui)}"
+PI_BIN="${PI_BIN:-$(resolve_binary PI_BIN pi)}"
 ARTIFACT_DIR="${ARTIFACT_DIR:-$ROOT/screenshots/ui-agent-tui-poc}"
 
 if [[ -z "$AGENT_TUI_BIN" ]]; then
-  echo "agent-tui not found. Install a pinned binary or set AGENT_TUI_BIN." >&2
+  echo "failed to resolve AGENT_TUI_BIN" >&2
   exit 1
 fi
 if [[ -z "$PI_BIN" ]]; then
-  echo "pi not found. Set PI_BIN to the Pi executable." >&2
+  echo "failed to resolve PI_BIN" >&2
   exit 1
 fi
 
