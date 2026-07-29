@@ -29,6 +29,7 @@ import {
   resolveModelWithFallback,
 } from "./routing.js";
 import { ReliabilityStore } from "./reliability-store.js";
+import { loadRuntimeState, runtimeStatePath, saveRuntimeState } from "./runtime-state.js";
 import { createCommandRouter, getBifrostCommandCompletions, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.js";
 import { setupDebug, debug, debugMeasure } from "./debug.js";
 import { parseInlineOverride } from "./inline-override.js";
@@ -129,6 +130,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   }
   const cacheEntries = loadCache(cachePath(process.cwd(), config.cache?.path));
   const reliabilityStore = new ReliabilityStore({ cwd: process.cwd(), config: config.reliability });
+  const runtimeStateFile = runtimeStatePath(process.cwd());
+  const runtimeState = loadRuntimeState(runtimeStateFile, {
+    enabled: config.enabled ?? true,
+    pinned: false,
+    classifierEnabled: config.classifier?.enabled ?? true,
+  });
   let selfSelecting = false;
   const runtimeReliability = new RuntimeReliabilityTracker();
   let pipeline: ClassificationPipeline | undefined;
@@ -148,14 +155,19 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   // Mutable state shared with command handlers.
   const state: BifrostState = {
     config,
-    enabled: config.enabled ?? true,
-    classifierEnabled: config.classifier?.enabled ?? true,
-    pinned: false,
+    enabled: runtimeState.enabled,
+    classifierEnabled: runtimeState.classifierEnabled,
+    pinned: runtimeState.pinned,
     cacheEntries,
     reliabilityStore,
     extensionDir,
     getPipeline,
     invalidatePipeline,
+    saveModeState: () => saveRuntimeState(runtimeStateFile, {
+      enabled: state.enabled,
+      pinned: state.pinned,
+      classifierEnabled: state.classifierEnabled,
+    }),
     lastRegistryRefreshAt: undefined,
     forceRegistryRefresh: false,
   };
@@ -198,6 +210,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     if (!state.enabled) return;
 
     state.pinned = true;
+    state.saveModeState();
     debug("bifrost", "model_select", { model: modelKey(ctx.model) });
     syncBifrostModeStatus(ctx, state);
     clearBifrostWidgets(ctx);

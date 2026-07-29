@@ -2,6 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
 import type { BifrostConfig } from "./config.ts";
 import { DEFAULT_RULES, loadConfig } from "./config.ts";
 import type { CacheEntry } from "./cache.ts";
@@ -33,6 +34,8 @@ export interface BifrostState {
   extensionDir: string;
   getPipeline: (ctx: ExtensionContext) => ClassificationPipeline;
   invalidatePipeline: () => void;
+  /** Persist runtime mode toggles (enabled/pinned/classifierEnabled) to disk. */
+  saveModeState: () => void;
   lastRegistryRefreshAt?: number;
   forceRegistryRefresh?: boolean;
 }
@@ -391,8 +394,14 @@ async function handleInit(
 
   // Auto-reload so the extension picks up the new config immediately.
   state.config = loadConfig(process.cwd(), state.extensionDir);
-  state.enabled = state.config.enabled ?? true;
-  state.classifierEnabled = state.config.classifier?.enabled ?? true;
+  const runtimeState = loadRuntimeState(runtimeStatePath(process.cwd()), {
+    enabled: state.config.enabled ?? true,
+    pinned: false,
+    classifierEnabled: state.config.classifier?.enabled ?? true,
+  });
+  state.enabled = runtimeState.enabled;
+  state.pinned = runtimeState.pinned;
+  state.classifierEnabled = runtimeState.classifierEnabled;
   state.reliabilityStore.reload(state.config.reliability, process.cwd());
   state.invalidatePipeline();
 
@@ -597,24 +606,28 @@ export function createCommandRouter(
   const routes: CommandEntry[] = [
     exact("on", "Enable routing", (_, ctx) => {
       state.enabled = true;
+      state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost enabled");
     }),
     exact("off", "Disable routing", (_, ctx) => {
       state.enabled = false;
+      state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost disabled");
     }),
     exact("pin", "Lock current model", (_, ctx) => {
       state.pinned = true;
+      state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost pinned");
     }),
     exact("unpin", "Resume routing", (_, ctx) => {
       state.pinned = false;
+      state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost unpinned");
@@ -624,9 +637,14 @@ export function createCommandRouter(
       state.config = loadConfig(process.cwd(), state.extensionDir);
       // Re-init debug — user may have updated debug config since startup.
       setupDebug(state.config.debug ?? { enabled: false }, process.cwd());
-      state.enabled = state.config.enabled ?? true;
-      state.classifierEnabled = state.config.classifier?.enabled ?? true;
-      state.pinned = false;
+      const runtimeState = loadRuntimeState(runtimeStatePath(process.cwd()), {
+        enabled: state.config.enabled ?? true,
+        pinned: false,
+        classifierEnabled: state.config.classifier?.enabled ?? true,
+      });
+      state.enabled = runtimeState.enabled;
+      state.classifierEnabled = runtimeState.classifierEnabled;
+      state.pinned = runtimeState.pinned;
       state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path));
       state.reliabilityStore.reload(state.config.reliability, process.cwd());
       state.invalidatePipeline();
@@ -760,6 +778,7 @@ export function createCommandRouter(
     // Classifier
     exact("classifier on", "Enable LLM classifier", (_, ctx) => {
       state.classifierEnabled = true;
+      state.saveModeState();
       state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
       debug("command", "classifier_toggle", { enabled: true });
@@ -767,6 +786,7 @@ export function createCommandRouter(
     }),
     exact("classifier off", "Disable LLM classifier", (_, ctx) => {
       state.classifierEnabled = false;
+      state.saveModeState();
       state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
       debug("command", "classifier_toggle", { enabled: false });

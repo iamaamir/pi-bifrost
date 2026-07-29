@@ -66,7 +66,7 @@ function makeStore(reliabilityState?: Record<string, { failures: number[]; openU
   return store;
 }
 
-function makeState() {
+function makeState(saveModeState: () => void = () => {}) {
   return {
     config: { models: {}, reliability: { enabled: true, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60 } },
     enabled: true,
@@ -77,6 +77,7 @@ function makeState() {
     extensionDir: ".",
     getPipeline: () => ({ classify: async () => ({ kind: "unclassified" as const }) }),
     invalidatePipeline: () => {},
+    saveModeState,
   };
 }
 
@@ -99,6 +100,21 @@ describe("bifrost command ui", () => {
     assert.equal(select?.options?.length, 8);
     assert((select?.options ?? []).some((option) => option.includes("Disable routing")));
     assert.equal(state.enabled, false);
+  });
+
+  it("persists mode toggles", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState(() => calls.push({ kind: "save" }));
+    const dispatch = createCommandRouter(state as never);
+
+    await dispatch("off", ctx as never);
+    await dispatch("pin", ctx as never);
+    await dispatch("classifier off", ctx as never);
+
+    assert.equal(calls.filter((call) => call.kind === "save").length, 3);
+    assert.equal(state.enabled, false);
+    assert.equal(state.pinned, true);
+    assert.equal(state.classifierEnabled, false);
   });
 
   it("shows picker for unknown subcommand", async () => {
