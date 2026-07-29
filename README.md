@@ -40,6 +40,17 @@ It probes every model you have access to, finds the ones that actually work, and
 
 Done. Bifrost is now routing your prompts.
 
+## Looking for fun ways to use Bifrost?
+
+[Bifrost Patterns](https://github.com/iamaamir/bifrost-pattern) explores what happens after Bifrost picks a model for one turn:
+
+- send scouts, implementers, and reviewers through different routes;
+- turn repository onboarding into an evidence-backed walkthrough;
+- compare configured models before proposing routing tiers;
+- keep work local, inspectable, and replay-free.
+
+Patterns is a playground on top of Bifrost, not required infrastructure.
+
 ## What it does
 
 Bifrost first applies direct rules and recent classification-cache matches. If needed, regex rules or optional LLM classification choose a configured tier such as `quick`, `general`, or `frontier`. One policy then selects a matching Pi model by list order, cost, context window, or random choice. Pi switches before your prompt is sent.
