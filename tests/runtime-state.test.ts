@@ -3,14 +3,20 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadRuntimeState, runtimeStatePath, saveRuntimeState, type RuntimeModeState } from "../runtime-state.ts";
+import {
+  loadRuntimeState,
+  runtimeStatePath,
+  saveRuntimeState,
+  type PersistedModeState,
+  type RuntimeModeState,
+} from "../runtime-state.ts";
 
 describe("runtime state", () => {
   it("saves and loads persisted mode", () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-runtime-state-"));
     try {
       const path = runtimeStatePath(cwd);
-      const state: RuntimeModeState = { enabled: false, pinned: true, classifierEnabled: false };
+      const state: PersistedModeState = { enabled: false, classifierEnabled: false };
       saveRuntimeState(path, state);
       // pinned is ephemeral — always false on load regardless of file
       const loaded = loadRuntimeState(path);

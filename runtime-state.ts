@@ -12,6 +12,16 @@ export interface RuntimeModeState {
   classifierEnabled: boolean;
 }
 
+/**
+ * Subset of runtime state that is persisted across extension reload and Pi
+ * restart. `pinned` is deliberately excluded — it is session-local only and
+ * must not be read from or written to disk (ADR-0015).
+ */
+export interface PersistedModeState {
+  enabled: boolean;
+  classifierEnabled: boolean;
+}
+
 export const DEFAULT_RUNTIME_STATE: RuntimeModeState = {
   enabled: true,
   pinned: false,
@@ -40,7 +50,7 @@ export function loadRuntimeState(path: string, fallback: RuntimeModeState = DEFA
   }
 }
 
-export function saveRuntimeState(path: string, state: RuntimeModeState): void {
+export function saveRuntimeState(path: string, state: PersistedModeState): void {
   try {
     writeJsonFile(path, state);
   } catch (err) {
