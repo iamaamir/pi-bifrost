@@ -11,3 +11,6 @@ docs/
 vscode/
 .idea/
 .vscode/
+.amq-bridge/
+.amqrc
+.pi-subagents/
