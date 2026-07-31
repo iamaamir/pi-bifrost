@@ -72,17 +72,32 @@ If a model repeatedly fails (probe timeout, auth error, provider stream failure)
 | `/bifrost reload` | Reload config after editing |
 | `/bifrost cache stats` | Show classification cache |
 | `/bifrost cache clear` | Clear classification cache |
-| `/bifrost classifier status` | Show classifier state |
+| `/bifrost classifier on` / `off` / `status` | Enable / disable LLM classifier, or show state; toggles persist to `.pi/bifrost-state.json` |
 
 ## UI smoke test
 
 Run `npm run test:ui` to capture Pi TUI screenshots for startup, dashboard, preview, disabled, classify, and pinned states. Output lands in `screenshots/ui-smoke/`.
 
+```bash
+npm test                # unit tests
+npm run test:integration  # integration tests
+npm run test:ui         # Pi TUI smoke tests
+npm run test:ui:reliability  # self-contained reliability E2E (fake provider)
+npm run release         # publish release
+```
+
 UI backlog and priorities: [`docs/ui-enhancements.md`](docs/ui-enhancements.md).
 
 ## Config
 
-Everything lives in `.pi/bifrost.json`. Editor autocomplete works in VS Code, Zed, Cursor.
+Config is supported at multiple paths with this precedence (later wins):
+
+1. Extension default (`<extensionDir>/bifrost.json`)
+2. Global (`~/.pi/agent/bifrost.json`)
+3. Project root (`bifrost.json`)
+4. Project config (`.pi/bifrost.json`)
+
+Editor autocomplete works in VS Code, Zed, Cursor.
 
 ### Tiers and models
 
@@ -170,7 +185,7 @@ Regex patterns that map prompts to tiers. First match wins. Case insensitive.
 }
 ```
 
-Rules can also live in a separate `.pi/bifrost-routes.json` file — it overrides inline rules.
+Rules can also live in a separate `.pi/bifrost-routes.json` file or a root-level `bifrost-routes.json` — `.pi/bifrost-routes.json` takes precedence.
 
 ### Direct model bindings
 
@@ -293,6 +308,21 @@ The dashboard shows open-circuit count in the title. `/bifrost preview` and `/bi
 
 See [`examples/economical-frontier-reliability.json`](examples/economical-frontier-reliability.json) for a complete config.
 
+## Pin vs Enable
+
+| Control | Persists | Survives restart | Inherits to subagents |
+|---------|----------|-----------------|----------------------|
+| `/bifrost on` / `off` | Yes (state file) | Yes | Yes — children inherit policy |
+| `/bifrost pin` / `unpin` | No (session-local) | No | No — children always route |
+
+**`enabled`** is a policy toggle. When routing is off, no model switching happens for anyone sharing that state. Subagents inherit it.
+
+**`pinned`** is a session preference. It locks the current model for the active session only. It is not written to disk and does not propagate to children. Subagents start with `pinned: false` and route independently.
+
+This means an orchestrator can pin a model for itself while its subagents still route through bifrost — each child picks the best model for its own task.
+
+See [ADR 0015](docs/adr/0015-pinned-ephemeral.md) for the design rationale.
+
 ## FAQ
 
 ### What does Bifrost's local cache store?
@@ -331,4 +361,4 @@ Clear the cache after substantial tier/rule changes if you want every prompt cla
 
 Bifrost records probe, activation, and settled stream failures in `.pi/bifrost-reliability.json`. After repeated failures, it opens that model's circuit and routes future prompts to healthy candidates. After cooldown, exactly one half-open trial can prove recovery. Bifrost does not silently rerun the failed prompt.
 
-Every field is optional. Config merges from: extension default → global (`~/.pi/agent/bifrost.json`) → project (`.pi/bifrost.json`).
+Every field is optional. Config merges from: extension default → global (`~/.pi/agent/bifrost.json`) → project root (`bifrost.json`) → project config (`.pi/bifrost.json`).

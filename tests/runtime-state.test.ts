@@ -12,7 +12,9 @@ describe("runtime state", () => {
       const path = runtimeStatePath(cwd);
       const state: RuntimeModeState = { enabled: false, pinned: true, classifierEnabled: false };
       saveRuntimeState(path, state);
-      assert.deepEqual(loadRuntimeState(path), state);
+      // pinned is ephemeral — always false on load regardless of file
+      const loaded = loadRuntimeState(path);
+      assert.deepEqual(loaded, { ...state, pinned: false });
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

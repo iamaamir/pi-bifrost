@@ -28,7 +28,7 @@ export function loadRuntimeState(path: string, fallback: RuntimeModeState = DEFA
     if (!parsed) return { ...fallback };
     return {
       enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : fallback.enabled,
-      pinned: typeof parsed.pinned === "boolean" ? parsed.pinned : fallback.pinned,
+      pinned: false, // pinned is ephemeral — session-local, never inherit from file
       classifierEnabled:
         typeof parsed.classifierEnabled === "boolean"
           ? parsed.classifierEnabled
