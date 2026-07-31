@@ -165,6 +165,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     invalidatePipeline,
     saveModeState: () => saveRuntimeState(runtimeStateFile, {
       enabled: state.enabled,
+      pinned: state.pinned,
       classifierEnabled: state.classifierEnabled,
     }),
     lastRegistryRefreshAt: undefined,
