@@ -1,0 +1,19 @@
+{
+  "classifier": {
+    "enabled": false,
+    "method": "auto"
+  },
+  "models": {
+    "quick": ["opencode/your-target-model"]
+  },
+  "strategy": "first",
+  "rules": [
+    {
+      "model": "opencode/your-target-model",
+      "pattern": "^.*$"
+    }
+  ],
+  "categoryStrategies": {
+    "quick": "first"
+  }
+}
