@@ -1,5 +1,7 @@
 # Bifrost
 
+![Pi-Bifrost social card](docs/social-card.png)
+
 Pi-Bifrost is **native model routing for [Pi](https://pi.dev)**. Before generation starts, it switches Pi's actual active model to one from your configuration.
 
 ```text
