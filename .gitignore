@@ -7,3 +7,6 @@ screenshots/
 .amq-bridge/
 .amqrc
 .pi-subagents/
+.plan/
+docs/adr/*
+docs/adr/*
