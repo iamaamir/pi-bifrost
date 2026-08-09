@@ -353,10 +353,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         syncBifrostModeStatus(ctx, state);
         const reason = resolved.fallbackReason ? `, ${resolved.fallbackReason}` : "";
         log(ctx, `Bifrost: ${tier} → ${modelKey(model)} (already active, ${source}${reason})`);
-        debug("input", "model_unchanged", { model: modelKey(model), selectedTier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped.length });
-        debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason });
+        debug("input", "model_unchanged", { model: modelKey(model), selectedTier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped.length, thinkingLevel: ctx.thinkingLevel });
+        debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, thinkingLevel: ctx.thinkingLevel });
         runtimeReliability.begin(modelKey(model));
-        endInput({ model: modelKey(model), tier: selectedTier, strategy, source });
+        endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
         return defaultAction;
       }
 
@@ -399,8 +399,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       syncBifrostModeStatus(ctx, state);
       log(ctx, doneMsg);
       runtimeReliability.begin(modelKey(model));
-      debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason });
-      endInput({ model: modelKey(model), tier: selectedTier, strategy, source });
+      debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, thinkingLevel: ctx.thinkingLevel });
+      endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
       return defaultAction;
     } finally {
       uiDone(ctx);
