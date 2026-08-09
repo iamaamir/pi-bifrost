@@ -222,6 +222,17 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   pi.on("input", async (event, ctx) => {
     if (event.source === "extension") return { action: "continue" };
     clearBifrostWidgets(ctx);
+    // Passive subagent observation — logged even when routing is disabled,
+    // so child-session model usage stays visible in debug logs.
+    if (process.env.PI_SUBAGENT_RUN_ID) {
+      debug("input", "subagent", {
+        source: "PI-subagent",
+        agent: process.env.PI_SUBAGENT_CHILD_AGENT,
+        model: modelKey(ctx.model),
+        thinkingLevel: ctx.thinkingLevel,
+        depth: process.env.PI_SUBAGENT_PARENT_DEPTH,
+      });
+    }
     if (!state.enabled || state.pinned) {
       debug("input", "bypass", { enabled: state.enabled, pinned: state.pinned });
       syncBifrostModeStatus(ctx, state);
