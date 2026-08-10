@@ -314,6 +314,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         ? getStrategy(state.config.categoryStrategies, state.config.strategy, defaultTier)
         : strategy;
 
+      const routeStart = performance.now();
       const resolved = resolveModelWithFallback(ctx, {
         requestedTier: tier,
         requestedPattern: pattern,
@@ -324,6 +325,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         reliabilityState: state.reliabilityStore.getState(),
         reliabilityConfig: state.config.reliability,
       });
+      const routingDurationMs = +(performance.now() - routeStart).toFixed(3);
       const model = resolved.selected;
       const selectedTier = resolved.selectedTier ?? tier;
 
@@ -337,7 +339,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
       if (!model) {
         state.forceRegistryRefresh = true;
-        debug("input", "no_model", { tier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped.length });
+        debug("input", "no_model", { tier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache" });
         const why = resolved.fallbackReason ? ` (${resolved.fallbackReason})` : "";
         log(ctx, `Bifrost: tier "${tier}" matched but no healthy model available${why}`, "warning");
         syncBifrostModeStatus(ctx, state);
@@ -364,8 +366,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         syncBifrostModeStatus(ctx, state);
         const reason = resolved.fallbackReason ? `, ${resolved.fallbackReason}` : "";
         log(ctx, `Bifrost: ${tier} → ${modelKey(model)} (already active, ${source}${reason})`);
-        debug("input", "model_unchanged", { model: modelKey(model), selectedTier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped.length, thinkingLevel: ctx.thinkingLevel });
-        debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, thinkingLevel: ctx.thinkingLevel });
+        debug("input", "model_unchanged", { model: modelKey(model), selectedTier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", thinkingLevel: ctx.thinkingLevel });
+        debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", thinkingLevel: ctx.thinkingLevel });
         runtimeReliability.begin(modelKey(model));
         endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
         return defaultAction;
@@ -410,7 +412,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       syncBifrostModeStatus(ctx, state);
       log(ctx, doneMsg);
       runtimeReliability.begin(modelKey(model));
-      debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, thinkingLevel: ctx.thinkingLevel });
+      debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", routingDurationMs, thinkingLevel: ctx.thinkingLevel });
       endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
       return defaultAction;
     } finally {
