@@ -64,6 +64,80 @@ describe("cache", () => {
       ];
       assert.equal(lookupCache(entries, "plan architecture", 0.85), undefined);
     });
+
+    // ── Inverted-index semantics (must hold regardless of implementation) ──
+
+    it("returns the FIRST entry among duplicate normalized values", () => {
+      const entries = [
+        { normalized: "hello world", category: "economical", lastUsed: 1, hits: 0 },
+        { normalized: "hello world", category: "frontier", lastUsed: 2, hits: 0 },
+      ];
+      const result = lookupCache(entries, "hello world", 0.85);
+      assert.equal(result!.category, "economical");
+    });
+
+    it("returns the EARLIER entry on equal fuzzy scores", () => {
+      // Both entries score identically against the prompt — earliest wins.
+      const entries = [
+        { normalized: "alpha beta gamma", category: "economical", lastUsed: 1, hits: 0 },
+        { normalized: "alpha beta delta", category: "frontier", lastUsed: 2, hits: 0 },
+      ];
+      // Prompt is equidistant from both: shares alpha+beta with each,
+      // one distinct token each way → same Jaccard for both.
+      const result = lookupCache(entries, "alpha beta zeta", 0.5);
+      assert.ok(result);
+      assert.equal(result!.category, "economical");
+    });
+
+    it("returns undefined when prompt shares no tokens with any entry", () => {
+      const entries = [
+        { normalized: "hello world", category: "economical", lastUsed: 1, hits: 0 },
+        { normalized: "foo bar baz", category: "frontier", lastUsed: 2, hits: 0 },
+      ];
+      assert.equal(lookupCache(entries, "completely different words here", 0.5), undefined);
+    });
+
+    it("skips entries whose size ratio is below threshold even with full overlap", () => {
+      // min/max = 2/6 = 0.33 < 0.8 — prefilter must reject despite the
+      // smaller entry's tokens being fully contained in the prompt.
+      const entries = [
+        { normalized: "a b", category: "economical", lastUsed: 1, hits: 0 },
+      ];
+      assert.equal(lookupCache(entries, "a b c d e f", 0.8), undefined);
+    });
+
+    it("matches when score equals threshold exactly", () => {
+      // Sizes 4 and 5, intersection 4 → union 5, score 4/5 = 0.8 ≥ 0.8.
+      // The size prefilter (min/max = 4/5) must also admit this pair.
+      const entries = [
+        { normalized: "a b c d e", category: "economical", lastUsed: 1, hits: 0 },
+      ];
+      const result = lookupCache(entries, "a b c d", 0.8);
+      assert.ok(result);
+      assert.equal(result!.category, "economical");
+    });
+
+    describe("threshold 0 (blessed semantics)", () => {
+      // At threshold 0 any entry sharing ≥1 token scores ≥ 0 and matches.
+      // Zero-overlap prompts never match — this differs from the original
+      // scan (which returned an arbitrary entry for every prompt) and is
+      // the documented behavior per schema.json.
+      it("matches when at least one token is shared", () => {
+        const entries = [
+          { normalized: "hello world", category: "economical", lastUsed: 1, hits: 0 },
+        ];
+        const result = lookupCache(entries, "hello completely different tail", 0);
+        assert.ok(result);
+        assert.equal(result!.category, "economical");
+      });
+
+      it("returns undefined for zero token overlap", () => {
+        const entries = [
+          { normalized: "hello world", category: "economical", lastUsed: 1, hits: 0 },
+        ];
+        assert.equal(lookupCache(entries, "unrelated words entirely", 0), undefined);
+      });
+    });
   });
 
   describe("touchCacheEntry", () => {

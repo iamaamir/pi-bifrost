@@ -164,7 +164,7 @@
           "type": "number",
           "minimum": 0,
           "maximum": 1,
-          "description": "Jaccard similarity threshold for fuzzy cache matches. 0 = any prompt matches. 1 = only exact token matches.",
+          "description": "Jaccard similarity threshold for fuzzy cache matches. 0 = any prompt sharing at least one token with an entry matches (prompts with zero token overlap never match). 1 = only exact token matches.",
           "default": 0.85
         },
         "path": {
