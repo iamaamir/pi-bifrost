@@ -34,5 +34,7 @@ export function readJsonFile<T>(path: string): T | undefined {
 }
 
 export function writeJsonFile(path: string, value: unknown): void {
-  writeTextFile(path, JSON.stringify(value, null, 2) + "\n");
+  // Compact JSON: these are machine-written state files (reliability,
+  // runtime state). Indentation doubled their size and stringify time.
+  writeTextFile(path, JSON.stringify(value) + "\n");
 }
