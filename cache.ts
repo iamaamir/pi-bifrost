@@ -35,6 +35,51 @@ function tokenSet(text: string): Set<string> {
   return new Set(normalize(text).split(" "));
 }
 
+/** Memoized token set per entry object — entries are immutable in their
+ * normalized field (touch/update replace objects), so a WeakMap is safe
+ * and dies with the entry. Avoids split+Set per entry per lookup. */
+const entryTokenCache = new WeakMap<CacheEntry, Set<string>>();
+
+function entryTokenSet(entry: CacheEntry): Set<string> {
+  let tokens = entryTokenCache.get(entry);
+  if (!tokens) {
+    tokens = new Set(entry.normalized.split(" "));
+    entryTokenCache.set(entry, tokens);
+  }
+  return tokens;
+}
+
+/** Token -> entry-index posting lists for one entries array.
+ * Cached per array identity; updateCache/loadCache produce fresh arrays,
+ * so staleness is impossible. */
+interface LookupIndex {
+  byToken: Map<string, number[]>;
+  /** normalized string -> earliest entry index holding it. */
+  byNormalized: Map<string, number>;
+}
+
+const indexCache = new WeakMap<CacheEntry[], LookupIndex>();
+
+function lookupIndex(entries: CacheEntry[]): LookupIndex {
+  let index = indexCache.get(entries);
+  if (!index) {
+    const byToken = new Map<string, number[]>();
+    const byNormalized = new Map<string, number>();
+    for (let i = 0; i < entries.length; i++) {
+      const normalized = entries[i]!.normalized;
+      if (!byNormalized.has(normalized)) byNormalized.set(normalized, i);
+      for (const token of entryTokenSet(entries[i]!)) {
+        const list = byToken.get(token);
+        if (list) list.push(i);
+        else byToken.set(token, [i]);
+      }
+    }
+    index = { byToken, byNormalized };
+    indexCache.set(entries, index);
+  }
+  return index;
+}
+
 export function loadCache(path: string): CacheEntry[] {
   try {
     const text = readTextFile(path);
@@ -86,23 +131,40 @@ export function lookupCache(
   threshold: number,
 ): CacheEntry | undefined {
   const normalized = normalize(prompt);
+
+  // Fast path: build the index (also serves exact lookup), then check the
+  // normalized->index map — O(1) instead of a full string-compare scan.
+  const { byNormalized } = lookupIndex(entries);
+  const exactIdx = byNormalized.get(normalized);
+  if (exactIdx !== undefined) return entries[exactIdx]!;
+
   const promptTokens = tokenSet(normalized);
-  let best: { entry: CacheEntry; score: number } | undefined;
+  const promptSize = promptTokens.size;
+  if (promptSize === 0 || entries.length === 0) return undefined;
 
-  for (const entry of entries) {
-    if (entry.normalized === normalized) return entry;
+  // Accumulate intersections via posting lists: touch only entries that
+  // share at least one token with the prompt. Jaccard >= threshold requires
+  // min/max sizes >= threshold; skip the rest without scoring.
+  const { byToken } = lookupIndex(entries);
+  const counters = new Map<number, number>();
+  for (const token of promptTokens) {
+    const list = byToken.get(token);
+    if (!list) continue;
+    for (const i of list) counters.set(i, (counters.get(i) ?? 0) + 1);
+  }
 
-    const entryTokens = tokenSet(entry.normalized);
-    if (promptTokens.size === 0 || entryTokens.size === 0) continue;
-
-    let intersection = 0;
-    for (const token of promptTokens) {
-      if (entryTokens.has(token)) intersection++;
-    }
-    const union = promptTokens.size + entryTokens.size - intersection;
+  let best: { entry: CacheEntry; score: number; index: number } | undefined;
+  for (const [i, intersection] of counters) {
+    const entry = entries[i]!;
+    const entrySize = entryTokenSet(entry).size;
+    if (entrySize === 0) continue;
+    if (Math.min(promptSize, entrySize) / Math.max(promptSize, entrySize) < threshold) continue;
+    const union = promptSize + entrySize - intersection;
     const score = union === 0 ? 0 : intersection / union;
-    if (score >= threshold && (!best || score > best.score)) {
-      best = { entry, score };
+    if (score < threshold) continue;
+    // Strictly greater keeps the earliest entry on ties (array order).
+    if (!best || score > best.score || (score === best.score && i < best.index)) {
+      best = { entry, score, index: i };
     }
   }
 
