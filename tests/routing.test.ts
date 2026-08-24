@@ -11,6 +11,8 @@ import {
   modelCost,
   getStrategy,
   classify,
+  classifyCompiled,
+  compileRules,
 } from "../routing.ts";
 import { emptyReliabilityState, recordModelFailure, DEFAULT_RELIABILITY } from "../reliability.ts";
 import { makeCtx, makeModel } from "./helpers.ts";
@@ -261,6 +263,17 @@ describe("routing", () => {
     it("returns undefined for invalid regex pattern", () => {
       const result = classify("hello", [{ pattern: "***invalid[", model: "frontier" }]);
       assert.equal(result, undefined);
+    });
+
+    it("precompiled matching preserves rule-order precedence across positions", () => {
+      // Rule 1 matches later in the text but must still win — guards against
+      // leftmost-first alternatives (e.g. a combined regex) changing precedence.
+      const rules = [
+        { pattern: "foo", model: "first" },
+        { pattern: "bar", model: "second" },
+      ];
+      assert.equal(classify("bar foo", rules), "first");
+      assert.equal(classifyCompiled("bar foo", compileRules(rules)), "first");
     });
   });
 });

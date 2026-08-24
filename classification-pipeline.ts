@@ -1,5 +1,5 @@
 import type { ClassifierModel } from "./classifier.ts";
-import { classify as regexClassify, type RouteRule } from "./routing.ts";
+import { classifyCompiled, compileRules, type RouteRule } from "./routing.ts";
 import { debug, debugMeasure } from "./debug.ts";
 
 // ── ADT result type ────────────────────────────────────────────
@@ -51,17 +51,21 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
     cacheLookup,
     classifierModels,
     classifyWithLLM,
-    regexRules,
+    regexRules: rawRegexRules,
     defaultTier,
     tiers,
   } = deps;
+
+  // Compile rules once at pipeline construction — no per-turn regex building.
+  // Per-rule testing preserves rule-order match precedence exactly.
+  const regexRules = compileRules(rawRegexRules);
 
   async function classify(text: string): Promise<ClassificationResult> {
     // Stage 1: pre-check regex for direct model references only.
     // Runs before tiers check — direct bindings work even with zero tiers.
     {
       const endPre = debugMeasure("pipeline", "regex_pre");
-      const pre = regexClassify(text, regexRules);
+      const pre = classifyCompiled(text, regexRules);
       endPre({ match: !!pre, tier: pre });
       if (pre && pre.includes("/") && !tiers.includes(pre)) {
         debug("pipeline", "result", { source: "regex", tier: pre, direct: true });
@@ -99,7 +103,7 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
 
     // Stage 3: regex rules
     const endRegex = debugMeasure("pipeline", "regex");
-    const regex = regexClassify(text, regexRules);
+    const regex = classifyCompiled(text, regexRules);
     endRegex({ match: !!regex, tier: regex });
     if (regex) {
       if (tiers.includes(regex)) {
