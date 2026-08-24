@@ -15,7 +15,7 @@ import {
   compileRules,
 } from "../routing.ts";
 import { emptyReliabilityState, recordModelFailure, DEFAULT_RELIABILITY } from "../reliability.ts";
-import { makeCtx, makeModel } from "./helpers.ts";
+import { makeCtx, makeModel, withoutCost } from "./helpers.ts";
 
 describe("routing", () => {
   describe("modelKey", () => {
@@ -100,6 +100,119 @@ describe("routing", () => {
     });
   });
 
+  describe("findCandidates parity", () => {
+    // Naive reference implementation: per-call lowercasing, dedup by key,
+    // rule-order iteration. The optimized path must return identical
+    // candidates in identical order for any input.
+    function naiveFindCandidates(
+      ctx: ReturnType<typeof makeCtx>,
+      pattern: string | string[] | undefined,
+    ): string[] {
+      if (!pattern) return [];
+      const out: string[] = [];
+      const seen = new Set<string>();
+      const patterns = Array.isArray(pattern) ? pattern : [pattern];
+      const available = ctx.modelRegistry.getAvailable();
+      const keyOf = (m: { provider: string; id: string }) => `${m.provider}/${m.id}`;
+      for (const p of patterns) {
+        if (p.includes("/")) {
+          const [provider, ...rest] = p.split("/");
+          const id = rest.join("/");
+          const found = available.find(
+            (m) => m.provider === provider && m.id === id,
+          );
+          if (found) {
+            const k = keyOf(found);
+            if (!seen.has(k)) {
+              seen.add(k);
+              out.push(k);
+            }
+          }
+        } else {
+          const lower = p.toLowerCase();
+          for (const m of available) {
+            if (
+              !seen.has(keyOf(m)) &&
+              (m.id.toLowerCase().includes(lower) ||
+                m.provider.toLowerCase().includes(lower))
+            ) {
+              seen.add(keyOf(m));
+              out.push(keyOf(m));
+            }
+          }
+        }
+      }
+      return out;
+    }
+
+    function mulberry32(seed: number): () => number {
+      let a = seed;
+      return () => {
+        a |= 0;
+        a = (a + 0x6d2b79f5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    it("memoized path matches naive reference across randomized trials", () => {
+      const rand = mulberry32(20260824);
+      const providers = ["opencode", "anthropic", "OpenAI", "google-x"];
+      for (let trial = 0; trial < 200; trial++) {
+        const n = 1 + Math.floor(rand() * 40);
+        const models = Array.from({ length: n }, () => {
+          const provider = providers[Math.floor(rand() * providers.length)];
+          const id = [
+            rand() > 0.7 ? "GLM" : "glm",
+            "-",
+            Math.floor(rand() * 100),
+            rand() > 0.5 ? "-Turbo" : "-mini",
+          ].join("");
+          return makeModel(provider, id);
+        });
+        const ctx = makeCtx(models);
+        const patterns: string[] = [];
+        const patternCount = 1 + Math.floor(rand() * 3);
+        for (let i = 0; i < patternCount; i++) {
+          const roll = rand();
+          if (roll < 0.3 && models.length > 0) {
+            const m = models[Math.floor(rand() * models.length)];
+            patterns.push(`${m.provider}/${m.id}`);
+          } else if (roll < 0.45) {
+            const m = models[Math.floor(rand() * models.length)];
+            patterns.push(`${m.provider}/missing-${Math.floor(rand() * 10)}`);
+          } else if (roll < 0.75) {
+            const m = models[Math.floor(rand() * models.length)];
+            patterns.push(m.id.slice(0, 3 + Math.floor(rand() * 4)));
+          } else {
+            patterns.push(["glm", "turbo", "nope", "OPEN"][Math.floor(rand() * 4)]);
+          }
+        }
+        const pattern: string | string[] =
+          patternCount === 1 && rand() < 0.5 ? patterns[0] : patterns;
+
+        const expected = naiveFindCandidates(ctx, pattern);
+        const actual = findCandidates(ctx, pattern).map(modelKey);
+        assert.deepEqual(actual, expected, `trial ${trial}: ${JSON.stringify(pattern)}`);
+
+        // Repeat call must be identical (memoization must not corrupt state).
+        const repeat = findCandidates(ctx, pattern).map(modelKey);
+        assert.deepEqual(repeat, expected, `trial ${trial} repeat`);
+      }
+    });
+
+    it("registry refresh (new model objects) sees updated ids", () => {
+      const models = [makeModel("anthropic", "claude-opus", 15)];
+      const ctx = makeCtx(models);
+      assert.equal(findCandidates(ctx, "opus").length, 1);
+
+      models[0] = makeModel("anthropic", "claude-sonnet", 15);
+      assert.deepEqual(findCandidates(ctx, "opus"), []);
+      assert.equal(findCandidates(ctx, "sonnet").length, 1);
+    });
+  });
+
   describe("selectModel", () => {
     it("returns first candidate for first strategy", () => {
       const a = makeModel("a", "a", 5, 10, 32000);
@@ -148,6 +261,16 @@ describe("routing", () => {
 
     it("returns undefined for empty candidates", () => {
       assert.equal(selectModel([], "first"), undefined);
+    });
+
+    it("returns a single candidate without invoking scoring, even with missing cost", () => {
+      // Regression: the old sort never invoked the comparator for one
+      // candidate, so cost-less models were returned as-is. minBy must
+      // preserve that — no score call, no throw.
+      const noCost = withoutCost(makeModel("a", "a", 5, 5));
+      const m = selectModel([noCost], "cheapest");
+      assert.equal(modelKey(m), "a/a");
+      assert.equal(modelKey(selectModel([noCost], "largest_context")), "a/a");
     });
   });
 

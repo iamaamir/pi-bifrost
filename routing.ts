@@ -55,11 +55,31 @@ export function findOneModel(
 
   const lower = pattern.toLowerCase();
   const available = ctx.modelRegistry.getAvailable();
-  return available.find(
-    (m) =>
-      m.id.toLowerCase().includes(lower) ||
-      m.provider.toLowerCase().includes(lower),
-  );
+  return available.find((m) => modelLowerMatches(m, lower));
+}
+
+/** Lowercased id/provider for a model, computed once per model object.
+ * Invariant: id/provider are immutable per object identity — registry
+ * refresh produces new objects (same assumption as cache.ts entry memo). */
+interface ModelLowerMeta {
+  readonly lowerId: string;
+  readonly lowerProvider: string;
+}
+
+const modelLowerCache = new WeakMap<Model<Api>, ModelLowerMeta>();
+
+function modelLowerMeta(m: Model<Api>): ModelLowerMeta {
+  let meta = modelLowerCache.get(m);
+  if (!meta) {
+    meta = { lowerId: m.id.toLowerCase(), lowerProvider: m.provider.toLowerCase() };
+    modelLowerCache.set(m, meta);
+  }
+  return meta;
+}
+
+function modelLowerMatches(m: Model<Api>, lower: string): boolean {
+  const meta = modelLowerMeta(m);
+  return meta.lowerId.includes(lower) || meta.lowerProvider.includes(lower);
 }
 
 export function findCandidates(
@@ -87,12 +107,11 @@ export function findCandidates(
     } else {
       const lower = p.toLowerCase();
       for (const m of available) {
-        if (
-          !seen.has(modelKey(m)) &&
-          (m.id.toLowerCase().includes(lower) ||
-            m.provider.toLowerCase().includes(lower))
-        ) {
-          seen.add(modelKey(m));
+        // Match test first — modelKey/dedup only run for actual matches.
+        if (!modelLowerMatches(m, lower)) continue;
+        const key = modelKey(m);
+        if (!seen.has(key)) {
+          seen.add(key);
           candidates.push(m);
         }
       }
@@ -102,21 +121,41 @@ export function findCandidates(
   return candidates;
 }
 
+/** First element achieving the minimum score — matches stable-sort[0] tie-breaking.
+ * Precondition: scores are finite numbers (Model cost/contextWindow are typed finite).
+ * Unlike sort, the score function is not invoked for a single candidate. */
+function minBy<T>(items: readonly T[], score: (item: T) => number): T | undefined {
+  let best: T | undefined;
+  let bestScore = Infinity;
+  for (const item of items) {
+    const s = score(item);
+    if (s < bestScore) {
+      best = item;
+      bestScore = s;
+    }
+  }
+  return best;
+}
+
 export function selectModel(
   candidates: Model<Api>[],
   strategy: RoutingStrategy,
 ): Model<Api> | undefined {
   if (candidates.length === 0) return undefined;
+  // Single candidate — return without scoring, matching the old sort's
+  // behavior of never invoking the comparator (cost-less models stay safe).
+  if (candidates.length === 1) return candidates[0];
 
   switch (strategy) {
     case "cheapest":
-      return [...candidates].sort((a, b) => modelCost(a) - modelCost(b))[0];
+      return minBy(candidates, modelCost);
     case "cheapest_input":
-      return [...candidates].sort((a, b) => modelInputCost(a) - modelInputCost(b))[0];
+      return minBy(candidates, modelInputCost);
     case "cheapest_output":
-      return [...candidates].sort((a, b) => modelOutputCost(a) - modelOutputCost(b))[0];
+      return minBy(candidates, modelOutputCost);
     case "largest_context":
-      return [...candidates].sort((a, b) => modelContextSize(b) - modelContextSize(a))[0];
+      // Descending sort picks the first maximum under stable tie-breaking.
+      return minBy(candidates, (m) => -modelContextSize(m));
     case "random":
       return candidates[Math.floor(Math.random() * candidates.length)];
     default:
@@ -283,6 +322,11 @@ export function getStrategy(
   return categoryStrategies?.[category] ?? fallbackStrategy ?? "first";
 }
 
+/**
+ * Match rules in order, constructing a RegExp per rule per call.
+ * @deprecated Production uses `compileRules` + `classifyCompiled`.
+ * Kept as the reference implementation for parity tests.
+ */
 export function classify(text: string, rules: readonly RouteRule[]): string | undefined {
   for (const rule of rules) {
     try {
