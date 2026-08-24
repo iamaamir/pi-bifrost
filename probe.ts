@@ -38,28 +38,38 @@ type MinimalSessionPrompt = (
   options: { cwd?: string; systemPrompt?: string },
 ) => Promise<string | undefined>;
 
+export interface RunProbeOptions {
+  onProgress?: (done: number, total: number, last: ProbeResult) => void;
+  promptWithSession?: MinimalSessionPrompt;
+  timeoutMs?: number;
+  concurrency?: number;
+}
+
 export async function runProbe(
   ctx: ExtensionContext,
-  onProgress?: (done: number, total: number, last: ProbeResult) => void,
-  promptWithSession: MinimalSessionPrompt = promptWithMinimalSession,
+  options: RunProbeOptions = {},
 ): Promise<{ results: ProbeResult[]; path: string }> {
   const available = ctx.modelRegistry.getAvailable();
   const total = available.length;
-  const CONCURRENCY = 8;
+  const CONCURRENCY = 50;
   const results: ProbeResult[] = new Array(total);
   let cursor = 0;
   let completed = 0;
 
+  const { onProgress, promptWithSession = promptWithMinimalSession, timeoutMs = PROBE_TIMEOUT_MS, concurrency = CONCURRENCY } = options;
+
   async function worker() {
     while (cursor < total) {
       const i = cursor++;
-      results[i] = await probeOne(ctx, available[i], promptWithSession);
+      results[i] = await probeOne(ctx, available[i], promptWithSession, timeoutMs);
       completed++;
       onProgress?.(completed, total, results[i]);
     }
   }
 
-  const workers = Array.from({ length: Math.min(CONCURRENCY, total) }, () => worker());
+  // Use minimum of requested concurrency and total models, but at least 1
+  const effectiveConcurrency = Math.max(1, Math.min(concurrency, total));
+  const workers = Array.from({ length: effectiveConcurrency }, () => worker());
   await Promise.all(workers);
 
   const outputPath = join(process.cwd(), ".pi", "bifrost-probe.json");
@@ -73,6 +83,7 @@ async function probeOne(
   ctx: ExtensionContext,
   model: Model<Api>,
   promptWithSession: MinimalSessionPrompt,
+  timeoutMs: number,
 ): Promise<ProbeResult> {
   const base: ProbeResult = {
     provider: model.provider,
@@ -92,7 +103,7 @@ async function probeOne(
   const start = performance.now();
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const provider = ctx.modelRegistry.getProvider(model.provider);
       if (!provider) {

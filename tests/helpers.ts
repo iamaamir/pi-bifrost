@@ -69,3 +69,11 @@ export function withoutCost<T extends Model<Api>>(model: T): T {
   (copy as Partial<Model<Api>>).cost = undefined as unknown as Model<Api>["cost"];
   return copy;
 }
+
+/**
+ * Delay helper for testing timeouts and slow responses.
+ */
+export function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+

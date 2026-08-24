@@ -248,20 +248,22 @@ async function handleInit(
     const lastModels: string[] = [];
 
     uiBusy(ctx, `Probing ${availableCount} models...`);
-    const { results } = await runProbe(ctx, (done, total, last) => {
-      if (last.status === "ok") okCount++;
-      else if (last.status === "error" || last.status === "timeout") errCount++;
-      lastModels.push(`${last.provider}/${last.model}: ${last.status} (${last.duration_ms}ms)`);
-      if (lastModels.length > 5) lastModels.shift();
+    const { results } = await runProbe(ctx, {
+      onProgress: (done, total, last) => {
+        if (last.status === "ok") okCount++;
+        else if (last.status === "error" || last.status === "timeout") errCount++;
+        lastModels.push(`${last.provider}/${last.model}: ${last.status} (${last.duration_ms}ms)`);
+        if (lastModels.length > 5) lastModels.shift();
 
-      if (ctx.hasUI) {
-        ctx.ui.setWidget("bifrost-probe", [
-          `Probing models: ${done}/${total}`,
-          `  ok: ${okCount}  errors: ${errCount}`,
-          "",
-          ...lastModels,
-        ]);
-      }
+        if (ctx.hasUI) {
+          ctx.ui.setWidget("bifrost-probe", [
+            `Probing models: ${done}/${total}`,
+            `  ok: ${okCount}  errors: ${errCount}`,
+            "",
+            ...lastModels,
+          ]);
+        }
+      },
     });
     uiDone(ctx);
     state.reliabilityStore.applyOutcomes(
@@ -687,7 +689,7 @@ export function createCommandRouter(
       uiBusy(ctx, `Probing ${available.length} models...`);
       log(ctx, `Probing ${available.length} model(s) with "${PROBE_PROMPT_TEXT}"...`);
 
-      const { results, path } = await runProbe(ctx);
+      const { results, path } = await runProbe(ctx, {});
       uiDone(ctx);
       state.reliabilityStore.applyOutcomes(
         results.map((r) =>
