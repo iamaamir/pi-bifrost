@@ -1,9 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runProbe } from "../probe.ts";
+import { runProbe, DEFAULT_PROBE_CONCURRENCY, probeOptionsFromConfig } from "../probe.ts";
 import { delay } from "./helpers.ts";
 
 describe("probe transport", () => {
@@ -218,9 +218,9 @@ describe("probe with many models and slow responses", () => {
       assert.equal(timeoutCount, Math.ceil(MODEL_COUNT / 2));
       assert.equal(okCount, Math.floor(MODEL_COUNT / 2));
 
-      // Verify concurrency limit (max 50 workers)
-      assert.ok(maxConcurrentWorkers <= 50, `max concurrent workers ${maxConcurrentWorkers} should not exceed 50`);
-      assert.ok(maxConcurrentWorkers >= 50 || maxConcurrentWorkers === MODEL_COUNT, `should reach max concurrency of 50 or total models`);
+      // Verify concurrency limit (default cap)
+      assert.ok(maxConcurrentWorkers <= DEFAULT_PROBE_CONCURRENCY, `max concurrent workers ${maxConcurrentWorkers} should not exceed ${DEFAULT_PROBE_CONCURRENCY}`);
+      assert.ok(maxConcurrentWorkers >= DEFAULT_PROBE_CONCURRENCY || maxConcurrentWorkers === MODEL_COUNT, `should reach max concurrency of ${DEFAULT_PROBE_CONCURRENCY} or total models`);
 
       // Verify progress was called for each completion
       assert.equal(progressCalls.length, MODEL_COUNT);
@@ -234,5 +234,112 @@ describe("probe with many models and slow responses", () => {
       process.chdir(cwdBefore);
       rmSync(cwd, { recursive: true, force: true });
     }
+  });
+});
+
+describe("probe concurrency and resilience", () => {
+  const makeFastModel = (i: number) => ({
+    provider: "test",
+    id: `model-${i}`,
+    api: "openai-completions",
+    cost: { input: 1, output: 2 },
+    baseUrl: "http://localhost/v1",
+  });
+
+  function makeFastCtx(models: ReturnType<typeof makeFastModel>[]) {
+    const provider = {
+      streamSimple: () => ({
+        result: async () => {
+          await delay(10);
+          return {
+            role: "assistant",
+            api: "openai-completions",
+            provider: "test",
+            model: "x",
+            content: [{ type: "text", text: "ok" }],
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: "stop",
+            timestamp: Date.now(),
+          };
+        },
+      }),
+    };
+    return {
+      modelRegistry: {
+        getAvailable: () => models,
+        getProvider: () => provider,
+        getProviderAuth: async () => ({ auth: { apiKey: "key" } }),
+      },
+    } as never;
+  }
+
+  it("honors an explicit concurrency cap", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-probe-cap-"));
+    const cwdBefore = process.cwd();
+    const models = Array.from({ length: 20 }, (_, i) => makeFastModel(i));
+    let activeWorkers = 0;
+    let maxConcurrentWorkers = 0;
+
+    try {
+      const ctx = makeFastCtx(models) as Parameters<typeof runProbe>[0];
+      // Wrap streamSimple to observe in-flight workers.
+      const registry = ctx.modelRegistry as unknown as {
+        getProvider: () => {
+          streamSimple: (
+            ...args: unknown[]
+          ) => { result: () => Promise<unknown> };
+        };
+      };
+      const provider = registry.getProvider();
+      const innerStream = provider.streamSimple;
+      provider.streamSimple = (...args: unknown[]) => {
+        const stream = innerStream.apply(provider, args);
+        return {
+          result: async () => {
+            activeWorkers++;
+            maxConcurrentWorkers = Math.max(maxConcurrentWorkers, activeWorkers);
+            try {
+              return await stream.result();
+            } finally {
+              activeWorkers--;
+            }
+          },
+        };
+      };
+
+      process.chdir(cwd);
+      await runProbe(ctx, { concurrency: 4 });
+      assert.ok(maxConcurrentWorkers <= 4, `max concurrent workers ${maxConcurrentWorkers} should not exceed 4`);
+      assert.ok(maxConcurrentWorkers > 1, "should run some workers concurrently");
+    } finally {
+      process.chdir(cwdBefore);
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("returns results even when writing the results file fails", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-probe-iofail-"));
+    const cwdBefore = process.cwd();
+
+    try {
+      // A file named ".pi" makes mkdir/write fail deterministically.
+      writeFileSync(join(cwd, ".pi"), "not a directory");
+      const ctx = makeFastCtx([makeFastModel(0)]) as Parameters<typeof runProbe>[0];
+      process.chdir(cwd);
+      const result = await runProbe(ctx, {});
+      assert.equal(result.results.length, 1);
+      assert.equal(result.results[0]?.status, "ok");
+    } finally {
+      process.chdir(cwdBefore);
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("probeOptionsFromConfig", () => {
+  it("forwards configured values and falls back to undefined", () => {
+    assert.deepEqual(probeOptionsFromConfig({ concurrency: 8, timeoutMs: 5000 }), { concurrency: 8, timeoutMs: 5000 });
+    assert.deepEqual(probeOptionsFromConfig({}), { concurrency: undefined, timeoutMs: undefined });
+    assert.deepEqual(probeOptionsFromConfig(undefined), { concurrency: undefined, timeoutMs: undefined });
   });
 });

@@ -9,7 +9,7 @@ import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
 import type { ClassificationPipeline } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
-import { runProbe, PROBE_PROMPT_TEXT } from "./probe.ts";
+import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
 import { showBifrostResult } from "./result-viewer.ts";
 import {
@@ -249,6 +249,7 @@ async function handleInit(
 
     uiBusy(ctx, `Probing ${availableCount} models...`);
     const { results } = await runProbe(ctx, {
+      ...probeOptionsFromConfig(state.config.probe),
       onProgress: (done, total, last) => {
         if (last.status === "ok") okCount++;
         else if (last.status === "error" || last.status === "timeout") errCount++;
@@ -689,7 +690,7 @@ export function createCommandRouter(
       uiBusy(ctx, `Probing ${available.length} models...`);
       log(ctx, `Probing ${available.length} model(s) with "${PROBE_PROMPT_TEXT}"...`);
 
-      const { results, path } = await runProbe(ctx, {});
+      const { results, path } = await runProbe(ctx, probeOptionsFromConfig(state.config.probe));
       uiDone(ctx);
       state.reliabilityStore.applyOutcomes(
         results.map((r) =>

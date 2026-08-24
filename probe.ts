@@ -24,6 +24,9 @@ const PROBE_PROMPT = "1+1=";
 export const PROBE_PROMPT_TEXT = PROBE_PROMPT;
 const PROBE_TIMEOUT_MS = 10_000;
 const PROBE_MAX_TOKENS = 5;
+/** Default worker count. Override via config `probe.concurrency` —
+ * lower it if a provider rate-limits burst traffic. */
+export const DEFAULT_PROBE_CONCURRENCY = 50;
 
 function assistantText(message: { content: Array<{ type: string; text?: string }> }): string {
   return message.content
@@ -45,18 +48,26 @@ export interface RunProbeOptions {
   concurrency?: number;
 }
 
+/** RunProbe options derived from config (`probe.concurrency`/`probe.timeoutMs`).
+ * Undefined fields fall back to runProbe defaults. */
+export function probeOptionsFromConfig(config?: {
+  concurrency?: number;
+  timeoutMs?: number;
+}): Pick<RunProbeOptions, "concurrency" | "timeoutMs"> {
+  return { concurrency: config?.concurrency, timeoutMs: config?.timeoutMs };
+}
+
 export async function runProbe(
   ctx: ExtensionContext,
   options: RunProbeOptions = {},
 ): Promise<{ results: ProbeResult[]; path: string }> {
   const available = ctx.modelRegistry.getAvailable();
   const total = available.length;
-  const CONCURRENCY = 50;
   const results: ProbeResult[] = new Array(total);
   let cursor = 0;
   let completed = 0;
 
-  const { onProgress, promptWithSession = promptWithMinimalSession, timeoutMs = PROBE_TIMEOUT_MS, concurrency = CONCURRENCY } = options;
+  const { onProgress, promptWithSession = promptWithMinimalSession, timeoutMs = PROBE_TIMEOUT_MS, concurrency = DEFAULT_PROBE_CONCURRENCY } = options;
 
   async function worker() {
     while (cursor < total) {
@@ -73,9 +84,16 @@ export async function runProbe(
   await Promise.all(workers);
 
   const outputPath = join(process.cwd(), ".pi", "bifrost-probe.json");
-  const dir = dirname(outputPath);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(outputPath, JSON.stringify(results, null, 2), "utf-8");
+  try {
+    const dir = dirname(outputPath);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    writeFileSync(outputPath, JSON.stringify(results, null, 2), "utf-8");
+  } catch (err) {
+    // Persistence is best-effort: a completed probe must still return its
+    // results so callers record reliability outcomes and render the report.
+    console.error(`[bifrost] failed to write probe results: ${err}`);
+    return { results, path: outputPath };
+  }
   return { results, path: outputPath };
 }
 

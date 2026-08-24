@@ -74,6 +74,9 @@
     },
     "reliability": {
       "$ref": "#/definitions/ReliabilityConfig"
+    },
+    "probe": {
+      "$ref": "#/definitions/ProbeConfig"
     }
   },
   "definitions": {
@@ -220,6 +223,25 @@
         "path": {
           "type": "string",
           "description": "Custom path for the debug log file. Default: .pi/bifrost-debug.jsonl"
+        }
+      }
+    },
+    "ProbeConfig": {
+      "type": "object",
+      "description": "Model probe tuning (/bifrost probe and /bifrost init). The probe sends a tiny prompt to every registry model; lower concurrency if providers rate-limit burst traffic.",
+      "additionalProperties": false,
+      "properties": {
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum number of models probed simultaneously.",
+          "default": 50
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Per-model probe timeout in milliseconds.",
+          "default": 10000
         }
       }
     }

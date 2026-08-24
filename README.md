@@ -278,6 +278,10 @@ Writes `.pi/bifrost-debug.jsonl` — one JSON line per event with routing reason
     "windowMinutes": 5,
     "cooldownMinutes": 60
   },
+  "probe": {
+    "concurrency": 50,
+    "timeoutMs": 10000
+  },
   "debug": { "enabled": false }
 }
 ```

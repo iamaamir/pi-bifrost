@@ -8,6 +8,13 @@ import type { ReliabilityConfig } from "./reliability.ts";
 
 type ClassifierMethod = "direct" | "subprocess" | "auto";
 
+export interface ProbeConfig {
+  /** Max concurrent model probes. Default 50. Lower this if providers rate-limit. */
+  concurrency?: number;
+  /** Per-model probe timeout in milliseconds. Default 10000. */
+  timeoutMs?: number;
+}
+
 export interface ClassifierConfig {
   enabled?: boolean;
   model?: string | string[];
@@ -30,6 +37,7 @@ export interface BifrostConfig {
   cache?: CacheOptions;
   debug?: DebugConfig;
   reliability?: ReliabilityConfig;
+  probe?: ProbeConfig;
 }
 
 export const DEFAULT_RULES: RouteRule[] = [
@@ -210,6 +218,21 @@ export function validateConfig(
     });
   }
 
+  const probe = config.probe;
+  if (probe?.concurrency !== undefined && (!Number.isInteger(probe.concurrency) || probe.concurrency < 1)) {
+    issues.push({
+      severity: "error",
+      message: `Probe concurrency must be an integer >= 1, got ${probe.concurrency}.`,
+    });
+  }
+
+  if (probe?.timeoutMs !== undefined && (!Number.isInteger(probe.timeoutMs) || probe.timeoutMs < 1)) {
+    issues.push({
+      severity: "error",
+      message: `Probe timeoutMs must be an integer >= 1, got ${probe.timeoutMs}.`,
+    });
+  }
+
   if (config.rules) {
     for (let i = 0; i < config.rules.length; i++) {
       const rule = config.rules[i];
@@ -267,6 +290,7 @@ export function mergeConfig(
   merged.cache = mergeObj(base.cache, override.cache);
   merged.debug = mergeObj(base.debug, override.debug);
   merged.reliability = mergeObj(base.reliability, override.reliability);
+  merged.probe = mergeObj(base.probe, override.probe);
   return merged;
 }
 

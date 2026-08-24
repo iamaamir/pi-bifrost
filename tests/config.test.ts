@@ -127,6 +127,35 @@ describe("validateConfig", () => {
     assert.ok(errors[0].message.includes("integer"));
   });
 
+  it("errors on invalid probe concurrency", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      probe: { concurrency: 0 },
+    });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes("Probe"));
+    assert.ok(errors[0].message.includes("integer"));
+  });
+
+  it("errors on non-integer probe timeout", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      probe: { timeoutMs: 10.5 },
+    });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes("Probe"));
+  });
+
+  it("allows valid probe settings", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      probe: { concurrency: 8, timeoutMs: 5000 },
+    });
+    assert.equal(issues.length, 0);
+  });
+
   it("allows multiple issues", () => {
     const issues = validateConfig({
       models: {},
