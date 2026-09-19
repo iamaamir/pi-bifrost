@@ -159,8 +159,10 @@
             <h3>Record useful diagnostics locally</h3>
             <p>
               Optional local JSONL debug logs record routing reason, selected
-              tier/model, and timing, not prompt bodies. They are local files,
-              not a hosted observability service.
+              tier/model, and timing. Normal logs omit prompt bodies; the
+              explicit TypeSafe full trace may include prompt/provider data and
+              must be treated as sensitive local troubleshooting output. Logs
+              are local files, not a hosted observability service.
             </p>
           </article>
           <article>
