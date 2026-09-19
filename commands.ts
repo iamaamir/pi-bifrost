@@ -645,6 +645,10 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
 
 export function getBifrostCommandCompletions(prefix: string) {
   const normalized = prefix.trim().toLowerCase();
+  // Exact commands should submit on first Enter. Returning a completion for
+  // an already-complete command makes Pi accept the suggestion first and
+  // leave the command text stuck in the editor until a second Enter.
+  if (BIFROST_COMMAND_OPTIONS.some((command) => command.value === normalized)) return null;
   const items = BIFROST_COMMAND_OPTIONS.filter((command) => command.value.startsWith(normalized)).map((command) => ({
     value: command.value,
     label: command.value,

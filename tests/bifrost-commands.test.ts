@@ -105,6 +105,11 @@ describe("bifrost command ui", () => {
     assert(items.some((item) => item.value === "classifier status" && item.description === "Show classifier state"));
   });
 
+  it("submits exact commands without requiring a second Enter", () => {
+    assert.equal(getBifrostCommandCompletions("classifier status"), null);
+    assert.equal(getBifrostCommandCompletions("classifier"), null);
+  });
+
   it("opens dashboard for root command", async () => {
     const { ctx, calls } = makeCtx();
     const state = makeState();

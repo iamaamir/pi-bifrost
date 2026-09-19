@@ -234,7 +234,13 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     description: "Bifrost model router control",
     getArgumentCompletions: getBifrostCommandCompletions,
     handler: async (args, ctx) => {
-      await handleCommand(args, ctx);
+      try {
+        await handleCommand(args, ctx);
+      } finally {
+        // Pi may leave slash-command text in editor after autocomplete or a
+        // custom selector. Command owns this input; clear it after every exit.
+        if (ctx.mode === "tui" && ctx.hasUI) ctx.ui.setEditorText("");
+      }
     },
   });
 
