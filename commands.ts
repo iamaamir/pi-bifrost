@@ -1,9 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir, ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
-import type { BifrostConfig } from "./config.ts";
+import type { BifrostConfig, ClassifierConfig } from "./config.ts";
 import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, loadConfig } from "./config.ts";
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
@@ -13,6 +13,7 @@ import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT } from "./probe.ts"
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
 import { showBifrostResult } from "./result-viewer.ts";
 import {
+  findCandidates,
   getStrategy,
   guessTier,
   modelKey,
@@ -66,6 +67,33 @@ export function uiDone(ctx: ExtensionContext) {
     ctx.ui.setWorkingMessage(undefined);
     ctx.ui.setWorkingVisible(false);
   }
+}
+
+function promptClassifierModelAvailable(
+  ctx: ExtensionContext,
+  model: ClassifierConfig["model"],
+): boolean {
+  return findCandidates(ctx, model).length > 0;
+}
+
+async function requestPromptClassifierModel(ctx: ExtensionContext): Promise<string | null> {
+  const modelRuntime = {
+    getAvailableSnapshot: () => ctx.modelRegistry.getAvailable(),
+    getModel: (provider: string, id: string) => ctx.modelRegistry.find(provider, id),
+    getError: () => ctx.modelRegistry.getError(),
+    refresh: async () => {
+      await ctx.modelRegistry.refresh();
+      return { aborted: false, errors: new Map() };
+    },
+  };
+  const scopedModels = (ctx as ExtensionContext & { scopedModels: readonly unknown[] }).scopedModels;
+  const selected = await ctx.ui.custom<string | null>((tui, _theme, _keybindings, done) => {
+    const selectorConstructor = ModelSelectorComponent as unknown as new (...args: any[]) => any;
+    const onSelect = (model: { provider: string; id: string }) => done(`${model.provider}/${model.id}`);
+    const onCancel = () => done(null);
+    return new selectorConstructor(tui, ctx.model, modelRuntime, scopedModels, onSelect, onCancel);
+  });
+  return selected;
 }
 
 function uiOutput(ctx: ExtensionContext, lines: string[]) {
@@ -176,7 +204,7 @@ const PROPOSAL_STRATEGIES: Record<string, RoutingStrategy> = {
 
 export function buildInitProposal(
   models: Record<string, string[]>,
-  classifierModel: string,
+  classifierModel: string | undefined,
   extensionDir: string,
   classifierBackend: "prompt" | "typesafe" = "prompt",
 ): Record<string, unknown> {
@@ -196,7 +224,7 @@ export function buildInitProposal(
     classifier: {
       enabled: true,
       backend: classifierBackend,
-      ...(classifierBackend === "prompt" ? { model: classifierModel, method: "auto" as const } : {}),
+      ...(classifierBackend === "prompt" && classifierModel ? { model: classifierModel, method: "auto" as const } : {}),
       ...(classifierBackend === "typesafe" ? { typesafe: { model: "jev-1.13.0" }, criteria: DEFAULT_CLASSIFIER_CRITERIA } : {}),
     },
     models,
@@ -356,8 +384,7 @@ async function handleInit(
     if (workingModels.length > 0) {
       classifierModel = `${workingModels[0].provider}/${workingModels[0].model}`;
     } else {
-      classifierModel = "opencode/mimo-v2.5-free";
-      log(ctx, "No working models found for classifier. Using default — it may not work.", "warning");
+      log(ctx, "No working models found for classifier. Init will omit classifier.model; regex fallback remains available.", "warning");
     }
   }
 
@@ -873,7 +900,7 @@ export function createCommandRouter(
     },
     {
       value: "classifier",
-      description: "Choose classifier backend",
+      description: "Choose classifier backend and prompt model",
       match: (sub) => sub === "classifier",
       handler: async (_, ctx) => {
         if (!ctx.hasUI) {
@@ -881,11 +908,25 @@ export function createCommandRouter(
           return;
         }
         const selected = await ctx.ui.select("Classifier backend", [
-          "prompt — use configured Pi model",
-          "typesafe — use Jev (requires TYPESAFE_API_KEY)",
+          "prompt — choose a Pi model",
+          "typesafe — use Jev (requires Pi auth.json or TYPESAFE_API_KEY)",
         ]);
         if (!selected) return;
         const backend = selected.startsWith("typesafe") ? "typesafe" : "prompt";
+        let selectedPromptModel: string | undefined;
+        const configuredPromptModel = state.config.classifier?.model;
+        const needsPromptModel = backend === "prompt" && !promptClassifierModelAvailable(ctx, configuredPromptModel);
+        if (needsPromptModel) {
+          if (ctx.modelRegistry.getAvailable().length === 0) {
+            log(ctx, "No Pi models available for prompt classifier; regex fallback remains active.", "warning");
+          } else {
+            selectedPromptModel = await requestPromptClassifierModel(ctx) ?? undefined;
+            if (!selectedPromptModel) {
+              log(ctx, "Prompt classifier model selection cancelled", "warning");
+              return;
+            }
+          }
+        }
         if (backend === "typesafe") {
           const approved = await ctx.ui.confirm(
             "Approve TypeSafe for this project?",
@@ -911,6 +952,11 @@ export function createCommandRouter(
           ? current.classifier as Record<string, unknown>
           : {};
         const nextClassifier: Record<string, unknown> = { ...classifier, backend };
+        if (backend === "prompt" && selectedPromptModel) {
+          nextClassifier.model = selectedPromptModel;
+        } else if (backend === "prompt" && needsPromptModel) {
+          delete nextClassifier.model;
+        }
         if (backend === "typesafe") {
           delete nextClassifier.endpoint;
           delete nextClassifier.method;

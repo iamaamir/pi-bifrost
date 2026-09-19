@@ -27,14 +27,14 @@ Features that need an eval harness, persistent analytics, telemetry infra, or up
 - [x] Performance API debug logging — JSONL, AI-parseable.
 - [x] Strict TypeScript (`tsc --noEmit` clean), npm + GitHub distribution.
 
-### v0.2.x — reliability + minimal defaults
+### v0.2.x — reliability + minimal defaults (shipped)
 - [x] **Reliability v1 — circuit breaker.** Probe/runtime failures recorded; circuit opens after N failures in M minutes; open-circuit models are skipped with fallback to default tier. State persisted in `.pi/bifrost-reliability.json`. See [`docs/adr/0005-reliability-store.md`](docs/adr/0005-reliability-store.md).
 - [x] **Default config overhaul.** Replaced the bloated research config with a 3-tier minimal default (`quick`/`general`/`frontier`), no hardcoded model IDs, `DEFAULT_RULES` is the single source of truth, `/bifrost init` and `guessTier` aligned to the new names. See [`docs/adr/0006-default-config.md`](docs/adr/0006-default-config.md).
 - [x] **Optional TypeSafe/Jev classifier.** Explicit opt-in tier judgment with strict decoding, confidence gates, safe credential/trust handling, bounded failure recovery, local metrics, and dual-gated troubleshooting traces. See [`docs/jev-typesafe-architecture.md`](docs/jev-typesafe-architecture.md).
 
 ---
 
-## In progress (v0.3 — transparency & safety)
+## In progress (v0.4 — transparency & safety)
 
 Four small ADRs. Each is a building block: traces make the rest debuggable; the other three fix specific sharp edges the latest reviews uncovered.
 

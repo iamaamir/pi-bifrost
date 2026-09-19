@@ -177,6 +177,14 @@ export interface ConfigIssue {
 }
 
 const trustedTypeSafeConfigs = new WeakSet<BifrostConfig>();
+const TYPESAFE_PROMPT_FIELDS = [
+  "endpoint",
+  "method",
+  "systemPrompt",
+  "maxTokens",
+  "temperature",
+  "fallbackToRegex",
+] as const;
 
 export function normalizeProjectPath(path: string): string {
   const resolved = resolve(process.cwd(), path);
@@ -412,6 +420,13 @@ export function mergeConfig(
   if (merged.classifier) {
     merged.classifier.criteria = mergeCriteria(base.classifier?.criteria, override.classifier?.criteria);
     merged.classifier.typesafe = mergeObj(base.classifier?.typesafe, override.classifier?.typesafe);
+    if (merged.classifier.backend === "typesafe") {
+      const mergedClassifier = merged.classifier as Record<string, unknown>;
+      const overrideClassifier = override.classifier as Record<string, unknown> | undefined;
+      for (const field of TYPESAFE_PROMPT_FIELDS) {
+        if (overrideClassifier?.[field] === undefined) delete mergedClassifier[field];
+      }
+    }
     if (merged.classifier.typesafe) {
       merged.classifier.typesafe.metrics = mergeObj(
         base.classifier?.typesafe?.metrics,
@@ -463,14 +478,6 @@ export function loadConfig(
     if (cfg) merged = mergeConfig(merged, cfg);
   }
   if (merged.classifier?.typesafe) delete merged.classifier.typesafe.trustedProjects;
-  if (merged.classifier?.backend === "typesafe") {
-    delete merged.classifier.endpoint;
-    delete merged.classifier.method;
-    delete merged.classifier.systemPrompt;
-    delete merged.classifier.maxTokens;
-    delete merged.classifier.temperature;
-    delete merged.classifier.fallbackToRegex;
-  }
   if (globalTrusted?.some((project) => normalizeProjectPath(project) === normalizeProjectPath(cwd))) {
     trustedTypeSafeConfigs.add(merged);
   }

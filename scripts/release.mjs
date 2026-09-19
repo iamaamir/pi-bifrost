@@ -105,6 +105,8 @@ async function main() {
   run("npm test");
   console.log("[release] Running typecheck...");
   run("npm run typecheck");
+  console.log("[release] Running integration tests...");
+  run("npm run test:integration");
 
   // ── 3. Determine new version ──────────────────────────────────────
   const pkgPath = join(ROOT, "package.json");

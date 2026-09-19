@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { validateConfig, type BifrostConfig } from "../config.ts";
+import { mergeConfig, validateConfig, type BifrostConfig } from "../config.ts";
 import type { RoutingStrategy } from "../routing.ts";
 
 const baseConfig: BifrostConfig = {
@@ -164,6 +164,20 @@ describe("validateConfig", () => {
       },
     });
     assert.equal(issues.length, 0);
+  });
+
+  it("preserves explicitly supplied TypeSafe prompt-only fields for validation", () => {
+    const inherited = mergeConfig(
+      { classifier: { model: "prompt/model", method: "auto" } },
+      { classifier: { backend: "typesafe" } },
+    );
+    assert.equal(inherited.classifier?.method, undefined);
+
+    const explicit = mergeConfig(
+      { classifier: { model: "prompt/model" } },
+      { classifier: { backend: "typesafe", method: "direct" } },
+    );
+    assert.ok(validateConfig({ ...baseConfig, ...explicit }).some((issue) => issue.message.includes("does not support")));
   });
 
   it("rejects TypeSafe custom endpoint, model, and prompt-only fields", () => {

@@ -42,7 +42,10 @@ Supported strategies include `cheapest`, `cheapest_input`, `cheapest_output`, `l
 - `/bifrost preview <prompt>` previews a route without sending.
 - `/bifrost pin` pauses routing.
 - `/bifrost unpin` resumes routing.
-- `/bifrost classifier off` disables LLM classification.
+- `/bifrost classifier` opens the prompt or TypeSafe/Jev backend picker.
+- `/bifrost classifier on` / `off` enables or disables LLM classification.
+- `/bifrost classifier test` runs a fresh classifier smoke test.
+- `/bifrost classifier status` shows backend, credential state, and safe metrics.
 - `/bifrost probe` checks model availability.
 - `/bifrost reload` reloads configuration.
 

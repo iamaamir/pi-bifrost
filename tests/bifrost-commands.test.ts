@@ -1,8 +1,15 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createCommandRouter, getBifrostCommandCompletions } from "../commands.ts";
 
-function makeCtx() {
+function makeCtx(
+  models: Array<{ provider: string; id: string }> = [],
+  selectOverride?: (title: string, options: string[]) => string | undefined,
+  customOverride?: () => Promise<unknown>,
+) {
   const calls: Array<{ kind: string; value?: unknown; title?: string; options?: string[]; lines?: string[] }> = [];
   const ctx = {
     hasUI: true,
@@ -13,7 +20,7 @@ function makeCtx() {
       },
       select: async (title: string, options: string[]) => {
         calls.push({ kind: "select", title, options });
-        return options.find((option) => option.includes("/bifrost off"));
+        return selectOverride?.(title, options) ?? options.find((option) => option.includes("/bifrost off"));
       },
       notify: (message: string, type?: string) => {
         calls.push({ kind: "notify", value: `${type ?? "info"}:${message}` });
@@ -37,7 +44,10 @@ function makeCtx() {
       setFooter: () => {},
       setHeader: () => {},
       setTitle: () => {},
-      custom: async () => undefined,
+      custom: async () => {
+        calls.push({ kind: "custom" });
+        return customOverride?.();
+      },
       pasteToEditor: () => {},
       getEditorText: () => "",
       editor: async () => undefined,
@@ -50,6 +60,10 @@ function makeCtx() {
       getAllThemes: () => [],
       setTheme: () => ({ success: true }),
     },
+    modelRegistry: {
+      getAvailable: () => models,
+    },
+    scopedModels: [],
   };
   return { ctx: ctx as never, calls };
 }
@@ -119,6 +133,53 @@ describe("bifrost command ui", () => {
     assert.equal(state.enabled, false);
     assert.equal(state.pinned, true);
     assert.equal(state.classifierEnabled, false);
+  });
+
+  it("selecting prompt also persists a classifier model", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-command-test-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const { ctx, calls } = makeCtx(
+        [{ provider: "fixture", id: "classifier" }],
+        (_title, options) => options[0],
+        async () => "fixture/classifier",
+      );
+      const state = makeState();
+      const dispatch = createCommandRouter(state as never);
+
+      await dispatch("classifier", ctx as never);
+
+      const saved = JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8"));
+      assert.equal(saved.classifier.backend, "prompt");
+      assert.equal(saved.classifier.model, "fixture/classifier");
+      assert.ok(calls.some((call) => call.kind === "custom"));
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves config unchanged when prompt model picker is cancelled", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-command-test-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const { ctx } = makeCtx(
+        [{ provider: "fixture", id: "classifier" }],
+        (_title, options) => options[0],
+        async () => null,
+      );
+      const state = makeState();
+      const dispatch = createCommandRouter(state as never);
+
+      await dispatch("classifier", ctx as never);
+
+      assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("shows picker for unknown subcommand", async () => {

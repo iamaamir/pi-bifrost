@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://pi.dev/schemas/bifrost.json",
   "title": "Bifrost Model Router Config",
-  "description": "Configuration for the pi-bifrost query-aware model router. Maps user prompts to model tiers via regex rules and an optional LLM classifier. Merged from extension defaults → global → project-local → root.",
+  "description": "Configuration for the pi-bifrost query-aware model router. Maps user prompts to model tiers via regex rules and an optional LLM classifier. Merged from extension defaults → global → project root → project config (.pi/bifrost.json), with later layers winning.",
   "type": "object",
   "properties": {
     "enabled": {
@@ -46,9 +46,9 @@
       },
       "examples": [
         {
-          "quick": ["opencode/deepseek-v4-flash-free"],
-          "general": ["opencode-go/deepseek-v4-pro", "openai-codex/gpt-5.4-mini"],
-          "frontier": ["openai-codex/gpt-5.6-sol", "opencode-go/glm-5.2"]
+          "quick": ["provider/fast-model"],
+          "general": ["provider/general-model"],
+          "frontier": ["provider/frontier-model"]
         }
       ]
     },
@@ -91,7 +91,7 @@
         },
         "model": {
           "type": "string",
-          "description": "Model tier name OR a direct model reference (e.g. 'opencode-go/glm-5.1'). If the value contains '/', it's treated as an exact provider/id lookup and bypasses tier selection. Otherwise, it must match a key in the 'models' map."
+          "description": "Model tier name OR a direct model reference (e.g. 'provider/specific-model'). If the value contains '/', it's treated as an exact provider/id lookup and bypasses tier selection. Otherwise, it must match a key in the 'models' map."
         }
       }
     },
@@ -172,7 +172,7 @@
             "oneOf": [
               { "type": "null", "description": "Remove inherited criterion for this tier." },
               { "type": "string", "minLength": 1 },
-              { "type": "object", "additionalProperties": false, "properties": { "what": { "type": "string", "minLength": 1 }, "notFor": { "type": "string" }, "examples": { "type": "array", "items": { "type": "string" } } } }
+              { "type": "object", "required": ["what"], "additionalProperties": false, "properties": { "what": { "type": "string", "minLength": 1 }, "notFor": { "type": "string" }, "examples": { "type": "array", "items": { "type": "string" } } } }
             ]
           }
         },

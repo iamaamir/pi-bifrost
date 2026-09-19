@@ -166,10 +166,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   // continues with best-effort routing for warnings.
   const configIssues = validateConfig(config);
   if (config.classifier?.backend === "typesafe" && !isTypeSafeTrusted(config)) {
-    console.error("[bifrost/config] warning: TypeSafe classifier unavailable; approve project in user config classifier.typesafe.trustedProjects");
+    console.warn("[bifrost/config] warning: TypeSafe classifier unavailable; approve project in user config classifier.typesafe.trustedProjects");
   }
   if (config.classifier?.backend === "typesafe" && isTypeSafeTrusted(config) && resolveTypeSafeApiKey().source === "missing") {
-    console.error("[bifrost/config] warning: TypeSafe classifier unavailable; configure typesafe in ~/.pi/agent/auth.json or set TYPESAFE_API_KEY");
+    console.warn("[bifrost/config] warning: TypeSafe classifier unavailable; configure typesafe in ~/.pi/agent/auth.json or set TYPESAFE_API_KEY");
   }
   for (const issue of configIssues) {
     const tag = issue.severity === "error" ? "error" : "warning";

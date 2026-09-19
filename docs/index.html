@@ -256,7 +256,8 @@
               If no candidate matches or the selected model cannot be activated,
               Pi keeps its current model. Bifrost also records repeated failures and
               temporarily skips unreliable models — after a cooldown, it tries them
-              again automatically. Your default tier always works as a fallback.
+              again automatically. The default tier is attempted when it has an
+              eligible candidate; otherwise Pi keeps its current model.
             </dd>
           </div>
           <div>
@@ -374,6 +375,13 @@
               Use <code>/bifrost classifier test</code> for a fresh request and
               <code>/bifrost classifier status</code> for safe operational state.
             </p>
+            <p>
+              Enable it explicitly with <code>classifier.backend: "typesafe"</code>,
+              approve the project through <code>/bifrost classifier</code>, and
+              provide credentials through Pi's user auth file or
+              <code>TYPESAFE_API_KEY</code>. Run <code>/bifrost reload</code> and
+              then the classifier test after setup.
+            </p>
           </div>
         </details>
 
@@ -436,8 +444,7 @@
       "lmstudio/openai/gpt-oss-20b"
     ],
     "frontier": [
-      "openai-codex/gpt-5.4",
-      "opencode-go/kimi-k3"
+      "provider/frontier-model"
     ]
   },
   "rules": [
@@ -448,7 +455,7 @@
   ],
   "classifier": {
     "enabled": true,
-    "model": "opencode/deepseek-v4-flash-free",
+    "model": "provider/classifier-model",
     "method": "auto"
   },
   "reliability": {
@@ -518,20 +525,44 @@
           <summary>Common commands</summary>
           <dl class="command-reference">
             <div>
+              <dt><code>/bifrost init</code></dt>
+              <dd>Probe models and generate config</dd>
+            </div>
+            <div>
+              <dt><code>/bifrost probe</code></dt>
+              <dd>Run availability checks</dd>
+            </div>
+            <div>
               <dt><code>/bifrost preview &lt;prompt&gt;</code></dt>
               <dd>Preview without sending</dd>
+            </div>
+            <div>
+              <dt><code>/bifrost on</code> / <code>off</code></dt>
+              <dd>Enable or disable routing</dd>
             </div>
             <div>
               <dt><code>/bifrost pin</code> / <code>unpin</code></dt>
               <dd>Pause or resume routing</dd>
             </div>
             <div>
-              <dt><code>/bifrost classifier off</code></dt>
-              <dd>Use regex without LLM classification</dd>
+              <dt><code>/bifrost classifier</code></dt>
+              <dd>Choose prompt or TypeSafe/Jev backend</dd>
             </div>
             <div>
-              <dt><code>/bifrost probe</code></dt>
-              <dd>Run availability checks</dd>
+              <dt><code>/bifrost classifier on</code> / <code>off</code></dt>
+              <dd>Enable or disable LLM classification</dd>
+            </div>
+            <div>
+              <dt><code>/bifrost classifier test</code></dt>
+              <dd>Run a fresh classifier smoke test</dd>
+            </div>
+            <div>
+              <dt><code>/bifrost classifier status</code></dt>
+              <dd>Show backend, credential state, and safe metrics</dd>
+            </div>
+            <div>
+              <dt><code>/bifrost cache stats</code> / <code>clear</code></dt>
+              <dd>Inspect or clear classification cache</dd>
             </div>
             <div>
               <dt><code>/bifrost reload</code></dt>

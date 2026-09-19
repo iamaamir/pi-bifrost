@@ -250,7 +250,7 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
     };
     if (!apiKey) {
       trace("credential_missing");
-      if (!warnedMissingKey) { warnedMissingKey = true; console.error("[bifrost] TypeSafe classifier disabled: TYPESAFE_API_KEY is missing"); }
+      if (!warnedMissingKey) { warnedMissingKey = true; console.error("[bifrost] TypeSafe classifier disabled: configure ~/.pi/agent/auth.json or TYPESAFE_API_KEY"); }
       return finish("missing_key");
     }
     const key = circuitKey();

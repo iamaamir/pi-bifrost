@@ -10,7 +10,7 @@
   },
   "classifier": {
     "enabled": true,
-    "model": "opencode/deepseek-v4-flash-free",
+    "model": "ollama/qwen2.5-coder:latest",
     "method": "auto",
     "fallbackToRegex": true
   },

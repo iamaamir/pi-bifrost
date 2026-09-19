@@ -30,7 +30,7 @@
     "extensions": [
       "./index.ts"
     ],
-    "minPiVersion": "0.80.8",
+    "minPiVersion": "0.85.0",
     "image": "https://iamaamir.github.io/pi-bifrost/social-card.png"
   },
   "scripts": {

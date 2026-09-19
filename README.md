@@ -75,7 +75,7 @@ If a model repeatedly fails (probe timeout, auth error, provider stream failure)
 | `/bifrost reload` | Reload config after editing |
 | `/bifrost cache stats` | Show classification cache |
 | `/bifrost cache clear` | Clear classification cache |
-| `/bifrost classifier` | Choose `prompt` or opt-in `typesafe`/Jev backend; TypeSafe requires project approval |
+| `/bifrost classifier` | Choose backend; prompt mode opens Pi's searchable model picker; TypeSafe requires project approval |
 | `/bifrost classifier on` / `off` / `test` / `status` | Enable, disable, test, or inspect classifier; toggles persist to `.pi/bifrost-state.json` |
 
 ## UI smoke test
@@ -111,18 +111,13 @@ The default config ships with three tiers. Run `/bifrost init` to populate them 
 {
   "models": {
     "quick": [
-      "opencode/deepseek-v4-flash-free",
-      "opencode/mimo-v2.5-free"
+      "provider/fast-model"
     ],
     "general": [
-      "opencode-go/deepseek-v4-pro",
-      "opencode-go/glm-5.2",
-      "openai-codex/gpt-5.4-mini"
+      "provider/general-model"
     ],
     "frontier": [
-      "openai-codex/gpt-5.6-sol",
-      "opencode-go/glm-5.2",
-      "opencode-go/deepseek-v4-pro"
+      "provider/frontier-model"
     ]
   }
 }
@@ -200,11 +195,11 @@ Instead of a tier name, use a model reference (`provider/id`) — the matched pr
   "rules": [
     {
       "pattern": "\\bcommit\\b",
-      "model": "opencode-go/glm-5.1"
+      "model": "provider/specific-model"
     },
     {
       "pattern": "\\btest\\b",
-      "model": "opencode/deepseek-v4-flash-free"
+      "model": "provider/specific-test-model"
     }
   ]
 }
@@ -232,7 +227,7 @@ An LLM that reads your prompt and picks a tier. More accurate than regex, costs 
 {
   "classifier": {
     "enabled": true,
-    "model": "opencode/mimo-v2.5-free"
+    "model": "provider/classifier-model"
   }
 }
 ```

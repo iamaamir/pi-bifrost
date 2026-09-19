@@ -1,15 +1,15 @@
 {
   "$schema": "../schema.json",
   "enabled": true,
-  "default": "economical",
+  "default": "quick",
   "strategy": "first",
   "categoryStrategies": {
-    "economical": "cheapest",
+    "quick": "cheapest",
     "frontier": "largest_context"
   },
   "classifier": {
     "enabled": true,
-    "model": "opencode/deepseek-v4-flash-free",
+    "model": "ollama/qwen2.5-coder:latest",
     "method": "auto",
     "maxTokens": 20,
     "temperature": 0,
@@ -21,7 +21,7 @@
     "threshold": 0.85
   },
   "models": {
-    "economical": [
+    "quick": [
       "ollama/qwen2.5-coder:latest",
       "lmstudio/openai/gpt-oss-20b"
     ],
@@ -37,7 +37,7 @@
     },
     {
       "pattern": "\\b(explain|summarize|format|convert|hello)\\b",
-      "model": "economical"
+      "model": "quick"
     }
   ]
 }

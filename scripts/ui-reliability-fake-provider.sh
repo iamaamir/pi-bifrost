@@ -29,9 +29,9 @@ wait_mode_state(){
 const fs = require("node:fs");
 const [statePath, enabled, pinned, classifier] = process.argv.slice(1);
 const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+// `pinned` is session-local by design and is not persisted.
 const expect = {
   enabled: enabled === "true",
-  pinned: pinned === "true",
   classifierEnabled: classifier === "true",
 };
 for (const [key, value] of Object.entries(expect)) {
@@ -117,10 +117,10 @@ prompt "$sid" '/bifrost pin'
 "$A" --session "$sid" wait 'Bifrost · pinned' --assert --timeout 15000 >/dev/null
 wait_mode_state "$work/.pi/bifrost-state.json" true true false
 prompt "$sid" '/reload'
-"$A" --session "$sid" wait 'Bifrost · pinned' --assert --timeout 15000 >/dev/null
+"$A" --session "$sid" wait 'Bifrost · on · classifier off' --assert --timeout 15000 >/dev/null
 wait_mode_state "$work/.pi/bifrost-state.json" true true false
 prompt "$sid" '/bifrost reload'
-"$A" --session "$sid" wait 'Bifrost · pinned' --assert --timeout 15000 >/dev/null
+"$A" --session "$sid" wait 'Bifrost · on · classifier off' --assert --timeout 15000 >/dev/null
 wait_mode_state "$work/.pi/bifrost-state.json" true true false
 echo 'scenario 4: pass'
 "$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true

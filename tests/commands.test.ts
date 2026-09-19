@@ -97,6 +97,11 @@ describe("commands helpers", () => {
       const proposal = buildInitProposal({}, "provider/c", ".") as { default: string };
       assert.equal(proposal.default, "general");
     });
+
+    it("omits prompt classifier model when no working model exists", () => {
+      const proposal = buildInitProposal({}, undefined, ".") as { classifier: Record<string, unknown> };
+      assert.equal(proposal.classifier.model, undefined);
+    });
   });
 
   describe("selectModel with cheapest strategy", () => {
