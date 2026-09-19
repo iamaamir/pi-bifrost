@@ -14,3 +14,4 @@ vscode/
 .amq-bridge/
 .amqrc
 .pi-subagents/
+.agents/
