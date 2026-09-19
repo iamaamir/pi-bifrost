@@ -48,7 +48,11 @@ Supported strategies include `cheapest`, `cheapest_input`, `cheapest_output`, `l
 
 ## Failure behavior
 
-If classification fails, Pi-Bifrost tries configured fallbacks, then keeps Pi's current model if no route resolves. If no matching model can be activated, Pi keeps its current model.
+If classification fails, Pi-Bifrost tries configured fallbacks, then keeps Pi's current model if no route resolves. If no matching model can be activated, Pi keeps its current model. TypeSafe/Jev failures include missing credentials, untrusted project, rate limits, auth errors, timeouts, invalid responses, low confidence, and open circuits. No user prompt is replayed.
+
+## TypeSafe/Jev
+
+TypeSafe is explicit opt-in via `classifier.backend: "typesafe"`. Jev receives current prompt plus configured tier criteria and returns a tier judgment, not an exact provider model. Bifrost retains model lists, reliability filtering, fallback policy, selection strategy, and Pi model activation. Credentials resolve from `~/.pi/agent/auth.json` entry `typesafe` before `TYPESAFE_API_KEY`; project approval is user-level and provenance-sensitive. `/bifrost classifier test` forces a fresh request; `/bifrost classifier status` exposes safe state without secrets. Full TypeSafe tracing requires both `debug.enabled` and `classifier.typesafe.debug`; it can include prompt/provider response data and is for local troubleshooting only.
 
 ## Privacy
 

@@ -17,6 +17,7 @@ Pi-Bifrost is **native model routing for [Pi](https://pi.dev)**. Before generati
 - **Inspectable control** — preview route, pin current model, or force a tier for one message.
 - **Model-agnostic setup** — `/bifrost init` probes supported models available through Pi, then proposes tier lists without hardcoded maintainer model IDs.
 - **Host-real verification** — unit tests, Pi TUI smoke tests, and fake-provider SSE E2E cover routing and reliability behavior.
+- **Optional TypeSafe/Jev backend** — Jev selects a configured Bifrost tier; Bifrost retains model availability, reliability, fallback policy, and Pi model activation. See [`docs/jev-typesafe-architecture.md`](docs/jev-typesafe-architecture.md) before enabling it.
 
 ## Install
 
@@ -74,7 +75,8 @@ If a model repeatedly fails (probe timeout, auth error, provider stream failure)
 | `/bifrost reload` | Reload config after editing |
 | `/bifrost cache stats` | Show classification cache |
 | `/bifrost cache clear` | Clear classification cache |
-| `/bifrost classifier on` / `off` / `status` | Enable / disable LLM classifier, or show state; toggles persist to `.pi/bifrost-state.json` |
+| `/bifrost classifier` | Choose `prompt` or opt-in `typesafe`/Jev backend; TypeSafe requires project approval |
+| `/bifrost classifier on` / `off` / `test` / `status` | Enable, disable, test, or inspect classifier; toggles persist to `.pi/bifrost-state.json` |
 
 ## UI smoke test
 
@@ -291,7 +293,7 @@ Or use the shell environment:
 export TYPESAFE_API_KEY="ts_..."
 ```
 
-Run `/bifrost classifier status` to see `credential=auth-file`, `credential=environment`, or `credential=missing`. Keys are never displayed.
+Run `/bifrost classifier test` to force a fresh nonce-bearing request and inspect backend activity. `/bifrost classifier status` shows `credential=auth-file`, `credential=environment`, or `credential=missing`; keys are never displayed. `/bifrost classifier` opens the backend picker in Pi's UI.
 
 Bifrost's existing fuzzy cache persists normalized prompt text locally for 30 days by default (`cache.ttlHours`), then evicts expired entries; disable it for sensitive projects. TypeSafe operational observation is content-free and local: bounded aggregate outcomes, tiers, confidence bands, latency buckets, and attempt counts are stored in `.pi/bifrost-classifier-metrics.json` and shown by `/bifrost classifier status` and `/bifrost debug`. It never stores prompts, probabilities, or credentials. Set `classifier.typesafe.metrics.enabled` to `false` to disable this file.
 
@@ -317,7 +319,9 @@ Trace events are written to `.pi/bifrost-debug.jsonl` and include request attemp
 }
 ```
 
-Writes `.pi/bifrost-debug.jsonl` — one JSON line per event with routing reason, selected tier/model, and timing. It does not store prompt bodies. Useful for understanding what Bifrost is doing.
+Writes `.pi/bifrost-debug.jsonl` — one JSON line per event with routing reason, selected tier/model, and timing. Normal Bifrost debug events do not store prompt bodies.
+
+For TypeSafe's full local troubleshooting trace, also set `classifier.typesafe.debug: true`. This explicitly includes the prompt and provider classification response, plus request/response details. Never enable it in shared logs or production collection; disable it after troubleshooting. API keys and authorization headers are never logged.
 
 ### Full config reference
 

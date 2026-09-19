@@ -234,8 +234,10 @@
             <dt>Local data</dt>
             <dd>
               The cache may store normalized, sorted prompt words in
-              <code>.pi/bifrost-cache.jsonl</code>. Debug logs contain routing
-              metadata, timings, and prompt length, not the prompt body.
+              <code>.pi/bifrost-cache.jsonl</code>. Normal debug logs contain
+              routing metadata, timings, and prompt length, not the prompt body.
+              TypeSafe full tracing is separate, opt-in, and may include prompt
+              and provider response data; disable it after local troubleshooting.
             </dd>
           </div>
           <div>
@@ -258,9 +260,11 @@
           <div>
             <dt>Credentials</dt>
             <dd>
-              Registry models use credentials managed by Pi. A custom classifier
-              <code>endpoint</code> is treated as an unauthenticated
-              OpenAI-compatible endpoint.
+              Registry models use credentials managed by Pi. TypeSafe/Jev uses
+              Pi's user auth file before <code>TYPESAFE_API_KEY</code>, requires
+              explicit project approval, and never logs API keys or authorization
+              headers. A custom prompt classifier <code>endpoint</code> is treated
+              as an unauthenticated OpenAI-compatible endpoint.
             </dd>
           </div>
         </dl>
@@ -347,6 +351,26 @@
             <p>
               Clear the cache after substantial tier or rule changes when you
               want every prompt classified fresh.
+            </p>
+          </div>
+        </details>
+
+        <details>
+          <summary>How does TypeSafe/Jev classification work?</summary>
+          <div class="faq-answer">
+            <p>
+              TypeSafe/Jev is an explicit opt-in classifier backend. It receives
+              the current prompt and configured tier criteria, then returns a
+              typed tier judgment. Bifrost still owns model lists, reliability,
+              fallback policy, and actual Pi model activation; Jev does not pick
+              provider models directly.
+            </p>
+            <p>
+              Invalid, low-confidence, unavailable, unauthorized, timed-out, or
+              circuit-open Jev results do not block routing. Bifrost falls back
+              according to configuration, then uses regex and the default tier.
+              Use <code>/bifrost classifier test</code> for a fresh request and
+              <code>/bifrost classifier status</code> for safe operational state.
             </p>
           </div>
         </details>
