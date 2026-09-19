@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CONFIG_DIR_NAME, getAgentDir, ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
@@ -598,34 +598,6 @@ async function handlePreview(
   await uiResult(ctx, "Bifrost preview", lines);
 }
 
-function approveTypeSafeProject(ctx: ExtensionContext): boolean {
-  const path = join(getAgentDir(), "bifrost.json");
-  let current: Record<string, unknown> = {};
-  try {
-    current = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown> : {};
-  } catch {
-    log(ctx, "Cannot approve TypeSafe: ~/.pi/agent/bifrost.json is invalid JSON", "error");
-    return false;
-  }
-  const classifier = current.classifier && typeof current.classifier === "object"
-    ? current.classifier as Record<string, unknown> : {};
-  const typesafe = classifier.typesafe && typeof classifier.typesafe === "object"
-    ? classifier.typesafe as Record<string, unknown> : {};
-  const projects = Array.isArray(typesafe.trustedProjects)
-    ? typesafe.trustedProjects.filter((item): item is string => typeof item === "string") : [];
-  const project = process.cwd();
-  if (!projects.includes(project)) projects.push(project);
-  current.classifier = { ...classifier, typesafe: { ...typesafe, trustedProjects: projects } };
-  try {
-    mkdirSync(getAgentDir(), { recursive: true });
-    writeFileSync(path, JSON.stringify(current, null, 2) + "\n");
-    return true;
-  } catch (error) {
-    log(ctx, `Cannot approve TypeSafe project: ${error instanceof Error ? error.message : String(error)}`, "error");
-    return false;
-  }
-}
-
 // ── Command type ────────────────────────────────────────────
 
 type CommandFn = (args: string, ctx: ExtensionContext) => void | Promise<void>;
@@ -926,17 +898,6 @@ export function createCommandRouter(
               return;
             }
           }
-        }
-        if (backend === "typesafe") {
-          const approved = await ctx.ui.confirm(
-            "Approve TypeSafe for this project?",
-            `Allow Jev to receive cache-miss prompts from ${process.cwd()}? This writes approval to ~/.pi/agent/bifrost.json.`,
-          );
-          if (!approved) {
-            log(ctx, "TypeSafe backend not selected; project approval cancelled", "warning");
-            return;
-          }
-          if (!approveTypeSafeProject(ctx)) return;
         }
         const path = join(process.cwd(), CONFIG_DIR_NAME, "bifrost.json");
         let current: Record<string, unknown> = {};

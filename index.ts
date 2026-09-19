@@ -24,7 +24,6 @@ import {
   loadRules,
   DEFAULT_CLASSIFIER_CRITERIA,
   validateConfig,
-  isTypeSafeTrusted,
   type BifrostConfig,
 } from "./config.js";
 import {
@@ -70,7 +69,6 @@ function hasTypeSafeConfigErrors(config: BifrostConfig): boolean {
 
 function activeClassifierCacheKey(config: BifrostConfig): string {
   return classifierCacheKey(config, Object.keys(config.models ?? {}), {
-    typesafeTrusted: isTypeSafeTrusted(config),
     typesafeCredentialAvailable: resolveTypeSafeApiKey().source !== "missing",
   });
 }
@@ -95,7 +93,7 @@ function buildPipeline(
   let classifierModels: ClassifierModel[] = [];
   let classifyWithTypeSafe: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<string | undefined>) | undefined;
   const typeSafeUsable = config.classifier?.backend === "typesafe" && !hasTypeSafeConfigErrors(config);
-  if (classifierEnabled && typeSafeUsable && tiers.length > 0 && isTypeSafeTrusted(config)) {
+  if (classifierEnabled && typeSafeUsable && tiers.length > 0) {
     const classifierConfig = config.classifier!;
     const classify = createTypeSafeClassifier({
       timeoutMs: classifierConfig.typesafe?.timeoutMs,
@@ -165,10 +163,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   // Validate config on startup. Errors are logged; the extension
   // continues with best-effort routing for warnings.
   const configIssues = validateConfig(config);
-  if (config.classifier?.backend === "typesafe" && !isTypeSafeTrusted(config)) {
-    console.warn("[bifrost/config] warning: TypeSafe classifier unavailable; approve project in user config classifier.typesafe.trustedProjects");
-  }
-  if (config.classifier?.backend === "typesafe" && isTypeSafeTrusted(config) && resolveTypeSafeApiKey().source === "missing") {
+  if (config.classifier?.backend === "typesafe" && resolveTypeSafeApiKey().source === "missing") {
     console.warn("[bifrost/config] warning: TypeSafe classifier unavailable; configure typesafe in ~/.pi/agent/auth.json or set TYPESAFE_API_KEY");
   }
   for (const issue of configIssues) {

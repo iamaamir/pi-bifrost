@@ -150,7 +150,6 @@ TypeSafe failures degrade safely:
 | Condition | Behavior |
 |---|---|
 | Missing credential | record `missing_key`, use fallback |
-| Untrusted project | do not construct active TypeSafe classifier |
 | `401`/`403` | record `auth`, use fallback |
 | `429`/`529` | bounded retry, then fallback |
 | Other HTTP failure | record `http`, use fallback |
@@ -194,19 +193,7 @@ export TYPESAFE_API_KEY="ts_..."
 
 Keys never belong in project config.
 
-TypeSafe also requires explicit project approval. Approval is stored only in user/global Pi config:
-
-```json
-{
-  "classifier": {
-    "typesafe": {
-      "trustedProjects": ["/absolute/project/path"]
-    }
-  }
-}
-```
-
-Project files cannot self-approve because a repository should not silently authorize hosted prompt transmission. Selecting TypeSafe through the interactive picker asks for approval and writes the exact current project path after confirmation.
+Selecting TypeSafe through `/bifrost classifier` is the explicit user opt-in. It writes the backend choice to project config; credentials remain user-managed and are never stored in project config.
 
 ## Configuration
 
@@ -249,7 +236,7 @@ TypeSafe uses its fixed official endpoint and nested `typesafe` transport settin
 /bifrost classifier
 ```
 
-Interactive backend selection. TypeSafe selection asks project approval and checks credential availability.
+Interactive backend selection. TypeSafe selection enables Jev and checks credential availability.
 
 ```text
 /bifrost classifier test
@@ -358,9 +345,9 @@ Pinned or disabled Bifrost intentionally does not classify or switch models. Unp
 
 It means Jev returned structurally valid data but uncertainty exceeded policy threshold. It follows fallback policy deliberately.
 
-### Global config can be malformed
+### Config can be malformed
 
-User/global and project configs are separate. A malformed `~/.pi/agent/bifrost.json` can prevent trust approval from loading even when project status appears to show TypeSafe. Validate both JSON files before diagnosing classifier behavior.
+User/global and project configs are separate. A malformed config layer can prevent TypeSafe settings from loading even when project status appears to show TypeSafe. Validate relevant JSON files before diagnosing classifier behavior.
 
 ### Installed extension may differ from source checkout
 

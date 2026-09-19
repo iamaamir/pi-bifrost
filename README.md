@@ -75,7 +75,7 @@ If a model repeatedly fails (probe timeout, auth error, provider stream failure)
 | `/bifrost reload` | Reload config after editing |
 | `/bifrost cache stats` | Show classification cache |
 | `/bifrost cache clear` | Clear classification cache |
-| `/bifrost classifier` | Choose backend; prompt mode opens Pi's searchable model picker; TypeSafe requires project approval |
+| `/bifrost classifier` | Choose backend; prompt mode opens Pi's searchable model picker; TypeSafe selection enables Jev |
 | `/bifrost classifier on` / `off` / `test` / `status` | Enable, disable, test, or inspect classifier; toggles persist to `.pi/bifrost-state.json` |
 
 ## UI smoke test
@@ -259,17 +259,7 @@ TypeSafe is disabled unless explicitly selected with `classifier.backend: "types
 
 Low confidence, missing key, outage, circuit-open state, or invalid response falls back to existing prompt classifier, then regex/default. Requests reject redirects, retry only bounded transient failures, and never replay user turns. Prompt transmission and TypeSafe retention follow TypeSafe policy.
 
-TypeSafe activation also requires exact project approval in the user-level Pi agent `bifrost.json`; project files cannot self-approve. Store credentials in Pi's auth file (recommended) or export the environment variable; never put API keys in project config:
-
-```json
-{
-  "classifier": {
-    "typesafe": {
-      "trustedProjects": ["/absolute/path/to/project"]
-    }
-  }
-}
-```
+Selecting TypeSafe through `/bifrost classifier` is explicit opt-in and writes `classifier.backend` to the project config. Store credentials in Pi's auth file (recommended) or export the environment variable; never put API keys in project config.
 
 Recommended credential setup in `~/.pi/agent/auth.json`:
 

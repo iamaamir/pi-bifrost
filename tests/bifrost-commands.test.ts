@@ -160,6 +160,26 @@ describe("bifrost command ui", () => {
     }
   });
 
+  it("selecting TypeSafe persists backend without project approval", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-command-test-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const { ctx } = makeCtx([], (_title, options) => options.find((option) => option.startsWith("typesafe")));
+      const state = makeState();
+      const dispatch = createCommandRouter(state as never);
+
+      await dispatch("classifier", ctx as never);
+
+      const saved = JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8"));
+      assert.equal(saved.classifier.backend, "typesafe");
+      assert.equal(saved.classifier.typesafe?.trustedProjects, undefined);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("leaves config unchanged when prompt model picker is cancelled", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-command-test-"));
     const previousCwd = process.cwd();

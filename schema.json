@@ -126,7 +126,6 @@
                 "enabled": { "type": "boolean", "default": true }
               }
             },
-            "trustedProjects": { "type": "array", "items": { "type": "string" }, "description": "User/global config only: exact project paths approved for TypeSafe." }
           }
         },
         "model": {

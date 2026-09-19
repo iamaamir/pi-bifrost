@@ -264,10 +264,11 @@
             <dt>Credentials</dt>
             <dd>
               Registry models use credentials managed by Pi. TypeSafe/Jev uses
-              Pi's user auth file before <code>TYPESAFE_API_KEY</code>, requires
-              explicit project approval, and never logs API keys or authorization
-              headers. A custom prompt classifier <code>endpoint</code> is treated
-              as an unauthenticated OpenAI-compatible endpoint.
+              Pi's user auth file before <code>TYPESAFE_API_KEY</code> and never
+              logs API keys or authorization headers. Selecting TypeSafe in the
+              classifier picker is explicit opt-in. A custom prompt classifier
+              <code>endpoint</code> is treated as an unauthenticated
+              OpenAI-compatible endpoint.
             </dd>
           </div>
         </dl>
@@ -376,11 +377,11 @@
               <code>/bifrost classifier status</code> for safe operational state.
             </p>
             <p>
-              Enable it explicitly with <code>classifier.backend: "typesafe"</code>,
-              approve the project through <code>/bifrost classifier</code>, and
-              provide credentials through Pi's user auth file or
-              <code>TYPESAFE_API_KEY</code>. Run <code>/bifrost reload</code> and
-              then the classifier test after setup.
+              Enable it explicitly with <code>classifier.backend: "typesafe"</code>
+              through <code>/bifrost classifier</code>, and provide credentials
+              through Pi's user auth file or <code>TYPESAFE_API_KEY</code>. Run
+              <code>/bifrost reload</code> and then the classifier test after
+              setup.
             </p>
           </div>
         </details>

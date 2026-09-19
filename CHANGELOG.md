@@ -6,7 +6,7 @@ All notable changes to pi-bifrost are documented here.
 
 ### Added
 - Direct model bindings, config validation, and inline tier overrides.
-- Opt-in TypeSafe/Jev classifier backend with confidence validation, bounded retries, persisted reliability, trust approval, safe credential resolution, metrics, and detailed local tracing.
+- Opt-in TypeSafe/Jev classifier backend with confidence validation, bounded retries, persisted reliability, safe credential resolution, metrics, and detailed local tracing.
 - `/bifrost classifier` backend picker, `/bifrost classifier test`, and expanded classifier status diagnostics.
 - TypeSafe/Jev architecture and operational guidance in `docs/jev-typesafe-architecture.md`.
 - Inline tier override via first-word detection (`frontier debug this`).

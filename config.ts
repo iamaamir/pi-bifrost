@@ -1,7 +1,6 @@
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { readJsonFile } from "./storage.ts";
-import { realpathSync } from "node:fs";
 import type { RoutingStrategy, RouteRule } from "./routing.ts";
 import type { CacheOptions } from "./cache.ts";
 import type { DebugConfig } from "./debug.ts";
@@ -43,8 +42,6 @@ export interface TypeSafeConfig {
   metrics?: {
     enabled?: boolean;
   };
-  /** User/global config only. Exact normalized project paths approved for fixed TypeSafe origin. */
-  trustedProjects?: string[];
 }
 
 export interface ClassifierConfig {
@@ -176,7 +173,6 @@ export interface ConfigIssue {
   readonly message: string;
 }
 
-const trustedTypeSafeConfigs = new WeakSet<BifrostConfig>();
 const TYPESAFE_PROMPT_FIELDS = [
   "endpoint",
   "method",
@@ -185,15 +181,6 @@ const TYPESAFE_PROMPT_FIELDS = [
   "temperature",
   "fallbackToRegex",
 ] as const;
-
-export function normalizeProjectPath(path: string): string {
-  const resolved = resolve(process.cwd(), path);
-  try { return realpathSync(resolved); } catch { return resolved; }
-}
-
-export function isTypeSafeTrusted(config: BifrostConfig): boolean {
-  return trustedTypeSafeConfigs.has(config);
-}
 
 /**
  * Validate a resolved BifrostConfig. Returns issues (errors stop
@@ -432,8 +419,6 @@ export function mergeConfig(
         base.classifier?.typesafe?.metrics,
         override.classifier?.typesafe?.metrics,
       );
-      // Trusted project approvals are provenance-sensitive and never merge through layers.
-      delete merged.classifier.typesafe.trustedProjects;
     }
   }
   merged.cache = mergeObj(base.cache, override.cache);
@@ -466,20 +451,9 @@ export function loadConfig(
     readJson<BifrostConfig>(join(cwd, "bifrost.json")),
     readJson<BifrostConfig>(join(cwd, CONFIG_DIR_NAME, "bifrost.json")),
   ];
-  for (let i = 2; i < configs.length; i++) {
-    if (configs[i]?.classifier?.typesafe?.trustedProjects !== undefined) {
-      console.error("[bifrost/config] warning: TypeSafe trustedProjects is accepted only from user/global config and was ignored");
-    }
-  }
-
-  const globalTrusted = configs[1]?.classifier?.typesafe?.trustedProjects;
   let merged: BifrostConfig = base;
   for (const cfg of configs) {
     if (cfg) merged = mergeConfig(merged, cfg);
-  }
-  if (merged.classifier?.typesafe) delete merged.classifier.typesafe.trustedProjects;
-  if (globalTrusted?.some((project) => normalizeProjectPath(project) === normalizeProjectPath(cwd))) {
-    trustedTypeSafeConfigs.add(merged);
   }
   return merged;
 }

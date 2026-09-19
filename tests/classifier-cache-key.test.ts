@@ -20,17 +20,15 @@ describe("classifier cache semantic key", () => {
     assert.match(first, /^[a-f0-9]{64}$/);
   });
 
-  it("changes when trusted TypeSafe activation becomes available", () => {
+  it("changes when TypeSafe credentials become available", () => {
     const typesafe: BifrostConfig = {
       ...config("same"),
       classifier: { ...config("same").classifier, backend: "typesafe" },
     };
     const fallbackOnly = classifierCacheKey(typesafe, ["quick", "general"], {
-      typesafeTrusted: false,
-      typesafeCredentialAvailable: true,
+      typesafeCredentialAvailable: false,
     });
     const active = classifierCacheKey(typesafe, ["quick", "general"], {
-      typesafeTrusted: true,
       typesafeCredentialAvailable: true,
     });
     assert.notEqual(fallbackOnly, active);

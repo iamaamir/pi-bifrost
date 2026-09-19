@@ -16,7 +16,6 @@ function stableValue(value: unknown): unknown {
 }
 
 export interface ClassifierRuntimeSemantics {
-  readonly typesafeTrusted?: boolean;
   readonly typesafeCredentialAvailable?: boolean;
 }
 
@@ -40,7 +39,6 @@ export function classifierCacheKey(
     criteria: classifier?.criteria,
     minConfidence: classifier?.minConfidence ?? 0.8,
     fallback: classifier?.fallback,
-    typesafeTrusted: runtime.typesafeTrusted ?? false,
     typesafeCredentialAvailable: runtime.typesafeCredentialAvailable ?? false,
     tiers,
   }));
