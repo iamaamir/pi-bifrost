@@ -2,10 +2,8 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { DEFAULT_RULES } from "../config.ts";
 import { classifyCompiled, compileRules } from "../routing.ts";
-import { resolveTypeSafeApiKey } from "../typesafe-classifier.ts";
-
-export const TYPESAFE_SYSTEMONE_URL = "https://api.typesafe.ai/v1/systemone";
-export const TYPESAFE_MODEL = "jev-1.13.0";
+import { resolveTypeSafeApiKey, buildTypeSafeRequest, decodeTypeSafeJudgment, TYPESAFE_SYSTEMONE_URL, TYPESAFE_MODEL } from "../typesafe-classifier.ts";
+export { TYPESAFE_SYSTEMONE_URL, TYPESAFE_MODEL } from "../typesafe-classifier.ts";
 export const DEFAULT_TIMEOUT_MS = 10_000;
 export const MAX_TIMEOUT_MS = 60_000;
 export const DEFAULT_MAX_ATTEMPTS = 2;
@@ -82,25 +80,15 @@ export function baselineTier(prompt: string, rules: readonly BaselineRule[] = DE
 }
 
 export function buildRequest(prompt: string): Record<string, unknown> {
-  return {
-    state: prompt,
-    model: TYPESAFE_MODEL,
-    questions: {
-      tier: {
-        type: "choice",
-        instructions: "Which model tier best fits this coding-agent request? Judge task complexity and consequence, not stated preference or price.",
-        criteria: {
-          quick: "Bounded, reversible, obvious work such as formatting, lookup, or a small mechanical edit. Not complex debugging, design, or security analysis.",
-          general: "Normal implementation, tests, API changes, or moderate reasoning with clear scope. Not purely mechanical or unusually ambiguous and consequential work.",
-          frontier: "Complex debugging, architecture, security, high ambiguity, concurrency, or high-consequence work. Not routine bounded edits.",
-        },
-      },
+  return buildTypeSafeRequest({
+    prompt,
+    tiers: [...TIERS],
+    criteria: {
+      quick: "Bounded, reversible, obvious work such as formatting, lookup, or a small mechanical edit. Not complex debugging, design, or security analysis.",
+      general: "Normal implementation, tests, API changes, or moderate reasoning with clear scope. Not purely mechanical or unusually ambiguous and consequential.",
+      frontier: "Complex debugging, architecture, security, high ambiguity, concurrency, or high-consequence work. Not routine bounded edits.",
     },
-  };
-}
-
-function finiteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
+  });
 }
 
 function invalidResponse(): never {
@@ -108,41 +96,20 @@ function invalidResponse(): never {
 }
 
 export function parseJevResponse(payload: unknown): JevJudgment {
+  const judgment = decodeTypeSafeJudgment(payload, TIERS, 0);
+  if (!judgment) invalidResponse();
   if (!payload || typeof payload !== "object") invalidResponse();
   const body = payload as Record<string, unknown>;
-  if (body.model !== TYPESAFE_MODEL) invalidResponse();
-  if (!body.answers || typeof body.answers !== "object") invalidResponse();
-  const answer = (body.answers as Record<string, unknown>).tier;
-  if (!answer || typeof answer !== "object") invalidResponse();
-  const value = answer as Record<string, unknown>;
-  if (value.type !== "choice" || typeof value.choice !== "string" || !TIERS.includes(value.choice as Tier)) invalidResponse();
-  if (!value.probabilities || typeof value.probabilities !== "object") invalidResponse();
-
-  const entries = Object.entries(value.probabilities as Record<string, unknown>);
-  if (entries.length !== TIERS.length || entries.some(([key]) => !TIERS.includes(key as Tier))) invalidResponse();
-  const probabilities = {} as Record<Tier, number>;
-  for (const tier of TIERS) {
-    const probability = (value.probabilities as Record<string, unknown>)[tier];
-    if (!finiteNumber(probability) || probability < 0 || probability > 1) invalidResponse();
-    probabilities[tier] = probability;
-  }
-  const sum = TIERS.reduce((total, tier) => total + probabilities[tier], 0);
-  if (Math.abs(sum - 1) > 0.001) invalidResponse();
-  const selected = value.choice as Tier;
-  const maximum = Math.max(...TIERS.map((tier) => probabilities[tier]));
-  if (Math.abs(probabilities[selected] - maximum) > 1e-9) invalidResponse();
-  if (!finiteNumber(value.confidence) || value.confidence < 0 || value.confidence > 1) invalidResponse();
-
-  if (!body.usage || typeof body.usage !== "object") invalidResponse();
+  if (!body.usage || typeof body.usage !== "object" || Array.isArray(body.usage)) invalidResponse();
   const usage = body.usage as Record<string, unknown>;
   if (!Number.isInteger(usage.input_tokens) || (usage.input_tokens as number) < 0) invalidResponse();
   if (!Number.isInteger(usage.output_tokens) || (usage.output_tokens as number) < 0) invalidResponse();
 
   return {
-    tier: selected,
-    confidence: value.confidence,
-    probabilities,
-    model: body.model,
+    tier: judgment.tier as Tier,
+    confidence: judgment.confidence,
+    probabilities: judgment.probabilities as Record<Tier, number>,
+    model: judgment.model,
     usage: { inputTokens: usage.input_tokens as number, outputTokens: usage.output_tokens as number },
   };
 }

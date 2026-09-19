@@ -79,18 +79,40 @@ function finite(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+function strictRecord(value: unknown, required: readonly string[], optional: readonly string[] = []): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const allowed = new Set([...required, ...optional]);
+    const ownKeys = Reflect.ownKeys(value);
+    if (ownKeys.some((key) => typeof key !== "string" || !allowed.has(key))) return undefined;
+    for (const key of required) {
+      const descriptor = descriptors[key];
+      if (!descriptor || !("value" in descriptor)) return undefined;
+    }
+    for (const key of ownKeys) {
+      const descriptor = descriptors[key as string];
+      if (!descriptor || !("value" in descriptor)) return undefined;
+    }
+    return value as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Decode only provider data needed for routing. Invalid data is a classifier miss. */
 export function decodeTypeSafeJudgment(payload: unknown, tiers: readonly string[], minConfidence = TYPESAFE_MIN_CONFIDENCE): TypeSafeJudgment | undefined {
-  if (!payload || typeof payload !== "object") return undefined;
-  const body = payload as Record<string, unknown>;
-  if (body.model !== TYPESAFE_MODEL || !body.answers || typeof body.answers !== "object") return undefined;
-  const answer = (body.answers as Record<string, unknown>).tier;
-  if (!answer || typeof answer !== "object") return undefined;
-  const value = answer as Record<string, unknown>;
-  if (value.type !== "choice" || typeof value.choice !== "string" || !tiers.includes(value.choice)) return undefined;
+  const body = strictRecord(payload, ["model", "answers"], ["usage"]);
+  if (!body || body.model !== TYPESAFE_MODEL) return undefined;
+  const answers = strictRecord(body.answers, ["tier"]);
+  if (!answers) return undefined;
+  const value = strictRecord(answers.tier, ["type", "choice", "confidence", "probabilities"]);
+  if (!value || value.type !== "choice" || typeof value.choice !== "string" || !tiers.includes(value.choice)) return undefined;
   if (!finite(value.confidence) || value.confidence < minConfidence || value.confidence > 1) return undefined;
-  if (!value.probabilities || typeof value.probabilities !== "object") return undefined;
-  const raw = value.probabilities as Record<string, unknown>;
+  const raw = strictRecord(value.probabilities, tiers);
+  if (!raw) return undefined;
   const keys = Object.keys(raw);
   if (keys.length !== tiers.length || tiers.some((tier) => !Object.prototype.hasOwnProperty.call(raw, tier)) || keys.some((key) => !tiers.includes(key))) return undefined;
   const probabilities: Record<string, number> = {};

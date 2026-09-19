@@ -37,7 +37,7 @@ export interface TypeSafeConfig {
   endpoint?: string;
   timeoutMs?: number;
   maxAttempts?: number;
-  /** Detailed request/response trace requires this and global debug.enabled. Never logs credentials or prompt text. */
+  /** Detailed request/response trace requires this and global debug.enabled. Never logs credentials; may log prompt/response data. */
   debug?: boolean;
   /** Content-free local aggregate observation. Enabled by default when TypeSafe is active. */
   metrics?: {
@@ -411,16 +411,6 @@ export function mergeConfig(
   merged.classifier = mergeObj(base.classifier, override.classifier);
   if (merged.classifier) {
     merged.classifier.criteria = mergeCriteria(base.classifier?.criteria, override.classifier?.criteria);
-    // Backend-specific fields from a lower-precedence prompt config must not
-    // invalidate an explicit TypeSafe selection in a higher-precedence layer.
-    if (merged.classifier.backend === "typesafe") {
-      delete merged.classifier.endpoint;
-      delete merged.classifier.method;
-      delete merged.classifier.systemPrompt;
-      delete merged.classifier.maxTokens;
-      delete merged.classifier.temperature;
-      delete merged.classifier.fallbackToRegex;
-    }
     merged.classifier.typesafe = mergeObj(base.classifier?.typesafe, override.classifier?.typesafe);
     if (merged.classifier.typesafe) {
       merged.classifier.typesafe.metrics = mergeObj(
@@ -473,6 +463,14 @@ export function loadConfig(
     if (cfg) merged = mergeConfig(merged, cfg);
   }
   if (merged.classifier?.typesafe) delete merged.classifier.typesafe.trustedProjects;
+  if (merged.classifier?.backend === "typesafe") {
+    delete merged.classifier.endpoint;
+    delete merged.classifier.method;
+    delete merged.classifier.systemPrompt;
+    delete merged.classifier.maxTokens;
+    delete merged.classifier.temperature;
+    delete merged.classifier.fallbackToRegex;
+  }
   if (globalTrusted?.some((project) => normalizeProjectPath(project) === normalizeProjectPath(cwd))) {
     trustedTypeSafeConfigs.add(merged);
   }

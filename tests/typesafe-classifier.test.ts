@@ -95,6 +95,14 @@ describe("TypeSafe classifier", () => {
     assert.equal(decodeTypeSafeJudgment({ ...payload(), answers: { tier: { type: "choice", choice: "nope", confidence: 1, probabilities: {} } } }, ["quick", "general", "frontier"]), undefined);
   });
 
+  it("fails closed for extra keys, accessors, and non-plain objects", () => {
+    assert.equal(decodeTypeSafeJudgment({ ...payload(), extra: true }, ["quick", "general", "frontier"]), undefined);
+    const accessor = payload() as Record<string, unknown>;
+    Object.defineProperty(accessor, "model", { get: () => TYPESAFE_MODEL, enumerable: true });
+    assert.equal(decodeTypeSafeJudgment(accessor, ["quick", "general", "frontier"]), undefined);
+    assert.equal(decodeTypeSafeJudgment(Object.create({ ...payload() }), ["quick", "general", "frontier"]), undefined);
+  });
+
   it("retries network and 429, but not auth", async () => {
     let calls = 0;
     const classifier = createTypeSafeClassifier({

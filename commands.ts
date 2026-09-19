@@ -438,7 +438,8 @@ async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState):
     log(ctx, "Classifier is disabled; run /bifrost classifier on first", "warning");
     return;
   }
-  const before = state.classifierMetricsStore.snapshot().total;
+  const beforeState = state.classifierMetricsStore.snapshot();
+  const before = beforeState.total;
   clearBifrostWidgets(ctx);
   uiBusy(ctx, "Testing classifier backend...");
   const prompt = `Classify this routine coding request for Bifrost tier selection. Test nonce ${Date.now()}.`;
@@ -451,8 +452,7 @@ async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState):
   }
   const after = state.classifierMetricsStore.snapshot();
   const source = result.kind === "classified" ? result.source : "fallback";
-  const metrics = state.classifierMetricsStore.snapshot();
-  const outcome = Object.keys(metrics.outcomes).at(-1);
+  const outcome = Object.entries(after.outcomes).find(([key, count]) => count > (beforeState.outcomes[key] ?? 0))?.[0];
   const lines = [
     "--- classifier test ---",
     `backend: ${classifier?.backend ?? "prompt"}`,
@@ -637,7 +637,6 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "classifier", description: "Choose classifier backend" },
   { value: "classifier on", description: "Enable LLM classifier" },
   { value: "classifier off", description: "Disable LLM classifier" },
-  { value: "classifier", description: "Choose classifier backend" },
   { value: "classifier test", description: "Test selected classifier backend" },
   { value: "classifier status", description: "Show classifier state" },
   { value: "debug", description: "Show config and routing state" },
