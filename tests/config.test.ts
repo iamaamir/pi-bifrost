@@ -67,6 +67,11 @@ describe("validateConfig", () => {
     assert.ok(errors[0].message.includes('between 0 and 1'));
   });
 
+  it("errors on invalid cache retention", () => {
+    const issues = validateConfig({ ...baseConfig, cache: { ttlHours: 0 } });
+    assert.ok(issues.some((issue) => issue.severity === "error" && issue.message.includes("ttlHours")));
+  });
+
   it("warns when cache maxEntries is 0", () => {
     const issues = validateConfig({
       ...baseConfig,
@@ -146,6 +151,35 @@ describe("validateConfig", () => {
     const errors = issues.filter((i) => i.severity === "error");
     assert.equal(errors.length, 1);
     assert.ok(errors[0].message.includes("Probe"));
+  });
+
+  it("accepts opt-in TypeSafe config with nested pinned transport", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      classifier: {
+        backend: "typesafe",
+        typesafe: { model: "jev-1.13.0" },
+        criteria: { frontier: "complex", economical: "normal" },
+        minConfidence: 0.8,
+      },
+    });
+    assert.equal(issues.length, 0);
+  });
+
+  it("rejects TypeSafe custom endpoint, model, and prompt-only fields", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      classifier: {
+        backend: "typesafe",
+        model: "prompt/model",
+        typesafe: { model: "other", endpoint: "http://localhost" },
+        method: "direct",
+        criteria: { frontier: "complex", economical: "normal" },
+      },
+    });
+    assert.ok(issues.some((issue) => issue.message.includes("must be exactly")));
+    assert.ok(issues.some((issue) => issue.message.includes("endpoint")));
+    assert.ok(issues.some((issue) => issue.message.includes("does not support")));
   });
 
   it("allows valid probe settings", () => {

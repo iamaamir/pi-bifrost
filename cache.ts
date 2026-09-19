@@ -5,6 +5,8 @@ export interface CacheEntry {
   category: string;
   lastUsed: number;
   hits: number;
+  /** Classifier semantics fingerprint. Legacy entries omit this and are ignored for keyed lookups. */
+  semanticKey?: string;
   /** Monotonic sequence number for stable eviction ordering. */
   seq?: number;
 }
@@ -13,8 +15,13 @@ export interface CacheOptions {
   enabled?: boolean;
   maxEntries?: number;
   threshold?: number;
+  /** Retain entries for this many hours. Default 720 (30 days). */
+  ttlHours?: number;
   path?: string;
 }
+
+export const DEFAULT_TTL_HOURS = 24 * 30;
+export const DEFAULT_CACHE_TTL_MS = DEFAULT_TTL_HOURS * 60 * 60 * 1000;
 
 export const DEFAULT_MAX_ENTRIES = 500;
 export const DEFAULT_THRESHOLD = 0.85;
@@ -80,7 +87,7 @@ function lookupIndex(entries: CacheEntry[]): LookupIndex {
   return index;
 }
 
-export function loadCache(path: string): CacheEntry[] {
+export function loadCache(path: string, maxAgeMs = Number.POSITIVE_INFINITY): CacheEntry[] {
   try {
     const text = readTextFile(path);
     if (text === undefined) return [];
@@ -96,11 +103,14 @@ export function loadCache(path: string): CacheEntry[] {
       })
       .filter((e): e is CacheEntry => e !== undefined);
 
+    const cutoff = Date.now() - maxAgeMs;
+    const freshEntries = entries.filter((entry) => Number.isFinite(entry.lastUsed) && entry.lastUsed >= cutoff);
+
     // Seed seq counter from loaded entries to avoid collision on restart.
-    const maxSeq = entries.reduce((max: number, e: CacheEntry) => Math.max(max, e.seq ?? 0), 0);
+    const maxSeq = freshEntries.reduce((max: number, e: CacheEntry) => Math.max(max, e.seq ?? 0), 0);
     if (maxSeq >= nextSeq) nextSeq = maxSeq + 1;
 
-    return entries;
+    return freshEntries;
   } catch (err) {
     console.error(`[bifrost] failed to load cache: ${err}`);
     return [];
@@ -129,14 +139,22 @@ export function lookupCache(
   entries: CacheEntry[],
   prompt: string,
   threshold: number,
+  semanticKey?: string,
+  maxAgeMs = Number.POSITIVE_INFINITY,
 ): CacheEntry | undefined {
   const normalized = normalize(prompt);
+  const cutoff = Date.now() - maxAgeMs;
+  const usable = (entry: CacheEntry): boolean => entry.lastUsed >= cutoff && (semanticKey === undefined || entry.semanticKey === semanticKey);
 
   // Fast path: build the index (also serves exact lookup), then check the
   // normalized->index map — O(1) instead of a full string-compare scan.
   const { byNormalized } = lookupIndex(entries);
   const exactIdx = byNormalized.get(normalized);
-  if (exactIdx !== undefined) return entries[exactIdx]!;
+  if (exactIdx !== undefined && usable(entries[exactIdx]!)) return entries[exactIdx]!;
+  if (semanticKey !== undefined) {
+    const exact = entries.find((entry) => entry.normalized === normalized && usable(entry));
+    if (exact) return exact;
+  }
 
   const promptTokens = tokenSet(normalized);
   const promptSize = promptTokens.size;
@@ -156,6 +174,7 @@ export function lookupCache(
   let best: { entry: CacheEntry; score: number; index: number } | undefined;
   for (const [i, intersection] of counters) {
     const entry = entries[i]!;
+    if (!usable(entry)) continue;
     const entrySize = entryTokenSet(entry).size;
     if (entrySize === 0) continue;
     if (Math.min(promptSize, entrySize) / Math.max(promptSize, entrySize) < threshold) continue;
@@ -197,15 +216,17 @@ export function updateCache(
   prompt: string,
   category: string,
   maxEntries: number,
+  semanticKey?: string,
 ): CacheEntry[] {
   const normalized = normalize(prompt);
-  const idx = entries.findIndex((e) => e.normalized === normalized);
+  const idx = entries.findIndex((e) => e.normalized === normalized && (semanticKey === undefined || e.semanticKey === semanticKey));
 
   if (idx !== -1) {
     const updated = [...entries];
     updated[idx] = {
       ...updated[idx],
       category,
+      semanticKey,
       lastUsed: Date.now(),
       hits: updated[idx].hits + 1,
     };
@@ -213,7 +234,7 @@ export function updateCache(
   }
 
   return evictIfNeeded(
-    [...entries, { normalized, category, lastUsed: Date.now(), hits: 1, seq: nextSeq++ }],
+    [...entries, { normalized, category, semanticKey, lastUsed: Date.now(), hits: 1, seq: nextSeq++ }],
     maxEntries,
   );
 }

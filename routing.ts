@@ -174,7 +174,7 @@ export function resolveModel(
 
 export interface SkippedCandidate {
   key: string;
-  reason: "open_circuit";
+  reason: "open_circuit" | "trial_active";
   openUntil?: number;
 }
 
@@ -218,8 +218,12 @@ export function resolveHealthyModel(
   const skipped: SkippedCandidate[] = [];
   for (const candidate of candidates) {
     const circuit = getCircuitState(reliabilityState, modelKey(candidate), now, reliabilityConfig);
-    if (circuit.open) {
-      skipped.push({ key: modelKey(candidate), reason: "open_circuit", openUntil: circuit.openUntil });
+    if (circuit.open || circuit.trialActive) {
+      skipped.push({
+        key: modelKey(candidate),
+        reason: circuit.open ? "open_circuit" : "trial_active",
+        openUntil: circuit.openUntil,
+      });
       continue;
     }
     healthyCandidates.push(candidate);

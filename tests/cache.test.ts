@@ -37,6 +37,17 @@ describe("cache", () => {
   });
 
   describe("lookupCache", () => {
+    it("filters semantic keys when provided", () => {
+      const entries = [{ normalized: "hello", category: "quick", lastUsed: Date.now(), hits: 0, semanticKey: "prompt-a" }];
+      assert.equal(lookupCache(entries, "hello", 1, "prompt-b"), undefined);
+      assert.equal(lookupCache(entries, "hello", 1, "prompt-a")?.category, "quick");
+    });
+
+    it("does not reuse entries after their retention window", () => {
+      const entries = [{ normalized: "hello", category: "quick", lastUsed: Date.now() - 2_000, hits: 0, semanticKey: "prompt-a" }];
+      assert.equal(lookupCache(entries, "hello", 1, "prompt-a", 1_000), undefined);
+    });
+
     it("returns entry for exact match (no mutation)", () => {
       const entries = [
         { normalized: "hello world", category: "economical", lastUsed: 1, hits: 5 },

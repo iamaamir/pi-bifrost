@@ -74,6 +74,10 @@ function makeState(saveModeState: () => void = () => {}) {
     pinned: false,
     cacheEntries: [],
     reliabilityStore: makeStore(),
+    classifierMetricsStore: {
+      snapshot: () => ({ version: 1, model: "jev-1.13.0", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0 }),
+      reload: () => {},
+    },
     extensionDir: ".",
     getPipeline: () => ({ classify: async () => ({ kind: "unclassified" as const }) }),
     invalidatePipeline: () => {},

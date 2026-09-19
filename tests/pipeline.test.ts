@@ -54,6 +54,45 @@ describe("classification-pipeline", () => {
   });
 
   describe("classifier", () => {
+    it("tries TypeSafe before existing prompt classifier", async () => {
+      const calls: string[] = [];
+      const p = createPipeline(deps({
+        classifyWithTypeSafe: async () => { calls.push("typesafe"); return "frontier"; },
+        classifierModels: [makeClassifierModel("a", "m1")],
+        classifyWithLLM: async () => { calls.push("prompt"); return "economical"; },
+      }));
+      const r = await p.classify("debug this");
+      assert.deepEqual(calls, ["typesafe"]);
+      assert.equal(r.kind, "classified");
+      if (r.kind === "classified") assert.equal(r.tier, "frontier");
+    });
+
+    it("falls from TypeSafe to prompt, then regex/default", async () => {
+      const calls: string[] = [];
+      const p = createPipeline(deps({
+        classifyWithTypeSafe: async () => { calls.push("typesafe"); return undefined; },
+        classifierModels: [makeClassifierModel("a", "m1")],
+        classifyWithLLM: async () => { calls.push("prompt"); return undefined; },
+        regexRules: [{ pattern: "hello", model: "frontier" }],
+        defaultTier: "economical",
+      }));
+      const r = await p.classify("hello");
+      assert.deepEqual(calls, ["typesafe", "prompt"]);
+      assert.equal(r.kind, "classified");
+      if (r.kind === "classified") assert.equal(r.source, "regex");
+    });
+
+    it("uses TypeSafe miss with prompt fallback and default", async () => {
+      const p = createPipeline(deps({
+        classifyWithTypeSafe: async () => undefined,
+        classifierModels: [makeClassifierModel("a", "m1")],
+        classifyWithLLM: async () => undefined,
+        defaultTier: "economical",
+      }));
+      const r = await p.classify("hello");
+      assert.equal(r.kind, "fallback");
+    });
+
     it("uses first successful classifier model", async () => {
       let calls = 0;
       const p = createPipeline(

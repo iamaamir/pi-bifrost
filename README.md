@@ -235,7 +235,79 @@ An LLM that reads your prompt and picks a tier. More accurate than regex, costs 
 }
 ```
 
-If the classifier fails or is disabled, regex rules take over. Successful LLM classifier results enter the local classification cache, so similar repeat prompts can skip another classifier call.
+If classifier fails or is disabled, regex rules take over. Successful LLM classifier results enter local classification cache, so similar repeat prompts can skip another classifier call.
+
+#### Optional TypeSafe/Jev backend
+
+TypeSafe is disabled unless explicitly selected with `classifier.backend: "typesafe"`. It sends each cache-miss prompt to official `https://api.typesafe.ai/v1/systemone` using a `typesafe` API-key credential from Pi's `~/.pi/agent/auth.json` first, then `TYPESAFE_API_KEY`, pinned `classifier.typesafe.model: "jev-1.13.0"`, and default confidence gate `0.80`. Configure criteria for every tier. Keep existing `classifier.model` for optional prompt fallback:
+
+```json
+{
+  "classifier": {
+    "enabled": true,
+    "backend": "typesafe",
+    "model": "my-prompt-classifier",
+    "typesafe": {
+      "model": "jev-1.13.0"
+    },
+    "minConfidence": 0.8,
+    "criteria": {
+      "quick": "Bounded, reversible work",
+      "general": "Normal implementation and moderate reasoning",
+      "frontier": "Complex, ambiguous, or high-consequence work"
+    }
+  }
+}
+```
+
+Low confidence, missing key, outage, circuit-open state, or invalid response falls back to existing prompt classifier, then regex/default. Requests reject redirects, retry only bounded transient failures, and never replay user turns. Prompt transmission and TypeSafe retention follow TypeSafe policy.
+
+TypeSafe activation also requires exact project approval in the user-level Pi agent `bifrost.json`; project files cannot self-approve. Store credentials in Pi's auth file (recommended) or export the environment variable; never put API keys in project config:
+
+```json
+{
+  "classifier": {
+    "typesafe": {
+      "trustedProjects": ["/absolute/path/to/project"]
+    }
+  }
+}
+```
+
+Recommended credential setup in `~/.pi/agent/auth.json`:
+
+```json
+{
+  "typesafe": {
+    "type": "api_key",
+    "key": "ts_..."
+  }
+}
+```
+
+Or use the shell environment:
+
+```bash
+export TYPESAFE_API_KEY="ts_..."
+```
+
+Run `/bifrost classifier status` to see `credential=auth-file`, `credential=environment`, or `credential=missing`. Keys are never displayed.
+
+Bifrost's existing fuzzy cache persists normalized prompt text locally for 30 days by default (`cache.ttlHours`), then evicts expired entries; disable it for sensitive projects. TypeSafe operational observation is content-free and local: bounded aggregate outcomes, tiers, confidence bands, latency buckets, and attempt counts are stored in `.pi/bifrost-classifier-metrics.json` and shown by `/bifrost classifier status` and `/bifrost debug`. It never stores prompts, probabilities, or credentials. Set `classifier.typesafe.metrics.enabled` to `false` to disable this file.
+
+For an end-to-end request trace, enable both global debug and TypeSafe debug:
+
+```json
+{
+  "debug": { "enabled": true },
+  "classifier": {
+    "backend": "typesafe",
+    "typesafe": { "debug": true }
+  }
+}
+```
+
+Trace events are written to `.pi/bifrost-debug.jsonl` and include request attempts, official endpoint, HTTP status, decoded tier, confidence, probabilities, retry/failure outcome, and correlation ID. This mode includes prompt/response classification data; use only for local troubleshooting and disable afterward. Credentials and authorization headers are never logged.
 
 ### Debug logging
 
@@ -335,7 +407,7 @@ See [ADR 0015](docs/adr/0015-pinned-ephemeral.md) for the design rationale.
 
 Bifrost maintains a **local routing-classification cache**. After a successful LLM classification, it stores a normalized prompt and its selected tier. Similar future prompts can reuse that tier and skip the classifier call. It does not store model answers.
 
-The project-local cache is `.pi/bifrost-cache.jsonl`. Entries contain lowercased, punctuation-stripped, sorted prompt words, selected tier, last-use timestamp, and hit count. Default limit is 500 entries; entries use exact matching first, then token-set similarity (default threshold `0.85`) and are evicted least-recently-used first. Use `/bifrost cache stats` to inspect it or `/bifrost cache clear` to remove it.
+The project-local cache is `.pi/bifrost-cache.jsonl`. Entries contain lowercased, punctuation-stripped, sorted prompt words, selected tier, last-use timestamp, hit count, and a hashed classifier-semantics fingerprint. Default limit is 500 entries with 30-day retention; entries use exact matching first, then token-set similarity (default threshold `0.85`) and are evicted least-recently-used first. Use `/bifrost cache stats` to inspect it or `/bifrost cache clear` to remove it.
 
 ### Do I need multiple models?
 

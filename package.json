@@ -41,6 +41,7 @@
     "test:ui:reliability": "bash scripts/ui-reliability-fake-provider.sh",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
+    "benchmark:jev": "node --experimental-strip-types scripts/jev-benchmark.ts",
     "release": "node --experimental-strip-types scripts/release.mjs"
   },
   "peerDependencies": {

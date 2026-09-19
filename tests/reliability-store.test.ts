@@ -46,6 +46,14 @@ describe("reliability store", () => {
     assert.equal(calls.length, 0);
   });
 
+  it("recordFailure does not persist when disabled", () => {
+    const { io, calls } = makeIo();
+    const store = new ReliabilityStore({ cwd: "/tmp", config: { ...cfg, enabled: false }, io });
+    store.recordFailure(key, "classifier", "timeout", 1000);
+    assert.deepEqual(store.getState(), emptyReliabilityState());
+    assert.equal(calls.length, 0);
+  });
+
   it("recordSettled — Policy A: failure always records", () => {
     const { io, calls } = makeIo();
     const store = new ReliabilityStore({ cwd: "/tmp", config: { ...cfg, failureThreshold: 1 }, io });
@@ -85,6 +93,17 @@ describe("reliability store", () => {
     const store = new ReliabilityStore({ cwd: "/tmp", config: { ...cfg, failureThreshold: 1 }, io, initialState: stateWithFailure });
     store.beginTrial(key);
     assert.equal(store.getCircuitState(key, 1000).trialActive, true);
+  });
+
+  it("treats an active half-open trial as unavailable", () => {
+    const { io } = makeIo();
+    const store = new ReliabilityStore({
+      cwd: "/tmp", config: cfg, io, now: () => 2000,
+      initialState: { version: 1, models: { [key]: { failures: [1000], openUntil: 1000 } } },
+    });
+    assert.equal(store.tryBeginTrial(key, 2000), true);
+    assert.equal(store.isModelHealthy(key, 2000), false);
+    assert.equal(store.tryBeginTrial(key, 2000), false);
   });
 
   it("applyOutcomes batches multiple outcomes into one save", () => {
@@ -142,18 +161,15 @@ describe("reliability store", () => {
   });
 
   it("pruneStaleTrials clears trialActive when openUntil expired", () => {
-    const { io } = makeIo();
     const t0 = 1000;
-    const store = new ReliabilityStore({
-      cwd: "/tmp", config: cfg, io, now: () => t0,
-      initialState: {
-        version: 1,
-        models: { [key]: { failures: [t0], openUntil: t0 - 1, trialActive: true } },
-      },
-    });
-    // openUntil is in the past → stale trial should be cleared
-    assert.equal(store.getCircuitState(key, t0).trialActive, false);
-    assert.equal(store.getCircuitState(key, t0).halfOpen, true);
+    const stale = { version: 1 as const, models: { [key]: { failures: [t0], openUntil: t0 - 1, trialActive: true } } };
+    const io: ReliabilityIo = { load: () => stale, save: () => {} };
+    const loaded = new ReliabilityStore({ cwd: "/tmp", config: cfg, io, now: () => t0 });
+    const injected = new ReliabilityStore({ cwd: "/tmp", config: cfg, io, now: () => t0, initialState: stale });
+    for (const store of [loaded, injected]) {
+      assert.equal(store.getCircuitState(key, t0).trialActive, false);
+      assert.equal(store.getCircuitState(key, t0).halfOpen, true);
+    }
   });
 
   it("isModelHealthy returns false for open circuit", () => {

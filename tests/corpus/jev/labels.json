@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "labelSet": "development",
+  "tiers": {
+    "quick": "Bounded, reversible, obvious work.",
+    "general": "Normal implementation, tests, and moderate reasoning.",
+    "frontier": "Complex debugging, architecture, security, ambiguity, or consequence."
+  },
+  "note": "Development labels support preliminary evaluation only. They do not authorize production route changes."
+}

@@ -22,6 +22,8 @@ export type ClassificationResult =
 export interface PipelineDeps {
   /** Query cache. Returns tier or undefined. */
   readonly cacheLookup: (text: string) => string | undefined;
+  /** Optional provider-neutral backend attempted before prompt classifier. */
+  readonly classifyWithTypeSafe?: (text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<string | undefined>;
   /** Classifier models in priority order. Empty array = skip LLM. */
   readonly classifierModels: readonly ClassifierModel[];
   /** Invoke the LLM classifier for a single model. Returns tier or undefined. */
@@ -41,7 +43,7 @@ export interface PipelineDeps {
 // ── Pipeline interface ─────────────────────────────────────────
 
 export interface ClassificationPipeline {
-  readonly classify: (text: string) => Promise<ClassificationResult>;
+  readonly classify: (text: string, signal?: AbortSignal) => Promise<ClassificationResult>;
 }
 
 // ── Factory ────────────────────────────────────────────────────
@@ -49,6 +51,7 @@ export interface ClassificationPipeline {
 export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
   const {
     cacheLookup,
+    classifyWithTypeSafe,
     classifierModels,
     classifyWithLLM,
     regexRules: rawRegexRules,
@@ -60,7 +63,7 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
   // Per-rule testing preserves rule-order match precedence exactly.
   const regexRules = compileRules(rawRegexRules);
 
-  async function classify(text: string): Promise<ClassificationResult> {
+  async function classify(text: string, signal?: AbortSignal): Promise<ClassificationResult> {
     // Stage 1: pre-check regex for direct model references only.
     // Runs before tiers check — direct bindings work even with zero tiers.
     {
@@ -84,7 +87,22 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
       return { kind: "classified", tier: cached, source: "cache" };
     }
 
-    // Stage 3: LLM classifier — try each model in priority order
+    // Stage 3: optional TypeSafe classifier, then existing prompt classifier.
+    if (classifyWithTypeSafe) {
+      try {
+        const endTypeSafe = debugMeasure("pipeline", "typesafe.attempt");
+        const tier = await classifyWithTypeSafe(text, tiers, signal);
+        endTypeSafe({ tier });
+        if (tier && tiers.includes(tier)) {
+          debug("pipeline", "result", { source: "classifier", tier, backend: "typesafe" });
+          return { kind: "classified", tier, source: "classifier" };
+        }
+      } catch (err) {
+        debug("pipeline", "typesafe.error", { error: String(err) });
+      }
+    }
+
+    // Existing prompt classifier — try each model in priority order.
     for (const model of classifierModels) {
       try {
         const endLLM = debugMeasure("pipeline", "classifier.attempt");
@@ -101,7 +119,7 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
       }
     }
 
-    // Stage 3: regex rules
+    // Stage 4: regex rules
     const endRegex = debugMeasure("pipeline", "regex");
     const regex = classifyCompiled(text, regexRules);
     endRegex({ match: !!regex, tier: regex });

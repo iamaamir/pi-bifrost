@@ -1,10 +1,10 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
 import type { BifrostConfig } from "./config.ts";
-import { DEFAULT_RULES, loadConfig } from "./config.ts";
+import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, loadConfig } from "./config.ts";
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
 import type { ClassificationPipeline } from "./classification-pipeline.ts";
@@ -21,6 +21,8 @@ import {
   type RoutingStrategy,
 } from "./routing.ts";
 import type { ReliabilityStore } from "./reliability-store.ts";
+import type { ClassifierMetricsStore } from "./classifier-metrics.ts";
+import { resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
@@ -31,6 +33,7 @@ export interface BifrostState {
   pinned: boolean;
   cacheEntries: CacheEntry[];
   reliabilityStore: ReliabilityStore;
+  classifierMetricsStore: ClassifierMetricsStore;
   extensionDir: string;
   getPipeline: (ctx: ExtensionContext) => ClassificationPipeline;
   invalidatePipeline: () => void;
@@ -175,6 +178,7 @@ export function buildInitProposal(
   models: Record<string, string[]>,
   classifierModel: string,
   extensionDir: string,
+  classifierBackend: "prompt" | "typesafe" = "prompt",
 ): Record<string, unknown> {
   const tierKeys = Object.keys(models);
   // Pick the first populated tier as default, or fall back to first key.
@@ -191,8 +195,9 @@ export function buildInitProposal(
     categoryStrategies,
     classifier: {
       enabled: true,
-      model: classifierModel,
-      method: "auto" as const,
+      backend: classifierBackend,
+      ...(classifierBackend === "prompt" ? { model: classifierModel, method: "auto" as const } : {}),
+      ...(classifierBackend === "typesafe" ? { typesafe: { model: "jev-1.13.0" }, criteria: DEFAULT_CLASSIFIER_CRITERIA } : {}),
     },
     models,
     rules: DEFAULT_RULES,
@@ -356,7 +361,12 @@ async function handleInit(
     }
   }
 
-  const proposal = buildInitProposal(models, classifierModel, state.extensionDir);
+  const proposal = buildInitProposal(
+    models,
+    classifierModel,
+    state.extensionDir,
+    state.config.classifier?.backend ?? "prompt",
+  );
 
   const totalAssigned = Object.values(models).reduce((s, v) => s + v.length, 0);
   uiOutput(ctx, [
@@ -406,6 +416,10 @@ async function handleInit(
   state.pinned = runtimeState.pinned;
   state.classifierEnabled = runtimeState.classifierEnabled;
   state.reliabilityStore.reload(state.config.reliability, process.cwd());
+  state.classifierMetricsStore.reload({
+    cwd: process.cwd(),
+    enabled: state.config.classifier?.backend === "typesafe" && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
+  });
   state.invalidatePipeline();
 
   log(ctx, "wrote .pi/bifrost.json and reloaded config");
@@ -416,6 +430,44 @@ async function handleInit(
     ctx.ui.setWidget("bifrost-output", []);
     ctx.ui.setWidget("bifrost-probe", []);
   }
+}
+
+async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState): Promise<void> {
+  const classifier = state.config.classifier;
+  if (!state.classifierEnabled || classifier?.enabled === false) {
+    log(ctx, "Classifier is disabled; run /bifrost classifier on first", "warning");
+    return;
+  }
+  const before = state.classifierMetricsStore.snapshot().total;
+  clearBifrostWidgets(ctx);
+  uiBusy(ctx, "Testing classifier backend...");
+  const prompt = `Classify this routine coding request for Bifrost tier selection. Test nonce ${Date.now()}.`;
+  let result;
+  try {
+    result = await state.getPipeline(ctx).classify(prompt);
+  } finally {
+    uiDone(ctx);
+    syncBifrostModeStatus(ctx, state);
+  }
+  const after = state.classifierMetricsStore.snapshot();
+  const source = result.kind === "classified" ? result.source : "fallback";
+  const metrics = state.classifierMetricsStore.snapshot();
+  const outcome = Object.keys(metrics.outcomes).at(-1);
+  const lines = [
+    "--- classifier test ---",
+    `backend: ${classifier?.backend ?? "prompt"}`,
+    `result: ${result.kind === "classified" ? result.tier : "fallback"}`,
+    `source: ${source}`,
+    `request observed: ${after.total > before ? "yes" : "no"}`,
+  ];
+  if (classifier?.backend === "typesafe") {
+    lines.push(`credential: ${resolveTypeSafeApiKey().source}`);
+    if (after.total > before) {
+      lines.push(`outcome: ${outcome ?? "recorded"}`);
+    }
+  }
+  lines.push("-----------------------");
+  await uiResult(ctx, "Classifier test", lines);
 }
 
 async function handleBenchmark(
@@ -519,6 +571,34 @@ async function handlePreview(
   await uiResult(ctx, "Bifrost preview", lines);
 }
 
+function approveTypeSafeProject(ctx: ExtensionContext): boolean {
+  const path = join(getAgentDir(), "bifrost.json");
+  let current: Record<string, unknown> = {};
+  try {
+    current = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown> : {};
+  } catch {
+    log(ctx, "Cannot approve TypeSafe: ~/.pi/agent/bifrost.json is invalid JSON", "error");
+    return false;
+  }
+  const classifier = current.classifier && typeof current.classifier === "object"
+    ? current.classifier as Record<string, unknown> : {};
+  const typesafe = classifier.typesafe && typeof classifier.typesafe === "object"
+    ? classifier.typesafe as Record<string, unknown> : {};
+  const projects = Array.isArray(typesafe.trustedProjects)
+    ? typesafe.trustedProjects.filter((item): item is string => typeof item === "string") : [];
+  const project = process.cwd();
+  if (!projects.includes(project)) projects.push(project);
+  current.classifier = { ...classifier, typesafe: { ...typesafe, trustedProjects: projects } };
+  try {
+    mkdirSync(getAgentDir(), { recursive: true });
+    writeFileSync(path, JSON.stringify(current, null, 2) + "\n");
+    return true;
+  } catch (error) {
+    log(ctx, `Cannot approve TypeSafe project: ${error instanceof Error ? error.message : String(error)}`, "error");
+    return false;
+  }
+}
+
 // ── Command type ────────────────────────────────────────────
 
 type CommandFn = (args: string, ctx: ExtensionContext) => void | Promise<void>;
@@ -554,8 +634,11 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "benchmark", description: "Classify a benchmark prompt", argumentHint: "<prompt>" },
   { value: "cache stats", description: "Show classification cache" },
   { value: "cache clear", description: "Clear classification cache" },
+  { value: "classifier", description: "Choose classifier backend" },
   { value: "classifier on", description: "Enable LLM classifier" },
   { value: "classifier off", description: "Disable LLM classifier" },
+  { value: "classifier", description: "Choose classifier backend" },
+  { value: "classifier test", description: "Test selected classifier backend" },
   { value: "classifier status", description: "Show classifier state" },
   { value: "debug", description: "Show config and routing state" },
   { value: "preview", description: "Preview routing for a prompt", argumentHint: "<prompt>" },
@@ -648,8 +731,12 @@ export function createCommandRouter(
       state.enabled = runtimeState.enabled;
       state.classifierEnabled = runtimeState.classifierEnabled;
       state.pinned = runtimeState.pinned;
-      state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path));
+      state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path), (state.config.cache?.ttlHours ?? 720) * 60 * 60 * 1000);
       state.reliabilityStore.reload(state.config.reliability, process.cwd());
+      state.classifierMetricsStore.reload({
+        cwd: process.cwd(),
+        enabled: state.config.classifier?.backend === "typesafe" && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
+      });
       state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
@@ -767,7 +854,7 @@ export function createCommandRouter(
       const entries = loadCache(path);
       log(
         ctx,
-        `cache: ${entries.length} entries (cap ${state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES}, threshold ${state.config.cache?.threshold ?? DEFAULT_THRESHOLD})`,
+        `cache: ${entries.length} entries (cap ${state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES}, retention ${state.config.cache?.ttlHours ?? 720}h, threshold ${state.config.cache?.threshold ?? DEFAULT_THRESHOLD})`,
       );
     }),
     exact("cache clear", "Clear classification cache", (_, ctx) => {
@@ -779,6 +866,76 @@ export function createCommandRouter(
     }),
 
     // Classifier
+    {
+      value: "classifier test",
+      description: "Test selected classifier backend",
+      match: (sub) => sub === "classifier test",
+      handler: (_, ctx) => handleClassifierTest(ctx, state),
+    },
+    {
+      value: "classifier",
+      description: "Choose classifier backend",
+      match: (sub) => sub === "classifier",
+      handler: async (_, ctx) => {
+        if (!ctx.hasUI) {
+          log(ctx, "Choose classifier backend in Pi UI: prompt or typesafe", "warning");
+          return;
+        }
+        const selected = await ctx.ui.select("Classifier backend", [
+          "prompt — use configured Pi model",
+          "typesafe — use Jev (requires TYPESAFE_API_KEY)",
+        ]);
+        if (!selected) return;
+        const backend = selected.startsWith("typesafe") ? "typesafe" : "prompt";
+        if (backend === "typesafe") {
+          const approved = await ctx.ui.confirm(
+            "Approve TypeSafe for this project?",
+            `Allow Jev to receive cache-miss prompts from ${process.cwd()}? This writes approval to ~/.pi/agent/bifrost.json.`,
+          );
+          if (!approved) {
+            log(ctx, "TypeSafe backend not selected; project approval cancelled", "warning");
+            return;
+          }
+          if (!approveTypeSafeProject(ctx)) return;
+        }
+        const path = join(process.cwd(), CONFIG_DIR_NAME, "bifrost.json");
+        let current: Record<string, unknown> = {};
+        try {
+          current = existsSync(path)
+            ? JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>
+            : {};
+        } catch {
+          log(ctx, "Cannot update classifier: .pi/bifrost.json is invalid JSON", "error");
+          return;
+        }
+        const classifier = current.classifier && typeof current.classifier === "object"
+          ? current.classifier as Record<string, unknown>
+          : {};
+        const nextClassifier: Record<string, unknown> = { ...classifier, backend };
+        if (backend === "typesafe") {
+          delete nextClassifier.endpoint;
+          delete nextClassifier.method;
+          delete nextClassifier.systemPrompt;
+          delete nextClassifier.maxTokens;
+          delete nextClassifier.temperature;
+          delete nextClassifier.fallbackToRegex;
+          nextClassifier.criteria ??= DEFAULT_CLASSIFIER_CRITERIA;
+        }
+        current.classifier = nextClassifier;
+        mkdirSync(join(process.cwd(), CONFIG_DIR_NAME), { recursive: true });
+        writeFileSync(path, JSON.stringify(current, null, 2) + "\n");
+        state.config = loadConfig(process.cwd(), state.extensionDir);
+        state.classifierMetricsStore.reload({
+          cwd: process.cwd(),
+          enabled: state.config.classifier?.backend === "typesafe" && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
+        });
+        state.invalidatePipeline();
+        log(ctx, `classifier backend set to ${backend}; config reloaded`);
+        if (backend === "typesafe" && resolveTypeSafeApiKey().source === "missing") {
+          log(ctx, "TypeSafe credential missing; use ~/.pi/agent/auth.json or TYPESAFE_API_KEY", "warning");
+        }
+      },
+    },
     exact("classifier on", "Enable LLM classifier", (_, ctx) => {
       state.classifierEnabled = true;
       state.saveModeState();
@@ -800,10 +957,19 @@ export function createCommandRouter(
       const modelId = Array.isArray(rawModel)
         ? rawModel.join(", ")
         : (rawModel ?? "none");
-      log(
-        ctx,
-        `classifier: enabled=${state.classifierEnabled} model=${modelId} endpoint=${state.config.classifier?.endpoint ?? "registry"} method=${state.config.classifier?.method ?? "auto"}`,
-      );
+      const classifier = state.config.classifier;
+      const backend = classifier?.backend ?? "prompt";
+      const credential = backend === "typesafe" ? resolveTypeSafeApiKey().source : undefined;
+      const detail = backend === "typesafe"
+        ? `backend=typesafe model=${classifier?.typesafe?.model ?? "jev-1.13.0"} endpoint=https://api.typesafe.ai/v1/systemone minConfidence=${classifier?.minConfidence ?? 0.8} credential=${credential}`
+        : `backend=prompt model=${modelId} endpoint=${classifier?.endpoint ?? "registry"} method=${classifier?.method ?? "auto"}`;
+      const metrics = state.classifierMetricsStore.snapshot();
+      const lines = [
+        `classifier: enabled=${state.classifierEnabled}`,
+        detail,
+        ...(backend === "typesafe" ? [`observations=${metrics.total}`, `outcomes=${JSON.stringify(metrics.outcomes)}`] : []),
+      ];
+      uiOutput(ctx, lines);
     }),
 
     // Debug — show loaded config state
@@ -820,9 +986,10 @@ export function createCommandRouter(
         `strategy: ${state.config.strategy}`,
         `tiers: ${tiers.join(", ")}`,
         `debug: ${JSON.stringify(state.config.debug)}`,
-        `cache: ${state.cacheEntries.length} entries`,
+        `cache: ${state.cacheEntries.length} entries (retention ${state.config.cache?.ttlHours ?? 720}h)`,
         `reliability: ${JSON.stringify(state.config.reliability ?? {})}`,
         `openCircuits: ${openCircuitCount(state)}`,
+        `classifierMetrics: ${JSON.stringify(state.classifierMetricsStore.snapshot())}`,
         "",
         `rules (${rules.length}):`,
         ...rules.map((r, i) => `  ${i}: "${r.pattern}" → "${r.model}"`),

@@ -1,0 +1,17 @@
+{
+  "corpusVersion": 1,
+  "schemaVersion": 1,
+  "labelSet": "development",
+  "counts": {
+    "total": 60,
+    "dev": 48,
+    "review": 12,
+    "byTier": {
+      "quick": 20,
+      "general": 20,
+      "frontier": 20
+    }
+  },
+  "defaultEvaluationSplit": "dev",
+  "note": "Development benchmark only. Tests validate record uniqueness, schema, split counts, and tier counts."
+}

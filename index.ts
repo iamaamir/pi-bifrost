@@ -1,6 +1,8 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "node:url";
 import { classifyWithLLM as invokeClassifier, type ClassifierModel } from "./classifier.js";
+import { classifierCacheKey } from "./classifier-semantics.js";
+import { ClassifierMetricsStore } from "./classifier-metrics.js";
 import {
   createPipeline,
   type ClassificationPipeline,
@@ -14,12 +16,15 @@ import {
   updateCache,
   DEFAULT_MAX_ENTRIES,
   DEFAULT_THRESHOLD,
+  DEFAULT_TTL_HOURS,
   type CacheEntry,
 } from "./cache.js";
 import {
   loadConfig,
   loadRules,
+  DEFAULT_CLASSIFIER_CRITERIA,
   validateConfig,
+  isTypeSafeTrusted,
   type BifrostConfig,
 } from "./config.js";
 import {
@@ -34,6 +39,7 @@ import { createCommandRouter, getBifrostCommandCompletions, log, uiBusy, uiDone,
 import { setupDebug, debug, debugMeasure } from "./debug.js";
 import { parseInlineOverride } from "./inline-override.js";
 import { RuntimeReliabilityTracker } from "./runtime-reliability.js";
+import { createTypeSafeClassifier, resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
 import {
   REGISTRY_REFRESH_TTL_MS,
   setBifrostStatus,
@@ -58,37 +64,72 @@ function endpointClassifier(id: string, endpoint: string): ClassifierModel {
   return { kind: "endpoint", id, baseUrl: endpoint };
 }
 
+function hasTypeSafeConfigErrors(config: BifrostConfig): boolean {
+  return validateConfig(config).some((issue) => issue.severity === "error" && (issue.message.includes("TypeSafe") || issue.message.includes("Classifier criteria")));
+}
+
+function activeClassifierCacheKey(config: BifrostConfig): string {
+  return classifierCacheKey(config, Object.keys(config.models ?? {}), {
+    typesafeTrusted: isTypeSafeTrusted(config),
+    typesafeCredentialAvailable: resolveTypeSafeApiKey().source !== "missing",
+  });
+}
+
 function buildPipeline(
   ctx: ExtensionContext,
   config: BifrostConfig,
   cacheEntries: CacheEntry[],
   classifierEnabled: boolean,
+  reliabilityStore: ReliabilityStore,
+  classifierMetricsStore: ClassifierMetricsStore,
+  cacheSemanticKey: string,
 ): ClassificationPipeline {
   const tiers = Object.keys(config.models ?? {});
   const cacheCfg = config.cache;
   const cacheEnabled = cacheCfg?.enabled ?? true;
   const threshold = cacheCfg?.threshold ?? DEFAULT_THRESHOLD;
+  const cacheMaxAgeMs = (cacheCfg?.ttlHours ?? DEFAULT_TTL_HOURS) * 60 * 60 * 1000;
 
   // Resolve classifier models once at pipeline construction.
   // If classifier is disabled, pass empty array — pipeline skips LLM stage.
   let classifierModels: ClassifierModel[] = [];
-  if (classifierEnabled && tiers.length > 0) {
+  let classifyWithTypeSafe: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<string | undefined>) | undefined;
+  const typeSafeUsable = config.classifier?.backend === "typesafe" && !hasTypeSafeConfigErrors(config);
+  if (classifierEnabled && typeSafeUsable && tiers.length > 0 && isTypeSafeTrusted(config)) {
+    const classifierConfig = config.classifier!;
+    const classify = createTypeSafeClassifier({
+      timeoutMs: classifierConfig.typesafe?.timeoutMs,
+      maxAttempts: classifierConfig.typesafe?.maxAttempts,
+      debug: Boolean(config.debug?.enabled && classifierConfig.typesafe?.debug),
+      minConfidence: classifierConfig.minConfidence,
+      reliability: reliabilityStore,
+      observe: (observation) => classifierMetricsStore.record(observation),
+    });
+    classifyWithTypeSafe = async (text, availableTiers, signal) => {
+      const judgment = await classify({ prompt: text, tiers: availableTiers, criteria: classifierConfig.criteria ?? DEFAULT_CLASSIFIER_CRITERIA }, signal);
+      return judgment?.tier;
+    };
+  }
+  const usePromptClassifier = classifierEnabled && tiers.length > 0 && (
+    (config.classifier?.backend ?? "prompt") === "prompt" ||
+    (typeSafeUsable && config.classifier?.backend === "typesafe" && config.classifier.fallback !== "regex")
+  );
+  if (usePromptClassifier) {
     const classifierEndpoint = config.classifier?.endpoint;
     if (classifierEndpoint) {
       const rawModel = config.classifier?.model;
-      const modelId = Array.isArray(rawModel)
-        ? rawModel[0]
-        : (rawModel ?? "classifier");
-      classifierModels = [endpointClassifier(modelId, classifierEndpoint)];
+      const modelIds = Array.isArray(rawModel) ? rawModel : [rawModel ?? "classifier"];
+      classifierModels = modelIds.map((modelId) => endpointClassifier(modelId, classifierEndpoint));
     } else {
       classifierModels = resolveClassifierModels(ctx, config);
     }
   }
 
   return createPipeline({
+    classifyWithTypeSafe,
     cacheLookup: (text) => {
       if (!cacheEnabled) return undefined;
-      const entry = lookupCache(cacheEntries, text, threshold);
+      const entry = lookupCache(cacheEntries, text, threshold, cacheSemanticKey, cacheMaxAgeMs);
       if (entry) {
         touchCacheEntry(entry);
         return entry.category;
@@ -124,12 +165,23 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   // Validate config on startup. Errors are logged; the extension
   // continues with best-effort routing for warnings.
   const configIssues = validateConfig(config);
+  if (config.classifier?.backend === "typesafe" && !isTypeSafeTrusted(config)) {
+    console.error("[bifrost/config] warning: TypeSafe classifier unavailable; approve project in user config classifier.typesafe.trustedProjects");
+  }
+  if (config.classifier?.backend === "typesafe" && isTypeSafeTrusted(config) && resolveTypeSafeApiKey().source === "missing") {
+    console.error("[bifrost/config] warning: TypeSafe classifier unavailable; configure typesafe in ~/.pi/agent/auth.json or set TYPESAFE_API_KEY");
+  }
   for (const issue of configIssues) {
     const tag = issue.severity === "error" ? "error" : "warning";
     console.error(`[bifrost/config] ${tag}: ${issue.message}`);
   }
-  const cacheEntries = loadCache(cachePath(process.cwd(), config.cache?.path));
+  const cacheTtlMs = (config.cache?.ttlHours ?? DEFAULT_TTL_HOURS) * 60 * 60 * 1000;
+  const cacheEntries = loadCache(cachePath(process.cwd(), config.cache?.path), cacheTtlMs);
   const reliabilityStore = new ReliabilityStore({ cwd: process.cwd(), config: config.reliability });
+  const classifierMetricsStore = new ClassifierMetricsStore({
+    cwd: process.cwd(),
+    enabled: config.classifier?.backend === "typesafe" && (config.classifier.typesafe?.metrics?.enabled ?? true),
+  });
   const runtimeStateFile = runtimeStatePath(process.cwd());
   const runtimeState = loadRuntimeState(runtimeStateFile, {
     enabled: config.enabled ?? true,
@@ -142,7 +194,15 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   function getPipeline(ctx: ExtensionContext): ClassificationPipeline {
     if (!pipeline) {
-      pipeline = buildPipeline(ctx, state.config, state.cacheEntries, state.classifierEnabled);
+      pipeline = buildPipeline(
+        ctx,
+        state.config,
+        state.cacheEntries,
+        state.classifierEnabled,
+        reliabilityStore,
+        classifierMetricsStore,
+        activeClassifierCacheKey(state.config),
+      );
     }
     return pipeline;
   }
@@ -160,6 +220,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     pinned: runtimeState.pinned,
     cacheEntries,
     reliabilityStore,
+    classifierMetricsStore,
     extensionDir,
     getPipeline,
     invalidatePipeline,
@@ -283,7 +344,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       const endClassify = debugMeasure("input", "classify");
       const classification = forcedTier
         ? { kind: "classified" as const, tier: forcedTier, source: "inline" as const }
-        : await getPipeline(ctx).classify(promptText);
+        : await getPipeline(ctx).classify(promptText, ctx.signal);
 
       if (classification.kind === "classified") {
         const tag = classification.source === "inline" ? "!" : classification.source;
@@ -329,12 +390,13 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       const model = resolved.selected;
       const selectedTier = resolved.selectedTier ?? tier;
 
-      // If selected model is half-open, mark trial in progress
-      if (model) {
-        const circuit = state.reliabilityStore.getCircuitState(modelKey(model));
-        if (circuit.halfOpen && !circuit.trialActive) {
-          state.reliabilityStore.beginTrial(modelKey(model));
-        }
+      // Claim the single half-open trial before using the selected model.
+      if (model && !state.reliabilityStore.tryBeginTrial(modelKey(model))) {
+        debug("input", "trial_unavailable", { model: modelKey(model) });
+        log(ctx, `Bifrost: ${modelKey(model)} already has a half-open trial in progress`, "warning");
+        syncBifrostModeStatus(ctx, state);
+        endInput();
+        return defaultAction;
       }
 
       if (!model) {
@@ -354,7 +416,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         const maxEntries = state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES;
         if (state.config.cache?.enabled ?? true) {
           const endCacheSave = debugMeasure("input", "cacheSave");
-          state.cacheEntries = updateCache(state.cacheEntries, promptText, tier, maxEntries);
+          state.cacheEntries = updateCache(state.cacheEntries, promptText, tier, maxEntries, activeClassifierCacheKey(state.config));
           saveCache(cachePath(process.cwd(), state.config.cache?.path), state.cacheEntries);
           invalidatePipeline();
           endCacheSave({ entries: state.cacheEntries.length });
