@@ -1,6 +1,7 @@
 import type { ClassifierModel } from "./classifier.ts";
 import { classifyCompiled, compileRules, type RouteRule } from "./routing.ts";
 import { debug, debugMeasure } from "./debug.ts";
+import { CLASSIFIER_BACKEND_IDS } from "./classifier-backends.ts";
 
 // ── ADT result type ────────────────────────────────────────────
 
@@ -90,15 +91,15 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
     // Stage 3: optional TypeSafe classifier, then existing prompt classifier.
     if (classifyWithTypeSafe) {
       try {
-        const endTypeSafe = debugMeasure("pipeline", "typesafe.attempt");
+        const endTypeSafe = debugMeasure("pipeline", `${CLASSIFIER_BACKEND_IDS.typesafe}.attempt`);
         const tier = await classifyWithTypeSafe(text, tiers, signal);
         endTypeSafe({ tier });
         if (tier && tiers.includes(tier)) {
-          debug("pipeline", "result", { source: "classifier", tier, backend: "typesafe" });
+          debug("pipeline", "result", { source: "classifier", tier, backend: CLASSIFIER_BACKEND_IDS.typesafe });
           return { kind: "classified", tier, source: "classifier" };
         }
       } catch (err) {
-        debug("pipeline", "typesafe.error", { error: String(err) });
+        debug("pipeline", `${CLASSIFIER_BACKEND_IDS.typesafe}.error`, { error: String(err) });
       }
     }
 

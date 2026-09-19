@@ -3,9 +3,11 @@ import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import type { ReliabilityStore } from "./reliability-store.ts";
 import { debug as bifrostDebug } from "./debug.ts";
 import type { TypeSafeObservation, TypeSafeOutcome } from "./classifier-metrics.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_CREDENTIAL_KEY, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL } from "./classifier-backends.ts";
 
-export const TYPESAFE_SYSTEMONE_URL = "https://api.typesafe.ai/v1/systemone";
-export const TYPESAFE_MODEL = "jev-1.13.0";
+/** Compatibility exports for the TypeSafe provider seam and benchmark. */
+export const TYPESAFE_SYSTEMONE_URL = TYPE_SAFE_ENDPOINT;
+export const TYPESAFE_MODEL = TYPE_SAFE_MODEL;
 export const DEFAULT_TYPESAFE_TIMEOUT_MS = 3_000;
 export const DEFAULT_TYPESAFE_MAX_ATTEMPTS = 2;
 const MAX_TYPESAFE_TIMEOUT_MS = 60_000;
@@ -28,7 +30,7 @@ export interface TypeSafeJudgment {
   readonly tier: string;
   readonly confidence: number;
   readonly probabilities: Readonly<Record<string, number>>;
-  readonly backend: "typesafe";
+  readonly backend: typeof CLASSIFIER_BACKEND_IDS.typesafe;
   readonly model: typeof TYPESAFE_MODEL;
 }
 
@@ -126,7 +128,7 @@ export function decodeTypeSafeJudgment(payload: unknown, tiers: readonly string[
   if (Math.abs(sum - 1) > 0.001) return undefined;
   const max = Math.max(...tiers.map((tier) => probabilities[tier]));
   if (Math.abs(probabilities[value.choice] - max) > 1e-9) return undefined;
-  return { tier: value.choice, confidence: value.confidence, probabilities, backend: "typesafe", model: TYPESAFE_MODEL };
+  return { tier: value.choice, confidence: value.confidence, probabilities, backend: CLASSIFIER_BACKEND_IDS.typesafe, model: TYPESAFE_MODEL };
 }
 
 function retryable(status: number | undefined): boolean {
@@ -190,7 +192,7 @@ function resolveCredentialKey(value: unknown): string | undefined {
 
 export function resolveTypeSafeApiKey(): { apiKey?: string; source: TypeSafeCredentialSource } {
   try {
-    const credential = readStoredCredential("typesafe");
+    const credential = readStoredCredential(TYPE_SAFE_CREDENTIAL_KEY);
     if (credential && credential.type === "api_key") {
       const key = resolveCredentialKey(credential.key);
       if (key) return { apiKey: key, source: "auth-file" };
@@ -198,11 +200,11 @@ export function resolveTypeSafeApiKey(): { apiKey?: string; source: TypeSafeCred
   } catch (error) {
     console.error(`[bifrost] failed to read TypeSafe credential: ${error}`);
   }
-  const apiKey = process.env.TYPESAFE_API_KEY;
+  const apiKey = process.env[TYPE_SAFE_API_KEY_ENV];
   return apiKey ? { apiKey, source: "environment" } : { source: "missing" };
 }
 
-function circuitKey(): string { return `classifier/typesafe/${TYPESAFE_MODEL}`; }
+function circuitKey(): string { return `classifier/${CLASSIFIER_BACKEND_IDS.typesafe}/${TYPESAFE_MODEL}`; }
 
 /** Thin System One adapter. Returns misses for all transport/decoder failures. */
 export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
@@ -218,7 +220,7 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
     const startedAt = performance.now();
     const traceId = `ts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const trace = (event: string, meta: Record<string, unknown> = {}) => {
-      if (options.debug) bifrostDebug("typesafe", event, { trace_id: traceId, model: TYPESAFE_MODEL, ...meta });
+      if (options.debug) bifrostDebug(CLASSIFIER_BACKEND_IDS.typesafe, event, { trace_id: traceId, model: TYPESAFE_MODEL, ...meta });
     };
     trace("start", { tiers: input.tiers, prompt_length: input.prompt.length, timeout_ms: timeoutMs, max_attempts: maxAttempts });
     let attempts = 0;
@@ -250,7 +252,7 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
     };
     if (!apiKey) {
       trace("credential_missing");
-      if (!warnedMissingKey) { warnedMissingKey = true; console.error("[bifrost] TypeSafe classifier disabled: configure ~/.pi/agent/auth.json or TYPESAFE_API_KEY"); }
+      if (!warnedMissingKey) { warnedMissingKey = true; console.error(`[bifrost] TypeSafe classifier disabled: configure ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`); }
       return finish("missing_key");
     }
     const key = circuitKey();

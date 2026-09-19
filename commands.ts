@@ -23,6 +23,7 @@ import {
 } from "./routing.ts";
 import type { ReliabilityStore } from "./reliability-store.ts";
 import type { ClassifierMetricsStore } from "./classifier-metrics.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend } from "./classifier-backends.ts";
 import { resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
 
 // ── Mutable state shared across commands ────────────────────
@@ -206,7 +207,7 @@ export function buildInitProposal(
   models: Record<string, string[]>,
   classifierModel: string | undefined,
   extensionDir: string,
-  classifierBackend: "prompt" | "typesafe" = "prompt",
+  classifierBackend: ClassifierBackend = CLASSIFIER_BACKEND_IDS.prompt,
 ): Record<string, unknown> {
   const tierKeys = Object.keys(models);
   // Pick the first populated tier as default, or fall back to first key.
@@ -224,8 +225,8 @@ export function buildInitProposal(
     classifier: {
       enabled: true,
       backend: classifierBackend,
-      ...(classifierBackend === "prompt" && classifierModel ? { model: classifierModel, method: "auto" as const } : {}),
-      ...(classifierBackend === "typesafe" ? { typesafe: { model: "jev-1.13.0" }, criteria: DEFAULT_CLASSIFIER_CRITERIA } : {}),
+      ...(classifierBackend === CLASSIFIER_BACKEND_IDS.prompt && classifierModel ? { model: classifierModel, method: "auto" as const } : {}),
+      ...(classifierBackend === CLASSIFIER_BACKEND_IDS.typesafe ? { typesafe: { model: TYPE_SAFE_MODEL }, criteria: DEFAULT_CLASSIFIER_CRITERIA } : {}),
     },
     models,
     rules: DEFAULT_RULES,
@@ -392,7 +393,7 @@ async function handleInit(
     models,
     classifierModel,
     state.extensionDir,
-    state.config.classifier?.backend ?? "prompt",
+    state.config.classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt,
   );
 
   const totalAssigned = Object.values(models).reduce((s, v) => s + v.length, 0);
@@ -445,7 +446,7 @@ async function handleInit(
   state.reliabilityStore.reload(state.config.reliability, process.cwd());
   state.classifierMetricsStore.reload({
     cwd: process.cwd(),
-    enabled: state.config.classifier?.backend === "typesafe" && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
+    enabled: state.config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
   });
   state.invalidatePipeline();
 
@@ -482,12 +483,12 @@ async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState):
   const outcome = Object.entries(after.outcomes).find(([key, count]) => count > (beforeState.outcomes[key] ?? 0))?.[0];
   const lines = [
     "--- classifier test ---",
-    `backend: ${classifier?.backend ?? "prompt"}`,
+    `backend: ${classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt}`,
     `result: ${result.kind === "classified" ? result.tier : "fallback"}`,
     `source: ${source}`,
     `request observed: ${after.total > before ? "yes" : "no"}`,
   ];
-  if (classifier?.backend === "typesafe") {
+  if (classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe) {
     lines.push(`credential: ${resolveTypeSafeApiKey().source}`);
     if (after.total > before) {
       lines.push(`outcome: ${outcome ?? "recorded"}`);
@@ -733,7 +734,7 @@ export function createCommandRouter(
       state.reliabilityStore.reload(state.config.reliability, process.cwd());
       state.classifierMetricsStore.reload({
         cwd: process.cwd(),
-        enabled: state.config.classifier?.backend === "typesafe" && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
+        enabled: state.config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
       });
       state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
@@ -881,13 +882,13 @@ export function createCommandRouter(
         }
         const selected = await ctx.ui.select("Classifier backend", [
           "prompt — choose a Pi model",
-          "typesafe — use Jev (requires Pi auth.json or TYPESAFE_API_KEY)",
+          `${CLASSIFIER_BACKEND_IDS.typesafe} — use Jev (requires Pi auth.json or ${TYPE_SAFE_API_KEY_ENV})`,
         ]);
         if (!selected) return;
-        const backend = selected.startsWith("typesafe") ? "typesafe" : "prompt";
+        const backend = selected.startsWith(CLASSIFIER_BACKEND_IDS.typesafe) ? CLASSIFIER_BACKEND_IDS.typesafe : CLASSIFIER_BACKEND_IDS.prompt;
         let selectedPromptModel: string | undefined;
         const configuredPromptModel = state.config.classifier?.model;
-        const needsPromptModel = backend === "prompt" && !promptClassifierModelAvailable(ctx, configuredPromptModel);
+        const needsPromptModel = backend === CLASSIFIER_BACKEND_IDS.prompt && !promptClassifierModelAvailable(ctx, configuredPromptModel);
         if (needsPromptModel) {
           if (ctx.modelRegistry.getAvailable().length === 0) {
             log(ctx, "No Pi models available for prompt classifier; regex fallback remains active.", "warning");
@@ -913,12 +914,12 @@ export function createCommandRouter(
           ? current.classifier as Record<string, unknown>
           : {};
         const nextClassifier: Record<string, unknown> = { ...classifier, backend };
-        if (backend === "prompt" && selectedPromptModel) {
+        if (backend === CLASSIFIER_BACKEND_IDS.prompt && selectedPromptModel) {
           nextClassifier.model = selectedPromptModel;
-        } else if (backend === "prompt" && needsPromptModel) {
+        } else if (backend === CLASSIFIER_BACKEND_IDS.prompt && needsPromptModel) {
           delete nextClassifier.model;
         }
-        if (backend === "typesafe") {
+        if (backend === CLASSIFIER_BACKEND_IDS.typesafe) {
           delete nextClassifier.endpoint;
           delete nextClassifier.method;
           delete nextClassifier.systemPrompt;
@@ -933,12 +934,12 @@ export function createCommandRouter(
         state.config = loadConfig(process.cwd(), state.extensionDir);
         state.classifierMetricsStore.reload({
           cwd: process.cwd(),
-          enabled: state.config.classifier?.backend === "typesafe" && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
+          enabled: state.config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
         });
         state.invalidatePipeline();
         log(ctx, `classifier backend set to ${backend}; config reloaded`);
-        if (backend === "typesafe" && resolveTypeSafeApiKey().source === "missing") {
-          log(ctx, "TypeSafe credential missing; use ~/.pi/agent/auth.json or TYPESAFE_API_KEY", "warning");
+        if (backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
+          log(ctx, `TypeSafe credential missing; use ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`, "warning");
         }
       },
     },
@@ -964,16 +965,16 @@ export function createCommandRouter(
         ? rawModel.join(", ")
         : (rawModel ?? "none");
       const classifier = state.config.classifier;
-      const backend = classifier?.backend ?? "prompt";
-      const credential = backend === "typesafe" ? resolveTypeSafeApiKey().source : undefined;
-      const detail = backend === "typesafe"
-        ? `backend=typesafe model=${classifier?.typesafe?.model ?? "jev-1.13.0"} endpoint=https://api.typesafe.ai/v1/systemone minConfidence=${classifier?.minConfidence ?? 0.8} credential=${credential}`
-        : `backend=prompt model=${modelId} endpoint=${classifier?.endpoint ?? "registry"} method=${classifier?.method ?? "auto"}`;
+      const backend = classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt;
+      const credential = backend === CLASSIFIER_BACKEND_IDS.typesafe ? resolveTypeSafeApiKey().source : undefined;
+      const detail = backend === CLASSIFIER_BACKEND_IDS.typesafe
+        ? `backend=${CLASSIFIER_BACKEND_IDS.typesafe} model=${classifier?.typesafe?.model ?? TYPE_SAFE_MODEL} endpoint=${TYPE_SAFE_ENDPOINT} minConfidence=${classifier?.minConfidence ?? 0.8} credential=${credential}`
+        : `backend=${CLASSIFIER_BACKEND_IDS.prompt} model=${modelId} endpoint=${classifier?.endpoint ?? "registry"} method=${classifier?.method ?? "auto"}`;
       const metrics = state.classifierMetricsStore.snapshot();
       const lines = [
         `classifier: enabled=${state.classifierEnabled}`,
         detail,
-        ...(backend === "typesafe" ? [`observations=${metrics.total}`, `outcomes=${JSON.stringify(metrics.outcomes)}`] : []),
+        ...(backend === CLASSIFIER_BACKEND_IDS.typesafe ? [`observations=${metrics.total}`, `outcomes=${JSON.stringify(metrics.outcomes)}`] : []),
       ];
       uiOutput(ctx, lines);
     }),

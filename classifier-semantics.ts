@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { BifrostConfig } from "./config.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_MODEL } from "./classifier-backends.ts";
 
 const CLASSIFIER_INSTRUCTION_VERSION = 1;
 
@@ -27,7 +28,7 @@ export function classifierCacheKey(
   const classifier = config.classifier;
   const semantics = JSON.stringify(stableValue({
     instructionVersion: CLASSIFIER_INSTRUCTION_VERSION,
-    backend: classifier?.backend ?? "prompt",
+    backend: classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt,
     model: classifier?.model,
     endpoint: classifier?.endpoint,
     method: classifier?.method,
@@ -35,7 +36,7 @@ export function classifierCacheKey(
     maxTokens: classifier?.maxTokens,
     temperature: classifier?.temperature,
     fallbackToRegex: classifier?.fallbackToRegex,
-    typesafeModel: classifier?.typesafe?.model ?? "jev-1.13.0",
+    typesafeModel: classifier?.typesafe?.model ?? TYPE_SAFE_MODEL,
     criteria: classifier?.criteria,
     minConfidence: classifier?.minConfidence ?? 0.8,
     fallback: classifier?.fallback,

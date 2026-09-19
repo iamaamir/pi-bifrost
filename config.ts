@@ -5,17 +5,17 @@ import type { RoutingStrategy, RouteRule } from "./routing.ts";
 import type { CacheOptions } from "./cache.ts";
 import type { DebugConfig } from "./debug.ts";
 import type { ReliabilityConfig } from "./reliability.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend } from "./classifier-backends.ts";
+
+export { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL } from "./classifier-backends.ts";
+export type { ClassifierBackend } from "./classifier-backends.ts";
 
 type ClassifierMethod = "direct" | "subprocess" | "auto";
-export type ClassifierBackend = "prompt" | "typesafe";
 export type TierCriterion = string | {
   what: string;
   notFor?: string;
   examples?: string[];
 };
-
-export const TYPESAFE_ENDPOINT = "https://api.typesafe.ai/v1/systemone";
-export const TYPESAFE_MODEL = "jev-1.13.0";
 
 /** Conservative defaults used when users opt into TypeSafe through init or the picker. */
 export const DEFAULT_CLASSIFIER_CRITERIA: Record<string, TierCriterion> = {
@@ -192,17 +192,17 @@ export function validateConfig(
   const issues: ConfigIssue[] = [];
   const modelKeys = Object.keys(config.models ?? {});
   const classifier = config.classifier;
-  if (classifier?.backend && classifier.backend !== "prompt" && classifier.backend !== "typesafe") {
+  if (classifier?.backend && !Object.values(CLASSIFIER_BACKEND_IDS).includes(classifier.backend)) {
     issues.push({ severity: "error", message: `Unknown classifier backend "${classifier.backend}".` });
   }
-  if (classifier?.backend === "typesafe") {
-    if (classifier.typesafe?.model !== undefined && classifier.typesafe.model !== TYPESAFE_MODEL) {
-      issues.push({ severity: "error", message: `TypeSafe classifier model must be exactly "${TYPESAFE_MODEL}".` });
+  if (classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe) {
+    if (classifier.typesafe?.model !== undefined && classifier.typesafe.model !== TYPE_SAFE_MODEL) {
+      issues.push({ severity: "error", message: `TypeSafe classifier model must be exactly "${TYPE_SAFE_MODEL}".` });
     }
-    if (classifier.typesafe?.endpoint !== undefined && classifier.typesafe.endpoint !== TYPESAFE_ENDPOINT) {
-      issues.push({ severity: "error", message: `TypeSafe classifier endpoint must be "${TYPESAFE_ENDPOINT}".` });
+    if (classifier.typesafe?.endpoint !== undefined && classifier.typesafe.endpoint !== TYPE_SAFE_ENDPOINT) {
+      issues.push({ severity: "error", message: `TypeSafe classifier endpoint must be "${TYPE_SAFE_ENDPOINT}".` });
     }
-    if (classifier.backend === "typesafe" && (classifier.endpoint !== undefined || classifier.method !== undefined || classifier.systemPrompt !== undefined || classifier.maxTokens !== undefined || classifier.temperature !== undefined || classifier.fallbackToRegex !== undefined)) {
+    if (classifier.backend === CLASSIFIER_BACKEND_IDS.typesafe && (classifier.endpoint !== undefined || classifier.method !== undefined || classifier.systemPrompt !== undefined || classifier.maxTokens !== undefined || classifier.temperature !== undefined || classifier.fallbackToRegex !== undefined)) {
       issues.push({ severity: "error", message: "TypeSafe classifier does not support endpoint, method, systemPrompt, maxTokens, temperature, or fallbackToRegex; use nested typesafe transport settings." });
     }
     if (classifier.typesafe?.timeoutMs !== undefined && (!Number.isInteger(classifier.typesafe.timeoutMs) || classifier.typesafe.timeoutMs < 100 || classifier.typesafe.timeoutMs > 60_000)) {
@@ -407,7 +407,7 @@ export function mergeConfig(
   if (merged.classifier) {
     merged.classifier.criteria = mergeCriteria(base.classifier?.criteria, override.classifier?.criteria);
     merged.classifier.typesafe = mergeObj(base.classifier?.typesafe, override.classifier?.typesafe);
-    if (merged.classifier.backend === "typesafe") {
+    if (merged.classifier.backend === CLASSIFIER_BACKEND_IDS.typesafe) {
       const mergedClassifier = merged.classifier as Record<string, unknown>;
       const overrideClassifier = override.classifier as Record<string, unknown> | undefined;
       for (const field of TYPESAFE_PROMPT_FIELDS) {

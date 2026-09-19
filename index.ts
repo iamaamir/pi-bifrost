@@ -38,6 +38,7 @@ import { createCommandRouter, getBifrostCommandCompletions, log, uiBusy, uiDone,
 import { setupDebug, debug, debugMeasure } from "./debug.js";
 import { parseInlineOverride } from "./inline-override.js";
 import { RuntimeReliabilityTracker } from "./runtime-reliability.js";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV } from "./classifier-backends.ts";
 import { createTypeSafeClassifier, resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
 import {
   REGISTRY_REFRESH_TTL_MS,
@@ -92,7 +93,7 @@ function buildPipeline(
   // If classifier is disabled, pass empty array — pipeline skips LLM stage.
   let classifierModels: ClassifierModel[] = [];
   let classifyWithTypeSafe: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<string | undefined>) | undefined;
-  const typeSafeUsable = config.classifier?.backend === "typesafe" && !hasTypeSafeConfigErrors(config);
+  const typeSafeUsable = config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && !hasTypeSafeConfigErrors(config);
   if (classifierEnabled && typeSafeUsable && tiers.length > 0) {
     const classifierConfig = config.classifier!;
     const classify = createTypeSafeClassifier({
@@ -109,8 +110,8 @@ function buildPipeline(
     };
   }
   const usePromptClassifier = classifierEnabled && tiers.length > 0 && (
-    (config.classifier?.backend ?? "prompt") === "prompt" ||
-    (typeSafeUsable && config.classifier?.backend === "typesafe" && config.classifier.fallback !== "regex")
+    (config.classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt) === CLASSIFIER_BACKEND_IDS.prompt ||
+    (typeSafeUsable && config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && config.classifier.fallback !== "regex")
   );
   if (usePromptClassifier) {
     const classifierEndpoint = config.classifier?.endpoint;
@@ -163,8 +164,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   // Validate config on startup. Errors are logged; the extension
   // continues with best-effort routing for warnings.
   const configIssues = validateConfig(config);
-  if (config.classifier?.backend === "typesafe" && resolveTypeSafeApiKey().source === "missing") {
-    console.warn("[bifrost/config] warning: TypeSafe classifier unavailable; configure typesafe in ~/.pi/agent/auth.json or set TYPESAFE_API_KEY");
+  if (config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
+    console.warn(`[bifrost/config] warning: TypeSafe classifier unavailable; configure typesafe in ~/.pi/agent/auth.json or set ${TYPE_SAFE_API_KEY_ENV}`);
   }
   for (const issue of configIssues) {
     const tag = issue.severity === "error" ? "error" : "warning";
@@ -175,7 +176,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   const reliabilityStore = new ReliabilityStore({ cwd: process.cwd(), config: config.reliability });
   const classifierMetricsStore = new ClassifierMetricsStore({
     cwd: process.cwd(),
-    enabled: config.classifier?.backend === "typesafe" && (config.classifier.typesafe?.metrics?.enabled ?? true),
+    enabled: config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && (config.classifier.typesafe?.metrics?.enabled ?? true),
   });
   const runtimeStateFile = runtimeStatePath(process.cwd());
   const runtimeState = loadRuntimeState(runtimeStateFile, {
