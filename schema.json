@@ -133,7 +133,7 @@
             { "type": "string" },
             { "type": "array", "items": { "type": "string" }, "minItems": 1 }
           ],
-          "description": "Model pattern(s) for prompt classifier. Arrays are tried in order."
+          "description": "Model pattern(s) for prompt classification. When backend is typesafe and fallback is prompt, this is the prompt fallback model; it is not the active Jev model."
         },
         "endpoint": {
           "type": "string",
@@ -176,7 +176,7 @@
           }
         },
         "minConfidence": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.8 },
-        "fallback": { "type": "string", "enum": ["prompt", "regex"], "default": "prompt" },
+        "fallback": { "type": "string", "enum": ["prompt", "regex"], "default": "prompt", "description": "Fallback after a TypeSafe miss or rejected judgment. Prompt uses classifier.model; regex skips prompt classification." },
         "systemPrompt": {
           "type": "string",
           "description": "Custom system prompt for the classifier. Override to change how categories are presented to the LLM.",

@@ -18,6 +18,11 @@ All notable changes to pi-bifrost are documented here.
 - Kept the Pi model-selector compatibility cast confined to one documented adapter boundary.
 - Config merge order: `.pi/bifrost.json` now wins over root `bifrost.json`.
 
+### Fixed
+- Init now prefers a populated `general` tier as default regardless of model discovery order.
+- TUI command feedback no longer appears twice through both notifications and stderr extension output.
+- TypeSafe backend selection now writes explicit Jev and fallback settings, status distinguishes Jev from its prompt fallback model, and classifier tests separate rejected backend judgments from final fallback routes.
+
 ### Security
 - TypeSafe decoder fails closed on non-plain objects, accessors, extra fields, and malformed probabilities.
 - Detailed TypeSafe traces are metadata-only and exclude prompts, request bodies, provider responses, external error text, API keys, and authorization headers.

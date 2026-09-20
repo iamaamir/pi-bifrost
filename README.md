@@ -278,7 +278,7 @@ Or use the shell environment:
 export TYPESAFE_API_KEY="ts_..."
 ```
 
-Run `/bifrost classifier test` to force a fresh nonce-bearing request and inspect backend activity. `/bifrost classifier status` shows `credential=auth-file`, `credential=environment`, or `credential=missing`; keys are never displayed. `/bifrost classifier` opens the backend picker in Pi's UI.
+Run `/bifrost classifier test` to force a fresh nonce-bearing request and inspect backend activity. Its report separates the selected backend judgment and acceptance decision from the final route produced by prompt/regex fallback. `/bifrost classifier status` shows the active Jev model, credential source, fallback mode, and prompt fallback model; keys are never displayed. `/bifrost classifier` opens the backend picker in Pi's UI.
 
 Bifrost's existing fuzzy cache persists normalized prompt text locally for 30 days by default (`cache.ttlHours`), then evicts expired entries; disable it for sensitive projects. TypeSafe operational observation is content-free and local: bounded aggregate outcomes, tiers, confidence bands, latency buckets, and attempt counts are stored in `.pi/bifrost-classifier-metrics.json` and shown by `/bifrost classifier status` and `/bifrost debug`. It never stores prompts, probabilities, or credentials. Set `classifier.typesafe.metrics.enabled` to `false` to disable this file.
 

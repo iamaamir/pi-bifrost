@@ -85,6 +85,20 @@ printf '[agent-tui-poc] asserting startup…\n'
 wait_for "Bifrost"
 snapshot startup
 
+printf '[agent-tui-poc] asserting reload message is not duplicated…\n'
+send_command "/bifrost reload"
+wait_for "Bifrost config reloaded"
+snapshot reload
+node - "$ARTIFACT_DIR/reload.json" <<'NODE'
+const fs = require("node:fs");
+const text = JSON.parse(fs.readFileSync(process.argv[2], "utf8")).rendered ?? "";
+const occurrences = text.split("Bifrost config reloaded").length - 1;
+if (occurrences !== 1 || text.includes("[bifrost] Bifrost config reloaded")) {
+  console.error(`expected one reload message without stderr duplicate, got ${occurrences}`);
+  process.exit(1);
+}
+NODE
+
 printf '[agent-tui-poc] asserting dashboard…\n'
 send_command "/bifrost"
 wait_for "/bifrost preview <prompt>"

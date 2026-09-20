@@ -242,13 +242,13 @@ Interactive backend selection. TypeSafe selection enables Jev and checks credent
 /bifrost classifier test
 ```
 
-Runs one fresh classifier pipeline smoke test with a nonce to avoid cache reuse. It reports backend, final result, source, whether a request was observed, credential source, and TypeSafe outcome.
+Runs one fresh classifier pipeline smoke test with a nonce to avoid cache reuse. It reports selected backend/model, backend judgment and confidence band, whether that judgment was accepted, final route/backend/model, request observation, credential source, and TypeSafe outcome.
 
 ```text
 /bifrost classifier status
 ```
 
-Shows enabled state, backend, model, credential source, and content-free aggregate metrics. It never prints credentials.
+Shows enabled state, active backend/model, credential source, configured fallback mode/model, and content-free aggregate metrics. It never prints credentials.
 
 ```text
 /bifrost debug
@@ -307,21 +307,24 @@ Trace includes correlation ID, attempt, endpoint, status, decoded tier, confiden
 
 ## Operational traps
 
-### `source: regex` does not mean Jev was skipped
+### `final source: regex` does not mean Jev was skipped
 
 If test output says:
 
 ```text
+backend result: quick
+confidence: <0.8
+accepted: no
+final source: regex
 request observed: yes
 outcome: low_confidence
-source: regex
 ```
 
-Jev was called and returned a judgment, but Bifrost rejected it below the confidence gate and used regex.
+Jev was called and returned `quick`, but Bifrost rejected it below the confidence gate and used regex.
 
-### `result` may be final fallback, not Jev's answer
+### Backend result and final result are separate
 
-Use the TypeSafe `decoded` trace event to see Jev's actual tier. The classifier test reports final pipeline result separately.
+The classifier test reports Jev's judgment separately from the final route. When prompt fallback succeeds, `backend: typesafe` and `accepted: no` may appear with `final backend: prompt`; this is expected fallback, not a backend-selection change.
 
 ### Debug is two-level
 

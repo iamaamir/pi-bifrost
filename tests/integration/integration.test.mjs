@@ -117,7 +117,10 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
       assert.ok(out.includes("credential: missing"));
       assert.ok(out.includes("outcome: missing_key"));
       assert.ok(out.includes("request observed: yes"));
-      assert.ok(out.includes("result: general"));
+      assert.ok(out.includes("model: jev-1.13.0"));
+      assert.ok(out.includes("accepted: no"));
+      assert.ok(out.includes("final result: general"));
+      assert.ok(out.includes("final source: fallback"));
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
