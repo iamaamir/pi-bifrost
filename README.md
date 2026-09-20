@@ -238,6 +238,8 @@ If classifier fails or is disabled, regex rules take over. Successful LLM classi
 
 TypeSafe is disabled unless explicitly selected with `classifier.backend: "typesafe"`.
 
+run `/bifrost classifier`  and choose _typesafe_
+
 ```json
 {
   "classifier": {
