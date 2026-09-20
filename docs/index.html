@@ -60,6 +60,7 @@
         <a class="wordmark" href="#top">Pi-Bifrost</a>
         <div class="nav-links">
           <a href="#routing">How it works</a>
+          <a href="#jev">Jev</a>
           <a href="#faq">FAQ</a>
           <a href="#install">Install</a>
           <a href="https://github.com/iamaamir/pi-bifrost">GitHub</a>
@@ -174,6 +175,33 @@
             </p>
           </article>
         </div>
+      </section>
+
+      <section class="section wrap" id="jev" aria-labelledby="jev-title">
+        <div class="section-heading compact">
+          <h2 id="jev-title">Optional Jev classification</h2>
+          <p>
+            TypeSafe's Jev model can classify prompts into your configured tiers.
+            Bifrost still chooses the actual Pi model, keeps fallback behavior, and
+            lets you inspect each decision.
+          </p>
+        </div>
+
+        <pre><code>"classifier": {
+  "enabled": true,
+  "backend": "typesafe",
+  "typesafe": { "model": "jev-1.13.0" },
+  "fallback": "prompt",
+  "model": "provider/classifier-model"
+}</code></pre>
+        <p>
+          In Pi, run <code>/bifrost classifier</code> and choose <code>typesafe</code>.
+          Add a TypeSafe key through Pi's user auth file or
+          <code>TYPESAFE_API_KEY</code>, then run <code>/bifrost reload</code>.
+          Verify with <code>/bifrost classifier status</code> or
+          <code>/bifrost classifier test</code>.
+          <a href="https://github.com/iamaamir/pi-bifrost#optional-typesafejev-backend">Read more in the README</a>.
+        </p>
       </section>
 
       <section
