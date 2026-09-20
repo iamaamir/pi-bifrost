@@ -236,16 +236,16 @@ If classifier fails or is disabled, regex rules take over. Successful LLM classi
 
 #### Optional TypeSafe/Jev backend
 
-TypeSafe is disabled unless explicitly selected with `classifier.backend: "typesafe"`. It sends each cache-miss prompt to official `https://api.typesafe.ai/v1/systemone` using a `typesafe` API-key credential from Pi's `~/.pi/agent/auth.json` first, then `TYPESAFE_API_KEY`, pinned `classifier.typesafe.model: "jev-1.13.0"`, and default confidence gate `0.80`. Configure criteria for every tier. Keep existing `classifier.model` for optional prompt fallback:
+TypeSafe is disabled unless explicitly selected with `classifier.backend: "typesafe"`.
 
 ```json
 {
   "classifier": {
     "enabled": true,
     "backend": "typesafe",
-    "model": "my-prompt-classifier",
     "typesafe": {
-      "model": "jev-1.13.0"
+      "model": "jev-1.13.0",
+      "debug": true,
     },
     "minConfidence": 0.8,
     "criteria": {
@@ -256,10 +256,6 @@ TypeSafe is disabled unless explicitly selected with `classifier.backend: "types
   }
 }
 ```
-
-Low confidence, missing key, outage, circuit-open state, or invalid response falls back to existing prompt classifier, then regex/default. Requests reject redirects, retry only bounded transient failures, and never replay user turns. Prompt transmission and TypeSafe retention follow TypeSafe policy.
-
-Selecting TypeSafe through `/bifrost classifier` is explicit opt-in and writes `classifier.backend` to the project config. Store credentials in Pi's auth file (recommended) or export the environment variable; never put API keys in project config.
 
 Recommended credential setup in `~/.pi/agent/auth.json`:
 
@@ -277,6 +273,9 @@ Or use the shell environment:
 ```bash
 export TYPESAFE_API_KEY="ts_..."
 ```
+
+Low confidence, missing key, outage, circuit-open state, or invalid response falls back to existing prompt classifier, then regex/default. Requests reject redirects, retry only bounded transient failures, and never replay user turns. Prompt transmission and TypeSafe retention follow TypeSafe policy.
+
 
 Run `/bifrost classifier test` to force a fresh nonce-bearing request and inspect backend activity. Its report separates the selected backend judgment and acceptance decision from the final route produced by prompt/regex fallback. `/bifrost classifier status` shows the active Jev model, credential source, fallback mode, and prompt fallback model; keys are never displayed. `/bifrost classifier` opens the backend picker in Pi's UI.
 
