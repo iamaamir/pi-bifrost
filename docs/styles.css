@@ -383,6 +383,96 @@ li code {
   font-size: 0.9rem;
 }
 
+.cache-modes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid var(--line-strong);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.cache-modes article {
+  min-width: 0;
+  padding: 1.5rem 2rem 1.5rem 0;
+}
+
+.cache-modes article + article {
+  padding-right: 0;
+  padding-left: 2rem;
+  border-left: 1px solid var(--line);
+}
+
+.cache-modes h3 {
+  margin-bottom: 0.75rem;
+}
+
+.cache-modes article > p {
+  margin: 1rem 0 0;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.cache-flow {
+  min-height: 2rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.cache-flow + .cache-flow {
+  margin-top: 0.35rem;
+}
+
+.cache-flow code,
+.cache-flow strong {
+  font-size: 0.75rem;
+}
+
+.cache-flow code {
+  color: var(--text);
+}
+
+.cache-flow span {
+  color: var(--accent);
+  font-family: var(--mono);
+}
+
+.cache-flow strong {
+  color: var(--success);
+}
+
+.cache-control {
+  display: grid;
+  grid-template-columns: minmax(9rem, auto) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: center;
+  padding-block: 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.cache-control > code {
+  color: #c6dce9;
+  font-size: 0.8rem;
+}
+
+.cache-control p,
+.cache-note {
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.cache-note {
+  margin-top: 1rem;
+  color: var(--faint);
+}
+
+.cache-note strong {
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.78rem;
+}
+
 .feature-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -680,6 +770,25 @@ th {
 
   .route-example strong {
     grid-column: 1 / -1;
+  }
+
+  .cache-modes {
+    grid-template-columns: 1fr;
+  }
+
+  .cache-modes article,
+  .cache-modes article + article {
+    padding: 1.2rem 0;
+    border-left: 0;
+  }
+
+  .cache-modes article + article {
+    border-top: 1px solid var(--line);
+  }
+
+  .cache-control {
+    grid-template-columns: 1fr;
+    gap: 0.45rem;
   }
 
   .feature-list {

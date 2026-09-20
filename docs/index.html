@@ -126,6 +126,86 @@
         </figure>
       </section>
 
+      <section
+        class="section wrap cache-section"
+        id="prompt-cache"
+        aria-labelledby="prompt-cache-title"
+      >
+        <div class="section-heading">
+          <h2 id="prompt-cache-title">Routing without giving up cache locality.</h2>
+          <p>
+            Provider prompt caches commonly reuse an exact prefix for one model.
+            Bifrost does not manage those caches. It controls when Pi's active
+            model changes, so you can choose continuity or per-turn routing.
+          </p>
+        </div>
+
+        <div class="cache-modes">
+          <article>
+            <h3>Adaptive routing</h3>
+            <div
+              class="cache-flow"
+              role="img"
+              aria-label="Every prompt goes through Bifrost to a task-appropriate model"
+            >
+              <code>Every prompt</code>
+              <span aria-hidden="true">→</span>
+              <code>Bifrost</code>
+              <span aria-hidden="true">→</span>
+              <strong>task-fit model</strong>
+            </div>
+            <p>
+              Best when model fit matters most. Each provider and model may build
+              an independent cache history as Bifrost routes the session.
+            </p>
+          </article>
+
+          <article>
+            <h3>Pinned orchestrator</h3>
+            <div
+              class="cache-flow"
+              role="img"
+              aria-label="Main session stays on a pinned model"
+            >
+              <code>Main session</code>
+              <span aria-hidden="true">→</span>
+              <strong>pinned model</strong>
+            </div>
+            <div
+              class="cache-flow"
+              role="img"
+              aria-label="Subagents continue through Bifrost to task-appropriate models"
+            >
+              <code>Subagents</code>
+              <span aria-hidden="true">→</span>
+              <code>Bifrost</code>
+              <span aria-hidden="true">→</span>
+              <strong>task-fit models</strong>
+            </div>
+            <p>
+              Best for long coding sessions and delegated workflows. Main-session
+              continuity improves while subagents still route independently.
+            </p>
+          </article>
+        </div>
+
+        <div class="cache-control">
+          <code>/bifrost pin</code>
+          <p>
+            Pin applies only to the current session. Run
+            <code>/bifrost unpin</code> to resume per-turn routing.
+          </p>
+        </div>
+
+        <p class="cache-note">
+          <strong>Across any number of switches:</strong> Treat each
+          provider/model pair as an independent cache history, not one shared
+          session cache. With model A → B → A, model A may reuse its longest
+          still-valid previous prefix; content added after that prefix remains
+          an uncached tail for model A.
+        </p>
+      </section>
+
       <section class="section wrap" aria-labelledby="capabilities-title">
         <div class="section-heading compact">
           <h2 id="capabilities-title">See route. Change route.</h2>
@@ -307,8 +387,8 @@
         <div class="section-heading compact">
           <h2 id="faq-title">Frequently asked questions</h2>
           <p>
-            Bifrost caches routing decisions locally, keeps provider caching in
-            the provider layer, and never silently replays your work.
+            Bifrost separates its local routing cache from provider prompt
+            caching and never silently replays your work.
           </p>
         </div>
 
@@ -360,13 +440,29 @@
         </details>
 
         <details>
-          <summary>What about provider prompt caching?</summary>
+          <summary>Does model routing affect provider prompt caching?</summary>
           <div class="faq-answer">
             <p>
-              Provider prompt or prefix caching belongs to Pi and the selected
-              provider. Pi-Bifrost routes before the turn; it does not claim a
-              universal provider-cache implementation or alter provider billing
-              behavior.
+              It can. Provider prompt or prefix caches are commonly tied to the
+              selected model and exact reusable prefix, so changing models may
+              reduce cache hits. Switching does not necessarily delete cached
+              data; eligibility, lifetime, and billing depend on Pi's provider
+              integration and the provider itself.
+            </p>
+            <p>
+              Bifrost does not create, merge, or clear those caches. After a
+              sequence such as model A → model B → model A, model A may reuse
+              the longest exact prefix it previously saw if that entry is still
+              valid. Messages added during model B's turn form an uncached tail
+              for model A. Repeated switching therefore fragments independent
+              model cache histories instead of creating one shared session cache.
+            </p>
+            <p>
+              For a cache-friendly workflow, run <code>/bifrost pin</code> to
+              keep the main conversation on its current model. The pin is local
+              to that session, so subagents still route independently. Leave
+              Bifrost unpinned when per-turn model selection matters more than
+              model continuity.
             </p>
           </div>
         </details>

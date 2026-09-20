@@ -387,7 +387,16 @@ See [`examples/economical-frontier-reliability.json`](examples/economical-fronti
 
 **`pinned`** is a session preference. It locks the current model for the active session only. It is not written to disk and does not propagate to children. Subagents start with `pinned: false` and route independently.
 
-This means an orchestrator can pin a model for itself while its subagents still route through bifrost — each child picks the best model for its own task.
+This means an orchestrator can pin a model for itself while its subagents still route through Bifrost. Each child picks a model for its own task.
+
+This is also the cache-friendly workflow. Provider prompt caches are commonly scoped to the selected model and exact reusable prefix, so frequent model changes may reduce cache hits. Pin the long-lived main conversation for better cache locality while allowing delegated work to route independently:
+
+```text
+Main conversation → pinned model → better cache locality
+Subagent tasks    → Bifrost      → task-appropriate models
+```
+
+Leave Bifrost unpinned when per-turn model selection matters more than model continuity. Provider cache eligibility, lifetime, and billing remain specific to Pi's provider integration and the provider itself.
 
 See [ADR 0015](docs/adr/0015-pinned-ephemeral.md) for the design rationale.
 
@@ -407,9 +416,21 @@ No. One healthy configured model is enough to start. Multiple models and tiers l
 
 No. Repository state, tool output, and user intent can change even when prompt text is similar. Bifrost does not reuse old assistant responses or automatically replay a failed prompt; that could repeat edits, commands, or external side effects.
 
-### What about provider prompt caching?
+### Does model routing affect provider prompt caching?
 
-Provider prompt/prefix caching is managed by Pi and each model provider. Bifrost does not claim a universal prompt-cache implementation. It routes before the turn; providers decide whether a request qualifies for their own caching and billing behavior.
+It can. Provider prompt/prefix caches are commonly tied to the selected model and exact reusable prefix, so changing models may reduce cache hits. Switching does not necessarily delete cached data; eligibility, lifetime, and billing depend on Pi's provider integration and the provider itself.
+
+Bifrost does not create, merge, or clear provider caches. Pi sends the current session context to the selected model, then Pi's provider integration and the provider decide whether any prefix qualifies for reuse. Treat each provider/model pair as an independent cache history:
+
+```text
+Turn 1 → Model A → Model A may cache its input prefix
+Turn 2 → Model B → Model B starts or extends its own cache history
+Turn 3 → Model A → Model A may reuse its longest still-valid prior prefix
+```
+
+On turn 3, content added after model A's previous input is an uncached tail that model A must process. Repeated switching therefore fragments cache histories rather than destroying one shared session cache. Even models from the same provider should not be assumed to share cached prefixes.
+
+For a cache-friendly workflow, run `/bifrost pin` to keep the main conversation on its current model. The pin is local to that session, so subagents still route independently. Leave Bifrost unpinned when per-turn model selection matters more than model continuity.
 
 ### What is stored locally, and can I disable it?
 
