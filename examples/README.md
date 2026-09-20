@@ -210,6 +210,8 @@ frontier implement the auth module
 /bifrost unpin
 /bifrost classifier off
 /bifrost classifier on
+/bifrost classifier test
+/bifrost classifier status
 ```
 
 Use `/bifrost preview` before changing rules. Use `/bifrost debug` to inspect loaded tiers and rules, `/bifrost benchmark` to compare per-tier candidates, and `/bifrost probe` to check which models respond.

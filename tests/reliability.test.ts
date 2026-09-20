@@ -11,6 +11,7 @@ import {
   recordModelFailure,
   recordModelSuccess,
   beginTrial,
+  abandonTrial,
   reliabilityPath,
   saveReliability,
 } from "../reliability.ts";
@@ -162,6 +163,21 @@ describe("reliability", () => {
     assert.equal(closed.open, false);
     assert.equal(closed.halfOpen, false);
     assert.equal(closed.trialActive, false);
+  });
+
+  it("half-open: abandoning a trial preserves failure and cooldown state", () => {
+    const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 60 };
+    const key = "openai/gpt-5.4";
+    const t0 = Date.UTC(2026, 0, 1, 12, 0, 0);
+    const failed = recordModelFailure(emptyReliabilityState(), key, cfg, t0, "probe", "timeout");
+    const trial = beginTrial(failed, key);
+    const abandoned = abandonTrial(trial, key);
+    assert.equal(abandoned.models[key]?.trialActive, false);
+    assert.equal(abandoned.models[key]?.openUntil, failed.models[key]?.openUntil);
+    assert.deepEqual(abandoned.models[key]?.failures, failed.models[key]?.failures);
+    assert.equal(abandoned.models[key]?.lastFailureReason, "timeout");
+    assert.equal(abandonTrial(abandoned, key), abandoned);
+    assert.equal(abandonTrial(abandoned, "missing"), abandoned);
   });
 
   it("half-open: trial failure reopens circuit with double cooldown", () => {

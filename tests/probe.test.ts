@@ -7,7 +7,7 @@ import { runProbe, DEFAULT_PROBE_CONCURRENCY, probeOptionsFromConfig } from "../
 import { delay } from "./helpers.ts";
 
 describe("probe transport", () => {
-  it("uses provider.streamSimple", async () => {
+  it("uses modelRegistry.streamSimple", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-probe-"));
     const model = {
       provider: "openai-codex",
@@ -22,28 +22,25 @@ describe("probe transport", () => {
       const ctx = {
         modelRegistry: {
           getAvailable: () => [model],
-          getProvider: () => ({
-            streamSimple: () => ({
-              result: async () => ({
-                role: "assistant",
-                api: "openai-codex-responses",
-                provider: "openai-codex",
-                model: "gpt-5.4-mini",
-                content: [{ type: "text", text: "2" }],
-                usage: {
-                  input: 1,
-                  output: 1,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  totalTokens: 2,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-                },
-                stopReason: "stop",
-                timestamp: Date.now(),
-              }),
+          streamSimple: () => ({
+            result: async () => ({
+              role: "assistant",
+              api: "openai-codex-responses",
+              provider: "openai-codex",
+              model: "gpt-5.4-mini",
+              content: [{ type: "text", text: "2" }],
+              usage: {
+                input: 1,
+                output: 1,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 2,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "stop",
+              timestamp: Date.now(),
             }),
           }),
-          getProviderAuth: async () => ({ auth: { apiKey: "key" } }),
         },
       } as never;
 
@@ -73,29 +70,26 @@ describe("probe transport", () => {
         cwd,
         modelRegistry: {
           getAvailable: () => [model],
-          getProvider: () => ({
-            streamSimple: () => ({
-              result: async () => ({
-                role: "assistant",
-                api: "openai-codex-responses",
-                provider: "openai-codex",
-                model: "gpt-5.4-mini",
-                content: [],
-                usage: {
-                  input: 1,
-                  output: 1,
-                  cacheRead: 0,
-                  cacheWrite: 0,
-                  totalTokens: 2,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-                },
-                stopReason: "error",
-                errorMessage: "empty response",
-                timestamp: Date.now(),
-              }),
+          streamSimple: () => ({
+            result: async () => ({
+              role: "assistant",
+              api: "openai-codex-responses",
+              provider: "openai-codex",
+              model: "gpt-5.4-mini",
+              content: [],
+              usage: {
+                input: 1,
+                output: 1,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 2,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "error",
+              errorMessage: "empty response",
+              timestamp: Date.now(),
             }),
           }),
-          getProviderAuth: async () => ({ auth: { apiKey: "key" } }),
         },
       } as never;
 
@@ -137,47 +131,44 @@ describe("probe with many models and slow responses", () => {
       const ctx = {
         modelRegistry: {
           getAvailable: () => models,
-          getProvider: () => ({
-            streamSimple: (_model: typeof models[0], _messages: unknown, options: { signal: AbortSignal }) => {
-              const model = _model;
-              const signal = options.signal;
-              const index = models.indexOf(model);
-              const isSlow = index % 2 === 0;
-              return {
-                result: async () => {
-                  activeWorkers++;
-                  maxConcurrentWorkers = Math.max(maxConcurrentWorkers, activeWorkers);
-                  try {
-                    if (isSlow) {
-                      await Promise.race([
-                        delay(SLOW_DELAY_MS),
-                        new Promise<never>((_, reject) => {
-                          if (signal.aborted) reject(new DOMException("Aborted", "AbortError"));
-                          signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
-                        }),
-                      ]);
-                    } else {
-                      await delay(FAST_DELAY_MS);
-                    }
-                    return {
-                      role: "assistant",
-                      api: "openai-completions",
-                      provider: model.provider,
-                      model: model.id,
-                      content: [{ type: "text", text: "ok" }],
-                      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-                      stopReason: "stop",
-                      timestamp: Date.now(),
-                    };
-                  } finally {
-                    activeWorkers--;
-                    completed++;
+          streamSimple: (_model: typeof models[0], _messages: unknown, options: { signal: AbortSignal }) => {
+            const model = _model;
+            const signal = options.signal;
+            const index = models.indexOf(model);
+            const isSlow = index % 2 === 0;
+            return {
+              result: async () => {
+                activeWorkers++;
+                maxConcurrentWorkers = Math.max(maxConcurrentWorkers, activeWorkers);
+                try {
+                  if (isSlow) {
+                    await Promise.race([
+                      delay(SLOW_DELAY_MS),
+                      new Promise<never>((_, reject) => {
+                        if (signal.aborted) reject(new DOMException("Aborted", "AbortError"));
+                        signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+                      }),
+                    ]);
+                  } else {
+                    await delay(FAST_DELAY_MS);
                   }
-                },
-              };
-            },
-          }),
-          getProviderAuth: async () => ({ auth: { apiKey: "key" } }),
+                  return {
+                    role: "assistant",
+                    api: "openai-completions",
+                    provider: model.provider,
+                    model: model.id,
+                    content: [{ type: "text", text: "ok" }],
+                    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+                    stopReason: "stop",
+                    timestamp: Date.now(),
+                  };
+                } finally {
+                  activeWorkers--;
+                  completed++;
+                }
+              },
+            };
+          },
         },
       } as never;
 
@@ -247,28 +238,24 @@ describe("probe concurrency and resilience", () => {
   });
 
   function makeFastCtx(models: ReturnType<typeof makeFastModel>[]) {
-    const provider = {
-      streamSimple: () => ({
-        result: async () => {
-          await delay(10);
-          return {
-            role: "assistant",
-            api: "openai-completions",
-            provider: "test",
-            model: "x",
-            content: [{ type: "text", text: "ok" }],
-            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-            stopReason: "stop",
-            timestamp: Date.now(),
-          };
-        },
-      }),
-    };
     return {
       modelRegistry: {
         getAvailable: () => models,
-        getProvider: () => provider,
-        getProviderAuth: async () => ({ auth: { apiKey: "key" } }),
+        streamSimple: () => ({
+          result: async () => {
+            await delay(10);
+            return {
+              role: "assistant",
+              api: "openai-completions",
+              provider: "test",
+              model: "x",
+              content: [{ type: "text", text: "ok" }],
+              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+              stopReason: "stop",
+              timestamp: Date.now(),
+            };
+          },
+        }),
       },
     } as never;
   }
@@ -284,16 +271,11 @@ describe("probe concurrency and resilience", () => {
       const ctx = makeFastCtx(models) as Parameters<typeof runProbe>[0];
       // Wrap streamSimple to observe in-flight workers.
       const registry = ctx.modelRegistry as unknown as {
-        getProvider: () => {
-          streamSimple: (
-            ...args: unknown[]
-          ) => { result: () => Promise<unknown> };
-        };
+        streamSimple: (...args: unknown[]) => { result: () => Promise<unknown> };
       };
-      const provider = registry.getProvider();
-      const innerStream = provider.streamSimple;
-      provider.streamSimple = (...args: unknown[]) => {
-        const stream = innerStream.apply(provider, args);
+      const innerStream = registry.streamSimple;
+      registry.streamSimple = (...args: unknown[]) => {
+        const stream = innerStream.apply(registry, args);
         return {
           result: async () => {
             activeWorkers++;

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://pi.dev/schemas/bifrost.json",
   "title": "Bifrost Model Router Config",
-  "description": "Configuration for the pi-bifrost query-aware model router. Maps user prompts to model tiers via regex rules and an optional LLM classifier. Merged from extension defaults → global → project-local → root.",
+  "description": "Configuration for the pi-bifrost query-aware model router. Maps user prompts to model tiers via regex rules and an optional LLM classifier. Merged from extension defaults → global → project root → project config (.pi/bifrost.json), with later layers winning.",
   "type": "object",
   "properties": {
     "enabled": {
@@ -46,9 +46,9 @@
       },
       "examples": [
         {
-          "quick": ["opencode/deepseek-v4-flash-free"],
-          "general": ["opencode-go/deepseek-v4-pro", "openai-codex/gpt-5.4-mini"],
-          "frontier": ["openai-codex/gpt-5.6-sol", "opencode-go/glm-5.2"]
+          "quick": ["provider/fast-model"],
+          "general": ["provider/general-model"],
+          "frontier": ["provider/frontier-model"]
         }
       ]
     },
@@ -91,14 +91,13 @@
         },
         "model": {
           "type": "string",
-          "description": "Model tier name OR a direct model reference (e.g. 'opencode-go/glm-5.1'). If the value contains '/', it's treated as an exact provider/id lookup and bypasses tier selection. Otherwise, it must match a key in the 'models' map."
+          "description": "Model tier name OR a direct model reference (e.g. 'provider/specific-model'). If the value contains '/', it's treated as an exact provider/id lookup and bypasses tier selection. Otherwise, it must match a key in the 'models' map."
         }
       }
     },
     "ClassifierConfig": {
       "type": "object",
       "description": "LLM-based classifier that inspects user prompts and selects a tier before falling back to regex rules. Set 'enabled: false' to use regex-only routing.",
-      "required": ["model"],
       "additionalProperties": false,
       "properties": {
         "enabled": {
@@ -106,13 +105,39 @@
           "description": "Enable the LLM classifier. When disabled, only regex rules are used.",
           "default": true
         },
-        "model": {
+        "backend": {
           "type": "string",
-          "description": "Model pattern for the classifier. Use the cheapest model you trust — each classification costs tokens. Example: 'ollama/qwen2.5-coder:latest'"
+          "enum": ["prompt", "typesafe"],
+          "description": "Classifier backend. Omit for existing prompt classifier; TypeSafe is explicit opt-in."
+        },
+        "typesafe": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model": { "type": "string", "const": "jev-1.13.0" },
+            "endpoint": { "type": "string", "const": "https://api.typesafe.ai/v1/systemone" },
+            "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 },
+            "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 3 },
+            "debug": { "type": "boolean", "default": false, "description": "Detailed TypeSafe operational trace with redacted metadata only; active only when global debug.enabled is true. Raw prompts, request bodies, provider responses, and external error text are never persisted." },
+            "metrics": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": true }
+              }
+            }
+          }
+        },
+        "model": {
+          "oneOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" }, "minItems": 1 }
+          ],
+          "description": "Model pattern(s) for prompt classification. When backend is typesafe and fallback is prompt, this is the prompt fallback model; it is not the active Jev model."
         },
         "endpoint": {
           "type": "string",
-          "description": "Optional base URL for the classifier when the model is not in pi's model registry. Example: 'http://127.0.0.1:1234/v1'. When set, only method='direct' works for that endpoint."
+          "description": "Prompt backend base URL. TypeSafe uses fixed nested typesafe.endpoint and rejects this field."
         },
         "method": {
           "type": "string",
@@ -139,6 +164,19 @@
           "description": "Fall back to regex rules when the classifier fails or returns an unknown category.",
           "default": true
         },
+        "criteria": {
+          "type": "object",
+          "description": "Provider-neutral criteria keyed by configured tier.",
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "null", "description": "Remove inherited criterion for this tier." },
+              { "type": "string", "minLength": 1 },
+              { "type": "object", "required": ["what"], "additionalProperties": false, "properties": { "what": { "type": "string", "minLength": 1 }, "notFor": { "type": "string" }, "examples": { "type": "array", "items": { "type": "string" } } } }
+            ]
+          }
+        },
+        "minConfidence": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.8 },
+        "fallback": { "type": "string", "enum": ["prompt", "regex"], "default": "prompt", "description": "Fallback after a TypeSafe miss or rejected judgment. Prompt uses classifier.model; regex skips prompt classification." },
         "systemPrompt": {
           "type": "string",
           "description": "Custom system prompt for the classifier. Override to change how categories are presented to the LLM.",
@@ -169,6 +207,11 @@
           "maximum": 1,
           "description": "Jaccard similarity threshold for fuzzy cache matches. 0 = any prompt sharing at least one token with an entry matches (prompts with zero token overlap never match). 1 = only exact token matches.",
           "default": 0.85
+        },
+        "ttlHours": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Classification cache retention in hours. Default: 720 (30 days)."
         },
         "path": {
           "type": "string",

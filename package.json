@@ -30,7 +30,7 @@
     "extensions": [
       "./index.ts"
     ],
-    "minPiVersion": "0.80.8",
+    "minPiVersion": "0.86.0",
     "image": "https://iamaamir.github.io/pi-bifrost/social-card.png"
   },
   "scripts": {
@@ -41,6 +41,7 @@
     "test:ui:reliability": "bash scripts/ui-reliability-fake-provider.sh",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
+    "benchmark:jev": "node --experimental-strip-types scripts/jev-benchmark.ts",
     "release": "node --experimental-strip-types scripts/release.mjs"
   },
   "peerDependencies": {
@@ -48,6 +49,8 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "0.86.0",
+    "@earendil-works/pi-coding-agent": "0.86.0",
     "@types/node": "^26.1.1",
     "agent-tui": "^1.1.0"
   }

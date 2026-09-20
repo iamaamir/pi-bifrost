@@ -60,6 +60,7 @@
         <a class="wordmark" href="#top">Pi-Bifrost</a>
         <div class="nav-links">
           <a href="#routing">How it works</a>
+          <a href="#jev">Jev</a>
           <a href="#faq">FAQ</a>
           <a href="#install">Install</a>
           <a href="https://github.com/iamaamir/pi-bifrost">GitHub</a>
@@ -159,8 +160,10 @@
             <h3>Record useful diagnostics locally</h3>
             <p>
               Optional local JSONL debug logs record routing reason, selected
-              tier/model, and timing, not prompt bodies. They are local files,
-              not a hosted observability service.
+              tier/model, and timing. TypeSafe traces are also metadata-only:
+              raw prompts, request bodies, provider responses, and external
+              error text are never persisted. Logs are local files, not a hosted
+              observability service.
             </p>
           </article>
           <article>
@@ -172,6 +175,33 @@
             </p>
           </article>
         </div>
+      </section>
+
+      <section class="section wrap" id="jev" aria-labelledby="jev-title">
+        <div class="section-heading compact">
+          <h2 id="jev-title">Optional Jev classification</h2>
+          <p>
+            TypeSafe's Jev model can classify prompts into your configured tiers.
+            Bifrost still chooses the actual Pi model, keeps fallback behavior, and
+            lets you inspect each decision.
+          </p>
+        </div>
+
+        <pre><code>"classifier": {
+  "enabled": true,
+  "backend": "typesafe",
+  "typesafe": { "model": "jev-1.13.0" },
+  "fallback": "prompt",
+  "model": "provider/classifier-model"
+}</code></pre>
+        <p>
+          In Pi, run <code>/bifrost classifier</code> and choose <code>typesafe</code>.
+          Add a TypeSafe key through Pi's user auth file or
+          <code>TYPESAFE_API_KEY</code>, then run <code>/bifrost reload</code>.
+          Verify with <code>/bifrost classifier status</code> or
+          <code>/bifrost classifier test</code>.
+          <a href="https://github.com/iamaamir/pi-bifrost#optional-typesafejev-backend">Read more in the README</a>.
+        </p>
       </section>
 
       <section
@@ -234,8 +264,11 @@
             <dt>Local data</dt>
             <dd>
               The cache may store normalized, sorted prompt words in
-              <code>.pi/bifrost-cache.jsonl</code>. Debug logs contain routing
-              metadata, timings, and prompt length, not the prompt body.
+              <code>.pi/bifrost-cache.jsonl</code>. Normal debug logs contain
+              routing metadata, timings, and prompt length, not the prompt body.
+              TypeSafe tracing is separate, opt-in, and remains metadata-only:
+              raw prompts, request bodies, provider responses, and external error
+              text are never persisted.
             </dd>
           </div>
           <div>
@@ -252,13 +285,17 @@
               If no candidate matches or the selected model cannot be activated,
               Pi keeps its current model. Bifrost also records repeated failures and
               temporarily skips unreliable models — after a cooldown, it tries them
-              again automatically. Your default tier always works as a fallback.
+              again automatically. The default tier is attempted when it has an
+              eligible candidate; otherwise Pi keeps its current model.
             </dd>
           </div>
           <div>
             <dt>Credentials</dt>
             <dd>
-              Registry models use credentials managed by Pi. A custom classifier
+              Registry models use credentials managed by Pi. TypeSafe/Jev uses
+              Pi's user auth file before <code>TYPESAFE_API_KEY</code> and never
+              logs API keys or authorization headers. Selecting TypeSafe in the
+              classifier picker is explicit opt-in. A custom prompt classifier
               <code>endpoint</code> is treated as an unauthenticated
               OpenAI-compatible endpoint.
             </dd>
@@ -352,6 +389,33 @@
         </details>
 
         <details>
+          <summary>How does TypeSafe/Jev classification work?</summary>
+          <div class="faq-answer">
+            <p>
+              TypeSafe/Jev is an explicit opt-in classifier backend. It receives
+              the current prompt and configured tier criteria, then returns a
+              typed tier judgment. Bifrost still owns model lists, reliability,
+              fallback policy, and actual Pi model activation; Jev does not pick
+              provider models directly.
+            </p>
+            <p>
+              Invalid, low-confidence, unavailable, unauthorized, timed-out, or
+              circuit-open Jev results do not block routing. Bifrost falls back
+              according to configuration, then uses regex and the default tier.
+              Use <code>/bifrost classifier test</code> for a fresh request and
+              <code>/bifrost classifier status</code> for safe operational state.
+            </p>
+            <p>
+              Enable it explicitly with <code>classifier.backend: "typesafe"</code>
+              through <code>/bifrost classifier</code>, and provide credentials
+              through Pi's user auth file or <code>TYPESAFE_API_KEY</code>. Run
+              <code>/bifrost reload</code> and then the classifier test after
+              setup.
+            </p>
+          </div>
+        </details>
+
+        <details>
           <summary>How does model reliability work?</summary>
           <div class="faq-answer">
             <p>
@@ -410,8 +474,7 @@
       "lmstudio/openai/gpt-oss-20b"
     ],
     "frontier": [
-      "openai-codex/gpt-5.4",
-      "opencode-go/kimi-k3"
+      "provider/frontier-model"
     ]
   },
   "rules": [
@@ -422,7 +485,7 @@
   ],
   "classifier": {
     "enabled": true,
-    "model": "opencode/deepseek-v4-flash-free",
+    "model": "provider/classifier-model",
     "method": "auto"
   },
   "reliability": {
@@ -492,20 +555,44 @@
           <summary>Common commands</summary>
           <dl class="command-reference">
             <div>
+              <dt><code>/bifrost init</code></dt>
+              <dd>Probe models and generate config</dd>
+            </div>
+            <div>
+              <dt><code>/bifrost probe</code></dt>
+              <dd>Run availability checks</dd>
+            </div>
+            <div>
               <dt><code>/bifrost preview &lt;prompt&gt;</code></dt>
               <dd>Preview without sending</dd>
+            </div>
+            <div>
+              <dt><code>/bifrost on</code> / <code>off</code></dt>
+              <dd>Enable or disable routing</dd>
             </div>
             <div>
               <dt><code>/bifrost pin</code> / <code>unpin</code></dt>
               <dd>Pause or resume routing</dd>
             </div>
             <div>
-              <dt><code>/bifrost classifier off</code></dt>
-              <dd>Use regex without LLM classification</dd>
+              <dt><code>/bifrost classifier</code></dt>
+              <dd>Choose prompt or TypeSafe/Jev backend</dd>
             </div>
             <div>
-              <dt><code>/bifrost probe</code></dt>
-              <dd>Run availability checks</dd>
+              <dt><code>/bifrost classifier on</code> / <code>off</code></dt>
+              <dd>Enable or disable LLM classification</dd>
+            </div>
+            <div>
+              <dt><code>/bifrost classifier test</code></dt>
+              <dd>Run a fresh classifier smoke test</dd>
+            </div>
+            <div>
+              <dt><code>/bifrost classifier status</code></dt>
+              <dd>Show backend, credential state, and safe metrics</dd>
+            </div>
+            <div>
+              <dt><code>/bifrost cache stats</code> / <code>clear</code></dt>
+              <dd>Inspect or clear classification cache</dd>
             </div>
             <div>
               <dt><code>/bifrost reload</code></dt>

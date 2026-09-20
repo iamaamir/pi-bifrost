@@ -308,6 +308,22 @@ describe("routing", () => {
       assert.equal(result.skipped[0]?.key, "anthropic/claude-opus");
       assert.equal(result.skipped[0]?.reason, "open_circuit");
     });
+
+    it("skips a candidate while its half-open trial is active", () => {
+      const a = makeModel("anthropic", "claude-opus", 15);
+      const b = makeModel("anthropic", "claude-sonnet", 3);
+      const ctx = makeCtx([a, b]);
+      const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 60 };
+      const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+      const state = {
+        version: 1 as const,
+        models: { [modelKey(a)]: { failures: [now - 60_000], openUntil: now - 1, trialActive: true } },
+      };
+
+      const result = resolveHealthyModel(ctx, [modelKey(a), modelKey(b)], "first", state, cfg, now);
+      assert.equal(modelKey(result.selected), modelKey(b));
+      assert.equal(result.skipped[0]?.reason, "trial_active");
+    });
   });
 
   describe("resolveModelWithFallback", () => {

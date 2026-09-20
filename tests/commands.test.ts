@@ -93,9 +93,20 @@ describe("commands helpers", () => {
       assert.equal(proposal.default, "quick");
     });
 
+    it("prefers general as default regardless of discovered tier order", () => {
+      const models = { frontier: ["provider/frontier"], general: ["provider/general"], quick: ["provider/quick"] };
+      const proposal = buildInitProposal(models, "provider/c", ".") as { default: string };
+      assert.equal(proposal.default, "general");
+    });
+
     it("default falls back to general when models are empty", () => {
       const proposal = buildInitProposal({}, "provider/c", ".") as { default: string };
       assert.equal(proposal.default, "general");
+    });
+
+    it("omits prompt classifier model when no working model exists", () => {
+      const proposal = buildInitProposal({}, undefined, ".") as { classifier: Record<string, unknown> };
+      assert.equal(proposal.classifier.model, undefined);
     });
   });
 

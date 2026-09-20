@@ -2,21 +2,27 @@
 
 All notable changes to pi-bifrost are documented here.
 
-## [0.2.0] - UNRELEASED
+## [0.4.0] - UNRELEASED
 
 ### Added
-- Inline tier override via first-word detection (`frontier debug this`)
-- Config validation on startup (`validateConfig`)
-- Extracted `parseInlineOverride` for testability
-- User-facing config issue messages
+- Direct model bindings, config validation, and inline tier overrides.
+- Opt-in TypeSafe/Jev classifier backend with confidence validation, bounded retries, persisted reliability, safe credential resolution, metrics, and detailed local tracing.
+- `/bifrost classifier` backend picker, `/bifrost classifier test`, and expanded classifier status diagnostics.
+- TypeSafe/Jev architecture and operational guidance in `docs/jev-typesafe-architecture.md`.
+- Inline tier override via first-word detection (`frontier debug this`).
+- Extracted `parseInlineOverride` for testability.
+- User-facing config issue messages.
 
 ### Changed
-- Eliminated all `as unknown as` casts from production code
-- Config merge order: `.pi/bifrost.json` now wins over root `bifrost.json`
+- Require Pi 0.86.0+ and route registry classifier/probe calls through Pi's authenticated `modelRegistry.streamSimple()` API.
+- Kept the Pi model-selector compatibility cast confined to one documented adapter boundary.
+- Config merge order: `.pi/bifrost.json` now wins over root `bifrost.json`.
 
-## [0.1.7] - 2026-07-xx
+### Fixed
+- Init now prefers a populated `general` tier as default regardless of model discovery order.
+- TUI command feedback no longer appears twice through both notifications and stderr extension output.
+- TypeSafe backend selection now writes explicit Jev and fallback settings, status distinguishes Jev from its prompt fallback model, and classifier tests separate rejected backend judgments from final fallback routes.
 
-### Added
-- Direct model bindings via `"model": "provider/id"` in regex rules
-- `parseInlineOverride` extraction
-- Config validation
+### Security
+- TypeSafe decoder fails closed on non-plain objects, accessors, extra fields, and malformed probabilities.
+- Detailed TypeSafe traces are metadata-only and exclude prompts, request bodies, provider responses, external error text, API keys, and authorization headers.

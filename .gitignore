@@ -10,3 +10,4 @@ screenshots/
 .plan/
 docs/adr/*
 docs/adr/*
+.agents/

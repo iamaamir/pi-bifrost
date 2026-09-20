@@ -12,7 +12,7 @@
 
   "classifier": {
     "enabled": true,
-    "model": "opencode/deepseek-v4-flash-free",
+    "backend": "prompt",
     "method": "auto",
     "maxTokens": 20,
     "temperature": 0,

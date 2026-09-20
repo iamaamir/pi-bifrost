@@ -42,13 +42,20 @@ Supported strategies include `cheapest`, `cheapest_input`, `cheapest_output`, `l
 - `/bifrost preview <prompt>` previews a route without sending.
 - `/bifrost pin` pauses routing.
 - `/bifrost unpin` resumes routing.
-- `/bifrost classifier off` disables LLM classification.
+- `/bifrost classifier` opens the prompt or TypeSafe/Jev backend picker.
+- `/bifrost classifier on` / `off` enables or disables LLM classification.
+- `/bifrost classifier test` runs a fresh classifier smoke test.
+- `/bifrost classifier status` shows backend, credential state, and safe metrics.
 - `/bifrost probe` checks model availability.
 - `/bifrost reload` reloads configuration.
 
 ## Failure behavior
 
-If classification fails, Pi-Bifrost tries configured fallbacks, then keeps Pi's current model if no route resolves. If no matching model can be activated, Pi keeps its current model.
+If classification fails, Pi-Bifrost tries configured fallbacks, then keeps Pi's current model if no route resolves. If no matching model can be activated, Pi keeps its current model. TypeSafe/Jev failures include missing credentials, rate limits, auth errors, timeouts, invalid responses, low confidence, and open circuits. No user prompt is replayed.
+
+## TypeSafe/Jev
+
+TypeSafe is explicit opt-in via `classifier.backend: "typesafe"`, selected through `/bifrost classifier`. Jev receives current prompt plus configured tier criteria and returns a tier judgment, not an exact provider model. Bifrost retains model lists, reliability filtering, fallback policy, selection strategy, and Pi model activation. Credentials resolve from `~/.pi/agent/auth.json` entry `typesafe` before `TYPESAFE_API_KEY`. `/bifrost classifier test` forces a fresh request; `/bifrost classifier status` exposes safe state without secrets. Detailed TypeSafe tracing requires both `debug.enabled` and `classifier.typesafe.debug`; it records redacted operational metadata only and never persists prompts, request/response bodies, provider payloads, or external error text.
 
 ## Privacy
 

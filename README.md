@@ -17,6 +17,7 @@ Pi-Bifrost is **native model routing for [Pi](https://pi.dev)**. Before generati
 - **Inspectable control** — preview route, pin current model, or force a tier for one message.
 - **Model-agnostic setup** — `/bifrost init` probes supported models available through Pi, then proposes tier lists without hardcoded maintainer model IDs.
 - **Host-real verification** — unit tests, Pi TUI smoke tests, and fake-provider SSE E2E cover routing and reliability behavior.
+- **Optional TypeSafe/Jev backend** — Jev selects a configured Bifrost tier; Bifrost retains model availability, reliability, fallback policy, and Pi model activation. See [`docs/jev-typesafe-architecture.md`](docs/jev-typesafe-architecture.md) before enabling it.
 
 ## Install
 
@@ -74,7 +75,8 @@ If a model repeatedly fails (probe timeout, auth error, provider stream failure)
 | `/bifrost reload` | Reload config after editing |
 | `/bifrost cache stats` | Show classification cache |
 | `/bifrost cache clear` | Clear classification cache |
-| `/bifrost classifier on` / `off` / `status` | Enable / disable LLM classifier, or show state; toggles persist to `.pi/bifrost-state.json` |
+| `/bifrost classifier` | Choose backend; prompt mode opens Pi's searchable model picker; TypeSafe selection enables Jev |
+| `/bifrost classifier on` / `off` / `test` / `status` | Enable, disable, test, or inspect classifier; toggles persist to `.pi/bifrost-state.json` |
 
 ## UI smoke test
 
@@ -109,18 +111,13 @@ The default config ships with three tiers. Run `/bifrost init` to populate them 
 {
   "models": {
     "quick": [
-      "opencode/deepseek-v4-flash-free",
-      "opencode/mimo-v2.5-free"
+      "provider/fast-model"
     ],
     "general": [
-      "opencode-go/deepseek-v4-pro",
-      "opencode-go/glm-5.2",
-      "openai-codex/gpt-5.4-mini"
+      "provider/general-model"
     ],
     "frontier": [
-      "openai-codex/gpt-5.6-sol",
-      "opencode-go/glm-5.2",
-      "opencode-go/deepseek-v4-pro"
+      "provider/frontier-model"
     ]
   }
 }
@@ -198,11 +195,11 @@ Instead of a tier name, use a model reference (`provider/id`) — the matched pr
   "rules": [
     {
       "pattern": "\\bcommit\\b",
-      "model": "opencode-go/glm-5.1"
+      "model": "provider/specific-model"
     },
     {
       "pattern": "\\btest\\b",
-      "model": "opencode/deepseek-v4-flash-free"
+      "model": "provider/specific-test-model"
     }
   ]
 }
@@ -230,12 +227,73 @@ An LLM that reads your prompt and picks a tier. More accurate than regex, costs 
 {
   "classifier": {
     "enabled": true,
-    "model": "opencode/mimo-v2.5-free"
+    "model": "provider/classifier-model"
   }
 }
 ```
 
-If the classifier fails or is disabled, regex rules take over. Successful LLM classifier results enter the local classification cache, so similar repeat prompts can skip another classifier call.
+If classifier fails or is disabled, regex rules take over. Successful LLM classifier results enter local classification cache, so similar repeat prompts can skip another classifier call.
+
+#### Optional TypeSafe/Jev backend
+
+TypeSafe is disabled unless explicitly selected with `classifier.backend: "typesafe"`.
+
+```json
+{
+  "classifier": {
+    "enabled": true,
+    "backend": "typesafe",
+    "typesafe": {
+      "model": "jev-1.13.0",
+      "debug": true,
+    },
+    "minConfidence": 0.8,
+    "criteria": {
+      "quick": "Bounded, reversible work",
+      "general": "Normal implementation and moderate reasoning",
+      "frontier": "Complex, ambiguous, or high-consequence work"
+    }
+  }
+}
+```
+
+Recommended credential setup in `~/.pi/agent/auth.json`:
+
+```json
+{
+  "typesafe": {
+    "type": "api_key",
+    "key": "ts_..."
+  }
+}
+```
+
+Or use the shell environment:
+
+```bash
+export TYPESAFE_API_KEY="ts_..."
+```
+
+Low confidence, missing key, outage, circuit-open state, or invalid response falls back to existing prompt classifier, then regex/default. Requests reject redirects, retry only bounded transient failures, and never replay user turns. Prompt transmission and TypeSafe retention follow TypeSafe policy.
+
+
+Run `/bifrost classifier test` to force a fresh nonce-bearing request and inspect backend activity. Its report separates the selected backend judgment and acceptance decision from the final route produced by prompt/regex fallback. `/bifrost classifier status` shows the active Jev model, credential source, fallback mode, and prompt fallback model; keys are never displayed. `/bifrost classifier` opens the backend picker in Pi's UI.
+
+Bifrost's existing fuzzy cache persists normalized prompt text locally for 30 days by default (`cache.ttlHours`), then evicts expired entries; disable it for sensitive projects. TypeSafe operational observation is content-free and local: bounded aggregate outcomes, tiers, confidence bands, latency buckets, and attempt counts are stored in `.pi/bifrost-classifier-metrics.json` and shown by `/bifrost classifier status` and `/bifrost debug`. It never stores prompts, probabilities, or credentials. Set `classifier.typesafe.metrics.enabled` to `false` to disable this file.
+
+For an end-to-end request trace, enable both global debug and TypeSafe debug:
+
+```json
+{
+  "debug": { "enabled": true },
+  "classifier": {
+    "backend": "typesafe",
+    "typesafe": { "debug": true }
+  }
+}
+```
+
+Trace events are written to `.pi/bifrost-debug.jsonl` and include request attempts, official endpoint, HTTP status, decoded tier, confidence, retry/failure outcome, and correlation ID. Traces are metadata-only: raw prompts, request bodies, provider responses, external error text, credentials, and authorization headers are never persisted.
 
 ### Debug logging
 
@@ -245,7 +303,9 @@ If the classifier fails or is disabled, regex rules take over. Successful LLM cl
 }
 ```
 
-Writes `.pi/bifrost-debug.jsonl` — one JSON line per event with routing reason, selected tier/model, and timing. It does not store prompt bodies. Useful for understanding what Bifrost is doing.
+Writes `.pi/bifrost-debug.jsonl` — one JSON line per event with routing reason, selected tier/model, and timing. Normal Bifrost debug events do not store prompt bodies.
+
+For TypeSafe's detailed local troubleshooting trace, also set `classifier.typesafe.debug: true`. This adds bounded operational metadata only; raw prompts, request/response bodies, provider payloads, and external error text are never persisted. API keys and authorization headers are never logged.
 
 ### Full config reference
 
@@ -335,7 +395,7 @@ See [ADR 0015](docs/adr/0015-pinned-ephemeral.md) for the design rationale.
 
 Bifrost maintains a **local routing-classification cache**. After a successful LLM classification, it stores a normalized prompt and its selected tier. Similar future prompts can reuse that tier and skip the classifier call. It does not store model answers.
 
-The project-local cache is `.pi/bifrost-cache.jsonl`. Entries contain lowercased, punctuation-stripped, sorted prompt words, selected tier, last-use timestamp, and hit count. Default limit is 500 entries; entries use exact matching first, then token-set similarity (default threshold `0.85`) and are evicted least-recently-used first. Use `/bifrost cache stats` to inspect it or `/bifrost cache clear` to remove it.
+The project-local cache is `.pi/bifrost-cache.jsonl`. Entries contain lowercased, punctuation-stripped, sorted prompt words, selected tier, last-use timestamp, hit count, and a hashed classifier-semantics fingerprint. Default limit is 500 entries with 30-day retention; entries use exact matching first, then token-set similarity (default threshold `0.85`) and are evicted least-recently-used first. Use `/bifrost cache stats` to inspect it or `/bifrost cache clear` to remove it.
 
 ### Do I need multiple models?
 

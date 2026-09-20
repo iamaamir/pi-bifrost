@@ -123,20 +123,7 @@ async function probeOne(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const provider = ctx.modelRegistry.getProvider(model.provider);
-      if (!provider) {
-        base.status = "error";
-        base.error = `unknown provider: ${model.provider}`;
-        return base;
-      }
-      const auth = await ctx.modelRegistry.getProviderAuth(model.provider);
-      if (!auth) {
-        base.status = "error";
-        base.error = "auth unavailable";
-        return base;
-      }
-
-      const stream = provider.streamSimple(
+      const stream = ctx.modelRegistry.streamSimple(
         model,
         {
           messages: [{ role: "user", content: PROBE_PROMPT, timestamp: Date.now() }],
@@ -146,9 +133,6 @@ async function probeOne(
           temperature: 0,
           signal: controller.signal,
           cacheRetention: "none",
-          apiKey: auth.auth.apiKey,
-          headers: auth.auth.headers,
-          env: auth.env,
         },
       );
       const response = await stream.result();

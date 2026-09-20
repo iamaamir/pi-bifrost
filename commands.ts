@@ -1,18 +1,19 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CONFIG_DIR_NAME } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, ModelSelectorComponent, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
-import type { BifrostConfig } from "./config.ts";
-import { DEFAULT_RULES, loadConfig } from "./config.ts";
+import type { BifrostConfig, ClassifierConfig } from "./config.ts";
+import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, loadConfig } from "./config.ts";
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
-import type { ClassificationPipeline } from "./classification-pipeline.ts";
+import type { ClassificationPipeline, ClassificationResult } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
 import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
 import { showBifrostResult } from "./result-viewer.ts";
 import {
+  findCandidates,
   getStrategy,
   guessTier,
   modelKey,
@@ -21,6 +22,9 @@ import {
   type RoutingStrategy,
 } from "./routing.ts";
 import type { ReliabilityStore } from "./reliability-store.ts";
+import type { ClassifierMetricsState, ClassifierMetricsStore } from "./classifier-metrics.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend } from "./classifier-backends.ts";
+import { resolveTypeSafeApiKey, type TypeSafeCredentialSource } from "./typesafe-classifier.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
@@ -31,6 +35,7 @@ export interface BifrostState {
   pinned: boolean;
   cacheEntries: CacheEntry[];
   reliabilityStore: ReliabilityStore;
+  classifierMetricsStore: ClassifierMetricsStore;
   extensionDir: string;
   getPipeline: (ctx: ExtensionContext) => ClassificationPipeline;
   invalidatePipeline: () => void;
@@ -45,8 +50,11 @@ export function log(
   message: string,
   type?: "info" | "warning" | "error",
 ) {
-  console.error(`[bifrost] ${message}`);
-  if (ctx.hasUI) ctx.ui.notify(message, type ?? "info");
+  if (ctx.hasUI) {
+    ctx.ui.notify(message, type ?? "info");
+  } else {
+    console.error(`[bifrost] ${message}`);
+  }
 }
 
 export function uiBusy(ctx: ExtensionContext, message: string) {
@@ -63,6 +71,39 @@ export function uiDone(ctx: ExtensionContext) {
     ctx.ui.setWorkingMessage(undefined);
     ctx.ui.setWorkingVisible(false);
   }
+}
+
+function promptClassifierModelAvailable(
+  ctx: ExtensionContext,
+  model: ClassifierConfig["model"],
+): boolean {
+  return findCandidates(ctx, model).length > 0;
+}
+
+async function requestPromptClassifierModel(ctx: ExtensionContext): Promise<string | null> {
+  const modelRuntime = {
+    getAvailableSnapshot: () => ctx.modelRegistry.getAvailable(),
+    getModel: (provider: string, id: string) => ctx.modelRegistry.find(provider, id),
+    getError: () => ctx.modelRegistry.getError(),
+    refresh: async (options?: { signal?: AbortSignal }) => {
+      return ctx.modelRegistry.refresh(options);
+    },
+  };
+  const selected = await ctx.ui.custom<string | null>((tui, _theme, _keybindings, done) => {
+    const onSelect = (model: { provider: string; id: string }) => done(`${model.provider}/${model.id}`);
+    const onCancel = () => done(null);
+    return new ModelSelectorComponent(
+      tui,
+      ctx.model,
+      // The extension facade exposes only registry methods; this adapter
+      // implements the subset ModelSelectorComponent consumes.
+      modelRuntime as unknown as ModelRuntime,
+      ctx.scopedModels,
+      onSelect,
+      onCancel,
+    );
+  });
+  return selected;
 }
 
 function uiOutput(ctx: ExtensionContext, lines: string[]) {
@@ -173,12 +214,16 @@ const PROPOSAL_STRATEGIES: Record<string, RoutingStrategy> = {
 
 export function buildInitProposal(
   models: Record<string, string[]>,
-  classifierModel: string,
+  classifierModel: string | undefined,
   extensionDir: string,
+  classifierBackend: ClassifierBackend = CLASSIFIER_BACKEND_IDS.prompt,
 ): Record<string, unknown> {
   const tierKeys = Object.keys(models);
-  // Pick the first populated tier as default, or fall back to first key.
-  const defaultTier = tierKeys.length > 0 ? tierKeys[0] : "general";
+  const firstPopulatedTier = Object.entries(models).find(([, candidates]) => candidates.length > 0)?.[0];
+  // Prefer general regardless of discovery order; otherwise use first populated tier.
+  const defaultTier = (models.general?.length ?? 0) > 0
+    ? "general"
+    : firstPopulatedTier ?? (tierKeys.includes("general") ? "general" : tierKeys[0] ?? "general");
   const categoryStrategies: Record<string, RoutingStrategy> = {};
   for (const t of tierKeys) {
     categoryStrategies[t] = PROPOSAL_STRATEGIES[t] ?? "first";
@@ -191,8 +236,9 @@ export function buildInitProposal(
     categoryStrategies,
     classifier: {
       enabled: true,
-      model: classifierModel,
-      method: "auto" as const,
+      backend: classifierBackend,
+      ...(classifierBackend === CLASSIFIER_BACKEND_IDS.prompt && classifierModel ? { model: classifierModel, method: "auto" as const } : {}),
+      ...(classifierBackend === CLASSIFIER_BACKEND_IDS.typesafe ? { typesafe: { model: TYPE_SAFE_MODEL }, criteria: DEFAULT_CLASSIFIER_CRITERIA } : {}),
     },
     models,
     rules: DEFAULT_RULES,
@@ -351,12 +397,16 @@ async function handleInit(
     if (workingModels.length > 0) {
       classifierModel = `${workingModels[0].provider}/${workingModels[0].model}`;
     } else {
-      classifierModel = "opencode/mimo-v2.5-free";
-      log(ctx, "No working models found for classifier. Using default — it may not work.", "warning");
+      log(ctx, "No working models found for classifier. Init will omit classifier.model; regex fallback remains available.", "warning");
     }
   }
 
-  const proposal = buildInitProposal(models, classifierModel, state.extensionDir);
+  const proposal = buildInitProposal(
+    models,
+    classifierModel,
+    state.extensionDir,
+    state.config.classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt,
+  );
 
   const totalAssigned = Object.values(models).reduce((s, v) => s + v.length, 0);
   uiOutput(ctx, [
@@ -406,6 +456,10 @@ async function handleInit(
   state.pinned = runtimeState.pinned;
   state.classifierEnabled = runtimeState.classifierEnabled;
   state.reliabilityStore.reload(state.config.reliability, process.cwd());
+  state.classifierMetricsStore.reload({
+    cwd: process.cwd(),
+    enabled: state.config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
+  });
   state.invalidatePipeline();
 
   log(ctx, "wrote .pi/bifrost.json and reloaded config");
@@ -416,6 +470,91 @@ async function handleInit(
     ctx.ui.setWidget("bifrost-output", []);
     ctx.ui.setWidget("bifrost-probe", []);
   }
+}
+
+function increasedMetric(
+  after: Readonly<Record<string, number>>,
+  before: Readonly<Record<string, number>>,
+): string | undefined {
+  return Object.entries(after).find(([key, count]) => count > (before[key] ?? 0))?.[0];
+}
+
+export function buildClassifierTestReport(input: {
+  classifier: ClassifierConfig | undefined;
+  result: ClassificationResult;
+  before: ClassifierMetricsState;
+  after: ClassifierMetricsState;
+  credential?: TypeSafeCredentialSource;
+}): string[] {
+  const { classifier, result, before, after, credential } = input;
+  const backend = classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt;
+  const judgment = result.kind === "classified" ? result.judgment : undefined;
+  const outcome = increasedMetric(after.outcomes, before.outcomes);
+  const observedTier = judgment?.backend === backend
+    ? judgment.tier
+    : increasedMetric(after.tiers, before.tiers);
+  const observedConfidence = judgment?.backend === backend && judgment.confidence !== undefined
+    ? String(judgment.confidence)
+    : increasedMetric(after.confidenceBands, before.confidenceBands) ?? "n/a";
+  const rawPromptModel = classifier?.model;
+  const configuredModel = Array.isArray(rawPromptModel) ? rawPromptModel.join(", ") : rawPromptModel;
+  const model = judgment?.backend === backend
+    ? judgment.model
+    : backend === CLASSIFIER_BACKEND_IDS.typesafe
+      ? classifier?.typesafe?.model ?? TYPE_SAFE_MODEL
+      : configuredModel;
+  const finalResult = result.kind === "unclassified" ? "unclassified" : result.tier;
+  const finalSource = result.kind === "classified" ? result.source : result.kind;
+  const accepted = result.kind === "classified" && judgment?.backend === backend;
+  const lines = [
+    "--- classifier test ---",
+    `backend: ${backend}`,
+    `model: ${model ?? "none"}`,
+    `backend result: ${observedTier ?? "none"}`,
+    `confidence: ${observedConfidence}`,
+    `accepted: ${accepted ? "yes" : "no"}`,
+    `final result: ${finalResult}`,
+    `final source: ${finalSource}`,
+    `final backend: ${judgment?.backend ?? "none"}`,
+    `final model: ${judgment?.model ?? "none"}`,
+    `request observed: ${after.total > before.total ? "yes" : "no"}`,
+  ];
+  if (backend === CLASSIFIER_BACKEND_IDS.typesafe) {
+    lines.push(`credential: ${credential ?? "missing"}`);
+    if (after.total > before.total) lines.push(`outcome: ${outcome ?? "recorded"}`);
+  }
+  lines.push("-----------------------");
+  return lines;
+}
+
+async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState): Promise<void> {
+  const classifier = state.config.classifier;
+  if (!state.classifierEnabled || classifier?.enabled === false) {
+    log(ctx, "Classifier is disabled; run /bifrost classifier on first", "warning");
+    return;
+  }
+  const before = state.classifierMetricsStore.snapshot();
+  clearBifrostWidgets(ctx);
+  uiBusy(ctx, "Testing classifier backend...");
+  const prompt = `Assess this small bounded request for tier selection. Verification nonce ${Date.now()}.`;
+  let result;
+  try {
+    result = await state.getPipeline(ctx).classify(prompt);
+  } finally {
+    uiDone(ctx);
+    syncBifrostModeStatus(ctx, state);
+  }
+  const after = state.classifierMetricsStore.snapshot();
+  const credential = classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe
+    ? resolveTypeSafeApiKey().source
+    : undefined;
+  await uiResult(ctx, "Classifier test", buildClassifierTestReport({
+    classifier,
+    result,
+    before,
+    after,
+    credential,
+  }));
 }
 
 async function handleBenchmark(
@@ -496,12 +635,14 @@ async function handlePreview(
   }
   const tier = classification.tier;
   const source = classification.kind === "classified" ? classification.source : "fallback";
+  const judgment = classification.kind === "classified" ? classification.judgment : undefined;
   const display = resolveTierDisplay(tier, state, ctx);
 
   const lines = [
     "--- preview ---",
     `prompt:    ${prompt}`,
     `source:    ${source}`,
+    ...(judgment ? [`backend:   ${judgment.backend}`, `model:     ${judgment.model ?? "none"}`, `confidence:${judgment.confidence === undefined ? " n/a" : ` ${judgment.confidence}`}`] : []),
     `tier:      ${tier}`,
     `strategy:  ${display.strategy}`,
     `selected tier: ${display.selectedTier}`,
@@ -522,6 +663,15 @@ async function handlePreview(
 // ── Command type ────────────────────────────────────────────
 
 type CommandFn = (args: string, ctx: ExtensionContext) => void | Promise<void>;
+
+export async function runBifrostCommand(
+  args: string,
+  ctx: ExtensionContext,
+  handler: CommandFn,
+): Promise<void> {
+  if (ctx.mode === "tui" && ctx.hasUI) ctx.ui.setEditorText("");
+  await handler(args, ctx);
+}
 
 interface CommandSpec {
   readonly value: string;
@@ -554,8 +704,10 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "benchmark", description: "Classify a benchmark prompt", argumentHint: "<prompt>" },
   { value: "cache stats", description: "Show classification cache" },
   { value: "cache clear", description: "Clear classification cache" },
+  { value: "classifier", description: "Choose classifier backend" },
   { value: "classifier on", description: "Enable LLM classifier" },
   { value: "classifier off", description: "Disable LLM classifier" },
+  { value: "classifier test", description: "Test selected classifier backend" },
   { value: "classifier status", description: "Show classifier state" },
   { value: "debug", description: "Show config and routing state" },
   { value: "preview", description: "Preview routing for a prompt", argumentHint: "<prompt>" },
@@ -563,6 +715,10 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
 
 export function getBifrostCommandCompletions(prefix: string) {
   const normalized = prefix.trim().toLowerCase();
+  // Exact commands should submit on first Enter. Returning a completion for
+  // an already-complete command makes Pi accept the suggestion first and
+  // leave the command text stuck in the editor until a second Enter.
+  if (BIFROST_COMMAND_OPTIONS.some((command) => command.value === normalized)) return null;
   const items = BIFROST_COMMAND_OPTIONS.filter((command) => command.value.startsWith(normalized)).map((command) => ({
     value: command.value,
     label: command.value,
@@ -648,8 +804,12 @@ export function createCommandRouter(
       state.enabled = runtimeState.enabled;
       state.classifierEnabled = runtimeState.classifierEnabled;
       state.pinned = runtimeState.pinned;
-      state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path));
+      state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path), (state.config.cache?.ttlHours ?? 720) * 60 * 60 * 1000);
       state.reliabilityStore.reload(state.config.reliability, process.cwd());
+      state.classifierMetricsStore.reload({
+        cwd: process.cwd(),
+        enabled: state.config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
+      });
       state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
@@ -767,7 +927,7 @@ export function createCommandRouter(
       const entries = loadCache(path);
       log(
         ctx,
-        `cache: ${entries.length} entries (cap ${state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES}, threshold ${state.config.cache?.threshold ?? DEFAULT_THRESHOLD})`,
+        `cache: ${entries.length} entries (cap ${state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES}, retention ${state.config.cache?.ttlHours ?? 720}h, threshold ${state.config.cache?.threshold ?? DEFAULT_THRESHOLD})`,
       );
     }),
     exact("cache clear", "Clear classification cache", (_, ctx) => {
@@ -779,6 +939,89 @@ export function createCommandRouter(
     }),
 
     // Classifier
+    {
+      value: "classifier test",
+      description: "Test selected classifier backend",
+      match: (sub) => sub === "classifier test",
+      handler: (_, ctx) => handleClassifierTest(ctx, state),
+    },
+    {
+      value: "classifier",
+      description: "Choose classifier backend and prompt model",
+      match: (sub) => sub === "classifier",
+      handler: async (_, ctx) => {
+        if (!ctx.hasUI) {
+          log(ctx, "Choose classifier backend in Pi UI: prompt or typesafe", "warning");
+          return;
+        }
+        const selected = await ctx.ui.select("Classifier backend", [
+          "prompt — choose a Pi model",
+          `${CLASSIFIER_BACKEND_IDS.typesafe} — use Jev (requires Pi auth.json or ${TYPE_SAFE_API_KEY_ENV})`,
+        ]);
+        if (!selected) return;
+        const backend = selected.startsWith(CLASSIFIER_BACKEND_IDS.typesafe) ? CLASSIFIER_BACKEND_IDS.typesafe : CLASSIFIER_BACKEND_IDS.prompt;
+        let selectedPromptModel: string | undefined;
+        const configuredPromptModel = state.config.classifier?.model;
+        const needsPromptModel = backend === CLASSIFIER_BACKEND_IDS.prompt && !promptClassifierModelAvailable(ctx, configuredPromptModel);
+        if (needsPromptModel) {
+          if (ctx.modelRegistry.getAvailable().length === 0) {
+            log(ctx, "No Pi models available for prompt classifier; regex fallback remains active.", "warning");
+          } else {
+            selectedPromptModel = await requestPromptClassifierModel(ctx) ?? undefined;
+            if (!selectedPromptModel) {
+              log(ctx, "Prompt classifier model selection cancelled", "warning");
+              return;
+            }
+          }
+        }
+        const path = join(process.cwd(), CONFIG_DIR_NAME, "bifrost.json");
+        let current: Record<string, unknown> = {};
+        try {
+          current = existsSync(path)
+            ? JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>
+            : {};
+        } catch {
+          log(ctx, "Cannot update classifier: .pi/bifrost.json is invalid JSON", "error");
+          return;
+        }
+        const classifier = current.classifier && typeof current.classifier === "object"
+          ? current.classifier as Record<string, unknown>
+          : {};
+        const nextClassifier: Record<string, unknown> = { ...classifier, backend };
+        if (backend === CLASSIFIER_BACKEND_IDS.prompt && selectedPromptModel) {
+          nextClassifier.model = selectedPromptModel;
+        } else if (backend === CLASSIFIER_BACKEND_IDS.prompt && needsPromptModel) {
+          delete nextClassifier.model;
+        }
+        if (backend === CLASSIFIER_BACKEND_IDS.typesafe) {
+          delete nextClassifier.endpoint;
+          delete nextClassifier.method;
+          delete nextClassifier.systemPrompt;
+          delete nextClassifier.maxTokens;
+          delete nextClassifier.temperature;
+          delete nextClassifier.fallbackToRegex;
+          const existingTypeSafe = nextClassifier.typesafe && typeof nextClassifier.typesafe === "object" && !Array.isArray(nextClassifier.typesafe)
+            ? nextClassifier.typesafe as Record<string, unknown>
+            : {};
+          nextClassifier.typesafe = { ...existingTypeSafe, model: TYPE_SAFE_MODEL };
+          nextClassifier.criteria ??= DEFAULT_CLASSIFIER_CRITERIA;
+          nextClassifier.fallback ??= nextClassifier.model ? "prompt" : "regex";
+        }
+        current.classifier = nextClassifier;
+        mkdirSync(join(process.cwd(), CONFIG_DIR_NAME), { recursive: true });
+        writeFileSync(path, JSON.stringify(current, null, 2) + "\n");
+        state.config = loadConfig(process.cwd(), state.extensionDir);
+        state.classifierMetricsStore.reload({
+          cwd: process.cwd(),
+          enabled: state.config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
+        });
+        state.invalidatePipeline();
+        log(ctx, `classifier backend set to ${backend}; config reloaded`);
+        if (backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
+          log(ctx, `TypeSafe credential missing; use ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`, "warning");
+        }
+      },
+    },
     exact("classifier on", "Enable LLM classifier", (_, ctx) => {
       state.classifierEnabled = true;
       state.saveModeState();
@@ -800,10 +1043,19 @@ export function createCommandRouter(
       const modelId = Array.isArray(rawModel)
         ? rawModel.join(", ")
         : (rawModel ?? "none");
-      log(
-        ctx,
-        `classifier: enabled=${state.classifierEnabled} model=${modelId} endpoint=${state.config.classifier?.endpoint ?? "registry"} method=${state.config.classifier?.method ?? "auto"}`,
-      );
+      const classifier = state.config.classifier;
+      const backend = classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt;
+      const credential = backend === CLASSIFIER_BACKEND_IDS.typesafe ? resolveTypeSafeApiKey().source : undefined;
+      const detail = backend === CLASSIFIER_BACKEND_IDS.typesafe
+        ? `backend=${CLASSIFIER_BACKEND_IDS.typesafe} model=${classifier?.typesafe?.model ?? TYPE_SAFE_MODEL} endpoint=${TYPE_SAFE_ENDPOINT} minConfidence=${classifier?.minConfidence ?? 0.8} credential=${credential} fallback=${classifier?.fallback ?? "prompt"} fallbackModel=${classifier?.fallback === "regex" ? "none" : modelId}`
+        : `backend=${CLASSIFIER_BACKEND_IDS.prompt} model=${modelId} endpoint=${classifier?.endpoint ?? "registry"} method=${classifier?.method ?? "auto"}`;
+      const metrics = state.classifierMetricsStore.snapshot();
+      const lines = [
+        `classifier: enabled=${state.classifierEnabled}`,
+        detail,
+        ...(backend === CLASSIFIER_BACKEND_IDS.typesafe ? [`observations=${metrics.total}`, `outcomes=${JSON.stringify(metrics.outcomes)}`] : []),
+      ];
+      uiOutput(ctx, lines);
     }),
 
     // Debug — show loaded config state
@@ -820,9 +1072,10 @@ export function createCommandRouter(
         `strategy: ${state.config.strategy}`,
         `tiers: ${tiers.join(", ")}`,
         `debug: ${JSON.stringify(state.config.debug)}`,
-        `cache: ${state.cacheEntries.length} entries`,
+        `cache: ${state.cacheEntries.length} entries (retention ${state.config.cache?.ttlHours ?? 720}h)`,
         `reliability: ${JSON.stringify(state.config.reliability ?? {})}`,
         `openCircuits: ${openCircuitCount(state)}`,
+        `classifierMetrics: ${JSON.stringify(state.classifierMetricsStore.snapshot())}`,
         "",
         `rules (${rules.length}):`,
         ...rules.map((r, i) => `  ${i}: "${r.pattern}" → "${r.model}"`),

@@ -102,6 +102,60 @@ describe("config load", () => {
     }
   });
 
+  it("deep-merges tier criteria and lets null remove inherited criteria", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
+    const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
+    const home = mkdtempSync(join(tmpdir(), "bifrost-home-"));
+    const agentDir = join(home, "agent");
+    const oldHome = process.env.HOME;
+    const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.HOME = home;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      writeJson(join(extensionDir, "bifrost.json"), { classifier: { criteria: {
+        quick: { what: "bounded", examples: ["format"] },
+        frontier: "complex",
+      } } });
+      writeJson(join(getAgentDir(), "bifrost.json"), { classifier: { criteria: { general: "normal" } } });
+      writeJson(join(cwd, "bifrost.json"), { classifier: { criteria: {
+        quick: { notFor: "architecture" },
+        frontier: null,
+      } } });
+      assert.deepEqual(loadConfig(cwd, extensionDir).classifier?.criteria, {
+        quick: { what: "bounded", examples: ["format"], notFor: "architecture" },
+        general: "normal",
+      });
+    } finally {
+      process.env.HOME = oldHome;
+      process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(extensionDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("activates TypeSafe from explicit project backend selection", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
+    const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
+    const home = mkdtempSync(join(tmpdir(), "bifrost-home-"));
+    const agentDir = join(home, "agent");
+    const oldHome = process.env.HOME;
+    const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.HOME = home;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      writeJson(join(cwd, "bifrost.json"), { classifier: { backend: "typesafe" } });
+      const config = loadConfig(cwd, extensionDir);
+      assert.equal(config.classifier?.backend, "typesafe");
+    } finally {
+      process.env.HOME = oldHome;
+      process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(extensionDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("ignores corrupt config layers and keeps later valid layers", () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
     const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));

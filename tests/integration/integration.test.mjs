@@ -1,4 +1,4 @@
-import { describe, it, before } from "node:test";
+import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -18,11 +18,13 @@ const PI_ARGS = [
   "-p",
 ];
 
-async function runPi(command, cwd = process.cwd()) {
+let integrationDir;
+
+async function runPi(command, cwd = process.cwd(), env = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn("pi", [...PI_ARGS, command], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
+      env: { ...process.env, ...env },
       cwd,
     });
 
@@ -70,46 +72,76 @@ function combined(output) {
 
 describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
   before(async () => {
-    await runPi("/bifrost cache clear");
+    integrationDir = mkdtempSync(join(tmpdir(), "bifrost-integration-"));
+    mkdirSync(join(integrationDir, ".pi"), { recursive: true });
+    writeFileSync(
+      join(integrationDir, ".pi", "bifrost.json"),
+      JSON.stringify({
+        default: "general",
+        classifier: { enabled: true, backend: "prompt", model: "integration/test-classifier" },
+        models: { quick: [], general: [], frontier: [] },
+      }),
+    );
+    await runPi("/bifrost cache clear", integrationDir);
+  });
+
+  after(() => {
+    rmSync(integrationDir, { recursive: true, force: true });
   });
 
   it("reports classifier status", async () => {
-    const out = combined(await runPi("/bifrost classifier status"));
+    const out = combined(await runPi("/bifrost classifier status", integrationDir));
     assert.ok(out.includes("enabled=true"));
-    assert.ok(out.includes("opencode/mimo-v2.5-free"));
+    assert.ok(out.includes("model=integration/test-classifier"));
     assert.ok(out.includes("endpoint=registry"));
   });
 
-  it("classifies hello as economical", async () => {
-    const out = combined(await runPi("/bifrost preview hello"));
-    assert.ok(out.includes("source:    classifier"));
-    assert.ok(out.includes("category:  economical"));
-  });
+  it("smokes TypeSafe production composition without credentials", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-typesafe-smoke-"));
+    mkdirSync(join(tempDir, ".pi"), { recursive: true });
+    writeFileSync(
+      join(tempDir, ".pi", "bifrost.json"),
+      JSON.stringify({
+        default: "general",
+        classifier: { enabled: true, backend: "typesafe" },
+        models: { quick: [], general: [], frontier: [] },
+      }),
+    );
 
-  it("classifies architecture prompt as frontier", async () => {
-    const out = combined(await runPi("/bifrost preview plan the architecture"));
-    assert.ok(out.includes("source:    classifier"));
-    assert.ok(out.includes("category:  frontier"));
-  });
-
-  it("caches classifications", async () => {
-    await runPi("/bifrost cache clear");
-    let out = combined(await runPi("/bifrost cache stats"));
-    assert.ok(out.includes("cache: 0 entries"));
-
-    // Run a live prompt. Routing to the local economical model may fail,
-    // but the classifier result is still cached before routing.
     try {
-      await runPi("format this file");
-    } catch {
-      // acceptable; routing failure is not the concern of this test
+      const out = combined(await runPi("/bifrost classifier test", tempDir, {
+        HOME: tempDir,
+        TYPESAFE_API_KEY: "",
+      }));
+      assert.ok(out.includes("backend: typesafe"));
+      assert.ok(out.includes("credential: missing"));
+      assert.ok(out.includes("outcome: missing_key"));
+      assert.ok(out.includes("request observed: yes"));
+      assert.ok(out.includes("model: jev-1.13.0"));
+      assert.ok(out.includes("accepted: no"));
+      assert.ok(out.includes("final result: general"));
+      assert.ok(out.includes("final source: fallback"));
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
     }
+  });
 
-    out = combined(await runPi("/bifrost cache stats"));
-    assert.ok(out.includes("cache: 1 entries"));
+  it("falls back to configured general tier for an unmatched prompt", async () => {
+    const out = combined(await runPi("/bifrost preview hello", integrationDir));
+    assert.ok(out.includes("source:    fallback"));
+    assert.ok(out.includes("tier:      general"));
+  });
 
-    out = combined(await runPi("/bifrost preview format this file"));
-    assert.ok(out.includes("source:    cache"));
+  it("routes architecture prompt to frontier by regex", async () => {
+    const out = combined(await runPi("/bifrost preview design the system architecture", integrationDir));
+    assert.ok(out.includes("source:    regex"));
+    assert.ok(out.includes("tier:      frontier"));
+  });
+
+  it("clears and reports an isolated cache", async () => {
+    await runPi("/bifrost cache clear", integrationDir);
+    const out = combined(await runPi("/bifrost cache stats", integrationDir));
+    assert.ok(out.includes("cache: 0 entries"));
   });
 
   it("falls back to regex when classifier is disabled in config", async () => {
@@ -122,7 +154,7 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
 
     try {
       const out = combined(
-        await runPi("/bifrost preview lint this file", tempDir),
+        await runPi("/bifrost preview fix lint this file", tempDir),
       );
       assert.ok(out.includes("source:    regex"));
     } finally {
@@ -130,26 +162,22 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
     }
   });
 
-  it("classifies without endpoint when model is in pi registry", async () => {
+  it("uses project-local tier names in preview output", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-test-"));
     mkdirSync(join(tempDir, ".pi"), { recursive: true });
     writeFileSync(
       join(tempDir, ".pi", "bifrost.json"),
       JSON.stringify({
-        classifier: { model: "lmstudio/qwen/qwen3-vl-8b" },
-        models: {
-          economical: "lmstudio/qwen/qwen3-vl-8b",
-          frontier: "openai-codex/gpt-5.4",
-        },
+        classifier: { enabled: false, backend: "prompt" },
+        default: "general",
+        models: { quick: [], general: [], frontier: [] },
       }),
     );
 
     try {
-      const out = combined(
-        await runPi("/bifrost preview hello", tempDir),
-      );
-      assert.ok(out.includes("source:    classifier"));
-      assert.ok(out.includes("category:  economical"));
+      const out = combined(await runPi("/bifrost preview hello", tempDir));
+      assert.ok(out.includes("source:    fallback"));
+      assert.ok(out.includes("tier:      general"));
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

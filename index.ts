@@ -1,10 +1,13 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "node:url";
 import { classifyWithLLM as invokeClassifier, type ClassifierModel } from "./classifier.js";
+import { classifierCacheKey } from "./classifier-semantics.js";
+import { ClassifierMetricsStore } from "./classifier-metrics.js";
 import {
   createPipeline,
   type ClassificationPipeline,
 } from "./classification-pipeline.js";
+import type { ClassificationJudgment } from "./classifier-backends.ts";
 import {
   cachePath,
   lookupCache,
@@ -14,11 +17,13 @@ import {
   updateCache,
   DEFAULT_MAX_ENTRIES,
   DEFAULT_THRESHOLD,
+  DEFAULT_TTL_HOURS,
   type CacheEntry,
 } from "./cache.js";
 import {
   loadConfig,
   loadRules,
+  DEFAULT_CLASSIFIER_CRITERIA,
   validateConfig,
   type BifrostConfig,
 } from "./config.js";
@@ -30,16 +35,19 @@ import {
 } from "./routing.js";
 import { ReliabilityStore } from "./reliability-store.js";
 import { loadRuntimeState, runtimeStatePath, saveRuntimeState } from "./runtime-state.js";
-import { createCommandRouter, getBifrostCommandCompletions, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.js";
+import { createCommandRouter, getBifrostCommandCompletions, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.js";
 import { setupDebug, debug, debugMeasure } from "./debug.js";
 import { parseInlineOverride } from "./inline-override.js";
 import { RuntimeReliabilityTracker } from "./runtime-reliability.js";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV } from "./classifier-backends.ts";
+import { createTypeSafeClassifier, resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
 import {
   REGISTRY_REFRESH_TTL_MS,
   setBifrostStatus,
   setBifrostWorkingMessage,
   shouldRefreshRegistry,
 } from "./ux-status.js";
+import { waitForRegistryRefresh } from "./registry-refresh.js";
 
 // ── Pipeline builder (composition root) ────────────────────────
 
@@ -58,37 +66,71 @@ function endpointClassifier(id: string, endpoint: string): ClassifierModel {
   return { kind: "endpoint", id, baseUrl: endpoint };
 }
 
+function hasTypeSafeConfigErrors(config: BifrostConfig): boolean {
+  return validateConfig(config).some((issue) => issue.severity === "error" && (issue.message.includes("TypeSafe") || issue.message.includes("Classifier criteria")));
+}
+
+function activeClassifierCacheKey(config: BifrostConfig): string {
+  return classifierCacheKey(config, Object.keys(config.models ?? {}), {
+    typesafeCredentialAvailable: resolveTypeSafeApiKey().source !== "missing",
+  });
+}
+
 function buildPipeline(
   ctx: ExtensionContext,
   config: BifrostConfig,
   cacheEntries: CacheEntry[],
   classifierEnabled: boolean,
+  reliabilityStore: ReliabilityStore,
+  classifierMetricsStore: ClassifierMetricsStore,
+  cacheSemanticKey: string,
 ): ClassificationPipeline {
   const tiers = Object.keys(config.models ?? {});
   const cacheCfg = config.cache;
   const cacheEnabled = cacheCfg?.enabled ?? true;
   const threshold = cacheCfg?.threshold ?? DEFAULT_THRESHOLD;
+  const cacheMaxAgeMs = (cacheCfg?.ttlHours ?? DEFAULT_TTL_HOURS) * 60 * 60 * 1000;
 
   // Resolve classifier models once at pipeline construction.
   // If classifier is disabled, pass empty array — pipeline skips LLM stage.
   let classifierModels: ClassifierModel[] = [];
-  if (classifierEnabled && tiers.length > 0) {
+  let classifyWithTypeSafe: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<ClassificationJudgment | undefined>) | undefined;
+  const typeSafeUsable = config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && !hasTypeSafeConfigErrors(config);
+  if (classifierEnabled && typeSafeUsable && tiers.length > 0) {
+    const classifierConfig = config.classifier!;
+    const classify = createTypeSafeClassifier({
+      timeoutMs: classifierConfig.typesafe?.timeoutMs,
+      maxAttempts: classifierConfig.typesafe?.maxAttempts,
+      debug: Boolean(config.debug?.enabled && classifierConfig.typesafe?.debug),
+      minConfidence: classifierConfig.minConfidence,
+      reliability: reliabilityStore,
+      observe: (observation) => classifierMetricsStore.record(observation),
+    });
+    classifyWithTypeSafe = async (text, availableTiers, signal) => {
+      const judgment = await classify({ prompt: text, tiers: availableTiers, criteria: classifierConfig.criteria ?? DEFAULT_CLASSIFIER_CRITERIA }, signal);
+      return judgment;
+    };
+  }
+  const usePromptClassifier = classifierEnabled && tiers.length > 0 && (
+    (config.classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt) === CLASSIFIER_BACKEND_IDS.prompt ||
+    (typeSafeUsable && config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && config.classifier.fallback !== "regex")
+  );
+  if (usePromptClassifier) {
     const classifierEndpoint = config.classifier?.endpoint;
     if (classifierEndpoint) {
       const rawModel = config.classifier?.model;
-      const modelId = Array.isArray(rawModel)
-        ? rawModel[0]
-        : (rawModel ?? "classifier");
-      classifierModels = [endpointClassifier(modelId, classifierEndpoint)];
+      const modelIds = Array.isArray(rawModel) ? rawModel : [rawModel ?? "classifier"];
+      classifierModels = modelIds.map((modelId) => endpointClassifier(modelId, classifierEndpoint));
     } else {
       classifierModels = resolveClassifierModels(ctx, config);
     }
   }
 
   return createPipeline({
+    classifyWithTypeSafe,
     cacheLookup: (text) => {
       if (!cacheEnabled) return undefined;
-      const entry = lookupCache(cacheEntries, text, threshold);
+      const entry = lookupCache(cacheEntries, text, threshold, cacheSemanticKey, cacheMaxAgeMs);
       if (entry) {
         touchCacheEntry(entry);
         return entry.category;
@@ -96,13 +138,20 @@ function buildPipeline(
       return undefined;
     },
     classifierModels,
-    classifyWithLLM: (model, text, tiers) =>
-      invokeClassifier(ctx, model, tiers, text, {
+    classifyWithLLM: async (model, text, tiers) => {
+      const tier = await invokeClassifier(ctx, model, tiers, text, {
         systemPrompt: config.classifier?.systemPrompt,
         maxTokens: config.classifier?.maxTokens,
         temperature: config.classifier?.temperature,
         method: config.classifier?.method,
-      }),
+      });
+      if (!tier) return undefined;
+      return {
+        tier,
+        backend: CLASSIFIER_BACKEND_IDS.prompt,
+        model: model.kind === "registry" ? `${model.model.provider}/${model.model.id}` : model.id,
+      };
+    },
     regexRules: loadRules(process.cwd(), config),
     defaultTier: config.default,
     tiers,
@@ -124,12 +173,20 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   // Validate config on startup. Errors are logged; the extension
   // continues with best-effort routing for warnings.
   const configIssues = validateConfig(config);
+  if (config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
+    console.warn(`[bifrost/config] warning: TypeSafe classifier unavailable; configure typesafe in ~/.pi/agent/auth.json or set ${TYPE_SAFE_API_KEY_ENV}`);
+  }
   for (const issue of configIssues) {
     const tag = issue.severity === "error" ? "error" : "warning";
     console.error(`[bifrost/config] ${tag}: ${issue.message}`);
   }
-  const cacheEntries = loadCache(cachePath(process.cwd(), config.cache?.path));
+  const cacheTtlMs = (config.cache?.ttlHours ?? DEFAULT_TTL_HOURS) * 60 * 60 * 1000;
+  const cacheEntries = loadCache(cachePath(process.cwd(), config.cache?.path), cacheTtlMs);
   const reliabilityStore = new ReliabilityStore({ cwd: process.cwd(), config: config.reliability });
+  const classifierMetricsStore = new ClassifierMetricsStore({
+    cwd: process.cwd(),
+    enabled: config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && (config.classifier.typesafe?.metrics?.enabled ?? true),
+  });
   const runtimeStateFile = runtimeStatePath(process.cwd());
   const runtimeState = loadRuntimeState(runtimeStateFile, {
     enabled: config.enabled ?? true,
@@ -142,7 +199,15 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   function getPipeline(ctx: ExtensionContext): ClassificationPipeline {
     if (!pipeline) {
-      pipeline = buildPipeline(ctx, state.config, state.cacheEntries, state.classifierEnabled);
+      pipeline = buildPipeline(
+        ctx,
+        state.config,
+        state.cacheEntries,
+        state.classifierEnabled,
+        reliabilityStore,
+        classifierMetricsStore,
+        activeClassifierCacheKey(state.config),
+      );
     }
     return pipeline;
   }
@@ -160,6 +225,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     pinned: runtimeState.pinned,
     cacheEntries,
     reliabilityStore,
+    classifierMetricsStore,
     extensionDir,
     getPipeline,
     invalidatePipeline,
@@ -177,7 +243,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     description: "Bifrost model router control",
     getArgumentCompletions: getBifrostCommandCompletions,
     handler: async (args, ctx) => {
-      await handleCommand(args, ctx);
+      await runBifrostCommand(args, ctx, handleCommand);
     },
   });
 
@@ -261,19 +327,28 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       ? shouldRefreshRegistry(state, Date.now(), REGISTRY_REFRESH_TTL_MS)
       : false;
 
+    let claimedTrial: string | undefined;
     try {
       if (shouldRefresh) {
         setBifrostWorkingMessage(ctx, "Bifrost checking models...");
         const endRefresh = debugMeasure("input", "registry.refresh");
+        let refreshOutcome: "success" | "error" | "aborted" = "error";
         try {
-          await ctx.modelRegistry.refresh();
+          const result = await waitForRegistryRefresh((signal) => ctx.modelRegistry.refresh(signal ? { signal } : undefined), ctx.signal);
+          if (result === "aborted") {
+            refreshOutcome = "aborted";
+            endInput({ outcome: "aborted" });
+            return defaultAction;
+          }
+          refreshOutcome = "success";
           state.lastRegistryRefreshAt = Date.now();
           state.forceRegistryRefresh = false;
           invalidatePipeline();
-          endRefresh();
-        } catch (err) {
-          debug("input", "registry.refresh.error", { error: String(err) });
-          console.error(`[bifrost] model registry refresh failed: ${err}`);
+        } catch {
+          debug("input", "registry.refresh.error", { category: "registry_refresh_failure" });
+          console.error("[bifrost] model registry refresh failed");
+        } finally {
+          endRefresh({ outcome: refreshOutcome });
         }
       }
 
@@ -283,7 +358,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       const endClassify = debugMeasure("input", "classify");
       const classification = forcedTier
         ? { kind: "classified" as const, tier: forcedTier, source: "inline" as const }
-        : await getPipeline(ctx).classify(promptText);
+        : await getPipeline(ctx).classify(promptText, ctx.signal);
 
       if (classification.kind === "classified") {
         const tag = classification.source === "inline" ? "!" : classification.source;
@@ -329,12 +404,17 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       const model = resolved.selected;
       const selectedTier = resolved.selectedTier ?? tier;
 
-      // If selected model is half-open, mark trial in progress
+      // Claim the single half-open trial before using the selected model.
       if (model) {
-        const circuit = state.reliabilityStore.getCircuitState(modelKey(model));
-        if (circuit.halfOpen && !circuit.trialActive) {
-          state.reliabilityStore.beginTrial(modelKey(model));
+        const trial = state.reliabilityStore.tryClaimTrial(modelKey(model));
+        if (!trial.allowed) {
+          debug("input", "trial_unavailable", { model: modelKey(model) });
+          log(ctx, `Bifrost: ${modelKey(model)} already has a half-open trial in progress`, "warning");
+          syncBifrostModeStatus(ctx, state);
+          endInput();
+          return defaultAction;
         }
+        if (trial.claimed) claimedTrial = modelKey(model);
       }
 
       if (!model) {
@@ -354,7 +434,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         const maxEntries = state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES;
         if (state.config.cache?.enabled ?? true) {
           const endCacheSave = debugMeasure("input", "cacheSave");
-          state.cacheEntries = updateCache(state.cacheEntries, promptText, tier, maxEntries);
+          state.cacheEntries = updateCache(state.cacheEntries, promptText, tier, maxEntries, activeClassifierCacheKey(state.config));
           saveCache(cachePath(process.cwd(), state.config.cache?.path), state.cacheEntries);
           invalidatePipeline();
           endCacheSave({ entries: state.cacheEntries.length });
@@ -369,6 +449,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         debug("input", "model_unchanged", { model: modelKey(model), selectedTier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", thinkingLevel: ctx.thinkingLevel });
         debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", thinkingLevel: ctx.thinkingLevel });
         runtimeReliability.begin(modelKey(model));
+        claimedTrial = undefined;
         endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
         return defaultAction;
       }
@@ -383,7 +464,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         ok = await pi.setModel(model);
       } catch (err) {
         setModelError = err;
-        debug("input", "setModel.throw", { model: modelKey(model), error: String(err) });
+        debug("input", "setModel.throw", { model: modelKey(model), category: "set_model_failure" });
       }
       endSwitch({ model: modelKey(model), ok });
       uiDone(ctx);
@@ -392,9 +473,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         selfSelecting = false;
         state.forceRegistryRefresh = true;
         const reason = setModelError
-          ? `setModel threw: ${String(setModelError).slice(0, 200)}`
+          ? "setModel threw"
           : "setModel returned false";
         state.reliabilityStore.recordFailure(modelKey(model), "setModel", reason);
+        claimedTrial = undefined;
         syncBifrostModeStatus(ctx, state);
         log(ctx, `Bifrost: no API key for ${modelKey(model)}`, "error");
         endInput({ model: modelKey(model), ok: false });
@@ -412,10 +494,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       syncBifrostModeStatus(ctx, state);
       log(ctx, doneMsg);
       runtimeReliability.begin(modelKey(model));
+      claimedTrial = undefined;
       debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", routingDurationMs, thinkingLevel: ctx.thinkingLevel });
       endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
       return defaultAction;
     } finally {
+      if (claimedTrial) state.reliabilityStore.abandonTrial(claimedTrial);
       uiDone(ctx);
       setBifrostWorkingMessage(ctx, undefined);
       syncBifrostModeStatus(ctx, state);

@@ -1,13 +1,14 @@
 import type { ClassifierModel } from "./classifier.ts";
 import { classifyCompiled, compileRules, type RouteRule } from "./routing.ts";
 import { debug, debugMeasure } from "./debug.ts";
+import { CLASSIFIER_BACKEND_IDS, type ClassificationJudgment, type ClassifierOutput } from "./classifier-backends.ts";
 
 // ── ADT result type ────────────────────────────────────────────
 
 export type ClassificationSource = "cache" | "classifier" | "regex" | "inline";
 
 export type ClassificationResult =
-  | { readonly kind: "classified"; readonly tier: string; readonly source: ClassificationSource }
+  | { readonly kind: "classified"; readonly tier: string; readonly source: ClassificationSource; readonly judgment?: ClassificationJudgment }
   | { readonly kind: "fallback"; readonly tier: string }
   | { readonly kind: "unclassified" };
 
@@ -22,6 +23,8 @@ export type ClassificationResult =
 export interface PipelineDeps {
   /** Query cache. Returns tier or undefined. */
   readonly cacheLookup: (text: string) => string | undefined;
+  /** Optional provider-neutral backend attempted before prompt classifier. */
+  readonly classifyWithTypeSafe?: (text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<ClassifierOutput | undefined>;
   /** Classifier models in priority order. Empty array = skip LLM. */
   readonly classifierModels: readonly ClassifierModel[];
   /** Invoke the LLM classifier for a single model. Returns tier or undefined. */
@@ -29,7 +32,7 @@ export interface PipelineDeps {
     model: ClassifierModel,
     text: string,
     tiers: readonly string[],
-  ) => Promise<string | undefined>;
+  ) => Promise<ClassifierOutput | undefined>;
   /** Regex routing rules. First match wins. */
   readonly regexRules: readonly RouteRule[];
   /** Default tier when nothing matches. */
@@ -41,7 +44,13 @@ export interface PipelineDeps {
 // ── Pipeline interface ─────────────────────────────────────────
 
 export interface ClassificationPipeline {
-  readonly classify: (text: string) => Promise<ClassificationResult>;
+  readonly classify: (text: string, signal?: AbortSignal) => Promise<ClassificationResult>;
+}
+
+function normalizeJudgment(output: ClassifierOutput, backend: "prompt" | "typesafe"): ClassificationJudgment {
+  return typeof output === "string"
+    ? { tier: output, backend }
+    : output;
 }
 
 // ── Factory ────────────────────────────────────────────────────
@@ -49,6 +58,7 @@ export interface ClassificationPipeline {
 export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
   const {
     cacheLookup,
+    classifyWithTypeSafe,
     classifierModels,
     classifyWithLLM,
     regexRules: rawRegexRules,
@@ -60,7 +70,7 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
   // Per-rule testing preserves rule-order match precedence exactly.
   const regexRules = compileRules(rawRegexRules);
 
-  async function classify(text: string): Promise<ClassificationResult> {
+  async function classify(text: string, signal?: AbortSignal): Promise<ClassificationResult> {
     // Stage 1: pre-check regex for direct model references only.
     // Runs before tiers check — direct bindings work even with zero tiers.
     {
@@ -84,24 +94,46 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
       return { kind: "classified", tier: cached, source: "cache" };
     }
 
-    // Stage 3: LLM classifier — try each model in priority order
+    // Stage 3: optional TypeSafe classifier, then existing prompt classifier.
+    if (classifyWithTypeSafe) {
+      try {
+        const endTypeSafe = debugMeasure("pipeline", `${CLASSIFIER_BACKEND_IDS.typesafe}.attempt`);
+        const output = await classifyWithTypeSafe(text, tiers, signal);
+        const judgment = output === undefined ? undefined : normalizeJudgment(output, CLASSIFIER_BACKEND_IDS.typesafe);
+        const tier = judgment?.tier;
+        endTypeSafe({ tier, backend: judgment?.backend, confidence: judgment?.confidence });
+        if (judgment && tiers.includes(judgment.tier)) {
+          debug("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model, confidence: judgment.confidence });
+          return { kind: "classified", tier: judgment.tier, source: "classifier", judgment };
+        }
+      } catch {
+        debug("pipeline", `${CLASSIFIER_BACKEND_IDS.typesafe}.error`, { aborted: signal?.aborted ?? false });
+      }
+      if (signal?.aborted) return { kind: "unclassified" };
+    }
+
+    // Existing prompt classifier — try each model in priority order.
     for (const model of classifierModels) {
       try {
         const endLLM = debugMeasure("pipeline", "classifier.attempt");
-        const tier = await classifyWithLLM(model, text, tiers);
+        const output = await classifyWithLLM(model, text, tiers);
         const modelId = model.kind === "registry" ? model.model.id : model.id;
-        endLLM({ model: modelId, tier });
-        if (tier && tiers.includes(tier)) {
-          debug("pipeline", "result", { source: "classifier", tier });
-          return { kind: "classified", tier, source: "classifier" };
+        const judgment = output === undefined ? undefined : normalizeJudgment(output, CLASSIFIER_BACKEND_IDS.prompt);
+        const tier = judgment?.tier;
+        endLLM({ model: modelId, tier, backend: judgment?.backend, confidence: judgment?.confidence });
+        if (judgment && tiers.includes(judgment.tier)) {
+          debug("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model ?? modelId, confidence: judgment.confidence });
+          return { kind: "classified", tier: judgment.tier, source: "classifier", judgment: { ...judgment, model: judgment.model ?? modelId } };
         }
-      } catch (err) {
-        debug("pipeline", "classifier.error", { error: String(err) });
-        console.error(`[bifrost] classifier model failed: ${err}`);
+      } catch {
+        debug("pipeline", "classifier.error", { category: "classifier_failure" });
+        console.error("[bifrost] classifier model failed");
       }
     }
 
-    // Stage 3: regex rules
+    if (signal?.aborted) return { kind: "unclassified" };
+
+    // Stage 4: regex rules
     const endRegex = debugMeasure("pipeline", "regex");
     const regex = classifyCompiled(text, regexRules);
     endRegex({ match: !!regex, tier: regex });
