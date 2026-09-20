@@ -3,6 +3,7 @@ import {
   recordModelFailure,
   recordModelSuccess,
   beginTrial,
+  abandonTrial,
   loadReliability,
   saveReliability,
   reliabilityPath,
@@ -104,17 +105,33 @@ export class ReliabilityStore {
 
   beginTrial(model: string): void {
     if (this.configValue?.enabled === false) return;
-    this.stateValue = beginTrial(this.stateValue, model);
+    const next = beginTrial(this.stateValue, model);
+    if (next === this.stateValue) return;
+    this.stateValue = next;
     this.persist();
+  }
+
+  abandonTrial(model: string): void {
+    if (this.configValue?.enabled === false) return;
+    const next = abandonTrial(this.stateValue, model);
+    if (next === this.stateValue) return;
+    this.stateValue = next;
+    this.persist();
+  }
+
+  /** Claim result distinguishes a newly owned half-open trial from a healthy target. */
+  tryClaimTrial(model: string, now?: number): { allowed: boolean; claimed: boolean } {
+    if (this.configValue?.enabled === false) return { allowed: true, claimed: false };
+    const circuit = this.getCircuitState(model, now);
+    if (circuit.open || circuit.trialActive) return { allowed: false, claimed: false };
+    if (!circuit.halfOpen) return { allowed: true, claimed: false };
+    this.beginTrial(model);
+    return { allowed: true, claimed: true };
   }
 
   /** Synchronously claim the single half-open trial for this store instance. */
   tryBeginTrial(model: string, now?: number): boolean {
-    if (this.configValue?.enabled === false) return true;
-    const circuit = this.getCircuitState(model, now);
-    if (circuit.open || circuit.trialActive) return false;
-    if (circuit.halfOpen) this.beginTrial(model);
-    return true;
+    return this.tryClaimTrial(model, now).allowed;
   }
 
   applyOutcomes(outcomes: readonly ReliabilityOutcome[], now?: number): void {

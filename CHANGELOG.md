@@ -14,9 +14,10 @@ All notable changes to pi-bifrost are documented here.
 - User-facing config issue messages.
 
 ### Changed
-- Eliminated all `as unknown as` casts from production code.
+- Require Pi 0.86.0+ and route registry classifier/probe calls through Pi's authenticated `modelRegistry.streamSimple()` API.
+- Kept the Pi model-selector compatibility cast confined to one documented adapter boundary.
 - Config merge order: `.pi/bifrost.json` now wins over root `bifrost.json`.
 
 ### Security
 - TypeSafe decoder fails closed on non-plain objects, accessors, extra fields, and malformed probabilities.
-- Detailed TypeSafe traces exclude API keys and authorization headers but may include prompt/provider response content; enable only for local troubleshooting.
+- Detailed TypeSafe traces are metadata-only and exclude prompts, request bodies, provider responses, external error text, API keys, and authorization headers.

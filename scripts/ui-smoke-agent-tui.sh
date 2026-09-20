@@ -96,10 +96,10 @@ printf '[agent-tui-poc] asserting preview dismissal…\n'
 send_command "/bifrost classifier off"
 wait_for "classifier off"
 send_command "/bifrost preview hello"
-wait_for "requested candidates (economical):"
+wait_for "requested candidates (general):"
 snapshot preview
 "$AGENT_TUI_BIN" --session "$session_id" press Escape >/dev/null
-wait_gone "requested candidates (economical):"
+wait_gone "requested candidates (general):"
 snapshot preview-dismiss
 
 printf '[agent-tui-poc] pass. Snapshots: %s\n' "$ARTIFACT_DIR"

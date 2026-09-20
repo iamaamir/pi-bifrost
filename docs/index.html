@@ -159,10 +159,10 @@
             <h3>Record useful diagnostics locally</h3>
             <p>
               Optional local JSONL debug logs record routing reason, selected
-              tier/model, and timing. Normal logs omit prompt bodies; the
-              explicit TypeSafe full trace may include prompt/provider data and
-              must be treated as sensitive local troubleshooting output. Logs
-              are local files, not a hosted observability service.
+              tier/model, and timing. TypeSafe traces are also metadata-only:
+              raw prompts, request bodies, provider responses, and external
+              error text are never persisted. Logs are local files, not a hosted
+              observability service.
             </p>
           </article>
           <article>
@@ -238,8 +238,9 @@
               The cache may store normalized, sorted prompt words in
               <code>.pi/bifrost-cache.jsonl</code>. Normal debug logs contain
               routing metadata, timings, and prompt length, not the prompt body.
-              TypeSafe full tracing is separate, opt-in, and may include prompt
-              and provider response data; disable it after local troubleshooting.
+              TypeSafe tracing is separate, opt-in, and remains metadata-only:
+              raw prompts, request bodies, provider responses, and external error
+              text are never persisted.
             </dd>
           </div>
           <div>

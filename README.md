@@ -294,7 +294,7 @@ For an end-to-end request trace, enable both global debug and TypeSafe debug:
 }
 ```
 
-Trace events are written to `.pi/bifrost-debug.jsonl` and include request attempts, official endpoint, HTTP status, decoded tier, confidence, probabilities, retry/failure outcome, and correlation ID. This mode includes prompt/response classification data; use only for local troubleshooting and disable afterward. Credentials and authorization headers are never logged.
+Trace events are written to `.pi/bifrost-debug.jsonl` and include request attempts, official endpoint, HTTP status, decoded tier, confidence, retry/failure outcome, and correlation ID. Traces are metadata-only: raw prompts, request bodies, provider responses, external error text, credentials, and authorization headers are never persisted.
 
 ### Debug logging
 
@@ -306,7 +306,7 @@ Trace events are written to `.pi/bifrost-debug.jsonl` and include request attemp
 
 Writes `.pi/bifrost-debug.jsonl` — one JSON line per event with routing reason, selected tier/model, and timing. Normal Bifrost debug events do not store prompt bodies.
 
-For TypeSafe's full local troubleshooting trace, also set `classifier.typesafe.debug: true`. This explicitly includes the prompt and provider classification response, plus request/response details. Never enable it in shared logs or production collection; disable it after troubleshooting. API keys and authorization headers are never logged.
+For TypeSafe's detailed local troubleshooting trace, also set `classifier.typesafe.debug: true`. This adds bounded operational metadata only; raw prompts, request/response bodies, provider payloads, and external error text are never persisted. API keys and authorization headers are never logged.
 
 ### Full config reference
 

@@ -95,6 +95,21 @@ describe("reliability store", () => {
     assert.equal(store.getCircuitState(key, 1000).trialActive, true);
   });
 
+  it("abandons only an owned half-open trial and persists once", () => {
+    const { io, calls } = makeIo();
+    const store = new ReliabilityStore({
+      cwd: "/tmp", config: cfg, io, now: () => 2000,
+      initialState: { version: 1, models: { [key]: { failures: [1000], openUntil: 1000 } } },
+    });
+    assert.deepEqual(store.tryClaimTrial(key, 2000), { allowed: true, claimed: true });
+    assert.equal(calls.length, 1);
+    store.abandonTrial(key);
+    assert.equal(store.getCircuitState(key, 2000).halfOpen, true);
+    assert.equal(calls.length, 2);
+    store.abandonTrial(key);
+    assert.equal(calls.length, 2);
+  });
+
   it("treats an active half-open trial as unavailable", () => {
     const { io } = makeIo();
     const store = new ReliabilityStore({

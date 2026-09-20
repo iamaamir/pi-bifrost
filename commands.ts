@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CONFIG_DIR_NAME, ModelSelectorComponent } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, ModelSelectorComponent, type ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
@@ -82,17 +82,23 @@ async function requestPromptClassifierModel(ctx: ExtensionContext): Promise<stri
     getAvailableSnapshot: () => ctx.modelRegistry.getAvailable(),
     getModel: (provider: string, id: string) => ctx.modelRegistry.find(provider, id),
     getError: () => ctx.modelRegistry.getError(),
-    refresh: async () => {
-      await ctx.modelRegistry.refresh();
-      return { aborted: false, errors: new Map() };
+    refresh: async (options?: { signal?: AbortSignal }) => {
+      return ctx.modelRegistry.refresh(options);
     },
   };
-  const scopedModels = (ctx as ExtensionContext & { scopedModels: readonly unknown[] }).scopedModels;
   const selected = await ctx.ui.custom<string | null>((tui, _theme, _keybindings, done) => {
-    const selectorConstructor = ModelSelectorComponent as unknown as new (...args: any[]) => any;
     const onSelect = (model: { provider: string; id: string }) => done(`${model.provider}/${model.id}`);
     const onCancel = () => done(null);
-    return new selectorConstructor(tui, ctx.model, modelRuntime, scopedModels, onSelect, onCancel);
+    return new ModelSelectorComponent(
+      tui,
+      ctx.model,
+      // The extension facade exposes only registry methods; this adapter
+      // implements the subset ModelSelectorComponent consumes.
+      modelRuntime as unknown as ModelRuntime,
+      ctx.scopedModels,
+      onSelect,
+      onCancel,
+    );
   });
   return selected;
 }
@@ -481,9 +487,12 @@ async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState):
   const after = state.classifierMetricsStore.snapshot();
   const source = result.kind === "classified" ? result.source : "fallback";
   const outcome = Object.entries(after.outcomes).find(([key, count]) => count > (beforeState.outcomes[key] ?? 0))?.[0];
+  const judgment = result.kind === "classified" ? result.judgment : undefined;
   const lines = [
     "--- classifier test ---",
-    `backend: ${classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt}`,
+    `backend: ${judgment?.backend ?? classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt}`,
+    `model: ${judgment?.model ?? "none"}`,
+    `confidence: ${judgment?.confidence ?? "n/a"}`,
     `result: ${result.kind === "classified" ? result.tier : "fallback"}`,
     `source: ${source}`,
     `request observed: ${after.total > before ? "yes" : "no"}`,
@@ -576,12 +585,14 @@ async function handlePreview(
   }
   const tier = classification.tier;
   const source = classification.kind === "classified" ? classification.source : "fallback";
+  const judgment = classification.kind === "classified" ? classification.judgment : undefined;
   const display = resolveTierDisplay(tier, state, ctx);
 
   const lines = [
     "--- preview ---",
     `prompt:    ${prompt}`,
     `source:    ${source}`,
+    ...(judgment ? [`backend:   ${judgment.backend}`, `model:     ${judgment.model ?? "none"}`, `confidence:${judgment.confidence === undefined ? " n/a" : ` ${judgment.confidence}`}`] : []),
     `tier:      ${tier}`,
     `strategy:  ${display.strategy}`,
     `selected tier: ${display.selectedTier}`,
@@ -602,6 +613,15 @@ async function handlePreview(
 // ── Command type ────────────────────────────────────────────
 
 type CommandFn = (args: string, ctx: ExtensionContext) => void | Promise<void>;
+
+export async function runBifrostCommand(
+  args: string,
+  ctx: ExtensionContext,
+  handler: CommandFn,
+): Promise<void> {
+  if (ctx.mode === "tui" && ctx.hasUI) ctx.ui.setEditorText("");
+  await handler(args, ctx);
+}
 
 interface CommandSpec {
   readonly value: string;

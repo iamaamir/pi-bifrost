@@ -118,14 +118,14 @@
             "endpoint": { "type": "string", "const": "https://api.typesafe.ai/v1/systemone" },
             "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 },
             "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 3 },
-            "debug": { "type": "boolean", "default": false, "description": "Detailed TypeSafe request/response trace; active only when global debug.enabled is true. May include prompt and response content." },
+            "debug": { "type": "boolean", "default": false, "description": "Detailed TypeSafe operational trace with redacted metadata only; active only when global debug.enabled is true. Raw prompts, request bodies, provider responses, and external error text are never persisted." },
             "metrics": {
               "type": "object",
               "additionalProperties": false,
               "properties": {
                 "enabled": { "type": "boolean", "default": true }
               }
-            },
+            }
           }
         },
         "model": {

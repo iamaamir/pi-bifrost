@@ -96,12 +96,7 @@ async function classifyWithDirectHttp(
   const userPrompt = classificationPrompt(categories, prompt);
 
   if (classifierModel.kind === "registry") {
-    const provider = ctx.modelRegistry.getProvider(classifierModel.model.provider);
-    if (!provider) return undefined;
-    const auth = await ctx.modelRegistry.getProviderAuth(classifierModel.model.provider);
-    if (!auth) return undefined;
-
-    const stream = provider.streamSimple(
+    const stream = ctx.modelRegistry.streamSimple(
       classifierModel.model,
       {
         systemPrompt,
@@ -112,9 +107,6 @@ async function classifyWithDirectHttp(
         temperature,
         signal: ctx.signal,
         cacheRetention: "none",
-        apiKey: auth.auth.apiKey,
-        headers: auth.auth.headers,
-        env: auth.env,
       },
     );
     const response = await stream.result();

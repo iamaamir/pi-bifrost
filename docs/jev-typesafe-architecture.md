@@ -303,9 +303,7 @@ failure
 finish
 ```
 
-Trace includes correlation ID, attempt, endpoint, status, decoded tier, confidence, probabilities, retry/failure outcome, and timing. Detailed debug intentionally includes prompt/response classification data for troubleshooting. It must remain off during normal use if that data is sensitive.
-
-API keys and authorization headers are never logged.
+Trace includes correlation ID, attempt, endpoint, status, decoded tier, confidence, retry/failure outcome, and timing. Detailed debug remains metadata-only: raw prompts, request bodies, provider responses, external error text, API keys, and authorization headers are never persisted.
 
 ## Operational traps
 

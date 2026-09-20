@@ -7,6 +7,7 @@ import {
   createPipeline,
   type ClassificationPipeline,
 } from "./classification-pipeline.js";
+import type { ClassificationJudgment } from "./classifier-backends.ts";
 import {
   cachePath,
   lookupCache,
@@ -34,7 +35,7 @@ import {
 } from "./routing.js";
 import { ReliabilityStore } from "./reliability-store.js";
 import { loadRuntimeState, runtimeStatePath, saveRuntimeState } from "./runtime-state.js";
-import { createCommandRouter, getBifrostCommandCompletions, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.js";
+import { createCommandRouter, getBifrostCommandCompletions, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.js";
 import { setupDebug, debug, debugMeasure } from "./debug.js";
 import { parseInlineOverride } from "./inline-override.js";
 import { RuntimeReliabilityTracker } from "./runtime-reliability.js";
@@ -46,6 +47,7 @@ import {
   setBifrostWorkingMessage,
   shouldRefreshRegistry,
 } from "./ux-status.js";
+import { waitForRegistryRefresh } from "./registry-refresh.js";
 
 // ── Pipeline builder (composition root) ────────────────────────
 
@@ -92,7 +94,7 @@ function buildPipeline(
   // Resolve classifier models once at pipeline construction.
   // If classifier is disabled, pass empty array — pipeline skips LLM stage.
   let classifierModels: ClassifierModel[] = [];
-  let classifyWithTypeSafe: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<string | undefined>) | undefined;
+  let classifyWithTypeSafe: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<ClassificationJudgment | undefined>) | undefined;
   const typeSafeUsable = config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && !hasTypeSafeConfigErrors(config);
   if (classifierEnabled && typeSafeUsable && tiers.length > 0) {
     const classifierConfig = config.classifier!;
@@ -106,7 +108,7 @@ function buildPipeline(
     });
     classifyWithTypeSafe = async (text, availableTiers, signal) => {
       const judgment = await classify({ prompt: text, tiers: availableTiers, criteria: classifierConfig.criteria ?? DEFAULT_CLASSIFIER_CRITERIA }, signal);
-      return judgment?.tier;
+      return judgment;
     };
   }
   const usePromptClassifier = classifierEnabled && tiers.length > 0 && (
@@ -136,13 +138,20 @@ function buildPipeline(
       return undefined;
     },
     classifierModels,
-    classifyWithLLM: (model, text, tiers) =>
-      invokeClassifier(ctx, model, tiers, text, {
+    classifyWithLLM: async (model, text, tiers) => {
+      const tier = await invokeClassifier(ctx, model, tiers, text, {
         systemPrompt: config.classifier?.systemPrompt,
         maxTokens: config.classifier?.maxTokens,
         temperature: config.classifier?.temperature,
         method: config.classifier?.method,
-      }),
+      });
+      if (!tier) return undefined;
+      return {
+        tier,
+        backend: CLASSIFIER_BACKEND_IDS.prompt,
+        model: model.kind === "registry" ? `${model.model.provider}/${model.model.id}` : model.id,
+      };
+    },
     regexRules: loadRules(process.cwd(), config),
     defaultTier: config.default,
     tiers,
@@ -234,13 +243,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     description: "Bifrost model router control",
     getArgumentCompletions: getBifrostCommandCompletions,
     handler: async (args, ctx) => {
-      try {
-        await handleCommand(args, ctx);
-      } finally {
-        // Pi may leave slash-command text in editor after autocomplete or a
-        // custom selector. Command owns this input; clear it after every exit.
-        if (ctx.mode === "tui" && ctx.hasUI) ctx.ui.setEditorText("");
-      }
+      await runBifrostCommand(args, ctx, handleCommand);
     },
   });
 
@@ -324,19 +327,28 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       ? shouldRefreshRegistry(state, Date.now(), REGISTRY_REFRESH_TTL_MS)
       : false;
 
+    let claimedTrial: string | undefined;
     try {
       if (shouldRefresh) {
         setBifrostWorkingMessage(ctx, "Bifrost checking models...");
         const endRefresh = debugMeasure("input", "registry.refresh");
+        let refreshOutcome: "success" | "error" | "aborted" = "error";
         try {
-          await ctx.modelRegistry.refresh();
+          const result = await waitForRegistryRefresh((signal) => ctx.modelRegistry.refresh(signal ? { signal } : undefined), ctx.signal);
+          if (result === "aborted") {
+            refreshOutcome = "aborted";
+            endInput({ outcome: "aborted" });
+            return defaultAction;
+          }
+          refreshOutcome = "success";
           state.lastRegistryRefreshAt = Date.now();
           state.forceRegistryRefresh = false;
           invalidatePipeline();
-          endRefresh();
-        } catch (err) {
-          debug("input", "registry.refresh.error", { error: String(err) });
-          console.error(`[bifrost] model registry refresh failed: ${err}`);
+        } catch {
+          debug("input", "registry.refresh.error", { category: "registry_refresh_failure" });
+          console.error("[bifrost] model registry refresh failed");
+        } finally {
+          endRefresh({ outcome: refreshOutcome });
         }
       }
 
@@ -393,12 +405,16 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       const selectedTier = resolved.selectedTier ?? tier;
 
       // Claim the single half-open trial before using the selected model.
-      if (model && !state.reliabilityStore.tryBeginTrial(modelKey(model))) {
-        debug("input", "trial_unavailable", { model: modelKey(model) });
-        log(ctx, `Bifrost: ${modelKey(model)} already has a half-open trial in progress`, "warning");
-        syncBifrostModeStatus(ctx, state);
-        endInput();
-        return defaultAction;
+      if (model) {
+        const trial = state.reliabilityStore.tryClaimTrial(modelKey(model));
+        if (!trial.allowed) {
+          debug("input", "trial_unavailable", { model: modelKey(model) });
+          log(ctx, `Bifrost: ${modelKey(model)} already has a half-open trial in progress`, "warning");
+          syncBifrostModeStatus(ctx, state);
+          endInput();
+          return defaultAction;
+        }
+        if (trial.claimed) claimedTrial = modelKey(model);
       }
 
       if (!model) {
@@ -433,6 +449,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         debug("input", "model_unchanged", { model: modelKey(model), selectedTier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", thinkingLevel: ctx.thinkingLevel });
         debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", thinkingLevel: ctx.thinkingLevel });
         runtimeReliability.begin(modelKey(model));
+        claimedTrial = undefined;
         endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
         return defaultAction;
       }
@@ -447,7 +464,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         ok = await pi.setModel(model);
       } catch (err) {
         setModelError = err;
-        debug("input", "setModel.throw", { model: modelKey(model), error: String(err) });
+        debug("input", "setModel.throw", { model: modelKey(model), category: "set_model_failure" });
       }
       endSwitch({ model: modelKey(model), ok });
       uiDone(ctx);
@@ -456,9 +473,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         selfSelecting = false;
         state.forceRegistryRefresh = true;
         const reason = setModelError
-          ? `setModel threw: ${String(setModelError).slice(0, 200)}`
+          ? "setModel threw"
           : "setModel returned false";
         state.reliabilityStore.recordFailure(modelKey(model), "setModel", reason);
+        claimedTrial = undefined;
         syncBifrostModeStatus(ctx, state);
         log(ctx, `Bifrost: no API key for ${modelKey(model)}`, "error");
         endInput({ model: modelKey(model), ok: false });
@@ -476,10 +494,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       syncBifrostModeStatus(ctx, state);
       log(ctx, doneMsg);
       runtimeReliability.begin(modelKey(model));
+      claimedTrial = undefined;
       debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", routingDurationMs, thinkingLevel: ctx.thinkingLevel });
       endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
       return defaultAction;
     } finally {
+      if (claimedTrial) state.reliabilityStore.abandonTrial(claimedTrial);
       uiDone(ctx);
       setBifrostWorkingMessage(ctx, undefined);
       syncBifrostModeStatus(ctx, state);

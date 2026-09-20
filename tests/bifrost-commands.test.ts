@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createCommandRouter, getBifrostCommandCompletions } from "../commands.ts";
+import { createCommandRouter, getBifrostCommandCompletions, runBifrostCommand } from "../commands.ts";
 
 function makeCtx(
   models: Array<{ provider: string; id: string }> = [],
@@ -108,6 +108,14 @@ describe("bifrost command ui", () => {
   it("submits exact commands without requiring a second Enter", () => {
     assert.equal(getBifrostCommandCompletions("classifier status"), null);
     assert.equal(getBifrostCommandCompletions("classifier"), null);
+  });
+
+  it("clears submitted text before dispatch while preserving follow-up prefills", async () => {
+    const { ctx, calls } = makeCtx();
+    await runBifrostCommand("preview", ctx as never, async (_args, commandCtx) => {
+      commandCtx.ui.setEditorText("/bifrost preview ");
+    });
+    assert.deepEqual(calls.filter((call) => call.kind === "editor").map((call) => call.value), ["", "/bifrost preview "]);
   });
 
   it("opens dashboard for root command", async () => {

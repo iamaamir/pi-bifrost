@@ -185,7 +185,7 @@ export function beginTrial(
   model: string,
 ): ReliabilityState {
   const current = state.models[model];
-  if (!current) return state;
+  if (!current || current.trialActive) return state;
   return {
     ...state,
     models: {
@@ -193,6 +193,25 @@ export function beginTrial(
       [model]: {
         ...current,
         trialActive: true,
+      },
+    },
+  };
+}
+
+/** Release a half-open trial without treating cancellation as success or failure. */
+export function abandonTrial(
+  state: ReliabilityState,
+  model: string,
+): ReliabilityState {
+  const current = state.models[model];
+  if (!current?.trialActive) return state;
+  return {
+    ...state,
+    models: {
+      ...state.models,
+      [model]: {
+        ...current,
+        trialActive: false,
       },
     },
   };

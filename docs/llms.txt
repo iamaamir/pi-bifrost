@@ -55,7 +55,7 @@ If classification fails, Pi-Bifrost tries configured fallbacks, then keeps Pi's 
 
 ## TypeSafe/Jev
 
-TypeSafe is explicit opt-in via `classifier.backend: "typesafe"`, selected through `/bifrost classifier`. Jev receives current prompt plus configured tier criteria and returns a tier judgment, not an exact provider model. Bifrost retains model lists, reliability filtering, fallback policy, selection strategy, and Pi model activation. Credentials resolve from `~/.pi/agent/auth.json` entry `typesafe` before `TYPESAFE_API_KEY`. `/bifrost classifier test` forces a fresh request; `/bifrost classifier status` exposes safe state without secrets. Full TypeSafe tracing requires both `debug.enabled` and `classifier.typesafe.debug`; it can include prompt/provider response data and is for local troubleshooting only.
+TypeSafe is explicit opt-in via `classifier.backend: "typesafe"`, selected through `/bifrost classifier`. Jev receives current prompt plus configured tier criteria and returns a tier judgment, not an exact provider model. Bifrost retains model lists, reliability filtering, fallback policy, selection strategy, and Pi model activation. Credentials resolve from `~/.pi/agent/auth.json` entry `typesafe` before `TYPESAFE_API_KEY`. `/bifrost classifier test` forces a fresh request; `/bifrost classifier status` exposes safe state without secrets. Detailed TypeSafe tracing requires both `debug.enabled` and `classifier.typesafe.debug`; it records redacted operational metadata only and never persists prompts, request/response bodies, provider payloads, or external error text.
 
 ## Privacy
 

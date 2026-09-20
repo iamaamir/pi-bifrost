@@ -20,11 +20,11 @@ const PI_ARGS = [
 
 let integrationDir;
 
-async function runPi(command, cwd = process.cwd()) {
+async function runPi(command, cwd = process.cwd(), env = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn("pi", [...PI_ARGS, command], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
+      env: { ...process.env, ...env },
       cwd,
     });
 
@@ -94,6 +94,33 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
     assert.ok(out.includes("enabled=true"));
     assert.ok(out.includes("model=integration/test-classifier"));
     assert.ok(out.includes("endpoint=registry"));
+  });
+
+  it("smokes TypeSafe production composition without credentials", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-typesafe-smoke-"));
+    mkdirSync(join(tempDir, ".pi"), { recursive: true });
+    writeFileSync(
+      join(tempDir, ".pi", "bifrost.json"),
+      JSON.stringify({
+        default: "general",
+        classifier: { enabled: true, backend: "typesafe" },
+        models: { quick: [], general: [], frontier: [] },
+      }),
+    );
+
+    try {
+      const out = combined(await runPi("/bifrost classifier test", tempDir, {
+        HOME: tempDir,
+        TYPESAFE_API_KEY: "",
+      }));
+      assert.ok(out.includes("backend: typesafe"));
+      assert.ok(out.includes("credential: missing"));
+      assert.ok(out.includes("outcome: missing_key"));
+      assert.ok(out.includes("request observed: yes"));
+      assert.ok(out.includes("result: general"));
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("falls back to configured general tier for an unmatched prompt", async () => {

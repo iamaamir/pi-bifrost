@@ -1,5 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { setupDebug } from "../debug.ts";
 import {
   TYPESAFE_MODEL,
   TYPESAFE_SYSTEMONE_URL,
@@ -101,6 +105,75 @@ describe("TypeSafe classifier", () => {
     Object.defineProperty(accessor, "model", { get: () => TYPESAFE_MODEL, enumerable: true });
     assert.equal(decodeTypeSafeJudgment(accessor, ["quick", "general", "frontier"]), undefined);
     assert.equal(decodeTypeSafeJudgment(Object.create({ ...payload() }), ["quick", "general", "frontier"]), undefined);
+  });
+
+  it("aborts and cancels a stalled response body at deadline", async () => {
+    let requestSignal: AbortSignal | undefined;
+    let cancelled = false;
+    const outcomes: string[] = [];
+    const body = new ReadableStream<Uint8Array>({ cancel: () => { cancelled = true; } });
+    const classifier = createTypeSafeClassifier({
+      apiKey: "key",
+      timeoutMs: 100,
+      maxAttempts: 1,
+      observe: ({ outcome }) => outcomes.push(outcome),
+      fetchImpl: async (_url, init) => {
+        requestSignal = init?.signal ?? undefined;
+        return new Response(body, { status: 200 });
+      },
+    });
+    assert.equal(await classifier({ prompt: "x", tiers: ["general"], criteria: { general: "normal" } }), undefined);
+    assert.equal(requestSignal?.aborted, true);
+    assert.equal(cancelled, true);
+    assert.deepEqual(outcomes, ["timeout"]);
+  });
+
+  it("abandons a half-open trial when caller aborts", async () => {
+    const key = `classifier/typesafe/${TYPESAFE_MODEL}`;
+    const now = Date.now();
+    const reliability = new ReliabilityStore({
+      cwd: "/tmp",
+      config: { enabled: true, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 1 },
+      initialState: { version: 1, models: { [key]: { failures: [now - 120_000], openUntil: now - 1 } } },
+      io: { load: emptyReliabilityState, save: () => {} },
+    });
+    const caller = new AbortController();
+    const body = new ReadableStream<Uint8Array>();
+    const classifier = createTypeSafeClassifier({
+      apiKey: "key",
+      timeoutMs: 500,
+      reliability,
+      fetchImpl: async () => {
+        setTimeout(() => caller.abort(), 10);
+        return new Response(body, { status: 200 });
+      },
+    });
+    assert.equal(await classifier({ prompt: "x", tiers: ["general"], criteria: { general: "normal" } }, caller.signal), undefined);
+    assert.equal(reliability.getCircuitState(key, Date.now()).trialActive, false);
+    assert.equal(reliability.getCircuitState(key, Date.now()).halfOpen, true);
+    assert.equal(reliability.getState().models[key]?.lastSuccessAt, undefined);
+  });
+
+  it("persists only redacted TypeSafe debug metadata", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-typesafe-debug-"));
+    const path = join(cwd, "trace.jsonl");
+    try {
+      setupDebug({ enabled: true, path }, cwd);
+      const classifier = createTypeSafeClassifier({
+        apiKey: "api-key-sentinel",
+        debug: true,
+        maxAttempts: 1,
+        fetchImpl: async () => { throw new Error("transport-error-sentinel"); },
+      });
+      await classifier({ prompt: "prompt-sentinel", tiers: ["general"], criteria: { general: "criteria-sentinel" } });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const trace = readFileSync(path, "utf8");
+      assert.doesNotMatch(trace, /prompt-sentinel|criteria-sentinel|api-key-sentinel|transport-error-sentinel/);
+      assert.match(trace, /"event":"transport_error"/);
+      assert.match(trace, /"category":"network"/);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it("retries network and 429, but not auth", async () => {

@@ -57,14 +57,34 @@ describe("classification-pipeline", () => {
     it("tries TypeSafe before existing prompt classifier", async () => {
       const calls: string[] = [];
       const p = createPipeline(deps({
-        classifyWithTypeSafe: async () => { calls.push("typesafe"); return "frontier"; },
+        classifyWithTypeSafe: async () => {
+          calls.push("typesafe");
+          return { tier: "frontier", backend: "typesafe", model: "jev-1.13.0", confidence: 0.93 };
+        },
         classifierModels: [makeClassifierModel("a", "m1")],
         classifyWithLLM: async () => { calls.push("prompt"); return "economical"; },
       }));
       const r = await p.classify("debug this");
       assert.deepEqual(calls, ["typesafe"]);
       assert.equal(r.kind, "classified");
-      if (r.kind === "classified") assert.equal(r.tier, "frontier");
+      if (r.kind === "classified") {
+        assert.equal(r.tier, "frontier");
+        assert.deepEqual(r.judgment, { tier: "frontier", backend: "typesafe", model: "jev-1.13.0", confidence: 0.93 });
+      }
+    });
+
+    it("does not continue fallback work after TypeSafe cancellation", async () => {
+      const controller = new AbortController();
+      controller.abort();
+      let promptCalled = false;
+      const p = createPipeline(deps({
+        classifyWithTypeSafe: async () => undefined,
+        classifierModels: [makeClassifierModel("a", "m1")],
+        classifyWithLLM: async () => { promptCalled = true; return "frontier"; },
+      }));
+      const result = await p.classify("hello", controller.signal);
+      assert.equal(result.kind, "unclassified");
+      assert.equal(promptCalled, false);
     });
 
     it("falls from TypeSafe to prompt, then regex/default", async () => {
@@ -91,6 +111,20 @@ describe("classification-pipeline", () => {
       }));
       const r = await p.classify("hello");
       assert.equal(r.kind, "fallback");
+    });
+
+    it("retains prompt backend and model metadata", async () => {
+      const p = createPipeline(deps({
+        classifierModels: [makeClassifierModel("fixture", "prompt-model")],
+        classifyWithLLM: async () => ({ tier: "frontier", backend: "prompt", confidence: 0.81 }),
+      }));
+      const r = await p.classify("debug this");
+      assert.equal(r.kind, "classified");
+      if (r.kind === "classified") {
+        assert.equal(r.judgment?.backend, "prompt");
+        assert.equal(r.judgment?.model, "prompt-model");
+        assert.equal(r.judgment?.confidence, 0.81);
+      }
     });
 
     it("uses first successful classifier model", async () => {
