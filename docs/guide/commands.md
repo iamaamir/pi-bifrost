@@ -5,7 +5,7 @@
 | Command | Behavior |
 |---------|----------|
 | `/bifrost` | Open dashboard and quick actions |
-| `/bifrost init` | Reuse fresh probe results or probe registry models, then propose configuration |
+| `/bifrost init` | Reuse fresh probe results or probe registry models, then propose configuration; pass `-f` (`--force`) to skip probe reuse and re-probe |
 | `/bifrost probe` | Send a tiny request to each registry model and report availability; usage may apply |
 | `/bifrost preview <prompt>` | Show the model a prompt would use, without generating; an enabled classifier may receive the prompt, and a tier name in the prompt is not applied |
 | `/bifrost on` | Enable routing policy |

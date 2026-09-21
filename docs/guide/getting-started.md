@@ -59,7 +59,7 @@ Inside Pi, run:
 Initialization:
 
 1. refreshes Pi's model registry;
-2. reuses probe results newer than one hour or probes every available registry model (results are cached in `.pi/bifrost-probe.json`);
+2. reuses probe results newer than one hour or probes every available registry model (results are cached in `.pi/bifrost-probe.json`); pass `-f` to force a fresh probe regardless of cache age;
 3. proposes `quick`, `general`, and `frontier` pools;
 4. orders candidates using one-time probe latency;
 5. proposes a prompt classifier when a working classifier model is found;

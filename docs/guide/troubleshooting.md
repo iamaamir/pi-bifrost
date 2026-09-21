@@ -21,13 +21,14 @@ It shows effective routing and reliability state after configuration layers merg
 | Wrong exact model is selected | `/bifrost preview <prompt>`; `/bifrost debug` | Broad substring pattern, tier strategy, candidate order, or health exclusion | Use exact `provider/id`; inspect strategy and candidate list; probe unhealthy model |
 | A configured model is skipped | `/bifrost debug`; `/bifrost probe` | Reliability circuit is open after repeated failures | Fix provider/model health and run a successful probe; otherwise wait for controlled recovery |
 | Config edit has no effect | `/bifrost debug` | Higher-precedence config overrides it or config was not reloaded | Check all config locations; edit winning layer; run `/bifrost reload` |
+| Init probe result is stale | `/bifrost init -f` | Cached probe is older than one hour | Run `/bifrost init -f` to force a fresh probe |
 | Prompt classifier fails | `/bifrost classifier test`; `/bifrost classifier status` | Missing model, provider error, invalid response, or fallback configuration | Select a working classifier model or disable classifier for rules/default-only routing |
 | TypeSafe/Jev is unavailable | `/bifrost classifier status` | Missing TypeSafe credential, timeout, rate limit, or open classifier circuit | Configure credential; test backend; inspect safe status; use prompt/regex fallback |
 | Tier prefix reaches model unchanged | `/bifrost debug` | Session is pinned, prefix is unknown, or tier key is unsupported syntax | Unpin; use a configured lowercase alphabetic single-word tier followed by whitespace |
 
 ## Lower probe pressure
 
-`/bifrost probe` sends a tiny request to every model available in Pi's registry. `/bifrost init` does the same when no probe result newer than one hour exists. Default concurrency is 50. Before the first init, lower it in `~/.pi/agent/bifrost.json` or `.pi/bifrost.json` when providers enforce tight burst limits:
+`/bifrost probe` sends a tiny request to every model available in Pi's registry. `/bifrost init` does the same when no probe result newer than one hour exists. Pass `-f` to force a fresh probe regardless of cache age. Default concurrency is 50. Before the first init, lower it in `~/.pi/agent/bifrost.json` or `.pi/bifrost.json` when providers enforce tight burst limits:
 
 ```json
 {
