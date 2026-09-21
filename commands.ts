@@ -247,13 +247,13 @@ export function buildInitProposal(
 
 // ── Command handlers ────────────────────────────────────────
 
+const isForced = (args:string):boolean => args?.split(/\s+/).includes("-f");
 async function handleInit(
   args: string,
   ctx: ExtensionContext,
   state: BifrostState,
 ): Promise<void> {
   clearBifrostWidgets(ctx);
-
   // Try to load cached probe results. If stale or missing, run probe inline.
   const probePath = join(process.cwd(), ".pi", "bifrost-probe.json");
   let workingModels: { provider: string; model: string; cost: { input: number; output: number }; duration_ms: number }[] = [];
@@ -267,7 +267,7 @@ async function handleInit(
       const ageMs = Date.now() - probeStat.mtimeMs;
       const ageMin = Math.round(ageMs / 60000);
 
-      if (ageMs < 3600_000) {
+      if (ageMs < 3600_000 && !isForced(args)) {
         workingModels = probeData
           .filter((r: any) => r.status === "ok")
           .map((r: any) => ({
@@ -701,6 +701,7 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "providers", description: "List available providers" },
   { value: "probe", description: "Probe working models" },
   { value: "init", description: "Probe models and generate config" },
+  { value: "init -f", description: "Force Probe models and generate config" },
   { value: "benchmark", description: "Classify a benchmark prompt", argumentHint: "<prompt>" },
   { value: "cache stats", description: "Show classification cache" },
   { value: "cache clear", description: "Clear classification cache" },
