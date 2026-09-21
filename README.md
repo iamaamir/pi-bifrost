@@ -39,7 +39,7 @@ Inside Pi:
 /bifrost init
 ```
 
-Initialization reuses probe results newer than one hour or probes every model available through Pi, then proposes tier pools and writes only after confirmation. The primary probe transport uses `1+1=` with at most 5 output tokens; empty responses may trigger a minimal-session fallback. Provider usage or rate limits may apply. See [Install and initialize](docs/guide/getting-started.md) before running init.
+Initialization reuses probe results newer than one hour or probes every model available through Pi, then proposes tier pools and writes only after confirmation. Pass `-f` to force a fresh probe regardless of cache age. The primary probe transport uses `1+1=` with at most 5 output tokens; empty responses may trigger a minimal-session fallback. Provider usage or rate limits may apply. See [Install and initialize](docs/guide/getting-started.md) before running init.
 
 ## How routing works
 
@@ -131,7 +131,7 @@ Detailed reference now lives in versioned guides committed with code:
 | Command | What it does |
 |---------|--------------|
 | `/bifrost` | Open dashboard and quick actions |
-| `/bifrost init` | Probe models and propose configuration |
+| `/bifrost init` | Probe models and propose configuration; pass `-f` to force a fresh probe |
 | `/bifrost probe` | Test model availability |
 | `/bifrost preview <prompt>` | Show the model a prompt would use, without generating or activating it; a tier name in the prompt is not applied; an enabled classifier may receive the prompt |
 | `/bifrost on` / `off` | Enable or disable routing policy |
