@@ -38,6 +38,10 @@ Jev receives the current prompt and configured tier criteria, then returns:
 
 Jev does not receive Bifrost's provider model pool and does not select an exact provider/model.
 
+Confidence measures how concentrated Jev's returned distribution is. It is not a correctness guarantee. Exploratory Pi-Bifrost evaluation found stable judgments for clear, bounded prompts, but current criteria also produced high-confidence under-routing for some mechanically small, high-consequence tasks. Treat tier criteria as versioned policy: keep fallback enabled, pin the evaluated Jev version, and test criteria against representative locked cases before relying on thresholds.
+
+TypeSafe/Jev support is the fixed hosted integration described here. Pi-Bifrost does not currently provide a generic local, self-hosted, or OpenRouter-compatible classifier transport.
+
 Choose TypeSafe in Pi:
 
 ```text

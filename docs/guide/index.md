@@ -38,7 +38,7 @@ Bifrost separates two decisions:
 - **Which tier fits this prompt?** A tier name in the message, the local classification cache, an optional classifier, a regex rule, or the configured default.
 - **Which model serves that tier?** User-owned model pool, reliability filtering, and configured strategy.
 
-Optional classifiers, including TypeSafe/Jev, choose a tier. They do not receive the provider model pool or choose the exact provider/model.
+Optional classifiers, including TypeSafe/Jev, choose a tier. They do not receive the provider model pool or choose the exact provider/model. Bifrost applies configured task-fit policy; it does not claim to identify one universally best model or guarantee savings.
 
 ## Choose what to read
 
@@ -59,7 +59,8 @@ Optional classifiers, including TypeSafe/Jev, choose a tier. They do not receive
 - Bifrost never automatically replays a failed user prompt.
 - Reliability circuits protect future turns; they are not provider quota guards.
 - Provider prompt caches remain controlled by Pi's provider integration and each provider.
-- `/bifrost pin` is a session-local hard lock. A tier name at the start of a message is ignored while pinned.
+- Adaptive routing may trade prompt-cache locality for per-turn task fit. It cannot guarantee better results, lower cost, lower latency, or cache savings.
+- `/bifrost pin` is a session-local hard lock. Use it when continuity or one exact model matters more than per-message routing. A tier name at the start of a message is ignored while pinned.
 
 ## More references
 

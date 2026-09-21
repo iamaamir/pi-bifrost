@@ -6,7 +6,7 @@
     <title>Pi-Bifrost | Model routing for Pi</title>
     <meta
       name="description"
-      content="Define model pools and per-tier strategies, then let Pi-Bifrost activate the right configured model before each Pi coding-agent turn."
+      content="Define model pools and per-tier strategies, then let Pi-Bifrost apply your routing policy before each Pi coding-agent turn."
     >
     <meta name="robots" content="index, follow">
     <meta name="theme-color" content="#111a23">
@@ -71,13 +71,14 @@
     <main id="main" tabindex="-1">
       <section class="hero wrap" id="top" aria-labelledby="hero-title">
         <p class="eyebrow">Native model routing for Pi</p>
-        <h1 id="hero-title">You set model policy. <br/> Bifrost picks the best for the task.</h1>
+        <h1 id="hero-title">You set model policy. <br> Bifrost applies it before each turn.</h1>
         <p class="lede">
           Group models into capability tiers, choose how each tier selects a
           candidate, and let Bifrost activate Pi's actual provider/model before
-          generation. No proxy. No hidden replay. No opaque model pool.
+          generation. Task-fit policy, not a claim of one universally best model.
+          No proxy. No hidden replay. No opaque model pool.
         </p>
-        <div class="route-preview" aria-label="Examples of explicit and adaptive Bifrost routing">
+        <div class="route-preview">
           <div class="route-example">
             <code>quick commit the changes</code>
             <span aria-hidden="true">→</span>
@@ -201,7 +202,9 @@
             TypeSafe/Jev is optional and requires a TypeSafe credential. It receives
             the current prompt plus your tier criteria, then returns a tier choice,
             probabilities, and confidence. It never receives your provider model
-            pool and never selects the exact model.
+            pool and never selects the exact model. Confidence is a routing signal,
+            not proof that a judgment is correct. Keep fallback enabled and test
+            criteria against your workload, especially small but high-consequence tasks.
           </p>
         </div>
 
@@ -396,7 +399,7 @@
 
       <section class="section wrap faq" id="faq" aria-labelledby="faq-title">
         <div class="section-heading compact">
-          <h2 id="faq-title">Three useful answers</h2>
+          <h2 id="faq-title">Four useful answers</h2>
           <p>Detailed setup and reference material lives in the versioned guide.</p>
         </div>
 
@@ -404,10 +407,23 @@
           <summary>Do I need an LLM classifier?</summary>
           <div class="faq-answer">
             <p>
-              No. A message that starts with a tier name, regex rules, and the configured default may resolve the tier instead.
-              can route without another model call. Prompt classifiers and
-              <a href="#jev">TypeSafe/Jev</a> are optional when semantic tier
-              judgment adds value.
+              No. A tier name at the start of a message, regex rules, or the
+              configured default can route without another model call. Prompt
+              classifiers and <a href="#jev">TypeSafe/Jev</a> are optional when
+              semantic tier judgment adds value.
+            </p>
+          </div>
+        </details>
+
+        <details>
+          <summary>When should I avoid adaptive routing?</summary>
+          <div class="faq-answer">
+            <p>
+              Pin one exact model when a long session builds on the same context,
+              prompt-cache locality matters, or switching would disrupt latency,
+              billing, or workflow expectations. Adaptive routing trades continuity
+              for per-turn task fit. It does not guarantee better results, lower
+              cost, lower latency, or cache savings.
             </p>
           </div>
         </details>

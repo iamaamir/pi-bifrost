@@ -70,7 +70,7 @@ Re-sending a prompt after a provider failure risks duplicating work (output may 
 ## Backlog — picked up when reported
 
 ### Usage stats & cost visibility
-`/bifrost stats` — per-model usage, cost estimates, cache hit rate, routing decisions over time. Inline telemetry after each prompt: `⎇ frontier → claude-opus ($0.008)`. Proves saving, justifies tool spend. **Effort:** Medium · **Reach:** teams justifying API costs. Need a local JSONL store; no cloud.
+`/bifrost stats` — per-model usage, cost estimates, cache hit rate, routing decisions over time. Inline telemetry after each prompt: `⎇ frontier → claude-opus ($0.008)`. Reports observed usage so teams can evaluate routing tradeoffs; it does not prove savings without a valid baseline. **Effort:** Medium · **Reach:** teams evaluating API costs. Need a local JSONL store; no cloud.
 
 ### Budget enforcement
 Daily/monthly spend caps in `.pi/bifrost-budget.jsonl`. At 80% → auto-downgrade default tier; at 100% → lock to free tier. Composes with usage stats. **Effort:** Medium · **Reach:** teams with junior devs.

@@ -1,6 +1,6 @@
 # pi-bifrost
 
-Query-aware model router extension for the pi coding agent. Classifies each user prompt, selects the best model from configured tiers, and switches pi's active model transparently. No native dependencies — uses pi's built-in model registry.
+Configuration-first model-routing extension for the Pi coding agent, not an LLM gateway or proxy. Resolves each user prompt to a configured tier, filters unhealthy candidates, applies the user's per-tier strategy, and activates Pi's actual model before generation. It applies task-fit policy; it does not identify a universally best model. No native dependencies; uses Pi's built-in model registry.
 
 ## Language
 
@@ -13,7 +13,7 @@ A regex pattern paired with a target tier. Rules are matched case-insensitively 
 _Avoid_: routing rule, classification rule
 
 **Classifier**:
-The LLM-based tier selector. Invoked before regex rules. Uses a cheap model to read the prompt and respond with a tier name. Two invocation methods: direct HTTP (fast, OpenAI-compatible) or subprocess (spawns a fresh pi CLI; slower but covers any provider).
+Optional semantic tier selector invoked before regex rules. The prompt backend uses a configured Pi model. The TypeSafe/Jev backend is an explicit opt-in hosted integration that returns one tier, probabilities, and confidence. Classifiers choose tiers, never exact provider models; Bifrost config retains model-pool and strategy control.
 
 **Strategy**:
 How to pick among candidates within a tier. `first` = first available candidate. `cheapest` = lowest combined input+output cost per 1M tokens. Set globally or per-tier via `categoryStrategies`.
@@ -41,7 +41,7 @@ Persisted classification cache using Jaccard token-set similarity. Stores `(norm
 
 **Dev:** "And if nothing matches?"
 
-**Expert:** "Falls through to the default tier, configured as `economical`. Safer to waste a cheap model on a hard prompt than burn frontier credits on 'hello world'."
+**Expert:** "Falls through to the configured default tier. Defaults are model-agnostic; users decide which models and strategy that tier uses."
 
 **Dev:** "What happens when the user manually switches models with /model?"
 

@@ -1,8 +1,8 @@
-# Bifrost
+# Pi-Bifrost
 
 ![Pi-Bifrost social card](docs/social-card.png)
 
-Pi-Bifrost is **native model routing for [Pi](https://pi.dev)**. You define model pools and per-tier selection strategies. Before generation, Bifrost resolves a configured tier, filters unhealthy candidates, applies your strategy, and activates Pi's actual provider/model.
+Pi-Bifrost is a **configuration-first model-routing extension for [Pi](https://pi.dev)**, not an LLM gateway or proxy. You define model pools and per-tier selection strategies. Before generation, Bifrost resolves a configured tier, filters unhealthy candidates, applies your strategy, and activates Pi's actual provider/model. It applies your task-fit policy; it does not claim to discover a universally best model.
 
 ```text
 "quick commit the changes"  → explicit quick tier → configured cheapest candidate
@@ -81,6 +81,17 @@ frontier debug this race condition
 
 Bifrost removes the tier name before the model sees the prompt, then uses that tier's model pool, reliability filter, and strategy. Custom tier names must currently be lowercase alphabetic single-word config keys. Pinned sessions ignore tier names in messages; a prefix does not override `/bifrost pin`.
 
+## When not to use adaptive routing
+
+Keep one exact model selected or run `/bifrost pin` when:
+
+- a long session repeatedly builds on the same context;
+- provider prompt-cache locality matters more than per-turn task fit;
+- you already know which exact model you want;
+- switching providers or models would disrupt latency, billing, or workflow expectations.
+
+Adaptive routing may improve policy fit, but it does not guarantee better coding results, lower cost, lower latency, or provider cache savings. Every provider/model pair has an independent cache history. Use explicit tier names for deliberate one-turn routing, or pin for continuity.
+
 ## Minimal configuration
 
 In `.pi/bifrost.json`:
@@ -156,6 +167,8 @@ Reliability circuits guard observed model health, not authoritative provider quo
 ## Optional TypeSafe/Jev classifier
 
 TypeSafe/Jev is explicit opt-in. Jev returns one configured tier, probabilities, and confidence. Bifrost still owns model pools, reliability filtering, fallback, selection strategy, and Pi model activation.
+
+Confidence is a routing signal, not proof of correctness. Exploratory evaluation found consistent judgments for clear prompts, but also high-confidence misses when mechanically small tasks had serious consequences. Keep fallback enabled and validate tier criteria against your workload.
 
 See [Classifier backends](docs/guide/classifiers.md).
 

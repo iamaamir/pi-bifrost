@@ -2,7 +2,7 @@
 
 > Configuration-first model routing extension for the Pi coding agent.
 
-Pi-Bifrost resolves prompts into configured tiers, filters unhealthy model candidates, applies user-selected per-tier strategies, and activates Pi's actual provider/model before generation.
+Pi-Bifrost resolves prompts into configured tiers, filters unhealthy model candidates, applies user-selected per-tier strategies, and activates Pi's actual provider/model before generation. It applies configured task-fit policy; it does not identify a universally best model or guarantee savings.
 
 ## Links
 
@@ -68,5 +68,9 @@ Pinned sessions ignore tier names in messages; unpin before routing per message 
 - Provider prompt caches remain provider-controlled; each provider/model pair has an independent history.
 - Across A → B → A or N switches, returning to a model may reuse its longest still-valid prefix while newer conversation content is an uncached tail.
 - `/bifrost pin` improves the opportunity for one continuous model history but cannot guarantee cache hits or savings.
+- Prefer pinning when context continuity, prompt-cache locality, or one exact model matters more than per-turn task fit.
+- Adaptive routing does not guarantee better coding results, lower cost, lower latency, or provider cache savings.
 - Optional classifiers receive the current prompt and tier instructions, not conversation history or tool output by default.
-- TypeSafe/Jev returns a tier choice, probabilities, and confidence; it never chooses the exact provider model.
+- TypeSafe/Jev is an explicit opt-in hosted integration. It returns a tier choice, probabilities, and confidence; it never chooses the exact provider model.
+- Jev confidence is not a correctness guarantee. Tier criteria require workload-specific validation, especially for small but high-consequence tasks.
+- Pi-Bifrost does not currently support generic local, self-hosted, or OpenRouter-compatible classifier transports.
