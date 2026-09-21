@@ -1,62 +1,72 @@
 # Pi-Bifrost
 
-> Query-aware model routing extension for the Pi coding agent.
+> Configuration-first model routing extension for the Pi coding agent.
 
-Pi-Bifrost classifies prompts into configured tiers, selects an available model, and switches Pi's active model before sending. It is designed for predictable, inspectable routing with manual overrides and safe fallbacks.
+Pi-Bifrost resolves prompts into configured tiers, filters unhealthy model candidates, applies user-selected per-tier strategies, and activates Pi's actual provider/model before generation.
 
 ## Links
 
 - Landing page: https://iamaamir.github.io/pi-bifrost/
-- Source and documentation: https://github.com/iamaamir/pi-bifrost
-- npm package: https://www.npmjs.com/package/pi-bifrost
+- Guide: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/index.md
+- Prompt caching and model switching: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/prompt-caching.md
+- Troubleshooting: https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/troubleshooting.md
+- Source: https://github.com/iamaamir/pi-bifrost
+- npm: https://www.npmjs.com/package/pi-bifrost
 - License: https://opensource.org/license/mit
 
 ## Install
+
+Requires Pi 0.86.0 or newer and at least one configured, authenticated provider model visible in Pi.
 
 ```sh
 pi install npm:pi-bifrost
 ```
 
-Initialize inside Pi:
+Then run inside Pi:
 
 ```text
 /bifrost init
 ```
 
-## Routing
+Init reuses probe results newer than one hour or probes every registry model. The primary probe transport uses `1+1=` with at most 5 output tokens; empty responses may trigger a minimal-session fallback. Default concurrency is 50. Requests may incur provider usage or rate limits.
 
-1. Direct regex bindings can target an exact `provider/id`.
-2. Cached classifications can be reused.
-3. Prompts can be classified with regex rules or an optional LLM classifier.
-4. A model is selected from the matching tier.
-5. Pi activates the selected model before sending.
+## Routing model
 
-Metadata-based routing does not require an additional model call. LLM classification is optional and may add tokens and latency on cache misses.
+```text
+prompt
+  → pick a tier
+  → configured model pool
+  → reliability filtering
+  → per-tier strategy
+  → Pi's active model
+```
 
-## Selection strategies
+A tier is chosen from a tier name at the start of the message, a rule that names an exact model, the local classification cache, an optional TypeSafe/Jev or prompt classifier, another regex rule, or the configured default. A rule that names an exact `provider/id` binds that model instead of a tier.
 
-Supported strategies include `cheapest`, `cheapest_input`, `cheapest_output`, `largest_context`, `random`, `first`, and `fastest`.
+Supported strategies: `first`, `fastest`, `cheapest`, `cheapest_input`, `cheapest_output`, `largest_context`, and `random`.
 
 ## Controls
 
-- `/bifrost preview <prompt>` previews a route without sending.
-- `/bifrost pin` pauses routing.
-- `/bifrost unpin` resumes routing.
-- `/bifrost classifier` opens the prompt or TypeSafe/Jev backend picker.
-- `/bifrost classifier on` / `off` enables or disables LLM classification.
-- `/bifrost classifier test` runs a fresh classifier smoke test.
-- `/bifrost classifier status` shows backend, credential state, and safe metrics.
+- `/bifrost preview <prompt>` shows the model a prompt would use without generating or activating it; an enabled classifier may receive the prompt, and a tier name in the prompt is not applied.
+- A message that starts with a configured tier name uses that tier for that message only. Tier names can be any name in your config, but only lowercase single-word alphabetic names work in a message.
+- `/bifrost pin` hard-locks the active model for the current session.
+- `/bifrost unpin` resumes per-message routing.
+- `/bifrost on` / `off` toggles routing policy.
 - `/bifrost probe` checks model availability.
-- `/bifrost reload` reloads configuration.
+- `/bifrost classifier` chooses classifier backend/model.
+- `/bifrost classifier test` makes a fresh classifier request.
+- `/bifrost classifier status` shows safe operational state.
 
-## Failure behavior
+Pinned sessions ignore tier names in messages; unpin before routing per message again.
 
-If classification fails, Pi-Bifrost tries configured fallbacks, then keeps Pi's current model if no route resolves. If no matching model can be activated, Pi keeps its current model. TypeSafe/Jev failures include missing credentials, rate limits, auth errors, timeouts, invalid responses, low confidence, and open circuits. No user prompt is replayed.
+## Safety and privacy
 
-## TypeSafe/Jev
-
-TypeSafe is explicit opt-in via `classifier.backend: "typesafe"`, selected through `/bifrost classifier`. Jev receives current prompt plus configured tier criteria and returns a tier judgment, not an exact provider model. Bifrost retains model lists, reliability filtering, fallback policy, selection strategy, and Pi model activation. Credentials resolve from `~/.pi/agent/auth.json` entry `typesafe` before `TYPESAFE_API_KEY`. `/bifrost classifier test` forces a fresh request; `/bifrost classifier status` exposes safe state without secrets. Detailed TypeSafe tracing requires both `debug.enabled` and `classifier.typesafe.debug`; it records redacted operational metadata only and never persists prompts, request/response bodies, provider payloads, or external error text.
-
-## Privacy
-
-The optional classifier receives the current prompt, tier names, and classifier instructions. It does not receive conversation history, prior messages, or tool output. Local cache and debug logging are optional.
+- Bifrost never automatically replays failed user prompts.
+- Reliability circuits affect future turns and persist across restart.
+- Reliability is not authoritative provider quota enforcement.
+- Local classification cache stores normalized prompt terms and selected tiers, not model answers.
+- Provider prompt caches remain provider-controlled; each provider/model pair has an independent history.
+- Across A → B → A or N switches, returning to a model may reuse its longest still-valid prefix while newer conversation content is an uncached tail.
+- `/bifrost pin` improves the opportunity for one continuous model history but cannot guarantee cache hits or savings.
+- Optional classifiers receive the current prompt and tier instructions, not conversation history or tool output by default.
+- TypeSafe/Jev returns a tier choice, probabilities, and confidence; it never chooses the exact provider model.

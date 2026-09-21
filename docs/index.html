@@ -6,14 +6,14 @@
     <title>Pi-Bifrost | Model routing for Pi</title>
     <meta
       name="description"
-      content="Pi-Bifrost routes Pi coding-agent prompts by task complexity, model cost, context window, configured order, and availability."
+      content="Define model pools and per-tier strategies, then let Pi-Bifrost activate the right configured model before each Pi coding-agent turn."
     >
     <meta name="robots" content="index, follow">
     <meta name="theme-color" content="#111a23">
     <meta property="og:title" content="Pi-Bifrost | Model routing for Pi">
     <meta
       property="og:description"
-      content="A small, inspectable model-routing extension for the Pi coding agent."
+      content="You define model policy. Pi-Bifrost resolves the tier, filters unhealthy candidates, and activates Pi's actual model before generation."
     >
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://iamaamir.github.io/pi-bifrost/">
@@ -38,7 +38,7 @@
         "@context": "https://schema.org",
         "@type": "SoftwareApplication",
         "name": "Pi-Bifrost",
-        "description": "Query-aware model router extension for the Pi coding agent.",
+        "description": "Configuration-first model router extension for the Pi coding agent.",
         "applicationCategory": "DeveloperTool",
         "operatingSystem": "Any",
         "url": "https://iamaamir.github.io/pi-bifrost/",
@@ -59,10 +59,10 @@
       <nav class="wrap nav" aria-label="Primary">
         <a class="wordmark" href="#top">Pi-Bifrost</a>
         <div class="nav-links">
-          <a href="#routing">How it works</a>
-          <a href="#jev">Jev</a>
-          <a href="#faq">FAQ</a>
+          <a href="#how">How it works</a>
+          <a href="#control">Control</a>
           <a href="#install">Install</a>
+          <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/index.md">Docs</a>
           <a href="https://github.com/iamaamir/pi-bifrost">GitHub</a>
         </div>
       </nav>
@@ -70,218 +70,270 @@
 
     <main id="main" tabindex="-1">
       <section class="hero wrap" id="top" aria-labelledby="hero-title">
-        <p class="eyebrow">Model routing for Pi</p>
-        <h1 id="hero-title">Pi-Bifrost picks a suitable model for each task.</h1>
+        <p class="eyebrow">Native model routing for Pi</p>
+        <h1 id="hero-title">You set model policy. <br/> Bifrost picks the best for the task.</h1>
         <p class="lede">
-          Bifrost is an extension for the Pi coding agent. It chooses from models
-          you configure before each prompt: fast or low-cost models for routine
-          work, stronger models for hard code, without changing Pi's model by hand.
+          Group models into capability tiers, choose how each tier selects a
+          candidate, and let Bifrost activate Pi's actual provider/model before
+          generation. No proxy. No hidden replay. No opaque model pool.
         </p>
-        <div class="route-preview" aria-label="Examples of Bifrost model routing">
+        <div class="route-preview" aria-label="Examples of explicit and adaptive Bifrost routing">
           <div class="route-example">
-            <code>summarize this file</code>
+            <code>quick commit the changes</code>
             <span aria-hidden="true">→</span>
-            <strong>use a faster model</strong>
+            <strong>explicit quick · configured cheapest</strong>
           </div>
           <div class="route-example">
             <code>debug this race condition</code>
             <span aria-hidden="true">→</span>
-            <strong>use a stronger model</strong>
+            <strong>adaptive frontier · configured largest context</strong>
           </div>
         </div>
         <div class="hero-actions">
           <a href="#install">Install in Pi</a>
-          <a href="#routing">See how Bifrost stays safe</a>
+          <a href="#how">See routing flow</a>
+          <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/index.md">Read documentation</a>
         </div>
       </section>
 
-      <section
-        class="section wrap"
-        id="routing"
-        aria-labelledby="routing-title"
-      >
+      <section class="section wrap" id="how" aria-labelledby="how-title">
         <div class="section-heading">
-          <h2 id="routing-title">Routing that remembers failure.</h2>
+          <h2 id="how-title">One turn. Four clear decisions.</h2>
           <p>
-            Routing does more than choose a tier. It changes Pi's actual active
-            model before generation, carries model health across restarts, and
-            avoids repeating work that may already have side effects.
+            Bifrost separates the tier choice from exact-model selection. The
+            classifier never receives authority to ignore your configured pool
+            or strategy.
           </p>
         </div>
 
-        <ul class="proof-strip" aria-label="Pi-Bifrost reliability guarantees">
-          <li><strong>Direct</strong><span>switches Pi's actual model</span></li>
-          <li><strong>Persistent</strong><span>remembers failures after restart</span></li>
-          <li><strong>Safe</strong><span>never replays a failed prompt</span></li>
-        </ul>
+        <dl class="glossary-strip">
+          <div><dt>Tier</dt><dd>A named capability group.</dd></div>
+          <div><dt>Pool</dt><dd>Models allowed for that tier.</dd></div>
+          <div><dt>Strategy</dt><dd>How one healthy model is chosen.</dd></div>
+          <div><dt>Classifier</dt><dd>Optional tier judge, not model selector.</dd></div>
+        </dl>
 
-        <figure class="bridge-figure">
-          <canvas id="bridge" aria-hidden="true"></canvas>
-          <div class="bf-desc" id="stageDesc">
-            <div class="bf-content">
-              <span class="bf-label" id="stageLabel">New request reaches Bifrost</span>
-              <p class="bf-detail" id="stageDetail">The prompt enters the classification pipeline. Bifrost first checks its fuzzy Jaccard cache for a similar prompt, then optionally runs an LLM classifier. Regex rules serve as a fallback between the classifier and the default tier.</p>
+        <ol class="routing-flow">
+          <li>
+            <span class="step-number">01</span>
+            <div>
+              <h3>Resolve a tier</h3>
+              <p>
+                A tier prefix, cache hit, optional classifier, regex rule, or
+                configured default resolves <code>quick</code>,
+                <code>general</code>, <code>frontier</code>, or your own tier.
+              </p>
             </div>
-          </div>
-        </figure>
+          </li>
+          <li>
+            <span class="step-number">02</span>
+            <div>
+              <h3>Load your model pool</h3>
+              <p>
+                Only models you placed in that tier become candidates. Add or
+                remove provider/model IDs directly in configuration.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">03</span>
+            <div>
+              <h3>Filter unhealthy candidates</h3>
+              <p>
+                Persistent reliability circuits exclude repeatedly failing
+                models before selection and later permit controlled recovery.
+              </p>
+            </div>
+          </li>
+          <li>
+            <span class="step-number">04</span>
+            <div>
+              <h3>Apply your tier strategy</h3>
+              <p>
+                Choose list order, cost, context window, probe-sorted speed, or
+                explicit random selection. Bifrost then activates Pi's actual
+                model before generation.
+              </p>
+            </div>
+          </li>
+        </ol>
       </section>
 
-      <section
-        class="section wrap cache-section"
-        id="prompt-cache"
-        aria-labelledby="prompt-cache-title"
-      >
+      <section class="section wrap" id="policy" aria-labelledby="policy-title">
         <div class="section-heading">
-          <h2 id="prompt-cache-title">Routing without giving up cache locality.</h2>
+          <h2 id="policy-title">Routing stays bounded by configuration.</h2>
           <p>
-            Provider prompt caches commonly reuse an exact prefix for one model.
-            Bifrost does not manage those caches. It controls when Pi's active
-            model changes, so you can choose continuity or per-turn routing.
+            Tier arrays define eligibility. Per-tier strategies choose among
+            healthy candidates. Optional semantic judgment decides only which
+            configured tier fits the prompt.
           </p>
         </div>
 
-        <div class="cache-modes">
-          <article>
-            <h3>Adaptive routing</h3>
-            <div
-              class="cache-flow"
-              role="img"
-              aria-label="Every prompt goes through Bifrost to a task-appropriate model"
-            >
-              <code>Every prompt</code>
-              <span aria-hidden="true">→</span>
-              <code>Bifrost</code>
-              <span aria-hidden="true">→</span>
-              <strong>task-fit model</strong>
-            </div>
-            <p>
-              Best when model fit matters most. Each provider and model may build
-              an independent cache history as Bifrost routes the session.
-            </p>
-          </article>
-
-          <article>
-            <h3>Pinned orchestrator</h3>
-            <div
-              class="cache-flow"
-              role="img"
-              aria-label="Main session stays on a pinned model"
-            >
-              <code>Main session</code>
-              <span aria-hidden="true">→</span>
-              <strong>pinned model</strong>
-            </div>
-            <div
-              class="cache-flow"
-              role="img"
-              aria-label="Subagents continue through Bifrost to task-appropriate models"
-            >
-              <code>Subagents</code>
-              <span aria-hidden="true">→</span>
-              <code>Bifrost</code>
-              <span aria-hidden="true">→</span>
-              <strong>task-fit models</strong>
-            </div>
-            <p>
-              Best for long coding sessions and delegated workflows. Main-session
-              continuity improves while subagents still route independently.
-            </p>
-          </article>
+        <div class="code-heading">
+          <span>.pi/bifrost.json</span>
+          <button
+            class="copy-button"
+            type="button"
+            data-copy-target="policy-example"
+          >
+            Copy<span class="sr-only"> model policy example</span>
+          </button>
         </div>
-
-        <div class="cache-control">
-          <code>/bifrost pin</code>
-          <p>
-            Pin applies only to the current session. Run
-            <code>/bifrost unpin</code> to resume per-turn routing.
-          </p>
-        </div>
-
-        <p class="cache-note">
-          <strong>Across any number of switches:</strong> Treat each
-          provider/model pair as an independent cache history, not one shared
-          session cache. With model A → B → A, model A may reuse its longest
-          still-valid previous prefix; content added after that prefix remains
-          an uncached tail for model A.
-        </p>
-      </section>
-
-      <section class="section wrap" aria-labelledby="capabilities-title">
-        <div class="section-heading compact">
-          <h2 id="capabilities-title">See route. Change route.</h2>
-          <p>Automation stays in Pi, under your configuration and control.</p>
-        </div>
-
-        <div class="feature-list">
-          <article>
-            <h3>Preview, pin, or force a tier</h3>
-            <p>
-              Run <code>/bifrost preview</code> before sending. Pin your active
-              model, or prefix one prompt with <code>frontier</code> to override
-              routing once without editing config.
-            </p>
-          </article>
-          <article>
-            <h3>Start from models that respond</h3>
-            <p>
-              <code>/bifrost init</code> probes supported models available through
-              Pi and proposes tier lists from successful results. Review proposal
-              before it writes config.
-            </p>
-          </article>
-          <article>
-            <h3>Choose policy, not hardcoded models</h3>
-            <p>
-              Use cost, context, order, or random selection per tier. Your own Pi
-              registry and configuration determine candidates.
-            </p>
-          </article>
-          <article>
-            <h3>Record useful diagnostics locally</h3>
-            <p>
-              Optional local JSONL debug logs record routing reason, selected
-              tier/model, and timing. TypeSafe traces are also metadata-only:
-              raw prompts, request bodies, provider responses, and external
-              error text are never persisted. Logs are local files, not a hosted
-              observability service.
-            </p>
-          </article>
-          <article>
-            <h3>Avoid repeatedly failing models</h3>
-            <p>
-              After configured repeated failures, Bifrost temporarily skips a
-              model and later allows one recovery trial. It does not replay a
-              failed prompt automatically.
-            </p>
-          </article>
-        </div>
+        <pre tabindex="0"><code id="policy-example">{
+  "models": {
+    "quick": ["provider/fast-model", "provider/backup-fast"],
+    "general": ["provider/general-model"],
+    "frontier": ["provider/frontier-model"]
+  },
+  "categoryStrategies": {
+    "quick": "cheapest",
+    "general": "first",
+    "frontier": "largest_context"
+  }
+}</code></pre>
       </section>
 
       <section class="section wrap" id="jev" aria-labelledby="jev-title">
-        <div class="section-heading compact">
-          <h2 id="jev-title">Optional Jev classification</h2>
+        <div class="section-heading">
+          <p class="eyebrow">Optional classifier backend</p>
+          <h2 id="jev-title">Jev judges the tier. Your policy chooses the model.</h2>
           <p>
-            TypeSafe's Jev model can classify prompts into your configured tiers.
-            Bifrost still chooses the actual Pi model, keeps fallback behavior, and
-            lets you inspect each decision.
+            TypeSafe/Jev is optional and requires a TypeSafe credential. It receives
+            the current prompt plus your tier criteria, then returns a tier choice,
+            probabilities, and confidence. It never receives your provider model
+            pool and never selects the exact model.
           </p>
         </div>
 
-        <pre><code>"classifier": {
-  "enabled": true,
-  "backend": "typesafe",
-  "typesafe": { "model": "jev-1.13.0" },
-  "fallback": "prompt",
-  "model": "provider/classifier-model"
-}</code></pre>
-        <p>
-          In Pi, run <code>/bifrost classifier</code> and choose <code>typesafe</code>.
-          Add a TypeSafe key through Pi's user auth file or
-          <code>TYPESAFE_API_KEY</code>, then run <code>/bifrost reload</code>.
-          Verify with <code>/bifrost classifier status</code> or
-          <code>/bifrost classifier test</code>.
-          <a href="https://github.com/iamaamir/pi-bifrost#optional-typesafejev-backend">Read more in the README</a>.
+        <figure
+          class="jev-figure"
+          aria-labelledby="jev-stage-label"
+          aria-describedby="jev-stage-detail"
+        >
+          <canvas id="jev-canvas" aria-hidden="true"></canvas>
+          <figcaption class="jev-caption" id="jev-caption">
+            <div class="jev-caption-head">
+              <span class="jev-stage" id="jev-stage-label">01 · Prompt and criteria enter Jev</span>
+              <button
+                class="jev-toggle"
+                id="jev-toggle"
+                type="button"
+                aria-label="Skip Jev illustration animation"
+              >
+                <span aria-hidden="true" id="jev-toggle-label">Skip</span>
+              </button>
+            </div>
+            <p class="jev-detail" id="jev-stage-detail">
+              Jev sees the current prompt and configured tier criteria, not Bifrost's
+              provider model pool.
+            </p>
+          </figcaption>
+        </figure>
+
+        <ol class="jev-contract">
+          <li><strong>Input</strong><span>Current prompt and tier criteria</span></li>
+          <li><strong>Judgment</strong><span>Tier, probabilities, confidence</span></li>
+          <li><strong>Boundary</strong><span>No provider model pool</span></li>
+          <li><strong>Selection</strong><span>Bifrost health filter and strategy</span></li>
+        </ol>
+
+        <p class="section-link">
+          <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/classifiers.md#typesafejev">Set up TypeSafe/Jev and understand prompt handling</a>
         </p>
+      </section>
+
+      <section class="section wrap" id="control" aria-labelledby="control-title">
+        <div class="section-heading">
+          <h2 id="control-title">Automatic when useful. Explicit when you know.</h2>
+          <p>
+            Use only as much routing as the task needs. Every control operates on
+            Pi's real active model.
+          </p>
+        </div>
+
+        <div class="feature-list control-options">
+          <article>
+            <h3>Adaptive</h3>
+            <p>
+              Leave routing on with nothing pinned and Bifrost picks a model for
+              every message through your configured routing policy.
+            </p>
+          </article>
+          <article>
+            <h3>Explicit tier</h3>
+            <p>
+              Start a prompt with a configured tier name, such as
+              <code>quick commit the changes</code>. Bifrost strips the tier name
+              and applies that tier's pool and strategy for one message.
+            </p>
+          </article>
+          <article>
+            <h3>Exact model</h3>
+            <p>
+              Select a model manually or run <code>/bifrost pin</code>. Pin is a
+              session-local hard lock: no automatic routing or tier-prefix parsing.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section wrap" id="trust" aria-labelledby="trust-title">
+        <div class="section-heading">
+          <h2 id="trust-title">Predictable under failure. Inspectable by default.</h2>
+          <p>
+            Bifrost changes future routing without silently repeating work that
+            may already have edited files, called tools, or touched external systems.
+          </p>
+        </div>
+
+        <ul class="proof-strip" aria-label="Pi-Bifrost product guarantees">
+          <li><strong>Native</strong><span>activates Pi's actual model</span></li>
+          <li><strong>Persistent</strong><span>remembers model failures</span></li>
+          <li><strong>Replay-free</strong><span>never resends failed work</span></li>
+        </ul>
+
+        <figure
+          class="bridge-figure"
+          aria-labelledby="bridge-stage-label"
+          aria-describedby="bridge-stage-detail"
+        >
+          <canvas id="bridge" aria-hidden="true"></canvas>
+          <figcaption class="bridge-caption" id="bridge-caption">
+            <div class="bridge-caption-head">
+              <span class="bridge-stage" id="bridge-stage-label">01 · Request reaches Bifrost</span>
+              <button
+                class="bridge-toggle"
+                id="bridge-toggle"
+                type="button"
+                aria-label="Pause reliability animation"
+              >
+                <span aria-hidden="true" id="bridge-toggle-label">Pause</span>
+              </button>
+            </div>
+            <p class="bridge-detail" id="bridge-stage-detail">
+              Bifrost resolves a configured tier, then checks candidate health
+              before Pi generates a response.
+            </p>
+          </figcaption>
+        </figure>
+
+        <div class="feature-list trust-details">
+          <article>
+            <h3>Preview before generation</h3>
+            <p>
+              <code>/bifrost preview</code> resolves the route without starting
+              generation or activating the model. An enabled classifier may still
+              receive the preview prompt.
+            </p>
+          </article>
+          <article>
+            <h3>Keep cache tradeoffs visible</h3>
+            <p>
+              Per-turn switching can fragment provider prompt-cache locality.
+              Pin for continuity, or <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/prompt-caching.md">read the N-switch cache guide</a>.
+            </p>
+          </article>
+        </div>
       </section>
 
       <section
@@ -291,8 +343,18 @@
       >
         <div class="wrap">
           <div class="section-heading compact">
-            <h2 id="install-title">Install</h2>
-            <p>Install package, then let Pi-Bifrost propose a config from models available in Pi. It writes only after your confirmation.</p>
+            <h2 id="install-title">Install, probe, review.</h2>
+            <p>
+              Requires Pi 0.86.0 or newer and at least one authenticated provider
+              model visible in Pi. <code>/bifrost init</code> uses a recent probe or
+              tests registry models, then writes only after confirmation.
+            </p>
+            <p class="install-note">
+              Primary probe requests use <code>1+1=</code> with at most 5 output
+              tokens; empty responses may trigger a minimal-session fallback.
+              Provider usage or rate limits may apply. The proposal may enable a
+              prompt classifier, so review it before confirmation.
+            </p>
           </div>
 
           <ol class="install-list">
@@ -318,395 +380,74 @@
                   type="button"
                   data-copy="/bifrost init"
                 >
-                  Copy<span class="sr-only"> setup command</span>
+                  Copy<span class="sr-only"> initialization command</span>
                 </button>
               </div>
             </li>
           </ol>
-        </div>
-      </section>
 
-      <section class="section wrap" id="trust" aria-labelledby="trust-title">
-        <div class="section-heading compact">
-          <h2 id="trust-title">Privacy and failure behavior</h2>
+          <div class="hero-actions install-actions">
+            <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/getting-started.md">Getting started</a>
+            <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/configuration.md">Configuration guide</a>
+            <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/commands.md">Command reference</a>
+          </div>
         </div>
-
-        <dl class="notes-list">
-          <div>
-            <dt>Classifier scope</dt>
-            <dd>
-              The optional classifier receives the complete current prompt, tier
-              names, and classifier instructions. It does not receive
-              conversation history, prior messages, or tool output.
-            </dd>
-          </div>
-          <div>
-            <dt>Local data</dt>
-            <dd>
-              The cache may store normalized, sorted prompt words in
-              <code>.pi/bifrost-cache.jsonl</code>. Normal debug logs contain
-              routing metadata, timings, and prompt length, not the prompt body.
-              TypeSafe tracing is separate, opt-in, and remains metadata-only:
-              raw prompts, request bodies, provider responses, and external error
-              text are never persisted.
-            </dd>
-          </div>
-          <div>
-            <dt>Classification failure</dt>
-            <dd>
-              Pi-Bifrost tries the next classifier candidate, then regex rules,
-              then the default tier. If nothing resolves, Pi keeps its current
-              model.
-            </dd>
-          </div>
-          <div>
-            <dt>Model failure</dt>
-            <dd>
-              If no candidate matches or the selected model cannot be activated,
-              Pi keeps its current model. Bifrost also records repeated failures and
-              temporarily skips unreliable models — after a cooldown, it tries them
-              again automatically. The default tier is attempted when it has an
-              eligible candidate; otherwise Pi keeps its current model.
-            </dd>
-          </div>
-          <div>
-            <dt>Credentials</dt>
-            <dd>
-              Registry models use credentials managed by Pi. TypeSafe/Jev uses
-              Pi's user auth file before <code>TYPESAFE_API_KEY</code> and never
-              logs API keys or authorization headers. Selecting TypeSafe in the
-              classifier picker is explicit opt-in. A custom prompt classifier
-              <code>endpoint</code> is treated as an unauthenticated
-              OpenAI-compatible endpoint.
-            </dd>
-          </div>
-        </dl>
       </section>
 
       <section class="section wrap faq" id="faq" aria-labelledby="faq-title">
         <div class="section-heading compact">
-          <h2 id="faq-title">Frequently asked questions</h2>
-          <p>
-            Bifrost separates its local routing cache from provider prompt
-            caching and never silently replays your work.
-          </p>
+          <h2 id="faq-title">Three useful answers</h2>
+          <p>Detailed setup and reference material lives in the versioned guide.</p>
         </div>
 
         <details>
-          <summary>What does Pi-Bifrost's local cache store?</summary>
+          <summary>Do I need an LLM classifier?</summary>
           <div class="faq-answer">
             <p>
-              Pi-Bifrost maintains a <strong>local routing-classification cache</strong>.
-              After a successful classifier result, it saves a normalized prompt
-              and selected tier. Similar future prompts can skip the classifier
-              call and route immediately. It does not store model answers.
-            </p>
-            <p>
-              The project-local file is <code>.pi/bifrost-cache.jsonl</code>.
-              By default it keeps up to 500 entries, checks exact matches first,
-              then uses token-set similarity, and evicts least-recently-used
-              entries. Use <code>/bifrost cache stats</code> to inspect it or
-              <code>/bifrost cache clear</code> to remove it.
+              No. A message that starts with a tier name, regex rules, and the configured default may resolve the tier instead.
+              can route without another model call. Prompt classifiers and
+              <a href="#jev">TypeSafe/Jev</a> are optional when semantic tier
+              judgment adds value.
             </p>
           </div>
         </details>
 
         <details>
-          <summary>Do I need multiple models?</summary>
+          <summary>Does routing affect provider prompt caching?</summary>
           <div class="faq-answer">
             <p>
-              No. One healthy configured model is enough to start. Multiple models
-              and tiers let Pi-Bifrost choose different candidates for routine,
-              general, and demanding work. <code>/bifrost init</code> shows its
-              proposed configuration before it writes anything.
+              It can. Treat every provider/model pair as an independent cache
+              history. Returning to a model may reuse its longest still-valid
+              prefix, while newer conversation content remains an uncached tail.
+              Bifrost does not manage provider caches. Read the dedicated
+              <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/prompt-caching.md">A → B → A and N-switch guide</a>.
             </p>
           </div>
         </details>
 
         <details>
-          <summary>Does Pi-Bifrost cache assistant answers or replay failed prompts?</summary>
+          <summary>What happens when a model fails?</summary>
           <div class="faq-answer">
             <p>
-              No. Your failed prompt is never silently replayed, so Bifrost does
-              not repeat edits, commands, or external side effects. Files, tool
-              output, branch, and user intent can change even when prompt text
-              looks the same.
-            </p>
-            <p>
-              When a model fails, Pi-Bifrost records it and routes future prompts
-              to healthy candidates instead of silently rerunning your work.
+              Bifrost records the failure, opens a circuit after the configured
+              threshold, and excludes that model from future routes until a
+              controlled recovery trial. It never automatically replays the
+              failed prompt.
             </p>
           </div>
         </details>
 
-        <details>
-          <summary>Does model routing affect provider prompt caching?</summary>
-          <div class="faq-answer">
-            <p>
-              It can. Provider prompt or prefix caches are commonly tied to the
-              selected model and exact reusable prefix, so changing models may
-              reduce cache hits. Switching does not necessarily delete cached
-              data; eligibility, lifetime, and billing depend on Pi's provider
-              integration and the provider itself.
-            </p>
-            <p>
-              Bifrost does not create, merge, or clear those caches. After a
-              sequence such as model A → model B → model A, model A may reuse
-              the longest exact prefix it previously saw if that entry is still
-              valid. Messages added during model B's turn form an uncached tail
-              for model A. Repeated switching therefore fragments independent
-              model cache histories instead of creating one shared session cache.
-            </p>
-            <p>
-              For a cache-friendly workflow, run <code>/bifrost pin</code> to
-              keep the main conversation on its current model. The pin is local
-              to that session, so subagents still route independently. Leave
-              Bifrost unpinned when per-turn model selection matters more than
-              model continuity.
-            </p>
-          </div>
-        </details>
-
-        <details>
-          <summary>What is stored locally, and can I disable it?</summary>
-          <div class="faq-answer">
-            <p>
-              Classification-cache entries contain lowercased, punctuation-stripped,
-              sorted prompt words, selected tier, last-use timestamp, and hit count.
-              They can still contain sensitive terms. Disable caching for sensitive
-              projects with <code>"cache": { "enabled": false }</code>, or choose
-              a different location with <code>cache.path</code>.
-            </p>
-            <p>
-              Clear the cache after substantial tier or rule changes when you
-              want every prompt classified fresh.
-            </p>
-          </div>
-        </details>
-
-        <details>
-          <summary>How does TypeSafe/Jev classification work?</summary>
-          <div class="faq-answer">
-            <p>
-              TypeSafe/Jev is an explicit opt-in classifier backend. It receives
-              the current prompt and configured tier criteria, then returns a
-              typed tier judgment. Bifrost still owns model lists, reliability,
-              fallback policy, and actual Pi model activation; Jev does not pick
-              provider models directly.
-            </p>
-            <p>
-              Invalid, low-confidence, unavailable, unauthorized, timed-out, or
-              circuit-open Jev results do not block routing. Bifrost falls back
-              according to configuration, then uses regex and the default tier.
-              Use <code>/bifrost classifier test</code> for a fresh request and
-              <code>/bifrost classifier status</code> for safe operational state.
-            </p>
-            <p>
-              Enable it explicitly with <code>classifier.backend: "typesafe"</code>
-              through <code>/bifrost classifier</code>, and provide credentials
-              through Pi's user auth file or <code>TYPESAFE_API_KEY</code>. Run
-              <code>/bifrost reload</code> and then the classifier test after
-              setup.
-            </p>
-          </div>
-        </details>
-
-        <details>
-          <summary>How does model reliability work?</summary>
-          <div class="faq-answer">
-            <p>
-              Pi-Bifrost persists probe, model-activation, and settled stream
-              failures in <code>.pi/bifrost-reliability.json</code>. Repeated
-              failures open a circuit, so unhealthy candidates are skipped on
-              later prompts. After cooldown, one half-open trial can prove a
-              model recovered.
-            </p>
-          </div>
-        </details>
-      </section>
-
-      <section
-        class="section wrap reference"
-        id="reference"
-        aria-labelledby="reference-title"
-      >
-        <div class="section-heading compact">
-          <h2 id="reference-title">Configuration and commands</h2>
-          <p>
-            A tier is a key in <code>models</code>, such as
-            <code>frontier</code>. A route rule uses the property
-            <code>model</code>: its value can be a tier name or an exact
-            <code>provider/id</code>. There is no <code>tier</code> property on
-            a route rule.
-          </p>
+        <div class="hero-actions faq-actions">
+          <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/index.md">Open full documentation</a>
+          <a href="https://github.com/iamaamir/pi-bifrost/issues">Ask or report an issue</a>
         </div>
-
-        <details open>
-          <summary>Configuration example</summary>
-          <div class="code-heading">
-            <span>.pi/bifrost.json</span>
-            <button
-              class="copy-button"
-              type="button"
-              data-copy-target="config-example"
-            >
-              Copy<span class="sr-only"> configuration example</span>
-            </button>
-          </div>
-          <pre><code id="config-example">{
-  "enabled": true,
-  "default": "general",
-  "strategy": "first",
-  "categoryStrategies": {
-    "quick": "cheapest",
-    "general": "first",
-    "frontier": "first"
-  },
-  "models": {
-    "quick": [
-      "ollama/qwen2.5-coder:latest"
-    ],
-    "general": [
-      "lmstudio/openai/gpt-oss-20b"
-    ],
-    "frontier": [
-      "provider/frontier-model"
-    ]
-  },
-  "rules": [
-    {
-      "pattern": "\\b(debug|fix|race condition)\\b",
-      "model": "frontier"
-    }
-  ],
-  "classifier": {
-    "enabled": true,
-    "model": "provider/classifier-model",
-    "method": "auto"
-  },
-  "reliability": {
-    "enabled": true,
-    "failureThreshold": 3,
-    "windowMinutes": 5,
-    "cooldownMinutes": 60
-  }
-}</code></pre>
-        </details>
-
-        <details open>
-          <summary>Selection strategies</summary>
-          <section
-            class="table-scroll"
-            tabindex="0"
-            aria-label="Selection strategies table"
-          >
-            <table>
-              <caption class="sr-only">
-                Pi-Bifrost selection strategies
-              </caption>
-              <thead>
-                <tr>
-                  <th scope="col">Name</th>
-                  <th scope="col">Behavior</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td><code>cheapest</code></td>
-                  <td>Lowest combined input and output cost</td>
-                </tr>
-                <tr>
-                  <td><code>cheapest_input</code></td>
-                  <td>Lowest input cost</td>
-                </tr>
-                <tr>
-                  <td><code>cheapest_output</code></td>
-                  <td>Lowest output cost</td>
-                </tr>
-                <tr>
-                  <td><code>largest_context</code></td>
-                  <td>Largest context window</td>
-                </tr>
-                <tr>
-                  <td><code>random</code></td>
-                  <td>Random available candidate</td>
-                </tr>
-                <tr>
-                  <td><code>first</code></td>
-                  <td>First available candidate in list order</td>
-                </tr>
-                <tr>
-                  <td><code>fastest</code></td>
-                  <td>
-                    Alias for <code>first</code>; uses init's one-time
-                    probe-sorted list, not live latency measurement
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </section>
-        </details>
-
-        <details open>
-          <summary>Common commands</summary>
-          <dl class="command-reference">
-            <div>
-              <dt><code>/bifrost init</code></dt>
-              <dd>Probe models and generate config</dd>
-            </div>
-            <div>
-              <dt><code>/bifrost probe</code></dt>
-              <dd>Run availability checks</dd>
-            </div>
-            <div>
-              <dt><code>/bifrost preview &lt;prompt&gt;</code></dt>
-              <dd>Preview without sending</dd>
-            </div>
-            <div>
-              <dt><code>/bifrost on</code> / <code>off</code></dt>
-              <dd>Enable or disable routing</dd>
-            </div>
-            <div>
-              <dt><code>/bifrost pin</code> / <code>unpin</code></dt>
-              <dd>Pause or resume routing</dd>
-            </div>
-            <div>
-              <dt><code>/bifrost classifier</code></dt>
-              <dd>Choose prompt or TypeSafe/Jev backend</dd>
-            </div>
-            <div>
-              <dt><code>/bifrost classifier on</code> / <code>off</code></dt>
-              <dd>Enable or disable LLM classification</dd>
-            </div>
-            <div>
-              <dt><code>/bifrost classifier test</code></dt>
-              <dd>Run a fresh classifier smoke test</dd>
-            </div>
-            <div>
-              <dt><code>/bifrost classifier status</code></dt>
-              <dd>Show backend, credential state, and safe metrics</dd>
-            </div>
-            <div>
-              <dt><code>/bifrost cache stats</code> / <code>clear</code></dt>
-              <dd>Inspect or clear classification cache</dd>
-            </div>
-            <div>
-              <dt><code>/bifrost reload</code></dt>
-              <dd>Reload config</dd>
-            </div>
-            <div>
-              <dt><code>/bifrost debug</code></dt>
-              <dd>Print config state and route rules</dd>
-            </div>
-          </dl>
-        </details>
       </section>
     </main>
 
     <footer class="site-footer">
       <div class="wrap footer-inner">
-        <!--<p>Pi-Bifrost <span>v0.1.6</span></p>-->
         <div>
+          <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/index.md">Docs</a>
           <a href="https://github.com/iamaamir/pi-bifrost">GitHub</a>
           <a href="https://www.npmjs.com/package/pi-bifrost">npm</a>
           <a href="https://opensource.org/license/mit">MIT</a>
@@ -720,236 +461,6 @@
       aria-live="polite"
       aria-atomic="true"
     ></div>
-    <script>
-      (function() {
-        "use strict";
-        const canvas = document.querySelector("#bridge");
-        if (!canvas) return;
-        const ctx = canvas.getContext("2d");
-        const stageLabel = document.querySelector("#stageLabel");
-        const stageDetail = document.querySelector("#stageDetail");
-        const stageDesc = document.querySelector("#stageDesc");
-
-        if (!ctx || !stageLabel || !stageDetail || !stageDesc) return;
-
-        const stageInfo = [
-          { label: "New request reaches Bifrost", detail: "The prompt enters the classification pipeline. Bifrost first checks its fuzzy Jaccard cache for a similar prompt, then optionally runs an LLM classifier. Regex rules serve as a fallback between the classifier and the default tier." },
-          { label: "Bifrost sees a remembered failure", detail: "This model failed 3+ times recently — its circuit is open. The red path pulses to show awareness, but no request is sent there. Bifrost skips it and searches for a healthy candidate in the same tier." },
-          { label: "Request takes safe bridge", detail: "A healthy model is found. If the model was half-open, Bifrost marks a trial in progress first. Then it calls pi.setModel() to switch the active model, and the prompt proceeds." },
-          { label: "Later: one half-open trial", detail: "The failed model's cooldown has expired. The next user request that naturally matches this tier is routed here as a trial. No stored prompts are replayed — it's the user's real question. If the trial succeeds, the circuit closes and the model is healthy again. If it fails, the cooldown doubles and the circuit re-opens (shown below as the model reverting to failed)." },
-        ];
-        let currentStage = -1;
-        let animElapsed = 0;
-        let lastFrameTs = 0;
-        let paused = false;
-        let transitioning = false;
-        const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
-        const C = { blue: "#75b5dc", mint: "#85c8aa", rose: "#c77b80", amber: "#d6ad72", line: "#31404b", faint: "#7b8a94", bg: "#14212c", white: "#e4e8ea" };
-        const LOOP_MS = 10000;
-        const SEGMENT = LOOP_MS / 4;
-        let frameId;
-
-        function resize() {
-          const r = canvas.getBoundingClientRect();
-          const s = devicePixelRatio || 1;
-          canvas.width = Math.round(r.width * s);
-          canvas.height = Math.round(r.height * s);
-          ctx.setTransform(s, 0, 0, s, 0, 0);
-          return r;
-        }
-
-        function ease(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
-
-        function bezier(p, t) {
-          const [a, b, c, d] = p;
-          const u = 1 - t;
-          return [u ** 3 * a[0] + 3 * u ** 2 * t * b[0] + 3 * u * t ** 2 * c[0] + t ** 3 * d[0], u ** 3 * a[1] + 3 * u ** 2 * t * b[1] + 3 * u * t ** 2 * c[1] + t ** 3 * d[1]];
-        }
-
-        function drawCurve(p, color, width, alpha = 1, dash = []) {
-          ctx.save();
-          ctx.globalAlpha = alpha;
-          ctx.strokeStyle = color;
-          ctx.lineWidth = width;
-          ctx.lineCap = "round";
-          ctx.setLineDash(dash);
-          ctx.beginPath();
-          ctx.moveTo(...p[0]);
-          ctx.bezierCurveTo(...p.slice(1).flat());
-          ctx.stroke();
-          ctx.restore();
-        }
-
-        function drawOrb(x, y, r, color, glow = 0, alpha = 1) {
-          ctx.save();
-          ctx.globalAlpha = alpha;
-          ctx.fillStyle = color;
-          ctx.shadowColor = color;
-          ctx.shadowBlur = glow;
-          ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-          ctx.restore();
-        }
-
-        function drawLabel(text, x, y, color) {
-          ctx.fillStyle = color;
-          ctx.font = "11px SFMono-Regular, Consolas, monospace";
-          ctx.textAlign = "center";
-          ctx.fillText(text, x, y);
-        }
-
-        function drawEndpoint(x, y, state, label) {
-          const color = state === "failed" ? C.rose : state === "selected" ? C.mint : state === "trial" ? C.amber : C.faint;
-          const alpha = state === "idle" ? 0.38 : 1;
-          ctx.save();
-          ctx.globalAlpha = alpha;
-          ctx.strokeStyle = color;
-          ctx.lineWidth = 1.5;
-          ctx.beginPath(); ctx.arc(x, y, 16, 0, Math.PI * 2); ctx.stroke();
-          ctx.beginPath(); ctx.arc(x, y, 9, 0, Math.PI * 2); ctx.stroke();
-          if (state === "failed") {
-            ctx.beginPath();
-            ctx.moveTo(x - 7, y - 7); ctx.lineTo(x + 7, y + 7);
-            ctx.moveTo(x + 7, y - 7); ctx.lineTo(x - 7, y + 7);
-            ctx.stroke();
-          }
-          if (state === "selected") drawOrb(x, y, 4, color, 15);
-          if (state === "trial") {
-            ctx.beginPath();
-            ctx.moveTo(x, y - 7); ctx.lineTo(x + 7, y);
-            ctx.lineTo(x, y + 7); ctx.lineTo(x - 7, y);
-            ctx.closePath(); ctx.stroke();
-          }
-          ctx.restore();
-          drawLabel(label, x, y + 39, color);
-        }
-
-        function drawStarfield(w, h) {
-          for (let i = 0; i < 24; i++) drawOrb((i * 89) % w, (i * 47) % h, 1, C.blue, 0, 0.13);
-        }
-
-        function draw(now = 0) {
-          const { width: W, height: H } = resize();
-          ctx.clearRect(0, 0, W, H);
-
-          if (!paused) {
-            if (lastFrameTs) animElapsed += now - lastFrameTs;
-            lastFrameTs = now;
-          }
-
-          const pts = {
-            start: [W * 0.1, H * 0.56],
-            hub: [W * 0.39, H * 0.56],
-            fail: [W * 0.84, H * 0.16],
-            safe: [W * 0.84, H * 0.56],
-          };
-          const paths = {
-            incoming: [pts.start, [W * 0.18, H * 0.56], [W * 0.3, H * 0.56], pts.hub],
-            failed: [pts.hub, [W * 0.5, H * 0.44], [W * 0.64, H * 0.08], pts.fail],
-            safe: [pts.hub, [W * 0.55, H * 0.66], [W * 0.66, H * 0.76], pts.safe],
-          };
-
-          const phase = reducedMotion ? 9000 : (animElapsed % LOOP_MS) / 1000;
-          const stage = Math.min(3, Math.floor(phase / (SEGMENT / 1000)));
-          if (stage !== currentStage && !transitioning) {
-            transitioning = true;
-            stageDesc.classList.add("bf-fading");
-            const info = stageInfo[stage];
-            setTimeout(() => {
-              currentStage = stage;
-              stageLabel.textContent = info.label;
-              stageDetail.textContent = info.detail;
-              stageDesc.className = "bf-desc bf-s" + stage;
-              requestAnimationFrame(() => {
-                stageDesc.classList.remove("bf-fading");
-                transitioning = false;
-              });
-            }, 600);
-          }
-
-          const t = (phase - stage * (SEGMENT / 1000)) / (SEGMENT / 1000);
-          const fadeIn = Math.min(1, t / 0.2);
-          const fadeOut = Math.min(1, (1 - t) / 0.2);
-          const travelerFade = Math.min(fadeIn, fadeOut);
-          const travelT = Math.min(1, t / 0.55);
-
-          drawStarfield(W, H);
-
-          drawCurve(paths.incoming, C.line, 8, 0.55);
-          if (stage === 3 && t < 0.55) {
-            drawCurve(paths.failed, C.amber, 1.5, 0.85, [4, 6]);
-          } else {
-            drawCurve(paths.failed, C.rose, 1.6, 0.45);
-          }
-          drawCurve(paths.safe, C.blue, 8, 0.12);
-          drawCurve(paths.safe, C.mint, 1.6, 0.32);
-
-          drawEndpoint(...pts.fail, stage === 3 && t < 0.55 ? "trial" : "failed", stage === 3 && t < 0.55 ? "half-open trial" : "failed model");
-          drawEndpoint(...pts.safe, stage >= 2 ? "selected" : "idle", "selected model");
-
-          drawLabel("new request", pts.start[0], pts.start[1] + 34, C.blue);
-          drawLabel("Bifrost", pts.hub[0], pts.hub[1] - 19, C.blue);
-          drawOrb(...pts.start, 7, C.blue, 20);
-          drawOrb(...pts.hub, 4, C.blue, 12, stage > 0 ? 1 : 0.28);
-
-          if (stage === 0) {
-            const p = bezier(paths.incoming, ease(travelT));
-            drawCurve(paths.incoming, C.blue, 2.2, 0.9);
-            drawOrb(...p, 5, C.white, 18, travelerFade);
-          } else if (stage === 1) {
-            const pulse = 0.5 + 0.35 * Math.sin(t * Math.PI * 3);
-            drawCurve(paths.incoming, C.blue, 2.2, 0.9);
-            drawCurve(paths.failed, C.rose, 1.8 + pulse * 1.2, pulse * 0.8 + 0.2);
-            drawOrb(...pts.hub, 5, C.white, 18);
-            drawOrb(...pts.fail, 6, C.rose, 8, 0.4 + 0.4 * Math.sin(t * Math.PI * 2.5 - 0.5));
-          } else if (stage === 2) {
-            const p = bezier(paths.safe, ease(travelT));
-            drawCurve(paths.incoming, C.blue, 2.2, 0.9);
-            drawCurve(paths.safe, C.blue, 10, 0.24);
-            drawCurve(paths.safe, C.mint, 2.3, 0.95);
-            drawOrb(...p, 5, C.white, 19, travelerFade);
-          } else if (stage === 3) {
-            const arrivalEnd = 0.2;
-            if (t < arrivalEnd) {
-              const p = bezier(paths.incoming, ease(t / arrivalEnd));
-              drawCurve(paths.incoming, C.blue, 2.2, 0.7);
-              drawCurve(paths.safe, C.mint, 1.6, 0.35);
-              drawCurve(paths.failed, C.amber, 1.5, 0.85, [4, 6]);
-              drawOrb(...p, 5, C.amber, 18, travelerFade);
-            } else {
-              const sub = (t - arrivalEnd) / (1 - arrivalEnd);
-              const p = bezier(paths.failed, ease(Math.min(1, sub / 0.44)));
-              drawCurve(paths.incoming, C.blue, 1.2, 0.38);
-              drawCurve(paths.safe, C.mint, 1.6, 0.35);
-              drawCurve(paths.failed, C.amber, 1.5, 0.85, [4, 6]);
-              drawOrb(...p, 5, C.amber, 18, travelerFade);
-            }
-          }
-
-          if (!reducedMotion && !paused) frameId = requestAnimationFrame(draw);
-        }
-
-        stageDesc.addEventListener("mouseenter", () => {
-          if (!reducedMotion) {
-            paused = true;
-            if (frameId != null) cancelAnimationFrame(frameId);
-          }
-        });
-        stageDesc.addEventListener("mouseleave", () => {
-          if (paused) {
-            paused = false;
-            lastFrameTs = 0;
-            frameId = requestAnimationFrame(draw);
-          }
-        });
-
-        addEventListener("resize", () => {
-          if (frameId != null) cancelAnimationFrame(frameId);
-          lastFrameTs = 0;
-          draw(performance.now());
-        });
-        draw(performance.now());
-      })();
-    </script>
     <script
       data-goatcounter="https://pi-bifrost.goatcounter.com/count"
       async

@@ -78,8 +78,8 @@ Daily/monthly spend caps in `.pi/bifrost-budget.jsonl`. At 80% → auto-downgrad
 ### Team policy layer
 `.pi/bifrost-policy.json` committed by a team lead; dev configs validated against it at load. Allowed models per tier, minimum cache settings, required classifier. **Effort:** Medium-High · **Reach:** teams of 3+.
 
-### Multi-turn stickiness
-Once classified as `frontier`, stay for N messages unless the prompt diverges significantly (sliding window + embedding similarity). Reduces re-classification overhead and keeps a debugging session from bouncing tiers. **Effort:** Medium · **Reach:** power users in long sessions.
+### Session-sticky routing
+**Proposed in [ADR 0019](docs/adr/0019-session-sticky-routing.md); not implemented.** Route the first eligible prompt, retain the selected provider/model as a session-local base, and skip automatic rerouting on normal later prompts. A configured tier-name prefix may explicitly route one turn before Bifrost restores the base; `/bifrost pin` remains a hard lock that ignores prefixes. This reported need replaces earlier speculative N-turn and semantic-divergence stickiness with a smaller, inspectable mode. **Effort:** Medium · **Reach:** users with long sessions, prompt-cache concerns, or unwanted model churn.
 
 ### Context-size guard
 Before switching to a smaller-context model, check that current context fits. Warn or refuse if it would truncate history. **Effort:** Medium · **Reach:** long sessions with large context.
