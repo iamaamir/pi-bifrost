@@ -132,16 +132,10 @@ Detailed reference now lives in versioned guides committed with code:
 |---------|--------------|
 | `/bifrost` | Open dashboard and quick actions |
 | `/bifrost init` | Probe models and propose configuration; pass `-f` to force a fresh probe |
-| `/bifrost probe` | Test model availability |
-| `/bifrost preview <prompt>` | Show the model a prompt would use, without generating or activating it; a tier name in the prompt is not applied; an enabled classifier may receive the prompt |
+| `/bifrost preview <prompt>` | Show the model a prompt would use, without generating; a tier name in the prompt is not applied |
 | `/bifrost on` / `off` | Enable or disable routing policy |
 | `/bifrost pin` / `unpin` | Hard-lock current model or resume routing |
 | `/bifrost reload` | Reload merged configuration |
-| `/bifrost cache stats` / `clear` | Inspect or clear local classification cache |
-| `/bifrost classifier` | Choose classifier backend/model |
-| `/bifrost classifier test` / `status` | Test or inspect classifier safely |
-| `/bifrost providers` | List providers available through Pi |
-| `/bifrost benchmark <prompt>` | Classify a prompt and show the outcome without generating |
 
 See the [full command guide](docs/guide/commands.md).
 
