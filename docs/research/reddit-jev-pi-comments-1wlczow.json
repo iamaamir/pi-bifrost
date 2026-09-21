@@ -1,0 +1,520 @@
+{
+  "source": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/",
+  "retrieved": "2026-09-21T16:55:01.421141+00:00",
+  "post": {
+    "id": "1wlczow",
+    "title": "I think i found the best use case for JEV and PI",
+    "author": "rimaa_nahk",
+    "subreddit": "PiCodingAgent",
+    "created": "2026-09-20T09:59:15+00:00",
+    "body": "\n\n\nI think JEV gets much more interesting once you stop treating it like a tiny LLM.\n\n\n**LLM → generate anything**  \n**JEV → choose between bounded options**\n\nThat makes model routing feel almost obvious:\n\n`prompt → JEV → best model`\n\nInstead of using an LLM just to decide which LLM to call, let JEV make the bounded judgment and let deterministic code handle the rest.\n\nMaybe JEV's killer use case isn't Doom.\n\nMaybe it's a **probabilistic switch statement.**\n\nso i am releasing the support for JEV in [PI-Bifrost](https://iamaamir.github.io/pi-bifrost/#jev)\n\nTry it : `pi install npm:pi-bifrost`\n\nand do share the feedback.",
+    "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/"
+  },
+  "counts": {
+    "comments": 50,
+    "top_level": 17,
+    "replies": 33
+  },
+  "comments": [
+    {
+      "id": "paxobqg",
+      "parent": null,
+      "author": "No-Ruin5825",
+      "body": "Will you make Luna or Sol as your router manager? ",
+      "created": "2026-09-20T10:33:32+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paxobqg/"
+    },
+    {
+      "id": "paxpo07",
+      "parent": "paxobqg",
+      "author": "rimaa_nahk",
+      "body": "the short answer is No.\n\nthe proper answer is :   \n  \nPi-Bifrost is model-agnostic, so Luna/Sol can absolutely be part of the routing setup.\n\nBut I probably wouldn’t use a model that powerful as the default router on every request.  \nthis is where i feel JEV fits best.\n\nThe router’s job is usually pretty small: look at the task, classify it, then hand it off to the right model. Using a frontier model just to decide which model to call adds extra latency and cost before the real work even starts.\n\nWhere I do think Luna/Sol could be useful is as an **escalation router** for ambiguous cases:\n\n`rules → JEV/small router → low confidence? → Luna/Sol`\n\nSo the long-term idea is less \"pick one router model\" and more:\n\n**Bifrost owns the routing policy. Rules, JEV, Luna, Sol, etc. are interchangeable decision engines.**\n\nThat keeps the system model-agnostic and lets you spend the expensive intelligence only when the routing decision itself is actually hard.",
+      "created": "2026-09-20T10:44:12+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paxpo07/"
+    },
+    {
+      "id": "paxqbii",
+      "parent": null,
+      "author": "debackerl",
+      "body": "Just use https://github.com/wfzyx/von or https://github.com/NandhaKishorM/laya then you don't need to pay per request. Open source model",
+      "created": "2026-09-20T10:49:19+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paxqbii/"
+    },
+    {
+      "id": "paxqfv8",
+      "parent": "paxqbii",
+      "author": "rimaa_nahk",
+      "body": "thats interesting, ill surely look into it. thx for sharing...",
+      "created": "2026-09-20T10:50:15+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paxqfv8/"
+    },
+    {
+      "id": "paxrt0r",
+      "parent": null,
+      "author": "darkotic",
+      "body": "Are these solutions prompt-cache mindful?",
+      "created": "2026-09-20T11:00:39+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paxrt0r/"
+    },
+    {
+      "id": "paxtvkq",
+      "parent": null,
+      "author": "cosmicnag",
+      "body": "How is the prefix cache managed or  a single long session with n number of model switching?",
+      "created": "2026-09-20T11:16:03+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paxtvkq/"
+    },
+    {
+      "id": "paxtxph",
+      "parent": "paxrt0r",
+      "author": "rimaa_nahk",
+      "body": "That's a valid concern.  \nPrompt caches are generally model/provider-specific, so frequent model switching can reduce cache-hit rates and increase cost and latency.\n\nBifrost doesnt inherently need to change models every prompt.  \nRecommended cache-minded workflow is to pin main model as orchestrator with `/bifrost pin`\nMain conversation then stays on one model, preserving cache locality, while each subagent can still be routed by Bifrost based on its task.\n\nThe pin is session- ocal and isn't inherited by subagents, so this already works today.",
+      "created": "2026-09-20T11:16:29+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paxtxph/"
+    },
+    {
+      "id": "paxytph",
+      "parent": "paxtvkq",
+      "author": "rimaa_nahk",
+      "body": "[https://iamaamir.github.io/pi-bifrost/#prompt-cache-title](https://iamaamir.github.io/pi-bifrost/#prompt-cache-title)",
+      "created": "2026-09-20T11:50:22+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paxytph/"
+    },
+    {
+      "id": "paxzvmn",
+      "parent": "paxpo07",
+      "author": "No-Ruin5825",
+      "body": "Main assumption here jev can route the system better than flagship models? I think this is very tricky. I think you can use jev more like downstream work or where realtime is very much required or cost of scale is huge. Your case fits the cost of scale on the other hand, you can have classifiers that are cheap and reliable (enough). \n\nIf the first shirt button in wrong place, the rest will be too.. just sayinh and thanks for sharing your work. ",
+      "created": "2026-09-20T11:57:17+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paxzvmn/"
+    },
+    {
+      "id": "pay0hf9",
+      "parent": "paxzvmn",
+      "author": "rimaa_nahk",
+      "body": "Totally agree with you, I see JEV as one of options and the system is agnostic. So anyone can pick any model of the choice with bifrost. ",
+      "created": "2026-09-20T12:01:11+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pay0hf9/"
+    },
+    {
+      "id": "pay0mxz",
+      "parent": "pay0hf9",
+      "author": "rimaa_nahk",
+      "body": "JEV is intresting here because it's fast, cheap and build for classification.",
+      "created": "2026-09-20T12:02:11+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pay0mxz/"
+    },
+    {
+      "id": "pay3xbr",
+      "parent": null,
+      "author": "xenarathon",
+      "body": "im currently working on a personal jev based router using litellm that uses jev the same way with candidate pools based on my corresponding omp roles (and few non coding pools for other apps in my homelab). i agree that this is one of the top jev use cases ",
+      "created": "2026-09-20T12:22:28+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pay3xbr/"
+    },
+    {
+      "id": "payd51a",
+      "parent": null,
+      "author": "funbike",
+      "body": "Some use-cases I'm thinking of:\n\n- **Skills hook.**  After each user message, determine which new skills should be loaded.  This would replace current skill functionality.\n- **Subagent and workflow router.**  Based on current task choose which workflow step and/or subagent should work on the task.\n- **General purpose tool functions.**\n    - A function that takes a question strings, and a set of possible answers. JEV returns selections, probability % and confidence %.\n    - A function that sends the entire chat history, question(s), and a set of answers.\n    - A function that sends the entire user message history, question(s), and a set of answers.\n- **Pick best assistance response.**   A hook that sends a user prompt and AI response to multiple LLMs, or set \"`n`\" parameter to 2+, and have JEV pick the best response.  You'd include a rubric guide to help it decide.   Due to doubling the response token count and latency, this is something you'd want to enable/disable as needed for difficult tasks.\n- `./JEV.md`  - For whatever it's being used for, this gives it project context.  It would be very similar to `AGENTS.md` but instead focused on decision making, not code generation.\n\n\nTBH, JEV is so impactful that I think harnesses need some retooling.\n\n- An optional \"goal\" prompt, used at the start of a new session.  If JEV knows your overall goal, it can more intelligently make decisions and it can be invoked selectively when the goal is defined in order to set model, set thinking, pick tools.\n- Redesign of Skills, maybe like I already discussed above.\n- Rethinking of the user-assistant loop.  Let JEV decide what should be done after an assistant response:  prompt-user (the current only option), incomplete-continue, poor-quality-try-again, done-quit.\n- A single JEV post-user-message hook that does all of the above, and can be appended to for additional questions.  This way there's only one round trip to JEV per user message.\n \n",
+      "created": "2026-09-20T13:14:19+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/payd51a/"
+    },
+    {
+      "id": "paygqy2",
+      "parent": null,
+      "author": "DistanceAlert5706",
+      "body": "You want to do it for quality or price? \nRouting on each prompt will kill caching, and with some providers pricing you can end up with same or even higher price per prompt. \nIf you do it per task, why not choose right model for a task instead of playing Jev roulette?",
+      "created": "2026-09-20T13:33:05+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paygqy2/"
+    },
+    {
+      "id": "payhfyx",
+      "parent": "paxtxph",
+      "author": "DistanceAlert5706",
+      "body": "Why not set models beforehand for subagents? Why you need Jev for this? Like I know I run Luna medium as scout and GLM5.3 medium as reviewer, I don't need Jev to randomize it, because I might end with Astra in reviewer and even 1 review can burn substantial weekly limit.",
+      "created": "2026-09-20T13:36:34+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/payhfyx/"
+    },
+    {
+      "id": "payics3",
+      "parent": "payd51a",
+      "author": "DistanceAlert5706",
+      "body": "Skill hooks yeah might be possible, everything else doesn't seem like something I would try to do.\n\nAlso interesting is auto mode implementation like in Claude for permission should be pretty simple.",
+      "created": "2026-09-20T13:41:09+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/payics3/"
+    },
+    {
+      "id": "payn4ew",
+      "parent": "payics3",
+      "author": "funbike",
+      "body": "The general purpose tools are pretty useful.  It will be easy to implement.  I could do that in an hour, if I had access.",
+      "created": "2026-09-20T14:04:32+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/payn4ew/"
+    },
+    {
+      "id": "payn72r",
+      "parent": "payhfyx",
+      "author": "rimaa_nahk",
+      "body": "Yup, you can totally do it.\n\nthe value i am failing to communicate is.\n\nJev helps when role alone does not determine required capability:\n\n       worker → rename one symbol                                              \n    \n       worker → implement API                                                  \n    \n       worker → diagnose distributed race                                      \n    \n\nSame role, radically different task complexity.\n\nBifrost's power is not replacing deterministic model assignments. Its power is filling gaps where no deterministic assignment can know task complexity beforehand.\n\nBifrost has two separate decisions:\n\n      1. Which tier fits this task?                                           \n      2. Which model should serve that tier?                                  \n\nJev participates only in decision 1.\n\nActual control flow\n\n      Prompt                                                                  \n        ↓                                                                     \n      Jev evaluates configured tiers                                          \n        ↓                                                                     \n      tier choice + probability distribution + confidence                     \n        ↓                                                                     \n      Bifrost validates confidence                                            \n        ↓                                                                     \n      Bifrost loads user-configured candidates for chosen tier                \n        ↓                                                                     \n      unavailable and circuit-open models removed                             \n        ↓                                                                     \n      user-configured tier strategy applied                                   \n        ↓                                                                     \n      Pi activates exact model                                                \n\nJev never sees or selects provider/luna-medium.\n\nyou can configure Bifrost to pick the model based on stratigies.\n\nsuc as:\n\n* cheapest means configuration chooses cheapest healthy candidate.\n* first means configuration order decides.\n* largest\\_context means metadata decides.\n* fastest means observed probe speed decides.\n* random happens only when user explicitly configures random.\n\n&#8203;\n\n    \"categoryStrategies\": {\n        \"frontier\": \"cheapest\",\n        \"general\": \"first\",\n        \"quick\": \"random\"\n      },\n\nYou define eligible models and selection strategy. Bifrost determines when each capability tier is appropriate.",
+      "created": "2026-09-20T14:04:52+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/payn72r/"
+    },
+    {
+      "id": "payq782",
+      "parent": "paxtxph",
+      "author": "funbike",
+      "body": "I'd prefer if it only choose a model after the first user message while the session is still empty, and after that only when I manually tell it to.\n\nChanging the model after every user message is madness. \n",
+      "created": "2026-09-20T14:19:09+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/payq782/"
+    },
+    {
+      "id": "payss4m",
+      "parent": "payd51a",
+      "author": "Equivalent_Idea8839",
+      "body": "> Skills hook. After each user message, determine which new skills should be loaded. This would replace current skill functionality. You could have a huge skill index without polluting LLM context.\n\nthis sounds like a good use of the local laya model. or some sort of tools suggestion\n\nat the very least just a suggestion engine (I don't want anything routing or breaking context without my perm)",
+      "created": "2026-09-20T14:31:11+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/payss4m/"
+    },
+    {
+      "id": "paytkfw",
+      "parent": "payq782",
+      "author": "rimaa_nahk",
+      "body": "you can totally do it today.\n\nyou can simply prefix the tier name with the prompt and thats it.\n\nexample prompt:  \n`quick commit the changes`\n\nin above prompt *\"quick\"* is the tier name and when bifrost will see the prompt with specific tier name it will do the routing for that specific msg.\n\nhope, thats what you were talking about.",
+      "created": "2026-09-20T14:34:50+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paytkfw/"
+    },
+    {
+      "id": "payw0a2",
+      "parent": "paytkfw",
+      "author": "funbike",
+      "body": "I don't see how that's related to what I said.  I don't want automatic model selection after the 1st user message.",
+      "created": "2026-09-20T14:45:58+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/payw0a2/"
+    },
+    {
+      "id": "payy93d",
+      "parent": "payw0a2",
+      "author": "rimaa_nahk",
+      "body": "I see , yes you can do that as wel",
+      "created": "2026-09-20T14:56:05+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/payy93d/"
+    },
+    {
+      "id": "paz1vr6",
+      "parent": null,
+      "author": "addiktion",
+      "body": "I was really confused, bifrost which they opensource, is an actual gateway that supports routing. Pi-bifrost is not that from the looks of it or hooks into that. Then you are throwing in Jev and I was like wtf is going on here since I assumed you wanted to use this as a gateway lite approach for model selection. Meanwhile the open source equivalent of jev is laya or von which seems better for a pi extension without another round trip if you can get it to work in pi-bifrost.",
+      "created": "2026-09-20T15:12:20+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paz1vr6/"
+    },
+    {
+      "id": "paz2x1f",
+      "parent": "payy93d",
+      "author": "funbike",
+      "body": "Sorry if I wasn't clear:\n\nI think it would be useful if your extension auto-selected a model ONLY AFTER THE FIRST user message, but not again  automatically after that.\n\nThen, later, if I wanted to, I could manually request your extension intelligently switch models for me.\n\nTo assist me, you could show in the status bar which model might be better than the current one I'm using, if any.  Maybe in red if it's above 80% certain.\n\nThe goal of the above is to protect the prompt cache.",
+      "created": "2026-09-20T15:16:59+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paz2x1f/"
+    },
+    {
+      "id": "paz3yvz",
+      "parent": "paz1vr6",
+      "author": "rimaa_nahk",
+      "body": "ah, i see where you coming from. the names are really making confusion.  \nbut No its not the same. thats a different project. \n\nTrivia we both used to work for the same company where teams had tendency to pick names from marvel universe.",
+      "created": "2026-09-20T15:21:42+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paz3yvz/"
+    },
+    {
+      "id": "paz4buv",
+      "parent": "paz1vr6",
+      "author": "rimaa_nahk",
+      "body": "Yes i am aware of von and laya , the issue is they both are also pretty new and i am not sure how many users are capable to setting them up locally. but i do have eye on these two and might add support later.",
+      "created": "2026-09-20T15:23:18+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paz4buv/"
+    },
+    {
+      "id": "paz4xzo",
+      "parent": "paz2x1f",
+      "author": "rimaa_nahk",
+      "body": "the issue here is the initial prompt could be anything and as simple as \"Hi\" now bifrost analyze the prompt and then pick the model best fit for that prompt , so imagine you just sent hi to the agent and bifrost picked a very cheap model for such tiny prompt then you have to try again etc. \n\nbut still ill see how can i make it work. i am open to suggestions.",
+      "created": "2026-09-20T15:26:02+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paz4xzo/"
+    },
+    {
+      "id": "paz5xwx",
+      "parent": "paz4xzo",
+      "author": "funbike",
+      "body": "Of course I know that.  That's why you'd want the power to manually switch, and to signal when a manual switch might be prudent.",
+      "created": "2026-09-20T15:30:28+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paz5xwx/"
+    },
+    {
+      "id": "paz7kav",
+      "parent": "payq782",
+      "author": "rimaa_nahk",
+      "body": "I would love to check your fork, or even better if you can contribute back with the same. ✌️",
+      "created": "2026-09-20T15:37:36+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paz7kav/"
+    },
+    {
+      "id": "paza95z",
+      "parent": "paz7kav",
+      "author": "funbike",
+      "body": "I will do that.  I don't have JEV access yet, however.",
+      "created": "2026-09-20T15:48:10+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paza95z/"
+    },
+    {
+      "id": "pazal2x",
+      "parent": "paza95z",
+      "author": "rimaa_nahk",
+      "body": "Keep me updated 🦥",
+      "created": "2026-09-20T15:49:15+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pazal2x/"
+    },
+    {
+      "id": "pazmswc",
+      "parent": null,
+      "author": "Limp_Classroom_2645",
+      "body": "I'm not using JEV unless it's open source/weights and self hostable",
+      "created": "2026-09-20T16:40:36+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pazmswc/"
+    },
+    {
+      "id": "paznjfb",
+      "parent": null,
+      "author": "freehuntx",
+      "body": "rag",
+      "created": "2026-09-20T16:43:39+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paznjfb/"
+    },
+    {
+      "id": "paznua1",
+      "parent": "pazmswc",
+      "author": "rimaa_nahk",
+      "body": "I believe there are a few system one open-source models available to try.",
+      "created": "2026-09-20T16:44:55+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/paznua1/"
+    },
+    {
+      "id": "pazztgb",
+      "parent": null,
+      "author": "horrbort",
+      "body": "I run it to decide which character to type next when programming. It’s so fast that it writes complete programs better and faster than astra!",
+      "created": "2026-09-20T17:33:29+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pazztgb/"
+    },
+    {
+      "id": "pb0ym3o",
+      "parent": "paxqbii",
+      "author": "Upstairs-Attitude610",
+      "body": "Is it possible to use one of those today with Pi? I can't find how with the READMEs. Maybe I need a pi extension that will call those.",
+      "created": "2026-09-20T19:53:23+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pb0ym3o/"
+    },
+    {
+      "id": "pb1vtm0",
+      "parent": null,
+      "author": "Vancecookcobain",
+      "body": "Yup and don't forget having it route to the best tool calls and skills so the models don't do dumb ass shit with the wrong tool calls and what not",
+      "created": "2026-09-20T22:20:47+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pb1vtm0/"
+    },
+    {
+      "id": "pb224oe",
+      "parent": null,
+      "author": "nazar1997",
+      "body": "Bro why didn't you post this earlier, I wasted a day making the same thing yesterday😭",
+      "created": "2026-09-20T22:52:07+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pb224oe/"
+    },
+    {
+      "id": "pb2g3yd",
+      "parent": "paza95z",
+      "author": "tenchi4u",
+      "body": "jev is on openrouter, so you can access it",
+      "created": "2026-09-21T00:06:45+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pb2g3yd/"
+    },
+    {
+      "id": "pb37rxu",
+      "parent": null,
+      "author": "Jejernig",
+      "body": "My implementation was a confidence and done ness verification ",
+      "created": "2026-09-21T02:42:40+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pb37rxu/"
+    },
+    {
+      "id": "pb3prqg",
+      "parent": null,
+      "author": "Front_Ad6281",
+      "body": "The “best” way to kill the efficiency of the cache and increase the cost?",
+      "created": "2026-09-21T04:35:21+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pb3prqg/"
+    },
+    {
+      "id": "pb43s4h",
+      "parent": "pb1vtm0",
+      "author": "rimaa_nahk",
+      "body": "tools calls and skills is a good idea to add, thanks.",
+      "created": "2026-09-21T06:22:13+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pb43s4h/"
+    },
+    {
+      "id": "pb43u6j",
+      "parent": "pb37rxu",
+      "author": "rimaa_nahk",
+      "body": "Nice",
+      "created": "2026-09-21T06:22:41+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pb43u6j/"
+    },
+    {
+      "id": "pb43y4f",
+      "parent": "pb0ym3o",
+      "author": "rimaa_nahk",
+      "body": "you have to set them up locally then i think either you can build a provider and find if any extension exists.",
+      "created": "2026-09-21T06:23:34+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pb43y4f/"
+    },
+    {
+      "id": "pb441sv",
+      "parent": "pb224oe",
+      "author": "rimaa_nahk",
+      "body": "sorry about that. the extension itself is old and being used by many , the new part is the support to JEV. ",
+      "created": "2026-09-21T06:24:24+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pb441sv/"
+    },
+    {
+      "id": "pb455ob",
+      "parent": null,
+      "author": "mistrjirka",
+      "body": "It's basically structured output with thinking off, something that existed for years. You self host it very easily ",
+      "created": "2026-09-21T06:33:27+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pb455ob/"
+    },
+    {
+      "id": "pb5a41l",
+      "parent": null,
+      "author": "Popular_Cry_7509",
+      "body": "Jev doesn’t think so it just picks really fast and makes a bad decision ",
+      "created": "2026-09-21T11:57:05+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pb5a41l/"
+    },
+    {
+      "id": "pb5hyfu",
+      "parent": "pb5a41l",
+      "author": "rimaa_nahk",
+      "body": "It's an assumption or proven ?",
+      "created": "2026-09-21T12:41:03+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pb5hyfu/"
+    },
+    {
+      "id": "pb6g249",
+      "parent": "paxqbii",
+      "author": "xtekno-id",
+      "body": "Awesome! Thanks for sharing",
+      "created": "2026-09-21T15:19:33+00:00",
+      "score": 1,
+      "edited": false,
+      "url": "https://www.reddit.com/r/PiCodingAgent/comments/1wlczow/i_think_i_found_the_best_use_case_for_jev_and_pi/pb6g249/"
+    }
+  ]
+}

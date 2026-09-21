@@ -1,0 +1,1489 @@
+{
+  "disclaimer": "Preliminary development evaluation only. Labels are development labels; this report does not authorize production routing or claim Jev superiority.",
+  "n": 60,
+  "corpusVersion": "1",
+  "splits": {
+    "dev": 48,
+    "review": 12
+  },
+  "model": {
+    "requested": "jev-1.13.0",
+    "observed": [
+      "jev-1.13.0"
+    ]
+  },
+  "availability": {
+    "successful": 60,
+    "total": 60,
+    "rate": 1
+  },
+  "strictAccuracy": {
+    "correct": 60,
+    "scored": 60,
+    "rate": 1
+  },
+  "baselineComparableAccuracy": {
+    "correct": 37,
+    "scored": 60,
+    "rate": 0.6166666666666667
+  },
+  "baselineAllRowsAccuracy": {
+    "correct": 37,
+    "scored": 60,
+    "rate": 0.6166666666666667
+  },
+  "baselineFrontierFalseNegatives": {
+    "count": 9,
+    "denominator": 20,
+    "rate": 0.45
+  },
+  "perTier": {
+    "quick": {
+      "gold": 20,
+      "correct": 20,
+      "precision": 1,
+      "recall": 1
+    },
+    "general": {
+      "gold": 20,
+      "correct": 20,
+      "precision": 1,
+      "recall": 1
+    },
+    "frontier": {
+      "gold": 20,
+      "correct": 20,
+      "precision": 1,
+      "recall": 1
+    }
+  },
+  "perFamily": {
+    "mechanical": {
+      "scored": 9,
+      "correct": 9,
+      "accuracy": 1
+    },
+    "language": {
+      "scored": 3,
+      "correct": 3,
+      "accuracy": 1
+    },
+    "testing": {
+      "scored": 4,
+      "correct": 4,
+      "accuracy": 1
+    },
+    "documentation": {
+      "scored": 4,
+      "correct": 4,
+      "accuracy": 1
+    },
+    "extraction": {
+      "scored": 1,
+      "correct": 1,
+      "accuracy": 1
+    },
+    "lookup": {
+      "scored": 1,
+      "correct": 1,
+      "accuracy": 1
+    },
+    "implementation": {
+      "scored": 14,
+      "correct": 14,
+      "accuracy": 1
+    },
+    "refactoring": {
+      "scored": 1,
+      "correct": 1,
+      "accuracy": 1
+    },
+    "database": {
+      "scored": 1,
+      "correct": 1,
+      "accuracy": 1
+    },
+    "maintenance": {
+      "scored": 2,
+      "correct": 2,
+      "accuracy": 1
+    },
+    "debugging": {
+      "scored": 7,
+      "correct": 7,
+      "accuracy": 1
+    },
+    "security": {
+      "scored": 5,
+      "correct": 5,
+      "accuracy": 1
+    },
+    "architecture": {
+      "scored": 8,
+      "correct": 8,
+      "accuracy": 1
+    }
+  },
+  "confusionMatrix": {
+    "quick": {
+      "quick": 20,
+      "general": 0,
+      "frontier": 0
+    },
+    "general": {
+      "quick": 0,
+      "general": 20,
+      "frontier": 0
+    },
+    "frontier": {
+      "quick": 0,
+      "general": 0,
+      "frontier": 20
+    }
+  },
+  "frontierFalseNegatives": {
+    "count": 0,
+    "denominator": 20,
+    "rate": 0
+  },
+  "baselineAgreement": 0.6166666666666667,
+  "correctedRoutingDelta": 0.38333333333333336,
+  "errors": {},
+  "latencyMs": {
+    "p50": 381,
+    "p95": 6516
+  },
+  "tokenUsage": {
+    "inputTokens": 25334,
+    "outputTokens": 2440,
+    "estimatedInputCostUsd": 0.001064028
+  },
+  "calibration": {
+    "samples": 60,
+    "multiclassBrier": 0.0055866666666666625,
+    "logLoss": 0.02292034117044135,
+    "expectedCalibrationError": 0.021333333333333343
+  },
+  "rows": [
+    {
+      "id": "jev-dev-0001",
+      "split": "dev",
+      "baselineTier": "quick",
+      "baselineSource": "regex_rule",
+      "goldTier": "quick",
+      "family": "mechanical",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 8145,
+      "inputTokens": 419,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017598000000000003
+    },
+    {
+      "id": "jev-dev-0002",
+      "split": "dev",
+      "baselineTier": "quick",
+      "baselineSource": "regex_rule",
+      "goldTier": "quick",
+      "family": "language",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 8300,
+      "inputTokens": 420,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001764
+    },
+    {
+      "id": "jev-dev-0003",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "mechanical",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 6516,
+      "inputTokens": 421,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017682
+    },
+    {
+      "id": "jev-dev-0004",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "mechanical",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 7330,
+      "inputTokens": 422,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017724000000000002
+    },
+    {
+      "id": "jev-dev-0005",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "mechanical",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 3104,
+      "inputTokens": 420,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001764
+    },
+    {
+      "id": "jev-dev-0006",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "regex_rule",
+      "goldTier": "quick",
+      "family": "testing",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 0.82,
+      "probabilities": {
+        "quick": 0.88,
+        "general": 0.12,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 5301,
+      "inputTokens": 421,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017682
+    },
+    {
+      "id": "jev-dev-0007",
+      "split": "dev",
+      "baselineTier": "quick",
+      "baselineSource": "regex_rule",
+      "goldTier": "quick",
+      "family": "mechanical",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 4459,
+      "inputTokens": 421,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017682
+    },
+    {
+      "id": "jev-dev-0008",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "documentation",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 394,
+      "inputTokens": 423,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017766000000000002
+    },
+    {
+      "id": "jev-dev-0009",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "extraction",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 1204,
+      "inputTokens": 420,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001764
+    },
+    {
+      "id": "jev-dev-0010",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "lookup",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 394,
+      "inputTokens": 420,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001764
+    },
+    {
+      "id": "jev-dev-0011",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "documentation",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 362,
+      "inputTokens": 422,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017724000000000002
+    },
+    {
+      "id": "jev-dev-0012",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "mechanical",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 395,
+      "inputTokens": 421,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017682
+    },
+    {
+      "id": "jev-dev-0013",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "mechanical",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 412,
+      "inputTokens": 418,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017556
+    },
+    {
+      "id": "jev-dev-0014",
+      "split": "dev",
+      "baselineTier": "quick",
+      "baselineSource": "regex_rule",
+      "goldTier": "quick",
+      "family": "documentation",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 1930,
+      "inputTokens": 422,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017724000000000002
+    },
+    {
+      "id": "jev-dev-0015",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "mechanical",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 378,
+      "inputTokens": 418,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017556
+    },
+    {
+      "id": "jev-dev-0016",
+      "split": "dev",
+      "baselineTier": "quick",
+      "baselineSource": "regex_rule",
+      "goldTier": "quick",
+      "family": "language",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 386,
+      "inputTokens": 420,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001764
+    },
+    {
+      "id": "jev-dev-0017",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "regex_rule",
+      "goldTier": "general",
+      "family": "implementation",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 1,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 362,
+      "inputTokens": 423,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017766000000000002
+    },
+    {
+      "id": "jev-dev-0018",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "regex_rule",
+      "goldTier": "general",
+      "family": "implementation",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 1,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 364,
+      "inputTokens": 426,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017892
+    },
+    {
+      "id": "jev-dev-0019",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "regex_rule",
+      "goldTier": "general",
+      "family": "testing",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 0.98,
+      "probabilities": {
+        "quick": 0.02,
+        "general": 0.98,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 343,
+      "inputTokens": 423,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017766000000000002
+    },
+    {
+      "id": "jev-dev-0020",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "regex_rule",
+      "goldTier": "general",
+      "family": "implementation",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 0.89,
+      "probabilities": {
+        "quick": 0.07,
+        "general": 0.93,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 337,
+      "inputTokens": 420,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001764
+    },
+    {
+      "id": "jev-dev-0021",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "implementation",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 0.97,
+      "probabilities": {
+        "quick": 0.01,
+        "general": 0.98,
+        "frontier": 0.01
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 366,
+      "inputTokens": 420,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001764
+    },
+    {
+      "id": "jev-dev-0022",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "implementation",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 0.01,
+        "general": 0.99,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 973,
+      "inputTokens": 420,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001764
+    },
+    {
+      "id": "jev-dev-0023",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "implementation",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 0,
+        "general": 1,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 339,
+      "inputTokens": 419,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017598000000000003
+    },
+    {
+      "id": "jev-dev-0024",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "implementation",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 0.66,
+      "probabilities": {
+        "quick": 0.22,
+        "general": 0.78,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 337,
+      "inputTokens": 421,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017682
+    },
+    {
+      "id": "jev-dev-0025",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "refactoring",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 0.93,
+      "probabilities": {
+        "quick": 0.05,
+        "general": 0.95,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 392,
+      "inputTokens": 426,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017892
+    },
+    {
+      "id": "jev-dev-0026",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "database",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 0.93,
+      "probabilities": {
+        "quick": 0.03,
+        "general": 0.96,
+        "frontier": 0.01
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 362,
+      "inputTokens": 422,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017724000000000002
+    },
+    {
+      "id": "jev-dev-0027",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "implementation",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 1,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 370,
+      "inputTokens": 425,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001785
+    },
+    {
+      "id": "jev-dev-0028",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "implementation",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 0.72,
+      "probabilities": {
+        "quick": 0.19,
+        "general": 0.81,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 385,
+      "inputTokens": 423,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017766000000000002
+    },
+    {
+      "id": "jev-dev-0029",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "regex_rule",
+      "goldTier": "general",
+      "family": "implementation",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 0.97,
+      "probabilities": {
+        "quick": 0,
+        "general": 0.98,
+        "frontier": 0.02
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 360,
+      "inputTokens": 424,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017808
+    },
+    {
+      "id": "jev-dev-0030",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "implementation",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 0.82,
+      "probabilities": {
+        "quick": 0.12,
+        "general": 0.88,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 1146,
+      "inputTokens": 419,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017598000000000003
+    },
+    {
+      "id": "jev-dev-0031",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "regex_rule",
+      "goldTier": "general",
+      "family": "testing",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 0.01,
+        "general": 0.99,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 1593,
+      "inputTokens": 422,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017724000000000002
+    },
+    {
+      "id": "jev-dev-0032",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "maintenance",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 0,
+        "general": 1,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 380,
+      "inputTokens": 423,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017766000000000002
+    },
+    {
+      "id": "jev-dev-0033",
+      "split": "dev",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "debugging",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 0.96,
+      "probabilities": {
+        "quick": 0,
+        "general": 0.02,
+        "frontier": 0.98
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 353,
+      "inputTokens": 427,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017934
+    },
+    {
+      "id": "jev-dev-0034",
+      "split": "dev",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "debugging",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 395,
+      "inputTokens": 424,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017808
+    },
+    {
+      "id": "jev-dev-0035",
+      "split": "dev",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "debugging",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 0,
+        "general": 0.01,
+        "frontier": 0.99
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 352,
+      "inputTokens": 425,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.00001785
+    },
+    {
+      "id": "jev-dev-0036",
+      "split": "dev",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "security",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 348,
+      "inputTokens": 424,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017808
+    },
+    {
+      "id": "jev-dev-0037",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "security",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 390,
+      "inputTokens": 424,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017808
+    },
+    {
+      "id": "jev-dev-0038",
+      "split": "dev",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "architecture",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 336,
+      "inputTokens": 424,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017808
+    },
+    {
+      "id": "jev-dev-0039",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "debugging",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 390,
+      "inputTokens": 424,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017808
+    },
+    {
+      "id": "jev-dev-0040",
+      "split": "dev",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "debugging",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 357,
+      "inputTokens": 420,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.00001764
+    },
+    {
+      "id": "jev-dev-0041",
+      "split": "dev",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "architecture",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 0.98,
+      "probabilities": {
+        "quick": 0,
+        "general": 0.01,
+        "frontier": 0.99
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 381,
+      "inputTokens": 423,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017766000000000002
+    },
+    {
+      "id": "jev-dev-0042",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "architecture",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 2950,
+      "inputTokens": 421,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017682
+    },
+    {
+      "id": "jev-dev-0043",
+      "split": "dev",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "security",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 348,
+      "inputTokens": 421,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017682
+    },
+    {
+      "id": "jev-dev-0044",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "architecture",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 0,
+        "general": 0.01,
+        "frontier": 0.99
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 394,
+      "inputTokens": 428,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017976000000000002
+    },
+    {
+      "id": "jev-dev-0045",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "architecture",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 407,
+      "inputTokens": 423,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017766000000000002
+    },
+    {
+      "id": "jev-dev-0046",
+      "split": "dev",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "debugging",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 0.91,
+      "probabilities": {
+        "quick": 0,
+        "general": 0.06,
+        "frontier": 0.94
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 403,
+      "inputTokens": 423,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017766000000000002
+    },
+    {
+      "id": "jev-dev-0047",
+      "split": "dev",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "architecture",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 364,
+      "inputTokens": 423,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017766000000000002
+    },
+    {
+      "id": "jev-dev-0048",
+      "split": "dev",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "architecture",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 340,
+      "inputTokens": 425,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.00001785
+    },
+    {
+      "id": "jev-review-0049",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "documentation",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 348,
+      "inputTokens": 420,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001764
+    },
+    {
+      "id": "jev-review-0050",
+      "split": "review",
+      "baselineTier": "quick",
+      "baselineSource": "regex_rule",
+      "goldTier": "quick",
+      "family": "mechanical",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 366,
+      "inputTokens": 417,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017514
+    },
+    {
+      "id": "jev-review-0051",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "language",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 0.99,
+        "general": 0.01,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 918,
+      "inputTokens": 423,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017766000000000002
+    },
+    {
+      "id": "jev-review-0052",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "testing",
+      "unresolved": false,
+      "jevTier": "quick",
+      "confidence": 0.91,
+      "probabilities": {
+        "quick": 0.94,
+        "general": 0.06,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 366,
+      "inputTokens": 420,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001764
+    },
+    {
+      "id": "jev-review-0053",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "regex_rule",
+      "goldTier": "general",
+      "family": "implementation",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 0,
+        "general": 1,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 935,
+      "inputTokens": 423,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017766000000000002
+    },
+    {
+      "id": "jev-review-0054",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "regex_rule",
+      "goldTier": "general",
+      "family": "implementation",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 0.98,
+      "probabilities": {
+        "quick": 0,
+        "general": 0.99,
+        "frontier": 0.01
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 366,
+      "inputTokens": 428,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017976000000000002
+    },
+    {
+      "id": "jev-review-0055",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "maintenance",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 0.72,
+      "probabilities": {
+        "quick": 0.19,
+        "general": 0.81,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 354,
+      "inputTokens": 426,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017892
+    },
+    {
+      "id": "jev-review-0056",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "implementation",
+      "unresolved": false,
+      "jevTier": "general",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 1,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 358,
+      "inputTokens": 424,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017808
+    },
+    {
+      "id": "jev-review-0057",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "security",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 914,
+      "inputTokens": 422,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017724000000000002
+    },
+    {
+      "id": "jev-review-0058",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "security",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 0.98,
+      "probabilities": {
+        "quick": 0,
+        "general": 0.01,
+        "frontier": 0.99
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 846,
+      "inputTokens": 422,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017724000000000002
+    },
+    {
+      "id": "jev-review-0059",
+      "split": "review",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "debugging",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 351,
+      "inputTokens": 423,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017766000000000002
+    },
+    {
+      "id": "jev-review-0060",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "architecture",
+      "unresolved": false,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 370,
+      "inputTokens": 423,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017766000000000002
+    }
+  ]
+}
