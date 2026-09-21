@@ -2,9 +2,18 @@
 
 These recipes show decisions Bifrost can automate. They are templates, not universal model lists. Replace model patterns with models available in your Pi registry.
 
+Where files live:
+
+- **Complete example files** in this directory are full config files. Copy one to `.pi/bifrost.json` for a single project, or `~/.pi/agent/bifrost.json` for all projects.
+- **Fragments** shown below are added inside that same `.pi/bifrost.json` file.
+
+Tier keys may use any name you like, but only a single lowercase alphabetic word (such as `quick`) can be typed at the start of a message to force that tier.
+
+After any edit, run `/bifrost reload` in Pi.
+
 ## Reliability: circuit breaker for flaky models
 
-Adds model health tracking and automatic fallback. Models with repeated failures are skipped temporarily (circuit open). Probes close circuits on success.
+Adds model health tracking and automatic fallback. Models with repeated failures are skipped temporarily (circuit open). Probes close circuits on success. Add to `.pi/bifrost.json`:
 
 ```json
 "reliability": {
@@ -19,16 +28,10 @@ Adds model health tracking and automatic fallback. Models with repeated failures
 - Records probe failures and runtime failures (`setModel` errors)
 - Opens circuit after `failureThreshold` failures in `windowMinutes`
 - Skips open-circuit models, falls back to default tier
-- Circuit closes on successful probe or timeout (`cooldownMinutes`)
+- After `cooldownMinutes`, allows one trial request: success closes the circuit, failure reopens it with a longer cooldown
 - Persists breaker state in `.pi/bifrost-reliability.json`
 
 See full example: `economical-frontier-reliability.json`
-
-## Recipes
-
-### `economical-frontier-reliability.json`
-
-Extends `economical-frontier.json` with reliability configuration.
 
 Try:
 
@@ -41,7 +44,7 @@ If a model fails repeatedly (e.g., network timeout or auth error), it will be sk
 
 ## Install Bifrost first:
 
-```text
+```sh
 pi install npm:pi-bifrost
 /bifrost init
 ```
@@ -120,7 +123,7 @@ Tradeoff: large-context models may cost more or respond slower.
 
 Use when certain operations must always use a specific model.
 
-- Direct `provider/id` rules bypass tier selection.
+- Direct `provider/id` rules skip tiers and bind one exact model.
 - Commits and release notes can use a dependable model.
 - Tests and formatting can use a fast local model.
 - Security prompts can route to the frontier tier.
@@ -218,7 +221,7 @@ Use `/bifrost preview` before changing rules. Use `/bifrost debug` to inspect lo
 
 ## Strategy cookbook
 
-Set a global strategy or override it per tier:
+Set a global strategy or override it per tier. In `.pi/bifrost.json`:
 
 ```json
 {
@@ -237,5 +240,5 @@ Set a global strategy or override it per tier:
 - `cheapest_output`: lowest output cost.
 - `largest_context`: largest context window.
 - `first`: first available candidate in list order.
-- `fastest`: probe-sorted first candidate.
+- `fastest`: behaves as `first` over the current list order; init may pre-sort that list from its one-time probe.
 - `random`: random available candidate.
