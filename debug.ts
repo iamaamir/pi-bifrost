@@ -10,6 +10,7 @@ import { appendFile, rename, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { performance } from "node:perf_hooks";
 import { appendFileSync } from "node:fs";
+import { CONFIG_DIR_NAME } from "./host.ts";
 
 export interface DebugConfig {
   enabled?: boolean;
@@ -98,7 +99,7 @@ export function setupDebug(cfg: DebugConfig, cwd: string) {
       ? cfg.path.replace(/^~/, process.env.HOME ?? "/tmp")
       : `${cwd}/${cfg.path}`;
   } else {
-    debugPath = `${cwd}/.pi/bifrost-debug.jsonl`;
+    debugPath = `${cwd}/${CONFIG_DIR_NAME}/bifrost-debug.jsonl`;
   }
 
   if (debugEnabled && !startupDone) {

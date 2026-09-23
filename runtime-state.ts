@@ -1,4 +1,5 @@
 import { resolveStoragePath, readJsonFile, writeJsonFile } from "./storage.ts";
+import { CONFIG_DIR_NAME } from "./host.ts";
 
 /**
  * Runtime mode state that must survive extension reload and Pi restart.
@@ -29,7 +30,7 @@ export const DEFAULT_RUNTIME_STATE: RuntimeModeState = {
 };
 
 export function runtimeStatePath(cwd: string): string {
-  return resolveStoragePath(cwd, undefined, ".pi/bifrost-state.json");
+  return resolveStoragePath(cwd, undefined, `${CONFIG_DIR_NAME}/bifrost-state.json`);
 }
 
 export function loadRuntimeState(path: string, fallback: RuntimeModeState = DEFAULT_RUNTIME_STATE): RuntimeModeState {

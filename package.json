@@ -26,6 +26,11 @@
     "ai",
     "coding-agent"
   ],
+  "omp": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
   "pi": {
     "extensions": [
       "./index.ts"

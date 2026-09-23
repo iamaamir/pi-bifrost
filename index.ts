@@ -42,6 +42,15 @@ import { RuntimeReliabilityTracker } from "./runtime-reliability.js";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV } from "./classifier-backends.ts";
 import { createTypeSafeClassifier, resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
 import {
+  initHost,
+  inputContinue,
+  inputTransform,
+  ctxSignal,
+  thinkingLevelOf,
+  isOmpHost,
+  refreshRegistry,
+} from "./host.ts";
+import {
   REGISTRY_REFRESH_TTL_MS,
   setBifrostStatus,
   setBifrostWorkingMessage,
@@ -159,6 +168,7 @@ function buildPipeline(
 }
 
 export default function bifrostExtension(pi: ExtensionAPI) {
+  initHost(pi);
   const extensionDir = fileURLToPath(new URL(".", import.meta.url));
 
   // Setup debug logging first — so startup errors are captured.
@@ -252,11 +262,28 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     clearBifrostWidgets(ctx);
   });
 
-  pi.on("agent_end", async (event) => {
+  // Reliability observation. Pi settles after retries with agent_settled;
+  // omp never emits it, so we settle from agent_end there. omp's
+  // agent_end carries willContinue?: boolean — a set flag (or a second
+  // consecutive end without an intervening settle) means Pi-style
+  // internal retries are still running, so we defer.
+  const ompSettlePending = { active: false };
+  pi.on("agent_end", async (event, ctx) => {
     runtimeReliability.observe(event.messages);
+    if (!isOmpHost()) return;
+    const willContinue = (event as { willContinue?: boolean }).willContinue === true;
+    if (willContinue) {
+      ompSettlePending.active = true;
+      return;
+    }
+    if (ompSettlePending.active && runtimeReliability.settle() === undefined) {
+      // Previous end already consumed the run — nothing tracked.
+      ompSettlePending.active = false;
+    }
+    settleReliability(ctx);
   });
 
-  pi.on("agent_settled", async (_event, ctx) => {
+  function settleReliability(ctx: ExtensionContext): void {
     const settled = runtimeReliability.settle();
     if (!settled || !state.enabled || state.config.reliability?.enabled === false) return;
     // Policy A: failure logged, clean settle silent (trial-only success).
@@ -265,6 +292,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     if (settled.reason) {
       log(ctx, `Bifrost: recorded provider failure for ${settled.model}; future prompts may route around it.`, "warning");
     }
+  }
+
+  pi.on("agent_settled", async (_event, ctx) => {
+    settleReliability(ctx);
   });
 
   pi.on("model_select", async (_event, ctx) => {
@@ -286,7 +317,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("input", async (event, ctx) => {
-    if (event.source === "extension") return { action: "continue" };
+    if (event.source === "extension") return inputContinue();
     clearBifrostWidgets(ctx);
     // Passive subagent observation — logged even when routing is disabled,
     // so child-session model usage stays visible in debug logs.
@@ -295,18 +326,18 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         source: "PI-subagent",
         agent: process.env.PI_SUBAGENT_CHILD_AGENT,
         model: modelKey(ctx.model),
-        thinkingLevel: ctx.thinkingLevel,
+        thinkingLevel: thinkingLevelOf(ctx),
         depth: process.env.PI_SUBAGENT_PARENT_DEPTH,
       });
     }
     if (!state.enabled || state.pinned) {
       debug("input", "bypass", { enabled: state.enabled, pinned: state.pinned });
       syncBifrostModeStatus(ctx, state);
-      return { action: "continue" };
+      return inputContinue();
     }
 
     const text = event.text.trim();
-    if (text.startsWith("/")) return { action: "continue" };
+    if (text.startsWith("/")) return inputContinue();
 
     // Inline tier override: "frontier debug this" forces that tier for one prompt.
     // Pi reserves / for commands, ! for bash. Just type the tier name as first word.
@@ -317,8 +348,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
     // Inline override should strip the tier keyword from what LLM sees.
     const defaultAction = forcedTier
-      ? { action: "transform" as const, text: promptText }
-      : { action: "continue" as const };
+      ? inputTransform(promptText)
+      : inputContinue();
 
     const endInput = debugMeasure("input", "total");
     debug("input", "prompt", { length: promptText.length });
@@ -334,7 +365,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         const endRefresh = debugMeasure("input", "registry.refresh");
         let refreshOutcome: "success" | "error" | "aborted" = "error";
         try {
-          const result = await waitForRegistryRefresh((signal) => ctx.modelRegistry.refresh(signal ? { signal } : undefined), ctx.signal);
+          const result = await waitForRegistryRefresh((signal) => refreshRegistry(ctx.modelRegistry, signal), ctxSignal(ctx));
           if (result === "aborted") {
             refreshOutcome = "aborted";
             endInput({ outcome: "aborted" });
@@ -344,9 +375,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           state.lastRegistryRefreshAt = Date.now();
           state.forceRegistryRefresh = false;
           invalidatePipeline();
-        } catch {
+        } catch (err) {
           debug("input", "registry.refresh.error", { category: "registry_refresh_failure" });
-          console.error("[bifrost] model registry refresh failed");
+          console.error(`[bifrost] model registry refresh failed: ${err instanceof Error ? err.message : String(err)}`);
         } finally {
           endRefresh({ outcome: refreshOutcome });
         }
@@ -358,7 +389,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       const endClassify = debugMeasure("input", "classify");
       const classification = forcedTier
         ? { kind: "classified" as const, tier: forcedTier, source: "inline" as const }
-        : await getPipeline(ctx).classify(promptText, ctx.signal);
+        : await getPipeline(ctx).classify(promptText, ctxSignal(ctx));
 
       if (classification.kind === "classified") {
         const tag = classification.source === "inline" ? "!" : classification.source;
@@ -446,11 +477,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         syncBifrostModeStatus(ctx, state);
         const reason = resolved.fallbackReason ? `, ${resolved.fallbackReason}` : "";
         log(ctx, `Bifrost: ${tier} → ${modelKey(model)} (already active, ${source}${reason})`);
-        debug("input", "model_unchanged", { model: modelKey(model), selectedTier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", thinkingLevel: ctx.thinkingLevel });
-        debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", thinkingLevel: ctx.thinkingLevel });
+        debug("input", "model_unchanged", { model: modelKey(model), selectedTier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", thinkingLevel: thinkingLevelOf(ctx) });
+        debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", thinkingLevel: thinkingLevelOf(ctx) });
         runtimeReliability.begin(modelKey(model));
         claimedTrial = undefined;
-        endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
+        endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: thinkingLevelOf(ctx) });
         return defaultAction;
       }
 
@@ -495,8 +526,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       log(ctx, doneMsg);
       runtimeReliability.begin(modelKey(model));
       claimedTrial = undefined;
-      debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", routingDurationMs, thinkingLevel: ctx.thinkingLevel });
-      endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
+      debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", routingDurationMs, thinkingLevel: thinkingLevelOf(ctx) });
+      endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: thinkingLevelOf(ctx) });
       return defaultAction;
     } finally {
       if (claimedTrial) state.reliabilityStore.abandonTrial(claimedTrial);

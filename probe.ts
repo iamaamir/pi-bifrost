@@ -7,6 +7,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { promptWithMinimalSession } from "./session-fallback.ts";
+import { streamSimpleVia, CONFIG_DIR_NAME } from "./host.ts";
 
 export interface ProbeResult {
   provider: string;
@@ -83,7 +84,7 @@ export async function runProbe(
   const workers = Array.from({ length: effectiveConcurrency }, () => worker());
   await Promise.all(workers);
 
-  const outputPath = join(process.cwd(), ".pi", "bifrost-probe.json");
+  const outputPath = join(process.cwd(), CONFIG_DIR_NAME, "bifrost-probe.json");
   try {
     const dir = dirname(outputPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -123,7 +124,8 @@ async function probeOne(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const stream = ctx.modelRegistry.streamSimple(
+      const stream = await streamSimpleVia(
+        ctx,
         model,
         {
           messages: [{ role: "user", content: PROBE_PROMPT, timestamp: Date.now() }],

@@ -1,4 +1,5 @@
 import { resolveStoragePath, readTextFile, writeTextFile } from "./storage.ts";
+import { CONFIG_DIR_NAME } from "./host.ts";
 
 export interface CacheEntry {
   normalized: string;
@@ -240,5 +241,5 @@ export function updateCache(
 }
 
 export function cachePath(cwd: string, configuredPath?: string): string {
-  return resolveStoragePath(cwd, configuredPath, ".pi/bifrost-cache.jsonl");
+  return resolveStoragePath(cwd, configuredPath, `${CONFIG_DIR_NAME}/bifrost-cache.jsonl`);
 }

@@ -1,4 +1,5 @@
 import { resolveStoragePath, readJsonFile, writeJsonFile } from "./storage.ts";
+import { CONFIG_DIR_NAME } from "./host.ts";
 
 export type TypeSafeOutcome =
   | "success"
@@ -110,7 +111,7 @@ export class ClassifierMetricsStore {
 
   reload(options: Pick<ClassifierMetricsStoreOptions, "cwd" | "path" | "enabled">): void {
     this.enabled = options.enabled ?? true;
-    this.path = resolveStoragePath(options.cwd, options.path, ".pi/bifrost-classifier-metrics.json");
+    this.path = resolveStoragePath(options.cwd, options.path, `${CONFIG_DIR_NAME}/bifrost-classifier-metrics.json`);
     if (!this.enabled) {
       this.state = emptyState();
       return;

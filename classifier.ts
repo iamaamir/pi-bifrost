@@ -3,6 +3,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { spawn } from "node:child_process";
 import { debug } from "./debug.ts";
 import { promptWithMinimalSession } from "./session-fallback.ts";
+import { streamSimpleVia, ctxSignal } from "./host.ts";
 
 // ── Classifier model — union type, no type-cast lies ─────────
 
@@ -96,7 +97,8 @@ async function classifyWithDirectHttp(
   const userPrompt = classificationPrompt(categories, prompt);
 
   if (classifierModel.kind === "registry") {
-    const stream = ctx.modelRegistry.streamSimple(
+    const stream = await streamSimpleVia(
+      ctx,
       classifierModel.model,
       {
         systemPrompt,
@@ -105,7 +107,7 @@ async function classifyWithDirectHttp(
       {
         maxTokens,
         temperature,
-        signal: ctx.signal,
+        signal: ctxSignal(ctx),
         cacheRetention: "none",
       },
     );
@@ -168,7 +170,7 @@ async function classifyWithDirectHttp(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: ctx.signal ?? (typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
+      signal: ctxSignal(ctx) ?? (typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
         ? AbortSignal.timeout(30_000)
         : void 0),
     });

@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CONFIG_DIR_NAME, ModelSelectorComponent, type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import * as host from "@earendil-works/pi-coding-agent";
+import { scopedModelsOf } from "./host.ts";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
@@ -60,7 +61,7 @@ export function log(
 export function uiBusy(ctx: ExtensionContext, message: string) {
   if (ctx.mode === "tui" && ctx.hasUI) {
     ctx.ui.setWorkingMessage(message);
-    ctx.ui.setWorkingVisible(true);
+    ctx.ui.setWorkingVisible?.(true);
   } else {
     console.error(`[bifrost] ${message}`);
   }
@@ -69,7 +70,7 @@ export function uiBusy(ctx: ExtensionContext, message: string) {
 export function uiDone(ctx: ExtensionContext) {
   if (ctx.mode === "tui" && ctx.hasUI) {
     ctx.ui.setWorkingMessage(undefined);
-    ctx.ui.setWorkingVisible(false);
+    ctx.ui.setWorkingVisible?.(false);
   }
 }
 
@@ -80,7 +81,23 @@ function promptClassifierModelAvailable(
   return findCandidates(ctx, model).length > 0;
 }
 
+type SelectorCtor = new (
+  tui: unknown,
+  current: ExtensionContext["model"],
+  runtime: unknown,
+  scopedModels: readonly never[],
+  onSelect: (model: { provider: string; id: string }) => void,
+  onCancel: () => void,
+) => object;
+
 async function requestPromptClassifierModel(ctx: ExtensionContext): Promise<string | null> {
+  // ModelSelectorComponent is Pi-only; omp does not export an equivalent
+  // from its package root. Degrade with guidance instead of crashing.
+  const SelectorComponent = (host as unknown as { ModelSelectorComponent?: SelectorCtor }).ModelSelectorComponent;
+  if (typeof SelectorComponent !== "function") {
+    log(ctx, "Interactive classifier model picker is unavailable on this host; set classifier.model in bifrost.json instead.", "warning");
+    return null;
+  }
   const modelRuntime = {
     getAvailableSnapshot: () => ctx.modelRegistry.getAvailable(),
     getModel: (provider: string, id: string) => ctx.modelRegistry.find(provider, id),
@@ -92,16 +109,16 @@ async function requestPromptClassifierModel(ctx: ExtensionContext): Promise<stri
   const selected = await ctx.ui.custom<string | null>((tui, _theme, _keybindings, done) => {
     const onSelect = (model: { provider: string; id: string }) => done(`${model.provider}/${model.id}`);
     const onCancel = () => done(null);
-    return new ModelSelectorComponent(
+    return new SelectorComponent(
       tui,
       ctx.model,
       // The extension facade exposes only registry methods; this adapter
       // implements the subset ModelSelectorComponent consumes.
-      modelRuntime as unknown as ModelRuntime,
-      ctx.scopedModels,
+      modelRuntime,
+      scopedModelsOf(ctx),
       onSelect,
       onCancel,
-    );
+    ) as never;
   });
   return selected;
 }
@@ -434,14 +451,14 @@ async function handleInit(
 
   const ok = writeWithoutPrompt || await ctx.ui.confirm(
     "Write config?",
-    "Write proposed config to .pi/bifrost.json?",
+    `Write proposed config to ${host.CONFIG_DIR_NAME}/bifrost.json?`,
   );
   if (!ok) {
     log(ctx, "config not written");
     return;
   }
 
-  const dir = join(process.cwd(), CONFIG_DIR_NAME);
+  const dir = join(process.cwd(), host.CONFIG_DIR_NAME);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "bifrost.json"), JSON.stringify(proposal, null, 2));
 
@@ -975,7 +992,7 @@ export function createCommandRouter(
             }
           }
         }
-        const path = join(process.cwd(), CONFIG_DIR_NAME, "bifrost.json");
+        const path = join(process.cwd(), host.CONFIG_DIR_NAME, "bifrost.json");
         let current: Record<string, unknown> = {};
         try {
           current = existsSync(path)
@@ -1009,7 +1026,7 @@ export function createCommandRouter(
           nextClassifier.fallback ??= nextClassifier.model ? "prompt" : "regex";
         }
         current.classifier = nextClassifier;
-        mkdirSync(join(process.cwd(), CONFIG_DIR_NAME), { recursive: true });
+        mkdirSync(join(process.cwd(), host.CONFIG_DIR_NAME), { recursive: true });
         writeFileSync(path, JSON.stringify(current, null, 2) + "\n");
         state.config = loadConfig(process.cwd(), state.extensionDir);
         state.classifierMetricsStore.reload({
