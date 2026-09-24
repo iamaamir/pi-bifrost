@@ -11,6 +11,7 @@
 // - ctx.signal / thinkingLevel / scopedModels: Pi-only context fields
 // - setWorkingVisible / ModelSelectorComponent / ModelRuntime: Pi-only
 // - model_select / agent_settled events: Pi-only (omp never emits them)
+// - agent_end: omp marks a non-terminal end with willContinue: true
 
 import * as host from "@earendil-works/pi-coding-agent";
 import { streamSimple as standaloneStreamSimple } from "@earendil-works/pi-ai/compat";
@@ -20,11 +21,17 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 /** Host's config dir name: ".pi" under Pi, ".omp" under omp. */
 export const CONFIG_DIR_NAME: string = host.CONFIG_DIR_NAME;
 
+/** omp's config dir name — see hostIsOmp for why this identifies the host. */
+const OMP_CONFIG_DIR_NAME = ".omp";
+
+/** @internal test seam for the import-time host signals. */
+export const _hostDeps = { configDirName: CONFIG_DIR_NAME };
+
 let ompRuntime = false;
 
 /**
  * Detect and latch the host from the ExtensionAPI instance. Called once
- * at extension load. omp exposes `pi.zod`; Pi's ExtensionAPI does not.
+ * at extension load.
  */
 export function initHost(pi: unknown): boolean {
   ompRuntime = hostIsOmp(pi);
@@ -33,6 +40,13 @@ export function initHost(pi: unknown): boolean {
 
 /** Structural probe — safe to call without latching state. */
 export function hostIsOmp(pi: unknown): boolean {
+  // Primary signal: the imported host package's own config dir name. omp's
+  // compat loader rewrites `@earendil-works/*` imports onto its bundled
+  // packages, so this value identifies which host distribution is loaded
+  // rather than a capability Pi could later happen to add.
+  if (_hostDeps.configDirName === OMP_CONFIG_DIR_NAME) return true;
+  // Fallback: omp injects `pi.zod` (and `pi.arktype`) into the ExtensionAPI;
+  // Pi's ExtensionAPI carries neither.
   return typeof pi === "object" && pi !== null && "zod" in pi;
 }
 
@@ -59,6 +73,17 @@ export function inputContinue(): never {
 
 export function inputTransform(text: string): never {
   return (ompRuntime ? { text } : { action: "transform", text }) as never;
+}
+
+// ── agent_end semantics ───────────────────────────────────────────
+// omp marks a non-terminal agent_end — another continuation is already
+// scheduled — with `willContinue: true`. Pi's AgentEndEvent has no such
+// field; there it is `agent_settled` that marks a completed run.
+
+/** True when an agent_end is not terminal and must not settle. */
+export function agentEndContinues(event: unknown): boolean {
+  if (typeof event !== "object" || event === null) return false;
+  return (event as { willContinue?: boolean }).willContinue === true;
 }
 
 // ── context fields missing on omp ─────────────────────────────────
@@ -144,17 +169,14 @@ export async function streamSimpleVia(
   // for those; mirror it so keyless providers stay usable from the probe
   // and classifier.
   if (options.apiKey === undefined) {
-    let key: string | undefined;
-    if (typeof registry.getApiKey === "function") {
-      try {
-        key = await registry.getApiKey(model);
-      } catch {
-        key = undefined;
-      }
-    }
-    // A real key wins; anything else (undefined, or omp's sentinel returned
-    // for a keyless provider) falls through to the sentinel so the request
-    // is still issued. Endpoints that need real auth will 401 either way.
+    // Deliberately no catch: an error thrown by getApiKey (OAuth refresh
+    // failure, credential broker or command failure, malformed auth) is a
+    // real credential-resolution failure and must reach the caller's error
+    // path. Only "no key returned" — a keyless provider — falls through to
+    // the sentinel.
+    const key = typeof registry.getApiKey === "function"
+      ? await registry.getApiKey(model)
+      : undefined;
     options = { ...options, apiKey: key ?? OMP_NO_AUTH };
   }
   return _streamDeps.standaloneStreamSimple(

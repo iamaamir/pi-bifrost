@@ -1,6 +1,7 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import {
+  agentEndContinues,
   hostIsOmp,
   initHost,
   isOmpHost,
@@ -8,24 +9,47 @@ import {
   inputTransform,
   refreshRegistry,
   streamSimpleVia,
+  OMP_NO_AUTH,
+  _hostDeps,
   _resetHostForTests,
   _streamDeps,
 } from "../host.ts";
 
+// The Pi host package this test runs against reports ".pi".
+const hostConfigDirName = _hostDeps.configDirName;
+
 describe("host compat seam", () => {
   beforeEach(() => {
     _resetHostForTests();
+    _hostDeps.configDirName = hostConfigDirName;
   });
 
   describe("hostIsOmp", () => {
+    it("detects omp from the host config dir name alone", () => {
+      _hostDeps.configDirName = ".omp";
+      assert.equal(hostIsOmp({ on: () => {} }), true);
+    });
+
     it("detects omp via the zod field", () => {
       assert.equal(hostIsOmp({ zod: {} }), true);
     });
 
     it("treats a Pi-shaped API (no zod) as Pi", () => {
+      assert.equal(hostConfigDirName, ".pi");
       assert.equal(hostIsOmp({ on: () => {}, setModel: () => {} }), false);
       assert.equal(hostIsOmp(null), false);
       assert.equal(hostIsOmp("pi"), false);
+    });
+  });
+
+  describe("agentEndContinues", () => {
+    it("treats only willContinue: true as non-terminal", () => {
+      assert.equal(agentEndContinues({ willContinue: true }), true);
+      assert.equal(agentEndContinues({ willContinue: false }), false);
+      assert.equal(agentEndContinues({}), false);
+      assert.equal(agentEndContinues({ willContinue: "yes" }), false);
+      assert.equal(agentEndContinues(undefined), false);
+      assert.equal(agentEndContinues(null), false);
     });
   });
 
@@ -180,6 +204,49 @@ describe("host compat seam", () => {
         await streamSimpleVia({ modelRegistry: registry } as never, model, context, baseOptions);
         const options = calls[0] as { apiKey?: string };
         assert.equal(options.apiKey, "N/A");
+      } finally {
+        _streamDeps.standaloneStreamSimple = original;
+      }
+    });
+
+    it("propagates a credential resolution failure without faking credentials", async () => {
+      initHost({ zod: {} });
+      const calls: unknown[] = [];
+      const original = _streamDeps.standaloneStreamSimple;
+      _streamDeps.standaloneStreamSimple = ((_model: unknown, _context: unknown, options: unknown) => {
+        calls.push(options);
+        return { marker: "standalone" };
+      }) as unknown as typeof _streamDeps.standaloneStreamSimple;
+      try {
+        // OAuth refresh / broker / credential-command failures are real
+        // errors: they must reach the caller, not become the no-auth
+        // sentinel that turns a credential problem into a confusing 401.
+        const registry = {
+          getApiKey: async () => {
+            throw new Error("credential resolution failed");
+          },
+        };
+        await assert.rejects(
+          streamSimpleVia({ modelRegistry: registry } as never, model, context, baseOptions),
+          /credential resolution failed/,
+        );
+        assert.equal(calls.length, 0, "must not stream with substituted credentials");
+      } finally {
+        _streamDeps.standaloneStreamSimple = original;
+      }
+    });
+
+    it("sends the sentinel when the registry has no credential resolver", async () => {
+      initHost({ zod: {} });
+      const calls: unknown[] = [];
+      const original = _streamDeps.standaloneStreamSimple;
+      _streamDeps.standaloneStreamSimple = ((_model: unknown, _context: unknown, options: unknown) => {
+        calls.push(options);
+        return { marker: "standalone" };
+      }) as unknown as typeof _streamDeps.standaloneStreamSimple;
+      try {
+        await streamSimpleVia({ modelRegistry: {} } as never, model, context, baseOptions);
+        assert.equal((calls[0] as { apiKey?: string }).apiKey, OMP_NO_AUTH);
       } finally {
         _streamDeps.standaloneStreamSimple = original;
       }
