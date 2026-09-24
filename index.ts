@@ -1,12 +1,12 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { fileURLToPath } from "node:url";
-import { classifyWithLLM as invokeClassifier, type ClassifierModel } from "./classifier.js";
-import { classifierCacheKey } from "./classifier-semantics.js";
-import { ClassifierMetricsStore } from "./classifier-metrics.js";
+import { classifyWithLLM as invokeClassifier, type ClassifierModel } from "./classifier.ts";
+import { classifierCacheKey } from "./classifier-semantics.ts";
+import { ClassifierMetricsStore } from "./classifier-metrics.ts";
 import {
   createPipeline,
   type ClassificationPipeline,
-} from "./classification-pipeline.js";
+} from "./classification-pipeline.ts";
 import type { ClassificationJudgment } from "./classifier-backends.ts";
 import {
   cachePath,
@@ -19,32 +19,33 @@ import {
   DEFAULT_THRESHOLD,
   DEFAULT_TTL_HOURS,
   type CacheEntry,
-} from "./cache.js";
+} from "./cache.ts";
 import {
   loadConfig,
   loadRules,
   DEFAULT_CLASSIFIER_CRITERIA,
   validateConfig,
   type BifrostConfig,
-} from "./config.js";
+} from "./config.ts";
 import {
   findCandidates,
   getStrategy,
   modelKey,
   resolveModelWithFallback,
-} from "./routing.js";
-import { ReliabilityStore } from "./reliability-store.js";
-import { loadRuntimeState, runtimeStatePath, saveRuntimeState } from "./runtime-state.js";
-import { createCommandRouter, getBifrostCommandCompletions, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.js";
-import { setupDebug, debug, debugMeasure } from "./debug.js";
-import { parseInlineOverride } from "./inline-override.js";
-import { RuntimeReliabilityTracker } from "./runtime-reliability.js";
+} from "./routing.ts";
+import { ReliabilityStore } from "./reliability-store.ts";
+import { loadRuntimeState, runtimeStatePath, saveRuntimeState } from "./runtime-state.ts";
+import { createCommandRouter, getBifrostCommandCompletions, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.ts";
+import { setupDebug, debug, debugMeasure } from "./debug.ts";
+import { parseInlineOverride } from "./inline-override.ts";
+import { RuntimeReliabilityTracker } from "./runtime-reliability.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV } from "./classifier-backends.ts";
 import { createTypeSafeClassifier, resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
 import {
   initHost,
   inputContinue,
   inputTransform,
+  agentEndContinues,
   ctxSignal,
   thinkingLevelOf,
   isOmpHost,
@@ -55,8 +56,8 @@ import {
   setBifrostStatus,
   setBifrostWorkingMessage,
   shouldRefreshRegistry,
-} from "./ux-status.js";
-import { waitForRegistryRefresh } from "./registry-refresh.js";
+} from "./ux-status.ts";
+import { waitForRegistryRefresh } from "./registry-refresh.ts";
 
 // ── Pipeline builder (composition root) ────────────────────────
 
@@ -262,24 +263,16 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     clearBifrostWidgets(ctx);
   });
 
-  // Reliability observation. Pi settles after retries with agent_settled;
-  // omp never emits it, so we settle from agent_end there. omp's
-  // agent_end carries willContinue?: boolean — a set flag (or a second
-  // consecutive end without an intervening settle) means Pi-style
-  // internal retries are still running, so we defer.
-  const ompSettlePending = { active: false };
+  // Reliability observation. Pi settles after its internal retries via
+  // agent_settled; omp never emits that event, so its terminal agent_end is
+  // the settle point. omp marks a non-terminal end — another continuation is
+  // already scheduled — with willContinue: true, which is not a completed run
+  // and must not settle. No pending-settlement state is needed: settle()
+  // consumes the tracked run, and begin() runs only for a routed turn, so
+  // repeated agent_end events cannot double-record.
   pi.on("agent_end", async (event, ctx) => {
     runtimeReliability.observe(event.messages);
-    if (!isOmpHost()) return;
-    const willContinue = (event as { willContinue?: boolean }).willContinue === true;
-    if (willContinue) {
-      ompSettlePending.active = true;
-      return;
-    }
-    if (ompSettlePending.active && runtimeReliability.settle() === undefined) {
-      // Previous end already consumed the run — nothing tracked.
-      ompSettlePending.active = false;
-    }
+    if (!isOmpHost() || agentEndContinues(event)) return;
     settleReliability(ctx);
   });
 
