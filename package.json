@@ -1,6 +1,6 @@
 {
   "name": "pi-bifrost",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Configuration-first model routing for Pi with user-owned tiers, strategies, overrides, and reliability filtering.",
   "type": "module",
   "license": "MIT",
