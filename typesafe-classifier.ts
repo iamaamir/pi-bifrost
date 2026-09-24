@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import type { ReliabilityStore } from "./reliability-store.ts";
 import { debug as bifrostDebug } from "./debug.ts";
+import { CONFIG_DIR_NAME } from "./host.ts";
 import type { TypeSafeObservation, TypeSafeOutcome } from "./classifier-metrics.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_CREDENTIAL_KEY, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassificationJudgment } from "./classifier-backends.ts";
 
@@ -288,7 +289,7 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
     };
     if (!apiKey) {
       trace("credential_missing");
-      if (!warnedMissingKey) { warnedMissingKey = true; console.error(`[bifrost] TypeSafe classifier disabled: configure ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`); }
+      if (!warnedMissingKey) { warnedMissingKey = true; console.error(`[bifrost] TypeSafe classifier disabled: configure ~/${CONFIG_DIR_NAME}/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`); }
       return finish("missing_key");
     }
     const key = circuitKey();

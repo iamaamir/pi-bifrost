@@ -1,7 +1,6 @@
 import * as host from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { homedir } from "node:os";
-import { join } from "node:path";
 
 // ModelRuntime exists on Pi; omp has no equivalent class (its registry is
 // process-global), so the minimal-session transport is unavailable there.
@@ -18,7 +17,7 @@ async function getRuntime(): Promise<MinimalRuntime> {
 }
 
 function agentDir(): string {
-  return process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+  return process.env.PI_CODING_AGENT_DIR ?? getAgentDir();
 }
 
 /** True when the host can spawn a minimal side session (Pi only). */

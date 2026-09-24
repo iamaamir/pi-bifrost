@@ -4,6 +4,7 @@
 // remaining buffer is flushed synchronously.
 //
 // Configure: { "debug": { "enabled": true, "path": ".pi/bifrost-debug.jsonl" } }
+// The default path follows the host config directory (.pi on Pi, .omp on OMP).
 
 import { existsSync, mkdirSync } from "node:fs";
 import { appendFile, rename, stat } from "node:fs/promises";

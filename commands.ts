@@ -10,7 +10,7 @@ import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
 import type { ClassificationPipeline, ClassificationResult } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
-import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT } from "./probe.ts";
+import { runProbe, probeOptionsFromConfig, probeResultsPath, PROBE_PROMPT_TEXT } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
 import { showBifrostResult } from "./result-viewer.ts";
 import {
@@ -272,7 +272,7 @@ async function handleInit(
 ): Promise<void> {
   clearBifrostWidgets(ctx);
   // Try to load cached probe results. If stale or missing, run probe inline.
-  const probePath = join(process.cwd(), ".pi", "bifrost-probe.json");
+  const probePath = probeResultsPath(process.cwd());
   let workingModels: { provider: string; model: string; cost: { input: number; output: number }; duration_ms: number }[] = [];
   let probeLoaded = false;
   let probeAge = "";
@@ -440,7 +440,7 @@ async function handleInit(
   ].filter(Boolean));
 
   if (uncategorized.length > 0) {
-    log(ctx, `${uncategorized.length} model(s) uncategorized — edit .pi/bifrost.json to assign them.`);
+    log(ctx, `${uncategorized.length} model(s) uncategorized — edit ${host.CONFIG_DIR_NAME}/bifrost.json to assign them.`);
   }
 
   const writeWithoutPrompt = args.trim().split(/\s+/).includes("--write");
@@ -479,7 +479,7 @@ async function handleInit(
   });
   state.invalidatePipeline();
 
-  log(ctx, "wrote .pi/bifrost.json and reloaded config");
+  log(ctx, `wrote ${host.CONFIG_DIR_NAME}/bifrost.json and reloaded config`);
   log(ctx, `Bifrost active with ${Object.keys(state.config.models ?? {}).length} tier(s). Try a prompt.`);
 
   // Clear the init widget so it doesn't persist in the TUI.
@@ -969,12 +969,12 @@ export function createCommandRouter(
       match: (sub) => sub === "classifier",
       handler: async (_, ctx) => {
         if (!ctx.hasUI) {
-          log(ctx, "Choose classifier backend in Pi UI: prompt or typesafe", "warning");
+          log(ctx, "Choose classifier backend in the host UI: prompt or typesafe", "warning");
           return;
         }
         const selected = await ctx.ui.select("Classifier backend", [
-          "prompt — choose a Pi model",
-          `${CLASSIFIER_BACKEND_IDS.typesafe} — use Jev (requires Pi auth.json or ${TYPE_SAFE_API_KEY_ENV})`,
+          "prompt — choose a host model",
+          `${CLASSIFIER_BACKEND_IDS.typesafe} — use Jev (requires ${host.CONFIG_DIR_NAME}/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV})`,
         ]);
         if (!selected) return;
         const backend = selected.startsWith(CLASSIFIER_BACKEND_IDS.typesafe) ? CLASSIFIER_BACKEND_IDS.typesafe : CLASSIFIER_BACKEND_IDS.prompt;
@@ -983,7 +983,7 @@ export function createCommandRouter(
         const needsPromptModel = backend === CLASSIFIER_BACKEND_IDS.prompt && !promptClassifierModelAvailable(ctx, configuredPromptModel);
         if (needsPromptModel) {
           if (ctx.modelRegistry.getAvailable().length === 0) {
-            log(ctx, "No Pi models available for prompt classifier; regex fallback remains active.", "warning");
+            log(ctx, "No models available for prompt classifier; regex fallback remains active.", "warning");
           } else {
             selectedPromptModel = await requestPromptClassifierModel(ctx) ?? undefined;
             if (!selectedPromptModel) {
@@ -999,7 +999,7 @@ export function createCommandRouter(
             ? JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>
             : {};
         } catch {
-          log(ctx, "Cannot update classifier: .pi/bifrost.json is invalid JSON", "error");
+          log(ctx, `Cannot update classifier: ${host.CONFIG_DIR_NAME}/bifrost.json is invalid JSON`, "error");
           return;
         }
         const classifier = current.classifier && typeof current.classifier === "object"
@@ -1036,7 +1036,7 @@ export function createCommandRouter(
         state.invalidatePipeline();
         log(ctx, `classifier backend set to ${backend}; config reloaded`);
         if (backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
-          log(ctx, `TypeSafe credential missing; use ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`, "warning");
+          log(ctx, `TypeSafe credential missing; use ~/${host.CONFIG_DIR_NAME}/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`, "warning");
         }
       },
     },

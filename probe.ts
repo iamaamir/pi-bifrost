@@ -29,6 +29,11 @@ const PROBE_MAX_TOKENS = 5;
  * lower it if a provider rate-limits burst traffic. */
 export const DEFAULT_PROBE_CONCURRENCY = 50;
 
+/** Resolve the host-specific probe-results path used by probe and init. */
+export function probeResultsPath(cwd: string): string {
+  return join(cwd, CONFIG_DIR_NAME, "bifrost-probe.json");
+}
+
 function assistantText(message: { content: Array<{ type: string; text?: string }> }): string {
   return message.content
     .filter((c): c is { type: "text"; text: string } => c.type === "text")
@@ -84,7 +89,7 @@ export async function runProbe(
   const workers = Array.from({ length: effectiveConcurrency }, () => worker());
   await Promise.all(workers);
 
-  const outputPath = join(process.cwd(), CONFIG_DIR_NAME, "bifrost-probe.json");
+  const outputPath = probeResultsPath(process.cwd());
   try {
     const dir = dirname(outputPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });

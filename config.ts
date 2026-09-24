@@ -239,7 +239,7 @@ export function validateConfig(
     issues.push({
       severity: "error",
       message:
-        'No tiers configured in "models". Add at least one tier to .pi/bifrost.json.',
+        `No tiers configured in "models". Add at least one tier to ${CONFIG_DIR_NAME}/bifrost.json.`,
     });
   }
 

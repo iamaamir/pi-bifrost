@@ -60,7 +60,7 @@ OMP reads the same `bifrost.json` schema but its own paths: `.omp/bifrost.json` 
 
 ## Initialize
 
-Inside Pi, run:
+Inside the host, run:
 
 ```text
 /bifrost init
@@ -68,21 +68,21 @@ Inside Pi, run:
 
 Initialization:
 
-1. refreshes Pi's model registry;
-2. reuses probe results newer than one hour or probes every available registry model (results are cached in `.pi/bifrost-probe.json`); pass `-f` to force a fresh probe regardless of cache age;
+1. refreshes the host's model registry;
+2. reuses probe results newer than one hour or probes every available registry model (results are cached in `.pi/bifrost-probe.json` on Pi or `.omp/bifrost-probe.json` on OMP); pass `-f` to force a fresh probe regardless of cache age;
 3. proposes `quick`, `general`, and `frontier` pools;
 4. orders candidates using one-time probe latency;
 5. proposes a prompt classifier when a working classifier model is found;
 6. shows the complete proposed configuration;
-7. writes `.pi/bifrost.json` only after confirmation.
+7. writes the host's project config (`.pi/bifrost.json` on Pi or `.omp/bifrost.json` on OMP) only after confirmation.
 
 Bifrost does not ship maintainer-specific provider/model IDs as routing defaults.
 
 ### Probe usage warning
 
-When a fresh result is unavailable, the probe sends `1+1=` to every available registry model. The primary transport caps output at 5 tokens; an empty response may trigger one minimal-session fallback request. Default concurrency is 50 and per-model timeout is 10 seconds. Requests may incur provider usage, consume credits, or trigger burst rate limits.
+When a fresh result is unavailable, the probe sends `1+1=` to every available registry model. The primary transport caps output at 5 tokens; an empty response may trigger one minimal-session fallback request on Pi. Default concurrency is 50 and per-model timeout is 10 seconds. Requests may incur provider usage, consume credits, or trigger burst rate limits.
 
-For providers with tight limits, create a config file before init. In `~/.pi/agent/bifrost.json` (all projects) or `.pi/bifrost.json` (this project):
+For providers with tight limits, create a config file before init. Use `~/.pi/agent/bifrost.json` (Pi) or `~/.omp/agent/bifrost.json` (OMP) for all projects, or the matching project config (`.pi/bifrost.json` / `.omp/bifrost.json`):
 
 ```json
 {
@@ -113,7 +113,7 @@ For rules/default-only routing, disable it after init:
 /bifrost classifier off
 ```
 
-Or set this in `.pi/bifrost.json`:
+Or set this in the host's project config (`.pi/bifrost.json` on Pi or `.omp/bifrost.json` on OMP):
 
 ```json
 {
@@ -175,7 +175,7 @@ Config merges in this order; later layers win:
 3. project root: `bifrost.json`
 4. project config: `.pi/bifrost.json` (`.omp/bifrost.json` on OMP)
 
-Project-specific rules may also live in `bifrost-routes.json` or `.pi/bifrost-routes.json`; the `.pi` file wins.
+Project-specific rules may also live in `bifrost-routes.json` or the host-specific `.pi/bifrost-routes.json` / `.omp/bifrost-routes.json`; the host directory file wins.
 
 After editing configuration:
 

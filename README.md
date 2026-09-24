@@ -109,7 +109,7 @@ Adaptive routing may improve policy fit, but it does not guarantee better coding
 
 ## Minimal configuration
 
-In `.pi/bifrost.json`:
+In the project config (`.pi/bifrost.json` on Pi or `.omp/bifrost.json` on OMP):
 
 ```json
 {

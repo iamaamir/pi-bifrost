@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runProbe, DEFAULT_PROBE_CONCURRENCY, probeOptionsFromConfig } from "../probe.ts";
+import { runProbe, DEFAULT_PROBE_CONCURRENCY, probeOptionsFromConfig, probeResultsPath } from "../probe.ts";
 import { delay } from "./helpers.ts";
 
 describe("probe transport", () => {
@@ -46,6 +46,7 @@ describe("probe transport", () => {
 
       process.chdir(cwd);
       const result = await runProbe(ctx, {});
+      assert.equal(result.path, probeResultsPath(process.cwd()));
       assert.equal(result.results[0]?.status, "ok");
       assert.equal(result.results[0]?.model, "gpt-5.4-mini");
     } finally {

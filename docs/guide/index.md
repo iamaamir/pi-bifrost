@@ -1,8 +1,8 @@
 # Pi-Bifrost guide
 
-Pi-Bifrost is a configuration-first model router for [Pi](https://pi.dev). It resolves a configured tier for a user prompt, filters unhealthy candidates, applies that tier's model-selection strategy, and activates Pi's actual provider/model before generation.
+Pi-Bifrost is a configuration-first model router for [Pi](https://pi.dev) and [OMP](https://omp.sh) (oh-my-pi). It resolves a configured tier for a user prompt, filters unhealthy candidates, applies that tier's model-selection strategy, and activates the host's actual provider/model before generation.
 
-New to Bifrost? Start with [Install and initialize](getting-started.md). It explains prerequisites, probe usage, generated classifier behavior, preview privacy, and the first routed prompt.
+New to Bifrost? Start with [Install and initialize](getting-started.md). It explains prerequisites, host-specific paths, probe usage, generated classifier behavior, preview privacy, and the first routed prompt.
 
 ## Start here
 
@@ -30,7 +30,7 @@ prompt
   → configured model pool
   → reliability filtering
   → per-tier strategy
-  → Pi's active provider/model
+  → the host's active provider/model
 ```
 
 Bifrost separates two decisions:
