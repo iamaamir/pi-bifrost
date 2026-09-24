@@ -10,7 +10,7 @@ Bifrost currently offers adaptive routing, explicit tier selection, hard pinning
 |-------------|--------------|
 | Send a normal message while routing is on and nothing is pinned | Bifrost picks a configured model for that message |
 | Start a message with a tier name, for example `quick commit the changes` | Bifrost uses that tier for that message only |
-| Select a model in Pi while routing is on | That model stays active for the rest of the session |
+| Select a model manually while routing is on | Pi pins that model; on OMP use `/bifrost pin` because OMP does not emit a model-select event |
 | `/bifrost pin` | Current model stays active for the rest of the session; automatic routing stops |
 | `/bifrost unpin` | Bifrost goes back to picking a model for each message |
 | `/bifrost off` | Bifrost stops routing until `/bifrost on` |
@@ -18,7 +18,7 @@ Bifrost currently offers adaptive routing, explicit tier selection, hard pinning
 
 ## Start a message with a tier name
 
-The tier name must be one you configured in `.pi/bifrost.json`. It is not an alias and not a separate command. For example, this config:
+The tier name must be one you configured in the host project config (`.pi/bifrost.json` on Pi or `.omp/bifrost.json` on OMP). It is not an alias and not a separate command. For example, this config:
 
 ```json
 {
@@ -43,7 +43,7 @@ Forcing a tier skips the tier choice, but the name alone does not pick the model
 1. takes the models configured for that tier;
 2. removes unhealthy ones;
 3. applies that tier's selection strategy;
-4. activates the result in Pi.
+4. activates the result in the host.
 
 ### When a tier name is recognized
 

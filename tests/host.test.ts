@@ -5,6 +5,7 @@ import {
   hostIsOmp,
   initHost,
   isOmpHost,
+  typeSafeCredentialOptions,
   inputContinue,
   inputTransform,
   refreshRegistry,
@@ -63,6 +64,29 @@ describe("host compat seam", () => {
     it("latches Pi mode by default", () => {
       initHost({});
       assert.equal(isOmpHost(), false);
+    });
+  });
+
+  describe("TypeSafe credential guidance", () => {
+    it("keeps Pi's supported auth-file guidance on Pi", () => {
+      initHost({});
+      const hint = typeSafeCredentialOptions("TYPESAFE_API_KEY");
+      assert.match(hint, /~\/\.pi\/agent\/auth\.json/);
+      assert.match(hint, /TYPESAFE_API_KEY/);
+    });
+
+    it("uses portable environment guidance on OMP", () => {
+      initHost({ zod: {} });
+      const hint = typeSafeCredentialOptions("TYPESAFE_API_KEY");
+      assert.match(hint, /TYPESAFE_API_KEY environment variable/);
+      assert.doesNotMatch(hint, /auth\.json|\.pi/);
+    });
+
+    it("uses the OMP config signal before host initialization", () => {
+      _hostDeps.configDirName = ".omp";
+      const hint = typeSafeCredentialOptions("TYPESAFE_API_KEY");
+      assert.match(hint, /TYPESAFE_API_KEY environment variable/);
+      assert.doesNotMatch(hint, /auth\.json|\.pi/);
     });
   });
 
@@ -179,16 +203,16 @@ describe("host compat seam", () => {
         return { marker: "standalone" };
       }) as unknown as typeof _streamDeps.standaloneStreamSimple;
       try {
-        const registry = { getApiKey: async () => "N/A" };
+        const registry = { getApiKey: async () => OMP_NO_AUTH };
         await streamSimpleVia({ modelRegistry: registry } as never, model, context, baseOptions);
         const options = calls[0] as { apiKey?: string };
-        assert.equal(options.apiKey, "N/A");
+        assert.equal(options.apiKey, OMP_NO_AUTH);
       } finally {
         _streamDeps.standaloneStreamSimple = original;
       }
     });
 
-    it("sends the sentinel when the registry has no key at all", async () => {
+    it("does not invent a key when the resolver returns no credential", async () => {
       initHost({ zod: {} });
       const calls: unknown[] = [];
       const original = _streamDeps.standaloneStreamSimple;
@@ -197,13 +221,13 @@ describe("host compat seam", () => {
         return { marker: "standalone" };
       }) as unknown as typeof _streamDeps.standaloneStreamSimple;
       try {
-        // Keyless provider (e.g. local Ollama): no stored credential. omp's
-        // providers throw MissingApiKeyError without a key, so the sentinel
-        // must still be sent for the request to be issued.
+        // OMP returns the explicit "N/A" sentinel for keyless providers.
+        // Undefined means a normal provider has no resolved credential and
+        // must not be turned into a fake key.
         const registry = { getApiKey: async () => undefined };
         await streamSimpleVia({ modelRegistry: registry } as never, model, context, baseOptions);
         const options = calls[0] as { apiKey?: string };
-        assert.equal(options.apiKey, "N/A");
+        assert.equal("apiKey" in options, false);
       } finally {
         _streamDeps.standaloneStreamSimple = original;
       }
@@ -236,7 +260,7 @@ describe("host compat seam", () => {
       }
     });
 
-    it("sends the sentinel when the registry has no credential resolver", async () => {
+    it("does not invent a key when the registry has no credential resolver", async () => {
       initHost({ zod: {} });
       const calls: unknown[] = [];
       const original = _streamDeps.standaloneStreamSimple;
@@ -246,7 +270,8 @@ describe("host compat seam", () => {
       }) as unknown as typeof _streamDeps.standaloneStreamSimple;
       try {
         await streamSimpleVia({ modelRegistry: {} } as never, model, context, baseOptions);
-        assert.equal((calls[0] as { apiKey?: string }).apiKey, OMP_NO_AUTH);
+        const options = calls[0] as { apiKey?: string };
+        assert.equal("apiKey" in options, false);
       } finally {
         _streamDeps.standaloneStreamSimple = original;
       }

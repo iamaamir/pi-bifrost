@@ -43,7 +43,7 @@ import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV } from "./classifier-back
 import { createTypeSafeClassifier, resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
 import {
   initHost,
-  CONFIG_DIR_NAME,
+  typeSafeCredentialOptions,
   inputContinue,
   inputTransform,
   agentEndContinues,
@@ -186,7 +186,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   // continues with best-effort routing for warnings.
   const configIssues = validateConfig(config);
   if (config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
-    console.warn(`[bifrost/config] warning: TypeSafe classifier unavailable; configure typesafe in ~/${CONFIG_DIR_NAME}/agent/auth.json or set ${TYPE_SAFE_API_KEY_ENV}`);
+    console.warn(`[bifrost/config] warning: TypeSafe classifier unavailable; configure ${typeSafeCredentialOptions(TYPE_SAFE_API_KEY_ENV)}`);
   }
   for (const issue of configIssues) {
     const tag = issue.severity === "error" ? "error" : "warning";

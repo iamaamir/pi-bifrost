@@ -11,9 +11,9 @@ Pi-Bifrost is a **configuration-first model-routing extension for [Pi](https://p
 
 ## Why Bifrost
 
-- **User-owned model pools** — add or remove Pi models directly in config.
+- **User-owned model pools** — add or remove host models directly in config.
 - **Per-tier strategies** — choose list order, cost, context window, probe-sorted speed, or explicit random selection.
-- **Native activation** — Pi uses the selected provider/model for the turn; no proxy or virtual profile.
+- **Native activation** — the host uses the selected provider/model for the turn; no proxy or virtual profile.
 - **Persistent reliability** — repeated model failures survive restart and affect future routing.
 - **No automatic replay** — Bifrost never silently repeats prompts that may have edited files or called tools.
 - **Inspectable control** — preview a route, name a tier directly, pin an exact model, or disable routing.
@@ -21,7 +21,7 @@ Pi-Bifrost is a **configuration-first model-routing extension for [Pi](https://p
 
 ## Install
 
-Requires Pi `0.86.0` or newer, or OMP `18.2.11` (the OMP version this extension is validated against), plus at least one configured, authenticated provider model visible in the host. The package declares both `pi.extensions` and `omp.extensions`, so one artifact serves both hosts.
+Requires Pi `0.86.0` or newer, or OMP `18.2.11` (the OMP version this extension is validated against), plus at least one configured provider model visible in the host (authenticated unless the provider is intentionally keyless). The package declares both `pi.extensions` and `omp.extensions`, so one artifact serves both hosts.
 
 ```bash
 pi install npm:pi-bifrost
@@ -64,7 +64,7 @@ prompt
   → configured model pool
   → reliability filtering
   → per-tier strategy
-  → Pi's active provider/model
+  → the host's active provider/model
 ```
 
 Bifrost picks a tier from a tier name at the start of the message, a rule that names an exact model, the local classification cache, an optional classifier, another regex rule, or your configured default. A rule that names an exact `provider/id` skips tiers and binds one model.
@@ -75,7 +75,7 @@ Bifrost picks a tier from a tier name at the start of the message, a rule that n
 | Strategy used inside each tier | Your config |
 | Tier that fits the prompt | Override, cache, classifier, rule, or default |
 | Unhealthy candidates excluded | Bifrost reliability |
-| Model that generates the turn | Pi, after Bifrost activates it |
+| Model that generates the turn | The host, after Bifrost activates it |
 
 ## Routing controls
 
@@ -83,7 +83,7 @@ Bifrost picks a tier from a tier name at the start of the message, a rule that n
 |-------------|--------------|
 | Send a normal message with routing on and nothing pinned | Bifrost picks a configured model for that message |
 | Start a message with a tier name, for example `quick commit the changes` | Bifrost uses that tier for that message only |
-| Select a model in Pi, or run `/bifrost pin` | That exact model stays active for the rest of the session |
+| Select a model manually in Pi, or run `/bifrost pin` | That exact model stays active for the rest of the session; on OMP use `/bifrost pin` because manual selection does not emit a model-select event |
 | Run `/bifrost unpin` | Bifrost goes back to picking a model per message |
 | Run `/bifrost off` | Bifrost stops routing until you turn it on again |
 
@@ -163,6 +163,7 @@ Detailed reference now lives in versioned guides committed with code:
 | `/bifrost pin` / `unpin` | Hard-lock current model or resume routing |
 | `/bifrost reload` | Reload merged configuration |
 
+
 See the [full command guide](docs/guide/commands.md).
 
 ## Reliability and cache behavior
@@ -175,7 +176,7 @@ Reliability circuits guard observed model health, not authoritative provider quo
 
 ## Optional TypeSafe/Jev classifier
 
-TypeSafe/Jev is explicit opt-in. Jev returns one configured tier, probabilities, and confidence. Bifrost still owns model pools, reliability filtering, fallback, selection strategy, and Pi model activation.
+TypeSafe/Jev is explicit opt-in. Jev returns one configured tier, probabilities, and confidence. Bifrost still owns model pools, reliability filtering, fallback, selection strategy, and host model activation.
 
 Confidence is a routing signal, not proof of correctness. Exploratory evaluation found consistent judgments for clear prompts, but also high-confidence misses when mechanically small tasks had serious consequences. Keep fallback enabled and validate tier criteria against your workload.
 

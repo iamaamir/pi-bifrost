@@ -21,7 +21,7 @@
 | `/bifrost classifier test` | Make fresh classifier request and show result/fallback |
 | `/bifrost classifier status` | Show backend, model, credentials, fallback, and safe metrics |
 | `/bifrost debug` | Show effective routing and reliability diagnostics |
-| `/bifrost providers` | List providers available through Pi |
+| `/bifrost providers` | List providers available through the host |
 | `/bifrost benchmark <prompt>` | Classify a prompt and show the outcome without generating |
 
 ## Common workflows
@@ -71,7 +71,7 @@ Edit the relevant `bifrost.json`, then run:
 /bifrost debug
 ```
 
-Probe sends `1+1=` to every model available in Pi's registry. The primary transport caps output at 5 tokens; an empty response may trigger one minimal-session fallback. Provider usage or burst rate limits may apply. See [Troubleshooting](troubleshooting.md).
+Probe sends `1+1=` to every model available in the host registry. The primary transport caps output at 5 tokens; an empty response may trigger one minimal-session fallback on Pi. Provider usage or burst rate limits may apply. See [Troubleshooting](troubleshooting.md).
 
 ## Persistence summary
 

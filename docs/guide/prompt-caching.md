@@ -6,7 +6,7 @@
 
 Pi-Bifrost is **prompt-cache mindful, not prompt-cache managing**.
 
-Bifrost chooses and activates Pi's model before generation. It does not create, merge, clear, price, inspect, or guarantee provider prompt-cache entries. Each provider decides whether an input prefix qualifies, how long it remains reusable, and how usage is billed.
+Bifrost chooses and activates the host's model before generation. It does not create, merge, clear, price, inspect, or guarantee provider prompt-cache entries. Each provider decides whether an input prefix qualifies, how long it remains reusable, and how usage is billed.
 
 If Bifrost switches models during one long session, treat every provider/model pair as having an independent cache history. Returning to an earlier model may reuse that model's longest still-valid matching prefix. Conversation content added since that model last handled the session is an uncached tail.
 
@@ -17,7 +17,7 @@ Bifrost and model providers cache different things:
 | Cache | Owner | Stores | Purpose |
 |------|-------|--------|---------|
 | Bifrost classification cache | Pi-Bifrost | Normalized prompt terms and selected tier | Avoid repeating tier classification |
-| Provider prompt or prefix cache | Provider through Pi's integration | Provider-defined reusable prefix the provider accepts for a model | Avoid recomputing the same input |
+| Provider prompt or prefix cache | Provider through the host's integration | Provider-defined reusable prefix the provider accepts for a model | Avoid recomputing the same input |
 
 `/bifrost cache stats` reports only Bifrost's local classification cache. It does not show provider prompt-cache hits, lifetime, savings, or billing.
 
@@ -64,7 +64,7 @@ Yes, because the tradeoff is explicit and controllable. No mode can guarantee pr
 | Adaptive routing (routing on, nothing pinned) | May pick a different configured model for every message | Lowest predictability | Task and model fit matter more than continuity |
 | Tier name in the message | Uses one tier for one message; that tier's strategy picks the model | May switch the model for one message | You know which capability tier the message needs |
 | Pinned | Keeps one exact model for the whole session | Best chance of one continuous model history | Long context, iterative work, cache locality |
-| Model chosen manually in Pi | Locks that model, exactly like pin | Same continuity benefit as pin | You know the exact model you want |
+| Model chosen manually in Pi, or pinned with `/bifrost pin` | Locks that model, exactly like pin | Same continuity benefit as pin | You know the exact model you want |
 
 `/bifrost pin` is a hard lock. While pinned, Bifrost does not route automatically and ignores tier names in messages. `/bifrost unpin` restores per-message routing.
 

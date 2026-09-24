@@ -3,6 +3,8 @@ import { dirname, join } from "node:path";
 import { DEFAULT_RULES } from "../config.ts";
 import { classifyCompiled, compileRules } from "../routing.ts";
 import { resolveTypeSafeApiKey, buildTypeSafeRequest, decodeTypeSafeJudgment, TYPESAFE_SYSTEMONE_URL, TYPESAFE_MODEL } from "../typesafe-classifier.ts";
+import { TYPE_SAFE_API_KEY_ENV } from "../classifier-backends.ts";
+import { typeSafeCredentialOptions } from "../host.ts";
 export { TYPESAFE_SYSTEMONE_URL, TYPESAFE_MODEL } from "../typesafe-classifier.ts";
 export const DEFAULT_TIMEOUT_MS = 10_000;
 export const MAX_TIMEOUT_MS = 60_000;
@@ -141,7 +143,7 @@ export class TypeSafeJevClient {
 
   constructor(options: ClientOptions = {}) {
     const key = options.apiKey ?? resolveTypeSafeApiKey().apiKey;
-    if (!key) throw new Error("TypeSafe credential is required: configure ~/.pi/agent/auth.json or TYPESAFE_API_KEY");
+    if (!key) throw new Error(`TypeSafe credential is required: configure ${typeSafeCredentialOptions(TYPE_SAFE_API_KEY_ENV)}`);
     this.#apiKey = key;
     this.#fetch = options.fetchImpl ?? fetch;
     this.#sleep = options.sleepImpl ?? sleep;

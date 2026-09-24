@@ -55,10 +55,10 @@ Optional classifiers, including TypeSafe/Jev, choose a tier. They do not receive
 
 ## Product boundaries
 
-- Bifrost activates Pi's real model; it does not hide routing behind a virtual profile.
+- Bifrost activates the host's real model; it does not hide routing behind a virtual profile.
 - Bifrost never automatically replays a failed user prompt.
 - Reliability circuits protect future turns; they are not provider quota guards.
-- Provider prompt caches remain controlled by Pi's provider integration and each provider.
+- Provider prompt caches remain controlled by the host's provider integration and each provider.
 - Adaptive routing may trade prompt-cache locality for per-turn task fit. It cannot guarantee better results, lower cost, lower latency, or cache savings.
 - `/bifrost pin` is a session-local hard lock. Use it when continuity or one exact model matters more than per-message routing. A tier name at the start of a message is ignored while pinned.
 

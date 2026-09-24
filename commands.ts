@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as host from "@earendil-works/pi-coding-agent";
-import { scopedModelsOf } from "./host.ts";
+import { scopedModelsOf, typeSafeCredentialOptions } from "./host.ts";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
@@ -974,7 +974,7 @@ export function createCommandRouter(
         }
         const selected = await ctx.ui.select("Classifier backend", [
           "prompt — choose a host model",
-          `${CLASSIFIER_BACKEND_IDS.typesafe} — use Jev (requires ${host.CONFIG_DIR_NAME}/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV})`,
+          `${CLASSIFIER_BACKEND_IDS.typesafe} — use Jev (requires ${typeSafeCredentialOptions(TYPE_SAFE_API_KEY_ENV)})`,
         ]);
         if (!selected) return;
         const backend = selected.startsWith(CLASSIFIER_BACKEND_IDS.typesafe) ? CLASSIFIER_BACKEND_IDS.typesafe : CLASSIFIER_BACKEND_IDS.prompt;
@@ -1036,7 +1036,7 @@ export function createCommandRouter(
         state.invalidatePipeline();
         log(ctx, `classifier backend set to ${backend}; config reloaded`);
         if (backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
-          log(ctx, `TypeSafe credential missing; use ~/${host.CONFIG_DIR_NAME}/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`, "warning");
+          log(ctx, `TypeSafe credential missing; configure ${typeSafeCredentialOptions(TYPE_SAFE_API_KEY_ENV)}`, "warning");
         }
       },
     },

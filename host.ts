@@ -55,6 +55,18 @@ export function isOmpHost(): boolean {
   return ompRuntime;
 }
 
+/**
+ * Host-appropriate TypeSafe credential guidance. OMP resolves credentials
+ * through an abstract host store, so its portable setup instruction is the
+ * environment variable rather than a fabricated auth-file path.
+ */
+export function typeSafeCredentialOptions(envName: string): string {
+  const usesOmp = ompRuntime || _hostDeps.configDirName === OMP_CONFIG_DIR_NAME;
+  return usesOmp
+    ? `the ${envName} environment variable`
+    : `Pi's ~/.pi/agent/auth.json or ${envName}`;
+}
+
 /** @internal test reset */
 export function _resetHostForTests(): void {
   ompRuntime = false;
@@ -162,22 +174,19 @@ export async function streamSimpleVia(
   if (typeof registry.streamSimple === "function") {
     return registry.streamSimple(model, context, options);
   }
-  // Standalone path (omp): streamSimple does not resolve credentials itself,
-  // and omp providers throw MissingApiKeyError before issuing the request —
-  // even for keyless endpoints (local Ollama proxying :cloud models,
-  // llama.cpp, LM Studio). omp's own agent path passes the kNoAuth sentinel
-  // for those; mirror it so keyless providers stay usable from the probe
-  // and classifier.
-  if (options.apiKey === undefined) {
+  // Standalone path (omp): streamSimple does not resolve credentials itself.
+  // OMP's ModelRegistry returns the kNoAuth sentinel explicitly for providers
+  // it marks keyless (including local Ollama/llama.cpp/LM Studio). Preserve
+  // that sentinel, but do not invent one when a normal provider has no
+  // resolved credential; the provider must report its normal missing-auth
+  // error instead of receiving a fake key.
+  if (options.apiKey === undefined && typeof registry.getApiKey === "function") {
     // Deliberately no catch: an error thrown by getApiKey (OAuth refresh
     // failure, credential broker or command failure, malformed auth) is a
     // real credential-resolution failure and must reach the caller's error
-    // path. Only "no key returned" — a keyless provider — falls through to
-    // the sentinel.
-    const key = typeof registry.getApiKey === "function"
-      ? await registry.getApiKey(model)
-      : undefined;
-    options = { ...options, apiKey: key ?? OMP_NO_AUTH };
+    // path.
+    const key = await registry.getApiKey(model);
+    if (key !== undefined) options = { ...options, apiKey: key };
   }
   return _streamDeps.standaloneStreamSimple(
     model,

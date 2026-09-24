@@ -7,10 +7,10 @@
 Bifrost tracks model failures from:
 
 - availability probes;
-- failed Pi model activation;
+- failed host model activation;
 - settled provider stream failures.
 
-After configured repeated failures inside a time window, Bifrost opens that model's circuit. Open-circuit candidates are excluded before tier strategy selection. In `.pi/bifrost.json`:
+After configured repeated failures inside a time window, Bifrost opens that model's circuit. Open-circuit candidates are excluded before tier strategy selection. In the host project config (`.pi/bifrost.json` on Pi or `.omp/bifrost.json` on OMP):
 
 ```json
 {
@@ -23,13 +23,13 @@ After configured repeated failures inside a time window, Bifrost opens that mode
 }
 ```
 
-Reliability state persists in `.pi/bifrost-reliability.json`. After cooldown, Bifrost may try that model once. Success restores it; failure keeps it excluded longer.
+Reliability state persists in `.pi/bifrost-reliability.json` on Pi or `.omp/bifrost-reliability.json` on OMP. After cooldown, Bifrost may try that model once. Success restores it; failure keeps it excluded longer.
 
 Bifrost never automatically replays the prompt that failed. Reliability affects future user turns only.
 
 ## Reliability is not quota enforcement
 
-A circuit records observed model health. It does not know authoritative provider weekly quota unless Pi or the provider exposes that information.
+A circuit records observed model health. It does not know authoritative provider weekly quota unless the host or provider exposes that information.
 
 Current safeguards for quota-sensitive models:
 
@@ -48,7 +48,8 @@ Bifrost's local cache stores routing classifications—not assistant answers.
 Default project-local file:
 
 ```text
-.pi/bifrost-cache.jsonl
+.pi/bifrost-cache.jsonl on Pi
+.omp/bifrost-cache.jsonl on OMP
 ```
 
 Entries contain:
@@ -59,7 +60,7 @@ Entries contain:
 - hit count;
 - classifier-semantics fingerprint.
 
-Normalized prompt text can still contain sensitive terms. Disable caching for sensitive projects in `.pi/bifrost.json`:
+Normalized prompt text can still contain sensitive terms. Disable caching for sensitive projects in the host project config:
 
 ```json
 {
@@ -88,7 +89,7 @@ See also: [Provider prompt caching and model switching](prompt-caching.md) for A
 
 ## Debug logging
 
-Enable local JSONL routing diagnostics in `.pi/bifrost.json`:
+Enable local JSONL routing diagnostics in the host project config:
 
 ```json
 {
@@ -101,7 +102,8 @@ Enable local JSONL routing diagnostics in `.pi/bifrost.json`:
 Default file:
 
 ```text
-.pi/bifrost-debug.jsonl
+.pi/bifrost-debug.jsonl on Pi
+.omp/bifrost-debug.jsonl on OMP
 ```
 
 Normal Bifrost debug events record routing reason, selected tier/model, and timing—not raw prompt bodies.

@@ -9,14 +9,14 @@ This document explains how Bifrost uses TypeSafe/Jev, why the boundaries exist, 
 Jev does not select an exact provider/model. It makes one typed semantic judgment: which configured Bifrost tier best fits the current coding-agent request.
 
 ```text
-Pi user prompt
+Host user prompt
   → Bifrost pre-generation hook
   → bypass / inline override / cache
   → TypeSafe/Jev Choice judgment
   → confidence and response validation
   → configured fallback when needed
   → Bifrost availability, reliability, and model strategy
-  → Pi activates actual provider/model
+  → host activates actual provider/model
   → prompt generation
 ```
 
@@ -25,7 +25,7 @@ Core separation:
 ```text
 Jev:      semantic suitability judgment
 Bifrost:  policy, fallback, model availability, reliability, selection
-Pi:       host model activation and generation
+Host:     model activation and generation
 ```
 
 ## Why Jev chooses tier, not exact model
@@ -45,7 +45,7 @@ Jev probabilities describe confidence in tier suitability, not comparative quali
 
 ## End-to-end flow
 
-### 1. Pi hook receives prompt
+### 1. Host hook receives prompt
 
 Bifrost runs before generation and first checks:
 
@@ -138,8 +138,8 @@ Once a tier is known, Bifrost:
 2. excludes unavailable candidates;
 3. excludes open reliability circuits;
 4. applies tier/global strategy;
-5. calls Pi's model switch;
-6. lets Pi generate using the actual selected model.
+5. calls the host's model switch;
+6. lets the host generate using the actual selected model.
 
 Jev does not bypass user model policy.
 
@@ -169,12 +169,19 @@ Repeated failures persist in Bifrost reliability state. After threshold, the Typ
 Credential lookup order:
 
 ```text
-~/.pi/agent/auth.json entry "typesafe"
+Pi: ~/.pi/agent/auth.json entry "typesafe"
+OMP: host credential store entry "typesafe"
   → TYPESAFE_API_KEY
   → missing
 ```
 
-Recommended Pi auth entry:
+Portable setup for either host:
+
+```bash
+export TYPESAFE_API_KEY="ts_..."
+```
+
+Pi may also use the supported `~/.pi/agent/auth.json` entry:
 
 ```json
 {
@@ -185,13 +192,7 @@ Recommended Pi auth entry:
 }
 ```
 
-Environment alternative:
-
-```bash
-export TYPESAFE_API_KEY="ts_..."
-```
-
-Keys never belong in project config.
+OMP's stored credential is resolved through its host credential store; a Pi-style `auth.json` path is not required. Keys never belong in project config.
 
 Selecting TypeSafe through `/bifrost classifier` is the explicit user opt-in. It writes the backend choice to project config; credentials remain user-managed and are never stored in project config.
 
@@ -279,7 +280,7 @@ Detailed TypeSafe trace requires both flags:
 Trace file:
 
 ```text
-.pi/bifrost-debug.jsonl
+.pi/bifrost-debug.jsonl on Pi or .omp/bifrost-debug.jsonl on OMP
 ```
 
 TypeSafe events include:
@@ -352,7 +353,7 @@ User/global and project configs are separate. A malformed config layer can preve
 
 ### Installed extension may differ from source checkout
 
-Testing a local checkout does not prove the currently installed Pi package contains latest changes. Confirm extension path/version when debugging behavior.
+Testing a local checkout does not prove the currently installed host package contains the latest changes. Confirm the extension path/version when debugging behavior.
 
 ## Design guardrails
 
