@@ -9,7 +9,8 @@
 // - registry.refresh:        Pi refresh({signal}) vs omp refresh(strategy)
 // - registry.streamSimple:   Pi method vs standalone pi-ai function
 // - ctx.signal / thinkingLevel / scopedModels: Pi-only context fields
-// - setWorkingVisible / ModelSelectorComponent / ModelRuntime: Pi-only
+// - setWorkingVisible / ModelRuntime: Pi-only
+// - ModelSelectorComponent: Pi-only; commands.ts falls back to the host select dialog on OMP
 // - model_select / agent_settled events: Pi-only (omp never emits them)
 // - agent_end: omp marks a non-terminal end with willContinue: true
 

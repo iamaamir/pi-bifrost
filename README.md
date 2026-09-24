@@ -42,6 +42,8 @@ pi install git:github.com/iamaamir/pi-bifrost
 
 From a local checkout, use `pi install git:github.com/iamaamir/pi-bifrost`, `omp plugin link <path>`, or point either host at the entry file (`omp --extension ./index.ts`). Both hosts keep their own config, cache, and reliability state; a model that fails in one host is not marked unhealthy in the other.
 
+After editing a linked or local checkout, fully quit and relaunch OMP. `/reload-plugins` refreshes discovery and capabilities, but it does not replace the extension module already initialized in that process.
+
 Inside the host:
 
 ```text
@@ -53,7 +55,7 @@ Initialization reuses probe results newer than one hour or probes every model av
 OMP-specific limitations:
 
 - Selecting a model manually in OMP does not pin Bifrost (OMP emits no model-select event, so `/bifrost pin` is the way to hard-lock a model there).
-- `/bifrost classifier`'s interactive model picker is Pi-only; on OMP set `classifier.model` in config.
+- `/bifrost classifier` uses a host model dialog on OMP; select an available `provider/id` for the prompt backend. Pi uses its richer model selector.
 - The minimal-session probe fallback is Pi-only; OMP probes use the direct streaming transport.
 
 ## How routing works

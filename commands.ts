@@ -90,37 +90,64 @@ type SelectorCtor = new (
   onCancel: () => void,
 ) => object;
 
+type SelectorHost = typeof host & {
+  /** Pi exports this class; OMP's published host types do not. */
+  ModelSelectorComponent?: SelectorCtor;
+};
+
+// OMP rewrites the host module at runtime but omits this Pi-only export from its published types.
+const selectorHost = host as SelectorHost;
+
+/** @internal test seam for hosts that do not export the rich model selector. */
+export const _selectorDeps: { modelSelectorComponent: SelectorCtor | undefined } = {
+  modelSelectorComponent: selectorHost.ModelSelectorComponent,
+};
+
 async function requestPromptClassifierModel(ctx: ExtensionContext): Promise<string | null> {
-  // ModelSelectorComponent is Pi-only; omp does not export an equivalent
-  // from its package root. Degrade with guidance instead of crashing.
-  const SelectorComponent = (host as unknown as { ModelSelectorComponent?: SelectorCtor }).ModelSelectorComponent;
-  if (typeof SelectorComponent !== "function") {
-    log(ctx, "Interactive classifier model picker is unavailable on this host; set classifier.model in bifrost.json instead.", "warning");
+  const SelectorComponent = _selectorDeps.modelSelectorComponent;
+  if (typeof SelectorComponent === "function") {
+    const modelRuntime = {
+      getAvailableSnapshot: () => ctx.modelRegistry.getAvailable(),
+      getModel: (provider: string, id: string) => ctx.modelRegistry.find(provider, id),
+      getError: () => ctx.modelRegistry.getError(),
+      refresh: async (options?: { signal?: AbortSignal }) => {
+        return ctx.modelRegistry.refresh(options);
+      },
+    };
+    const selected = await ctx.ui.custom<string | null>((tui, _theme, _keybindings, done) => {
+      const onSelect = (model: { provider: string; id: string }) => done(`${model.provider}/${model.id}`);
+      const onCancel = () => done(null);
+      return new SelectorComponent(
+        tui,
+        ctx.model,
+        // The extension facade exposes only registry methods; this adapter
+        // implements the subset ModelSelectorComponent consumes.
+        modelRuntime,
+        scopedModelsOf(ctx),
+        onSelect,
+        onCancel,
+      ) as never;
+    });
+    return selected;
+  }
+
+  // OMP exposes the interactive UI contract but not Pi's rich selector class.
+  // Use the same host dialog for an exact, provider-qualified model choice.
+  const options = ctx.modelRegistry.getAvailable().map((model) => {
+    const value = `${model.provider}/${model.id}`;
+    const name = model.name;
+    return { value, label: name && name !== model.id ? `${value} — ${name}` : value };
+  });
+  if (options.length === 0) {
+    log(ctx, "No models available for prompt classifier; regex fallback remains active.", "warning");
     return null;
   }
-  const modelRuntime = {
-    getAvailableSnapshot: () => ctx.modelRegistry.getAvailable(),
-    getModel: (provider: string, id: string) => ctx.modelRegistry.find(provider, id),
-    getError: () => ctx.modelRegistry.getError(),
-    refresh: async (options?: { signal?: AbortSignal }) => {
-      return ctx.modelRegistry.refresh(options);
-    },
-  };
-  const selected = await ctx.ui.custom<string | null>((tui, _theme, _keybindings, done) => {
-    const onSelect = (model: { provider: string; id: string }) => done(`${model.provider}/${model.id}`);
-    const onCancel = () => done(null);
-    return new SelectorComponent(
-      tui,
-      ctx.model,
-      // The extension facade exposes only registry methods; this adapter
-      // implements the subset ModelSelectorComponent consumes.
-      modelRuntime,
-      scopedModelsOf(ctx),
-      onSelect,
-      onCancel,
-    ) as never;
-  });
-  return selected;
+  const selected = await ctx.ui.select(
+    "Select prompt classifier model",
+    options.map((option) => option.label),
+  );
+  if (!selected) return null;
+  return options.find((option) => option.label === selected)?.value ?? null;
 }
 
 function uiOutput(ctx: ExtensionContext, lines: string[]) {

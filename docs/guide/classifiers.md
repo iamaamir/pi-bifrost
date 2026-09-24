@@ -24,6 +24,8 @@ The prompt backend asks a configured host model to return one tier name. In the 
 
 Prompt classification adds model tokens and latency on cache misses. Successful results may enter Bifrost's local classification cache.
 
+Running `/bifrost classifier` and choosing `prompt` opens a host model dialog. Pi provides its searchable model selector; OMP provides a provider-qualified list of authenticated models. Selecting a model writes the exact `provider/id` to `classifier.model`; you can still configure that field manually.
+
 If prompt classification fails or returns an unknown tier, Bifrost continues through configured fallback, regex rules, and default tier behavior.
 
 ## TypeSafe/Jev

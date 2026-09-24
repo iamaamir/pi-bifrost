@@ -47,9 +47,9 @@ pi install git:github.com/iamaamir/pi-bifrost
 omp plugin link /path/to/pi-bifrost
 ```
 
-Restart the host if the extension is not loaded in the current session.
+After updating a linked or local extension source, fully quit and relaunch OMP. `/reload-plugins` refreshes discovery and capabilities, but it does not replace the extension module already initialized in that process; source-code changes require a fresh OMP process.
 
-OMP reads the same `bifrost.json` schema but its own paths: `.omp/bifrost.json` for the project config and `~/.omp/agent/bifrost.json` for the global one. Local cache and reliability state live under `.omp/`. Manual model selection in OMP does not pin Bifrost (use `/bifrost pin`), and `/bifrost classifier`'s interactive model picker is Pi-only — set `classifier.model` in config on OMP.
+OMP reads the same `bifrost.json` schema but its own paths: `.omp/bifrost.json` for the project config and `~/.omp/agent/bifrost.json` for the global one. Local cache and reliability state live under `.omp/`. Manual model selection in OMP does not pin Bifrost (use `/bifrost pin`). Running `/bifrost classifier` and choosing the prompt backend opens a host dialog of available `provider/id` models; select one there or set `classifier.model` in config.
 
 ## Understand four terms
 

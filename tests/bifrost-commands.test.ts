@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildClassifierTestReport, createCommandRouter, getBifrostCommandCompletions, log, runBifrostCommand } from "../commands.ts";
+import { _selectorDeps, buildClassifierTestReport, createCommandRouter, getBifrostCommandCompletions, log, runBifrostCommand } from "../commands.ts";
 
 function makeCtx(
-  models: Array<{ provider: string; id: string }> = [],
+  models: Array<{ provider: string; id: string; name?: string }> = [],
   selectOverride?: (title: string, options: string[]) => string | undefined,
   customOverride?: () => Promise<unknown>,
 ) {
@@ -186,6 +186,46 @@ describe("bifrost command ui", () => {
       assert.equal(saved.classifier.model, "fixture/classifier");
       assert.ok(calls.some((call) => call.kind === "custom"));
     } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the host model dialog when the rich selector is unavailable", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-command-test-"));
+    const previousCwd = process.cwd();
+    const originalSelector = _selectorDeps.modelSelectorComponent;
+    _selectorDeps.modelSelectorComponent = undefined;
+    process.chdir(tempDir);
+    try {
+      let selectCount = 0;
+      const { ctx, calls } = makeCtx(
+        [
+          { provider: "fixture", id: "classifier", name: "Classifier model" },
+          { provider: "backup", id: "classifier", name: "Classifier model" },
+        ],
+        (_title, options) => {
+          selectCount += 1;
+          return selectCount === 1 ? options[0] : options[1];
+        },
+      );
+      const state = makeState();
+      const dispatch = createCommandRouter(state as never);
+
+      await dispatch("classifier", ctx as never);
+
+      const selects = calls.filter((call) => call.kind === "select");
+      assert.equal(selects.length, 2);
+      assert.equal(selects[1]?.title, "Select prompt classifier model");
+      assert.deepEqual(selects[1]?.options, [
+        "fixture/classifier — Classifier model",
+        "backup/classifier — Classifier model",
+      ]);
+      assert.equal(calls.some((call) => call.kind === "custom"), false);
+      const saved = JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8"));
+      assert.equal(saved.classifier.model, "backup/classifier");
+    } finally {
+      _selectorDeps.modelSelectorComponent = originalSelector;
       process.chdir(previousCwd);
       rmSync(tempDir, { recursive: true, force: true });
     }
