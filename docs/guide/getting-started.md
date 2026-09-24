@@ -4,7 +4,7 @@
 
 ## What Bifrost does
 
-Pi-Bifrost chooses from models already available in [Pi](https://pi.dev). For each message it resolves a configured capability tier, filters unhealthy candidates, applies your tier strategy, and activates Pi's actual provider/model before generation.
+Pi-Bifrost chooses from models already available in [Pi](https://pi.dev) or [OMP](https://omp.sh) (oh-my-pi). For each message it resolves a configured capability tier, filters unhealthy candidates, applies your tier strategy, and activates the host's actual provider/model before generation.
 
 Bifrost does not provide model credentials or a model proxy.
 
@@ -12,34 +12,44 @@ Bifrost does not provide model credentials or a model proxy.
 
 You need:
 
-- Pi `0.86.0` or newer;
-- at least one model provider configured and authenticated in Pi;
-- at least one model visible in Pi's model registry;
+- Pi `0.86.0` or newer, or OMP `18.2.11` (the validated OMP version);
+- at least one model provider configured and authenticated in the host;
+- at least one model visible in the host's model registry;
 - network access for installation and provider requests.
 
-Check Pi:
+Check the host:
 
 ```bash
 pi --version
+omp --version
 ```
 
-Open Pi and confirm you can select and use at least one provider model before diagnosing Bifrost.
+Confirm you can select and use at least one provider model before diagnosing Bifrost.
 
 ## Install
 
-From npm:
+Pi, from npm:
 
 ```bash
 pi install npm:pi-bifrost
 ```
 
-Or directly from GitHub:
+OMP:
+
+```bash
+omp plugin install pi-bifrost
+```
+
+Or directly from GitHub (Pi) or a local checkout (OMP):
 
 ```bash
 pi install git:github.com/iamaamir/pi-bifrost
+omp plugin link /path/to/pi-bifrost
 ```
 
-Restart Pi if the extension is not loaded in the current session.
+Restart the host if the extension is not loaded in the current session.
+
+OMP reads the same `bifrost.json` schema but its own paths: `.omp/bifrost.json` for the project config and `~/.omp/agent/bifrost.json` for the global one. Local cache and reliability state live under `.omp/`. Manual model selection in OMP does not pin Bifrost (use `/bifrost pin`), and `/bifrost classifier`'s interactive model picker is Pi-only — set `classifier.model` in config on OMP.
 
 ## Understand four terms
 
@@ -161,9 +171,9 @@ Resume adaptive routing:
 Config merges in this order; later layers win:
 
 1. extension default: `<extensionDir>/bifrost.json`
-2. user-global: `~/.pi/agent/bifrost.json`
+2. user-global: `~/.pi/agent/bifrost.json` (`~/.omp/agent/bifrost.json` on OMP)
 3. project root: `bifrost.json`
-4. project config: `.pi/bifrost.json`
+4. project config: `.pi/bifrost.json` (`.omp/bifrost.json` on OMP)
 
 Project-specific rules may also live in `bifrost-routes.json` or `.pi/bifrost-routes.json`; the `.pi` file wins.
 
