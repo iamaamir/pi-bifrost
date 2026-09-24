@@ -1,0 +1,166 @@
+{
+  "created_at_utc": "2026-09-21T19:30:54.185749+00:00",
+  "purpose": "Preserve live Jev evidence before temporary API access expiry.",
+  "git_head": "9bba0fb",
+  "requested_model": "jev-1.13.0",
+  "endpoint": "https://api.typesafe.ai/v1/systemone",
+  "credentials_persisted": false,
+  "user_or_reddit_text_sent": false,
+  "commands": [
+    "node --experimental-strip-types scripts/jev-benchmark.ts --live tests/corpus/jev/scenarios.jsonl --split all --concurrency 6 --timeout-ms 10000",
+    "node --experimental-strip-types scripts/jev-benchmark.ts --live docs/research/jev-expiry-hard-corpus.jsonl --split all --concurrency 6 --timeout-ms 10000",
+    "python3 scripts/jev-expiry-criteria-capture.py docs/research/jev-expiry-hard-corpus.jsonl OUTPUT.json",
+    "node --experimental-strip-types scripts/jev-benchmark.ts --live docs/research/jev-expiry-long-context-corpus.jsonl --split all --concurrency 4 --timeout-ms 30000",
+    "python3 scripts/jev-expiry-criteria-capture.py docs/research/jev-expiry-long-context-corpus.jsonl OUTPUT.json",
+    "GET https://api.typesafe.ai/v1/models"
+  ],
+  "capture_totals": {
+    "api_requests": 651,
+    "successful_requests": 648,
+    "input_tokens": 1017052,
+    "output_tokens": 57846,
+    "estimated_input_cost_usd_at_0_042_per_million": 0.042716184
+  },
+  "files": [
+    {
+      "path": "docs/research/jev-expiry-hard-corpus.jsonl",
+      "bytes": 18081,
+      "sha256": "baced530129204187e36aa8b964559a304bc28a10e214b705f386d9e967945c1"
+    },
+    {
+      "path": "docs/research/jev-expiry-long-context-corpus.jsonl",
+      "bytes": 611206,
+      "sha256": "ac3b4ed3ec768595c37850ba811fa5dcf085557ffecdba5b5db2bedbdc31b488"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-criteria-comparison-run1.json",
+      "bytes": 54683,
+      "sha256": "00d8393515903a615dd21b4012dbe9f3bd8ad61619726fcb6f6971dbd8e340b1"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-criteria-comparison-run2.json",
+      "bytes": 54656,
+      "sha256": "1140ac492ed7545e5a08757c66795485ee27814fb7757aba89bdcf74a2d7d44d"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-criteria-comparison-run3.json",
+      "bytes": 54671,
+      "sha256": "13e71157ff630c4128fc741ff465e15319af99f6b18637520e3b42a20db5e0c4"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-criteria-risk-run1.json",
+      "bytes": 69488,
+      "sha256": "85f574d0f2ddef73fc2bf30b1200bd10ba931ef234561e7d98ade9b23f3d7cae"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-criteria-risk-run2.json",
+      "bytes": 69498,
+      "sha256": "dd89bad231557c0e4d3bcba038b97dccda8707f58fd7bce76cc3df4898053c64"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-criteria-risk-run3.json",
+      "bytes": 69457,
+      "sha256": "c0ba89269527390e1357e65dfe86a955f82de9dc45246ddd6e98efecf64d3037"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-existing-corpus-run1.json",
+      "bytes": 35743,
+      "sha256": "7217851b8376343bc37afaebec6e49dc9f3bb52fbad0d7304f784a9d6bff9869"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-existing-corpus-run1.summary.txt",
+      "bytes": 222,
+      "sha256": "574b70f84b79e530832267346edeedee1a334f39c8ee22a53f5e5a15f10637c3"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-existing-corpus-run2.json",
+      "bytes": 35954,
+      "sha256": "8cd1f85d0d9af58a75dc947a2fe934283b8efa384738310b4b2087fc5c736a5e"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-existing-corpus-run2.summary.txt",
+      "bytes": 222,
+      "sha256": "97d478938eae27eaa6b69613f187d888c0bb479b446200d8ab4045029579eef7"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-existing-corpus-run3.json",
+      "bytes": 35963,
+      "sha256": "7dcaced288ae7551dd58056ec9ebb888eaefc2ddab38277410aa7abbfcfad37b"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-existing-corpus-run3.summary.txt",
+      "bytes": 222,
+      "sha256": "00bbaf3eb66eafdbf5463181aec6aaffa9ff078cb6ce1789097f5dcc4b42c030"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-hard-corpus-run1.json",
+      "bytes": 27830,
+      "sha256": "2e4268deae635a473faf54181acbd36e2ff6e814faf1a1281ccd3a5f775be132"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-hard-corpus-run1.summary.txt",
+      "bytes": 218,
+      "sha256": "3d41999230bc7e0963ae89b203defbc0142176eb679234363911041cf5330903"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-hard-corpus-run2.json",
+      "bytes": 27610,
+      "sha256": "02bf0869c86c4c68fc9a128ec39d27aaf9b8a17dd7b9acd765dfebf84b282f8c"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-hard-corpus-run2.summary.txt",
+      "bytes": 218,
+      "sha256": "68b636718c9eaf90dec75f1a6a4a0f42d986013a54f5d46724d5112093bca151"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-hard-corpus-run3.json",
+      "bytes": 27636,
+      "sha256": "519cc1b1c0487b7a28c98d614c323e498106c5c1154440b9d186c8bcbb67054f"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-hard-corpus-run3.summary.txt",
+      "bytes": 218,
+      "sha256": "ad8c3dacdea36b90a515b5086abc86c0873be2c43a431695070bdb167a97b71c"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-long-context-criteria-run1.json",
+      "bytes": 21735,
+      "sha256": "cd6ed659c5d1c442a09cd9708b529d436283679af84bb43d820ce3485e2966e1"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-long-context-criteria-run2.json",
+      "bytes": 21724,
+      "sha256": "1c1450811ff5b6897ee3a05fc957dbc97ecd3094cb9583360f3f0442228cf366"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-long-context-run1.json",
+      "bytes": 8506,
+      "sha256": "187dbec65245e6a614c452bbbbad7e2f139415139835cae2b90912c63305420d"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-long-context-run1.summary.txt",
+      "bytes": 219,
+      "sha256": "03e13b15a5dca89b343c81393e9bbbe091cf51236ce578661db7bbd4283b6113"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-long-context-run2.json",
+      "bytes": 8515,
+      "sha256": "2c1be0a5b1a53db5f74b1dc26916bb5531fb24c936212b985136a83b19da88bb"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-long-context-run2.summary.txt",
+      "bytes": 219,
+      "sha256": "aae33a2385b0f9a82307bec2236af696bfedd53d5c5d2629c82a7ab19a535c73"
+    },
+    {
+      "path": "docs/research/jev-live-expiry-models.json",
+      "bytes": 541,
+      "sha256": "035188d36346708beb7d8aad453dfc4f617aa7cff74f0c47f39ab13b583ee397"
+    },
+    {
+      "path": "scripts/jev-expiry-criteria-capture.py",
+      "bytes": 7104,
+      "sha256": "76181a12f80dfa61f053b0c06930e6b8518dab631a9ff9465c024ac80fdaf514"
+    }
+  ]
+}

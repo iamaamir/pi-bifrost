@@ -1,0 +1,1117 @@
+{
+  "disclaimer": "Preliminary development evaluation only. Labels are development labels; this report does not authorize production routing or claim Jev superiority.",
+  "n": 47,
+  "splits": {
+    "review": 47
+  },
+  "model": {
+    "requested": "jev-1.13.0",
+    "observed": [
+      "jev-1.13.0"
+    ]
+  },
+  "availability": {
+    "successful": 46,
+    "total": 47,
+    "rate": 0.9787234042553191
+  },
+  "strictAccuracy": {
+    "correct": 0,
+    "scored": 0
+  },
+  "baselineComparableAccuracy": {
+    "correct": 0,
+    "scored": 0
+  },
+  "baselineAllRowsAccuracy": {
+    "correct": 0,
+    "scored": 0
+  },
+  "baselineFrontierFalseNegatives": {
+    "count": 0,
+    "denominator": 0
+  },
+  "perTier": {
+    "quick": {
+      "gold": 0,
+      "correct": 0,
+      "precision": 0,
+      "recall": 0
+    },
+    "general": {
+      "gold": 0,
+      "correct": 0,
+      "precision": 0,
+      "recall": 0
+    },
+    "frontier": {
+      "gold": 0,
+      "correct": 0,
+      "precision": 0,
+      "recall": 0
+    }
+  },
+  "perFamily": {},
+  "confusionMatrix": {
+    "quick": {
+      "quick": 0,
+      "general": 0,
+      "frontier": 0
+    },
+    "general": {
+      "quick": 0,
+      "general": 0,
+      "frontier": 0
+    },
+    "frontier": {
+      "quick": 0,
+      "general": 0,
+      "frontier": 0
+    }
+  },
+  "frontierFalseNegatives": {
+    "count": 0,
+    "denominator": 0
+  },
+  "errors": {
+    "invalid_response": 1
+  },
+  "latencyMs": {
+    "p50": 372,
+    "p95": 5451
+  },
+  "tokenUsage": {
+    "inputTokens": 19630,
+    "outputTokens": 1866,
+    "estimatedInputCostUsd": 0.0008244600000000001
+  },
+  "calibration": {
+    "samples": 0
+  },
+  "rows": [
+    {
+      "id": "expiry-boundary-001",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "boundary",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 0.97,
+      "probabilities": {
+        "quick": 0.98,
+        "general": 0.02,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 6331,
+      "inputTokens": 426,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017892
+    },
+    {
+      "id": "expiry-boundary-002",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "boundary",
+      "unresolved": true,
+      "jevTier": "general",
+      "confidence": 0.98,
+      "probabilities": {
+        "quick": 0.01,
+        "general": 0.99,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 7568,
+      "inputTokens": 423,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017766000000000002
+    },
+    {
+      "id": "expiry-boundary-003",
+      "split": "review",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "general",
+      "family": "boundary",
+      "unresolved": true,
+      "jevTier": "general",
+      "confidence": 0.6,
+      "probabilities": {
+        "quick": 0.14,
+        "general": 0.73,
+        "frontier": 0.13
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 2245,
+      "inputTokens": 417,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017514
+    },
+    {
+      "id": "expiry-boundary-004",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "boundary",
+      "unresolved": true,
+      "jevTier": "general",
+      "confidence": 0.56,
+      "probabilities": {
+        "quick": 0.29,
+        "general": 0.71,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 5451,
+      "inputTokens": 425,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001785
+    },
+    {
+      "id": "expiry-boundary-005",
+      "split": "review",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "boundary",
+      "unresolved": true,
+      "jevTier": "frontier",
+      "confidence": 0.84,
+      "probabilities": {
+        "quick": 0.01,
+        "general": 0.1,
+        "frontier": 0.89
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 4326,
+      "inputTokens": 421,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017682
+    },
+    {
+      "id": "expiry-boundary-006",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "boundary",
+      "unresolved": true,
+      "jevTier": "frontier",
+      "confidence": 0.48,
+      "probabilities": {
+        "quick": 0.08,
+        "general": 0.27,
+        "frontier": 0.65
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 4413,
+      "inputTokens": 424,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017808
+    },
+    {
+      "id": "expiry-boundary-007",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "regex_rule",
+      "goldTier": "quick",
+      "family": "boundary",
+      "unresolved": true,
+      "jevTier": "general",
+      "confidence": 0.58,
+      "probabilities": {
+        "quick": 0.28,
+        "general": 0.72,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 3757,
+      "inputTokens": 426,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017892
+    },
+    {
+      "id": "expiry-boundary-008",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "boundary",
+      "unresolved": true,
+      "jevTier": "general",
+      "confidence": 0.88,
+      "probabilities": {
+        "quick": 0,
+        "general": 0.92,
+        "frontier": 0.08
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 342,
+      "inputTokens": 420,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001764
+    },
+    {
+      "id": "expiry-multi-001",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "multi_intent",
+      "unresolved": true,
+      "jevTier": "frontier",
+      "confidence": 0.98,
+      "probabilities": {
+        "quick": 0,
+        "general": 0.01,
+        "frontier": 0.99
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 2859,
+      "inputTokens": 428,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017976000000000002
+    },
+    {
+      "id": "expiry-multi-002",
+      "split": "review",
+      "baselineTier": "quick",
+      "baselineSource": "regex_rule",
+      "goldTier": "general",
+      "family": "multi_intent",
+      "unresolved": true,
+      "jevTier": "general",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 1,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 1173,
+      "inputTokens": 425,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001785
+    },
+    {
+      "id": "expiry-multi-003",
+      "split": "review",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "multi_intent",
+      "unresolved": true,
+      "jevTier": "frontier",
+      "confidence": 0.94,
+      "probabilities": {
+        "quick": 0,
+        "general": 0.04,
+        "frontier": 0.96
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 357,
+      "inputTokens": 427,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017934
+    },
+    {
+      "id": "expiry-multi-004",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "multi_intent",
+      "unresolved": true,
+      "jevTier": "general",
+      "confidence": 0.95,
+      "probabilities": {
+        "quick": 0.01,
+        "general": 0.97,
+        "frontier": 0.02
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 371,
+      "inputTokens": 429,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000018018
+    },
+    {
+      "id": "expiry-multi-005",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "multi_intent",
+      "unresolved": true,
+      "status": "error",
+      "error": "invalid_response",
+      "latencyMs": 392
+    },
+    {
+      "id": "expiry-multi-006",
+      "split": "review",
+      "baselineTier": "quick",
+      "baselineSource": "regex_rule",
+      "goldTier": "general",
+      "family": "multi_intent",
+      "unresolved": true,
+      "jevTier": "general",
+      "confidence": 0.42,
+      "probabilities": {
+        "quick": 0.38,
+        "general": 0.62,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 1140,
+      "inputTokens": 425,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001785
+    },
+    {
+      "id": "expiry-adversarial-001",
+      "split": "review",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "adversarial",
+      "unresolved": true,
+      "jevTier": "frontier",
+      "confidence": 0.97,
+      "probabilities": {
+        "quick": 0.01,
+        "general": 0.01,
+        "frontier": 0.98
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 433,
+      "inputTokens": 430,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000018060000000000003
+    },
+    {
+      "id": "expiry-adversarial-002",
+      "split": "review",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "adversarial",
+      "unresolved": true,
+      "jevTier": "frontier",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 385,
+      "inputTokens": 430,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000018060000000000003
+    },
+    {
+      "id": "expiry-adversarial-003",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "adversarial",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 361,
+      "inputTokens": 431,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000018102
+    },
+    {
+      "id": "expiry-adversarial-004",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "adversarial",
+      "unresolved": true,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 1125,
+      "inputTokens": 428,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000017976000000000002
+    },
+    {
+      "id": "expiry-adversarial-005",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "adversarial",
+      "unresolved": true,
+      "jevTier": "general",
+      "confidence": 0.59,
+      "probabilities": {
+        "quick": 0.23,
+        "general": 0.73,
+        "frontier": 0.04
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 1235,
+      "inputTokens": 429,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000018018
+    },
+    {
+      "id": "expiry-adversarial-006",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "adversarial",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 0.97,
+      "probabilities": {
+        "quick": 0.98,
+        "general": 0,
+        "frontier": 0.02
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 490,
+      "inputTokens": 432,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000018144
+    },
+    {
+      "id": "expiry-underspecified-001",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "underspecified",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 0.96,
+      "probabilities": {
+        "quick": 0.98,
+        "general": 0.02,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 347,
+      "inputTokens": 412,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017304000000000002
+    },
+    {
+      "id": "expiry-underspecified-002",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "underspecified",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 0.11,
+      "probabilities": {
+        "quick": 0.39999999999999997,
+        "general": 0.27,
+        "frontier": 0.33
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 344,
+      "inputTokens": 414,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017388
+    },
+    {
+      "id": "expiry-underspecified-003",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "underspecified",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 0.34,
+      "probabilities": {
+        "quick": 0.56,
+        "general": 0.33,
+        "frontier": 0.11
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 367,
+      "inputTokens": 413,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017346
+    },
+    {
+      "id": "expiry-underspecified-004",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "underspecified",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 0.14,
+      "probabilities": {
+        "quick": 0.43,
+        "general": 0.14,
+        "frontier": 0.43
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 364,
+      "inputTokens": 414,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017388
+    },
+    {
+      "id": "expiry-underspecified-005",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "underspecified",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 0.56,
+      "probabilities": {
+        "quick": 0.7,
+        "general": 0.19,
+        "frontier": 0.11
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 358,
+      "inputTokens": 416,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017472
+    },
+    {
+      "id": "expiry-underspecified-006",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "underspecified",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 0.93,
+      "probabilities": {
+        "quick": 0.96,
+        "general": 0.04,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 335,
+      "inputTokens": 413,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017346
+    },
+    {
+      "id": "expiry-language-001",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "multilingual",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 385,
+      "inputTokens": 421,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017682
+    },
+    {
+      "id": "expiry-language-002",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "multilingual",
+      "unresolved": true,
+      "jevTier": "frontier",
+      "confidence": 0.93,
+      "probabilities": {
+        "quick": 0,
+        "general": 0.05,
+        "frontier": 0.95
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 349,
+      "inputTokens": 432,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000018144
+    },
+    {
+      "id": "expiry-language-003",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "multilingual",
+      "unresolved": true,
+      "jevTier": "general",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 1,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 341,
+      "inputTokens": 425,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001785
+    },
+    {
+      "id": "expiry-language-004",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "multilingual",
+      "unresolved": true,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 357,
+      "inputTokens": 431,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000018102
+    },
+    {
+      "id": "expiry-language-005",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "multilingual",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 372,
+      "inputTokens": 430,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000018060000000000003
+    },
+    {
+      "id": "expiry-language-006",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "multilingual",
+      "unresolved": true,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 353,
+      "inputTokens": 433,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000018186
+    },
+    {
+      "id": "expiry-language-007",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "multilingual",
+      "unresolved": true,
+      "jevTier": "general",
+      "confidence": 0.73,
+      "probabilities": {
+        "quick": 0.18,
+        "general": 0.82,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 364,
+      "inputTokens": 432,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000018144
+    },
+    {
+      "id": "expiry-language-008",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "multilingual",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 0.95,
+      "probabilities": {
+        "quick": 0.97,
+        "general": 0.03,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 425,
+      "inputTokens": 431,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000018102
+    },
+    {
+      "id": "expiry-consequence-001",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "consequence",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 0.35,
+      "probabilities": {
+        "quick": 0.57,
+        "general": 0.09,
+        "frontier": 0.34
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 369,
+      "inputTokens": 431,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000018102
+    },
+    {
+      "id": "expiry-consequence-002",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "consequence",
+      "unresolved": true,
+      "jevTier": "frontier",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 0,
+        "general": 0.01,
+        "frontier": 0.99
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 1045,
+      "inputTokens": 425,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.00001785
+    },
+    {
+      "id": "expiry-consequence-003",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "consequence",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 352,
+      "inputTokens": 425,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.00001785
+    },
+    {
+      "id": "expiry-consequence-004",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "frontier",
+      "family": "consequence",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 0.21,
+      "probabilities": {
+        "quick": 0.47,
+        "general": 0.28,
+        "frontier": 0.25
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 887,
+      "inputTokens": 419,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017598000000000003
+    },
+    {
+      "id": "expiry-broad-001",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "broad_low_risk",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 0.99,
+        "general": 0.01,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 1061,
+      "inputTokens": 432,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000018144
+    },
+    {
+      "id": "expiry-broad-002",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "general",
+      "family": "broad_low_risk",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 0.86,
+      "probabilities": {
+        "quick": 0.91,
+        "general": 0.09,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 357,
+      "inputTokens": 428,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017976000000000002
+    },
+    {
+      "id": "expiry-broad-003",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "broad_low_risk",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 0.96,
+      "probabilities": {
+        "quick": 0.97,
+        "general": 0.03,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 338,
+      "inputTokens": 423,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017766000000000002
+    },
+    {
+      "id": "expiry-context-001",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "irrelevant_context",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 347,
+      "inputTokens": 464,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000019488
+    },
+    {
+      "id": "expiry-context-002",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "irrelevant_context",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 0.99,
+        "general": 0.01,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 362,
+      "inputTokens": 445,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000018690000000000002
+    },
+    {
+      "id": "expiry-context-003",
+      "split": "review",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "irrelevant_context",
+      "unresolved": true,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 892,
+      "inputTokens": 440,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.00001848
+    },
+    {
+      "id": "expiry-preference-001",
+      "split": "review",
+      "baselineTier": "frontier",
+      "baselineSource": "regex_rule",
+      "goldTier": "frontier",
+      "family": "preference",
+      "unresolved": true,
+      "jevTier": "frontier",
+      "confidence": 1,
+      "probabilities": {
+        "quick": 0,
+        "general": 0,
+        "frontier": 1
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 380,
+      "inputTokens": 431,
+      "outputTokens": 42,
+      "estimatedInputCostUsd": 0.000018102
+    },
+    {
+      "id": "expiry-preference-002",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "default",
+      "goldTier": "quick",
+      "family": "preference",
+      "unresolved": true,
+      "jevTier": "quick",
+      "confidence": 0.99,
+      "probabilities": {
+        "quick": 1,
+        "general": 0,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 367,
+      "inputTokens": 427,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017934
+    },
+    {
+      "id": "expiry-preference-003",
+      "split": "review",
+      "baselineTier": "general",
+      "baselineSource": "regex_rule",
+      "goldTier": "general",
+      "family": "preference",
+      "unresolved": true,
+      "jevTier": "general",
+      "confidence": 0.81,
+      "probabilities": {
+        "quick": 0.12,
+        "general": 0.88,
+        "frontier": 0
+      },
+      "model": "jev-1.13.0",
+      "status": "ok",
+      "latencyMs": 366,
+      "inputTokens": 427,
+      "outputTokens": 40,
+      "estimatedInputCostUsd": 0.000017934
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+Jev benchmark (all): 47 prompts; availability 46/47; accuracy n/a; frontier false negatives 0/0; latency p50/p95 372/5451ms; tokens in/out 19630/1866; estimated cost $0.000824. Preliminary development evaluation only.

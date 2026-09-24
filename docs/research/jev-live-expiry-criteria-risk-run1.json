@@ -1,0 +1,2662 @@
+{
+  "disclaimer": "Exploratory access-expiry capture. Provisional unresolved labels; not promotion evidence.",
+  "retrieved_at_utc": "2026-09-21T19:24:18.006483+00:00",
+  "endpoint": "https://api.typesafe.ai/v1/systemone",
+  "requested_model": "jev-1.13.0",
+  "input_path": "docs/research/jev-expiry-hard-corpus.jsonl",
+  "input_sha256": "baced530129204187e36aa8b964559a304bc28a10e214b705f386d9e967945c1",
+  "questions": {
+    "labels_only": {
+      "instructions": "Which model tier best fits this coding-agent request? Judge task complexity and consequence, not stated preference or price.",
+      "criteria": {
+        "quick": null,
+        "general": null,
+        "frontier": null
+      }
+    },
+    "current_criteria": {
+      "instructions": "Which model tier best fits this coding-agent request? Judge task complexity and consequence, not stated preference or price.",
+      "criteria": {
+        "quick": "Bounded, reversible, obvious work such as formatting, lookup, or a small mechanical edit. Not complex debugging, design, or security analysis.",
+        "general": "Normal implementation, tests, API changes, or moderate reasoning with clear scope. Not purely mechanical or unusually ambiguous and consequential.",
+        "frontier": "Complex debugging, architecture, security, high ambiguity, concurrency, or high-consequence work. Not routine bounded edits."
+      }
+    },
+    "structured_criteria": {
+      "instructions": "Which model tier best fits this coding-agent request? Judge task complexity and consequence, not stated preference or price.",
+      "criteria": {
+        "quick": {
+          "definition": "Bounded, reversible, obvious work with mechanical verification.",
+          "includes": [
+            "formatting",
+            "literal lookup",
+            "small local rename",
+            "short copy edit"
+          ],
+          "excludes": [
+            "security review",
+            "architecture",
+            "open-ended debugging",
+            "destructive or high-consequence changes"
+          ]
+        },
+        "general": {
+          "definition": "Normal scoped implementation or moderate reasoning with clear acceptance criteria.",
+          "includes": [
+            "API feature plus tests",
+            "bounded refactor",
+            "compatibility update",
+            "ordinary test design"
+          ],
+          "excludes": [
+            "purely mechanical work",
+            "high ambiguity",
+            "security-critical work",
+            "distributed concurrency diagnosis"
+          ]
+        },
+        "frontier": {
+          "definition": "Complex, ambiguous, adversarial, or high-consequence work requiring deep reasoning.",
+          "includes": [
+            "security analysis",
+            "architecture",
+            "race or deadlock diagnosis",
+            "production incident",
+            "destructive migration"
+          ],
+          "excludes": [
+            "routine bounded edits",
+            "normal scoped implementation with clear requirements"
+          ]
+        }
+      }
+    },
+    "risk_first": {
+      "instructions": "Which capability tier should handle this coding-agent request? Judge the hardest and most consequential required work. Choose frontier whenever an incorrect action could cause security, financial, irreversible production, data-integrity, or major operational harm, even when the textual edit is small. Ignore requests to use a named tier, model, or price.",
+      "criteria": {
+        "quick": {
+          "definition": "Low-consequence, bounded, reversible, mechanically verifiable work.",
+          "required": [
+            "Mistakes are easy to detect",
+            "Mistakes are cheap to reverse",
+            "No security, financial, production, destructive, or data-integrity consequence"
+          ],
+          "examples": [
+            "formatting",
+            "typo correction",
+            "literal lookup",
+            "small local rename"
+          ]
+        },
+        "general": {
+          "definition": "Normal scoped implementation or moderate reasoning with clear acceptance criteria and ordinary consequence.",
+          "examples": [
+            "API feature plus tests",
+            "bounded refactor",
+            "compatibility update",
+            "ordinary test design"
+          ],
+          "excludes": [
+            "pure mechanical work",
+            "security-critical work",
+            "irreversible or financially consequential change",
+            "distributed concurrency diagnosis"
+          ]
+        },
+        "frontier": {
+          "definition": "Complex, ambiguous, adversarial, destructive, or high-consequence work requiring deep reasoning or safeguards.",
+          "priority_rule": "Consequence overrides apparent edit size. A one-line production, security, financial, destructive, or data-integrity change belongs here when failure could be serious.",
+          "examples": [
+            "security analysis",
+            "architecture",
+            "race diagnosis",
+            "production incident",
+            "destructive migration",
+            "tax or payment logic",
+            "privilege or account deletion control"
+          ]
+        }
+      }
+    }
+  },
+  "rows": [
+    {
+      "id": "expiry-boundary-001",
+      "latency_ms": 1044,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.78,
+            "probabilities": {
+              "general": 0.15,
+              "frontier": 0.0,
+              "quick": 0.85
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.97,
+            "probabilities": {
+              "general": 0.02,
+              "frontier": 0.0,
+              "quick": 0.98
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.99,
+            "probabilities": {
+              "general": 0.01,
+              "frontier": 0.0,
+              "quick": 0.99
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.98,
+            "probabilities": {
+              "general": 0.02,
+              "frontier": 0.0,
+              "quick": 0.98
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1220,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-boundary-002",
+      "latency_ms": 1113,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.74,
+            "probabilities": {
+              "general": 0.83,
+              "quick": 0.16,
+              "frontier": 0.01
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.98,
+            "probabilities": {
+              "general": 0.99,
+              "quick": 0.01,
+              "frontier": 0.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 1.0,
+            "probabilities": {
+              "general": 1.0,
+              "quick": 0.0,
+              "frontier": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.98,
+            "probabilities": {
+              "general": 0.99,
+              "quick": 0.0,
+              "frontier": 0.01
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1217,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-boundary-003",
+      "latency_ms": 1076,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.48,
+            "probabilities": {
+              "general": 0.35,
+              "frontier": 0.0,
+              "quick": 0.65
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.63,
+            "probabilities": {
+              "general": 0.75,
+              "frontier": 0.13,
+              "quick": 0.12
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.61,
+            "probabilities": {
+              "general": 0.74,
+              "frontier": 0.13,
+              "quick": 0.13
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.45,
+            "probabilities": {
+              "general": 0.63,
+              "frontier": 0.03,
+              "quick": 0.34
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1211,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-boundary-004",
+      "latency_ms": 1040,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.55,
+            "probabilities": {
+              "general": 0.7,
+              "frontier": 0.0,
+              "quick": 0.3
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.52,
+            "probabilities": {
+              "general": 0.68,
+              "frontier": 0.0,
+              "quick": 0.32
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.96,
+            "probabilities": {
+              "general": 0.97,
+              "frontier": 0.0,
+              "quick": 0.03
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.92,
+            "probabilities": {
+              "general": 0.95,
+              "frontier": 0.0,
+              "quick": 0.05
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1219,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-boundary-005",
+      "latency_ms": 1985,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.55,
+            "probabilities": {
+              "frontier": 0.09,
+              "quick": 0.21,
+              "general": 0.7
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.79,
+            "probabilities": {
+              "frontier": 0.86,
+              "quick": 0.01,
+              "general": 0.13
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.97,
+            "probabilities": {
+              "frontier": 0.98,
+              "quick": 0.0,
+              "general": 0.02
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 1.0,
+              "quick": 0.0,
+              "general": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1215,
+          "output_tokens": 165
+        }
+      }
+    },
+    {
+      "id": "expiry-boundary-006",
+      "latency_ms": 2069,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.35,
+            "probabilities": {
+              "frontier": 0.32,
+              "general": 0.5599999999999999,
+              "quick": 0.12
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.5,
+            "probabilities": {
+              "frontier": 0.67,
+              "general": 0.27,
+              "quick": 0.06
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.44,
+            "probabilities": {
+              "frontier": 0.63,
+              "quick": 0.05,
+              "general": 0.32
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.99,
+            "probabilities": {
+              "frontier": 1.0,
+              "general": 0.0,
+              "quick": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1218,
+          "output_tokens": 165
+        }
+      }
+    },
+    {
+      "id": "expiry-boundary-007",
+      "latency_ms": 2018,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.28,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.52,
+              "general": 0.48
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.51,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.33,
+              "general": 0.67
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.64,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.24,
+              "general": 0.76
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.59,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.27,
+              "general": 0.73
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1220,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-boundary-008",
+      "latency_ms": 2005,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.88,
+            "probabilities": {
+              "general": 0.91,
+              "frontier": 0.01,
+              "quick": 0.08
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.88,
+            "probabilities": {
+              "quick": 0.0,
+              "frontier": 0.08,
+              "general": 0.92
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.99,
+            "probabilities": {
+              "general": 1.0,
+              "frontier": 0.0,
+              "quick": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.56,
+            "probabilities": {
+              "general": 0.71,
+              "frontier": 0.27,
+              "quick": 0.02
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1214,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-multi-001",
+      "latency_ms": 993,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.75,
+            "probabilities": {
+              "frontier": 0.11,
+              "quick": 0.06,
+              "general": 0.83
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.98,
+            "probabilities": {
+              "frontier": 0.99,
+              "quick": 0.0,
+              "general": 0.01
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.99,
+            "probabilities": {
+              "frontier": 0.99,
+              "quick": 0.0,
+              "general": 0.01
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 1.0,
+              "quick": 0.0,
+              "general": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1222,
+          "output_tokens": 165
+        }
+      }
+    },
+    {
+      "id": "expiry-multi-002",
+      "latency_ms": 1933,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.9,
+            "probabilities": {
+              "frontier": 0.03,
+              "general": 0.9400000000000001,
+              "quick": 0.03
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 0.0,
+              "general": 1.0,
+              "quick": 0.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 0.0,
+              "general": 1.0,
+              "quick": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 0.0,
+              "general": 1.0,
+              "quick": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1219,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-multi-003",
+      "latency_ms": 1018,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.4,
+            "probabilities": {
+              "quick": 0.07,
+              "general": 0.6,
+              "frontier": 0.33
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.94,
+            "probabilities": {
+              "quick": 0.0,
+              "general": 0.03,
+              "frontier": 0.97
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.99,
+            "probabilities": {
+              "quick": 0.0,
+              "general": 0.01,
+              "frontier": 0.99
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "quick": 0.0,
+              "general": 0.0,
+              "frontier": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1221,
+          "output_tokens": 165
+        }
+      }
+    },
+    {
+      "id": "expiry-multi-004",
+      "latency_ms": 969,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.85,
+            "probabilities": {
+              "quick": 0.07,
+              "frontier": 0.03,
+              "general": 0.9
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.95,
+            "probabilities": {
+              "quick": 0.02,
+              "general": 0.96,
+              "frontier": 0.02
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 1.0,
+            "probabilities": {
+              "quick": 0.0,
+              "general": 1.0,
+              "frontier": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.98,
+            "probabilities": {
+              "quick": 0.0,
+              "general": 0.99,
+              "frontier": 0.01
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1223,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-multi-005",
+      "latency_ms": 1995,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.48,
+            "probabilities": {
+              "quick": 0.09,
+              "frontier": 0.26,
+              "general": 0.65
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.9,
+            "probabilities": {
+              "quick": 0.01,
+              "frontier": 0.93,
+              "general": 0.05
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.92,
+            "probabilities": {
+              "quick": 0.01,
+              "frontier": 0.95,
+              "general": 0.04
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.99,
+            "probabilities": {
+              "quick": 0.0,
+              "frontier": 0.99,
+              "general": 0.01
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1217,
+          "output_tokens": 165
+        }
+      }
+    },
+    {
+      "id": "expiry-multi-006",
+      "latency_ms": 1089,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.45,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.63,
+              "general": 0.37
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.44,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.37,
+              "general": 0.63
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.59,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.27,
+              "general": 0.73
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.74,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.17,
+              "general": 0.83
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1219,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-adversarial-001",
+      "latency_ms": 1969,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.29,
+            "probabilities": {
+              "general": 0.53,
+              "quick": 0.21,
+              "frontier": 0.26
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.98,
+            "probabilities": {
+              "general": 0.0,
+              "quick": 0.01,
+              "frontier": 0.99
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.99,
+            "probabilities": {
+              "general": 0.0,
+              "quick": 0.0,
+              "frontier": 1.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "general": 0.0,
+              "quick": 0.0,
+              "frontier": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1224,
+          "output_tokens": 165
+        }
+      }
+    },
+    {
+      "id": "expiry-adversarial-002",
+      "latency_ms": 1936,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.36,
+            "probabilities": {
+              "frontier": 0.57,
+              "quick": 0.03,
+              "general": 0.4
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.99,
+            "probabilities": {
+              "frontier": 1.0,
+              "quick": 0.0,
+              "general": 0.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 1.0,
+              "general": 0.0,
+              "quick": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 1.0,
+              "quick": 0.0,
+              "general": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1224,
+          "output_tokens": 167
+        }
+      }
+    },
+    {
+      "id": "expiry-adversarial-003",
+      "latency_ms": 1013,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.88,
+            "probabilities": {
+              "general": 0.08,
+              "frontier": 0.0,
+              "quick": 0.92
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 1.0,
+            "probabilities": {
+              "general": 0.0,
+              "frontier": 0.0,
+              "quick": 1.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 1.0,
+            "probabilities": {
+              "general": 0.0,
+              "frontier": 0.0,
+              "quick": 1.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.99,
+            "probabilities": {
+              "general": 0.0,
+              "frontier": 0.0,
+              "quick": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1225,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-adversarial-004",
+      "latency_ms": 1040,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.68,
+            "probabilities": {
+              "quick": 0.02,
+              "general": 0.19,
+              "frontier": 0.79
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "quick": 0.0,
+              "general": 0.0,
+              "frontier": 1.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "quick": 0.0,
+              "general": 0.0,
+              "frontier": 1.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "quick": 0.0,
+              "general": 0.0,
+              "frontier": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1222,
+          "output_tokens": 167
+        }
+      }
+    },
+    {
+      "id": "expiry-adversarial-005",
+      "latency_ms": 1016,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.45,
+            "probabilities": {
+              "frontier": 0.01,
+              "quick": 0.35,
+              "general": 0.64
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.66,
+            "probabilities": {
+              "frontier": 0.03,
+              "quick": 0.19,
+              "general": 0.78
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.76,
+            "probabilities": {
+              "frontier": 0.02,
+              "quick": 0.14,
+              "general": 0.84
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.71,
+            "probabilities": {
+              "frontier": 0.06,
+              "quick": 0.13,
+              "general": 0.81
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1223,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-adversarial-006",
+      "latency_ms": 940,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.68,
+            "probabilities": {
+              "frontier": 0.15,
+              "general": 0.06,
+              "quick": 0.79
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.97,
+            "probabilities": {
+              "frontier": 0.02,
+              "general": 0.0,
+              "quick": 0.98
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.99,
+            "probabilities": {
+              "frontier": 0.01,
+              "general": 0.0,
+              "quick": 0.99
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.9,
+            "probabilities": {
+              "frontier": 0.07,
+              "general": 0.0,
+              "quick": 0.93
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1226,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-underspecified-001",
+      "latency_ms": 1971,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.61,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.74,
+              "general": 0.26
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.96,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.98,
+              "general": 0.02
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.96,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.98,
+              "general": 0.02
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.97,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.98,
+              "general": 0.02
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1206,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-underspecified-002",
+      "latency_ms": 1033,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.45,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.37,
+              "general": 0.63
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.17,
+            "probabilities": {
+              "frontier": 0.34,
+              "quick": 0.45,
+              "general": 0.21
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.05,
+            "probabilities": {
+              "frontier": 0.3,
+              "quick": 0.33,
+              "general": 0.37
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.33,
+            "probabilities": {
+              "frontier": 0.17,
+              "quick": 0.55,
+              "general": 0.28
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1208,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-underspecified-003",
+      "latency_ms": 1248,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.25,
+            "probabilities": {
+              "frontier": 0.01,
+              "general": 0.49,
+              "quick": 0.5
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.37,
+            "probabilities": {
+              "frontier": 0.13,
+              "quick": 0.58,
+              "general": 0.29
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.37,
+            "probabilities": {
+              "frontier": 0.06,
+              "general": 0.36,
+              "quick": 0.58
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.44,
+            "probabilities": {
+              "frontier": 0.09,
+              "general": 0.28,
+              "quick": 0.63
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1207,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-underspecified-004",
+      "latency_ms": 1141,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.26,
+            "probabilities": {
+              "frontier": 0.01,
+              "quick": 0.51,
+              "general": 0.48
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.16,
+            "probabilities": {
+              "frontier": 0.44,
+              "quick": 0.41,
+              "general": 0.15
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.13,
+            "probabilities": {
+              "frontier": 0.29,
+              "quick": 0.43,
+              "general": 0.28
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.08,
+            "probabilities": {
+              "frontier": 0.39,
+              "quick": 0.35,
+              "general": 0.26
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1208,
+          "output_tokens": 163
+        }
+      }
+    },
+    {
+      "id": "expiry-underspecified-005",
+      "latency_ms": 997,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.27,
+            "probabilities": {
+              "general": 0.51,
+              "frontier": 0.01,
+              "quick": 0.48
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.53,
+            "probabilities": {
+              "quick": 0.69,
+              "frontier": 0.13,
+              "general": 0.18
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.39,
+            "probabilities": {
+              "quick": 0.59,
+              "frontier": 0.14,
+              "general": 0.27
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.79,
+            "probabilities": {
+              "quick": 0.86,
+              "frontier": 0.02,
+              "general": 0.12
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1210,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-underspecified-006",
+      "latency_ms": 952,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.88,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.92,
+              "general": 0.08
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.94,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.96,
+              "general": 0.04
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.91,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.94,
+              "general": 0.06
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.94,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.96,
+              "general": 0.04
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1207,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-language-001",
+      "latency_ms": 1056,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.81,
+            "probabilities": {
+              "quick": 0.88,
+              "frontier": 0.0,
+              "general": 0.12
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 1.0,
+            "probabilities": {
+              "quick": 1.0,
+              "general": 0.0,
+              "frontier": 0.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 1.0,
+            "probabilities": {
+              "quick": 1.0,
+              "frontier": 0.0,
+              "general": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 1.0,
+            "probabilities": {
+              "quick": 1.0,
+              "frontier": 0.0,
+              "general": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1215,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-language-002",
+      "latency_ms": 959,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.85,
+            "probabilities": {
+              "quick": 0.05,
+              "general": 0.9,
+              "frontier": 0.05
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.94,
+            "probabilities": {
+              "quick": 0.0,
+              "general": 0.04,
+              "frontier": 0.96
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.94,
+            "probabilities": {
+              "quick": 0.0,
+              "general": 0.04,
+              "frontier": 0.96
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.95,
+            "probabilities": {
+              "quick": 0.0,
+              "general": 0.03,
+              "frontier": 0.97
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1226,
+          "output_tokens": 165
+        }
+      }
+    },
+    {
+      "id": "expiry-language-003",
+      "latency_ms": 942,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.84,
+            "probabilities": {
+              "frontier": 0.0,
+              "general": 0.9,
+              "quick": 0.1
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 0.0,
+              "general": 1.0,
+              "quick": 0.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 0.0,
+              "general": 1.0,
+              "quick": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 0.0,
+              "general": 1.0,
+              "quick": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1219,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-language-004",
+      "latency_ms": 1026,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.29,
+            "probabilities": {
+              "frontier": 0.42,
+              "general": 0.53,
+              "quick": 0.05
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 1.0,
+              "general": 0.0,
+              "quick": 0.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 1.0,
+              "general": 0.0,
+              "quick": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 1.0,
+              "general": 0.0,
+              "quick": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1225,
+          "output_tokens": 165
+        }
+      }
+    },
+    {
+      "id": "expiry-language-005",
+      "latency_ms": 965,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.9,
+            "probabilities": {
+              "general": 0.07,
+              "quick": 0.93,
+              "frontier": 0.0
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 1.0,
+            "probabilities": {
+              "general": 0.0,
+              "quick": 1.0,
+              "frontier": 0.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 1.0,
+            "probabilities": {
+              "general": 0.0,
+              "quick": 1.0,
+              "frontier": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 1.0,
+            "probabilities": {
+              "general": 0.0,
+              "quick": 1.0,
+              "frontier": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1224,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-language-006",
+      "latency_ms": 1011,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.66,
+            "probabilities": {
+              "frontier": 0.77,
+              "general": 0.21,
+              "quick": 0.02
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 1.0,
+              "general": 0.0,
+              "quick": 0.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 1.0,
+              "general": 0.0,
+              "quick": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 1.0,
+              "general": 0.0,
+              "quick": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1227,
+          "output_tokens": 167
+        }
+      }
+    },
+    {
+      "id": "expiry-language-007",
+      "latency_ms": 1018,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.47,
+            "probabilities": {
+              "quick": 0.65,
+              "general": 0.35,
+              "frontier": 0.0
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.74,
+            "probabilities": {
+              "quick": 0.17,
+              "general": 0.83,
+              "frontier": 0.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.89,
+            "probabilities": {
+              "quick": 0.07,
+              "general": 0.93,
+              "frontier": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.92,
+            "probabilities": {
+              "quick": 0.05,
+              "general": 0.95,
+              "frontier": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1226,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-language-008",
+      "latency_ms": 964,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.48,
+            "probabilities": {
+              "general": 0.34,
+              "quick": 0.66,
+              "frontier": 0.0
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.94,
+            "probabilities": {
+              "general": 0.04,
+              "quick": 0.96,
+              "frontier": 0.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.97,
+            "probabilities": {
+              "quick": 0.98,
+              "general": 0.02,
+              "frontier": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.98,
+            "probabilities": {
+              "quick": 0.99,
+              "general": 0.01,
+              "frontier": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1225,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-consequence-001",
+      "latency_ms": 1059,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.31,
+            "probabilities": {
+              "general": 0.42,
+              "frontier": 0.03,
+              "quick": 0.55
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.5,
+            "probabilities": {
+              "general": 0.08,
+              "frontier": 0.25,
+              "quick": 0.67
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.23,
+            "probabilities": {
+              "general": 0.06,
+              "quick": 0.49,
+              "frontier": 0.45
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "general": 0.0,
+              "frontier": 1.0,
+              "quick": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1225,
+          "output_tokens": 161
+        }
+      }
+    },
+    {
+      "id": "expiry-consequence-002",
+      "latency_ms": 1127,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.42,
+            "probabilities": {
+              "general": 0.34,
+              "frontier": 0.62,
+              "quick": 0.04
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.98,
+            "probabilities": {
+              "general": 0.01,
+              "frontier": 0.99,
+              "quick": 0.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.97,
+            "probabilities": {
+              "general": 0.02,
+              "frontier": 0.98,
+              "quick": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "general": 0.0,
+              "frontier": 1.0,
+              "quick": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1219,
+          "output_tokens": 167
+        }
+      }
+    },
+    {
+      "id": "expiry-consequence-003",
+      "latency_ms": 1038,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.97,
+            "probabilities": {
+              "frontier": 0.0,
+              "general": 0.02,
+              "quick": 0.98
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 0.0,
+              "general": 0.0,
+              "quick": 1.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 0.0,
+              "general": 0.0,
+              "quick": 1.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.88,
+            "probabilities": {
+              "frontier": 0.92,
+              "general": 0.01,
+              "quick": 0.07
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1219,
+          "output_tokens": 161
+        }
+      }
+    },
+    {
+      "id": "expiry-consequence-004",
+      "latency_ms": 1006,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.32,
+            "probabilities": {
+              "frontier": 0.01,
+              "quick": 0.44,
+              "general": 0.55
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.16,
+            "probabilities": {
+              "frontier": 0.31,
+              "quick": 0.44,
+              "general": 0.25
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.74,
+            "probabilities": {
+              "frontier": 0.83,
+              "quick": 0.13,
+              "general": 0.04
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 1.0,
+              "quick": 0.0,
+              "general": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1213,
+          "output_tokens": 163
+        }
+      }
+    },
+    {
+      "id": "expiry-broad-001",
+      "latency_ms": 975,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.47,
+            "probabilities": {
+              "frontier": 0.0,
+              "general": 0.35,
+              "quick": 0.65
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.98,
+            "probabilities": {
+              "frontier": 0.0,
+              "general": 0.01,
+              "quick": 0.99
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.99,
+            "probabilities": {
+              "frontier": 0.0,
+              "general": 0.01,
+              "quick": 0.99
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.99,
+            "probabilities": {
+              "general": 0.01,
+              "quick": 0.99,
+              "frontier": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1226,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-broad-002",
+      "latency_ms": 1994,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.57,
+            "probabilities": {
+              "quick": 0.28,
+              "general": 0.72,
+              "frontier": 0.0
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.86,
+            "probabilities": {
+              "quick": 0.91,
+              "general": 0.09,
+              "frontier": 0.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.83,
+            "probabilities": {
+              "quick": 0.89,
+              "general": 0.11,
+              "frontier": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.69,
+            "probabilities": {
+              "quick": 0.8,
+              "general": 0.19,
+              "frontier": 0.01
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1222,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-broad-003",
+      "latency_ms": 2066,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.35,
+            "probabilities": {
+              "general": 0.43,
+              "frontier": 0.0,
+              "quick": 0.57
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.95,
+            "probabilities": {
+              "general": 0.03,
+              "frontier": 0.0,
+              "quick": 0.97
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.92,
+            "probabilities": {
+              "general": 0.05,
+              "frontier": 0.0,
+              "quick": 0.95
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.95,
+            "probabilities": {
+              "general": 0.03,
+              "frontier": 0.0,
+              "quick": 0.97
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1217,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-context-001",
+      "latency_ms": 1001,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.98,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.99,
+              "general": 0.01
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 1.0,
+              "general": 0.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 1.0,
+              "general": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 1.0,
+              "general": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1258,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-context-002",
+      "latency_ms": 981,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.87,
+            "probabilities": {
+              "quick": 0.92,
+              "frontier": 0.0,
+              "general": 0.08
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.98,
+            "probabilities": {
+              "quick": 0.99,
+              "frontier": 0.0,
+              "general": 0.01
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.99,
+            "probabilities": {
+              "quick": 0.99,
+              "frontier": 0.0,
+              "general": 0.01
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.99,
+            "probabilities": {
+              "quick": 0.99,
+              "frontier": 0.0,
+              "general": 0.01
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1239,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-context-003",
+      "latency_ms": 1988,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.69,
+            "probabilities": {
+              "frontier": 0.79,
+              "quick": 0.03,
+              "general": 0.18
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 1.0,
+              "quick": 0.0,
+              "general": 0.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 1.0,
+              "quick": 0.0,
+              "general": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "frontier": 1.0,
+              "quick": 0.0,
+              "general": 0.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1234,
+          "output_tokens": 167
+        }
+      }
+    },
+    {
+      "id": "expiry-preference-001",
+      "latency_ms": 1037,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 0.45,
+            "probabilities": {
+              "quick": 0.04,
+              "general": 0.33,
+              "frontier": 0.63
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "quick": 0.0,
+              "general": 0.0,
+              "frontier": 1.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "quick": 0.0,
+              "general": 0.0,
+              "frontier": 1.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "frontier",
+            "confidence": 1.0,
+            "probabilities": {
+              "quick": 0.0,
+              "general": 0.0,
+              "frontier": 1.0
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1225,
+          "output_tokens": 167
+        }
+      }
+    },
+    {
+      "id": "expiry-preference-002",
+      "latency_ms": 961,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.27,
+            "probabilities": {
+              "general": 0.41,
+              "quick": 0.51,
+              "frontier": 0.08
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.99,
+            "probabilities": {
+              "general": 0.0,
+              "quick": 1.0,
+              "frontier": 0.0
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.98,
+            "probabilities": {
+              "general": 0.01,
+              "quick": 0.99,
+              "frontier": 0.0
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.91,
+            "probabilities": {
+              "general": 0.03,
+              "quick": 0.94,
+              "frontier": 0.03
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1221,
+          "output_tokens": 159
+        }
+      }
+    },
+    {
+      "id": "expiry-preference-003",
+      "latency_ms": 977,
+      "status": "ok",
+      "response": {
+        "model": "jev-1.13.0",
+        "answers": {
+          "labels_only": {
+            "type": "choice",
+            "choice": "quick",
+            "confidence": 0.64,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.76,
+              "general": 0.24
+            }
+          },
+          "current_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.87,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.08,
+              "general": 0.92
+            }
+          },
+          "structured_criteria": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.98,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.01,
+              "general": 0.99
+            }
+          },
+          "risk_first": {
+            "type": "choice",
+            "choice": "general",
+            "confidence": 0.96,
+            "probabilities": {
+              "frontier": 0.0,
+              "quick": 0.03,
+              "general": 0.97
+            }
+          }
+        },
+        "usage": {
+          "input_tokens": 1221,
+          "output_tokens": 159
+        }
+      }
+    }
+  ]
+}
