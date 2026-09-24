@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pi:
+    name: Pi compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - run: npm install
+      - run: npm run typecheck
+      - run: npm test
+
+  # TypeScript compilation against Pi's SDK cannot see OMP's runtime
+  # differences, so this lane loads the extension through OMP's own loader.
+  # `omp models` boots the app and loads --extension modules without
+  # contacting a provider, so no credentials are needed.
+  omp-loader:
+    name: OMP loader compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - name: Install OMP
+        run: bun install -g @oh-my-pi/pi-coding-agent@18.2.11
+      - name: Load the extension through OMP
+        run: |
+          set -euo pipefail
+          timeout 120 omp models -e ./index.ts 2> omp-load.err
+          if grep -q "Failed to load extension" omp-load.err; then
+            echo "::error::OMP failed to load the extension"
+            cat omp-load.err
+            exit 1
+          fi
+          cat omp-load.err
