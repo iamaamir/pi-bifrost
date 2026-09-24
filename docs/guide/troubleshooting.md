@@ -13,8 +13,8 @@ It shows effective routing and reliability state after configuration layers merg
 | Symptom | Inspect | Likely cause | Repair |
 |---------|---------|--------------|--------|
 | Host command is missing | Run `pi --version` or `omp --version` in a terminal | The host is not installed or not on `PATH` | Install [Pi](https://pi.dev) or [OMP](https://omp.sh), then reopen the terminal |
-| Host rejects the package | Check the host version | Pi is older than `0.86.0`, or OMP differs from the validated `18.2.11` | Upgrade the host, then reinstall the package |
-| Init reports zero registry models | Open the host model picker; run `/bifrost debug` | No provider is configured or authenticated in the host | Configure at least one provider and credential, then restart or refresh the host |
+| Host rejects the package | Check the host version | Pi is older than `0.86.0`, or the host cannot load the package manifest | Upgrade the host, then reinstall the package |
+| Init reports zero registry models | Open the host model picker; run `/bifrost debug` | No usable provider/model is configured or visible in the host | Configure a usable provider/model, then restart or refresh the host |
 | Probe returns errors or timeouts | `/bifrost probe`; inspect provider account/network | Invalid credentials, no credits, network failure, provider outage, or burst rate limit | Fix provider access; lower `probe.concurrency`; probe again |
 | Init finds no usable models | Read probe summary | Every registry model failed, timed out, or was unsupported | Fix provider access before accepting generated pools |
 | Preview resolves an unexpected tier | `/bifrost preview <prompt>`; `/bifrost classifier status`; `/bifrost cache stats` | Earlier cache/classifier result beat regex, rule order differs, or default tier applied | Inspect preview `source`; clear stale local cache; test classifier; reorder rules or change default |
