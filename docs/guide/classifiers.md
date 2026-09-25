@@ -10,7 +10,7 @@ Classifiers resolve **tiers**, not exact provider models. Model pools, reliabili
 
 ## Prompt classifier
 
-The prompt backend asks a configured Pi model to return one tier name. In `.pi/bifrost.json`:
+The prompt backend asks a configured host model to return one tier name. In the host project config (`.pi/bifrost.json` on Pi or `.omp/bifrost.json` on OMP):
 
 ```json
 {
@@ -23,6 +23,8 @@ The prompt backend asks a configured Pi model to return one tier name. In `.pi/b
 ```
 
 Prompt classification adds model tokens and latency on cache misses. Successful results may enter Bifrost's local classification cache.
+
+Running `/bifrost classifier` and choosing `prompt` opens a host model dialog. Pi provides its searchable model selector; OMP provides a provider-qualified list of authenticated models. Selecting a model writes the exact `provider/id` to `classifier.model`; you can still configure that field manually.
 
 If prompt classification fails or returns an unknown tier, Bifrost continues through configured fallback, regex rules, and default tier behavior.
 
@@ -42,13 +44,13 @@ Confidence measures how concentrated Jev's returned distribution is. It is not a
 
 TypeSafe/Jev support is the fixed hosted integration described here. Pi-Bifrost does not currently provide a generic local, self-hosted, or OpenRouter-compatible classifier transport.
 
-Choose TypeSafe in Pi:
+Choose TypeSafe in the host UI:
 
 ```text
 /bifrost classifier
 ```
 
-Or configure it in `.pi/bifrost.json`:
+Or configure it in the host project config (`.pi/bifrost.json` on Pi or `.omp/bifrost.json` on OMP):
 
 ```json
 {
@@ -72,7 +74,9 @@ Or configure it in `.pi/bifrost.json`:
 
 ## Credentials
 
-Recommended Pi user auth file, `~/.pi/agent/auth.json`:
+Bifrost first asks the host for a stored TypeSafe credential, then falls back to `TYPESAFE_API_KEY`.
+
+For Pi, the supported file entry is `~/.pi/agent/auth.json`:
 
 ```json
 {
@@ -83,13 +87,7 @@ Recommended Pi user auth file, `~/.pi/agent/auth.json`:
 }
 ```
 
-Location:
-
-```text
-~/.pi/agent/auth.json
-```
-
-Or use:
+OMP resolves the stored credential through its host credential store, not a Pi-style `auth.json`. Use the portable environment setup on OMP (and it also works on Pi):
 
 ```bash
 export TYPESAFE_API_KEY="ts_..."
@@ -114,7 +112,7 @@ The active classifier receives the current prompt and tier instructions. It does
 
 `/bifrost preview <prompt>` uses the same steps Bifrost uses to pick a tier for a normal message (local classification cache → optional classifier → rules → default). It does not treat a leading tier name as an override. When no local cache entry resolves first, an enabled prompt or TypeSafe/Jev classifier may receive the preview prompt and incur classifier usage. Preview does not submit a generation turn or activate the selected provider model.
 
-TypeSafe operational metrics are content-free and local. Detailed troubleshooting requires both global debug and TypeSafe debug. In `.pi/bifrost.json`:
+TypeSafe operational metrics are content-free and local. Detailed troubleshooting requires both global debug and TypeSafe debug. In the host project config (`.pi/bifrost.json` on Pi or `.omp/bifrost.json` on OMP):
 
 ```json
 {

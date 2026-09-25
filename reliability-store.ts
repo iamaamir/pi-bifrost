@@ -103,6 +103,11 @@ export class ReliabilityStore {
     }
   }
 
+  /** Release a half-open trial after cancellation or an unobserved terminal outcome. */
+  recordAborted(model: string): void {
+    this.abandonTrial(model);
+  }
+
   beginTrial(model: string): void {
     if (this.configValue?.enabled === false) return;
     const next = beginTrial(this.stateValue, model);
@@ -159,9 +164,9 @@ export class ReliabilityStore {
     this.configValue = config;
   }
 
-  reload(config?: ReliabilityConfig, cwd?: string): void {
-    if (config !== undefined) this.configValue = config;
-    if (cwd !== undefined) this.pathValue = reliabilityPath(cwd, this.configValue?.path);
+  reload(config: ReliabilityConfig | undefined, cwd?: string): void {
+    this.configValue = config;
+    if (cwd !== undefined) this.pathValue = reliabilityPath(cwd, config?.path);
     this.stateValue = this.pruneStaleTrials(this.io.load(this.pathValue));
   }
 

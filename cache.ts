@@ -1,4 +1,5 @@
 import { resolveStoragePath, readTextFile, writeTextFile } from "./storage.ts";
+import { CONFIG_DIR_NAME } from "./host.ts";
 
 export interface CacheEntry {
   normalized: string;
@@ -117,12 +118,14 @@ export function loadCache(path: string, maxAgeMs = Number.POSITIVE_INFINITY): Ca
   }
 }
 
-export function saveCache(path: string, entries: CacheEntry[]) {
+export function saveCache(path: string, entries: CacheEntry[]): boolean {
   try {
-    const lines = entries.map((e) => JSON.stringify(e)).join("\n");
+    const lines = entries.map((entry) => JSON.stringify(entry)).join("\n");
     writeTextFile(path, lines ? lines + "\n" : "");
+    return true;
   } catch (err) {
     console.error(`[bifrost] failed to save cache: ${err}`);
+    return false;
   }
 }
 
@@ -240,5 +243,5 @@ export function updateCache(
 }
 
 export function cachePath(cwd: string, configuredPath?: string): string {
-  return resolveStoragePath(cwd, configuredPath, ".pi/bifrost-cache.jsonl");
+  return resolveStoragePath(cwd, configuredPath, `${CONFIG_DIR_NAME}/bifrost-cache.jsonl`);
 }

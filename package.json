@@ -1,7 +1,7 @@
 {
   "name": "pi-bifrost",
   "version": "0.4.5",
-  "description": "Configuration-first model routing for Pi with user-owned tiers, strategies, overrides, and reliability filtering.",
+  "description": "Configuration-first model routing for Pi and OMP with user-owned tiers, strategies, overrides, and reliability filtering.",
   "type": "module",
   "license": "MIT",
   "author": {
@@ -19,6 +19,8 @@
   "keywords": [
     "pi-package",
     "pi-extension",
+    "omp",
+    "oh-my-pi",
     "model-router",
     "model-routing",
     "developer-tools",
@@ -26,6 +28,11 @@
     "ai",
     "coding-agent"
   ],
+  "omp": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
   "pi": {
     "extensions": [
       "./index.ts"
@@ -52,6 +59,7 @@
     "@earendil-works/pi-ai": "0.86.0",
     "@earendil-works/pi-coding-agent": "0.86.0",
     "@types/node": "^26.1.1",
-    "agent-tui": "^1.1.0"
+    "agent-tui": "^1.1.0",
+    "typescript": "5.9.3"
   }
 }

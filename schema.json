@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://pi.dev/schemas/bifrost.json",
   "title": "Bifrost Model Router Config",
-  "description": "Configuration for the pi-bifrost query-aware model router. Maps user prompts to model tiers via regex rules and an optional LLM classifier. Merged from extension defaults → global → project root → project config (.pi/bifrost.json), with later layers winning.",
+  "description": "Configuration for the pi-bifrost query-aware model router. Maps user prompts to model tiers via regex rules and an optional LLM classifier. Merged from extension defaults → global → project root → project config (.pi/bifrost.json on Pi or .omp/bifrost.json on OMP), with later layers winning.",
   "type": "object",
   "properties": {
     "enabled": {
@@ -215,7 +215,7 @@
         },
         "path": {
           "type": "string",
-          "description": "Custom path for the cache file. Absolute, ~-prefixed, or relative to project root. Default: .pi/bifrost-cache.jsonl"
+          "description": "Custom path for the cache file. Absolute, ~-prefixed, or relative to project root. Default: .pi/bifrost-cache.jsonl on Pi or .omp/bifrost-cache.jsonl on OMP"
         }
       }
     },
@@ -249,7 +249,7 @@
         },
         "path": {
           "type": "string",
-          "description": "Custom path for persisted reliability state. Default: .pi/bifrost-reliability.json"
+          "description": "Custom path for persisted reliability state. Default: .pi/bifrost-reliability.json on Pi or .omp/bifrost-reliability.json on OMP"
         }
       }
     },
@@ -265,7 +265,7 @@
         },
         "path": {
           "type": "string",
-          "description": "Custom path for the debug log file. Default: .pi/bifrost-debug.jsonl"
+          "description": "Custom path for the debug log file. Default: .pi/bifrost-debug.jsonl on Pi or .omp/bifrost-debug.jsonl on OMP"
         }
       }
     },

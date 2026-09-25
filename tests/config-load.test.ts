@@ -183,4 +183,25 @@ describe("config load", () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
+
+  it("ignores project config when the host reports untrusted", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
+    const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
+    const home = mkdtempSync(join(tmpdir(), "bifrost-home-"));
+    const oldHome = process.env.HOME;
+    const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.HOME = home;
+    process.env.PI_CODING_AGENT_DIR = join(home, "agent");
+    try {
+      writeJson(join(extensionDir, "bifrost.json"), { models: { general: ["extension"] } });
+      writeJson(join(cwd, "bifrost.json"), { models: { general: ["project"] } });
+      assert.deepEqual(loadConfig(cwd, extensionDir, false).models, { general: ["extension"] });
+    } finally {
+      process.env.HOME = oldHome;
+      process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(extensionDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
 });

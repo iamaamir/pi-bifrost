@@ -5,12 +5,12 @@
 Bifrost policy follows this flow:
 
 ```text
-pick a tier → that tier's models → skip unhealthy ones → per-tier strategy → Pi's active model
+pick a tier → that tier's models → skip unhealthy ones → per-tier strategy → the host's active model
 ```
 
 ## Tier model pools
 
-Keys under `models` are tier names. Values list the models allowed in that tier. Add this to `.pi/bifrost.json`:
+Keys under `models` are tier names. Values list the models allowed in that tier. Add this to the host project config (`.pi/bifrost.json` on Pi or `.omp/bifrost.json` on OMP):
 
 ```json
 {
@@ -47,7 +47,7 @@ Strategies choose the exact healthy candidate after a tier has resolved:
 | `largest_context` | Largest context window |
 | `random` | Random healthy candidate |
 
-Set one global fallback and override individual tiers. In `.pi/bifrost.json`:
+Set one global fallback and override individual tiers. In the host project config:
 
 ```json
 {
@@ -64,7 +64,7 @@ Set one global fallback and override individual tiers. In `.pi/bifrost.json`:
 
 ## Tier rules
 
-Regex rules are case-insensitive and evaluated in configured order. First match wins within the regex stage. In `.pi/bifrost.json`:
+Regex rules are case-insensitive and evaluated in configured order. First match wins within the regex stage. In the host project config:
 
 ```json
 {
@@ -85,7 +85,7 @@ Despite the property name `model`, a rule value without `/` names a tier.
 
 ## Direct-model rules
 
-A rule value containing `/` binds one exact provider/model and skips tier selection. In `.pi/bifrost.json`:
+A rule value containing `/` binds one exact provider/model and skips tier selection. In the host project config:
 
 ```json
 {
@@ -116,7 +116,7 @@ First matching step wins; later steps are skipped. A rule naming an exact model 
 
 ## Complete example
 
-Full configuration file, `.pi/bifrost.json`:
+Full configuration file in the host project config:
 
 ```json
 {

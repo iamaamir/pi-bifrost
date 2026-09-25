@@ -1,4 +1,5 @@
 import { resolveStoragePath, readJsonFile, writeJsonFile } from "./storage.ts";
+import { CONFIG_DIR_NAME } from "./host.ts";
 
 export interface ReliabilityConfig {
   enabled?: boolean;
@@ -230,7 +231,7 @@ export function recordSetModelOutcome(
 }
 
 export function reliabilityPath(cwd: string, configuredPath?: string): string {
-  return resolveStoragePath(cwd, configuredPath, ".pi/bifrost-reliability.json");
+  return resolveStoragePath(cwd, configuredPath, `${CONFIG_DIR_NAME}/bifrost-reliability.json`);
 }
 
 export function loadReliability(path: string): ReliabilityState {

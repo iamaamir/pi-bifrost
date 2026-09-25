@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pi:
+    name: Pi compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  # TypeScript compilation against Pi's SDK cannot see OMP's runtime
+  # differences, so this lane loads the extension through OMP's own loader.
+  # `omp models` boots the app and loads --extension modules without
+  # contacting a provider, so no credentials are needed. The second step
+  # exercises the package's local `omp.extensions` manifest path as well.
+  omp-loader:
+    name: OMP loader compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+      - name: Install OMP
+        run: bun install -g @oh-my-pi/pi-coding-agent@18.3.0
+      - name: Load the extension through OMP
+        run: |
+          set -euo pipefail
+          timeout 120 omp models -e ./index.ts 2> omp-load.err
+          if grep -q "Failed to load extension" omp-load.err; then
+            echo "::error::OMP failed to load the extension"
+            cat omp-load.err
+            exit 1
+          fi
+          cat omp-load.err
+      - name: Load the package through OMP's plugin manifest
+        run: |
+          set -euo pipefail
+          workdir=$(mktemp -d)
+          trap 'rm -rf "$workdir"' EXIT
+          mkdir -p "$workdir/home" "$workdir/project"
+          HOME="$workdir/home" omp plugin link "$GITHUB_WORKSPACE"
+          (
+            cd "$workdir/project"
+            HOME="$workdir/home" timeout 120 omp models
+          ) > /dev/null 2> "$workdir/omp-plugin.err"
+          if grep -q "Failed to load extension" "$workdir/omp-plugin.err"; then
+            echo "::error::OMP failed to load the linked package"
+            cat "$workdir/omp-plugin.err"
+            exit 1
+          fi
+          cat "$workdir/omp-plugin.err"

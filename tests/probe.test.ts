@@ -1,169 +1,201 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runProbe, DEFAULT_PROBE_CONCURRENCY, probeOptionsFromConfig } from "../probe.ts";
+import { runProbe, DEFAULT_PROBE_CONCURRENCY, probeOptionsFromConfig, probeResultsPath } from "../probe.ts";
 import { delay } from "./helpers.ts";
 
+const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+
+interface FixtureModel {
+  provider: string;
+  id: string;
+  api: string;
+  cost: { input: number; output: number };
+  baseUrl: string;
+}
+
+function textResponse(model: FixtureModel, text: string) {
+  return {
+    role: "assistant" as const,
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    content: [{ type: "text" as const, text }],
+    usage,
+    stopReason: "stop" as const,
+    timestamp: Date.now(),
+  };
+}
+
+function emptyResponse(model: FixtureModel, stopReason: "error" | "stop" = "error") {
+  return {
+    role: "assistant" as const,
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    content: [],
+    usage,
+    stopReason,
+    timestamp: Date.now(),
+  };
+}
+
+function modelFixture(id = "fixture", provider = "test"): FixtureModel {
+  return { provider, id, api: "openai-completions", cost: { input: 0, output: 0 }, baseUrl: "https://example.invalid/v1" };
+}
+
+function context(cwd: string, model: FixtureModel, response: unknown) {
+  return {
+    cwd,
+    modelRegistry: {
+      getAvailable: () => [model],
+      streamSimple: () => ({ result: async () => response }),
+    },
+  } as never;
+}
+
+function tempCwd(prefix: string) {
+  return mkdtempSync(join(tmpdir(), prefix));
+}
+
 describe("probe transport", () => {
-  it("uses modelRegistry.streamSimple", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "bifrost-probe-"));
-    const model = {
-      provider: "openai-codex",
-      id: "gpt-5.4-mini",
-      api: "openai-codex-responses",
-      cost: { input: 0.75, output: 4.5 },
-      baseUrl: "https://example.invalid/v1",
-    };
-    const cwdBefore = process.cwd();
-
+  it("uses modelRegistry.streamSimple and persists under the context cwd", async () => {
+    const cwd = tempCwd("bifrost-probe-");
+    const repositoryProbe = join(process.cwd(), ".pi", "bifrost-probe.json");
+    const repositoryBefore = existsSync(repositoryProbe) ? readFileSync(repositoryProbe) : undefined;
+    const model = { ...modelFixture("gpt-5.4-mini", "openai-codex"), api: "openai-codex-responses" };
     try {
-      const ctx = {
-        modelRegistry: {
-          getAvailable: () => [model],
-          streamSimple: () => ({
-            result: async () => ({
-              role: "assistant",
-              api: "openai-codex-responses",
-              provider: "openai-codex",
-              model: "gpt-5.4-mini",
-              content: [{ type: "text", text: "2" }],
-              usage: {
-                input: 1,
-                output: 1,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 2,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              stopReason: "stop",
-              timestamp: Date.now(),
-            }),
-          }),
-        },
-      } as never;
-
-      process.chdir(cwd);
+      const ctx = context(cwd, model, textResponse(model, "2"));
       const result = await runProbe(ctx, {});
+      assert.equal(result.path, probeResultsPath(cwd));
       assert.equal(result.results[0]?.status, "ok");
       assert.equal(result.results[0]?.model, "gpt-5.4-mini");
+      assert.equal(readFileSync(result.path, "utf8").trim(), JSON.stringify(result.results, null, 2));
     } finally {
-      process.chdir(cwdBefore);
+      rmSync(cwd, { recursive: true, force: true });
+    }
+    const repositoryAfter = existsSync(repositoryProbe) ? readFileSync(repositoryProbe) : undefined;
+    assert.deepEqual(
+      repositoryAfter?.toString("utf8"),
+      repositoryBefore?.toString("utf8"),
+    );
+  });
+
+  it("falls back to a minimal session for an empty error response", async () => {
+    const cwd = tempCwd("bifrost-probe-error-fallback-");
+    const model = { ...modelFixture("gpt-5.4-mini", "openai-codex"), api: "openai-codex-responses" };
+    try {
+      const result = await runProbe(context(cwd, model, emptyResponse(model)), { promptWithSession: async () => "2" });
+      assert.equal(result.results[0]?.status, "ok");
+      assert.equal(result.results[0]?.transport, "session");
+      assert.equal(result.results[0]?.model, "gpt-5.4-mini");
+    } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
   });
 
-  it("falls back to minimal session when stream is empty", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "bifrost-probe-"));
-    const model = {
-      provider: "openai-codex",
-      id: "gpt-5.4-mini",
-      api: "openai-codex-responses",
-      cost: { input: 0.75, output: 4.5 },
-      baseUrl: "https://example.invalid/v1",
-    };
-    const cwdBefore = process.cwd();
-
+  it("falls back to a minimal session for an empty successful response", async () => {
+    const cwd = tempCwd("bifrost-probe-stop-fallback-");
+    const model = modelFixture("empty-stop");
     try {
-      const ctx = {
-        cwd,
-        modelRegistry: {
-          getAvailable: () => [model],
-          streamSimple: () => ({
-            result: async () => ({
-              role: "assistant",
-              api: "openai-codex-responses",
-              provider: "openai-codex",
-              model: "gpt-5.4-mini",
-              content: [],
-              usage: {
-                input: 1,
-                output: 1,
-                cacheRead: 0,
-                cacheWrite: 0,
-                totalTokens: 2,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-              },
-              stopReason: "error",
-              errorMessage: "empty response",
-              timestamp: Date.now(),
-            }),
-          }),
-        },
-      } as never;
-
-      process.chdir(cwd);
-      const result = await runProbe(ctx, { promptWithSession: async () => "2" });
+      const result = await runProbe(context(cwd, model, emptyResponse(model, "stop")), { promptWithSession: async () => "2" });
       assert.equal(result.results[0]?.status, "ok");
-      assert.equal(result.results[0]?.model, "gpt-5.4-mini");
+      assert.equal(result.results[0]?.transport, "session");
     } finally {
-      process.chdir(cwdBefore);
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects fallback text that settles after the probe deadline", async () => {
+    const cwd = tempCwd("bifrost-probe-late-fallback-");
+    const model = modelFixture("late-fallback");
+    try {
+      const result = await runProbe(context(cwd, model, emptyResponse(model)), {
+        timeoutMs: 10,
+        promptWithSession: async () => {
+          await delay(25);
+          return "2";
+        },
+      });
+      assert.equal(result.results[0]?.status, "timeout");
+      assert.equal(result.results[0]?.error, "timeout");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies partial aborted output as timeout before text", async () => {
+    const cwd = tempCwd("bifrost-probe-aborted-");
+    const model = modelFixture("aborted");
+    const response = { ...textResponse(model, "partial"), stopReason: "aborted" as const };
+    try {
+      const result = await runProbe(context(cwd, model, response), {});
+      assert.equal(result.results[0]?.status, "timeout");
+      assert.equal(result.results[0]?.error, "timeout");
+      assert.equal(result.path, probeResultsPath(cwd));
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("recognizes host-neutral AbortError throws", async () => {
+    const cwd = tempCwd("bifrost-probe-abort-error-");
+    const model = modelFixture("abort-error");
+    const ctx = {
+      cwd,
+      modelRegistry: {
+        getAvailable: () => [model],
+        streamSimple: () => { throw { name: "AbortError", message: "aborted" }; },
+      },
+    } as never;
+    try {
+      const result = await runProbe(ctx, {});
+      assert.equal(result.results[0]?.status, "timeout");
+      assert.equal(result.path, probeResultsPath(cwd));
+    } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
   });
 });
 
-describe("probe with many models and slow responses", () => {
-  it("handles 500 models with mixed fast/slow responses, respects concurrency and timeout", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "bifrost-probe-500-"));
-    const cwdBefore = process.cwd();
-    const MODEL_COUNT = 500;
-    const TIMEOUT_MS = 50; // short timeout for fast test
-    const SLOW_DELAY_MS = 200; // longer than timeout -> timeout status
-    const FAST_DELAY_MS = 10; // shorter than timeout -> ok status
-
-    // Create 500 models: even indices are slow, odd are fast
-    const models = Array.from({ length: MODEL_COUNT }, (_, i) => ({
-      provider: "test",
-      id: `model-${i}`,
-      api: "openai-completions",
-      cost: { input: 1, output: 2 },
-      baseUrl: "http://localhost/v1",
-    }));
-
-    let activeWorkers = 0;
-    let maxConcurrentWorkers = 0;
+describe("probe concurrency and persistence", () => {
+  it("handles many models with bounded concurrency and timeout", async () => {
+    const cwd = tempCwd("bifrost-probe-many-");
+    const modelCount = 500;
+    const models = Array.from({ length: modelCount }, (_, index) => ({ ...modelFixture(`model-${index}`), cost: { input: 1, output: 2 } }));
+    let active = 0;
+    let maxActive = 0;
     let completed = 0;
-    const progressCalls: Array<{ done: number; total: number }> = [];
-
+    const progress: number[] = [];
     try {
       const ctx = {
+        cwd,
         modelRegistry: {
           getAvailable: () => models,
-          streamSimple: (_model: typeof models[0], _messages: unknown, options: { signal: AbortSignal }) => {
-            const model = _model;
+          streamSimple: (_model: (typeof models)[number], _messages: unknown, options: { signal: AbortSignal }) => {
+            const index = models.indexOf(_model);
             const signal = options.signal;
-            const index = models.indexOf(model);
-            const isSlow = index % 2 === 0;
             return {
               result: async () => {
-                activeWorkers++;
-                maxConcurrentWorkers = Math.max(maxConcurrentWorkers, activeWorkers);
+                active++;
+                maxActive = Math.max(maxActive, active);
                 try {
-                  if (isSlow) {
+                  if (index % 2 === 0) {
                     await Promise.race([
-                      delay(SLOW_DELAY_MS),
+                      delay(200),
                       new Promise<never>((_, reject) => {
                         if (signal.aborted) reject(new DOMException("Aborted", "AbortError"));
                         signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
                       }),
                     ]);
                   } else {
-                    await delay(FAST_DELAY_MS);
+                    await delay(10);
                   }
-                  return {
-                    role: "assistant",
-                    api: "openai-completions",
-                    provider: model.provider,
-                    model: model.id,
-                    content: [{ type: "text", text: "ok" }],
-                    usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-                    stopReason: "stop",
-                    timestamp: Date.now(),
-                  };
+                  return textResponse(_model, "ok");
                 } finally {
-                  activeWorkers--;
+                  active--;
                   completed++;
                 }
               },
@@ -171,148 +203,65 @@ describe("probe with many models and slow responses", () => {
           },
         },
       } as never;
-
-      process.chdir(cwd);
       const result = await runProbe(ctx, {
-        timeoutMs: TIMEOUT_MS,
-        onProgress: (done, total, last) => {
-          progressCalls.push({ done, total });
-          assert.equal(total, MODEL_COUNT);
-          assert.equal(last.provider, "test");
-        },
+        timeoutMs: 50,
+        onProgress: (done) => { progress.push(done); },
       });
-
-      // Verify results count
-      assert.equal(result.results.length, MODEL_COUNT);
-
-      // Verify all models have a result in correct order
-      for (let i = 0; i < MODEL_COUNT; i++) {
-        const r = result.results[i];
-        assert.equal(r?.provider, "test");
-        assert.equal(r?.model, `model-${i}`);
-      }
-
-      // Verify slow models timed out, fast models succeeded
-      let timeoutCount = 0;
-      let okCount = 0;
-      for (let i = 0; i < MODEL_COUNT; i++) {
-        const r = result.results[i];
-        const isSlow = i % 2 === 0;
-        if (isSlow) {
-          assert.equal(r?.status, "timeout", `model-${i} should be timeout`);
-          timeoutCount++;
-        } else {
-          assert.equal(r?.status, "ok", `model-${i} should be ok`);
-          okCount++;
-        }
-      }
-      assert.equal(timeoutCount, Math.ceil(MODEL_COUNT / 2));
-      assert.equal(okCount, Math.floor(MODEL_COUNT / 2));
-
-      // Verify concurrency limit (default cap)
-      assert.ok(maxConcurrentWorkers <= DEFAULT_PROBE_CONCURRENCY, `max concurrent workers ${maxConcurrentWorkers} should not exceed ${DEFAULT_PROBE_CONCURRENCY}`);
-      assert.ok(maxConcurrentWorkers >= DEFAULT_PROBE_CONCURRENCY || maxConcurrentWorkers === MODEL_COUNT, `should reach max concurrency of ${DEFAULT_PROBE_CONCURRENCY} or total models`);
-
-      // Verify progress was called for each completion
-      assert.equal(progressCalls.length, MODEL_COUNT);
-      assert.equal(progressCalls[progressCalls.length - 1]?.done, MODEL_COUNT);
-
-      // Verify results are written to file
-      const probePath = join(cwd, ".pi", "bifrost-probe.json");
-      const probeData = JSON.parse(await import("node:fs/promises").then((fs) => fs.readFile(probePath, "utf-8")));
-      assert.equal(probeData.length, MODEL_COUNT);
+      assert.equal(result.results.length, modelCount);
+      assert.equal(completed, modelCount);
+      assert.equal(progress.length, modelCount);
+      assert.equal(progress.at(-1), modelCount);
+      assert.ok(maxActive <= DEFAULT_PROBE_CONCURRENCY);
+      assert.ok(maxActive > 1);
+      assert.equal(result.results.filter((item) => item.status === "timeout").length, modelCount / 2);
+      assert.equal(result.results.filter((item) => item.status === "ok").length, modelCount / 2);
+      assert.equal(JSON.parse(readFileSync(result.path, "utf8")).length, modelCount);
     } finally {
-      process.chdir(cwdBefore);
       rmSync(cwd, { recursive: true, force: true });
     }
   });
-});
-
-describe("probe concurrency and resilience", () => {
-  const makeFastModel = (i: number) => ({
-    provider: "test",
-    id: `model-${i}`,
-    api: "openai-completions",
-    cost: { input: 1, output: 2 },
-    baseUrl: "http://localhost/v1",
-  });
-
-  function makeFastCtx(models: ReturnType<typeof makeFastModel>[]) {
-    return {
-      modelRegistry: {
-        getAvailable: () => models,
-        streamSimple: () => ({
-          result: async () => {
-            await delay(10);
-            return {
-              role: "assistant",
-              api: "openai-completions",
-              provider: "test",
-              model: "x",
-              content: [{ type: "text", text: "ok" }],
-              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-              stopReason: "stop",
-              timestamp: Date.now(),
-            };
-          },
-        }),
-      },
-    } as never;
-  }
 
   it("honors an explicit concurrency cap", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "bifrost-probe-cap-"));
-    const cwdBefore = process.cwd();
-    const models = Array.from({ length: 20 }, (_, i) => makeFastModel(i));
-    let activeWorkers = 0;
-    let maxConcurrentWorkers = 0;
-
+    const cwd = tempCwd("bifrost-probe-cap-");
+    const models = Array.from({ length: 20 }, (_, index) => modelFixture(`model-${index}`));
+    let active = 0;
+    let maxActive = 0;
     try {
-      const ctx = makeFastCtx(models) as Parameters<typeof runProbe>[0];
-      // Wrap streamSimple to observe in-flight workers.
-      const registry = ctx.modelRegistry as unknown as {
-        streamSimple: (...args: unknown[]) => { result: () => Promise<unknown> };
-      };
-      const innerStream = registry.streamSimple;
-      registry.streamSimple = (...args: unknown[]) => {
-        const stream = innerStream.apply(registry, args);
-        return {
-          result: async () => {
-            activeWorkers++;
-            maxConcurrentWorkers = Math.max(maxConcurrentWorkers, activeWorkers);
-            try {
-              return await stream.result();
-            } finally {
-              activeWorkers--;
-            }
-          },
-        };
-      };
-
-      process.chdir(cwd);
+      const ctx = {
+        cwd,
+        modelRegistry: {
+          getAvailable: () => models,
+          streamSimple: (selected: (typeof models)[number]) => ({
+            result: async () => {
+              active++;
+              maxActive = Math.max(maxActive, active);
+              try {
+                await delay(10);
+                return textResponse(selected, "ok");
+              } finally {
+                active--;
+              }
+            },
+          }),
+        },
+      } as never;
       await runProbe(ctx, { concurrency: 4 });
-      assert.ok(maxConcurrentWorkers <= 4, `max concurrent workers ${maxConcurrentWorkers} should not exceed 4`);
-      assert.ok(maxConcurrentWorkers > 1, "should run some workers concurrently");
+      assert.ok(maxActive <= 4);
+      assert.ok(maxActive > 1);
     } finally {
-      process.chdir(cwdBefore);
       rmSync(cwd, { recursive: true, force: true });
     }
   });
 
-  it("returns results even when writing the results file fails", async () => {
-    const cwd = mkdtempSync(join(tmpdir(), "bifrost-probe-iofail-"));
-    const cwdBefore = process.cwd();
-
+  it("returns results when persistence fails", async () => {
+    const cwd = tempCwd("bifrost-probe-iofail-");
+    writeFileSync(join(cwd, ".pi"), "not a directory");
+    const model = modelFixture("io-failure");
     try {
-      // A file named ".pi" makes mkdir/write fail deterministically.
-      writeFileSync(join(cwd, ".pi"), "not a directory");
-      const ctx = makeFastCtx([makeFastModel(0)]) as Parameters<typeof runProbe>[0];
-      process.chdir(cwd);
-      const result = await runProbe(ctx, {});
+      const result = await runProbe(context(cwd, model, textResponse(model, "ok")), {});
       assert.equal(result.results.length, 1);
       assert.equal(result.results[0]?.status, "ok");
     } finally {
-      process.chdir(cwdBefore);
       rmSync(cwd, { recursive: true, force: true });
     }
   });

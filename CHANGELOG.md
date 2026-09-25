@@ -22,6 +22,8 @@ All notable changes to pi-bifrost are documented here.
 - Init now prefers a populated `general` tier as default regardless of model discovery order.
 - TUI command feedback no longer appears twice through both notifications and stderr extension output.
 - TypeSafe backend selection now writes explicit Jev and fallback settings, status distinguishes Jev from its prompt fallback model, and classifier tests separate rejected backend judgments from final fallback routes.
+- OMP now opens its host model dialog for prompt-classifier selection when Pi's rich selector export is unavailable.
+- Linked/local source changes now documented as requiring a fresh OMP process; `/reload-plugins` alone does not replace initialized extension modules.
 
 ### Security
 - TypeSafe decoder fails closed on non-plain objects, accessors, extra fields, and malformed probabilities.

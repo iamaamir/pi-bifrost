@@ -4,7 +4,7 @@
 
 ## What Bifrost does
 
-Pi-Bifrost chooses from models already available in [Pi](https://pi.dev). For each message it resolves a configured capability tier, filters unhealthy candidates, applies your tier strategy, and activates Pi's actual provider/model before generation.
+Pi-Bifrost chooses from models already available in [Pi](https://pi.dev) or [OMP](https://omp.sh) (oh-my-pi). For each message it resolves a configured capability tier, filters unhealthy candidates, applies your tier strategy, and activates the host's actual provider/model before generation.
 
 Bifrost does not provide model credentials or a model proxy.
 
@@ -12,34 +12,48 @@ Bifrost does not provide model credentials or a model proxy.
 
 You need:
 
-- Pi `0.86.0` or newer;
-- at least one model provider configured and authenticated in Pi;
-- at least one model visible in Pi's model registry;
+- Pi `0.86.0` or newer, or OMP `18.3.0` (the validated OMP version);
+- at least one model provider configured in the host and authenticated unless it is intentionally keyless;
+- at least one model visible in the host's model registry;
 - network access for installation and provider requests.
 
-Check Pi:
+Check the host:
 
 ```bash
 pi --version
+omp --version
 ```
 
-Open Pi and confirm you can select and use at least one provider model before diagnosing Bifrost.
+Confirm you can select and use at least one provider model before diagnosing Bifrost.
 
 ## Install
 
-From npm:
+Pi, from npm:
 
 ```bash
 pi install npm:pi-bifrost
 ```
 
-Or directly from GitHub:
+OMP:
+
+```bash
+omp plugin install pi-bifrost
+```
+
+Or directly from GitHub (Pi) or a local checkout (OMP):
 
 ```bash
 pi install git:github.com/iamaamir/pi-bifrost
+omp plugin link /path/to/pi-bifrost
 ```
 
-Restart Pi if the extension is not loaded in the current session.
+After updating a linked or local extension source, fully quit and relaunch OMP. `/reload-plugins` refreshes discovery and capabilities, but it does not replace the extension module already initialized in that process; source-code changes require a fresh OMP process.
+
+OMP reads the same `bifrost.json` schema but its own paths: `.omp/bifrost.json` for the project config and `~/.omp/agent/bifrost.json` for the global one. Local cache and reliability state live under `.omp/`. Manual model selection in OMP does not pin Bifrost (use `/bifrost pin`). Running `/bifrost classifier` and choosing the prompt backend opens a host dialog of available `provider/id` models; select one there or set `classifier.model` in config.
+
+On OMP 18.3, the extension `input` event is emitted only by the interactive editor submission path. Print/RPC/ACP, direct `session.prompt()` calls, and dedicated follow-up submission bypass that event, and `before_agent_start` cannot replace the original prompt. Those modes therefore cannot be pre-routed by this extension; use the OMP interactive TUI when adaptive routing is required.
+
+Pi trust gates project-owned layers. Bifrost reads the project-root `bifrost.json`, host-specific `.pi/bifrost.json`, and project route files only when `ctx.isProjectTrusted()` is true; untrusted projects retain only extension and user-global configuration. OMP 18.3 currently reports trust true, so its project layers remain available without a Pi-style trust gate.
 
 ## Understand four terms
 
@@ -50,7 +64,7 @@ Restart Pi if the extension is not loaded in the current session.
 
 ## Initialize
 
-Inside Pi, run:
+Inside the host, run:
 
 ```text
 /bifrost init
@@ -58,21 +72,21 @@ Inside Pi, run:
 
 Initialization:
 
-1. refreshes Pi's model registry;
-2. reuses probe results newer than one hour or probes every available registry model (results are cached in `.pi/bifrost-probe.json`); pass `-f` to force a fresh probe regardless of cache age;
+1. refreshes the host's model registry;
+2. reuses probe results newer than one hour or probes every available registry model (results are cached in `.pi/bifrost-probe.json` on Pi or `.omp/bifrost-probe.json` on OMP); pass `-f` to force a fresh probe regardless of cache age;
 3. proposes `quick`, `general`, and `frontier` pools;
 4. orders candidates using one-time probe latency;
 5. proposes a prompt classifier when a working classifier model is found;
 6. shows the complete proposed configuration;
-7. writes `.pi/bifrost.json` only after confirmation.
+7. writes the host's project config (`.pi/bifrost.json` on Pi or `.omp/bifrost.json` on OMP) only after confirmation.
 
 Bifrost does not ship maintainer-specific provider/model IDs as routing defaults.
 
 ### Probe usage warning
 
-When a fresh result is unavailable, the probe sends `1+1=` to every available registry model. The primary transport caps output at 5 tokens; an empty response may trigger one minimal-session fallback request. Default concurrency is 50 and per-model timeout is 10 seconds. Requests may incur provider usage, consume credits, or trigger burst rate limits.
+When a fresh result is unavailable, the probe sends `1+1=` to every available registry model. The primary transport caps output at 5 tokens; an empty response may trigger one minimal-session fallback request on Pi. Default concurrency is 50 and per-model timeout is 10 seconds. Requests may incur provider usage, consume credits, or trigger burst rate limits.
 
-For providers with tight limits, create a config file before init. In `~/.pi/agent/bifrost.json` (all projects) or `.pi/bifrost.json` (this project):
+For providers with tight limits, create a config file before init. Use `~/.pi/agent/bifrost.json` (Pi) or `~/.omp/agent/bifrost.json` (OMP) for all projects, or the matching project config (`.pi/bifrost.json` / `.omp/bifrost.json`):
 
 ```json
 {
@@ -103,7 +117,7 @@ For rules/default-only routing, disable it after init:
 /bifrost classifier off
 ```
 
-Or set this in `.pi/bifrost.json`:
+Or set this in the host's project config (`.pi/bifrost.json` on Pi or `.omp/bifrost.json` on OMP):
 
 ```json
 {
@@ -161,11 +175,11 @@ Resume adaptive routing:
 Config merges in this order; later layers win:
 
 1. extension default: `<extensionDir>/bifrost.json`
-2. user-global: `~/.pi/agent/bifrost.json`
+2. user-global: `~/.pi/agent/bifrost.json` (`~/.omp/agent/bifrost.json` on OMP)
 3. project root: `bifrost.json`
-4. project config: `.pi/bifrost.json`
+4. project config: `.pi/bifrost.json` (`.omp/bifrost.json` on OMP)
 
-Project-specific rules may also live in `bifrost-routes.json` or `.pi/bifrost-routes.json`; the `.pi` file wins.
+Project-specific rules may also live in `bifrost-routes.json` or the host-specific `.pi/bifrost-routes.json` / `.omp/bifrost-routes.json`; the host directory file wins.
 
 After editing configuration:
 

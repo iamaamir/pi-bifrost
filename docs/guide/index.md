@@ -1,8 +1,8 @@
 # Pi-Bifrost guide
 
-Pi-Bifrost is a configuration-first model router for [Pi](https://pi.dev). It resolves a configured tier for a user prompt, filters unhealthy candidates, applies that tier's model-selection strategy, and activates Pi's actual provider/model before generation.
+Pi-Bifrost is a configuration-first model router for [Pi](https://pi.dev) and [OMP](https://omp.sh) (oh-my-pi). It resolves a configured tier for a user prompt, filters unhealthy candidates, applies that tier's model-selection strategy, and activates the host's actual provider/model before generation.
 
-New to Bifrost? Start with [Install and initialize](getting-started.md). It explains prerequisites, probe usage, generated classifier behavior, preview privacy, and the first routed prompt.
+New to Bifrost? Start with [Install and initialize](getting-started.md). It explains prerequisites, host-specific paths, probe usage, generated classifier behavior, preview privacy, and the first routed prompt.
 
 ## Start here
 
@@ -30,7 +30,7 @@ prompt
   → configured model pool
   → reliability filtering
   → per-tier strategy
-  → Pi's active provider/model
+  → the host's active provider/model
 ```
 
 Bifrost separates two decisions:
@@ -55,10 +55,10 @@ Optional classifiers, including TypeSafe/Jev, choose a tier. They do not receive
 
 ## Product boundaries
 
-- Bifrost activates Pi's real model; it does not hide routing behind a virtual profile.
+- Bifrost activates the host's real model; it does not hide routing behind a virtual profile.
 - Bifrost never automatically replays a failed user prompt.
 - Reliability circuits protect future turns; they are not provider quota guards.
-- Provider prompt caches remain controlled by Pi's provider integration and each provider.
+- Provider prompt caches remain controlled by the host's provider integration and each provider.
 - Adaptive routing may trade prompt-cache locality for per-turn task fit. It cannot guarantee better results, lower cost, lower latency, or cache savings.
 - `/bifrost pin` is a session-local hard lock. Use it when continuity or one exact model matters more than per-message routing. A tier name at the start of a message is ignored while pinned.
 

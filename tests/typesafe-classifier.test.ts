@@ -4,11 +4,13 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setupDebug } from "../debug.ts";
+import { initHost } from "../host.ts";
 import {
   TYPESAFE_MODEL,
   TYPESAFE_SYSTEMONE_URL,
   createTypeSafeClassifier,
   decodeTypeSafeJudgment,
+  resolveTypeSafeApiKeyForContext,
 } from "../typesafe-classifier.ts";
 import { ReliabilityStore } from "../reliability-store.ts";
 import { emptyReliabilityState } from "../reliability.ts";
@@ -128,6 +130,51 @@ describe("TypeSafe classifier", () => {
     assert.deepEqual(outcomes, ["timeout"]);
   });
 
+  it("bounds stalled credential resolution before any request", async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    let fetchCalls = 0;
+    let resolverSignal: AbortSignal | undefined;
+    let resolveCredential!: (value: string) => void;
+    const credential = new Promise<string>((resolve) => { resolveCredential = resolve; });
+    const outcomes: string[] = [];
+    initHost({ zod: {} });
+    const classifier = createTypeSafeClassifier({
+      ctx: {
+        cwd: "/project",
+        modelRegistry: {
+          getApiKeyForProvider: async (
+            _provider: string,
+            _sessionId: string | undefined,
+            options?: { signal?: AbortSignal },
+          ) => {
+            resolverSignal = options?.signal;
+            return credential;
+          },
+        },
+      } as never,
+      timeoutMs: 100,
+      maxAttempts: 1,
+      observe: ({ outcome }) => outcomes.push(outcome),
+      fetchImpl: async () => {
+        fetchCalls++;
+        return new Response(JSON.stringify(payload()), { status: 200 });
+      },
+    });
+    try {
+      const pending = classifier({ prompt: "x", tiers: ["general"], criteria: { general: "normal" } });
+      t.mock.timers.tick(100);
+      assert.equal(await pending, undefined);
+      assert.equal(fetchCalls, 0);
+      assert.equal(resolverSignal?.aborted, true);
+      assert.deepEqual(outcomes, ["timeout"]);
+      resolveCredential("late-key");
+      await Promise.resolve();
+      assert.equal(fetchCalls, 0);
+    } finally {
+      t.mock.timers.reset();
+    }
+  });
+
   it("abandons a half-open trial when caller aborts", async () => {
     const key = `classifier/typesafe/${TYPESAFE_MODEL}`;
     const now = Date.now();
@@ -194,5 +241,29 @@ describe("TypeSafe classifier", () => {
     const authClassifier = createTypeSafeClassifier({ apiKey: "key", maxAttempts: 3, fetchImpl: async () => { calls++; return new Response("no", { status: 401 }); }, sleepImpl: async () => {} });
     assert.equal(await authClassifier({ prompt: "x", tiers: ["general"], criteria: { general: "normal" } }), undefined);
     assert.equal(calls, 1);
+  });
+
+  it("prefers the OMP context registry credential path", async () => {
+    initHost({ zod: {} });
+    const calls: unknown[] = [];
+    const previous = process.env.TYPESAFE_API_KEY;
+    delete process.env.TYPESAFE_API_KEY;
+    try {
+      const result = await resolveTypeSafeApiKeyForContext({
+        cwd: "/project",
+        sessionManager: { getSessionId: () => "session-typesafe" },
+        modelRegistry: {
+          getApiKeyForProvider: async (...args: unknown[]) => {
+            calls.push(args);
+            return "omp-typesafe-key";
+          },
+        },
+      } as never);
+      assert.deepEqual(result, { apiKey: "omp-typesafe-key", source: "host-store" });
+      assert.deepEqual(calls, [["typesafe", "session-typesafe", { baseUrl: TYPESAFE_SYSTEMONE_URL, modelId: TYPESAFE_MODEL }]]);
+    } finally {
+      if (previous === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = previous;
+    }
   });
 });

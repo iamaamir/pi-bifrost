@@ -21,8 +21,10 @@
 | `/bifrost classifier test` | Make fresh classifier request and show result/fallback |
 | `/bifrost classifier status` | Show backend, model, credentials, fallback, and safe metrics |
 | `/bifrost debug` | Show effective routing and reliability diagnostics |
-| `/bifrost providers` | List providers available through Pi |
+| `/bifrost providers` | List providers available through the host |
 | `/bifrost benchmark <prompt>` | Classify a prompt and show the outcome without generating |
+
+On OMP 18.3, routing is only applied to interactive editor submissions that emit the extension `input` event. Print/RPC/ACP, direct `session.prompt()` calls, and dedicated follow-up submission bypass the event and cannot be pre-routed by this extension.
 
 ## Common workflows
 
@@ -71,14 +73,14 @@ Edit the relevant `bifrost.json`, then run:
 /bifrost debug
 ```
 
-Probe sends `1+1=` to every model available in Pi's registry. The primary transport caps output at 5 tokens; an empty response may trigger one minimal-session fallback. Provider usage or burst rate limits may apply. See [Troubleshooting](troubleshooting.md).
+Probe sends `1+1=` to every model available in the host registry. The primary transport caps output at 5 tokens; an empty response may trigger one minimal-session fallback on Pi. Provider usage or burst rate limits may apply. See [Troubleshooting](troubleshooting.md).
 
 ## Persistence summary
 
-| Control | Survives restart | Propagates to child sessions |
-|---------|------------------|------------------------------|
-| `/bifrost on` / `off` | Yes | Yes, through shared runtime policy |
-| `/bifrost pin` / `unpin` | No | No |
-| Classifier on/off | Yes | Follows shared runtime/config state |
+| Control | Survives restart | Scope across child sessions |
+|---------|------------------|-----------------------------|
+| `/bifrost on` / `off` | Yes | Shared project runtime state; a child in another project uses that project's state |
+| `/bifrost pin` / `unpin` | No | Session-local only |
+| Classifier on/off | Yes | Shared project runtime state plus effective config |
 
 Pin is a hard lock. A tier name at the start of a message is not applied while pinned.

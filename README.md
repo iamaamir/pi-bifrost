@@ -2,7 +2,7 @@
 
 ![Pi-Bifrost social card](docs/social-card.png)
 
-Pi-Bifrost is a **configuration-first model-routing extension for [Pi](https://pi.dev)**, not an LLM gateway or proxy. You define model pools and per-tier selection strategies. Before generation, Bifrost resolves a configured tier, filters unhealthy candidates, applies your strategy, and activates Pi's actual provider/model. It applies your task-fit policy; it does not claim to discover a universally best model.
+Pi-Bifrost is a **configuration-first model-routing extension for [Pi](https://pi.dev) and [OMP](https://omp.sh) (oh-my-pi)**, not an LLM gateway or proxy. You define model pools and per-tier selection strategies. Before generation, Bifrost resolves a configured tier, filters unhealthy candidates, applies your strategy, and activates the host's actual provider/model. It applies your task-fit policy; it does not claim to discover a universally best model.
 
 ```text
 "quick commit the changes"  → explicit quick tier → configured cheapest candidate
@@ -11,9 +11,9 @@ Pi-Bifrost is a **configuration-first model-routing extension for [Pi](https://p
 
 ## Why Bifrost
 
-- **User-owned model pools** — add or remove Pi models directly in config.
+- **User-owned model pools** — add or remove host models directly in config.
 - **Per-tier strategies** — choose list order, cost, context window, probe-sorted speed, or explicit random selection.
-- **Native activation** — Pi uses the selected provider/model for the turn; no proxy or virtual profile.
+- **Native activation** — the host uses the selected provider/model for the turn; no proxy or virtual profile.
 - **Persistent reliability** — repeated model failures survive restart and affect future routing.
 - **No automatic replay** — Bifrost never silently repeats prompts that may have edited files or called tools.
 - **Inspectable control** — preview a route, name a tier directly, pin an exact model, or disable routing.
@@ -21,7 +21,7 @@ Pi-Bifrost is a **configuration-first model-routing extension for [Pi](https://p
 
 ## Install
 
-Requires Pi `0.86.0` or newer and at least one configured, authenticated provider model visible in Pi.
+Requires Pi `0.86.0` or newer, or OMP `18.3.0` (the OMP version this extension is validated against), plus at least one configured provider model visible in the host (authenticated unless the provider is intentionally keyless). The package declares both `pi.extensions` and `omp.extensions`, so one artifact serves both hosts.
 
 ```bash
 pi install npm:pi-bifrost
@@ -33,13 +33,33 @@ Or from source:
 pi install git:github.com/iamaamir/pi-bifrost
 ```
 
-Inside Pi:
+### Supported hosts
+
+| Host | Install | Project config | Global config | Local state |
+|------|---------|----------------|---------------|-------------|
+| Pi | `pi install npm:pi-bifrost` | `.pi/bifrost.json` | `~/.pi/agent/bifrost.json` | `.pi/` |
+| OMP / oh-my-pi | `omp plugin install pi-bifrost` | `.omp/bifrost.json` | `~/.omp/agent/bifrost.json` | `.omp/` |
+
+From a local checkout, use `pi install git:github.com/iamaamir/pi-bifrost`, `omp plugin link <path>`, or point either host at the entry file (`omp --extension ./index.ts`). Both hosts keep their own config, cache, and reliability state; a model that fails in one host is not marked unhealthy in the other.
+
+After editing a linked or local checkout, fully quit and relaunch OMP. `/reload-plugins` refreshes discovery and capabilities, but it does not replace the extension module already initialized in that process.
+
+On Pi, project-owned configuration is trust-gated: Bifrost loads the project-root `bifrost.json` and the host-specific `.pi/bifrost.json` (plus project route files) only when Pi reports `ctx.isProjectTrusted() === true`. An untrusted Pi project therefore uses only the extension and user-global layers. OMP 18.3 currently reports trust true, so its project layers are available without this Pi trust gate.
+
+Inside the host:
 
 ```text
 /bifrost init
 ```
 
-Initialization reuses probe results newer than one hour or probes every model available through Pi, then proposes tier pools and writes only after confirmation. Pass `-f` to force a fresh probe regardless of cache age. The primary probe transport uses `1+1=` with at most 5 output tokens; empty responses may trigger a minimal-session fallback. Provider usage or rate limits may apply. See [Install and initialize](docs/guide/getting-started.md) before running init.
+Initialization reuses probe results newer than one hour or probes every model available through the host, then proposes tier pools and writes only after confirmation. Pass `-f` to force a fresh probe regardless of cache age. The primary probe transport uses `1+1=` with at most 5 output tokens; empty responses may trigger a minimal-session fallback on Pi. Provider usage or rate limits may apply. See [Install and initialize](docs/guide/getting-started.md) before running init.
+
+OMP-specific limitations:
+
+- Selecting a model manually in OMP does not pin Bifrost (OMP emits no model-select event, so `/bifrost pin` is the way to hard-lock a model there).
+- `/bifrost classifier` uses a host model dialog on OMP; select an available `provider/id` for the prompt backend. Pi uses its richer model selector.
+- The minimal-session probe fallback is Pi-only; OMP probes use the direct streaming transport.
+- OMP's `input` extension event is emitted by the interactive editor path. OMP print/RPC/ACP, direct `session.prompt()` calls, and dedicated follow-up submission do not emit it, so those paths cannot be pre-routed by an extension; `before_agent_start` cannot replace the original prompt. Use the interactive TUI path for Bifrost routing on OMP.
 
 ## How routing works
 
@@ -49,7 +69,7 @@ prompt
   → configured model pool
   → reliability filtering
   → per-tier strategy
-  → Pi's active provider/model
+  → the host's active provider/model
 ```
 
 Bifrost picks a tier from a tier name at the start of the message, a rule that names an exact model, the local classification cache, an optional classifier, another regex rule, or your configured default. A rule that names an exact `provider/id` skips tiers and binds one model.
@@ -60,7 +80,7 @@ Bifrost picks a tier from a tier name at the start of the message, a rule that n
 | Strategy used inside each tier | Your config |
 | Tier that fits the prompt | Override, cache, classifier, rule, or default |
 | Unhealthy candidates excluded | Bifrost reliability |
-| Model that generates the turn | Pi, after Bifrost activates it |
+| Model that generates the turn | The host, after Bifrost activates it |
 
 ## Routing controls
 
@@ -68,7 +88,7 @@ Bifrost picks a tier from a tier name at the start of the message, a rule that n
 |-------------|--------------|
 | Send a normal message with routing on and nothing pinned | Bifrost picks a configured model for that message |
 | Start a message with a tier name, for example `quick commit the changes` | Bifrost uses that tier for that message only |
-| Select a model in Pi, or run `/bifrost pin` | That exact model stays active for the rest of the session |
+| Select a model manually in Pi, or run `/bifrost pin` | That exact model stays active for the rest of the session; on OMP use `/bifrost pin` because manual selection does not emit a model-select event |
 | Run `/bifrost unpin` | Bifrost goes back to picking a model per message |
 | Run `/bifrost off` | Bifrost stops routing until you turn it on again |
 
@@ -94,7 +114,7 @@ Adaptive routing may improve policy fit, but it does not guarantee better coding
 
 ## Minimal configuration
 
-In `.pi/bifrost.json`:
+In the project config (`.pi/bifrost.json` on Pi or `.omp/bifrost.json` on OMP):
 
 ```json
 {
@@ -118,9 +138,9 @@ Tier arrays are eligibility boundaries. Strategies choose the exact healthy cand
 Config precedence, later wins:
 
 1. extension default
-2. `~/.pi/agent/bifrost.json`
+2. `~/.pi/agent/bifrost.json` (`~/.omp/agent/bifrost.json` on OMP)
 3. project-root `bifrost.json`
-4. `.pi/bifrost.json`
+4. `.pi/bifrost.json` (`.omp/bifrost.json` on OMP)
 
 ## Documentation
 
@@ -148,11 +168,12 @@ Detailed reference now lives in versioned guides committed with code:
 | `/bifrost pin` / `unpin` | Hard-lock current model or resume routing |
 | `/bifrost reload` | Reload merged configuration |
 
+
 See the [full command guide](docs/guide/commands.md).
 
 ## Reliability and cache behavior
 
-Bifrost records probe, activation, and settled stream failures in `.pi/bifrost-reliability.json`. Repeated failures open a circuit, so future turns skip unhealthy candidates until cooldown and one controlled recovery trial. The failed user prompt is never replayed automatically.
+Bifrost records probe, activation, and settled stream failures in `.pi/bifrost-reliability.json` (`.omp/bifrost-reliability.json` on OMP). Repeated failures open a circuit, so future turns skip unhealthy candidates until cooldown and one controlled recovery trial. The failed user prompt is never replayed automatically.
 
 Bifrost's local classification cache stores normalized prompt terms and selected tiers, not assistant answers. Provider prompt caches are separate. Treat every provider/model pair as an independent cache history: switching may fragment locality, and returning to a model may reuse its longest still-valid prefix while newer conversation content remains an uncached tail. `/bifrost pin` keeps one model stable when continuity matters more than per-turn routing. See [Provider prompt caching and model switching](docs/guide/prompt-caching.md).
 
@@ -160,7 +181,7 @@ Reliability circuits guard observed model health, not authoritative provider quo
 
 ## Optional TypeSafe/Jev classifier
 
-TypeSafe/Jev is explicit opt-in. Jev returns one configured tier, probabilities, and confidence. Bifrost still owns model pools, reliability filtering, fallback, selection strategy, and Pi model activation.
+TypeSafe/Jev is explicit opt-in. Jev returns one configured tier, probabilities, and confidence. Bifrost still owns model pools, reliability filtering, fallback, selection strategy, and host model activation.
 
 Confidence is a routing signal, not proof of correctness. Exploratory evaluation found consistent judgments for clear prompts, but also high-confidence misses when mechanically small tasks had serious consequences. Keep fallback enabled and validate tier criteria against your workload.
 
@@ -179,6 +200,8 @@ npm run test:integration
 npm run test:ui
 npm run test:ui:reliability
 ```
+
+`npm test` covers host compatibility and the reliability settlement lifecycle deterministically. CI runs that suite plus an OMP lane that loads the extension through OMP's own loader (`omp models -e ./index.ts`) and fails on a loader error.
 
 UI smoke output lands in `screenshots/ui-smoke/`.
 
