@@ -50,7 +50,7 @@ function assistantFailure() {
   };
 }
 
-function boot(host: "pi" | "omp"): Harness {
+function boot(host: "pi" | "omp", setModelResult: boolean | Error = true, projectTrusted = true): Harness {
   const cwd = mkdtempSync(join(tmpdir(), "bifrost-lifecycle-"));
 
   // Config layers: the repo's bifrost.json is merged as the extension-dir
@@ -71,9 +71,14 @@ function boot(host: "pi" | "omp"): Harness {
   // Isolate the global config layer so a developer's own bifrost.json
   // cannot leak into the fixture.
   process.env.PI_CODING_AGENT_DIR = join(cwd, "agent");
+  if (!projectTrusted) {
+    mkdirSync(join(cwd, "agent"), { recursive: true });
+    writeFileSync(join(cwd, "agent", "bifrost.json"), JSON.stringify({ enabled: false, classifier: { enabled: false } }));
+  }
   process.chdir(cwd);
 
   const handlers = new Map<string, Handler[]>();
+  let started = false;
   const routed = makeModel(ROUTED_PROVIDER, ROUTED_ID);
   const active = makeModel("fixture", "current");
   const registry = {
@@ -82,10 +87,12 @@ function boot(host: "pi" | "omp"): Harness {
       provider === routed.provider && id === routed.id ? routed : undefined,
   };
   const ctx = {
+    cwd,
     hasUI: false,
     mode: "print",
     model: active,
     modelRegistry: registry,
+    isProjectTrusted: () => projectTrusted,
     ui: {
       theme: { fg: (_color: string, text: string) => text },
       setStatus: () => {},
@@ -109,7 +116,8 @@ function boot(host: "pi" | "omp"): Harness {
     registerCommand: () => {},
     setModel: async () => {
       setModelCalls += 1;
-      return true;
+      if (setModelResult instanceof Error) throw setModelResult;
+      return setModelResult;
     },
   };
 
@@ -131,7 +139,15 @@ function boot(host: "pi" | "omp"): Harness {
   };
 
   return {
-    prompt: () => emit("input", { type: "input", text: "smoke hello", source: "user" }),
+    prompt: async () => {
+      if (!started) {
+        for (const handler of handlers.get("session_start") ?? []) {
+          await handler({ type: "session_start" }, ctx);
+        }
+        started = true;
+      }
+      return emit("input", { type: "input", text: "smoke hello", source: "interactive" });
+    },
     emit,
     settledFailures: () => {
       if (!existsSync(reliabilityFile)) return 0;
@@ -250,6 +266,45 @@ describe("agent_end reliability settlement", () => {
       await harness.emit("agent_settled", { type: "agent_settled" });
       assert.equal(harness.settledFailures(), 1);
       assert.equal(harness.settlementLogs(), 1);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("does not pass the prompt through when OMP setModel throws", async () => {
+    const harness = boot("omp", new Error("activation failed"));
+    try {
+      const result = await harness.prompt();
+      assert.deepEqual(result, { handled: true });
+      assert.equal(harness.setModelCalls(), 1);
+      assert.equal(harness.settledFailures(), 1);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("abandons an aborted half-open trial without success", async () => {
+    const harness = boot("omp");
+    try {
+      await startRun(harness);
+      await harness.emit("agent_end", {
+        type: "agent_end",
+        messages: [{ role: "assistant", provider: ROUTED_PROVIDER, model: ROUTED_ID, stopReason: "aborted" }],
+      });
+      assert.equal(harness.settledFailures(), 0);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("ignores project runtime state and project config in an untrusted session", async () => {
+    const harness = boot("pi", true, false);
+    try {
+      const statePath = join(process.cwd(), CONFIG_DIR_NAME, "bifrost-state.json");
+      writeFileSync(statePath, JSON.stringify({ enabled: true, pinned: true, classifierEnabled: true }));
+      const result = await harness.prompt();
+      assert.deepEqual(result, { action: "continue" });
+      assert.equal(harness.setModelCalls(), 0);
     } finally {
       harness.cleanup();
     }

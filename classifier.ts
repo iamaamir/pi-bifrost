@@ -1,9 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { debug } from "./debug.ts";
 import { promptWithMinimalSession } from "./session-fallback.ts";
-import { streamSimpleVia, ctxSignal } from "./host.ts";
+import { classifierSubprocessInvocation, streamSimpleVia, ctxSignal, isOmpHost } from "./host.ts";
 
 // ── Classifier model — union type, no type-cast lies ─────────
 
@@ -52,7 +52,10 @@ export interface ClassifierOptions {
   maxTokens?: number;
   temperature?: number;
   method?: "direct" | "subprocess" | "auto";
+  signal?: AbortSignal;
 }
+
+export const _classifierDeps = { spawn };
 
 export function categoryLabel(category: string): string {
   return category;
@@ -76,13 +79,6 @@ export function extractCategory(text: string, categories: readonly string[]): st
   return categories.find((cat) => cat.toLowerCase() === needle);
 }
 
-function piCommand(): { command: string; args: string[] } {
-  // Reuse the current Node binary and script path for subprocess.
-  // Falls back to bare "pi" if argv[1] is unavailable (e.g. bundled executable).
-  const script = process.argv[1];
-  if (script) return { command: process.execPath, args: [script] };
-  return { command: "pi", args: [] };
-}
 
 async function classifyWithDirectHttp(
   ctx: ExtensionContext,
@@ -107,7 +103,7 @@ async function classifyWithDirectHttp(
       {
         maxTokens,
         temperature,
-        signal: ctxSignal(ctx),
+        signal: options.signal ?? ctxSignal(ctx),
         cacheRetention: "none",
       },
     );
@@ -119,10 +115,10 @@ async function classifyWithDirectHttp(
       .trim();
 
     if (!content) {
-      const fallbackText = await promptWithMinimalSession(
+      const fallbackText = options.signal?.aborted ? undefined : await promptWithMinimalSession(
         classifierModel.model,
         userPrompt,
-        { cwd: ctx.cwd, systemPrompt },
+        { cwd: ctx.cwd, systemPrompt, signal: options.signal ?? ctxSignal(ctx) },
       );
       if (!fallbackText?.trim()) {
         debug("classifier", "registry.empty_response", { model: classifierId(classifierModel) });
@@ -170,9 +166,9 @@ async function classifyWithDirectHttp(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: ctxSignal(ctx) ?? (typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
+      signal: options.signal ?? ctxSignal(ctx) ?? (typeof AbortSignal !== "undefined" && "timeout" in AbortSignal
         ? AbortSignal.timeout(30_000)
-        : void 0),
+        : undefined),
     });
 
     if (!response.ok) {
@@ -204,90 +200,129 @@ async function classifyWithDirectHttp(
 }
 
 async function classifyWithSubprocess(
-  _ctx: ExtensionContext,
+  ctx: ExtensionContext,
   classifierModel: ClassifierModel,
   categories: readonly string[],
   prompt: string,
   options: ClassifierOptions = {},
 ): Promise<string | undefined> {
-  // Subprocess only works with registry models (needs provider/id for --model).
-  if (classifierModel.kind !== "registry") return undefined;
+  if (classifierModel.kind !== "registry" || options.signal?.aborted) return undefined;
   const model = classifierModel.model;
-  debug("classifier", "subprocess.start", { model: `${model.provider}/${model.id}` });
-
   const systemPrompt = options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
   const userPrompt = classificationPrompt(categories, prompt);
-  const { command, args } = piCommand();
+  const invocation = classifierSubprocessInvocation(ctx, model, systemPrompt);
+  if (!invocation) {
+    debug("classifier", "subprocess.unavailable", { model: `${model.provider}/${model.id}` });
+    return undefined;
+  }
+  debug("classifier", "subprocess.start", { model: `${model.provider}/${model.id}`, command: invocation.command });
 
-  const piArgs = [
-    ...args,
-    "--no-extensions",
-    "--no-prompt-templates",
-    "--no-context-files",
-    "--no-approve",
-    "--no-session",
-    "--print",
-    "--system-prompt",
-    systemPrompt,
-    "-p",
-    userPrompt,
-    "--model",
-    `${model.provider}/${model.id}`,
-  ];
+  let resolve!: (result: string | undefined) => void;
+  const promise = new Promise<string | undefined>((resolver) => { resolve = resolver; });
+  let settled = false;
+  let child: ChildProcessWithoutNullStreams;
+  try {
+    child = _classifierDeps.spawn(invocation.command, invocation.args, {
+      cwd: invocation.cwd,
+      env: invocation.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    }) as ChildProcessWithoutNullStreams;
+  } catch (err) {
+    console.error(`[bifrost] classifier subprocess error: ${err}`);
+    resolve(undefined);
+    return promise;
+  }
 
-  return new Promise((resolve) => {
-    const child = spawn(command, piArgs, {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
-    });
-
-    let stdout = "";
-    let stderr = "";
-    const MAX_CHUNK = 2000;
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      if (stdout.length < MAX_CHUNK) stdout += chunk;
-    });
-    child.stderr.on("data", (chunk: string) => {
-      if (stderr.length < MAX_CHUNK) stderr += chunk;
-    });
-
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      console.error(`[bifrost] classifier subprocess timed out`);
-      resolve(undefined);
-    }, 120_000);
-
-    child.on("error", (err: Error) => {
-      clearTimeout(timer);
-      console.error(`[bifrost] classifier subprocess error: ${err}`);
-      resolve(undefined);
-    });
-
-    child.on("close", (code: number | null) => {
-      clearTimeout(timer);
-      if (code !== 0) {
-        debug("classifier", "subprocess.error", {
-          model: `${model.provider}/${model.id}`,
-          exitCode: code,
-          stderr: stderr.slice(0, 200),
-        });
-        console.error(
-          `[bifrost] classifier subprocess exited ${code}: ${stderr.slice(0, 500)}`,
-        );
-        resolve(undefined);
-        return;
-      }
-      const result = extractCategory(stdout, categories);
-      debug("classifier", "subprocess.done", {
+  let stdout = "";
+  let stderr = "";
+  const MAX_CHUNK = 2_000;
+  const finish = (result: string | undefined) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    options.signal?.removeEventListener("abort", abort);
+    resolve(result);
+  };
+  const stop = () => {
+    try {
+      if (!child.killed) child.kill("SIGTERM");
+    } catch (err) {
+      debug("classifier", "subprocess.kill_error", {
         model: `${model.provider}/${model.id}`,
-        raw: stdout.trim().slice(0, 100),
-        tier: result,
+        error: err instanceof Error ? err.message : String(err),
       });
-      resolve(result);
+    }
+  };
+  const abort = () => {
+    stop();
+    finish(undefined);
+  };
+  const timer = setTimeout(() => {
+    stop();
+    console.error(`[bifrost] classifier subprocess timed out`);
+    finish(undefined);
+  }, 120_000);
+
+  const onStdinError = (err: unknown) => {
+    debug("classifier", "subprocess.stdin_error", {
+      model: `${model.provider}/${model.id}`,
+      error: err instanceof Error ? err.message : String(err),
     });
+    finish(undefined);
+    stop();
+  };
+  const onChildError = (err: Error) => {
+    console.error(`[bifrost] classifier subprocess error: ${err}`);
+    finish(undefined);
+  };
+  const onClose = (code: number | null) => {
+    if (options.signal?.aborted) {
+      finish(undefined);
+      return;
+    }
+    if (code !== 0) {
+      debug("classifier", "subprocess.error", {
+        model: `${model.provider}/${model.id}`,
+        exitCode: code,
+      });
+      console.error(`[bifrost] classifier subprocess exited ${code}`);
+      finish(undefined);
+      return;
+    }
+    const result = extractCategory(stdout, categories);
+    debug("classifier", "subprocess.done", {
+      model: `${model.provider}/${model.id}`,
+      raw: stdout.trim().slice(0, 100),
+      tier: result,
+    });
+    finish(result);
+  };
+
+  options.signal?.addEventListener("abort", abort, { once: true });
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    if (stdout.length < MAX_CHUNK) stdout += chunk;
   });
+  child.stderr.on("data", (chunk: string) => {
+    if (stderr.length < MAX_CHUNK) stderr += chunk;
+  });
+
+  // Register stream/process handlers before writing. A child can exit before
+  // consuming stdin, which makes the writable emit EPIPE asynchronously.
+  child.stdin.on("error", onStdinError);
+  child.on("error", onChildError);
+  child.on("close", onClose);
+  if (child.stdin.destroyed || child.stdin.writableEnded || child.stdin.writable === false) {
+    onStdinError(new Error("classifier subprocess stdin is closed"));
+  } else {
+    try {
+      child.stdin.end(userPrompt);
+    } catch (err) {
+      onStdinError(err);
+    }
+  }
+  return promise;
 }
 
 export async function classifyWithLLM(
@@ -308,6 +343,8 @@ export async function classifyWithLLM(
       options,
     );
     if (direct) return direct;
+    if (options.signal?.aborted) return undefined;
+    if (isOmpHost()) return undefined;
   }
 
   if (method === "subprocess" || method === "auto") {

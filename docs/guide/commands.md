@@ -24,6 +24,8 @@
 | `/bifrost providers` | List providers available through the host |
 | `/bifrost benchmark <prompt>` | Classify a prompt and show the outcome without generating |
 
+On OMP 18.3, routing is only applied to interactive editor submissions that emit the extension `input` event. Print/RPC/ACP, direct `session.prompt()` calls, and dedicated follow-up submission bypass the event and cannot be pre-routed by this extension.
+
 ## Common workflows
 
 ### Preview before generation
@@ -75,10 +77,10 @@ Probe sends `1+1=` to every model available in the host registry. The primary tr
 
 ## Persistence summary
 
-| Control | Survives restart | Propagates to child sessions |
-|---------|------------------|------------------------------|
-| `/bifrost on` / `off` | Yes | Yes, through shared runtime policy |
-| `/bifrost pin` / `unpin` | No | No |
-| Classifier on/off | Yes | Follows shared runtime/config state |
+| Control | Survives restart | Scope across child sessions |
+|---------|------------------|-----------------------------|
+| `/bifrost on` / `off` | Yes | Shared project runtime state; a child in another project uses that project's state |
+| `/bifrost pin` / `unpin` | No | Session-local only |
+| Classifier on/off | Yes | Shared project runtime state plus effective config |
 
 Pin is a hard lock. A tier name at the start of a message is not applied while pinned.

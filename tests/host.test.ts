@@ -4,7 +4,9 @@ import {
   agentEndContinues,
   hostIsOmp,
   initHost,
+  inputHandled,
   isOmpHost,
+  isProjectTrusted,
   typeSafeCredentialOptions,
   inputContinue,
   inputTransform,
@@ -44,15 +46,32 @@ describe("host compat seam", () => {
   });
 
   describe("agentEndContinues", () => {
-    it("treats only willContinue: true as non-terminal", () => {
+    it("retains OMP willContinue and isTerminal lifecycle compatibility", () => {
       assert.equal(agentEndContinues({ willContinue: true }), true);
+      assert.equal(agentEndContinues({ isTerminal: false }), true);
       assert.equal(agentEndContinues({ willContinue: false }), false);
+      assert.equal(agentEndContinues({ isTerminal: true }), false);
       assert.equal(agentEndContinues({}), false);
       assert.equal(agentEndContinues({ willContinue: "yes" }), false);
       assert.equal(agentEndContinues(undefined), false);
       assert.equal(agentEndContinues(null), false);
     });
   });
+
+  it("uses the host project trust API with OMP compatibility", () => {
+    initHost({ zod: {} });
+    assert.equal(isProjectTrusted({ isProjectTrusted: () => true } as never), true);
+    initHost({});
+    assert.equal(isProjectTrusted({ isProjectTrusted: () => false } as never), false);
+  });
+
+  it("maps handled results for both hosts", () => {
+    initHost({});
+    assert.deepEqual(inputHandled(), { action: "handled" });
+    initHost({ zod: {} });
+    assert.deepEqual(inputHandled(), { handled: true });
+  });
+
 
   describe("initHost", () => {
     it("latches omp mode and reports it", () => {
@@ -194,6 +213,40 @@ describe("host compat seam", () => {
       }
     });
 
+
+    it("uses OMP session resolver and forwards cwd, signal, and session identity", async () => {
+      initHost({ zod: {} });
+      const calls: Array<{ context: unknown; options: { apiKey?: unknown; cwd?: string; sessionId?: string; signal?: AbortSignal } }> = [];
+      const original = _streamDeps.standaloneStreamSimple;
+      _streamDeps.standaloneStreamSimple = ((_model: unknown, context: unknown, options: unknown) => {
+        calls.push({ context, options: options as { apiKey?: unknown; cwd?: string; sessionId?: string; signal?: AbortSignal } });
+        return { marker: "standalone" };
+      }) as unknown as typeof _streamDeps.standaloneStreamSimple;
+      try {
+        const signal = new AbortController().signal;
+        const resolverCalls: unknown[] = [];
+        const ctx = {
+          cwd: "/project/omp",
+          signal,
+          sessionManager: { getSessionId: () => "session-1" },
+          modelRegistry: {
+            resolver: (...args: unknown[]) => {
+              resolverCalls.push(args);
+              return "resolver";
+            },
+            getApiKey: async () => "stale",
+          },
+        };
+        await streamSimpleVia(ctx as never, model, context, { signal });
+        assert.deepEqual(resolverCalls, [[model, "session-1"]]);
+        assert.equal(calls[0]?.options.apiKey, "resolver");
+        assert.equal(calls[0]?.options.cwd, "/project/omp");
+        assert.equal(calls[0]?.options.sessionId, "session-1");
+        assert.equal(calls[0]?.options.signal, signal);
+      } finally {
+        _streamDeps.standaloneStreamSimple = original;
+      }
+    });
     it("passes the omp keyless sentinel through as the apiKey", async () => {
       initHost({ zod: {} });
       const calls: unknown[] = [];

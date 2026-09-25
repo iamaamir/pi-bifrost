@@ -5,8 +5,8 @@
 // Steps:
 //   1. Validate clean working tree
 //   2. Run tests + typecheck
-//   3. Bump version in package.json (or accept custom --version X.Y.Z)
-//   4. Commit version bump + create git tag
+//   3. Bump version in package.json and package-lock.json (or accept custom --version X.Y.Z)
+//   4. Commit synchronized version manifests + create git tag
 //   5. Push branch + tag to origin
 //   6. npm publish (if --publish flag, requires confirmation)
 
@@ -129,13 +129,19 @@ async function main() {
 
   console.log(`[release] ${currentVersion} → ${newVersion}`);
 
-  // ── 4. Update package.json version ───────────────────────────────
+  // ── 4. Update synchronized version manifests ─────────────────────
   pkg.version = newVersion;
   writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
 
+  const lockPath = join(ROOT, "package-lock.json");
+  const lock = JSON.parse(readFileSync(lockPath, "utf-8"));
+  lock.version = newVersion;
+  if (lock.packages && lock.packages[""]) lock.packages[""].version = newVersion;
+  writeFileSync(lockPath, JSON.stringify(lock, null, 2) + "\n");
+
   // ── 5. Commit + tag ──────────────────────────────────────────────
   const tag = `v${newVersion}`;
-  run(`git add package.json`);
+  run(`git add package.json package-lock.json`);
   run(`git commit -m "chore: release v${newVersion}"`);
   run(`git tag -a ${tag} -m "Release v${newVersion}"`);
 

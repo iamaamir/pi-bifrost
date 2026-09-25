@@ -1,14 +1,15 @@
 import { performance } from "node:perf_hooks";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ReliabilityStore } from "./reliability-store.ts";
 import { debug as bifrostDebug } from "./debug.ts";
-import { typeSafeCredentialOptions } from "./host.ts";
+import { providerApiKeyViaRegistry, typeSafeCredentialOptions, waitForOperation } from "./host.ts";
 import type { TypeSafeObservation, TypeSafeOutcome } from "./classifier-metrics.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_CREDENTIAL_KEY, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassificationJudgment } from "./classifier-backends.ts";
 
 /** Compatibility exports for the TypeSafe provider seam and benchmark. */
-export const TYPESAFE_SYSTEMONE_URL = TYPE_SAFE_ENDPOINT;
 export const TYPESAFE_MODEL = TYPE_SAFE_MODEL;
+export const TYPESAFE_SYSTEMONE_URL = TYPE_SAFE_ENDPOINT;
 export const DEFAULT_TYPESAFE_TIMEOUT_MS = 3_000;
 export const DEFAULT_TYPESAFE_MAX_ATTEMPTS = 2;
 const MAX_TYPESAFE_TIMEOUT_MS = 60_000;
@@ -40,6 +41,7 @@ export interface TypeSafeFetch {
 
 export interface TypeSafeOptions {
   readonly apiKey?: string;
+  readonly ctx?: ExtensionContext;
   readonly fetchImpl?: TypeSafeFetch;
   readonly sleepImpl?: (ms: number) => Promise<void>;
   readonly timeoutMs?: number;
@@ -170,6 +172,8 @@ function abortableDelay(
   });
 }
 
+
+
 async function cancelResponseBody(response: Response | undefined): Promise<void> {
   if (!response?.body || response.bodyUsed) return;
   try {
@@ -237,11 +241,32 @@ export function resolveTypeSafeApiKey(): { apiKey?: string; source: TypeSafeCred
   return apiKey ? { apiKey, source: "environment" } : { source: "missing" };
 }
 
+/**
+ * Resolve TypeSafe credentials with OMP's session-aware registry first.
+ * Pi has no provider-registry resolver for this external endpoint, so it keeps
+ * the stored Pi credential and environment fallbacks.
+ */
+export async function resolveTypeSafeApiKeyForContext(
+  ctx: ExtensionContext,
+  signal?: AbortSignal,
+): Promise<{ apiKey?: string; source: TypeSafeCredentialSource }> {
+  try {
+    const apiKey = await providerApiKeyViaRegistry(ctx, TYPE_SAFE_CREDENTIAL_KEY, {
+      baseUrl: TYPE_SAFE_ENDPOINT,
+      modelId: TYPESAFE_MODEL,
+      signal,
+    });
+    if (apiKey) return { apiKey, source: "host-store" };
+  } catch (error) {
+    console.error(`[bifrost] failed to resolve TypeSafe credential from host registry: ${error}`);
+  }
+  return resolveTypeSafeApiKey();
+}
+
 function circuitKey(): string { return `classifier/${CLASSIFIER_BACKEND_IDS.typesafe}/${TYPESAFE_MODEL}`; }
 
 /** Thin System One adapter. Returns misses for all transport/decoder failures. */
 export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
-  const apiKey = options.apiKey ?? resolveTypeSafeApiKey().apiKey;
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleepImpl = options.sleepImpl ?? sleep;
   const timeoutMs = Math.min(MAX_TYPESAFE_TIMEOUT_MS, Math.max(100, Math.floor(options.timeoutMs ?? DEFAULT_TYPESAFE_TIMEOUT_MS)));
@@ -251,6 +276,18 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
   return async function classify(input: TypeSafeInput, signal?: AbortSignal): Promise<TypeSafeJudgment | undefined> {
     const activeSignal = signal ?? options.signal;
     const startedAt = performance.now();
+    const deadline = startedAt + timeoutMs;
+    const deadlineController = new AbortController();
+    const onCallerAbort = () => deadlineController.abort(activeSignal?.reason);
+    if (activeSignal?.aborted) deadlineController.abort(activeSignal.reason);
+    else activeSignal?.addEventListener("abort", onCallerAbort, { once: true });
+    const deadlineTimer = setTimeout(() => {
+      deadlineController.abort(new DOMException("Timed out", "TimeoutError"));
+    }, timeoutMs);
+    const cleanupDeadline = () => {
+      clearTimeout(deadlineTimer);
+      activeSignal?.removeEventListener("abort", onCallerAbort);
+    };
     const traceId = `ts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const trace = (event: string, meta: Record<string, unknown> = {}) => {
       if (options.debug) bifrostDebug(CLASSIFIER_BACKEND_IDS.typesafe, event, { trace_id: traceId, model: TYPESAFE_MODEL, ...meta });
@@ -264,6 +301,7 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
         options.reliability?.abandonTrial(circuitKey());
         trialClaimed = false;
       }
+      cleanupDeadline();
       trace("finish", {
         outcome,
         attempts,
@@ -287,9 +325,37 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
       }
       return judgment;
     };
+    const deadlineOutcome = (): TypeSafeOutcome => activeSignal?.aborted ? "aborted" : "timeout";
+
+    if (activeSignal?.aborted) return finish("aborted");
+    if (performance.now() >= deadline) return finish("timeout");
+
+    let apiKey: string | undefined;
+    if (options.apiKey !== undefined) {
+      apiKey = options.apiKey;
+    } else if (options.ctx) {
+      const resolution = await waitForOperation(
+        resolveTypeSafeApiKeyForContext(options.ctx, deadlineController.signal),
+        deadlineController.signal,
+      );
+      if (resolution.aborted) return finish(deadlineOutcome());
+      if (resolution.error) {
+        console.error(`[bifrost] failed to resolve TypeSafe credential: ${resolution.error}`);
+      } else {
+        apiKey = resolution.value?.apiKey;
+      }
+    } else {
+      apiKey = resolveTypeSafeApiKey().apiKey;
+    }
+
+    if (activeSignal?.aborted) return finish("aborted");
+    if (deadlineController.signal.aborted || performance.now() >= deadline) return finish(deadlineOutcome());
     if (!apiKey) {
       trace("credential_missing");
-      if (!warnedMissingKey) { warnedMissingKey = true; console.error(`[bifrost] TypeSafe classifier disabled: configure ${typeSafeCredentialOptions(TYPE_SAFE_API_KEY_ENV)}`); }
+      if (!warnedMissingKey) {
+        warnedMissingKey = true;
+        console.error(`[bifrost] TypeSafe classifier disabled: configure ${typeSafeCredentialOptions(TYPE_SAFE_API_KEY_ENV)}`);
+      }
       return finish("missing_key");
     }
     const key = circuitKey();
@@ -311,18 +377,25 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
       options.reliability?.recordSuccess(key, "classifier");
       trialClaimed = false;
     };
-    const deadline = performance.now() + timeoutMs;
     let failure: TypeSafeOutcome = "network";
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       if (activeSignal?.aborted) return finish("aborted");
+      if (deadlineController.signal.aborted || performance.now() >= deadline) {
+        failure = "timeout";
+        break;
+      }
       attempts = attempt;
       const remaining = deadline - performance.now();
       trace("attempt", { attempt, remaining_ms: Math.max(0, Math.round(remaining)) });
-      if (remaining <= 0) { failure = "timeout"; break; }
+      if (remaining <= 0) {
+        failure = "timeout";
+        break;
+      }
 
       const controller = new AbortController();
-      const abort = () => controller.abort(new DOMException("Aborted", "AbortError"));
-      activeSignal?.addEventListener("abort", abort, { once: true });
+      const abort = () => controller.abort(deadlineController.signal.reason);
+      if (deadlineController.signal.aborted) abort();
+      else deadlineController.signal.addEventListener("abort", abort, { once: true });
       const timer = setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), remaining);
       let response: Response | undefined;
       let phase: "fetch" | "body" = "fetch";
@@ -330,18 +403,47 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
       let delay = 0;
       try {
         trace("request", { attempt, endpoint: TYPESAFE_SYSTEMONE_URL });
-        response = await fetchImpl(TYPESAFE_SYSTEMONE_URL, {
-          method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify(buildTypeSafeRequest(input)),
-          signal: controller.signal,
-          redirect: "error",
-        });
+        if (deadlineController.signal.aborted || performance.now() >= deadline) {
+          failure = "timeout";
+          break;
+        }
+        const request = await waitForOperation(
+          fetchImpl(TYPESAFE_SYSTEMONE_URL, {
+            method: "POST",
+            headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
+            body: JSON.stringify(buildTypeSafeRequest(input)),
+            signal: controller.signal,
+            redirect: "error",
+          }),
+          controller.signal,
+          (lateResponse) => { void cancelResponseBody(lateResponse); },
+        );
+        if (request.aborted) {
+          if (activeSignal?.aborted) return finish("aborted");
+          failure = "timeout";
+          break;
+        }
+        if (request.value === undefined) {
+          if (request.error !== undefined) throw request.error;
+          failure = "network";
+          shouldRetry = true;
+          break;
+        }
+        response = request.value;
+        if (deadlineController.signal.aborted || performance.now() >= deadline) {
+          failure = "timeout";
+          break;
+        }
         trace("response", { attempt, status: response.status, ok: response.ok });
 
         if (response.ok) {
           phase = "body";
           const body = await readResponseJson(response, controller.signal);
+          if (activeSignal?.aborted) return finish("aborted");
+          if (deadlineController.signal.aborted || performance.now() >= deadline) {
+            failure = "timeout";
+            break;
+          }
           const judgment = decodeTypeSafeJudgment(body, input.tiers, 0);
           trace("decoded", { attempt, tier: judgment?.tier, confidence: judgment?.confidence, valid: Boolean(judgment) });
           if (!judgment) {
@@ -391,14 +493,21 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
         shouldRetry = true;
       } finally {
         clearTimeout(timer);
-        activeSignal?.removeEventListener("abort", abort);
+        deadlineController.signal.removeEventListener("abort", abort);
         await cancelResponseBody(response);
       }
 
       if (!shouldRetry || attempt === maxAttempts) break;
       trace("retry_wait", { attempt, delay_ms: delay });
-      if (delay >= deadline - performance.now()) { failure = "timeout"; break; }
-      if (!await abortableDelay(delay, sleepImpl, activeSignal)) return finish("aborted");
+      if (delay >= deadline - performance.now()) {
+        failure = "timeout";
+        break;
+      }
+      if (!await abortableDelay(delay, sleepImpl, deadlineController.signal)) {
+        if (activeSignal?.aborted) return finish("aborted");
+        failure = "timeout";
+        break;
+      }
     }
     recordFailure(failure);
     trace("failure", { outcome: failure, attempts });

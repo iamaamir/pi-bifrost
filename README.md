@@ -21,7 +21,7 @@ Pi-Bifrost is a **configuration-first model-routing extension for [Pi](https://p
 
 ## Install
 
-Requires Pi `0.86.0` or newer, or OMP `18.2.11` (the OMP version this extension is validated against), plus at least one configured provider model visible in the host (authenticated unless the provider is intentionally keyless). The package declares both `pi.extensions` and `omp.extensions`, so one artifact serves both hosts.
+Requires Pi `0.86.0` or newer, or OMP `18.3.0` (the OMP version this extension is validated against), plus at least one configured provider model visible in the host (authenticated unless the provider is intentionally keyless). The package declares both `pi.extensions` and `omp.extensions`, so one artifact serves both hosts.
 
 ```bash
 pi install npm:pi-bifrost
@@ -44,6 +44,8 @@ From a local checkout, use `pi install git:github.com/iamaamir/pi-bifrost`, `omp
 
 After editing a linked or local checkout, fully quit and relaunch OMP. `/reload-plugins` refreshes discovery and capabilities, but it does not replace the extension module already initialized in that process.
 
+On Pi, project-owned configuration is trust-gated: Bifrost loads the project-root `bifrost.json` and the host-specific `.pi/bifrost.json` (plus project route files) only when Pi reports `ctx.isProjectTrusted() === true`. An untrusted Pi project therefore uses only the extension and user-global layers. OMP 18.3 currently reports trust true, so its project layers are available without this Pi trust gate.
+
 Inside the host:
 
 ```text
@@ -57,6 +59,7 @@ OMP-specific limitations:
 - Selecting a model manually in OMP does not pin Bifrost (OMP emits no model-select event, so `/bifrost pin` is the way to hard-lock a model there).
 - `/bifrost classifier` uses a host model dialog on OMP; select an available `provider/id` for the prompt backend. Pi uses its richer model selector.
 - The minimal-session probe fallback is Pi-only; OMP probes use the direct streaming transport.
+- OMP's `input` extension event is emitted by the interactive editor path. OMP print/RPC/ACP, direct `session.prompt()` calls, and dedicated follow-up submission do not emit it, so those paths cannot be pre-routed by an extension; `before_agent_start` cannot replace the original prompt. Use the interactive TUI path for Bifrost routing on OMP.
 
 ## How routing works
 

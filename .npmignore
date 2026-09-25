@@ -6,6 +6,8 @@ tsconfig.json
 .git/
 .github/
 .pi/
+.omp/
+.plan/
 screenshots/
 docs/
 vscode/

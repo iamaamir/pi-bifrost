@@ -12,7 +12,7 @@ Bifrost does not provide model credentials or a model proxy.
 
 You need:
 
-- Pi `0.86.0` or newer, or OMP `18.2.11` (the validated OMP version);
+- Pi `0.86.0` or newer, or OMP `18.3.0` (the validated OMP version);
 - at least one model provider configured in the host and authenticated unless it is intentionally keyless;
 - at least one model visible in the host's model registry;
 - network access for installation and provider requests.
@@ -50,6 +50,10 @@ omp plugin link /path/to/pi-bifrost
 After updating a linked or local extension source, fully quit and relaunch OMP. `/reload-plugins` refreshes discovery and capabilities, but it does not replace the extension module already initialized in that process; source-code changes require a fresh OMP process.
 
 OMP reads the same `bifrost.json` schema but its own paths: `.omp/bifrost.json` for the project config and `~/.omp/agent/bifrost.json` for the global one. Local cache and reliability state live under `.omp/`. Manual model selection in OMP does not pin Bifrost (use `/bifrost pin`). Running `/bifrost classifier` and choosing the prompt backend opens a host dialog of available `provider/id` models; select one there or set `classifier.model` in config.
+
+On OMP 18.3, the extension `input` event is emitted only by the interactive editor submission path. Print/RPC/ACP, direct `session.prompt()` calls, and dedicated follow-up submission bypass that event, and `before_agent_start` cannot replace the original prompt. Those modes therefore cannot be pre-routed by this extension; use the OMP interactive TUI when adaptive routing is required.
+
+Pi trust gates project-owned layers. Bifrost reads the project-root `bifrost.json`, host-specific `.pi/bifrost.json`, and project route files only when `ctx.isProjectTrusted()` is true; untrusted projects retain only extension and user-global configuration. OMP 18.3 currently reports trust true, so its project layers remain available without a Pi-style trust gate.
 
 ## Understand four terms
 

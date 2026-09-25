@@ -1,13 +1,13 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import * as host from "@earendil-works/pi-coding-agent";
-import { scopedModelsOf, typeSafeCredentialOptions } from "./host.ts";
+import { ctxSignal, isProjectTrusted, operationSignalFor, refreshRegistry, scopedModelsOf, typeSafeCredentialOptions, waitForOperation } from "./host.ts";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
-import type { BifrostConfig, ClassifierConfig } from "./config.ts";
-import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, loadConfig } from "./config.ts";
+import type { BifrostConfig, ClassifierConfig, TierCriterion } from "./config.ts";
+import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, loadConfigForContext } from "./config.ts";
 import type { CacheEntry } from "./cache.ts";
-import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
+import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD, DEFAULT_TTL_HOURS } from "./cache.ts";
 import type { ClassificationPipeline, ClassificationResult } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
 import { runProbe, probeOptionsFromConfig, probeResultsPath, PROBE_PROMPT_TEXT } from "./probe.ts";
@@ -25,7 +25,7 @@ import {
 import type { ReliabilityStore } from "./reliability-store.ts";
 import type { ClassifierMetricsState, ClassifierMetricsStore } from "./classifier-metrics.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend } from "./classifier-backends.ts";
-import { resolveTypeSafeApiKey, type TypeSafeCredentialSource } from "./typesafe-classifier.ts";
+import { resolveTypeSafeApiKeyForContext, type TypeSafeCredentialSource } from "./typesafe-classifier.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
@@ -40,10 +40,59 @@ export interface BifrostState {
   extensionDir: string;
   getPipeline: (ctx: ExtensionContext) => ClassificationPipeline;
   invalidatePipeline: () => void;
+  cwd?: string;
+  /** Effective project trust for the bound session. */
+  projectTrusted?: boolean;
+  /** Monotonic generation for invalidating stale asynchronous input work. */
+  generation?: number;
+  /** Rebind effective project state before a command runs in a new session/cwd. */
+  rebind?: (ctx: ExtensionContext, force?: boolean, resetPinned?: boolean) => void;
   /** Persist runtime mode toggles (enabled/pinned/classifierEnabled) to disk. */
   saveModeState: () => void;
   lastRegistryRefreshAt?: number;
   forceRegistryRefresh?: boolean;
+}
+
+function contextCwd(ctx: ExtensionContext): string {
+  return ctx.cwd || process.cwd();
+}
+
+type RegistryRefreshOutcome = "completed" | "cancelled" | "timedOut";
+
+/** Bound OMP command refreshes without letting abandoned discovery abort later safety writes. */
+async function refreshCommandRegistry(ctx: ExtensionContext): Promise<RegistryRefreshOutcome> {
+  const operation = operationSignalFor(ctx);
+  try {
+    if (operation.signal?.aborted) return operation.timedOut() ? "timedOut" : "cancelled";
+    const result = await waitForOperation(
+      refreshRegistry(ctx.modelRegistry, operation.signal),
+      operation.signal,
+    );
+    if (result.aborted) return operation.timedOut() ? "timedOut" : "cancelled";
+    if ("error" in result) throw result.error;
+    return "completed";
+  } finally {
+    operation.done();
+  }
+}
+
+function loadEffectiveCache(ctx: ExtensionContext, state: BifrostState): { entries: CacheEntry[]; retentionHours: number } {
+  const retentionHours = state.config.cache?.ttlHours ?? DEFAULT_TTL_HOURS;
+  return {
+    entries: loadCache(cachePath(contextCwd(ctx), state.config.cache?.path), retentionHours * 60 * 60 * 1000),
+    retentionHours,
+  };
+}
+
+async function typeSafeCredentialSource(ctx: ExtensionContext): Promise<TypeSafeCredentialSource> {
+  return (await resolveTypeSafeApiKeyForContext(ctx, ctxSignal(ctx))).source;
+}
+
+function completeCriteria(config: BifrostConfig): Record<string, TierCriterion> {
+  return Object.fromEntries(Object.keys(config.models ?? {}).map((tier) => [
+    tier,
+    DEFAULT_CLASSIFIER_CRITERIA[tier] ?? `Requests best served by the ${tier} model tier.`,
+  ]));
 }
 
 export function log(
@@ -264,14 +313,11 @@ export function buildInitProposal(
 ): Record<string, unknown> {
   const tierKeys = Object.keys(models);
   const firstPopulatedTier = Object.entries(models).find(([, candidates]) => candidates.length > 0)?.[0];
-  // Prefer general regardless of discovery order; otherwise use first populated tier.
   const defaultTier = (models.general?.length ?? 0) > 0
     ? "general"
     : firstPopulatedTier ?? (tierKeys.includes("general") ? "general" : tierKeys[0] ?? "general");
   const categoryStrategies: Record<string, RoutingStrategy> = {};
-  for (const t of tierKeys) {
-    categoryStrategies[t] = PROPOSAL_STRATEGIES[t] ?? "first";
-  }
+  for (const tier of tierKeys) categoryStrategies[tier] = PROPOSAL_STRATEGIES[tier] ?? "first";
   return {
     $schema: `${extensionDir.replace(/\/$/, "")}/schema.json`,
     enabled: true,
@@ -288,55 +334,94 @@ export function buildInitProposal(
     rules: DEFAULT_RULES,
   };
 }
+const isForced = (args: string): boolean =>
+  args.split(/\s+/).some((arg) => arg === "-f" || arg === "--force");
 
-// ── Command handlers ────────────────────────────────────────
+interface ProbeCacheRow {
+  readonly provider: string;
+  readonly model: string;
+  readonly status: string;
+  readonly cost_input?: number;
+  readonly cost_output?: number;
+  readonly duration_ms?: number;
+}
 
-const isForced = (args:string):boolean => args?.split(/\s+/).includes("-f");
+function isProbeCacheRow(value: unknown): value is ProbeCacheRow {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.provider === "string" && typeof row.model === "string" && typeof row.status === "string";
+}
+
 async function handleInit(
   args: string,
   ctx: ExtensionContext,
   state: BifrostState,
 ): Promise<void> {
   clearBifrostWidgets(ctx);
-  // Try to load cached probe results. If stale or missing, run probe inline.
-  const probePath = probeResultsPath(process.cwd());
+  if (!isProjectTrusted(ctx)) {
+    log(ctx, "Trust this project before writing Bifrost configuration.", "warning");
+    return;
+  }
+  const cwd = contextCwd(ctx);
+  try {
+    const refreshOutcome = await refreshCommandRegistry(ctx);
+    if (refreshOutcome === "cancelled") {
+      log(ctx, "Bifrost init cancelled while refreshing models.", "warning");
+      return;
+    }
+    if (refreshOutcome === "timedOut") {
+      log(ctx, "Model registry refresh timed out; continuing with the current registry snapshot.", "warning");
+    }
+  } catch (error) {
+    log(ctx, `Model registry refresh failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
+  }
+  if (ctxSignal(ctx)?.aborted) {
+    log(ctx, "Bifrost init cancelled while refreshing models.", "warning");
+    return;
+  }
+
+  // Try to load cached probe results. If stale, empty, or forced, run probe inline.
+  const probePath = probeResultsPath(cwd);
   let workingModels: { provider: string; model: string; cost: { input: number; output: number }; duration_ms: number }[] = [];
   let probeLoaded = false;
   let probeAge = "";
 
-  if (existsSync(probePath)) {
+  if (existsSync(probePath) && !isForced(args)) {
     try {
-      const probeData = JSON.parse(readFileSync(probePath, "utf-8"));
+      const parsed: unknown = JSON.parse(readFileSync(probePath, "utf-8"));
       const probeStat = statSync(probePath);
       const ageMs = Date.now() - probeStat.mtimeMs;
       const ageMin = Math.round(ageMs / 60000);
-
-      if (ageMs < 3600_000 && !isForced(args)) {
-        workingModels = probeData
-          .filter((r: any) => r.status === "ok")
-          .map((r: any) => ({
-            provider: r.provider,
-            model: r.model,
-            cost: { input: r.cost_input ?? 0, output: r.cost_output ?? 0 },
-            duration_ms: r.duration_ms ?? 0,
+      if (ageMs < 3600_000 && Array.isArray(parsed)) {
+        workingModels = parsed.filter(isProbeCacheRow)
+          .filter((row) => row.status === "ok")
+          .map((row) => ({
+            provider: row.provider,
+            model: row.model,
+            cost: { input: row.cost_input ?? 0, output: row.cost_output ?? 0 },
+            duration_ms: row.duration_ms ?? 0,
           }));
-        probeAge = `${ageMin}m ago`;
-        probeLoaded = true;
+        if (workingModels.length > 0) {
+          probeLoaded = true;
+          probeAge = `${ageMin}m ago`;
+        }
       }
     } catch {
-      // Corrupt — will re-probe below.
+      // Corrupt or unreadable — probe below.
     }
   }
 
-  // If no fresh probe data, run probe inline.
   if (!probeLoaded) {
     const available = ctx.modelRegistry.getAvailable();
     const availableCount = available.length;
+    if (availableCount === 0) {
+      log(ctx, "No models available after registry refresh; init did not write a config.", "error");
+      return;
+    }
     log(ctx, `Probing ${availableCount} models to find working ones...`);
     let okCount = 0;
     let errCount = 0;
     const lastModels: string[] = [];
-
     uiBusy(ctx, `Probing ${availableCount} models...`);
     const { results } = await runProbe(ctx, {
       ...probeOptionsFromConfig(state.config.probe),
@@ -345,7 +430,6 @@ async function handleInit(
         else if (last.status === "error" || last.status === "timeout") errCount++;
         lastModels.push(`${last.provider}/${last.model}: ${last.status} (${last.duration_ms}ms)`);
         if (lastModels.length > 5) lastModels.shift();
-
         if (ctx.hasUI) {
           ctx.ui.setWidget("bifrost-probe", [
             `Probing models: ${done}/${total}`,
@@ -358,35 +442,25 @@ async function handleInit(
     });
     uiDone(ctx);
     state.reliabilityStore.applyOutcomes(
-      results.map((r) =>
-        r.status === "ok"
-          ? { model: `${r.provider}/${r.model}`, ok: true as const, source: "probe" }
-          : { model: `${r.provider}/${r.model}`, ok: false as const, source: "probe", reason: r.error ?? r.status }
-      ),
-      Date.now()
+      results.map((result) => result.status === "ok"
+        ? { model: `${result.provider}/${result.model}`, ok: true as const, source: "probe" }
+        : { model: `${result.provider}/${result.model}`, ok: false as const, source: "probe", reason: result.status }),
+      Date.now(),
     );
-
-    workingModels = results
-      .filter((r) => r.status === "ok")
-      .map((r) => ({
-        provider: r.provider,
-        model: r.model,
-        cost: { input: r.cost_input ?? 0, output: r.cost_output ?? 0 },
-        duration_ms: r.duration_ms ?? 0,
-      }));
-    probeLoaded = true;
+    workingModels = results.filter((result) => result.status === "ok").map((result) => ({
+      provider: result.provider,
+      model: result.model,
+      cost: { input: result.cost_input ?? 0, output: result.cost_output ?? 0 },
+      duration_ms: result.duration_ms ?? 0,
+    }));
+    probeLoaded = workingModels.length > 0;
     probeAge = "just now";
-
-    const ok = results.filter((r) => r.status === "ok").length;
-    const errors = results.filter((r) => r.status === "error").length;
-    const timeouts = results.filter((r) => r.status === "timeout").length;
-    const skipped = results.filter((r) => r.status === "skipped").length;
+    const ok = results.filter((result) => result.status === "ok").length;
+    const errors = results.filter((result) => result.status === "error").length;
+    const timeouts = results.filter((result) => result.status === "timeout").length;
+    const skipped = results.filter((result) => result.status === "skipped").length;
     log(ctx, `Probe complete: ok=${ok} error=${errors} timeout=${timeouts} skipped=${skipped}.`);
-    if (ok === 0) {
-      log(ctx, "No usable models found. Check API keys, network, and credits.", "error");
-      log(ctx, "Proceeding with full registry — most models will likely be unreachable.", "warning");
-      probeLoaded = false;
-    }
+    if (ok === 0) log(ctx, "No usable models found; init will leave unfiltered registry models for manual review.", "warning");
   }
 
   if (probeLoaded && workingModels.length > 0) {
@@ -394,122 +468,80 @@ async function handleInit(
   }
 
   const available = ctx.modelRegistry.getAvailable();
+  if (available.length === 0) {
+    log(ctx, "No models available after refresh; init did not write a config.", "error");
+    return;
+  }
   const models: Record<string, string[]> = {};
   const uncategorized: string[] = [];
-
-  for (const m of available) {
-    const key = `${m.provider}/${m.id}`;
-
-    // If probe data is loaded, skip models that failed or timed out.
-    if (probeLoaded && workingModels.length > 0) {
-      const working = workingModels.find(
-        (w) => w.provider === m.provider && w.model === m.id,
-      );
-      if (!working) continue; // known-broken, silently skip
-    }
-
-    const tier = guessTier(m);
+  for (const model of available) {
+    const key = `${model.provider}/${model.id}`;
+    if (probeLoaded && !workingModels.some((working) => working.provider === model.provider && working.model === model.id)) continue;
+    const tier = guessTier(model);
     if (tier) {
-      models[tier] = models[tier] ?? [];
+      models[tier] ??= [];
       models[tier].push(key);
     } else {
       uncategorized.push(key);
     }
   }
-
-  // Sort each tier by probe response time (fastest first) so "first"
-  // strategy picks the fastest model.
   if (probeLoaded) {
-    const speedMap = new Map(workingModels.map((w) => [`${w.provider}/${w.model}`, w.duration_ms]));
-    for (const tier of Object.keys(models)) {
-      models[tier].sort((a, b) => (speedMap.get(a) ?? Infinity) - (speedMap.get(b) ?? Infinity));
-    }
+    const speedMap = new Map(workingModels.map((working) => [`${working.provider}/${working.model}`, working.duration_ms]));
+    for (const tier of Object.keys(models)) models[tier].sort((a, b) => (speedMap.get(a) ?? Infinity) - (speedMap.get(b) ?? Infinity));
   }
 
-  // Pick a classifier default: fastest cheap working model.
   let classifierModel: string | undefined;
-  if (probeLoaded && workingModels.length > 0) {
-    const cheapWorking = workingModels
-      .filter((w) => (w.cost.input + w.cost.output) < 2)
-      .sort((a, b) => a.duration_ms - b.duration_ms);
-    if (cheapWorking.length > 0) {
-      classifierModel = `${cheapWorking[0].provider}/${cheapWorking[0].model}`;
-    }
+  if (workingModels.length > 0) {
+    const cheapWorking = workingModels.filter((working) => working.cost.input + working.cost.output < 2).sort((a, b) => a.duration_ms - b.duration_ms);
+    classifierModel = `${(cheapWorking[0] ?? workingModels[0]).provider}/${(cheapWorking[0] ?? workingModels[0]).model}`;
   }
-  if (!classifierModel) {
-    // Fallback: any working model, or a sensible default.
-    if (workingModels.length > 0) {
-      classifierModel = `${workingModels[0].provider}/${workingModels[0].model}`;
-    } else {
-      log(ctx, "No working models found for classifier. Init will omit classifier.model; regex fallback remains available.", "warning");
-    }
-  }
-
-  const proposal = buildInitProposal(
-    models,
-    classifierModel,
-    state.extensionDir,
-    state.config.classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt,
-  );
-
-  const totalAssigned = Object.values(models).reduce((s, v) => s + v.length, 0);
-  uiOutput(ctx, [
+  const proposal = buildInitProposal(models, classifierModel, state.extensionDir, state.config.classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt);
+  const totalAssigned = Object.values(models).reduce((sum, values) => sum + values.length, 0);
+  await uiResult(ctx, "Bifrost init", [
     "--- init ---",
     `source: ${probeLoaded ? `probe (${workingModels.length} working)` : `registry (${available.length} listed)`}`,
     `assigned: ${totalAssigned} models`,
-    `classifier: ${classifierModel}`,
+    `classifier: ${classifierModel ?? "none"}`,
     `uncategorized: ${uncategorized.length}`,
     "proposed config:",
     JSON.stringify(proposal, null, 2),
     "----------------",
-    probeLoaded ? "" : "⚠ Run /bifrost probe first to filter unreachable models.",
+    probeLoaded ? "" : "⚠ No probe-verified models; inspect the proposal before writing.",
     "Assign uncategorized models manually in the generated config.",
-  ].filter(Boolean));
+  ].filter((line): line is string => Boolean(line)));
 
-  if (uncategorized.length > 0) {
-    log(ctx, `${uncategorized.length} model(s) uncategorized — edit ${host.CONFIG_DIR_NAME}/bifrost.json to assign them.`);
-  }
-
-  const writeWithoutPrompt = args.trim().split(/\s+/).includes("--write");
+  if (uncategorized.length > 0) log(ctx, `${uncategorized.length} model(s) uncategorized — edit ${host.CONFIG_DIR_NAME}/bifrost.json to assign them.`);
+  const writeWithoutPrompt = args.split(/\s+/).includes("--write");
   if (!ctx.hasUI && !writeWithoutPrompt) {
     log(ctx, "run in TUI or use --write to persist", "warning");
     return;
   }
-
-  const ok = writeWithoutPrompt || await ctx.ui.confirm(
-    "Write config?",
-    `Write proposed config to ${host.CONFIG_DIR_NAME}/bifrost.json?`,
-  );
+  const ok = writeWithoutPrompt || await ctx.ui.confirm("Write config?", `Write proposed config to ${host.CONFIG_DIR_NAME}/bifrost.json?`);
   if (!ok) {
     log(ctx, "config not written");
     return;
   }
 
-  const dir = join(process.cwd(), host.CONFIG_DIR_NAME);
+  const dir = join(cwd, host.CONFIG_DIR_NAME);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "bifrost.json"), JSON.stringify(proposal, null, 2));
-
-  // Auto-reload so the extension picks up the new config immediately.
-  state.config = loadConfig(process.cwd(), state.extensionDir);
-  const runtimeState = loadRuntimeState(runtimeStatePath(process.cwd()), {
+  state.cwd = cwd;
+  state.config = loadConfigForContext(cwd, state.extensionDir, ctx);
+  const runtimeState = loadRuntimeState(runtimeStatePath(cwd), {
     enabled: state.config.enabled ?? true,
-    pinned: false,
+    pinned: state.pinned,
     classifierEnabled: state.config.classifier?.enabled ?? true,
   });
   state.enabled = runtimeState.enabled;
-  state.pinned = runtimeState.pinned;
   state.classifierEnabled = runtimeState.classifierEnabled;
-  state.reliabilityStore.reload(state.config.reliability, process.cwd());
+  state.reliabilityStore.reload(state.config.reliability, cwd);
   state.classifierMetricsStore.reload({
-    cwd: process.cwd(),
+    cwd,
     enabled: state.config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
   });
   state.invalidatePipeline();
-
   log(ctx, `wrote ${host.CONFIG_DIR_NAME}/bifrost.json and reloaded config`);
   log(ctx, `Bifrost active with ${Object.keys(state.config.models ?? {}).length} tier(s). Try a prompt.`);
-
-  // Clear the init widget so it doesn't persist in the TUI.
   if (ctx.hasUI) {
     ctx.ui.setWidget("bifrost-output", []);
     ctx.ui.setWidget("bifrost-probe", []);
@@ -583,14 +615,14 @@ async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState):
   const prompt = `Assess this small bounded request for tier selection. Verification nonce ${Date.now()}.`;
   let result;
   try {
-    result = await state.getPipeline(ctx).classify(prompt);
+    result = await state.getPipeline(ctx).classify(prompt, ctxSignal(ctx));
   } finally {
     uiDone(ctx);
     syncBifrostModeStatus(ctx, state);
   }
   const after = state.classifierMetricsStore.snapshot();
   const credential = classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe
-    ? resolveTypeSafeApiKey().source
+    ? await typeSafeCredentialSource(ctx)
     : undefined;
   await uiResult(ctx, "Classifier test", buildClassifierTestReport({
     classifier,
@@ -606,22 +638,18 @@ async function handleBenchmark(
   ctx: ExtensionContext,
   state: BifrostState,
 ): Promise<void> {
-  const prompt =
-    args.slice("benchmark".length).trim() ||
-    "Write a short Python function to reverse a string and explain it briefly.";
+  const prompt = args.slice("benchmark".length).trim() || "Write a short Python function to reverse a string and explain it briefly.";
   const categories = Object.keys(state.config.models ?? {});
-
   if (categories.length === 0) {
     log(ctx, "no categories configured; run /bifrost init first", "warning");
     return;
   }
-
   clearBifrostWidgets(ctx);
   setBifrostStatus(ctx, "benchmarking prompt...", "accent");
   uiBusy(ctx, "Classifying benchmark prompt...");
   let classification;
   try {
-    classification = await state.getPipeline(ctx).classify(prompt);
+    classification = await state.getPipeline(ctx).classify(prompt, ctxSignal(ctx));
   } finally {
     uiDone(ctx);
     syncBifrostModeStatus(ctx, state);
@@ -662,13 +690,12 @@ async function handlePreview(
     log(ctx, "usage: /bifrost preview <prompt>", "warning");
     return;
   }
-
   clearBifrostWidgets(ctx);
   setBifrostStatus(ctx, "previewing prompt...", "accent");
   uiBusy(ctx, "Classifying preview prompt...");
   let classification;
   try {
-    classification = await state.getPipeline(ctx).classify(prompt);
+    classification = await state.getPipeline(ctx).classify(prompt, ctxSignal(ctx));
   } finally {
     uiDone(ctx);
     syncBifrostModeStatus(ctx, state);
@@ -733,7 +760,7 @@ function exact(word: string, description: string, handler: CommandFn): CommandEn
 }
 
 function prefix(word: string, description: string, handler: CommandFn, argumentHint = "<prompt>"): CommandEntry {
-  return { value: word, description, argumentHint, match: (sub) => sub.startsWith(word), handler };
+  return { value: word, description, argumentHint, match: (sub) => sub === word || sub.startsWith(`${word} `), handler };
 }
 
 export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
@@ -745,7 +772,8 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "providers", description: "List available providers" },
   { value: "probe", description: "Probe working models" },
   { value: "init", description: "Probe models and generate config" },
-  { value: "init -f", description: "Force Probe models and generate config" },
+  { value: "init -f", description: "Force probe models and generate config" },
+  { value: "init --force", description: "Force probe models and generate config" },
   { value: "benchmark", description: "Classify a benchmark prompt", argumentHint: "<prompt>" },
   { value: "cache stats", description: "Show classification cache" },
   { value: "cache clear", description: "Clear classification cache" },
@@ -808,6 +836,12 @@ export function createCommandRouter(
   state: BifrostState,
 ): (args: string, ctx: ExtensionContext) => Promise<void> {
   const routes: CommandEntry[] = [
+    {
+      value: "classifier test",
+      description: "Test selected classifier backend",
+      match: (sub) => sub === "classifier test",
+      handler: (_, ctx) => handleClassifierTest(ctx, state),
+    },
     exact("on", "Enable routing", (_, ctx) => {
       state.enabled = true;
       state.saveModeState();
@@ -838,32 +872,28 @@ export function createCommandRouter(
     }),
     exact("reload", "Reload config after editing", (_, ctx) => {
       const done = debugMeasure("command", "reload");
-      state.config = loadConfig(process.cwd(), state.extensionDir);
-      // Re-init debug — user may have updated debug config since startup.
-      setupDebug(state.config.debug ?? { enabled: false }, process.cwd());
-      const runtimeState = loadRuntimeState(runtimeStatePath(process.cwd()), {
+      const cwd = contextCwd(ctx);
+      state.cwd = cwd;
+      state.config = loadConfigForContext(cwd, state.extensionDir, ctx);
+      setupDebug(state.config.debug ?? { enabled: false }, cwd);
+      const runtimeState = loadRuntimeState(runtimeStatePath(cwd), {
         enabled: state.config.enabled ?? true,
-        pinned: false,
+        pinned: state.pinned,
         classifierEnabled: state.config.classifier?.enabled ?? true,
       });
       state.enabled = runtimeState.enabled;
       state.classifierEnabled = runtimeState.classifierEnabled;
-      state.pinned = runtimeState.pinned;
-      state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path), (state.config.cache?.ttlHours ?? 720) * 60 * 60 * 1000);
-      state.reliabilityStore.reload(state.config.reliability, process.cwd());
+      state.cacheEntries = loadCache(cachePath(cwd, state.config.cache?.path), (state.config.cache?.ttlHours ?? 720) * 60 * 60 * 1000);
+      state.reliabilityStore.reload(state.config.reliability, cwd);
       state.classifierMetricsStore.reload({
-        cwd: process.cwd(),
+        cwd,
         enabled: state.config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
       });
       state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       done();
-      debug("command", "reloaded", {
-        enabled: state.enabled,
-        classifierEnabled: state.classifierEnabled,
-        tiers: Object.keys(state.config.models ?? {}).join(","),
-      });
+      debug("command", "reloaded", { enabled: state.enabled, classifierEnabled: state.classifierEnabled, tiers: Object.keys(state.config.models ?? {}).join(",") });
       log(ctx, "Bifrost config reloaded");
     }),
 
@@ -886,6 +916,18 @@ export function createCommandRouter(
 
     // Probe — test every model with a tiny prompt
     exact("probe", "Probe working models", async (_, ctx) => {
+      try {
+        const refreshOutcome = await refreshCommandRegistry(ctx);
+        if (refreshOutcome === "cancelled") {
+          log(ctx, "Bifrost probe cancelled while refreshing models.", "warning");
+          return;
+        }
+        if (refreshOutcome === "timedOut") {
+          log(ctx, "Model registry refresh timed out; probing the current registry snapshot.", "warning");
+        }
+      } catch (error) {
+        log(ctx, `Model registry refresh failed: ${error instanceof Error ? error.message : String(error)}`, "warning");
+      }
       const available = ctx.modelRegistry.getAvailable();
       if (available.length === 0) {
         log(ctx, "No models available in registry.", "warning");
@@ -894,65 +936,39 @@ export function createCommandRouter(
       clearBifrostWidgets(ctx);
       uiBusy(ctx, `Probing ${available.length} models...`);
       log(ctx, `Probing ${available.length} model(s) with "${PROBE_PROMPT_TEXT}"...`);
-
       const { results, path } = await runProbe(ctx, probeOptionsFromConfig(state.config.probe));
       uiDone(ctx);
       state.reliabilityStore.applyOutcomes(
-        results.map((r) =>
-          r.status === "ok"
-            ? { model: `${r.provider}/${r.model}`, ok: true as const, source: "probe" }
-            : { model: `${r.provider}/${r.model}`, ok: false as const, source: "probe", reason: r.error ?? r.status }
-        ),
-        Date.now()
+        results.map((result) => result.status === "ok"
+          ? { model: `${result.provider}/${result.model}`, ok: true as const, source: "probe" }
+          : { model: `${result.provider}/${result.model}`, ok: false as const, source: "probe", reason: result.status }),
+        Date.now(),
       );
-
-      const ok = results.filter((r) => r.status === "ok");
-      const errs = results.filter((r) => r.status === "error");
-      const timeouts = results.filter((r) => r.status === "timeout");
-      const skipped = results.filter((r) => r.status === "skipped");
-
+      const ok = results.filter((result) => result.status === "ok");
+      const errors = results.filter((result) => result.status === "error");
+      const timeouts = results.filter((result) => result.status === "timeout");
+      const skipped = results.filter((result) => result.status === "skipped");
       const lines = [
         `--- probe results (${results.length} models) ---`,
         `  ok:      ${ok.length}`,
-        `  error:   ${errs.length}`,
+        `  error:   ${errors.length}`,
         `  timeout: ${timeouts.length}`,
         `  skipped: ${skipped.length}`,
         "",
       ];
-
-      if (errs.length > 0) {
+      if (errors.length > 0) {
         lines.push("errors:");
-        for (const e of errs.slice(0, 10)) {
-          lines.push(`  ${e.provider}/${e.model} — ${e.error}`);
-        }
-        if (errs.length > 10) lines.push(`  ... and ${errs.length - 10} more`);
+        for (const error of errors.slice(0, 10)) lines.push(`  ${error.provider}/${error.model} — ${error.error}`);
+        if (errors.length > 10) lines.push(`  ... and ${errors.length - 10} more`);
       }
-
       if (timeouts.length > 0) {
         lines.push("timeouts:");
-        for (const t of timeouts) {
-          lines.push(`  ${t.provider}/${t.model}`);
-        }
+        for (const timeout of timeouts) lines.push(`  ${timeout.provider}/${timeout.model}`);
       }
-
       lines.push("", `full results → ${path}`);
-      uiOutput(ctx, lines);
-
-      if (ok.length < results.length) {
-        log(
-          ctx,
-          `${ok.length}/${results.length} models responded. Check ${path} for details.`,
-          "warning",
-        );
-      } else if (ok.length > 0) {
-        log(ctx, `All ${ok.length} models responded successfully.`);
-      }
-
-      // Clear the probe widget so results don't persist in the TUI.
-      if (ctx.hasUI) {
-        ctx.ui.setWidget("bifrost-probe", []);
-        ctx.ui.setWidget("bifrost-output", []);
-      }
+      await uiResult(ctx, "Bifrost probe", lines);
+      if (ok.length < results.length) log(ctx, `${ok.length}/${results.length} models responded. Check ${path} for details.`, "warning");
+      else if (ok.length > 0) log(ctx, `All ${ok.length} models responded successfully.`);
     }),
 
     // Init
@@ -968,33 +984,28 @@ export function createCommandRouter(
 
     // Cache
     exact("cache stats", "Show classification cache", (_, ctx) => {
-      const path = cachePath(process.cwd(), state.config.cache?.path);
-      const entries = loadCache(path);
-      log(
-        ctx,
-        `cache: ${entries.length} entries (cap ${state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES}, retention ${state.config.cache?.ttlHours ?? 720}h, threshold ${state.config.cache?.threshold ?? DEFAULT_THRESHOLD})`,
-      );
+      const { entries, retentionHours } = loadEffectiveCache(ctx, state);
+      log(ctx, `cache: ${entries.length} entries (cap ${state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES}, retention ${retentionHours}h, threshold ${state.config.cache?.threshold ?? DEFAULT_THRESHOLD})`);
     }),
     exact("cache clear", "Clear classification cache", (_, ctx) => {
-      const path = cachePath(process.cwd(), state.config.cache?.path);
-      saveCache(path, []);
+      const path = cachePath(contextCwd(ctx), state.config.cache?.path);
+      if (!saveCache(path, [])) {
+        log(ctx, `Bifrost: could not clear cache at ${path}`, "error");
+        return;
+      }
       state.cacheEntries = [];
       state.invalidatePipeline();
       log(ctx, "cache cleared");
     }),
-
-    // Classifier
-    {
-      value: "classifier test",
-      description: "Test selected classifier backend",
-      match: (sub) => sub === "classifier test",
-      handler: (_, ctx) => handleClassifierTest(ctx, state),
-    },
     {
       value: "classifier",
       description: "Choose classifier backend and prompt model",
       match: (sub) => sub === "classifier",
       handler: async (_, ctx) => {
+        if (!isProjectTrusted(ctx)) {
+          log(ctx, "Trust this project before changing its Bifrost classifier configuration.", "warning");
+          return;
+        }
         if (!ctx.hasUI) {
           log(ctx, "Choose classifier backend in the host UI: prompt or typesafe", "warning");
           return;
@@ -1004,11 +1015,13 @@ export function createCommandRouter(
           `${CLASSIFIER_BACKEND_IDS.typesafe} — use Jev (requires ${typeSafeCredentialOptions(TYPE_SAFE_API_KEY_ENV)})`,
         ]);
         if (!selected) return;
-        const backend = selected.startsWith(CLASSIFIER_BACKEND_IDS.typesafe) ? CLASSIFIER_BACKEND_IDS.typesafe : CLASSIFIER_BACKEND_IDS.prompt;
+        const backend = selected.startsWith(CLASSIFIER_BACKEND_IDS.typesafe)
+          ? CLASSIFIER_BACKEND_IDS.typesafe
+          : CLASSIFIER_BACKEND_IDS.prompt;
         let selectedPromptModel: string | undefined;
         const configuredPromptModel = state.config.classifier?.model;
         const needsPromptModel = backend === CLASSIFIER_BACKEND_IDS.prompt && !promptClassifierModelAvailable(ctx, configuredPromptModel);
-        if (needsPromptModel) {
+        if (backend === CLASSIFIER_BACKEND_IDS.prompt) {
           if (ctx.modelRegistry.getAvailable().length === 0) {
             log(ctx, "No models available for prompt classifier; regex fallback remains active.", "warning");
           } else {
@@ -1019,7 +1032,8 @@ export function createCommandRouter(
             }
           }
         }
-        const path = join(process.cwd(), host.CONFIG_DIR_NAME, "bifrost.json");
+        const cwd = contextCwd(ctx);
+        const path = join(cwd, host.CONFIG_DIR_NAME, "bifrost.json");
         let current: Record<string, unknown> = {};
         try {
           current = existsSync(path)
@@ -1029,7 +1043,7 @@ export function createCommandRouter(
           log(ctx, `Cannot update classifier: ${host.CONFIG_DIR_NAME}/bifrost.json is invalid JSON`, "error");
           return;
         }
-        const classifier = current.classifier && typeof current.classifier === "object"
+        const classifier = current.classifier && typeof current.classifier === "object" && !Array.isArray(current.classifier)
           ? current.classifier as Record<string, unknown>
           : {};
         const nextClassifier: Record<string, unknown> = { ...classifier, backend };
@@ -1039,30 +1053,31 @@ export function createCommandRouter(
           delete nextClassifier.model;
         }
         if (backend === CLASSIFIER_BACKEND_IDS.typesafe) {
-          delete nextClassifier.endpoint;
-          delete nextClassifier.method;
-          delete nextClassifier.systemPrompt;
-          delete nextClassifier.maxTokens;
-          delete nextClassifier.temperature;
-          delete nextClassifier.fallbackToRegex;
+          for (const field of ["endpoint", "method", "systemPrompt", "maxTokens", "temperature", "fallbackToRegex"]) delete nextClassifier[field];
           const existingTypeSafe = nextClassifier.typesafe && typeof nextClassifier.typesafe === "object" && !Array.isArray(nextClassifier.typesafe)
             ? nextClassifier.typesafe as Record<string, unknown>
             : {};
           nextClassifier.typesafe = { ...existingTypeSafe, model: TYPE_SAFE_MODEL };
-          nextClassifier.criteria ??= DEFAULT_CLASSIFIER_CRITERIA;
+          const effectiveCriteria = state.config.classifier?.criteria ?? {};
+          const nextCriteria: Record<string, TierCriterion> = { ...completeCriteria(state.config) };
+          for (const [tier, criterion] of Object.entries(effectiveCriteria)) {
+            if (criterion !== undefined) nextCriteria[tier] = criterion;
+          }
+          nextClassifier.criteria = nextCriteria;
           nextClassifier.fallback ??= nextClassifier.model ? "prompt" : "regex";
         }
         current.classifier = nextClassifier;
-        mkdirSync(join(process.cwd(), host.CONFIG_DIR_NAME), { recursive: true });
+        mkdirSync(join(cwd, host.CONFIG_DIR_NAME), { recursive: true });
         writeFileSync(path, JSON.stringify(current, null, 2) + "\n");
-        state.config = loadConfig(process.cwd(), state.extensionDir);
+        state.cwd = cwd;
+        state.config = loadConfigForContext(cwd, state.extensionDir, ctx);
         state.classifierMetricsStore.reload({
-          cwd: process.cwd(),
+          cwd,
           enabled: state.config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
         });
         state.invalidatePipeline();
         log(ctx, `classifier backend set to ${backend}; config reloaded`);
-        if (backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
+        if (backend === CLASSIFIER_BACKEND_IDS.typesafe && await typeSafeCredentialSource(ctx) === "missing") {
           log(ctx, `TypeSafe credential missing; configure ${typeSafeCredentialOptions(TYPE_SAFE_API_KEY_ENV)}`, "warning");
         }
       },
@@ -1083,41 +1098,39 @@ export function createCommandRouter(
       debug("command", "classifier_toggle", { enabled: false });
       log(ctx, "LLM classifier disabled; regex fallback active");
     }),
-    exact("classifier status", "Show classifier state", (_, ctx) => {
+    exact("classifier status", "Show classifier state", async (_, ctx) => {
       const rawModel = state.config.classifier?.model;
-      const modelId = Array.isArray(rawModel)
-        ? rawModel.join(", ")
-        : (rawModel ?? "none");
+      const modelId = Array.isArray(rawModel) ? rawModel.join(", ") : (rawModel ?? "none");
       const classifier = state.config.classifier;
       const backend = classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt;
-      const credential = backend === CLASSIFIER_BACKEND_IDS.typesafe ? resolveTypeSafeApiKey().source : undefined;
+      const credential = backend === CLASSIFIER_BACKEND_IDS.typesafe ? await typeSafeCredentialSource(ctx) : undefined;
       const detail = backend === CLASSIFIER_BACKEND_IDS.typesafe
         ? `backend=${CLASSIFIER_BACKEND_IDS.typesafe} model=${classifier?.typesafe?.model ?? TYPE_SAFE_MODEL} endpoint=${TYPE_SAFE_ENDPOINT} minConfidence=${classifier?.minConfidence ?? 0.8} credential=${credential} fallback=${classifier?.fallback ?? "prompt"} fallbackModel=${classifier?.fallback === "regex" ? "none" : modelId}`
         : `backend=${CLASSIFIER_BACKEND_IDS.prompt} model=${modelId} endpoint=${classifier?.endpoint ?? "registry"} method=${classifier?.method ?? "auto"}`;
       const metrics = state.classifierMetricsStore.snapshot();
-      const lines = [
+      await uiResult(ctx, "Bifrost classifier status", [
         `classifier: enabled=${state.classifierEnabled}`,
         detail,
         ...(backend === CLASSIFIER_BACKEND_IDS.typesafe ? [`observations=${metrics.total}`, `outcomes=${JSON.stringify(metrics.outcomes)}`] : []),
-      ];
-      uiOutput(ctx, lines);
+      ]);
     }),
 
     // Debug — show loaded config state
     exact("debug", "Show config and routing state", (_, ctx) => {
       const rules = state.config.rules ?? [];
       const tiers = Object.keys(state.config.models ?? {});
+      const { entries: cacheEntries, retentionHours: cacheRetentionHours } = loadEffectiveCache(ctx, state);
       const lines = [
         "--- config ---",
-        `cwd: ${process.cwd()}`,
         `enabled: ${state.enabled}`,
         `pinned: ${state.pinned}`,
         `classifierEnabled: ${state.classifierEnabled}`,
+        `cwd: ${contextCwd(ctx)}`,
         `default: ${state.config.default}`,
         `strategy: ${state.config.strategy}`,
         `tiers: ${tiers.join(", ")}`,
         `debug: ${JSON.stringify(state.config.debug)}`,
-        `cache: ${state.cacheEntries.length} entries (retention ${state.config.cache?.ttlHours ?? 720}h)`,
+        `cache: ${cacheEntries.length} entries (retention ${cacheRetentionHours}h)`,
         `reliability: ${JSON.stringify(state.config.reliability ?? {})}`,
         `openCircuits: ${openCircuitCount(state)}`,
         `classifierMetrics: ${JSON.stringify(state.classifierMetricsStore.snapshot())}`,
@@ -1133,9 +1146,9 @@ export function createCommandRouter(
   ];
 
   return async (args: string, ctx: ExtensionContext) => {
+    state.rebind?.(ctx);
     const trimmed = args.trim();
     const sub = trimmed.toLowerCase();
-
     if (!trimmed) {
       debug("command", "dashboard");
       if (!ctx.hasUI) {

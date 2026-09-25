@@ -1,4 +1,5 @@
-import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, isProjectTrusted } from "./host.ts";
 import { join } from "node:path";
 import { readJsonFile } from "./storage.ts";
 import type { RoutingStrategy, RouteRule } from "./routing.ts";
@@ -431,6 +432,7 @@ export function mergeConfig(
 export function loadConfig(
   cwd: string,
   extensionDir: string,
+  projectTrusted = true,
 ): BifrostConfig {
   const base: BifrostConfig = {
     enabled: true,
@@ -445,12 +447,16 @@ export function loadConfig(
     rules: DEFAULT_RULES,
   };
 
-  const configs = [
+  const configs: Array<BifrostConfig | undefined> = [
     readJson<BifrostConfig>(join(extensionDir, "bifrost.json")),
     readJson<BifrostConfig>(join(getAgentDir(), "bifrost.json")),
-    readJson<BifrostConfig>(join(cwd, "bifrost.json")),
-    readJson<BifrostConfig>(join(cwd, CONFIG_DIR_NAME, "bifrost.json")),
   ];
+  if (projectTrusted) {
+    configs.push(
+      readJson<BifrostConfig>(join(cwd, "bifrost.json")),
+      readJson<BifrostConfig>(join(cwd, CONFIG_DIR_NAME, "bifrost.json")),
+    );
+  }
   let merged: BifrostConfig = base;
   for (const cfg of configs) {
     if (cfg) merged = mergeConfig(merged, cfg);
@@ -458,14 +464,29 @@ export function loadConfig(
   return merged;
 }
 
-export function loadRules(cwd: string, config: BifrostConfig): RouteRule[] {
-  const routeFiles = [
-    join(cwd, CONFIG_DIR_NAME, "bifrost-routes.json"),
-    join(cwd, "bifrost-routes.json"),
-  ];
+/** Read host/project config only after the host has established trust. */
+export function loadConfigForContext(
+  cwd: string,
+  extensionDir: string,
+  ctx: Parameters<typeof isProjectTrusted>[0],
+): BifrostConfig {
+  return loadConfig(cwd, extensionDir, isProjectTrusted(ctx));
+}
 
-  for (const p of routeFiles) {
-    const rules = readJson<RouteRule[]>(p);
+export function loadRules(
+  cwd: string,
+  config: BifrostConfig,
+  projectTrusted = true,
+): RouteRule[] {
+  const routeFiles = projectTrusted
+    ? [
+        join(cwd, CONFIG_DIR_NAME, "bifrost-routes.json"),
+        join(cwd, "bifrost-routes.json"),
+      ]
+    : [];
+
+  for (const path of routeFiles) {
+    const rules = readJson<RouteRule[]>(path);
     if (rules) return rules;
   }
 

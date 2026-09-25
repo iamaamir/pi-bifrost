@@ -32,6 +32,7 @@ export interface PipelineDeps {
     model: ClassifierModel,
     text: string,
     tiers: readonly string[],
+    signal?: AbortSignal,
   ) => Promise<ClassifierOutput | undefined>;
   /** Regex routing rules. First match wins. */
   readonly regexRules: readonly RouteRule[];
@@ -84,6 +85,7 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
     }
 
     if (tiers.length === 0) return { kind: "unclassified" };
+    if (signal?.aborted) return { kind: "unclassified" };
 
     // Stage 2: cache lookup
     const endCache = debugMeasure("pipeline", "cache");
@@ -114,21 +116,23 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
 
     // Existing prompt classifier — try each model in priority order.
     for (const model of classifierModels) {
+      if (signal?.aborted) return { kind: "unclassified" };
       try {
         const endLLM = debugMeasure("pipeline", "classifier.attempt");
-        const output = await classifyWithLLM(model, text, tiers);
+        const output = await classifyWithLLM(model, text, tiers, signal);
         const modelId = model.kind === "registry" ? model.model.id : model.id;
         const judgment = output === undefined ? undefined : normalizeJudgment(output, CLASSIFIER_BACKEND_IDS.prompt);
         const tier = judgment?.tier;
         endLLM({ model: modelId, tier, backend: judgment?.backend, confidence: judgment?.confidence });
         if (judgment && tiers.includes(judgment.tier)) {
-          debug("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model ?? modelId, confidence: judgment.confidence });
+          debug("classifier", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model ?? modelId, confidence: judgment.confidence });
           return { kind: "classified", tier: judgment.tier, source: "classifier", judgment: { ...judgment, model: judgment.model ?? modelId } };
         }
       } catch {
-        debug("pipeline", "classifier.error", { category: "classifier_failure" });
+        debug("classifier", "classifier.error", { category: "classifier_failure" });
         console.error("[bifrost] classifier model failed");
       }
+      if (signal?.aborted) return { kind: "unclassified" };
     }
 
     if (signal?.aborted) return { kind: "unclassified" };

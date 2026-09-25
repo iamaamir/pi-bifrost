@@ -59,6 +59,7 @@
     "@earendil-works/pi-ai": "0.86.0",
     "@earendil-works/pi-coding-agent": "0.86.0",
     "@types/node": "^26.1.1",
-    "agent-tui": "^1.1.0"
+    "agent-tui": "^1.1.0",
+    "typescript": "5.9.3"
   }
 }

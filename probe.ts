@@ -44,7 +44,7 @@ function assistantText(message: { content: Array<{ type: string; text?: string }
 type MinimalSessionPrompt = (
   model: Model<Api>,
   prompt: string,
-  options: { cwd?: string; systemPrompt?: string },
+  options: { cwd?: string; systemPrompt?: string; signal?: AbortSignal },
 ) => Promise<string | undefined>;
 
 export interface RunProbeOptions {
@@ -67,6 +67,8 @@ export async function runProbe(
   ctx: ExtensionContext,
   options: RunProbeOptions = {},
 ): Promise<{ results: ProbeResult[]; path: string }> {
+  const cwd = ctx.cwd || process.cwd();
+  const probeCtx = { ...ctx, cwd };
   const available = ctx.modelRegistry.getAvailable();
   const total = available.length;
   const results: ProbeResult[] = new Array(total);
@@ -78,7 +80,7 @@ export async function runProbe(
   async function worker() {
     while (cursor < total) {
       const i = cursor++;
-      results[i] = await probeOne(ctx, available[i], promptWithSession, timeoutMs);
+      results[i] = await probeOne(probeCtx, available[i], promptWithSession, timeoutMs);
       completed++;
       onProgress?.(completed, total, results[i]);
     }
@@ -89,7 +91,7 @@ export async function runProbe(
   const workers = Array.from({ length: effectiveConcurrency }, () => worker());
   await Promise.all(workers);
 
-  const outputPath = probeResultsPath(process.cwd());
+  const outputPath = probeResultsPath(cwd);
   try {
     const dir = dirname(outputPath);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -103,6 +105,11 @@ export async function runProbe(
   return { results, path: outputPath };
 }
 
+function abortLike(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const value = error as { name?: unknown; code?: unknown };
+  return value.name === "AbortError" || value.name === "TimeoutError" || value.code === "ABORT_ERR";
+}
 async function probeOne(
   ctx: ExtensionContext,
   model: Model<Api>,
@@ -120,14 +127,15 @@ async function probeOne(
 
   const api = model.api as string | undefined;
   if (!api) {
-    base.error = "unsupported api: undefined";
+    base.error = "unsupported_api";
     return base;
   }
 
   const start = performance.now();
+  const deadline = start + timeoutMs;
+  const controller = new AbortController();
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const timer = setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), timeoutMs);
     try {
       const stream = await streamSimpleVia(
         ctx,
@@ -144,37 +152,54 @@ async function probeOne(
       );
       const response = await stream.result();
       base.duration_ms = +(performance.now() - start).toFixed(1);
+      if (response.stopReason === "aborted" || controller.signal.aborted || performance.now() >= deadline) {
+        base.status = "timeout";
+        base.error = "timeout";
+        return base;
+      }
       const text = assistantText(response).trim();
       if (!text) {
-        const fallbackText = await promptWithSession(model, PROBE_PROMPT, {
-          cwd: ctx.cwd,
-          systemPrompt: "You are a model probe. Reply with only the result.",
-        });
+        const fallbackText = controller.signal.aborted || performance.now() >= deadline
+          ? undefined
+          : await promptWithSession(model, PROBE_PROMPT, {
+              cwd: ctx.cwd,
+              systemPrompt: "You are a model probe. Reply with only the result.",
+              signal: controller.signal,
+            });
+        if (controller.signal.aborted || performance.now() >= deadline) {
+          base.status = "timeout";
+          base.error = "timeout";
+          return base;
+        }
         if (!fallbackText?.trim()) {
           base.status = "error";
-          base.error = "empty response";
+          base.error = "provider_error";
           return base;
         }
         base.status = "ok";
         base.transport = "session";
         return base;
       }
-      base.transport = "streamSimple";
-      base.status = response.stopReason === "error" ? "error" : "ok";
-      if (response.stopReason === "error") {
-        base.error = response.errorMessage ?? "model error";
-      } else {
-        base.tokens = response.usage.totalTokens;
+      if (controller.signal.aborted || performance.now() >= deadline) {
+        base.status = "timeout";
+        base.error = "timeout";
+        return base;
       }
+      if (response.stopReason === "error") {
+        base.status = "error";
+        base.error = "provider_error";
+        return base;
+      }
+      base.transport = "streamSimple";
+      base.status = "ok";
+      base.tokens = response.usage.totalTokens;
     } finally {
       clearTimeout(timer);
     }
   } catch (err) {
     base.duration_ms = +(performance.now() - start).toFixed(1);
-    base.status = err instanceof DOMException && err.name === "AbortError"
-      ? "timeout"
-      : "error";
-    base.error = String(err).slice(0, 200);
+    base.status = controller.signal.aborted || performance.now() >= deadline || abortLike(err) ? "timeout" : "error";
+    base.error = controller.signal.aborted || performance.now() >= deadline || abortLike(err) ? "timeout" : "provider_error";
   }
 
   return base;

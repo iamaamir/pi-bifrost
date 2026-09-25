@@ -118,12 +118,14 @@ export function loadCache(path: string, maxAgeMs = Number.POSITIVE_INFINITY): Ca
   }
 }
 
-export function saveCache(path: string, entries: CacheEntry[]) {
+export function saveCache(path: string, entries: CacheEntry[]): boolean {
   try {
-    const lines = entries.map((e) => JSON.stringify(e)).join("\n");
+    const lines = entries.map((entry) => JSON.stringify(entry)).join("\n");
     writeTextFile(path, lines ? lines + "\n" : "");
+    return true;
   } catch (err) {
     console.error(`[bifrost] failed to save cache: ${err}`);
+    return false;
   }
 }
 
