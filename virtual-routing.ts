@@ -3,18 +3,32 @@ import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelRouteRequest, ModelRoute } from "@earendil-works/pi-coding-agent";
 import type { VirtualOverride } from "./virtual-override.ts";
 
-/** Explains what to fix: empty pool vs configured-but-unresolvable pool. */
-export function poolProblem(tier: string, pool: string | string[] | undefined): string {
+/** Explains what to fix: empty pool, excluded-only pool, or unresolved pool. */
+export function poolProblem(
+  tier: string,
+  pool: string | string[] | undefined,
+  skipped?: readonly { key: string; reason: string }[],
+): string {
   const patterns = pool === undefined ? [] : Array.isArray(pool) ? pool : [pool];
-  return patterns.length === 0
-    ? `0 models configured for "${tier}" — add models to bifrost.json or run /bifrost init`
-    : `pool [${patterns.join(", ")}] resolved 0 available models — check provider credentials and model ids`;
+  if (patterns.length === 0) {
+    return `0 models configured for "${tier}" — add models to bifrost.json or run /bifrost init`;
+  }
+  if (skipped && skipped.length > 0) {
+    const list = skipped.map((entry) => `${entry.key} (${entry.reason})`).join(", ");
+    return `pool [${patterns.join(", ")}] resolved models, all excluded: ${list}`;
+  }
+  return `pool [${patterns.join(", ")}] resolved 0 available models — check provider credentials and model ids`;
 }
 
 /** Fail-closed error that says what to fix: empty pool vs unresolved pool. */
-export function noModelError(tier: string, pool: string | string[] | undefined, reason?: string): string {
+export function noModelError(
+  tier: string,
+  pool: string | string[] | undefined,
+  reason?: string,
+  skipped?: readonly { key: string; reason: string }[],
+): string {
   const suffix = reason ? ` (${reason})` : "";
-  return `Bifrost: no healthy physical model for tier ${tier}${suffix}: ${poolProblem(tier, pool)}`;
+  return `Bifrost: no healthy physical model for tier ${tier}${suffix}: ${poolProblem(tier, pool, skipped)}`;
 }
 
 export interface VirtualRouteDependencies {

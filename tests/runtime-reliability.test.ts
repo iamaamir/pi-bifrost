@@ -14,6 +14,7 @@ import {
   saveReliability,
 } from "../reliability.ts";
 import { makeCtx, makeModel } from "./helpers.ts";
+import { RuntimeReliabilityTracker } from "../runtime-reliability.ts";
 
 describe("runtime reliability simulation", () => {
   it("opens circuit on runtime failure, routes around it, then closes after successful probe", () => {
@@ -92,5 +93,35 @@ describe("runtime reliability simulation", () => {
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
+  });
+});
+
+describe("RuntimeReliabilityTracker ledger", () => {
+  it("settles every model dispatched within one run", () => {
+    const tracker = new RuntimeReliabilityTracker();
+    tracker.begin("a/one");
+    tracker.begin("b/two");
+    tracker.observe([
+      { role: "assistant", provider: "a", model: "one", stopReason: "error", errorMessage: "boom" },
+      { role: "assistant", provider: "b", model: "two", stopReason: "stop" },
+    ]);
+    assert.deepEqual(tracker.settle(), [
+      { model: "a/one", reason: "boom" },
+      { model: "b/two", reason: undefined },
+    ]);
+  });
+
+  it("releases one dispatch without disturbing others", () => {
+    const tracker = new RuntimeReliabilityTracker();
+    tracker.begin("a/one");
+    tracker.begin("b/two");
+    tracker.release("a/one");
+    assert.deepEqual(tracker.settle(), [{ model: "b/two", reason: undefined }]);
+  });
+
+  it("settles cleanly when a dispatched model produced no message", () => {
+    const tracker = new RuntimeReliabilityTracker();
+    tracker.begin("a/one");
+    assert.deepEqual(tracker.settle(), [{ model: "a/one", reason: undefined }]);
   });
 });

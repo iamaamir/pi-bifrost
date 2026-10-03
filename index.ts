@@ -329,7 +329,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     name: "Bifrost Auto",
     thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
     async route(request, ctx) {
-      let routeFailure: { tier: string; pool: string | string[] | undefined; reason?: string } | undefined;
+      let routeFailure: { tier: string; pool: string | string[] | undefined; reason?: string; skipped?: readonly { key: string; reason: string }[] } | undefined;
       const route = createVirtualRoute({
         overrides: virtualOverride,
         fallback: () => lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default).selected : undefined),
@@ -372,12 +372,13 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           const model = resolved.selected;
           if (!model) {
             state.forceRegistryRefresh = true;
-            routeFailure = { tier: classification.tier, pool: state.config.models?.[classification.tier], reason: resolved.fallbackReason };
+            routeFailure = { tier: classification.tier, pool: state.config.models?.[classification.tier], reason: resolved.fallbackReason, skipped: resolved.skipped };
             debug("virtual", "fail", { tier: classification.tier, reason: resolved.fallbackReason, pool: routeFailure.pool, skipped: resolved.skipped });
             return undefined;
           }
           debug("virtual", "select", { tier: classification.tier, model: modelKey(model), source: classification.kind === "classified" ? classification.source : "fallback", skipped: resolved.skipped });
           const trial = state.reliabilityStore.tryClaimTrial(modelKey(model));
+          debug("virtual", "trial", { model: modelKey(model), allowed: trial.allowed, claimed: trial.claimed });
           if (!trial.allowed) throw new Error(`Bifrost: half-open trial unavailable for ${modelKey(model)}`);
           try {
             saveClassifierDecision(prompt, classification);
@@ -395,14 +396,14 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         onDispatchFailed: (model) => {
           debug("virtual", "dispatch.release", { model: modelKey(model) });
           state.reliabilityStore.abandonTrial(modelKey(model));
-          runtimeReliability.settle();
+          runtimeReliability.release(modelKey(model));
         },
         onDegrade: (model) => {
-          const detail = routeFailure ? poolProblem(routeFailure.tier, routeFailure.pool) : "no configured model resolved";
+          const detail = routeFailure ? poolProblem(routeFailure.tier, routeFailure.pool, routeFailure.skipped) : "no configured model resolved";
           debug("virtual", "degrade", { model: modelKey(model), tier: routeFailure?.tier });
           log(ctx, `Bifrost: keeping ${modelKey(model)} (last dispatched) — ${detail}`, "warning");
         },
-        routeError: (detail) => new Error(routeFailure ? noModelError(routeFailure.tier, routeFailure.pool, routeFailure.reason) : `Bifrost: ${detail}`),
+        routeError: (detail) => new Error(routeFailure ? noModelError(routeFailure.tier, routeFailure.pool, routeFailure.reason, routeFailure.skipped) : `Bifrost: ${detail}`),
       });
       return route(request);
     },
@@ -432,17 +433,19 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const settled = runtimeReliability.settle();
     // Queues drain before agent_end; anything still pending was abandoned.
     virtualOverride.clear();
-    if (!settled) return;
+    if (settled.length === 0) return;
     if (!state.enabled || state.config.reliability?.enabled === false) {
-      // Policy off mid-run: still resolve the claimed trial so models never wedge.
-      state.reliabilityStore.abandonTrial(settled.model);
+      // Policy off mid-run: still resolve claimed trials so models never wedge.
+      for (const outcome of settled) state.reliabilityStore.abandonTrial(outcome.model);
       return;
     }
     // Policy A: failure logged, clean settle silent (trial-only success).
     // Intentional — normal routing produces no log noise.
-    state.reliabilityStore.recordSettled(settled.model, settled.reason);
-    if (settled.reason) {
-      log(ctx, `Bifrost: recorded provider failure for ${settled.model}; future prompts may route around it.`, "warning");
+    for (const outcome of settled) {
+      state.reliabilityStore.recordSettled(outcome.model, outcome.reason);
+      if (outcome.reason) {
+        log(ctx, `Bifrost: recorded provider failure for ${outcome.model}; future prompts may route around it.`, "warning");
+      }
     }
   });
 

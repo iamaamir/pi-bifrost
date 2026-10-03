@@ -33,7 +33,7 @@ describe("virtual inline override handoff", () => {
     assert.equal(handoff.take("commit changes"), "quick");
   });
 
-  it("clear() drops abandoned overrides (wired at session_start and agent_settled)", () => {
+  it("clear() drops abandoned overrides", () => {
     const handoff = new VirtualOverride();
     handoff.prepare("quick", "commit changes");
     handoff.clear();

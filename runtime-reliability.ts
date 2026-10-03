@@ -17,38 +17,48 @@ export interface RuntimeFailure {
   reason?: string;
 }
 
+/**
+ * Ledger of models dispatched within one agent run. One run can dispatch
+ * several models (queued user turns drain before one agent_settled), so a
+ * single slot would lose ownership of earlier claimed half-open trials and
+ * wedge them. Every dispatched model settles individually.
+ */
 export class RuntimeReliabilityTracker {
-  private selectedModel: string | undefined;
-  private pendingFailure: string | undefined;
+  private pending = new Map<string, string | undefined>();
 
   begin(selectedModel: string): void {
-    this.selectedModel = selectedModel;
-    this.pendingFailure = undefined;
+    if (!this.pending.has(selectedModel)) this.pending.set(selectedModel, undefined);
+  }
+
+  /** Drop one dispatch (e.g. dispatch bookkeeping failed before the request). */
+  release(selectedModel: string): void {
+    this.pending.delete(selectedModel);
   }
 
   observe(messages: readonly AssistantOutcome[]): void {
-    if (!this.selectedModel) return;
-    let last: AssistantOutcome | undefined;
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index];
-      if (message.role === "assistant" && modelKey(message) === this.selectedModel) {
-        last = message;
-        break;
+    for (const model of this.pending.keys()) {
+      let last: AssistantOutcome | undefined;
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
+        if (message.role === "assistant" && modelKey(message) === model) {
+          last = message;
+          break;
+        }
       }
+      if (!last) continue;
+      this.pending.set(
+        model,
+        last.stopReason === "error"
+          ? (typeof last.errorMessage === "string" ? last.errorMessage : "provider request failed")
+          : undefined,
+      );
     }
-    if (!last) return;
-    this.pendingFailure = last.stopReason === "error"
-      ? (typeof last.errorMessage === "string" ? last.errorMessage : "provider request failed")
-      : undefined;
   }
 
-  /** Returns model on both success and failure. reason undefined = clean settle. */
-  settle(): RuntimeFailure | undefined {
-    const failure = this.pendingFailure;
-    const model = this.selectedModel;
-    this.selectedModel = undefined;
-    this.pendingFailure = undefined;
-    if (!model) return undefined;
-    return { model, reason: failure };
+  /** Returns every dispatch on both success and failure. reason undefined = clean settle. */
+  settle(): RuntimeFailure[] {
+    const settled = [...this.pending.entries()].map(([model, reason]) => ({ model, reason }));
+    this.pending.clear();
+    return settled;
   }
 }

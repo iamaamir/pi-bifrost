@@ -134,7 +134,41 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
     }
   });
 
-  it("settles half-open trials and visibly degrades after the circuit opens", async () => {
+  it("settles a claimed half-open trial end to end", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-auto-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-auto-work-"));
+    try {
+      writeFixture({
+        home, work, port: server.port,
+        models: [{ id: "healthy", reasoning: false }],
+        bifrost: {
+          enabled: true, default: "quick", strategy: "first", classifier: { enabled: false },
+          models: { quick: ["fake/healthy"] },
+          reliability: { enabled: true, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60 },
+          debug: { enabled: true },
+        },
+      });
+      // Seed an expired-cooldown circuit: the route must CLAIM a half-open trial.
+      mkdirSync(join(work, ".pi"), { recursive: true });
+      writeFileSync(join(work, ".pi", "bifrost-reliability.json"), JSON.stringify({
+        version: 1,
+        models: { "fake/healthy": { failures: [Date.now() - 7_200_000], openUntil: Date.now() - 1_000, trialActive: false } },
+      }));
+      const { code, stderr } = await runAuto({ home, work, messages: ["hello"] });
+      assert.equal(code, 0);
+      assert.match(stderr, /Bifrost auto: quick → fake\/healthy/);
+      const reliability = JSON.parse(readFileSync(join(work, ".pi", "bifrost-reliability.json"), "utf8"));
+      const record = reliability.models["fake/healthy"];
+      assert.equal(record.trialActive, false, "claimed half-open trial must resolve at settle");
+      const debugLog = readFileSync(join(work, ".pi", "bifrost-debug.jsonl"), "utf8");
+      assert.match(debugLog, /"event":"trial","entryType":"event","model":"fake\/healthy","allowed":true,"claimed":true/, "seeded half-open trial must actually be claimed");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+
+  it("opens the circuit on failure and visibly degrades to the last dispatched model", async () => {
     const home = mkdtempSync(join(tmpdir(), "bifrost-auto-home-"));
     const work = mkdtempSync(join(tmpdir(), "bifrost-auto-work-"));
     try {
@@ -152,9 +186,7 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
       assert.match(stderr, /Bifrost auto: quick → fake\/fail-then-ok/);
       assert.match(stderr, /Bifrost: keeping fake\/fail-then-ok/);
       const reliability = JSON.parse(readFileSync(join(work, ".pi", "bifrost-reliability.json"), "utf8"));
-      const record = reliability.models["fake/fail-then-ok"];
-      assert.equal(record.trialActive, false, "claimed trial must resolve at settle");
-      assert.equal(record.lastFailureSource, "agent_settled");
+      assert.equal(reliability.models["fake/fail-then-ok"].lastFailureSource, "agent_settled");
     } finally {
       rmSync(home, { recursive: true, force: true });
       rmSync(work, { recursive: true, force: true });

@@ -30,6 +30,10 @@ describe("virtual fail-closed errors", () => {
     assert.match(message, /bifrost init/);
     assert.match(poolProblem("general", undefined), /0 models configured/);
     assert.match(poolProblem("general", ["x/y"]), /resolved 0 available models/);
+    assert.match(
+      poolProblem("general", ["x/y"], [{ key: "x/y", reason: "open_circuit" }]),
+      /all excluded: x\/y \(open_circuit\)/,
+    );
   });
 
   it("distinguishes a configured pool that resolved no available model", () => {
