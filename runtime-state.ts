@@ -28,6 +28,11 @@ export const DEFAULT_RUNTIME_STATE: RuntimeModeState = {
   classifierEnabled: true,
 };
 
+/** Session restore replays a recorded selection — it is not a user action. */
+export function isPassiveModelSelection(source: string): boolean {
+  return source === "restore";
+}
+
 export function runtimeStatePath(cwd: string): string {
   return resolveStoragePath(cwd, undefined, ".pi/bifrost-state.json");
 }

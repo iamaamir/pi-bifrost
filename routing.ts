@@ -50,12 +50,13 @@ export function findOneModel(
   if (pattern.includes("/")) {
     const [provider, ...idParts] = pattern.split("/");
     const id = idParts.join("/");
-    return ctx.modelRegistry.find(provider, id);
+    const model = ctx.modelRegistry.find(provider, id);
+    return model?.api === "pi-virtual" ? undefined : model;
   }
 
   const lower = pattern.toLowerCase();
   const available = ctx.modelRegistry.getAvailable();
-  return available.find((m) => modelLowerMatches(m, lower));
+  return available.find((m) => m.api !== "pi-virtual" && modelLowerMatches(m, lower));
 }
 
 /** Lowercased id/provider for a model, computed once per model object.
@@ -108,7 +109,7 @@ export function findCandidates(
       const lower = p.toLowerCase();
       for (const m of available) {
         // Match test first — modelKey/dedup only run for actual matches.
-        if (!modelLowerMatches(m, lower)) continue;
+        if (m.api === "pi-virtual" || !modelLowerMatches(m, lower)) continue;
         const key = modelKey(m);
         if (!seen.has(key)) {
           seen.add(key);

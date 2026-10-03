@@ -2,7 +2,7 @@
 
 ![Pi-Bifrost social card](docs/social-card.png)
 
-Pi-Bifrost is a **configuration-first model-routing extension for [Pi](https://pi.dev)**, not an LLM gateway or proxy. You define model pools and per-tier selection strategies. Before generation, Bifrost resolves a configured tier, filters unhealthy candidates, applies your strategy, and activates Pi's actual provider/model. It applies your task-fit policy; it does not claim to discover a universally best model.
+Pi-Bifrost is a **configuration-first model-routing extension for [Pi](https://pi.dev)**, not an LLM gateway or proxy. You define model pools and per-tier selection strategies. Before generation, Bifrost resolves a configured tier, filters unhealthy candidates, applies your strategy, and activates Pi's actual provider/model — or, with [Bifrost Auto](#bifrost-auto-virtual-model), dispatches it per request through Pi's virtual models. It applies your task-fit policy; it does not claim to discover a universally best model.
 
 ```text
 "quick commit the changes"  → explicit quick tier → configured cheapest candidate
@@ -13,7 +13,7 @@ Pi-Bifrost is a **configuration-first model-routing extension for [Pi](https://p
 
 - **User-owned model pools** — add or remove Pi models directly in config.
 - **Per-tier strategies** — choose list order, cost, context window, probe-sorted speed, or explicit random selection.
-- **Native activation** — Pi uses the selected provider/model for the turn; no proxy or virtual profile.
+- **Native activation** — Pi uses the selected provider/model for the turn; no proxy. Bifrost Auto is opt-in and shows `auto → physical` in the footer.
 - **Persistent reliability** — repeated model failures survive restart and affect future routing.
 - **No automatic replay** — Bifrost never silently repeats prompts that may have edited files or called tools.
 - **Inspectable control** — preview a route, name a tier directly, pin an exact model, or disable routing.
@@ -21,7 +21,7 @@ Pi-Bifrost is a **configuration-first model-routing extension for [Pi](https://p
 
 ## Install
 
-Requires Pi `0.86.0` or newer and at least one configured, authenticated provider model visible in Pi.
+Requires Pi `1.0.1` or newer and at least one configured, authenticated provider model visible in Pi.
 
 ```bash
 pi install npm:pi-bifrost
@@ -80,6 +80,21 @@ frontier debug this race condition
 ```
 
 Bifrost removes the tier name before the model sees the prompt, then uses that tier's model pool, reliability filter, and strategy. Custom tier names must currently be lowercase alphabetic single-word config keys. Pinned sessions ignore tier names in messages; a prefix does not override `/bifrost pin`.
+
+## Bifrost Auto (virtual model)
+
+Requires Pi `1.0.1` or newer. Select `bifrost/auto` in Pi's `/model` picker and Bifrost routes **each request** through the same tier, cache, reliability, and strategy policy — but Pi dispatches the physical model at request time instead of Bifrost switching the active model at input time.
+
+- Pi's footer shows `bifrost/auto → provider/model`; every assistant message records the physical model that answered.
+- Tier prefixes work exactly as in adaptive mode and stay hidden from the model.
+- Footer pairs: `auto • <level>` is your reasoning preference for routing; the right pair is what actually runs. Bifrost clamps the dispatched level to the target's capabilities, so non-reasoning models run `off` regardless of the preference.
+- Tool continuations and retries stay on the model that started the turn. Bifrost never replays prompts and never switches models mid-retry.
+- Selecting `bifrost/auto` opts into routing; selecting any physical model pins it as before.
+- `/bifrost pin` or `/bifrost off` while Auto is selected leaves Auto and locks the last dispatched physical model.
+- If no pool resolves a model: a fresh session fails with an actionable explanation (empty pool → `run /bifrost init`); a session that already dispatched a physical model keeps the last one with a visible warning. Nothing silently reroutes elsewhere.
+- Selecting `bifrost/auto` with no pools configured offers to run `/bifrost init` once (TUI), disclosing probe usage first.
+
+Physical selection stays the default: with no virtual model selected, Bifrost behaves exactly as described above.
 
 ## When not to use adaptive routing
 

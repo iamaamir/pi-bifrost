@@ -182,6 +182,16 @@ const TYPESAFE_PROMPT_FIELDS = [
   "fallbackToRegex",
 ] as const;
 
+/** True when no configured tier lists a model — nothing to route. */
+export function configHasNoPools(config: BifrostConfig): boolean {
+  const models = config.models ?? {};
+  const keys = Object.keys(models);
+  return keys.every((tier) => {
+    const pool = models[tier];
+    return Array.isArray(pool) ? pool.length === 0 : !pool;
+  });
+}
+
 /**
  * Validate a resolved BifrostConfig. Returns issues (errors stop
  * the extension from starting, warnings are logged only).

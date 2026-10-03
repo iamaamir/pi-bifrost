@@ -39,6 +39,8 @@ export interface BifrostState {
   extensionDir: string;
   getPipeline: (ctx: ExtensionContext) => ClassificationPipeline;
   invalidatePipeline: () => void;
+  /** Leave Bifrost's virtual selection for its last dispatched physical model. */
+  selectPhysicalFromVirtual?: (ctx: ExtensionContext) => Promise<boolean>;
   /** Persist runtime mode toggles (enabled/pinned/classifierEnabled) to disk. */
   saveModeState: () => void;
   lastRegistryRefreshAt?: number;
@@ -771,14 +773,16 @@ export function createCommandRouter(
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost enabled");
     }),
-    exact("off", "Disable routing", (_, ctx) => {
+    exact("off", "Disable routing", async (_, ctx) => {
+      if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
       state.enabled = false;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost disabled");
     }),
-    exact("pin", "Lock current model", (_, ctx) => {
+    exact("pin", "Lock current model", async (_, ctx) => {
+      if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
       state.pinned = true;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);

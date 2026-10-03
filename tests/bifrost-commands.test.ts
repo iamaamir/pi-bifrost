@@ -166,6 +166,19 @@ describe("bifrost command ui", () => {
     assert.equal(state.classifierEnabled, false);
   });
 
+  it("does not pin or disable a virtual selection until physical activation succeeds", async () => {
+    const { ctx } = makeCtx();
+    const state = Object.assign(makeState(), { selectPhysicalFromVirtual: async () => false });
+    const dispatch = createCommandRouter(state as never);
+    await dispatch("pin", ctx as never);
+    await dispatch("off", ctx as never);
+    assert.equal(state.pinned, false);
+    assert.equal(state.enabled, true);
+    state.selectPhysicalFromVirtual = async () => true;
+    await dispatch("pin", ctx as never);
+    assert.equal(state.pinned, true);
+  });
+
   it("selecting prompt also persists a classifier model", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-command-test-"));
     const previousCwd = process.cwd();

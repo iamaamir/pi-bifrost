@@ -4,6 +4,13 @@ import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_MODEL } from "./classifier-backends.t
 
 const CLASSIFIER_INSTRUCTION_VERSION = 1;
 
+/** Bound what classifiers see (matches Pi's jev-router example: slice(0, 16_000)). */
+export const CLASSIFIER_PROMPT_MAX_CHARS = 16_000;
+
+export function boundedClassifierPrompt(text: string, maxChars = CLASSIFIER_PROMPT_MAX_CHARS): string {
+  return text.length <= maxChars ? text : text.slice(0, maxChars);
+}
+
 function stableValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableValue);
   if (value && typeof value === "object") {

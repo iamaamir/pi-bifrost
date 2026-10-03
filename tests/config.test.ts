@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mergeConfig, validateConfig, type BifrostConfig } from "../config.ts";
+import { mergeConfig, validateConfig, configHasNoPools, type BifrostConfig } from "../config.ts";
 import type { RoutingStrategy } from "../routing.ts";
 
 const baseConfig: BifrostConfig = {
@@ -12,6 +12,16 @@ const baseConfig: BifrostConfig = {
     economical: ["model-b"],
   },
 };
+
+describe("configHasNoPools", () => {
+  it("detects missing and empty pools, and accepts any configured model", () => {
+    assert.equal(configHasNoPools({}), true);
+    assert.equal(configHasNoPools({ models: {} }), true);
+    assert.equal(configHasNoPools({ models: { quick: [], general: [] } }), true);
+    assert.equal(configHasNoPools({ models: { quick: "provider/m" } }), false);
+    assert.equal(configHasNoPools({ models: { quick: [], general: ["provider/m"] } }), false);
+  });
+});
 
 describe("validateConfig", () => {
   it("returns no issues for a valid config", () => {

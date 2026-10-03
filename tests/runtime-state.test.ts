@@ -7,9 +7,18 @@ import {
   loadRuntimeState,
   runtimeStatePath,
   saveRuntimeState,
+  isPassiveModelSelection,
   type PersistedModeState,
   type RuntimeModeState,
 } from "../runtime-state.ts";
+
+describe("isPassiveModelSelection", () => {
+  it("treats session restore as passive and user-driven selection as active", () => {
+    assert.equal(isPassiveModelSelection("restore"), true);
+    assert.equal(isPassiveModelSelection("set"), false);
+    assert.equal(isPassiveModelSelection("cycle"), false);
+  });
+});
 
 describe("runtime state", () => {
   it("saves and loads persisted mode", () => {

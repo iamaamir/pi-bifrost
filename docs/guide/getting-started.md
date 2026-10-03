@@ -12,7 +12,7 @@ Bifrost does not provide model credentials or a model proxy.
 
 You need:
 
-- Pi `0.86.0` or newer;
+- Pi `1.0.1` or newer;
 - at least one model provider configured and authenticated in Pi;
 - at least one model visible in Pi's model registry;
 - network access for installation and provider requests.

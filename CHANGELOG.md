@@ -2,6 +2,26 @@
 
 All notable changes to pi-bifrost are documented here.
 
+## [0.5.0] - UNRELEASED
+
+### Added
+- `bifrost/auto` virtual model (Pi 1.0.1+): per-request dispatch through the existing tier, cache, reliability, and strategy policy. Select it in `/model`; Pi's footer shows `bifrost/auto → provider/model` and assistant messages record the physical model.
+- Inline tier overrides hand off from input-time prompt stripping to virtual routing without persisting prompt text.
+- Setup offer: selecting `bifrost/auto` with no configured pools asks once (TUI) whether to run `/bifrost init`, disclosing that init probes every available model; non-TUI keeps the actionable error. Init itself still confirms before writing config.
+
+### Changed
+- Require Pi 1.0.1+ (`minPiVersion`), matching the virtual-model API.
+- Selecting `bifrost/auto` opts into per-prompt routing; selecting a physical model still pins. `/bifrost pin` and `/bifrost off` exit Auto and lock the last dispatched physical model.
+- Virtual entries (`api: pi-virtual`) are excluded from tier candidate pools; Bifrost never routes a virtual model to another virtual model.
+
+### Fixed
+- Fail-closed virtual route errors are actionable: empty pools say `0 models configured — add models to bifrost.json or run /bifrost init`; configured pools that resolve nothing name the patterns and point at credentials/model ids.
+- Virtual route selection and failure emit debug events (`virtual.select`, `virtual.fail`, `virtual.degrade`) so fail-closed routes self-document when debug logging is on.
+- No wedged Auto sessions: when a user turn finds no resolvable model, a session that already dispatched a physical model keeps the last one with a visible warning (continuations already worked this way); fresh sessions fail with the actionable error above.
+- Auto dispatch clamps the thinking level to the physical model's capabilities via pi-ai's `clampThinkingLevel` (non-reasoning targets dispatch `off`), and debug traces log the dispatched level instead of the virtual selection level.
+- Session restore (`model_select` source `restore`) no longer pins or flips Auto state — restore is passive, matching Pi's `model-status` example semantics.
+- Classifier backends receive prompt text bounded to 16k chars (matches Pi's `jev-router` example); cache matching still uses the full prompt.
+
 ## [0.4.0] - UNRELEASED
 
 ### Added
