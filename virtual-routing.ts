@@ -24,6 +24,8 @@ export interface VirtualRouteDependencies {
   /** Last dispatched physical model — session fact, not routing policy. */
   sticky?: () => Model<Api> | undefined;
   onDispatch?: (model: Model<Api>, thinkingLevel: ModelRoute["thinkingLevel"]) => void;
+  /** Release dispatch bookkeeping (e.g. claimed half-open trial) when dispatch setup throws. */
+  onDispatchFailed?: (model: Model<Api>) => void;
   /** Visible degrade: kept model when no pool resolves. */
   onDegrade?: (model: Model<Api>) => void;
   routeError?: (detail: string) => Error;
@@ -41,10 +43,19 @@ export function createVirtualRoute(deps: VirtualRouteDependencies): (request: Mo
   return async (request) => {
     const sticky = request.reason === "retry" ? (request.failed ?? request.previous) : request.previous;
     const fail = (detail: string) => deps.routeError ? deps.routeError(detail) : new Error(`Bifrost: ${detail}`);
+    const dispatch = (model: Model<Api>, thinkingLevel: ModelRoute["thinkingLevel"]): ModelRoute => {
+      try {
+        deps.onDispatch?.(model, thinkingLevel);
+      } catch (error) {
+        deps.onDispatchFailed?.(model);
+        throw error;
+      }
+      return { model, thinkingLevel };
+    };
     if (request.reason !== "user") {
       const model = sticky?.model ?? deps.fallback();
       if (!model) throw fail("no healthy physical model for virtual request");
-      return { model, thinkingLevel: sticky?.thinkingLevel ?? clampThinkingLevel(model, request.thinkingLevel) };
+      return dispatch(model, clampThinkingLevel(model, sticky?.thinkingLevel ?? request.thinkingLevel));
     }
 
     const prompt = latestUserText(request.messages);
@@ -54,11 +65,8 @@ export function createVirtualRoute(deps: VirtualRouteDependencies): (request: Mo
       const kept = deps.sticky?.();
       if (!kept) throw fail("no healthy physical model for virtual request");
       deps.onDegrade?.(kept);
-      deps.onDispatch?.(kept, clampThinkingLevel(kept, request.thinkingLevel));
-      return { model: kept, thinkingLevel: clampThinkingLevel(kept, request.thinkingLevel) };
+      return dispatch(kept, clampThinkingLevel(kept, request.thinkingLevel));
     }
-    const thinkingLevel = clampThinkingLevel(model, request.thinkingLevel);
-    deps.onDispatch?.(model, thinkingLevel);
-    return { model, thinkingLevel };
+    return dispatch(model, clampThinkingLevel(model, request.thinkingLevel));
   };
 }

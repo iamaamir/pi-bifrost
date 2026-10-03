@@ -215,7 +215,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     pinned: false,
     classifierEnabled: config.classifier?.enabled ?? true,
   });
-  let selfSelecting = false;
+  let selfSelectKey: string | undefined;
   let offeredSetup = false;
   const virtualOverride = new VirtualOverride();
   const runtimeReliability = new RuntimeReliabilityTracker();
@@ -296,17 +296,17 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       log(ctx, "Bifrost: no dispatched physical model to pin; select one in /model first", "warning");
       return false;
     }
-    selfSelecting = true;
+    selfSelectKey = modelKey(physical);
     try {
       if (!(await pi.setModel(physical))) {
-        selfSelecting = false;
+        selfSelectKey = undefined;
         log(ctx, `Bifrost: cannot activate ${modelKey(physical)}`, "error");
         return false;
       }
       virtualOverride.clear();
       return true;
     } catch {
-      selfSelecting = false;
+      selfSelectKey = undefined;
       log(ctx, `Bifrost: cannot activate ${modelKey(physical)}`, "error");
       return false;
     }
@@ -390,6 +390,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           runtimeReliability.begin(modelKey(model));
           debug("virtual", "dispatch", { model: modelKey(model), thinkingLevel });
         },
+        onDispatchFailed: (model) => {
+          debug("virtual", "dispatch.release", { model: modelKey(model) });
+          state.reliabilityStore.abandonTrial(modelKey(model));
+          runtimeReliability.settle();
+        },
         onDegrade: (model) => {
           const detail = routeFailure ? poolProblem(routeFailure.tier, routeFailure.pool) : "no configured model resolved";
           debug("virtual", "degrade", { model: modelKey(model), tier: routeFailure?.tier });
@@ -423,7 +428,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   pi.on("agent_settled", async (_event, ctx) => {
     const settled = runtimeReliability.settle();
-    if (!settled || !state.enabled || state.config.reliability?.enabled === false) return;
+    if (!settled) return;
+    if (!state.enabled || state.config.reliability?.enabled === false) {
+      // Policy off mid-run: still resolve the claimed trial so models never wedge.
+      state.reliabilityStore.abandonTrial(settled.model);
+      return;
+    }
     // Policy A: failure logged, clean settle silent (trial-only success).
     // Intentional — normal routing produces no log noise.
     state.reliabilityStore.recordSettled(settled.model, settled.reason);
@@ -433,8 +443,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("model_select", async (event, ctx) => {
-    if (selfSelecting) {
-      selfSelecting = false;
+    // Swallow only our own programmatic activation, matched by exact model.
+    if (selfSelectKey && modelKey(event.model) === selfSelectKey) {
+      selfSelectKey = undefined;
       return;
     }
     // Session restore replays a recorded selection; it is not a user action.
@@ -658,7 +669,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
       uiBusy(ctx, `Bifrost routing to ${modelKey(model)}...`);
       setBifrostWorkingMessage(ctx, `Bifrost routing to ${modelKey(model)}...`);
-      selfSelecting = true;
+      selfSelectKey = modelKey(model);
       const endSwitch = debugMeasure("input", "setModel");
       let ok = false;
       let setModelError: unknown;
@@ -672,7 +683,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       uiDone(ctx);
       setBifrostWorkingMessage(ctx, undefined);
       if (!ok) {
-        selfSelecting = false;
+        selfSelectKey = undefined;
         state.forceRegistryRefresh = true;
         const reason = setModelError
           ? "setModel threw"

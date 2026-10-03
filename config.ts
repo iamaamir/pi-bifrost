@@ -188,7 +188,7 @@ export function configHasNoPools(config: BifrostConfig): boolean {
   const keys = Object.keys(models);
   return keys.every((tier) => {
     const pool = models[tier];
-    return Array.isArray(pool) ? pool.length === 0 : !pool;
+    return Array.isArray(pool) ? pool.length === 0 : !pool?.trim();
   });
 }
 

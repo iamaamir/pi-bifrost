@@ -1,6 +1,11 @@
 // Input runs before Pi queues/creates user messages; virtual route() runs when
 // message is dispatched. Hold only turn-local text. Steering messages take
 // priority over follow-ups, matching Pi's delivery order.
+// Identity limit (accepted residual): matching is (delivery priority, FIFO,
+// exact stripped text) — no turn id exists on input events. Two queued prompts
+// with identical stripped text but different tiers resolve in queue order;
+// different raw text stripping to the same prompt is the theoretical
+// misassociation case. Nothing is persisted.
 type Delivery = "steer" | "followUp" | undefined;
 
 export class VirtualOverride {

@@ -53,6 +53,32 @@ describe("virtual fail-closed errors", () => {
     assert.equal((await routes[1](request("user", "prompt", { thinkingLevel: "medium" }) as never)).thinkingLevel, "high");
   });
 
+  it("clamps a sticky level that the physical model does not support", async () => {
+    const nonReasoning = Object.assign(makeModel("fixture", "plain"), { reasoning: false });
+    const route = createVirtualRoute({
+      overrides: new VirtualOverride(),
+      select: async () => undefined,
+      fallback: () => undefined,
+    });
+    const result = await route(request("continuation", "prompt", {
+      previous: { model: nonReasoning, thinkingLevel: "high" },
+    }) as never);
+    assert.equal(result.thinkingLevel, "off");
+  });
+
+  it("releases the dispatched model when dispatch bookkeeping throws", async () => {
+    let released: unknown;
+    const route = createVirtualRoute({
+      overrides: new VirtualOverride(),
+      select: async () => first,
+      fallback: () => undefined,
+      onDispatch: () => { throw new Error("bookkeeping failed"); },
+      onDispatchFailed: (model) => { released = model; },
+    });
+    await assert.rejects(() => route(request("user", "prompt") as never), /bookkeeping failed/);
+    assert.equal(released, first);
+  });
+
   it("keeps the last dispatched model with a notice when no pool resolves", async () => {
     let degraded: unknown;
     const route = createVirtualRoute({
@@ -89,10 +115,11 @@ describe("virtual Bifrost requests", () => {
 
   it("keeps physical model and thinking level for tool continuation and retry", async () => {
     const { route, calls } = setup();
-    const sticky = { model: second, thinkingLevel: "high" };
+    const stickyModel = Object.assign(makeModel("fixture", "sticky-strong"), { reasoning: true });
+    const sticky = { model: stickyModel, thinkingLevel: "high" as const };
     const continued = await route(request("continuation", "debug race", { previous: sticky }) as never);
     const retried = await route(request("retry", "debug race", { failed: { ...sticky, message: { stopReason: "error" } } }) as never);
-    assert.deepEqual([continued.model, retried.model], [second, second]);
+    assert.deepEqual([continued.model, retried.model], [stickyModel, stickyModel]);
     assert.deepEqual([continued.thinkingLevel, retried.thinkingLevel], ["high", "high"]);
     assert.deepEqual(calls, []);
   });

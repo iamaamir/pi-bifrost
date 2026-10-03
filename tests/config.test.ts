@@ -18,6 +18,7 @@ describe("configHasNoPools", () => {
     assert.equal(configHasNoPools({}), true);
     assert.equal(configHasNoPools({ models: {} }), true);
     assert.equal(configHasNoPools({ models: { quick: [], general: [] } }), true);
+    assert.equal(configHasNoPools({ models: { quick: "   " } }), true);
     assert.equal(configHasNoPools({ models: { quick: "provider/m" } }), false);
     assert.equal(configHasNoPools({ models: { quick: [], general: ["provider/m"] } }), false);
   });
