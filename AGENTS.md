@@ -27,7 +27,7 @@ Use the feature gate in [`docs/product-philosophy.md`](docs/product-philosophy.m
 
 ## Non-negotiable behavior
 
-- Select Pi's actual active model before generation. Do not hide it behind a virtual profile.
+- Select Pi's actual active model before generation. Physical selection is the default. The explicitly selected `bifrost/auto` virtual model may dispatch physical models per request when selection and dispatch both stay visible.
 - Never automatically replay a failed user prompt, including behind config opt-in. A prior turn may have edited files, called tools, or caused external side effects. Any future retry design requires explicit per-incident user confirmation, host-proven zero-side-effect boundary, deterministic E2E coverage, and an approved ADR.
 - Persist reliability state. Circuits must survive restart and use controlled half-open recovery.
 - Keep defaults model-agnostic. Do not ship maintainer-specific provider/model IDs in default routing policy.
@@ -40,7 +40,7 @@ Use the feature gate in [`docs/product-philosophy.md`](docs/product-philosophy.m
 Keep policy separate from host adaptation.
 
 - **Core policy:** config, classification, routing, cache, reliability, inline overrides.
-- **Pi adapter:** events, `setModel`, commands, status, result rendering, probe transport.
+- **Pi adapter:** events, `setModel`, virtual model registration, commands, status, result rendering, probe transport.
 
 Do not introduce a proxy as the default design. Do not build multi-agent orchestration into Bifrost.
 

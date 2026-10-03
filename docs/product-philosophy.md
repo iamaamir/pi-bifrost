@@ -6,7 +6,7 @@ Its job is to select a suitable configured model for each coding-agent turn, saf
 
 ## Core promises
 
-1. **Direct** — select the host's actual active model before generation when the host supports it.
+1. **Direct** — select the host's actual active model before generation when the host supports it. Where the host offers native virtual models, an explicitly selected virtual mode may dispatch the physical model per request as long as selection and dispatch stay visible.
 2. **Safe** — preserve user work. Do not automatically replay a turn that may have edited files, invoked tools, or touched external systems.
 3. **Inspectable** — show what was selected, why it was selected, what was excluded, and how a user can change it.
 4. **User-owned** — configuration and explicit user actions remain the primary policy surface.
