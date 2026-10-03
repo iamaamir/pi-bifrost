@@ -299,16 +299,18 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     selfSelectKey = modelKey(physical);
     try {
       if (!(await pi.setModel(physical))) {
-        selfSelectKey = undefined;
         log(ctx, `Bifrost: cannot activate ${modelKey(physical)}`, "error");
         return false;
       }
       virtualOverride.clear();
       return true;
     } catch {
-      selfSelectKey = undefined;
       log(ctx, `Bifrost: cannot activate ${modelKey(physical)}`, "error");
       return false;
+    } finally {
+      // pi.setModel awaits its model_select emission; the key lives only inside
+      // that window, so a stale key can never swallow a later manual selection.
+      selfSelectKey = undefined;
     }
   };
 
@@ -371,15 +373,15 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           if (!model) {
             state.forceRegistryRefresh = true;
             routeFailure = { tier: classification.tier, pool: state.config.models?.[classification.tier], reason: resolved.fallbackReason };
-            debug("virtual", "fail", { tier: classification.tier, reason: resolved.fallbackReason, pool: routeFailure.pool });
+            debug("virtual", "fail", { tier: classification.tier, reason: resolved.fallbackReason, pool: routeFailure.pool, skipped: resolved.skipped });
             return undefined;
           }
-          debug("virtual", "select", { tier: classification.tier, model: modelKey(model), source: classification.kind === "classified" ? classification.source : "fallback" });
+          debug("virtual", "select", { tier: classification.tier, model: modelKey(model), source: classification.kind === "classified" ? classification.source : "fallback", skipped: resolved.skipped });
           const trial = state.reliabilityStore.tryClaimTrial(modelKey(model));
           if (!trial.allowed) throw new Error(`Bifrost: half-open trial unavailable for ${modelKey(model)}`);
           try {
             saveClassifierDecision(prompt, classification);
-            log(ctx, `Bifrost auto: ${classification.tier} → ${modelKey(model)} (${classification.kind === "classified" ? classification.source : "fallback"}${resolved.fallbackReason ? `; ${resolved.fallbackReason}` : ""})`);
+            log(ctx, `Bifrost auto: ${classification.tier} → ${modelKey(model)} (${classification.kind === "classified" ? classification.source : "fallback"}${resolved.fallbackReason ? `; ${resolved.fallbackReason}` : ""}${resolved.skipped.length > 0 ? `; ${resolved.skipped.length} skipped: ${resolved.skipped.map((s) => s.key).join(", ")}` : ""})`);
             return model;
           } catch (error) {
             if (trial.claimed) state.reliabilityStore.abandonTrial(modelKey(model));
@@ -428,6 +430,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   pi.on("agent_settled", async (_event, ctx) => {
     const settled = runtimeReliability.settle();
+    // Queues drain before agent_end; anything still pending was abandoned.
+    virtualOverride.clear();
     if (!settled) return;
     if (!state.enabled || state.config.reliability?.enabled === false) {
       // Policy off mid-run: still resolve the claimed trial so models never wedge.
@@ -678,12 +682,14 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       } catch (err) {
         setModelError = err;
         debug("input", "setModel.throw", { model: modelKey(model), category: "set_model_failure" });
+      } finally {
+        // Key lives only inside the awaited setModel window (see selectPhysicalFromVirtual).
+        selfSelectKey = undefined;
       }
       endSwitch({ model: modelKey(model), ok });
       uiDone(ctx);
       setBifrostWorkingMessage(ctx, undefined);
       if (!ok) {
-        selfSelectKey = undefined;
         state.forceRegistryRefresh = true;
         const reason = setModelError
           ? "setModel threw"
