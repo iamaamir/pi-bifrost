@@ -737,6 +737,9 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
 
 export function getBifrostCommandCompletions(prefix: string) {
   const normalized = prefix.trim().toLowerCase();
+  // Aliases are completion-only: dispatch reaches them through the parent's
+  // matcher, never through this list. Flattening here also keeps the exact-match
+  // early return below alias-aware.
   const entries = BIFROST_COMMAND_OPTIONS.flatMap((command) => [
     { value: command.value, description: command.description },
     ...(command.aliases ?? []).map((alias) => ({ value: alias, description: command.description })),

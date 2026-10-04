@@ -511,9 +511,36 @@ describe("bifrost command ui", () => {
 });
 
 describe("command aliases", () => {
-  it("keeps init -f reachable as an alias of init", () => {
+  it("declares init -f as an alias of init", () => {
     const init = BIFROST_COMMAND_OPTIONS.find((c) => c.value === "init");
     assert.deepEqual(init?.aliases, ["init -f"]);
+  });
+
+  it("dispatches init -f to init rather than the unknown-subcommand picker", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-f-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      // Fresh, therefore reusable probe data: plain `init` would reuse it and
+      // never probe. Only `-f` forces a re-probe, so "Probing" proves both
+      // that the alias matched and that the flag reached handleInit.
+      writeFileSync(join(tempDir, ".pi", "bifrost-probe.json"), JSON.stringify([
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]));
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      const state = makeState();
+      // handleInit's forced-probe branch calls applyOutcomes, which makeStore
+      // does not provide. The only existing init test uses --write, which
+      // returns before that branch, so nothing else ever reached it.
+      state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} } as never;
+      await createCommandRouter(state as never)("init -f", ctx as never);
+      assert.equal(calls.some((call) => call.kind === "select" && call.title === "Bifrost commands"), false);
+      assert(calls.some((call) => call.kind === "notify" && String(call.value).startsWith("info:Probing")));
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("no longer lists init -f as its own command", () => {
@@ -524,16 +551,11 @@ describe("command aliases", () => {
   });
 
   it("offers init -f in completion", () => {
-    const items = getBifrostCommandCompletions("ini");
+    // "init -" isolates the alias: it is the only entry that matches, so this
+    // cannot pass by `init` merely prefix-matching. Under "ini" both entries
+    // are returned and the assertion could not tell them apart.
+    const items = getBifrostCommandCompletions("init -");
     assert.ok(items?.some((i) => i.value === "init -f" && i.label === "init -f"));
-    assert.ok(items?.some((i) => i.value === "init" && i.label === "init"));
-  });
-
-  it("still offers init in completion", () => {
-    // "init" itself is exact-dispatchable, so it must return null (see the
-    // exact-match tests below). A partial prefix is what exercises emission.
-    const items = getBifrostCommandCompletions("ini");
-    assert.ok(items?.some((i) => i.value === "init"));
   });
 
   it("submits an exact alias instead of offering a completion", () => {
