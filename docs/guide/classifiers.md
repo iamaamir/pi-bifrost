@@ -4,9 +4,19 @@
 
 A classifier is optional. Regex rules and the configured default tier can route without another model call.
 
-`/bifrost init` normally proposes an enabled prompt classifier when it finds a working classifier model. Review the generated `classifier` block. Run `/bifrost classifier off` or set `classifier.enabled` to `false` for rules/default-only routing.
+`/bifrost init` normally proposes an enabled prompt classifier when it finds a working model. After init writes configuration, run `/bifrost classifier` to choose a backend. Run `/bifrost classifier off` or set `classifier.enabled` to `false` for rules/default-only routing.
 
 Classifiers resolve **tiers**, not exact provider models. Model pools, reliability filtering, and strategies remain Bifrost policy.
+
+Set `classifier.backend` to `prompt`, `typesafe`, or `pi-native` for a fixed choice. If you omit it, Bifrost selects a backend when it first builds the classifier pipeline:
+
+1. Pi-managed TypeSafe credential (including `/login`, a runtime key, or `models.json`): `pi-native`.
+2. `TYPESAFE_API_KEY` in the environment: `typesafe`.
+3. No detected credential: `prompt`.
+
+An explicit backend always wins. Detection stays fixed until the extension restarts, even after `/bifrost reload`. On first use, Bifrost prints the detected backend and reason. `/bifrost classifier status` and `/bifrost classifier test` show `auto: <backend> (<reason>)` when detection supplies the choice. Users upgrading with no explicit backend can switch from prompt to a direct backend. Set `"backend": "prompt"` to keep prompt classification.
+
+If the auto-detected direct backend's settings are invalid (for example a missing criterion for a custom tier), Bifrost prints the config errors and falls back to prompt classification when `fallback` is not `regex`. An explicit `classifier.backend` fails closed instead.
 
 ## Prompt classifier
 
@@ -28,7 +38,7 @@ If prompt classification fails or returns an unknown tier, Bifrost continues thr
 
 ## TypeSafe/Jev
 
-TypeSafe/Jev is an optional hosted tier-classification backend and requires a TypeSafe credential. Selecting it is explicit opt-in.
+TypeSafe/Jev is an optional hosted tier-classification backend and requires a TypeSafe credential. Set `"backend": "typesafe"` to select Bifrost's direct TypeSafe transport.
 
 Jev receives the current prompt and configured tier criteria, then returns:
 
@@ -40,7 +50,7 @@ Jev does not receive Bifrost's provider model pool and does not select an exact 
 
 Confidence measures how concentrated Jev's returned distribution is. It is not a correctness guarantee. Exploratory Pi-Bifrost evaluation found stable judgments for clear, bounded prompts, but current criteria also produced high-confidence under-routing for some mechanically small, high-consequence tasks. Treat tier criteria as versioned policy: keep fallback enabled, pin the evaluated Jev version, and test criteria against representative locked cases before relying on thresholds.
 
-TypeSafe/Jev support is the fixed hosted integration described here. Pi-Bifrost does not currently provide a generic local, self-hosted, or OpenRouter-compatible classifier transport.
+TypeSafe/Jev support uses a fixed hosted endpoint. Bifrost does not provide a generic local, self-hosted, or OpenRouter-compatible classifier transport.
 
 Choose TypeSafe in Pi:
 
@@ -69,6 +79,31 @@ Or configure it in `.pi/bifrost.json`:
   }
 }
 ```
+
+## Pi-native classifier
+
+The `pi-native` backend calls Pi's `ctx.modelRegistry.classify()` API. Pi resolves the TypeSafe credential and classifier model. Set up TypeSafe through Pi's `/login` command, or set `TYPESAFE_API_KEY` in your environment. Select `pi-native` in `/bifrost classifier` or set it in `.pi/bifrost.json`. The `pi-native` picker entry appears only when the host exposes classification support (`classify()`).
+
+```json
+{
+  "classifier": {
+    "enabled": true,
+    "backend": "pi-native",
+    "piNative": { "model": "typesafe/jev-latest" },
+    "minConfidence": 0.8,
+    "fallback": "regex",
+    "criteria": {
+      "quick": "Bounded, reversible work",
+      "general": "Normal implementation and moderate reasoning",
+      "frontier": "Complex, ambiguous, or high-consequence work"
+    }
+  }
+}
+```
+
+You can omit `classifier.piNative.model`. Pi then uses the first available TypeSafe classifier model in its catalog. Bifrost skips its fuzzy classification cache in this mode because the catalog choice can change. Set a model id to enable that cache for Pi-native classification. If no model is available, Bifrost reports whether credentials or the catalog need attention. Set `fallback` to `prompt` and provide `classifier.model` to use a chat model after a direct-classifier miss. Set it to `regex` to skip that extra model call. The direct transport retries bounded errors and never replays a user turn.
+
+See [the full example](../../examples/classifier-pi-native.json).
 
 ## Credentials
 
@@ -104,7 +139,7 @@ Repository config cannot redirect TypeSafe credentials to arbitrary origins. Typ
 /bifrost classifier status
 ```
 
-`test` makes a fresh request. `status` shows active backend, model, credential source, fallback, and safe metrics without exposing keys.
+`test` makes a fresh request. `status` shows the active backend, model, fallback, and safe metrics without exposing keys. The direct TypeSafe backend also shows the credential source. Pi-native shows the catalog model or the configured `classifier.piNative.model`.
 
 Low confidence, missing credentials, network failure, timeout, invalid response, rate limit, or open classifier circuit follows configured fallback. User prompts are never replayed.
 
@@ -112,9 +147,9 @@ Low confidence, missing credentials, network failure, timeout, invalid response,
 
 The active classifier receives the current prompt and tier instructions. It does not receive conversation history, prior messages, source files, or tool output by default.
 
-`/bifrost preview <prompt>` uses the same steps Bifrost uses to pick a tier for a normal message (local classification cache → optional classifier → rules → default). It does not treat a leading tier name as an override. When no local cache entry resolves first, an enabled prompt or TypeSafe/Jev classifier may receive the preview prompt and incur classifier usage. Preview does not submit a generation turn or activate the selected provider model.
+`/bifrost preview <prompt>` uses the same steps Bifrost uses to pick a tier for a normal message (local classification cache → optional classifier → rules → default). It does not treat a leading tier name as an override. When no local cache entry resolves first, an enabled prompt, TypeSafe/Jev, or Pi-native classifier can receive the preview prompt and incur classifier usage. Preview does not submit a generation turn or activate the selected provider model.
 
-TypeSafe operational metrics are content-free and local. Detailed troubleshooting requires both global debug and TypeSafe debug. In `.pi/bifrost.json`:
+Direct-classifier metrics are content-free and local. Detailed direct TypeSafe troubleshooting requires both global debug and TypeSafe debug. In `.pi/bifrost.json`:
 
 ```json
 {

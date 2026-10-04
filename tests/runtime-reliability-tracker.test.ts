@@ -16,7 +16,7 @@ describe("runtime reliability tracker", () => {
     const tracker = new RuntimeReliabilityTracker();
     tracker.begin("openai/gpt-5.4");
     tracker.observe([failed()]);
-    assert.deepEqual(tracker.settle(), { model: "openai/gpt-5.4", reason: "Streaming response failed" });
+    assert.deepEqual(tracker.settle(), [{ model: "openai/gpt-5.4", reason: "Streaming response failed" }]);
   });
 
   it("does not report failure when Pi retry succeeds", () => {
@@ -24,13 +24,13 @@ describe("runtime reliability tracker", () => {
     tracker.begin("openai/gpt-5.4");
     tracker.observe([failed()]);
     tracker.observe([succeeded]);
-    assert.deepEqual(tracker.settle(), { model: "openai/gpt-5.4", reason: undefined });
+    assert.deepEqual(tracker.settle(), [{ model: "openai/gpt-5.4", reason: undefined }]);
   });
 
   it("ignores failures from models Bifrost did not select", () => {
     const tracker = new RuntimeReliabilityTracker();
     tracker.begin("openai/gpt-5.4");
     tracker.observe([{ ...failed(), model: "gpt-4.1-mini" }]);
-    assert.deepEqual(tracker.settle(), { model: "openai/gpt-5.4", reason: undefined });
+    assert.deepEqual(tracker.settle(), [{ model: "openai/gpt-5.4", reason: undefined }]);
   });
 });

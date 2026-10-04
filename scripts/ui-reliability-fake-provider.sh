@@ -125,4 +125,61 @@ wait_mode_state "$work/.pi/bifrost-state.json" true true false
 echo 'scenario 4: pass'
 "$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true
 
+# ── Scenario 5: /model picker selects Bifrost Auto and routes a prompt ──
+echo '--- scenario 5: model picker -> bifrost/auto ---'
+rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json"
+cat >"$work/bifrost.json" <<'EOF'
+{"enabled":true,"default":"economical","strategy":"cheapest","classifier":{"enabled":false},"models":{"economical":["fake/healthy"]},"rules":[{"pattern":"hello","model":"economical"}],"debug":{"enabled":true}}
+EOF
+sid=$(start_pi)
+"$A" --session "$sid" wait 'Bifrost' --assert --timeout 15000 >/dev/null
+prompt "$sid" '/model'
+"$A" --session "$sid" type 'Bifrost Auto' >/dev/null
+"$A" --session "$sid" press Enter >/dev/null
+"$A" --session "$sid" wait '(bifrost) auto' --assert --timeout 15000 >/dev/null
+prompt "$sid" 'hello world'
+poll_until "$work/.pi/bifrost-debug.jsonl" '"event":"virtual_auto"'
+poll_until "$work/.pi/bifrost-debug.jsonl" '"event":"result"'
+grep -q '"event":"dispatch","entryType":"event","model":"fake/healthy"' "$work/.pi/bifrost-debug.jsonl" || { echo 'FAIL: auto route did not dispatch fake/healthy' >&2; exit 1; }
+echo 'scenario 5: pass'
+"$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true
+
+# ── Scenario 6: steer-queued prompts dispatch and settle within one run ──
+echo '--- scenario 6: queued multi-dispatch settlement ---'
+rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json"
+cat >"$home/.pi/agent/models.json" <<EOF
+{"providers":{"fake":{"baseUrl":"http://127.0.0.1:$port/v1","api":"openai-completions","apiKey":"test","models":[{"id":"healthy","reasoning":false},{"id":"fast","reasoning":false},{"id":"strong","reasoning":false},{"id":"slow","reasoning":false}]}}}
+EOF
+cat >"$work/bifrost.json" <<'EOF'
+{"enabled":true,"default":"quick","strategy":"first","classifier":{"enabled":false},"reliability":{"enabled":true,"failureThreshold":1,"windowMinutes":5,"cooldownMinutes":60},"models":{"quick":["fake/fast"],"frontier":["fake/strong"],"hold":["fake/slow"]},"rules":[{"pattern":"hold","model":"hold"}],"debug":{"enabled":true}}
+EOF
+# Seed an expired-cooldown circuit for fake/fast: its steer dispatch must claim
+# and settle a half-open trial inside the shared run.
+mkdir -p "$work/.pi"
+cat >"$work/.pi/bifrost-reliability.json" <<'EOF'
+{"version":1,"models":{"fake/fast":{"failures":[1],"openUntil":1,"trialActive":false}}}
+EOF
+sid=$(start_pi)
+"$A" --session "$sid" wait 'Bifrost' --assert --timeout 15000 >/dev/null
+prompt "$sid" '/model'
+"$A" --session "$sid" type 'Bifrost Auto' >/dev/null
+"$A" --session "$sid" press Enter >/dev/null
+"$A" --session "$sid" wait '(bifrost) auto' --assert --timeout 15000 >/dev/null
+prompt "$sid" 'hold please'
+sleep 1
+# Steer submissions during an active run: Enter queues (Escape would interrupt).
+"$A" --session "$sid" type 'frontier one' >/dev/null
+"$A" --session "$sid" press Enter >/dev/null
+"$A" --session "$sid" type 'quick two' >/dev/null
+"$A" --session "$sid" press Enter >/dev/null
+poll_until "$work/.pi/bifrost-debug.jsonl" '"event":"dispatch","entryType":"event","model":"fake/fast"' 60
+grep -q '"event":"dispatch","entryType":"event","model":"fake/strong"' "$work/.pi/bifrost-debug.jsonl" || { echo 'FAIL: steer #1 did not dispatch fake/strong' >&2; exit 1; }
+grep -q '"event":"dispatch","entryType":"event","model":"fake/slow"' "$work/.pi/bifrost-debug.jsonl" || { echo 'FAIL: initial prompt did not dispatch fake/slow' >&2; exit 1; }
+grep -q '"event":"trial","entryType":"event","model":"fake/fast","allowed":true,"claimed":true' "$work/.pi/bifrost-debug.jsonl" || { echo 'FAIL: half-open trial was not claimed for fake/fast' >&2; exit 1; }
+if grep -q '"trialActive":true' "$work/.pi/bifrost-reliability.json" 2>/dev/null; then
+  echo 'FAIL: trial wedged after multi-dispatch settle' >&2; exit 1
+fi
+echo 'scenario 6: pass'
+"$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true
+
 echo 'all reliability E2E scenarios: pass'

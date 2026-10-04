@@ -1,7 +1,15 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { classifierCacheKey } from "../classifier-semantics.ts";
+import { boundedClassifierPrompt, CLASSIFIER_PROMPT_MAX_CHARS, classifierCacheEnabled, classifierCacheKey } from "../classifier-semantics.ts";
 import type { BifrostConfig } from "../config.ts";
+
+describe("boundedClassifierPrompt", () => {
+  it("keeps short prompts intact and slices long ones for classifiers", () => {
+    assert.equal(boundedClassifierPrompt("short prompt"), "short prompt");
+    const long = "x".repeat(CLASSIFIER_PROMPT_MAX_CHARS + 50);
+    assert.equal(boundedClassifierPrompt(long).length, CLASSIFIER_PROMPT_MAX_CHARS);
+  });
+});
 
 function config(systemPrompt: string): BifrostConfig {
   return {
@@ -10,6 +18,16 @@ function config(systemPrompt: string): BifrostConfig {
     classifier: { backend: "prompt", model: "provider/classifier", systemPrompt },
   };
 }
+
+describe("classifierCacheEnabled", () => {
+  it("does not reuse a decision when the default Pi catalog model can change", () => {
+    const floating: BifrostConfig = { models: { general: ["chat/a"] }, classifier: { backend: "pi-native" } };
+    assert.equal(classifierCacheEnabled(floating, "pi-native"), false);
+    assert.equal(classifierCacheEnabled({ ...floating, classifier: { piNative: { model: "typesafe/jev-latest" } } }, "pi-native"), true);
+    assert.equal(classifierCacheEnabled(floating, "typesafe"), true);
+    assert.equal(classifierCacheEnabled({ ...floating, cache: { enabled: false } }, "typesafe"), false);
+  });
+});
 
 describe("classifier cache semantic key", () => {
   it("changes when prompt-classifier instructions change without persisting them", () => {
@@ -32,6 +50,19 @@ describe("classifier cache semantic key", () => {
       typesafeCredentialAvailable: true,
     });
     assert.notEqual(fallbackOnly, active);
+  });
+
+  it("changes with the configured pi-native model and an explicitly supplied resolved id", () => {
+    const native: BifrostConfig = {
+      models: { quick: ["chat/a"] },
+      classifier: { backend: "pi-native", piNative: { model: "typesafe/jev-latest" } },
+    };
+    const changed: BifrostConfig = {
+      ...native,
+      classifier: { backend: "pi-native", piNative: { model: "typesafe/jev-9" } },
+    };
+    assert.notEqual(classifierCacheKey(native, ["quick"]), classifierCacheKey(changed, ["quick"]));
+    assert.notEqual(classifierCacheKey(native, ["quick"]), classifierCacheKey(native, ["quick"], { piNativeModel: "typesafe/jev-9" }));
   });
 
   it("is stable for criteria with different property insertion order", () => {

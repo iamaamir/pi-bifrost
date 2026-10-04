@@ -15,6 +15,8 @@ Bifrost currently offers adaptive routing, explicit tier selection, hard pinning
 | `/bifrost unpin` | Bifrost goes back to picking a model for each message |
 | `/bifrost off` | Bifrost stops routing until `/bifrost on` |
 | `/bifrost on` | Bifrost resumes routing |
+| Select `bifrost/auto` in Pi's `/model` | Bifrost routes each request to a physical model at dispatch time ([Bifrost Auto](#bifrost-auto-virtual-model)) |
+| `/bifrost pin` or `/bifrost off` while `bifrost/auto` is selected | Bifrost leaves Auto and locks the last dispatched physical model |
 
 ## Start a message with a tier name
 
@@ -55,6 +57,22 @@ Forcing a tier skips the tier choice, but the name alone does not pick the model
 - There is no separate list of aliases.
 - If the first word is not a configured tier, the whole message is routed normally.
 - A tier name anywhere other than the first word is ordinary text.
+
+## Bifrost Auto (virtual model)
+
+Requires Pi `1.0.1` or newer. Selecting `bifrost/auto` in Pi's `/model` picker switches from input-time model activation to Pi's native per-request dispatch. The routing policy is the same: configured tier pools, inline tier prefixes, classification cache, optional classifiers, reliability filtering, and per-tier strategies.
+
+| Property | Behavior |
+|----------|----------|
+| Visible selection | `bifrost/auto`; Pi's footer shows `bifrost/auto → provider/model` |
+| Thinking level | Left footer level is your routing preference; Bifrost clamps the dispatched level to the target's capabilities (non-reasoning targets run `off`) |
+| Recorded model | Every assistant message records the physical model that answered |
+| Tier prefixes | Same syntax, still stripped before the model sees the prompt |
+| Tool continuations and retries | Stay on the physical model that handled the previous request |
+| Classification and overrides | Run on `user` requests only; compaction and extension calls use the last dispatched or default-tier physical model |
+| Failure mode | Fresh sessions fail with an actionable explanation when no pool resolves (empty pool → `run /bifrost init`); later turns keep the last dispatched physical model with a visible warning. Disabled, pinned, or nothing dispatched ends the request with an explanation; nothing is silently replayed |
+
+Selecting `bifrost/auto` enables routing and clears a pin. `/bifrost pin` and `/bifrost off` exit Auto by activating the last dispatched physical model and locking it. Manual model selection keeps its existing meaning: the selected physical model is pinned.
 
 ## Pin is a hard lock
 

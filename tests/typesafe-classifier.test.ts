@@ -58,7 +58,7 @@ describe("TypeSafe classifier", () => {
     await classifier({ prompt: "sensitive prompt", tiers: ["quick", "general", "frontier"], criteria });
     assert.equal(observations.length, 1);
     assert.deepEqual({ ...(observations[0] as object), latencyMs: 0 }, {
-      outcome: "success", attempts: 1, tier: "frontier", confidence: 0.92, latencyMs: 0,
+      outcome: "success", attempts: 1, model: TYPESAFE_MODEL, tier: "frontier", confidence: 0.92, latencyMs: 0,
     });
     assert.doesNotMatch(JSON.stringify(observations), /sensitive|probabilit|authorization|api.?key/i);
   });

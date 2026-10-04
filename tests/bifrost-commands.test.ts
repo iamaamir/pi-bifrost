@@ -3,12 +3,14 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildClassifierTestReport, createCommandRouter, getBifrostCommandCompletions, log, runBifrostCommand } from "../commands.ts";
+import { buildClassifierTestReport, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, runBifrostCommand } from "../commands.ts";
+import { makePiClassifierModel, makeRegistry } from "./helpers.ts";
 
 function makeCtx(
   models: Array<{ provider: string; id: string }> = [],
   selectOverride?: (title: string, options: string[]) => string | undefined,
   customOverride?: () => Promise<unknown>,
+  registryOverride?: Pick<ReturnType<typeof makeRegistry>, "getAvailableOfType">,
 ) {
   const calls: Array<{ kind: string; value?: unknown; title?: string; options?: string[]; lines?: string[] }> = [];
   const ctx = {
@@ -62,6 +64,7 @@ function makeCtx(
     },
     modelRegistry: {
       getAvailable: () => models,
+      ...registryOverride,
     },
     scopedModels: [],
   };
@@ -71,6 +74,7 @@ function makeCtx(
 function makeStore(reliabilityState?: Record<string, { failures: number[]; openUntil?: number }>, enabled = true) {
   const store = {
     getState: () => ({ version: 1 as const, models: reliabilityState ?? {} }),
+    reload: () => {},
     openCircuitCount: (now?: number) => {
       if (!enabled) return 0;
       const t = now ?? Date.now();
@@ -93,11 +97,45 @@ function makeState(saveModeState: () => void = () => {}) {
       reload: () => {},
     },
     extensionDir: ".",
+    effectiveClassifierBackend: (config: { classifier?: { backend?: string } }) => ({
+      backend: config.classifier?.backend ?? "prompt",
+      reason: config.classifier?.backend ? "explicit config" : "no credential detected",
+      auto: !config.classifier?.backend,
+    }),
     getPipeline: () => ({ classify: async () => ({ kind: "unclassified" as const }) }),
     invalidatePipeline: () => {},
     saveModeState,
   };
 }
+
+describe("classifier chooser config", () => {
+  it("sets pi-native model and removes prompt-only settings without losing fallback model", () => {
+    const next = nextClassifierConfig({
+      model: "chat/fallback", endpoint: "https://old", method: "auto", systemPrompt: "old",
+      maxTokens: 12, temperature: 0, fallbackToRegex: true, piNative: { timeoutMs: 500 },
+    }, { backend: "pi-native", piNativeModel: "typesafe/jev-latest" });
+    assert.equal(next.backend, "pi-native");
+    assert.deepEqual(next.piNative, { timeoutMs: 500, model: "typesafe/jev-latest" });
+    assert.equal(next.model, "chat/fallback");
+    assert.equal(next.fallback, "prompt");
+    assert(next.criteria);
+    for (const field of ["endpoint", "method", "systemPrompt", "maxTokens", "temperature", "fallbackToRegex"]) {
+      assert.equal(field in next, false, field);
+    }
+  });
+
+  it("catalog default clears a prior explicit pi-native model", () => {
+    const next = nextClassifierConfig({ piNative: { model: "typesafe/old", maxAttempts: 2 } },
+      { backend: "pi-native", piNativeModel: null });
+    assert.deepEqual(next.piNative, { maxAttempts: 2 });
+    assert.equal(next.fallback, "regex");
+  });
+
+  it("keeps prompt model on reselect and still clears it when unavailable", () => {
+    assert.equal(nextClassifierConfig({ model: "chat/a" }, { backend: "prompt" }).model, "chat/a");
+    assert.equal("model" in nextClassifierConfig({ model: "chat/a" }, { backend: "prompt", promptModel: null }), false);
+  });
+});
 
 describe("bifrost command ui", () => {
   it("renders TUI log messages once without duplicating them to stderr", () => {
@@ -164,6 +202,19 @@ describe("bifrost command ui", () => {
     assert.equal(state.enabled, false);
     assert.equal(state.pinned, true);
     assert.equal(state.classifierEnabled, false);
+  });
+
+  it("does not pin or disable a virtual selection until physical activation succeeds", async () => {
+    const { ctx } = makeCtx();
+    const state = Object.assign(makeState(), { selectPhysicalFromVirtual: async () => false });
+    const dispatch = createCommandRouter(state as never);
+    await dispatch("pin", ctx as never);
+    await dispatch("off", ctx as never);
+    assert.equal(state.pinned, false);
+    assert.equal(state.enabled, true);
+    state.selectPhysicalFromVirtual = async () => true;
+    await dispatch("pin", ctx as never);
+    assert.equal(state.pinned, true);
   });
 
   it("selecting prompt also persists a classifier model", async () => {
@@ -248,6 +299,36 @@ describe("bifrost command ui", () => {
     assert.match(output, /fallback=prompt fallbackModel=fixture\/classifier/);
   });
 
+  it("shows auto-detected pi-native backend and reason in status", async () => {
+    const { ctx, calls } = makeCtx();
+    const state: any = makeState();
+    state.effectiveClassifierBackend = () => ({ backend: "pi-native", reason: "Pi-managed TypeSafe credential", auto: true });
+    await createCommandRouter(state)("classifier status", ctx as never);
+    const output = calls.find((call) => call.kind === "widget")?.lines?.join("\n") ?? "";
+    assert.match(output, /backend=auto: pi-native \(Pi-managed TypeSafe credential\) model=catalog default/);
+    assert.match(output, /observations=0/);
+  });
+
+  it("names pi-native and its resolved model in classifier test report", () => {
+    const metrics = {
+      version: 1 as const, model: "typesafe/jev-latest", total: 1,
+      outcomes: { success: 1 }, tiers: { quick: 1 }, confidenceBands: {}, latencyBuckets: {},
+      totalLatencyMs: 100, totalAttempts: 1,
+    };
+    const lines = buildClassifierTestReport({
+      classifier: { piNative: {} },
+      effectiveBackend: { backend: "pi-native", reason: "Pi-managed TypeSafe credential", auto: true },
+      result: { kind: "classified", tier: "quick", source: "classifier", judgment: {
+        tier: "quick", backend: "pi-native", model: "typesafe/jev-latest", confidence: 0.93,
+      } },
+      before: { ...metrics, total: 0, outcomes: {} }, after: metrics,
+    });
+    assert(lines.includes("backend: auto: pi-native (Pi-managed TypeSafe credential)"));
+    assert(lines.includes("model: typesafe/jev-latest"));
+    assert(lines.includes("accepted: yes"));
+    assert(lines.includes("outcome: success"));
+  });
+
   it("separates a rejected TypeSafe judgment from the final fallback route", () => {
     const before = {
       version: 1, model: "jev-1.13.0", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
@@ -284,6 +365,72 @@ describe("bifrost command ui", () => {
     assert(lines.includes("final backend: prompt"));
     assert(lines.includes("final model: fixture/classifier"));
     assert(lines.includes("outcome: low_confidence"));
+  });
+
+  it("prints classifier guidance after --write init without opening picker", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-guidance-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      writeFileSync(join(tempDir, ".pi", "bifrost-probe.json"), JSON.stringify([
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]));
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      const state = makeState();
+      await createCommandRouter(state as never)("init --write", ctx as never);
+      assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), true);
+      assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("Next: run /bifrost classifier")));
+      assert.equal(calls.some((call) => call.kind === "select"), false);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("hides the pi-native backend on hosts without classification support", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-hide-native-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      // Plain makeCtx registry has no classify(): an unsupported host.
+      const { ctx, calls } = makeCtx([], (_title, options) => options.find((item) => item.startsWith("pi-native")));
+      const state = makeState();
+      await createCommandRouter(state as never)("classifier", ctx as never);
+      const picker = calls.find((call) => call.kind === "select" && call.title === "Classifier backend");
+      assert.ok(picker?.options?.length);
+      assert.ok(picker?.options?.every((item) => !item.startsWith("pi-native")));
+      assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("lists only available Pi classifier models and writes the chosen id", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-native-chooser-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const available = makePiClassifierModel("typesafe", "jev-latest");
+      const unavailable = makePiClassifierModel("typesafe", "jev-private");
+      const registry = makeRegistry([], {
+        classifierModels: [available, unavailable], availableClassifierModels: [available],
+      });
+      const { ctx, calls } = makeCtx([], (title, options) => title === "Classifier backend"
+        ? options.find((item) => item.startsWith("pi-native"))
+        : options.find((item) => item === "typesafe/jev-latest"), undefined, registry);
+      const state = makeState();
+      await createCommandRouter(state as never)("classifier", ctx as never);
+      const saved = JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8"));
+      assert.equal(saved.classifier.backend, "pi-native");
+      assert.equal(saved.classifier.piNative.model, "typesafe/jev-latest");
+      assert(calls.some((call) => call.kind === "select" && call.title === "Pi native classifier model"
+        && call.options?.includes("typesafe/jev-latest") && !call.options?.includes("typesafe/jev-private")));
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("leaves config unchanged when prompt model picker is cancelled", async () => {

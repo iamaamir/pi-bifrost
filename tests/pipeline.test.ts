@@ -57,7 +57,7 @@ describe("classification-pipeline", () => {
     it("tries TypeSafe before existing prompt classifier", async () => {
       const calls: string[] = [];
       const p = createPipeline(deps({
-        classifyWithTypeSafe: async () => {
+        classifyDirect: async () => {
           calls.push("typesafe");
           return { tier: "frontier", backend: "typesafe", model: "jev-1.13.0", confidence: 0.93 };
         },
@@ -78,7 +78,7 @@ describe("classification-pipeline", () => {
       controller.abort();
       let promptCalled = false;
       const p = createPipeline(deps({
-        classifyWithTypeSafe: async () => undefined,
+        classifyDirect: async () => undefined,
         classifierModels: [makeClassifierModel("a", "m1")],
         classifyWithLLM: async () => { promptCalled = true; return "frontier"; },
       }));
@@ -90,7 +90,7 @@ describe("classification-pipeline", () => {
     it("falls from TypeSafe to prompt, then regex/default", async () => {
       const calls: string[] = [];
       const p = createPipeline(deps({
-        classifyWithTypeSafe: async () => { calls.push("typesafe"); return undefined; },
+        classifyDirect: async () => { calls.push("typesafe"); return undefined; },
         classifierModels: [makeClassifierModel("a", "m1")],
         classifyWithLLM: async () => { calls.push("prompt"); return undefined; },
         regexRules: [{ pattern: "hello", model: "frontier" }],
@@ -104,7 +104,7 @@ describe("classification-pipeline", () => {
 
     it("uses TypeSafe miss with prompt fallback and default", async () => {
       const p = createPipeline(deps({
-        classifyWithTypeSafe: async () => undefined,
+        classifyDirect: async () => undefined,
         classifierModels: [makeClassifierModel("a", "m1")],
         classifyWithLLM: async () => undefined,
         defaultTier: "economical",

@@ -13,6 +13,7 @@
 
   "classifier": {
     "enabled": true,
+    "backend": "prompt",
     "model": "provider/your-cheap-classifier-model",
     "method": "auto",
     "maxTokens": 20,

@@ -1,8 +1,12 @@
 import { resolveStoragePath, readJsonFile, writeJsonFile } from "./storage.ts";
+import { CLASSIFIER_BACKEND_IDS, type ClassifierBackend } from "./classifier-backends.ts";
+import type { BifrostConfig } from "./config.ts";
 
 export type TypeSafeOutcome =
   | "success"
   | "missing_key"
+  | "missing_catalog"
+  | "unsupported"
   | "circuit_open"
   | "aborted"
   | "timeout"
@@ -19,11 +23,20 @@ export interface TypeSafeObservation {
   readonly attempts: number;
   readonly tier?: string;
   readonly confidence?: number;
+  /** Resolved provider/model id when available. */
+  readonly model?: string;
+}
+
+/** Metrics record only for direct backends (typesafe, pi-native), per their nested metrics.enabled. */
+export function classifierMetricsEnabled(config: BifrostConfig, effectiveBackend: ClassifierBackend | undefined): boolean {
+  if (effectiveBackend === CLASSIFIER_BACKEND_IDS.typesafe) return config.classifier?.typesafe?.metrics?.enabled ?? true;
+  if (effectiveBackend === CLASSIFIER_BACKEND_IDS.piNative) return config.classifier?.piNative?.metrics?.enabled ?? true;
+  return false;
 }
 
 export interface ClassifierMetricsState {
   readonly version: 1;
-  readonly model: "jev-1.13.0";
+  readonly model: string;
   readonly total: number;
   readonly outcomes: Readonly<Record<string, number>>;
   readonly tiers: Readonly<Record<string, number>>;
@@ -80,10 +93,10 @@ function counts(value: unknown): Record<string, number> {
 }
 
 function normalizeState(value: ClassifierMetricsState | undefined): ClassifierMetricsState {
-  if (!value || value.version !== 1 || value.model !== "jev-1.13.0") return emptyState();
+  if (!value || value.version !== 1 || typeof value.model !== "string" || !value.model || value.model.length > 200) return emptyState();
   return {
     version: 1,
-    model: "jev-1.13.0",
+    model: value.model,
     total: count(value.total),
     outcomes: counts(value.outcomes),
     tiers: counts(value.tiers),
@@ -125,17 +138,20 @@ export class ClassifierMetricsStore {
 
   record(observation: TypeSafeObservation): void {
     if (!this.enabled) return;
+    const base = observation.model && observation.model.length <= 200 && observation.model !== this.state.model
+      ? { ...emptyState(), model: observation.model }
+      : this.state;
     const outcome = observation.outcome;
-    const outcomes = { ...this.state.outcomes, [outcome]: (this.state.outcomes[outcome] ?? 0) + 1 };
+    const outcomes = { ...base.outcomes, [outcome]: (base.outcomes[outcome] ?? 0) + 1 };
     const tiers = observation.tier
-      ? { ...this.state.tiers, [observation.tier]: (this.state.tiers[observation.tier] ?? 0) + 1 }
-      : this.state.tiers;
+      ? { ...base.tiers, [observation.tier]: (base.tiers[observation.tier] ?? 0) + 1 }
+      : base.tiers;
     const confidenceBand = observation.confidence === undefined
       ? undefined
       : observation.confidence >= 0.9 ? "0.9-1.0" : observation.confidence >= 0.8 ? "0.8-0.9" : "<0.8";
     const confidenceBands = confidenceBand
-      ? { ...this.state.confidenceBands, [confidenceBand]: (this.state.confidenceBands[confidenceBand] ?? 0) + 1 }
-      : this.state.confidenceBands;
+      ? { ...base.confidenceBands, [confidenceBand]: (base.confidenceBands[confidenceBand] ?? 0) + 1 }
+      : base.confidenceBands;
     const latency = Math.max(0, Math.round(observation.latencyMs));
     const latencyBucket = latency <= 250 ? "<=250ms"
       : latency <= 500 ? "<=500ms"
@@ -143,23 +159,39 @@ export class ClassifierMetricsStore {
       : latency <= 3000 ? "<=3000ms"
       : latency <= 10000 ? "<=10000ms"
       : ">10000ms";
-    const latencyBuckets = { ...this.state.latencyBuckets, [latencyBucket]: (this.state.latencyBuckets[latencyBucket] ?? 0) + 1 };
+    const latencyBuckets = { ...base.latencyBuckets, [latencyBucket]: (base.latencyBuckets[latencyBucket] ?? 0) + 1 };
     this.state = {
       version: 1,
-      model: "jev-1.13.0",
-      total: this.state.total + 1,
+      model: base.model,
+      total: base.total + 1,
       outcomes,
       tiers,
       confidenceBands,
       latencyBuckets,
-      totalLatencyMs: this.state.totalLatencyMs + latency,
-      totalAttempts: this.state.totalAttempts + Math.max(0, Math.floor(observation.attempts)),
+      totalLatencyMs: base.totalLatencyMs + latency,
+      totalAttempts: base.totalAttempts + Math.max(0, Math.floor(observation.attempts)),
       lastObservedAt: this.now(),
     };
     try {
       this.io.save(this.path, this.state);
     } catch (error) {
       console.error(`[bifrost] failed to save classifier metrics: ${error}`);
+    }
+  }
+
+  /** Flip enablement without a file path round-trip. Disabling resets to empty, like reload. */
+  setEnabled(enabled: boolean): void {
+    if (this.enabled === enabled) return;
+    this.enabled = enabled;
+    if (!enabled) {
+      this.state = emptyState();
+      return;
+    }
+    try {
+      this.state = normalizeState(this.io.load(this.path));
+    } catch (error) {
+      console.error(`[bifrost] failed to load classifier metrics: ${error}`);
+      this.state = emptyState();
     }
   }
 

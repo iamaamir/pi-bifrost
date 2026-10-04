@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mergeConfig, validateConfig, type BifrostConfig } from "../config.ts";
+import { mergeConfig, validateConfig, configHasNoPools, hasClassifierConfigErrors, type BifrostConfig } from "../config.ts";
 import type { RoutingStrategy } from "../routing.ts";
 
 const baseConfig: BifrostConfig = {
@@ -12,6 +12,19 @@ const baseConfig: BifrostConfig = {
     economical: ["model-b"],
   },
 };
+
+describe("configHasNoPools", () => {
+  it("detects missing and empty pools, and accepts any configured model", () => {
+    assert.equal(configHasNoPools({}), true);
+    assert.equal(configHasNoPools({ models: {} }), true);
+    assert.equal(configHasNoPools({ models: { quick: [], general: [] } }), true);
+    assert.equal(configHasNoPools({ models: { quick: "   " } }), true);
+    assert.equal(configHasNoPools({ models: { quick: [" "] } }), true);
+    assert.equal(configHasNoPools({ models: { quick: [" ", "provider/m"] } }), false);
+    assert.equal(configHasNoPools({ models: { quick: "provider/m" } }), false);
+    assert.equal(configHasNoPools({ models: { quick: [], general: ["provider/m"] } }), false);
+  });
+});
 
 describe("validateConfig", () => {
   it("returns no issues for a valid config", () => {
@@ -194,6 +207,90 @@ describe("validateConfig", () => {
     assert.ok(issues.some((issue) => issue.message.includes("must be exactly")));
     assert.ok(issues.some((issue) => issue.message.includes("endpoint")));
     assert.ok(issues.some((issue) => issue.message.includes("does not support")));
+  });
+
+  it("accepts the pi-native backend and rejects unknown backend values", () => {
+    const ok = validateConfig({ ...baseConfig, classifier: { backend: "pi-native" } });
+    assert.equal(ok.filter((issue) => issue.message.includes("backend")).length, 0);
+    // A runtime-bad value on purpose: the cast sits at the fixture seam.
+    const bad = validateConfig({ ...baseConfig, classifier: { backend: "bogus" } as unknown as BifrostConfig["classifier"] });
+    assert.ok(bad.some((issue) => issue.message.includes("Unknown classifier backend")));
+  });
+
+  it("validates the piNative transport block like typesafe", () => {
+    const ok = validateConfig({
+      ...baseConfig,
+      classifier: {
+        backend: "pi-native",
+        piNative: { model: "typesafe/jev-latest", timeoutMs: 2000, maxAttempts: 2, metrics: { enabled: true } },
+        criteria: { frontier: "complex", economical: "normal" },
+      },
+    });
+    assert.equal(ok.length, 0);
+
+    const bounds = validateConfig({
+      ...baseConfig,
+      classifier: { backend: "pi-native", piNative: { timeoutMs: 50, maxAttempts: 9 }, criteria: { frontier: "complex", economical: "normal" } },
+    });
+    assert.ok(bounds.some((issue) => issue.message.includes("PiNative classifier timeoutMs")));
+    assert.ok(bounds.some((issue) => issue.message.includes("PiNative classifier maxAttempts")));
+
+    const promptFields = validateConfig({
+      ...baseConfig,
+      classifier: { backend: "pi-native", method: "direct", criteria: { frontier: "complex", economical: "normal" } },
+    });
+    assert.ok(promptFields.some((issue) => issue.message.includes("PiNative classifier does not support")));
+  });
+
+  it("runs the shared direct-backend gate with the backend prefix", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      // A runtime-bad fallback on purpose: the cast sits at the fixture seam.
+      classifier: {
+        backend: "pi-native",
+        minConfidence: 2,
+        fallback: "sometimes",
+        criteria: { frontier: "complex", economical: "normal" },
+      } as unknown as BifrostConfig["classifier"],
+    });
+    assert.ok(issues.some((issue) => issue.message.includes("PiNative classifier minConfidence")));
+    assert.ok(issues.some((issue) => issue.message.includes("PiNative classifier fallback")));
+
+    const missing = validateConfig({
+      ...baseConfig,
+      models: { mega: ["provider/model"] },
+      default: "mega",
+      classifier: { backend: "pi-native" },
+    });
+    assert.ok(missing.some((issue) => issue.message.includes('PiNative classifier criteria missing for tier "mega"')));
+  });
+
+  it("reaches criterion errors through hasClassifierConfigErrors", () => {
+    // The empty criterion fires the singular "Classifier criterion" message,
+    // which the old includes("Classifier criteria") match missed.
+    const emptyCriterion: BifrostConfig = {
+      ...baseConfig,
+      classifier: { backend: "typesafe", criteria: { frontier: "", economical: "normal" } },
+    };
+    assert.equal(hasClassifierConfigErrors(emptyCriterion), true);
+    const missingCriteria: BifrostConfig = {
+      ...baseConfig,
+      models: { mega: ["provider/model"] },
+      default: "mega",
+      classifier: { backend: "pi-native" },
+    };
+    assert.equal(hasClassifierConfigErrors(missingCriteria), true);
+    assert.equal(hasClassifierConfigErrors({ ...baseConfig, classifier: { backend: "prompt" } }), false);
+    assert.equal(hasClassifierConfigErrors({ ...baseConfig, models: {} }), false);
+  });
+
+  it("merges the piNative nested block across overrides", () => {
+    const merged = mergeConfig(
+      { classifier: { backend: "pi-native", piNative: { model: "typesafe/jev-latest" } } },
+      { classifier: { piNative: { timeoutMs: 2000 } } },
+    );
+    assert.equal(merged.classifier?.piNative?.model, "typesafe/jev-latest");
+    assert.equal(merged.classifier?.piNative?.timeoutMs, 2000);
   });
 
   it("allows valid probe settings", () => {

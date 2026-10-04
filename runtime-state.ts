@@ -1,3 +1,4 @@
+import type { ModelSelectSource } from "@earendil-works/pi-coding-agent";
 import { resolveStoragePath, readJsonFile, writeJsonFile } from "./storage.ts";
 
 /**
@@ -27,6 +28,11 @@ export const DEFAULT_RUNTIME_STATE: RuntimeModeState = {
   pinned: false,
   classifierEnabled: true,
 };
+
+/** Session restore replays a recorded selection — it is not a user action. */
+export function isPassiveModelSelection(source: ModelSelectSource): boolean {
+  return source === "restore";
+}
 
 export function runtimeStatePath(cwd: string): string {
   return resolveStoragePath(cwd, undefined, ".pi/bifrost-state.json");

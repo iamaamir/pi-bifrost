@@ -30,12 +30,12 @@
     "extensions": [
       "./index.ts"
     ],
-    "minPiVersion": "0.86.0",
+    "minPiVersion": "1.0.1",
     "image": "https://iamaamir.github.io/pi-bifrost/social-card.png"
   },
   "scripts": {
     "test": "node --test --experimental-strip-types \"tests/*.test.ts\" \"tests/*.test.mjs\"",
-    "test:integration": "node --test --experimental-strip-types tests/integration/integration.test.mjs",
+    "test:integration": "node --test --experimental-strip-types tests/integration/*.test.mjs",
     "test:ui": "python3 scripts/ui-smoke.py",
     "test:ui:agent-tui": "bash scripts/ui-smoke-agent-tui.sh",
     "test:ui:reliability": "bash scripts/ui-reliability-fake-provider.sh",
@@ -49,8 +49,8 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.86.0",
-    "@earendil-works/pi-coding-agent": "0.86.0",
+    "@earendil-works/pi-ai": "1.0.1",
+    "@earendil-works/pi-coding-agent": "1.0.1",
     "@types/node": "^26.1.1",
     "agent-tui": "^1.1.0"
   }

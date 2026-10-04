@@ -5,7 +5,7 @@
 | Command | Behavior |
 |---------|----------|
 | `/bifrost` | Open dashboard and quick actions |
-| `/bifrost init` | Reuse fresh probe results or probe registry models, then propose configuration; pass `-f` (`--force`) to skip probe reuse and re-probe |
+| `/bifrost init` | Reuse fresh probe results or probe registry models, then propose configuration and guide you to `/bifrost classifier`; pass `-f` (`--force`) to skip probe reuse and re-probe |
 | `/bifrost probe` | Send a tiny request to each registry model and report availability; usage may apply |
 | `/bifrost preview <prompt>` | Show the model a prompt would use, without generating; an enabled classifier may receive the prompt, and a tier name in the prompt is not applied |
 | `/bifrost on` | Enable routing policy |
@@ -15,11 +15,11 @@
 | `/bifrost reload` | Reload merged configuration |
 | `/bifrost cache stats` | Inspect local classification cache |
 | `/bifrost cache clear` | Clear local classification cache |
-| `/bifrost classifier` | Open classifier backend/model picker |
+| `/bifrost classifier` | Choose `prompt`, `typesafe`, or `pi-native`. The Pi-native picker can select a catalog model or use the default |
 | `/bifrost classifier on` | Enable configured classifier |
 | `/bifrost classifier off` | Disable classifier while retaining routing |
 | `/bifrost classifier test` | Make fresh classifier request and show result/fallback |
-| `/bifrost classifier status` | Show backend, model, credentials, fallback, and safe metrics |
+| `/bifrost classifier status` | Show effective backend, detection reason, model, fallback, and safe metrics |
 | `/bifrost debug` | Show effective routing and reliability diagnostics |
 | `/bifrost providers` | List providers available through Pi |
 | `/bifrost benchmark <prompt>` | Classify a prompt and show the outcome without generating |
@@ -32,7 +32,7 @@
 /bifrost preview review this authorization design
 ```
 
-Preview does not submit a generation turn or activate the selected model. It does run the normal tier pipeline, so an enabled prompt or TypeSafe/Jev classifier may receive the preview prompt and incur classifier usage. Run `/bifrost classifier off` first for a rules-and-default-only preview.
+Preview does not submit a generation turn or activate the selected model. It does run the normal tier pipeline, so an enabled prompt, TypeSafe/Jev, or Pi-native classifier can receive the preview prompt and incur classifier usage. Run `/bifrost classifier off` first for a rules-and-default-only preview.
 
 Preview does not read a tier name from the prompt. To preview a forced tier, confirm that tier's candidates and strategy in configuration instead.
 

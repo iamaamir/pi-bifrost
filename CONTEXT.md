@@ -54,3 +54,16 @@ Persisted classification cache using Jaccard token-set similarity. Stores `(norm
 ## Flagged ambiguities
 
 - **tier vs category**: The codebase uses both interchangeably. The schema.json and `guessTier()` use "tier"; `classifyPrompt()` and cache entries use "category." The config key `categoryStrategies` retains the old name for backward compatibility. Prefer "tier" in new code and docs.
+
+## Pi extension patterns (implementation reference)
+
+Study Pi's own `examples/extensions/` before extending the Pi adapter — examples encode current host semantics better than docs alone.
+
+| Example | What it teaches |
+|---|---|
+| `jev-router.ts` | Virtual route contract: sticky `failed ?? previous` for non-user requests, explicit `direct` handling, bounded classifier input (`.slice(0, 16_000)`), typed router state per session branch, throw only when catalog lookup fails |
+| `model-status.ts` | `model_select` carries `{ model, previousModel, source }`, `source ∈ set \| cycle \| restore`; guard `source === "restore"` — session restore is passive, never a user action |
+| `input-transform.ts`, `input-transform-streaming.ts` | `input` result contract (`continue` / `transform` / `handled`), skip `event.source === "extension"`, keep the `streamingBehavior === "steer"` path cheap |
+| `custom-footer.ts` | `ctx.ui.setFooter()` exists, but product rule keeps Pi's default footer; Bifrost renders via `setStatus("bifrost-state", ...)` only |
+
+Lessons adopted in the virtual adapter: dispatch-level thinking clamp via pi-ai's `clampThinkingLevel` (traces log the dispatched level), `model_select` restore guard (restore never pins or flips auto state), bounded classifier input (16k chars).

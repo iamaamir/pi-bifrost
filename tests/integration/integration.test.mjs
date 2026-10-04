@@ -1,7 +1,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,12 +19,19 @@ const PI_ARGS = [
 ];
 
 let integrationDir;
+// Isolate HOME per run: a developer's ~/.pi/agent may load other bifrost
+// copies or extensions, which collides with this suite's extension instance.
+let integrationHome;
+function homeEnv() {
+  integrationHome ??= mkdtempSync(join(tmpdir(), "bifrost-integration-home-"));
+  return { HOME: integrationHome };
+}
 
 async function runPi(command, cwd = process.cwd(), env = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn("pi", [...PI_ARGS, command], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...homeEnv(), ...env },
       cwd,
     });
 
@@ -87,6 +94,7 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
 
   after(() => {
     rmSync(integrationDir, { recursive: true, force: true });
+    if (integrationHome) rmSync(integrationHome, { recursive: true, force: true });
   });
 
   it("reports classifier status", async () => {
@@ -94,6 +102,29 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
     assert.ok(out.includes("enabled=true"));
     assert.ok(out.includes("model=integration/test-classifier"));
     assert.ok(out.includes("endpoint=registry"));
+  });
+
+  it("detects env TypeSafe backend in status and a network-free preview trace", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-detected-backend-"));
+    mkdirSync(join(tempDir, ".pi"), { recursive: true });
+    writeFileSync(join(tempDir, ".pi", "bifrost.json"), JSON.stringify({
+      default: "general", classifier: { enabled: true }, debug: { enabled: true },
+      models: { quick: [], general: [] },
+      rules: [{ pattern: "direct hit", model: "fake/chat" }],
+    }));
+    const env = { HOME: tempDir, TYPESAFE_API_KEY: "fixture-only" };
+    try {
+      const status = combined(await runPi("/bifrost classifier status", tempDir, env));
+      assert.match(status, /backend=auto: typesafe \(env key detected\)/);
+      // Direct-model regex runs before the classifier transport; no external API call.
+      const preview = combined(await runPi("/bifrost preview direct hit", tempDir, env));
+      assert.match(preview, /source:\s+regex/);
+      const events = readFileSync(join(tempDir, ".pi", "bifrost-debug.jsonl"), "utf8")
+        .trim().split("\n").map((line) => JSON.parse(line));
+      assert(events.some((event) => event.module === "classifier" && event.event === "backend.detected" && event.backend === "typesafe"));
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("smokes TypeSafe production composition without credentials", async () => {

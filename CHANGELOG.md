@@ -2,6 +2,32 @@
 
 All notable changes to pi-bifrost are documented here.
 
+## [0.5.0] - UNRELEASED
+
+### Added
+- `pi-native` classifier backend through Pi's `modelRegistry.classify()`. It uses Pi-managed TypeSafe credentials and a classifier model from Pi's catalog. Set `classifier.piNative.model` to `typesafe/jev-latest` or omit it to use the first available model.
+- `/bifrost classifier` now offers `prompt`, `typesafe`, and `pi-native`. Successful init prints the picker command; interactive init can open the picker after writing configuration.
+- `bifrost/auto` virtual model (Pi 1.0.1+): per-request dispatch through the existing tier, cache, reliability, and strategy policy. Select it in `/model`; Pi's footer shows `bifrost/auto → provider/model` and assistant messages record the physical model.
+- Inline tier overrides hand off from input-time prompt stripping to virtual routing without persisting prompt text.
+- Setup offer: selecting `bifrost/auto` with no configured pools asks once (TUI) whether to run `/bifrost init`, disclosing that init probes every available model; non-TUI keeps the actionable error. Init itself still confirms before writing config.
+
+### Changed
+- When `classifier.backend` is absent, Bifrost now detects Pi-managed TypeSafe credentials first, then `TYPESAFE_API_KEY`, and otherwise uses `prompt`. This can change the classifier for existing configurations that omit the backend. Set `classifier.backend` explicitly to keep the old choice. Detection stays fixed for the extension session and prints its reason on first use.
+- Pi-native classification without `classifier.piNative.model` skips the fuzzy classification cache. A changing catalog cannot reuse a tier chosen by a different classifier model. Set an explicit model id to enable the cache.
+- When auto-detection picks a direct backend (`typesafe` or `pi-native`) but its settings are invalid (for example a missing criterion for a custom tier), Bifrost prints the config errors and keeps prompt classification instead of silently disabling it. An explicit `classifier.backend` still fails closed.
+- The `pi-native` option is hidden on hosts without classification support. Auto-detection skips it there as well.
+- Require Pi 1.0.1+ (`minPiVersion`), matching the virtual-model API.
+- Selecting `bifrost/auto` opts into per-prompt routing; selecting a physical model still pins. `/bifrost pin` and `/bifrost off` exit Auto and lock the last dispatched physical model.
+- Virtual entries (`api: pi-virtual`) are excluded from tier candidate pools; Bifrost never routes a virtual model to another virtual model.
+
+### Fixed
+- Fail-closed virtual route errors are actionable: empty pools say `0 models configured — add models to bifrost.json or run /bifrost init`; configured pools that resolve nothing name the patterns and point at credentials/model ids.
+- Virtual route selection and failure emit debug events (`virtual.select`, `virtual.fail`, `virtual.degrade`) so fail-closed routes self-document when debug logging is on.
+- No wedged Auto sessions: when a user turn finds no resolvable model, a session that already dispatched a physical model keeps the last one with a visible warning (continuations already worked this way); fresh sessions fail with the actionable error above.
+- Auto dispatch clamps the thinking level to the physical model's capabilities via pi-ai's `clampThinkingLevel` (non-reasoning targets dispatch `off`), and debug traces log the dispatched level instead of the virtual selection level.
+- Session restore (`model_select` source `restore`) no longer pins or flips Auto state — restore is passive, matching Pi's `model-status` example semantics.
+- Classifier backends receive prompt text bounded to 16k chars (matches Pi's `jev-router` example); cache matching still uses the full prompt.
+
 ## [0.4.0] - UNRELEASED
 
 ### Added

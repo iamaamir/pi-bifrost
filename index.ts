@@ -1,12 +1,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { fileURLToPath } from "node:url";
-import { classifyWithLLM as invokeClassifier, type ClassifierModel } from "./classifier.js";
-import { classifierCacheKey } from "./classifier-semantics.js";
-import { ClassifierMetricsStore } from "./classifier-metrics.js";
+import { classifyWithLLM as invokeClassifier, type ClassifierModel } from "./classifier.ts";
+import { classifierCacheEnabled, classifierCacheKey, boundedClassifierPrompt, directStagePlan } from "./classifier-semantics.ts";
+import { ClassifierMetricsStore, classifierMetricsEnabled } from "./classifier-metrics.ts";
 import {
   createPipeline,
   type ClassificationPipeline,
-} from "./classification-pipeline.js";
+  type ClassificationResult,
+} from "./classification-pipeline.ts";
 import type { ClassificationJudgment } from "./classifier-backends.ts";
 import {
   cachePath,
@@ -19,37 +21,58 @@ import {
   DEFAULT_THRESHOLD,
   DEFAULT_TTL_HOURS,
   type CacheEntry,
-} from "./cache.js";
+} from "./cache.ts";
 import {
   loadConfig,
   loadRules,
+  configHasNoPools,
   DEFAULT_CLASSIFIER_CRITERIA,
   validateConfig,
+  hasClassifierConfigErrors,
+  classifierConfigErrors,
   type BifrostConfig,
-} from "./config.js";
+} from "./config.ts";
 import {
   findCandidates,
   getStrategy,
   modelKey,
   resolveModelWithFallback,
-} from "./routing.js";
-import { ReliabilityStore } from "./reliability-store.js";
-import { loadRuntimeState, runtimeStatePath, saveRuntimeState } from "./runtime-state.js";
-import { createCommandRouter, getBifrostCommandCompletions, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.js";
-import { setupDebug, debug, debugMeasure } from "./debug.js";
-import { parseInlineOverride } from "./inline-override.js";
-import { RuntimeReliabilityTracker } from "./runtime-reliability.js";
+  type RoutedModelResolution,
+  type SkippedCandidate,
+} from "./routing.ts";
+import { ReliabilityStore } from "./reliability-store.ts";
+import { loadRuntimeState, runtimeStatePath, saveRuntimeState, isPassiveModelSelection } from "./runtime-state.ts";
+import { createCommandRouter, getBifrostCommandCompletions, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.ts";
+import { setupDebug, debug, debugMeasure } from "./debug.ts";
+import { parseInlineOverride } from "./inline-override.ts";
+import { BIFROST_AUTO_ID, BIFROST_AUTO_PROVIDER, isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
+import { createDispatchOwnership, RuntimeReliabilityTracker } from "./runtime-reliability.ts";
+import { VirtualOverride } from "./virtual-override.ts";
+import { createVirtualRoute, noModelError, poolProblem } from "./virtual-routing.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV } from "./classifier-backends.ts";
 import { createTypeSafeClassifier, resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
+import { createPiNativeClassifier, piClassificationSupported } from "./classifier-pi-native.ts";
+import { collectDetectionFacts, createDetectionEngine, createDetectionNoticeGate, effectiveBackendOf, piNativeCredentialMissing, selectEffectiveBackend, type EffectiveBackend } from "./classifier-detection.ts";
+import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import {
   REGISTRY_REFRESH_TTL_MS,
   setBifrostStatus,
   setBifrostWorkingMessage,
   shouldRefreshRegistry,
-} from "./ux-status.js";
-import { waitForRegistryRefresh } from "./registry-refresh.js";
+} from "./ux-status.ts";
+import { waitForRegistryRefresh } from "./registry-refresh.ts";
 
 // ── Pipeline builder (composition root) ────────────────────────
+
+function lastDispatchedPhysical(ctx: ExtensionContext): Model<Api> | undefined {
+  for (const entry of ctx.sessionManager.getBranch().slice().reverse()) {
+    if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+    if (isVirtualModel(entry.message)) continue;
+    const model = ctx.modelRegistry.find(entry.message.provider, entry.message.model);
+    if (model && !isVirtualModel(model)) return model;
+  }
+  return undefined;
+}
 
 function resolveClassifierModels(
   ctx: ExtensionContext,
@@ -66,13 +89,11 @@ function endpointClassifier(id: string, endpoint: string): ClassifierModel {
   return { kind: "endpoint", id, baseUrl: endpoint };
 }
 
-function hasTypeSafeConfigErrors(config: BifrostConfig): boolean {
-  return validateConfig(config).some((issue) => issue.severity === "error" && (issue.message.includes("TypeSafe") || issue.message.includes("Classifier criteria")));
-}
-
-function activeClassifierCacheKey(config: BifrostConfig): string {
+function activeClassifierCacheKey(config: BifrostConfig, detectionEngine: ReturnType<typeof createDetectionEngine>): string {
+  const effective = effectiveBackendOf(config, detectionEngine);
   return classifierCacheKey(config, Object.keys(config.models ?? {}), {
     typesafeCredentialAvailable: resolveTypeSafeApiKey().source !== "missing",
+    effectiveBackend: effective.backend,
   });
 }
 
@@ -84,19 +105,34 @@ function buildPipeline(
   reliabilityStore: ReliabilityStore,
   classifierMetricsStore: ClassifierMetricsStore,
   cacheSemanticKey: string,
+  effective: EffectiveBackend,
 ): ClassificationPipeline {
   const tiers = Object.keys(config.models ?? {});
   const cacheCfg = config.cache;
-  const cacheEnabled = cacheCfg?.enabled ?? true;
+  const cacheEnabled = classifierCacheEnabled(config, effective.backend);
   const threshold = cacheCfg?.threshold ?? DEFAULT_THRESHOLD;
   const cacheMaxAgeMs = (cacheCfg?.ttlHours ?? DEFAULT_TTL_HOURS) * 60 * 60 * 1000;
 
   // Resolve classifier models once at pipeline construction.
   // If classifier is disabled, pass empty array — pipeline skips LLM stage.
   let classifierModels: ClassifierModel[] = [];
-  let classifyWithTypeSafe: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<ClassificationJudgment | undefined>) | undefined;
-  const typeSafeUsable = config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && !hasTypeSafeConfigErrors(config);
-  if (classifierEnabled && typeSafeUsable && tiers.length > 0) {
+  let classifyDirect: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<ClassificationJudgment | undefined>) | undefined;
+  const directConfigOk = !hasClassifierConfigErrors(config, effective.backend);
+  const plan = directStagePlan({
+    backend: effective.backend,
+    auto: effective.auto,
+    classifierEnabled,
+    tierCount: tiers.length,
+    directConfigOk,
+    fallback: config.classifier?.fallback,
+  });
+  if (plan.directDegraded) {
+    for (const message of classifierConfigErrors(config, effective.backend)) {
+      console.error(`[bifrost/config] error: ${message}`);
+    }
+    console.error(`[bifrost/config] auto backend ${effective.backend} is unusable; ${plan.usePromptFallback ? "using prompt classifier fallback" : "regex/default fallback only"}. Fix the errors above or pin classifier.backend.`);
+  }
+  if (plan.useDirect && effective.backend === CLASSIFIER_BACKEND_IDS.typesafe) {
     const classifierConfig = config.classifier!;
     const classify = createTypeSafeClassifier({
       timeoutMs: classifierConfig.typesafe?.timeoutMs,
@@ -106,15 +142,32 @@ function buildPipeline(
       reliability: reliabilityStore,
       observe: (observation) => classifierMetricsStore.record(observation),
     });
-    classifyWithTypeSafe = async (text, availableTiers, signal) => {
-      const judgment = await classify({ prompt: text, tiers: availableTiers, criteria: classifierConfig.criteria ?? DEFAULT_CLASSIFIER_CRITERIA }, signal);
+    classifyDirect = async (text, availableTiers, signal) => {
+      const judgment = await classify({ prompt: boundedClassifierPrompt(text), tiers: availableTiers, criteria: classifierConfig.criteria ?? DEFAULT_CLASSIFIER_CRITERIA }, signal);
       return judgment;
     };
   }
-  const usePromptClassifier = classifierEnabled && tiers.length > 0 && (
-    (config.classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt) === CLASSIFIER_BACKEND_IDS.prompt ||
-    (typeSafeUsable && config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && config.classifier.fallback !== "regex")
-  );
+  if (plan.useDirect && effective.backend === CLASSIFIER_BACKEND_IDS.piNative) {
+    const classify = createPiNativeClassifier({
+      registry: ctx.modelRegistry,
+      model: config.classifier?.piNative?.model,
+      timeoutMs: config.classifier?.piNative?.timeoutMs,
+      maxAttempts: config.classifier?.piNative?.maxAttempts,
+      debug: Boolean(config.debug?.enabled),
+      minConfidence: config.classifier?.minConfidence,
+      reliability: reliabilityStore,
+      credentialMissing: () => piNativeCredentialMissing(
+        (providerId) => ctx.modelRegistry.getProviderAuthStatus(providerId),
+        resolveTypeSafeApiKey().source !== "missing",
+      ),
+      observe: (observation) => classifierMetricsStore.record(observation),
+    });
+    classifyDirect = async (text, availableTiers, signal) => {
+      const judgment = await classify({ prompt: boundedClassifierPrompt(text), tiers: availableTiers, criteria: config.classifier?.criteria ?? DEFAULT_CLASSIFIER_CRITERIA }, signal);
+      return judgment;
+    };
+  }
+  const usePromptClassifier = plan.usePromptFallback;
   if (usePromptClassifier) {
     const classifierEndpoint = config.classifier?.endpoint;
     if (classifierEndpoint) {
@@ -127,7 +180,7 @@ function buildPipeline(
   }
 
   return createPipeline({
-    classifyWithTypeSafe,
+    classifyDirect,
     cacheLookup: (text) => {
       if (!cacheEnabled) return undefined;
       const entry = lookupCache(cacheEntries, text, threshold, cacheSemanticKey, cacheMaxAgeMs);
@@ -139,7 +192,7 @@ function buildPipeline(
     },
     classifierModels,
     classifyWithLLM: async (model, text, tiers) => {
-      const tier = await invokeClassifier(ctx, model, tiers, text, {
+      const tier = await invokeClassifier(ctx, model, tiers, boundedClassifierPrompt(text), {
         systemPrompt: config.classifier?.systemPrompt,
         maxTokens: config.classifier?.maxTokens,
         temperature: config.classifier?.temperature,
@@ -169,6 +222,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   }
 
   const config = bootConfig;
+  const detectionEngine = createDetectionEngine();
 
   // Validate config on startup. Errors are logged; the extension
   // continues with best-effort routing for warnings.
@@ -185,7 +239,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   const reliabilityStore = new ReliabilityStore({ cwd: process.cwd(), config: config.reliability });
   const classifierMetricsStore = new ClassifierMetricsStore({
     cwd: process.cwd(),
-    enabled: config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && (config.classifier.typesafe?.metrics?.enabled ?? true),
+    enabled: classifierMetricsEnabled(config, effectiveBackendOf(config, detectionEngine).backend),
   });
   const runtimeStateFile = runtimeStatePath(process.cwd());
   const runtimeState = loadRuntimeState(runtimeStateFile, {
@@ -193,12 +247,51 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     pinned: false,
     classifierEnabled: config.classifier?.enabled ?? true,
   });
-  let selfSelecting = false;
-  const runtimeReliability = new RuntimeReliabilityTracker();
+  let selfSelectKey: string | undefined;
+  let offeredSetup = false;
+  // One extension runtime can host several sessions: scope mutable routing
+  // state per session so concurrent sessions cannot consume each other's
+  // prompt handoffs or reliability outcomes.
+  const overridesBySession = new WeakMap<object, VirtualOverride>();
+  const trackersBySession = new WeakMap<object, RuntimeReliabilityTracker>();
+  function overrideFor(ctx: ExtensionContext): VirtualOverride {
+    const key = ctx.sessionManager;
+    let value = overridesBySession.get(key);
+    if (!value) {
+      value = new VirtualOverride();
+      overridesBySession.set(key, value);
+    }
+    return value;
+  }
+  function trackerFor(ctx: ExtensionContext): RuntimeReliabilityTracker {
+    const key = ctx.sessionManager;
+    let value = trackersBySession.get(key);
+    if (!value) {
+      value = new RuntimeReliabilityTracker();
+      trackersBySession.set(key, value);
+    }
+    return value;
+  }
   let pipeline: ClassificationPipeline | undefined;
+  const shouldNotifyDetection = createDetectionNoticeGate();
 
   function getPipeline(ctx: ExtensionContext): ClassificationPipeline {
+    const detected = detectionEngine.detect(() => collectDetectionFacts({
+      readStoredCredential,
+      getProviderAuthStatus: (providerId) => ctx.modelRegistry.getProviderAuthStatus(providerId),
+      env: process.env,
+      nativeSupported: piClassificationSupported(ctx.modelRegistry),
+    }));
+    const effective = selectEffectiveBackend(state.config.classifier?.backend, detected);
+    if (effective.auto) {
+      state.classifierDetection = { backend: effective.backend, reason: effective.reason };
+      if (shouldNotifyDetection(ctx.sessionManager)) {
+        debug("classifier", "backend.detected", { backend: effective.backend, reason: effective.reason });
+        console.warn(`Bifrost: classifier backend auto: ${effective.backend} (${effective.reason}). Run /bifrost classifier to change.`);
+      }
+    }
     if (!pipeline) {
+      classifierMetricsStore.setEnabled(classifierMetricsEnabled(state.config, effective.backend));
       pipeline = buildPipeline(
         ctx,
         state.config,
@@ -206,7 +299,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         state.classifierEnabled,
         reliabilityStore,
         classifierMetricsStore,
-        activeClassifierCacheKey(state.config),
+        activeClassifierCacheKey(state.config, detectionEngine),
+        effective,
       );
     }
     return pipeline;
@@ -227,6 +321,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     reliabilityStore,
     classifierMetricsStore,
     extensionDir,
+    effectiveClassifierBackend: (config) => effectiveBackendOf(config, detectionEngine),
     getPipeline,
     invalidatePipeline,
     saveModeState: () => saveRuntimeState(runtimeStateFile, {
@@ -236,6 +331,164 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     lastRegistryRefreshAt: undefined,
     forceRegistryRefresh: false,
   };
+
+  function resolveForTier(ctx: ExtensionContext, tier: string) {
+    const pattern = state.config.models?.[tier] ?? tier;
+    const strategy = getStrategy(state.config.categoryStrategies, state.config.strategy, tier);
+    const defaultTier = state.config.default;
+    const defaultPattern = defaultTier ? (state.config.models?.[defaultTier] ?? defaultTier) : undefined;
+    const defaultStrategy = defaultTier
+      ? getStrategy(state.config.categoryStrategies, state.config.strategy, defaultTier)
+      : strategy;
+    return resolveModelWithFallback(ctx, {
+      requestedTier: tier,
+      requestedPattern: pattern,
+      requestedStrategy: strategy,
+      defaultTier,
+      defaultPattern,
+      defaultStrategy,
+      reliabilityState: state.reliabilityStore.getState(),
+      reliabilityConfig: state.config.reliability,
+    });
+  }
+
+  function saveClassifierDecision(prompt: string, result: ClassificationResult): void {
+    try {
+      if (result.kind !== "classified" || result.source !== "classifier"
+        || !classifierCacheEnabled(state.config, effectiveBackendOf(state.config, detectionEngine).backend)) return;
+      const maxEntries = state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES;
+      state.cacheEntries = updateCache(state.cacheEntries, prompt, result.tier, maxEntries, activeClassifierCacheKey(state.config, detectionEngine));
+      saveCache(cachePath(process.cwd(), state.config.cache?.path), state.cacheEntries);
+      invalidatePipeline();
+    } catch (error) {
+      // Cache persistence must never fail the route.
+      debug("virtual", "cache.save_error", { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  state.selectPhysicalFromVirtual = async (ctx) => {
+    if (!isBifrostAuto(ctx.model)) return true;
+    const physical = lastDispatchedPhysical(ctx);
+    if (!physical) {
+      log(ctx, "Bifrost: no dispatched physical model to fall back to; select one in /model first", "warning");
+      return false;
+    }
+    selfSelectKey = modelKey(physical);
+    try {
+      if (!(await pi.setModel(physical))) {
+        log(ctx, `Bifrost: no dispatched physical model to fall back to — cannot activate ${modelKey(physical)}`, "error");
+        return false;
+      }
+      overrideFor(ctx).clear();
+      return true;
+    } catch {
+      log(ctx, `Bifrost: cannot activate ${modelKey(physical)}`, "error");
+      return false;
+    } finally {
+      // The key's safety comes from this finally: pi.setModel awaits its
+      // model_select emission, but _emitModelSelect early-returns without an
+      // event on same-model sets — either way the key dies here.
+      selfSelectKey = undefined;
+    }
+  };
+
+  // Virtual adapter for `bifrost/auto`: selecting it makes Pi dispatch each request
+  // through route() below instead of Bifrost switching the active model at input time.
+  // - `user` requests classify + select from configured pools (inline tier handoff applies);
+  // - `continuation`/`retry` stay sticky so prompt caches and thinking signatures stay valid;
+  // - `direct` requests use the last dispatched or default-tier model;
+  // - the dispatched thinking level is clamped to the target model's capabilities;
+  // - disabled/pinned never dispatches; unresolvable pools fail fresh sessions with an
+  //   actionable error and visibly keep the last dispatched model afterwards.
+  // Prompts are never replayed. Model identity stays visible in Pi's footer and messages.
+  pi.registerVirtualModel({
+    provider: BIFROST_AUTO_PROVIDER,
+    id: BIFROST_AUTO_ID,
+    name: "Bifrost Auto",
+    thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+    async route(request, ctx) {
+      let routeFailure: { tier: string; pool: string | string[] | undefined; reason?: RoutedModelResolution["fallbackReason"]; skipped?: readonly SkippedCandidate[] } | undefined;
+      const ownership = createDispatchOwnership({
+        claimTrial: (key) => state.reliabilityStore.tryClaimTrial(key),
+        abandonTrial: (key) => state.reliabilityStore.abandonTrial(key),
+        begin: (key) => trackerFor(ctx).begin(key),
+        release: (key) => trackerFor(ctx).release(key),
+      });
+      const route = createVirtualRoute({
+        overrides: overrideFor(ctx),
+        fallback: () => lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default).selected : undefined),
+        sticky: () => lastDispatchedPhysical(ctx),
+        select: async (prompt, forcedTier, signal) => {
+          if (!state.enabled || state.pinned) throw new Error("Bifrost: virtual auto is disabled or pinned; select a physical model");
+          if (state.classifierEnabled && shouldRefreshRegistry(state, Date.now(), REGISTRY_REFRESH_TTL_MS)) {
+            try {
+              const outcome = await waitForRegistryRefresh((refreshSignal) => ctx.modelRegistry.refresh(refreshSignal ? { signal: refreshSignal } : undefined), signal);
+              if (outcome === "aborted") throw new Error("Bifrost: model registry refresh aborted");
+              state.lastRegistryRefreshAt = Date.now();
+              state.forceRegistryRefresh = false;
+              invalidatePipeline();
+            } catch (error) {
+              if (signal?.aborted) throw error;
+              debug("virtual", "registry.refresh.error", { category: "registry_refresh_failure" });
+            }
+          }
+          const classification: ClassificationResult = forcedTier
+            ? { kind: "classified", tier: forcedTier, source: "inline" }
+            : await getPipeline(ctx).classify(prompt, signal);
+          if (signal?.aborted) throw new Error("Bifrost: route aborted");
+          if (classification.kind === "unclassified") throw new Error("Bifrost: no configured tier for virtual request");
+          const classifierIdentity = classification.kind === "classified" && classification.judgment
+            ? { classifierBackend: classification.judgment.backend, classifierModel: classification.judgment.model }
+            : {};
+          const resolve = () => resolveForTier(ctx, classification.tier);
+          let resolved = resolve();
+          if (!resolved.selected && resolved.primary.candidates.length === 0) {
+            // Registry merge can lag the first request; one bounded refresh + re-resolve.
+            try {
+              const outcome = await waitForRegistryRefresh((refreshSignal) => ctx.modelRegistry.refresh(refreshSignal ? { signal: refreshSignal } : undefined), signal);
+              if (outcome === "aborted") throw new Error("Bifrost: model registry refresh aborted");
+              state.lastRegistryRefreshAt = Date.now();
+              state.forceRegistryRefresh = false;
+              invalidatePipeline();
+              resolved = resolve();
+            } catch (error) {
+              if (signal?.aborted) throw error;
+              debug("virtual", "registry.refresh.error", { category: "registry_refresh_failure" });
+            }
+          }
+          const model = resolved.selected;
+          if (!model) {
+            state.forceRegistryRefresh = true;
+            routeFailure = { tier: classification.tier, pool: state.config.models?.[classification.tier], reason: resolved.fallbackReason, skipped: resolved.skipped };
+            debug("virtual", "fail", { tier: classification.tier, reason: resolved.fallbackReason, pool: routeFailure.pool, skipped: resolved.skipped });
+            return undefined;
+          }
+          debug("virtual", "select", { tier: classification.tier, model: modelKey(model), source: classification.kind === "classified" ? classification.source : "fallback", ...classifierIdentity, skipped: resolved.skipped });
+          saveClassifierDecision(prompt, classification);
+          log(ctx, `Bifrost auto: ${classification.tier} → ${modelKey(model)} (${classification.kind === "classified" ? classification.source : "fallback"}${resolved.fallbackReason ? `; ${resolved.fallbackReason}` : ""}${resolved.skipped.length > 0 ? `; ${resolved.skipped.length} skipped: ${resolved.skipped.map((s) => s.key).join(", ")}` : ""})`);
+          return model;
+        },
+        onDispatch: (model, thinkingLevel, intent) => {
+          const key = modelKey(model);
+          ownership.claim(key, intent, (trial) => debug("virtual", "trial", { model: key, allowed: trial.allowed, claimed: trial.claimed }));
+          debug("virtual", "dispatch", { model: key, thinkingLevel });
+        },
+        onDispatchFailed: (model) => {
+          const key = modelKey(model);
+          debug("virtual", "dispatch.release", { model: key });
+          // Release only the bookkeeping this dispatch owns.
+          ownership.fail(key);
+        },
+        onDegrade: (model) => {
+          const detail = routeFailure ? poolProblem(routeFailure.tier, routeFailure.pool, routeFailure.skipped) : "no configured model resolved";
+          debug("virtual", "degrade", { model: modelKey(model), tier: routeFailure?.tier });
+          log(ctx, `Bifrost: keeping ${modelKey(model)} (last dispatched) — ${detail}`, "warning");
+        },
+        routeError: (detail) => new Error(routeFailure ? noModelError(routeFailure.tier, routeFailure.pool, routeFailure.reason, routeFailure.skipped) : `Bifrost: ${detail}`),
+      });
+      return route(request);
+    },
+  });
 
   const handleCommand = createCommandRouter(state);
 
@@ -248,28 +501,69 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    overrideFor(ctx).clear();
     syncBifrostModeStatus(ctx, state);
     clearBifrostWidgets(ctx);
   });
 
-  pi.on("agent_end", async (event) => {
-    runtimeReliability.observe(event.messages);
+  pi.on("agent_end", async (event, ctx) => {
+    trackerFor(ctx).observe(event.messages);
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
-    const settled = runtimeReliability.settle();
-    if (!settled || !state.enabled || state.config.reliability?.enabled === false) return;
+    const settled = trackerFor(ctx).settle();
+    // Clear at settle, not agent_end: agent_end handlers can queue fresh work
+    // whose input-prepared tiers are still pending. Queued user input drains
+    // before agent_end, so anything left here was abandoned.
+    overrideFor(ctx).clear();
+    if (settled.length === 0) return;
+    if (!state.enabled || state.config.reliability?.enabled === false) {
+      // Policy off mid-run: still resolve claimed trials so models never wedge.
+      for (const outcome of settled) state.reliabilityStore.abandonTrial(outcome.model);
+      return;
+    }
     // Policy A: failure logged, clean settle silent (trial-only success).
     // Intentional — normal routing produces no log noise.
-    state.reliabilityStore.recordSettled(settled.model, settled.reason);
-    if (settled.reason) {
-      log(ctx, `Bifrost: recorded provider failure for ${settled.model}; future prompts may route around it.`, "warning");
+    for (const outcome of settled) {
+      state.reliabilityStore.recordSettled(outcome.model, outcome.reason);
+      if (outcome.reason) {
+        log(ctx, `Bifrost: recorded provider failure for ${outcome.model}; future prompts may route around it.`, "warning");
+      }
     }
   });
 
-  pi.on("model_select", async (_event, ctx) => {
-    if (selfSelecting) {
-      selfSelecting = false;
+  pi.on("model_select", async (event, ctx) => {
+    // Swallow only our own programmatic activation, matched by exact model.
+    if (selfSelectKey && event.source === "set" && modelKey(event.model) === selfSelectKey) {
+      selfSelectKey = undefined;
+      return;
+    }
+    // Session restore replays a recorded selection; it is not a user action.
+    if (isPassiveModelSelection(event.source)) {
+      debug("bifrost", "model_select.restore", { model: modelKey(event.model) });
+      return;
+    }
+    // Selecting the virtual profile is an explicit request for per-prompt routing.
+    if (isBifrostAuto(ctx.model)) {
+      overrideFor(ctx).clear();
+      state.pinned = false;
+      state.enabled = true;
+      state.saveModeState();
+      debug("bifrost", "model_select.virtual_auto");
+      syncBifrostModeStatus(ctx, state);
+      clearBifrostWidgets(ctx);
+      log(ctx, "Bifrost Auto selected; routing each prompt to a physical model");
+      // Nothing to route: offer setup once instead of letting requests fail later.
+      if (!offeredSetup && configHasNoPools(state.config)) {
+        offeredSetup = true;
+        if (ctx.mode === "tui" && ctx.hasUI) {
+          const setup = await ctx.ui.confirm(
+            "Bifrost has no models configured for this project. Run /bifrost init now?",
+            "Init probes every available model; provider usage may apply.",
+          );
+          if (setup) await runBifrostCommand("init", ctx, handleCommand);
+        }
+      }
       return;
     }
     if (!state.enabled) return;
@@ -319,6 +613,15 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const defaultAction = forcedTier
       ? { action: "transform" as const, text: promptText }
       : { action: "continue" as const };
+
+    // Virtual auto: Pi dispatches the physical model in route(); skip the
+    // legacy input-time switch. Hand the stripped prompt + forced tier across.
+    if (isBifrostAuto(ctx.model)) {
+      overrideFor(ctx).prepare(forcedTier, promptText, event.streamingBehavior);
+      debug("input", "virtual_auto", { forcedTier, streamingBehavior: event.streamingBehavior });
+      syncBifrostModeStatus(ctx, state);
+      return defaultAction;
+    }
 
     const endInput = debugMeasure("input", "total");
     debug("input", "prompt", { length: promptText.length });
@@ -381,6 +684,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       const source = classification.kind === "classified"
         ? classification.source
         : "fallback";
+      const classifierIdentity = classification.kind === "classified" && classification.judgment
+        ? { classifierBackend: classification.judgment.backend, classifierModel: classification.judgment.model }
+        : {};
       const pattern = state.config.models?.[tier] ?? tier;
       const strategy = getStrategy(state.config.categoryStrategies, state.config.strategy, tier);
       const defaultTier = state.config.default;
@@ -432,9 +738,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         classification.source === "classifier"
       ) {
         const maxEntries = state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES;
-        if (state.config.cache?.enabled ?? true) {
+        if (classifierCacheEnabled(state.config, effectiveBackendOf(state.config, detectionEngine).backend)) {
           const endCacheSave = debugMeasure("input", "cacheSave");
-          state.cacheEntries = updateCache(state.cacheEntries, promptText, tier, maxEntries, activeClassifierCacheKey(state.config));
+          state.cacheEntries = updateCache(state.cacheEntries, promptText, tier, maxEntries, activeClassifierCacheKey(state.config, detectionEngine));
           saveCache(cachePath(process.cwd(), state.config.cache?.path), state.cacheEntries);
           invalidatePipeline();
           endCacheSave({ entries: state.cacheEntries.length });
@@ -446,9 +752,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         syncBifrostModeStatus(ctx, state);
         const reason = resolved.fallbackReason ? `, ${resolved.fallbackReason}` : "";
         log(ctx, `Bifrost: ${tier} → ${modelKey(model)} (already active, ${source}${reason})`);
-        debug("input", "model_unchanged", { model: modelKey(model), selectedTier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", thinkingLevel: ctx.thinkingLevel });
-        debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", thinkingLevel: ctx.thinkingLevel });
-        runtimeReliability.begin(modelKey(model));
+        debug("input", "model_unchanged", { model: modelKey(model), selectedTier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", ...classifierIdentity, thinkingLevel: ctx.thinkingLevel });
+        debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", ...classifierIdentity, thinkingLevel: ctx.thinkingLevel });
+        trackerFor(ctx).begin(modelKey(model));
         claimedTrial = undefined;
         endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
         return defaultAction;
@@ -456,7 +762,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
       uiBusy(ctx, `Bifrost routing to ${modelKey(model)}...`);
       setBifrostWorkingMessage(ctx, `Bifrost routing to ${modelKey(model)}...`);
-      selfSelecting = true;
+      selfSelectKey = modelKey(model);
       const endSwitch = debugMeasure("input", "setModel");
       let ok = false;
       let setModelError: unknown;
@@ -465,12 +771,14 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       } catch (err) {
         setModelError = err;
         debug("input", "setModel.throw", { model: modelKey(model), category: "set_model_failure" });
+      } finally {
+        // Key lives only inside the awaited setModel window (see selectPhysicalFromVirtual).
+        selfSelectKey = undefined;
       }
       endSwitch({ model: modelKey(model), ok });
       uiDone(ctx);
       setBifrostWorkingMessage(ctx, undefined);
       if (!ok) {
-        selfSelecting = false;
         state.forceRegistryRefresh = true;
         const reason = setModelError
           ? "setModel threw"
@@ -493,9 +801,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         : `Bifrost: ${tier} → ${modelKey(model)} (fallback${detail ? `; ${detail}` : ""})`;
       syncBifrostModeStatus(ctx, state);
       log(ctx, doneMsg);
-      runtimeReliability.begin(modelKey(model));
+      trackerFor(ctx).begin(modelKey(model));
       claimedTrial = undefined;
-      debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", routingDurationMs, thinkingLevel: ctx.thinkingLevel });
+      debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", ...classifierIdentity, routingDurationMs, thinkingLevel: ctx.thinkingLevel });
       endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
       return defaultAction;
     } finally {

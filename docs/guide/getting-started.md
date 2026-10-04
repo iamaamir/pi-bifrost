@@ -12,7 +12,7 @@ Bifrost does not provide model credentials or a model proxy.
 
 You need:
 
-- Pi `0.86.0` or newer;
+- Pi `1.0.1` or newer;
 - at least one model provider configured and authenticated in Pi;
 - at least one model visible in Pi's model registry;
 - network access for installation and provider requests.
@@ -64,7 +64,8 @@ Initialization:
 4. orders candidates using one-time probe latency;
 5. proposes a prompt classifier when a working classifier model is found;
 6. shows the complete proposed configuration;
-7. writes `.pi/bifrost.json` only after confirmation.
+7. writes `.pi/bifrost.json` only after confirmation;
+8. prints `/bifrost classifier` as the next step. In Pi's interactive UI, you can open the backend picker immediately.
 
 Bifrost does not ship maintainer-specific provider/model IDs as routing defaults.
 
@@ -95,7 +96,9 @@ Before confirming, check:
 4. The default tier exists and has candidates.
 5. Classifier behavior matches your privacy and cost requirements.
 
-Init normally enables the prompt classifier when it finds a working classifier model. Prompt classification sends the current prompt to that configured model on local-cache misses and adds tokens and latency.
+Init normally enables the prompt classifier when it finds a working model. After init writes configuration, run `/bifrost classifier`. Choose `prompt`, `typesafe`, or `pi-native`. If you use `init --write`, run the command yourself after init. If you remove `classifier.backend`, Bifrost detects a backend from your TypeSafe credentials. See [Classifier backends](classifiers.md).
+
+Prompt classification sends the current prompt to the configured model on local-cache misses. It adds tokens and latency.
 
 For rules/default-only routing, disable it after init:
 
@@ -121,7 +124,7 @@ Or set this in `.pi/bifrost.json`:
 
 Preview resolves and displays the source, tier, candidates, strategy, and selected model. It does **not** start a generation turn or activate the selected model.
 
-Preview does run the normal tier pipeline. It does not read a tier name from the prompt, so a forced tier cannot be previewed. If a prompt classifier or TypeSafe/Jev is enabled and no local cache entry resolves first, that classifier may receive the preview prompt and incur classifier usage.
+Preview does run the normal tier pipeline. It does not read a tier name from the prompt, so a forced tier cannot be previewed. If a prompt, TypeSafe/Jev, or Pi-native classifier is enabled and no local cache entry resolves first, it can receive the preview prompt and incur classifier usage.
 
 For local-only preview:
 
@@ -180,5 +183,5 @@ Use full `provider/id` values when ambiguity matters. Short patterns may substri
 - Learn adaptive, explicit-tier, and pinned behavior: [Routing controls](routing-controls.md).
 - Edit pools, strategies, and rules: [Configuration](configuration.md).
 - Understand N model switches and provider prompt caches: [Provider prompt caching](prompt-caching.md).
-- Configure prompt or TypeSafe/Jev classification: [Classifier backends](classifiers.md).
+- Configure prompt, TypeSafe/Jev, or Pi-native classification: [Classifier backends](classifiers.md).
 - Diagnose setup and routing failures: [Troubleshooting](troubleshooting.md).

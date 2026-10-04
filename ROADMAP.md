@@ -52,6 +52,16 @@ The LLM classifier today returns a tier or nothing. Let it emit `<tier>:<conf 0�
 
 ---
 
+## Post-v1 direction — slim the adapter, double down on policy (not now)
+
+Maintainer direction (2026-10-03): once v1 is ready, remove or avoid reimplementing anything Pi now provides natively, and concentrate Bifrost on what hosts do not provide. **v1 ships the current architecture first — no speculative rewrites.**
+
+- **Remove/avoid (Pi-native now or soon):** custom classifier transports (TypeSafe direct HTTP, prompt endpoint, subprocess) — Pi's `ctx.modelRegistry.classify()` and classifier-model catalog cover invocation (ADR 0018 anticipated exactly this seam); probe transports re-audited against evolving Pi model APIs; any UI Pi already renders (footer, model display) — Bifrost keeps `setStatus("bifrost-state", ...)` only.
+- **Double down (Bifrost's moat):** policy and decision engines — tier judgment and classification semantics, decision traces (ADR 0007), confidence gating (ADR 0010), escalation and fallback chains (ADR 0008), reliability circuits (ADR 0005), provider/model selection strategies, config primitives (ADR 0017).
+- **Discipline:** each removal needs evidence the Pi-native path matches current semantics (credentials, retries, abort, reliability, traces) plus a migration ADR. Thin adapters stay; policy never migrates out.
+
+---
+
 ## Research / Unknowns — needs upstream or external evidence
 
 These stay parked until the listed dependency is resolved.

@@ -107,8 +107,8 @@
         },
         "backend": {
           "type": "string",
-          "enum": ["prompt", "typesafe"],
-          "description": "Classifier backend. Omit for existing prompt classifier; TypeSafe is explicit opt-in."
+          "enum": ["prompt", "typesafe", "pi-native"],
+          "description": "Classifier backend. If omitted, Bifrost detects Pi-managed TypeSafe credentials first, TYPESAFE_API_KEY second, and otherwise uses prompt. An explicit value always wins."
         },
         "typesafe": {
           "type": "object",
@@ -128,16 +128,31 @@
             }
           }
         },
+        "piNative": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Pi-native classifier settings. Omit model to use the first available TypeSafe classifier model in Pi's catalog.",
+          "properties": {
+            "model": { "type": "string", "description": "Classifier model in provider/id form, for example typesafe/jev-latest." },
+            "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 },
+            "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 3 },
+            "metrics": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": { "enabled": { "type": "boolean", "default": true } }
+            }
+          }
+        },
         "model": {
           "oneOf": [
             { "type": "string" },
             { "type": "array", "items": { "type": "string" }, "minItems": 1 }
           ],
-          "description": "Model pattern(s) for prompt classification. When backend is typesafe and fallback is prompt, this is the prompt fallback model; it is not the active Jev model."
+          "description": "Model pattern(s) for prompt classification. With a direct backend and prompt fallback, this is the prompt model, not the TypeSafe classifier model."
         },
         "endpoint": {
           "type": "string",
-          "description": "Prompt backend base URL. TypeSafe uses fixed nested typesafe.endpoint and rejects this field."
+          "description": "Prompt backend base URL. Direct backends reject this field."
         },
         "method": {
           "type": "string",
@@ -176,7 +191,7 @@
           }
         },
         "minConfidence": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.8 },
-        "fallback": { "type": "string", "enum": ["prompt", "regex"], "default": "prompt", "description": "Fallback after a TypeSafe miss or rejected judgment. Prompt uses classifier.model; regex skips prompt classification." },
+        "fallback": { "type": "string", "enum": ["prompt", "regex"], "default": "prompt", "description": "Fallback after a direct classifier miss or rejected judgment. Prompt uses classifier.model; regex skips prompt classification." },
         "systemPrompt": {
           "type": "string",
           "description": "Custom system prompt for the classifier. Override to change how categories are presented to the LLM.",

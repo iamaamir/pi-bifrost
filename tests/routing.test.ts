@@ -69,6 +69,14 @@ describe("routing", () => {
   });
 
   describe("findCandidates", () => {
+    it("excludes virtual entries from exact and fuzzy candidate pools", () => {
+      const virtual = { ...makeModel("bifrost", "auto"), api: "pi-virtual" } as ReturnType<typeof makeModel>;
+      const physical = makeModel("fixture", "auto-fast");
+      const ctx = makeCtx([virtual, physical]);
+      assert.deepEqual(findCandidates(ctx, "bifrost/auto"), []);
+      assert.deepEqual(findCandidates(ctx, "auto"), [physical]);
+    });
+
     it("returns multiple models for an array", () => {
       const ctx = makeCtx([
         makeModel("anthropic", "claude-opus", 15),
