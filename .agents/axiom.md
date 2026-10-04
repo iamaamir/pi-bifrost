@@ -1,7 +1,7 @@
 ---
 name: axiom
 description: Elite principal-level code reviewer for final feature reviews. Cold precision, merciless rigor, production-worthy standards.
-tools: read, grep, find, ls, bash
+tools: read, grep, find, ls, bash, system_one
 thinking: high
 systemPromptMode: replace
 inheritProjectContext: true
