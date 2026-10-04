@@ -163,11 +163,21 @@ function formatCandidateLines(
 
 // ── Shared tier-resolution + display ───────────────────────
 
+export type BifrostTierDisplay = {
+  strategy: string;
+  selected: string;
+  selectedTier: string;
+  fallbackReason?: string;
+  requestedCandidateLines: string[];
+  fallbackCandidateLines: string[];
+  defaultTier?: string;
+};
+
 function resolveTierDisplay(
   tier: string,
   state: BifrostState,
   ctx: ExtensionContext,
-) {
+): BifrostTierDisplay {
   const pattern = state.config.models?.[tier] ?? tier;
   const strategy = getStrategy(state.config.categoryStrategies, state.config.strategy, tier);
   const defaultTier = state.config.default;
@@ -629,14 +639,106 @@ async function handleBenchmark(
   await uiResult(ctx, "Bifrost benchmark", lines);
 }
 
+// ── Preview report ──────────────────────────────────────────
+
+/**
+ * Machine-readable shape of one `/bifrost preview` decision. Every field is a
+ * primitive so the report survives `JSON.stringify` on a single line. Optional
+ * keys are omitted rather than set to null, so a consumer can test for the
+ * absence of a backend, model, confidence, or fallback reason.
+ *
+ * This is a projection of what `resolveTierDisplay` already computes. It carries
+ * no stage timings and no structured candidate records, so it is deliberately
+ * not a DecisionTrace (see ADR 0007).
+ */
+export type BifrostPreviewReport = {
+  prompt: string;
+  source: string;
+  backend?: string;
+  model?: string;
+  confidence?: number;
+  tier: string;
+  strategy: string;
+  selectedTier: string;
+  fallbackReason?: string;
+  requestedCandidates: string[];
+  fallbackCandidates: string[];
+  defaultTier?: string;
+  selected: string;
+};
+
+/** Marker prefix for machine-readable command output, so a caller can find the line without guessing. */
+export const BIFROST_JSON_PREFIX = "[bifrost-json] ";
+
+export function parsePreviewArgs(args: string): { prompt: string; json: boolean } {
+  const rest = args.slice("preview".length).trim();
+  if (rest === "--json") return { prompt: "", json: true };
+  if (rest.startsWith("--json ")) return { prompt: rest.slice("--json".length).trim(), json: true };
+  return { prompt: rest, json: false };
+}
+
+export function buildPreviewReport(input: {
+  prompt: string;
+  classification: Exclude<ClassificationResult, { kind: "unclassified" }>;
+  display: BifrostTierDisplay;
+}): BifrostPreviewReport {
+  const { prompt, classification, display } = input;
+  const judgment = classification.kind === "classified" ? classification.judgment : undefined;
+  return {
+    prompt,
+    source: classification.kind === "classified" ? classification.source : "fallback",
+    ...(judgment ? { backend: judgment.backend } : {}),
+    ...(judgment?.model !== undefined ? { model: judgment.model } : {}),
+    ...(judgment?.confidence !== undefined ? { confidence: judgment.confidence } : {}),
+    tier: classification.tier,
+    strategy: display.strategy,
+    selectedTier: display.selectedTier,
+    ...(display.fallbackReason !== undefined ? { fallbackReason: display.fallbackReason } : {}),
+    requestedCandidates: display.requestedCandidateLines,
+    fallbackCandidates: display.fallbackCandidateLines,
+    ...(display.defaultTier !== undefined ? { defaultTier: display.defaultTier } : {}),
+    selected: display.selected,
+  };
+}
+
+export function serializePreviewReport(report: BifrostPreviewReport): string {
+  return JSON.stringify(report);
+}
+
+export function renderPreviewReport(report: BifrostPreviewReport): string[] {
+  return [
+    "--- preview ---",
+    `prompt:    ${report.prompt}`,
+    `source:    ${report.source}`,
+    // The JSON report omits absent fields; the human view keeps the historical
+    // "none" / "n/a" placeholders so the TUI output does not change.
+    ...(report.backend ? [
+      `backend:   ${report.backend}`,
+      `model:     ${report.model ?? "none"}`,
+      `confidence:${report.confidence === undefined ? " n/a" : ` ${report.confidence}`}`,
+    ] : []),
+    `tier:      ${report.tier}`,
+    `strategy:  ${report.strategy}`,
+    `selected tier: ${report.selectedTier}`,
+    ...(report.fallbackReason ? [`fallback:  ${report.fallbackReason}`] : []),
+    `requested candidates (${report.tier}):`,
+    ...report.requestedCandidates,
+    ...(report.fallbackCandidates.length > 0 && report.defaultTier && report.defaultTier !== report.tier
+      ? [`fallback candidates (${report.defaultTier}):`, ...report.fallbackCandidates]
+      : []),
+    `selected:  ${report.selected}`,
+    "---------------",
+  ];
+}
+
 async function handlePreview(
   args: string,
   ctx: ExtensionContext,
   state: BifrostState,
 ): Promise<void> {
-  const prompt = args.slice("preview".length).trim();
+  const { prompt, json } = parsePreviewArgs(args);
   if (!prompt) {
-    log(ctx, "usage: /bifrost preview <prompt>", "warning");
+    log(ctx, json ? "usage: /bifrost preview --json <prompt>" : "usage: /bifrost preview <prompt>", "warning");
     return;
   }
 
@@ -654,31 +756,18 @@ async function handlePreview(
     log(ctx, "no tier matched", "warning");
     return;
   }
-  const tier = classification.tier;
-  const source = classification.kind === "classified" ? classification.source : "fallback";
-  const judgment = classification.kind === "classified" ? classification.judgment : undefined;
-  const display = resolveTierDisplay(tier, state, ctx);
 
-  const lines = [
-    "--- preview ---",
-    `prompt:    ${prompt}`,
-    `source:    ${source}`,
-    ...(judgment ? [`backend:   ${judgment.backend}`, `model:     ${judgment.model ?? "none"}`, `confidence:${judgment.confidence === undefined ? " n/a" : ` ${judgment.confidence}`}`] : []),
-    `tier:      ${tier}`,
-    `strategy:  ${display.strategy}`,
-    `selected tier: ${display.selectedTier}`,
-    ...(display.fallbackReason ? [`fallback:  ${display.fallbackReason}`] : []),
-    `requested candidates (${tier}):`,
-    ...display.requestedCandidateLines,
-  ];
-  if (display.fallbackCandidateLines.length > 0 && display.defaultTier && display.defaultTier !== tier) {
-    lines.push(`fallback candidates (${display.defaultTier}):`);
-    lines.push(...display.fallbackCandidateLines);
+  const report = buildPreviewReport({
+    prompt,
+    classification,
+    display: resolveTierDisplay(classification.tier, state, ctx),
+  });
+
+  if (json) {
+    console.error(`${BIFROST_JSON_PREFIX}${serializePreviewReport(report)}`);
+    return;
   }
-  lines.push(`selected:  ${display.selected}`);
-  lines.push("---------------");
-
-  await uiResult(ctx, "Bifrost preview", lines);
+  await uiResult(ctx, "Bifrost preview", renderPreviewReport(report));
 }
 
 // ── Command type ────────────────────────────────────────────

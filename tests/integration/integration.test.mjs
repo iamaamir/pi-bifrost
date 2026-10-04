@@ -77,6 +77,18 @@ function combined(output) {
   return `${output.stderr}\n${output.stdout}`;
 }
 
+const JSON_PREFIX = "[bifrost-json] ";
+
+/**
+ * Read a machine-readable command report. Asserts on the parsed object so a
+ * change to the report shape fails here instead of being silently scraped past.
+ */
+function readJsonReport(output, label = "command") {
+  const line = combined(output).split("\n").find((candidate) => candidate.startsWith(JSON_PREFIX));
+  assert.ok(line, `expected a ${JSON_PREFIX}report from ${label}, got:\n${combined(output)}`);
+  return JSON.parse(line.slice(JSON_PREFIX.length));
+}
+
 describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
   before(async () => {
     integrationDir = mkdtempSync(join(tmpdir(), "bifrost-integration-"));
@@ -117,8 +129,13 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
       const status = combined(await runPi("/bifrost classifier status", tempDir, env));
       assert.match(status, /backend=auto: typesafe \(env key detected\)/);
       // Direct-model regex runs before the classifier transport; no external API call.
-      const preview = combined(await runPi("/bifrost preview direct hit", tempDir, env));
-      assert.match(preview, /source:\s+regex/);
+      const preview = readJsonReport(await runPi("/bifrost preview --json direct hit", tempDir, env), "preview");
+      assert.equal(preview.source, "regex");
+      assert.equal(preview.prompt, "direct hit");
+      assert.equal(preview.tier, "fake/chat");
+      assert.equal(preview.defaultTier, "general");
+      assert.ok(Array.isArray(preview.requestedCandidates));
+      assert.ok(Array.isArray(preview.fallbackCandidates));
       const events = readFileSync(join(tempDir, ".pi", "bifrost-debug.jsonl"), "utf8")
         .trim().split("\n").map((line) => JSON.parse(line));
       assert(events.some((event) => event.module === "classifier" && event.event === "backend.detected" && event.backend === "typesafe"));

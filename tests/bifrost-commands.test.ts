@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildClassifierTestReport, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, runBifrostCommand } from "../commands.ts";
+import { buildClassifierTestReport, buildPreviewReport, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, runBifrostCommand, serializePreviewReport } from "../commands.ts";
 import { makePiClassifierModel, makeRegistry } from "./helpers.ts";
 
 function makeCtx(
@@ -507,5 +507,188 @@ describe("bifrost command ui", () => {
 
     const widget = calls.find((call) => call.kind === "widget" && String(call.value).startsWith("bifrost-output:"));
     assert(widget?.lines?.some((line) => line.includes("openCircuits: 0")));
+  });
+});
+
+describe("preview report", () => {
+  const display = {
+    strategy: "first-available",
+    selected: "fake/chat",
+    selectedTier: "general",
+    fallbackReason: undefined as string | undefined,
+    requestedCandidateLines: ["fake/chat"],
+    fallbackCandidateLines: [] as string[],
+    defaultTier: "general",
+  };
+
+  it("carries every routing decision as a typed field", () => {
+    const report = buildPreviewReport({
+      prompt: "direct hit",
+      classification: { kind: "classified", tier: "general", source: "regex" },
+      display,
+    });
+
+    assert.deepEqual(report, {
+      prompt: "direct hit",
+      source: "regex",
+      tier: "general",
+      strategy: "first-available",
+      selectedTier: "general",
+      selected: "fake/chat",
+      defaultTier: "general",
+      requestedCandidates: ["fake/chat"],
+      fallbackCandidates: [],
+    });
+  });
+
+  it("reports fallback source and omits absent optional fields", () => {
+    const report = buildPreviewReport({
+      prompt: "anything",
+      classification: { kind: "fallback", tier: "general" },
+      display,
+    });
+
+    assert.equal(report.source, "fallback");
+    assert.equal("backend" in report, false);
+    assert.equal("model" in report, false);
+    assert.equal("confidence" in report, false);
+    assert.equal("fallbackReason" in report, false);
+  });
+
+  it("omits confidence when the judgment carries none", () => {
+    const report = buildPreviewReport({
+      prompt: "p",
+      classification: {
+        kind: "classified",
+        tier: "quick",
+        source: "classifier",
+        judgment: { tier: "quick", backend: "pi-native", model: "typesafe/jev-latest" },
+      },
+      display,
+    });
+
+    assert.equal(report.backend, "pi-native");
+    assert.equal(report.model, "typesafe/jev-latest");
+    assert.equal("confidence" in report, false);
+  });
+
+  it("keeps a zero confidence, which is falsy but present", () => {
+    const report = buildPreviewReport({
+      prompt: "p",
+      classification: {
+        kind: "classified",
+        tier: "quick",
+        source: "classifier",
+        judgment: { tier: "quick", backend: "pi-native", confidence: 0 },
+      },
+      display,
+    });
+
+    assert.equal(report.confidence, 0);
+  });
+
+  it("surfaces the fallback reason and both candidate lists", () => {
+    const report = buildPreviewReport({
+      prompt: "p",
+      classification: { kind: "fallback", tier: "quick" },
+      display: {
+        ...display,
+        selectedTier: "general",
+        fallbackReason: "all requested models unavailable",
+        requestedCandidateLines: ["a/one", "b/two"],
+        fallbackCandidateLines: ["c/three"],
+      },
+    });
+
+    assert.equal(report.fallbackReason, "all requested models unavailable");
+    assert.deepEqual(report.requestedCandidates, ["a/one", "b/two"]);
+    assert.deepEqual(report.fallbackCandidates, ["c/three"]);
+  });
+
+  it("renders the same report as the text view", () => {
+    const report = buildPreviewReport({
+      prompt: "direct hit",
+      classification: { kind: "classified", tier: "general", source: "regex" },
+      display,
+    });
+    const lines = renderPreviewReport(report);
+
+    assert(lines.includes("prompt:    direct hit"));
+    assert(lines.includes("source:    regex"));
+    assert(lines.includes("tier:      general"));
+    assert(lines.includes("selected:  fake/chat"));
+  });
+
+  it("keeps none and n/a placeholders in the text view while JSON omits the keys", () => {
+    const report = buildPreviewReport({
+      prompt: "p",
+      classification: {
+        kind: "classified",
+        tier: "quick",
+        source: "classifier",
+        judgment: { tier: "quick", backend: "prompt" },
+      },
+      display,
+    });
+    const lines = renderPreviewReport(report);
+
+    assert(lines.includes("model:     none"));
+    assert(lines.includes("confidence: n/a"));
+    assert.equal("model" in report, false);
+    assert.equal("confidence" in report, false);
+  });
+
+  it("keeps a zero confidence visible in the text view", () => {
+    const report = buildPreviewReport({
+      prompt: "p",
+      classification: {
+        kind: "classified",
+        tier: "quick",
+        source: "classifier",
+        judgment: { tier: "quick", backend: "pi-native", confidence: 0 },
+      },
+      display,
+    });
+
+    assert(renderPreviewReport(report).includes("confidence: 0"));
+  });
+
+  it("serializes to one parseable line with no prose envelope", () => {
+    const report = buildPreviewReport({
+      prompt: "direct hit",
+      classification: { kind: "classified", tier: "general", source: "regex" },
+      display,
+    });
+    const line = serializePreviewReport(report);
+
+    assert.equal(line.split("\n").length, 1);
+    assert.deepEqual(JSON.parse(line), report);
+  });
+
+  it("escapes a prompt that would otherwise break the JSON line", () => {
+    const report = buildPreviewReport({
+      prompt: 'quote " and\nnewline',
+      classification: { kind: "classified", tier: "general", source: "regex" },
+      display,
+    });
+    const line = serializePreviewReport(report);
+
+    assert.equal(line.split("\n").length, 1);
+    assert.equal(JSON.parse(line).prompt, 'quote " and\nnewline');
+  });
+});
+
+describe("preview json flag", () => {
+  it("treats --json as a flag only in the first position", () => {
+    assert.deepEqual(parsePreviewArgs("preview --json fix the bug"), { prompt: "fix the bug", json: true });
+    assert.deepEqual(parsePreviewArgs("preview fix the bug"), { prompt: "fix the bug", json: false });
+    assert.deepEqual(parsePreviewArgs("preview --json"), { prompt: "", json: true });
+  });
+
+  it("leaves a later --json inside the prompt text", () => {
+    assert.deepEqual(parsePreviewArgs("preview explain the --json flag"), {
+      prompt: "explain the --json flag",
+      json: false,
+    });
   });
 });
