@@ -71,6 +71,7 @@ function makeCtx(
 function makeStore(reliabilityState?: Record<string, { failures: number[]; openUntil?: number }>, enabled = true) {
   const store = {
     getState: () => ({ version: 1 as const, models: reliabilityState ?? {} }),
+    reload: () => {},
     openCircuitCount: (now?: number) => {
       if (!enabled) return 0;
       const t = now ?? Date.now();
@@ -361,6 +362,27 @@ describe("bifrost command ui", () => {
     assert(lines.includes("final backend: prompt"));
     assert(lines.includes("final model: fixture/classifier"));
     assert(lines.includes("outcome: low_confidence"));
+  });
+
+  it("prints classifier guidance after --write init without opening picker", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-guidance-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      writeFileSync(join(tempDir, ".pi", "bifrost-probe.json"), JSON.stringify([
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]));
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      const state = makeState();
+      await createCommandRouter(state as never)("init --write", ctx as never);
+      assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), true);
+      assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("Next: run /bifrost classifier")));
+      assert.equal(calls.some((call) => call.kind === "select"), false);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("leaves config unchanged when prompt model picker is cancelled", async () => {

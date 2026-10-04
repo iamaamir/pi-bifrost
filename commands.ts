@@ -471,6 +471,13 @@ async function handleInit(
 
   log(ctx, "wrote .pi/bifrost.json and reloaded config");
   log(ctx, `Bifrost active with ${Object.keys(state.config.models ?? {}).length} tier(s). Try a prompt.`);
+  log(ctx, "Next: run /bifrost classifier to choose the routing backend.");
+  if (ctx.mode === "tui" && ctx.hasUI && !writeWithoutPrompt && await ctx.ui.confirm(
+    "Choose classifier backend?",
+    "Open /bifrost classifier now?",
+  )) {
+    await handleClassifierChoose(ctx, state);
+  }
 
   // Clear the init widget so it doesn't persist in the TUI.
   if (ctx.hasUI) {
