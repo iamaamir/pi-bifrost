@@ -12,6 +12,12 @@
 // in queue order. A transform-mutated dispatch can also leak its entry to a
 // later identical prompt (a failed match consumes nothing); such a mis-tier is
 // visible in the "Bifrost auto:" decision line.
+//
+// Consume-then-fail (documented residual, issue #17): take() consumes the
+// matched entry before dispatch, so a select() failure loses that turn's hint.
+// No re-consumption path needs protection: prompts are never replayed, Pi's
+// retry/continuation dispatches are sticky and never read overrides, and a
+// re-sent prompt re-enters through input with a fresh entry.
 type Delivery = "steer" | "followUp" | undefined;
 
 function priorityRank(delivery: Delivery): number {

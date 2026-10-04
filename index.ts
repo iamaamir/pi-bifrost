@@ -41,7 +41,7 @@ import {
   type SkippedCandidate,
 } from "./routing.ts";
 import { ReliabilityStore } from "./reliability-store.ts";
-import { loadRuntimeState, runtimeStatePath, saveRuntimeState, isPassiveModelSelection } from "./runtime-state.ts";
+import { loadRuntimeState, runtimeStatePath, saveRuntimeState, isPassiveModelSelection, createSelfSelectTracker } from "./runtime-state.ts";
 import { createCommandRouter, getBifrostCommandCompletions, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
 import { parseInlineOverride } from "./inline-override.ts";
@@ -67,6 +67,9 @@ import { waitForRegistryRefresh } from "./registry-refresh.ts";
 function lastDispatchedPhysical(ctx: ExtensionContext): Model<Api> | undefined {
   for (const entry of ctx.sessionManager.getBranch().slice().reverse()) {
     if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+    // Defense in depth: assistant messages record physical dispatches only
+    // (a virtual model never reaches a provider), but never trust identity
+    // bookkeeping when choosing a model to activate.
     if (isVirtualModel(entry.message)) continue;
     const model = ctx.modelRegistry.find(entry.message.provider, entry.message.model);
     if (model && !isVirtualModel(model)) return model;
@@ -247,7 +250,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     pinned: false,
     classifierEnabled: config.classifier?.enabled ?? true,
   });
-  let selfSelectKey: string | undefined;
+  // Programmatic activation keys, scoped per session: two sessions selecting
+  // the same model concurrently must never swallow each other's event (#17).
+  const selfSelect = createSelfSelectTracker();
   let offeredSetup = false;
   // One extension runtime can host several sessions: scope mutable routing
   // state per session so concurrent sessions cannot consume each other's
@@ -368,15 +373,18 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   state.selectPhysicalFromVirtual = async (ctx) => {
     if (!isBifrostAuto(ctx.model)) return true;
-    const physical = lastDispatchedPhysical(ctx);
+    // Prefer the last dispatched model; otherwise resolve the default tier —
+    // the same fallback route() uses — so a fresh session can still exit Auto.
+    const physical = lastDispatchedPhysical(ctx)
+      ?? (state.config.default ? resolveForTier(ctx, state.config.default).selected : undefined);
     if (!physical) {
-      log(ctx, "Bifrost: no dispatched physical model to fall back to; select one in /model first", "warning");
+      log(ctx, "Bifrost: no healthy physical model to fall back to; configure a default-tier model or select one in /model", "warning");
       return false;
     }
-    selfSelectKey = modelKey(physical);
+    selfSelect.claim(ctx.sessionManager, modelKey(physical));
     try {
       if (!(await pi.setModel(physical))) {
-        log(ctx, `Bifrost: no dispatched physical model to fall back to — cannot activate ${modelKey(physical)}`, "error");
+        log(ctx, `Bifrost: failed to activate ${modelKey(physical)}; select a physical model in /model`, "error");
         return false;
       }
       overrideFor(ctx).clear();
@@ -388,7 +396,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       // The key's safety comes from this finally: pi.setModel awaits its
       // model_select emission, but _emitModelSelect early-returns without an
       // event on same-model sets — either way the key dies here.
-      selfSelectKey = undefined;
+      selfSelect.release(ctx.sessionManager);
     }
   };
 
@@ -533,11 +541,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("model_select", async (event, ctx) => {
-    // Swallow only our own programmatic activation, matched by exact model.
-    if (selfSelectKey && event.source === "set" && modelKey(event.model) === selfSelectKey) {
-      selfSelectKey = undefined;
-      return;
-    }
+    // Swallow only this session's own programmatic activation, matched by exact model.
+    if (selfSelect.consume(ctx.sessionManager, event.source, modelKey(event.model))) return;
     // Session restore replays a recorded selection; it is not a user action.
     if (isPassiveModelSelection(event.source)) {
       debug("bifrost", "model_select.restore", { model: modelKey(event.model) });
@@ -762,7 +767,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
       uiBusy(ctx, `Bifrost routing to ${modelKey(model)}...`);
       setBifrostWorkingMessage(ctx, `Bifrost routing to ${modelKey(model)}...`);
-      selfSelectKey = modelKey(model);
+      selfSelect.claim(ctx.sessionManager, modelKey(model));
       const endSwitch = debugMeasure("input", "setModel");
       let ok = false;
       let setModelError: unknown;
@@ -773,7 +778,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         debug("input", "setModel.throw", { model: modelKey(model), category: "set_model_failure" });
       } finally {
         // Key lives only inside the awaited setModel window (see selectPhysicalFromVirtual).
-        selfSelectKey = undefined;
+        selfSelect.release(ctx.sessionManager);
       }
       endSwitch({ model: modelKey(model), ok });
       uiDone(ctx);

@@ -134,6 +134,31 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
     }
   });
 
+  it("lets /bifrost off resolve the default-tier model without a prior dispatch", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-auto-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-auto-work-"));
+    try {
+      writeFixture({
+        home, work, port: server.port,
+        models: [{ id: "fast", reasoning: false }, { id: "strong", reasoning: false }],
+        bifrost: {
+          enabled: true, default: "general", strategy: "first", classifier: { enabled: false },
+          models: { quick: ["fake/fast"], general: ["fake/strong"] },
+        },
+      });
+      // The first turn is the command itself: nothing ever dispatched through
+      // Auto, so leaving it must resolve the default-tier model instead of
+      // dead-ending with "select one in /model first" (issue #17 P2).
+      const { code, stderr } = await runAuto({ home, work, messages: ["/bifrost off"] });
+      assert.equal(code, 0);
+      assert.match(stderr, /Bifrost disabled/);
+      assert.doesNotMatch(stderr, /no dispatched physical model/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+
   it("settles a claimed half-open trial end to end", async () => {
     const home = mkdtempSync(join(tmpdir(), "bifrost-auto-home-"));
     const work = mkdtempSync(join(tmpdir(), "bifrost-auto-work-"));
