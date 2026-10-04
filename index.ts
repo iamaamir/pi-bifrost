@@ -112,7 +112,7 @@ function buildPipeline(
   // Resolve classifier models once at pipeline construction.
   // If classifier is disabled, pass empty array — pipeline skips LLM stage.
   let classifierModels: ClassifierModel[] = [];
-  let classifyWithTypeSafe: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<ClassificationJudgment | undefined>) | undefined;
+  let classifyDirect: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<ClassificationJudgment | undefined>) | undefined;
   const typeSafeUsable = config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && !hasTypeSafeConfigErrors(config);
   if (classifierEnabled && typeSafeUsable && tiers.length > 0) {
     const classifierConfig = config.classifier!;
@@ -124,7 +124,7 @@ function buildPipeline(
       reliability: reliabilityStore,
       observe: (observation) => classifierMetricsStore.record(observation),
     });
-    classifyWithTypeSafe = async (text, availableTiers, signal) => {
+    classifyDirect = async (text, availableTiers, signal) => {
       const judgment = await classify({ prompt: boundedClassifierPrompt(text), tiers: availableTiers, criteria: classifierConfig.criteria ?? DEFAULT_CLASSIFIER_CRITERIA }, signal);
       return judgment;
     };
@@ -145,7 +145,7 @@ function buildPipeline(
   }
 
   return createPipeline({
-    classifyWithTypeSafe,
+    classifyDirect,
     cacheLookup: (text) => {
       if (!cacheEnabled) return undefined;
       const entry = lookupCache(cacheEntries, text, threshold, cacheSemanticKey, cacheMaxAgeMs);

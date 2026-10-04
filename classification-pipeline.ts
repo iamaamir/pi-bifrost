@@ -1,7 +1,7 @@
 import type { ClassifierModel } from "./classifier.ts";
 import { classifyCompiled, compileRules, type RouteRule } from "./routing.ts";
 import { debug, debugMeasure } from "./debug.ts";
-import { CLASSIFIER_BACKEND_IDS, type ClassificationJudgment, type ClassifierOutput } from "./classifier-backends.ts";
+import { CLASSIFIER_BACKEND_IDS, type ClassificationJudgment, type ClassifierOutput, type ClassifierBackend } from "./classifier-backends.ts";
 
 // ── ADT result type ────────────────────────────────────────────
 
@@ -23,8 +23,8 @@ export type ClassificationResult =
 export interface PipelineDeps {
   /** Query cache. Returns tier or undefined. */
   readonly cacheLookup: (text: string) => string | undefined;
-  /** Optional provider-neutral backend attempted before prompt classifier. */
-  readonly classifyWithTypeSafe?: (text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<ClassifierOutput | undefined>;
+  /** Optional direct backend (typesafe or pi-native) attempted before the prompt classifier. */
+  readonly classifyDirect?: (text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<ClassificationJudgment | undefined>;
   /** Classifier models in priority order. Empty array = skip LLM. */
   readonly classifierModels: readonly ClassifierModel[];
   /** Invoke the LLM classifier for a single model. Returns tier or undefined. */
@@ -47,7 +47,7 @@ export interface ClassificationPipeline {
   readonly classify: (text: string, signal?: AbortSignal) => Promise<ClassificationResult>;
 }
 
-function normalizeJudgment(output: ClassifierOutput, backend: "prompt" | "typesafe"): ClassificationJudgment {
+function normalizeJudgment(output: ClassifierOutput, backend: ClassifierBackend): ClassificationJudgment {
   return typeof output === "string"
     ? { tier: output, backend }
     : output;
@@ -58,7 +58,7 @@ function normalizeJudgment(output: ClassifierOutput, backend: "prompt" | "typesa
 export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
   const {
     cacheLookup,
-    classifyWithTypeSafe,
+    classifyDirect,
     classifierModels,
     classifyWithLLM,
     regexRules: rawRegexRules,
@@ -94,20 +94,19 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
       return { kind: "classified", tier: cached, source: "cache" };
     }
 
-    // Stage 3: optional TypeSafe classifier, then existing prompt classifier.
-    if (classifyWithTypeSafe) {
+    // Stage 3: optional direct classifier (typesafe or pi-native), then prompt fallback.
+    if (classifyDirect) {
       try {
-        const endTypeSafe = debugMeasure("pipeline", `${CLASSIFIER_BACKEND_IDS.typesafe}.attempt`);
-        const output = await classifyWithTypeSafe(text, tiers, signal);
-        const judgment = output === undefined ? undefined : normalizeJudgment(output, CLASSIFIER_BACKEND_IDS.typesafe);
+        const endDirect = debugMeasure("pipeline", "direct.attempt");
+        const judgment = await classifyDirect(text, tiers, signal);
         const tier = judgment?.tier;
-        endTypeSafe({ tier, backend: judgment?.backend, confidence: judgment?.confidence });
+        endDirect({ tier, backend: judgment?.backend, confidence: judgment?.confidence });
         if (judgment && tiers.includes(judgment.tier)) {
           debug("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model, confidence: judgment.confidence });
           return { kind: "classified", tier: judgment.tier, source: "classifier", judgment };
         }
       } catch {
-        debug("pipeline", `${CLASSIFIER_BACKEND_IDS.typesafe}.error`, { aborted: signal?.aborted ?? false });
+        debug("pipeline", "direct.error", { aborted: signal?.aborted ?? false });
       }
       if (signal?.aborted) return { kind: "unclassified" };
     }
