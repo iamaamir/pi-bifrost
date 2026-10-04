@@ -11,10 +11,16 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 function documentedCommands(): Set<string> {
   const md = readFileSync(join(ROOT, "docs", "guide", "commands.md"), "utf8");
   const lines = md.split("\n");
-  // First table only: the command rows sit above the second table, whose
-  // header line starts with "| Control".
-  const end = lines.findIndex((line, i) => i > 6 && line.startsWith("| Control"));
-  const table = lines.slice(6, end === -1 ? undefined : end);
+  // Anchor both ends on table headers rather than row numbers, so prose
+  // inserted above the table cannot silently shift the parse.
+  const start = lines.findIndex((line) => line.startsWith("| Command |"));
+  assert.notEqual(start, -1, "docs/guide/commands.md: command table header not found");
+  // Asserted first so `i > start` is never evaluated against a start of -1.
+  // Scoped to the first table: the command rows sit above a second table
+  // whose header line starts with "| Control".
+  const end = lines.findIndex((line, i) => i > start && line.startsWith("| Control"));
+  assert.notEqual(end, -1, "docs/guide/commands.md: following table not found, parse would scan the whole file");
+  const table = lines.slice(start, end);
   const commands = new Set<string>();
   for (const line of table) {
     if (!line.startsWith("| `/bifrost")) continue;
@@ -39,6 +45,11 @@ describe("docs command drift", () => {
     const undocumented = [...registered].filter((v) => !documented.has(v)).sort();
     const unknown = [...documented].filter((v) => !registered.has(v)).sort();
 
+    assert.equal(
+      documented.size,
+      registered.size,
+      `documented ${documented.size} commands but the registry defines ${registered.size}; a count mismatch usually means the parse found the wrong rows`,
+    );
     assert.deepEqual(
       undocumented,
       [],
