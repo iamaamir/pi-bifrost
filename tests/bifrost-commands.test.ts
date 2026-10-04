@@ -649,11 +649,77 @@ describe("route dispatch", () => {
     assert.ok(calls.some((c) => c.kind === "widget" && (c.lines ?? []).includes("--- config ---")));
   });
 
-  it("does not let a prefix route swallow a multi-word exact command", async () => {
+  // Every assertion in this block pins a string only that one handler emits,
+  // or a mutation it alone performs. A predicate that fallthrough also
+  // satisfies — "some widget or notify happened" — cannot tell a routed
+  // command from one that missed every route and opened the picker.
+
+  it("routes reload", async () => {
     const { ctx, calls } = makeCtx();
     const state = makeState();
-    await createCommandRouter(state as never)("classifier status", ctx as never);
-    assert.ok(calls.some((c) => c.kind === "widget" || c.kind === "notify"));
+    await inTempDir(async () => {
+      await createCommandRouter(state as never)("reload", ctx as never);
+    });
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("Bifrost config reloaded")));
+  });
+
+  it("routes providers", async () => {
+    const { ctx, calls } = makeCtx([
+      { provider: "fixture", id: "chat" },
+      { provider: "fixture", id: "reason" },
+    ]);
+    const state = makeState();
+    await createCommandRouter(state as never)("providers", ctx as never);
+    const lines = calls.filter((c) => c.kind === "widget").flatMap((c) => c.lines ?? []);
+    assert.ok(lines.includes("available providers:"));
+    assert.ok(lines.includes("  fixture: 2 model(s)"));
+  });
+
+  it("routes probe", async () => {
+    const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+    const state = makeState();
+    // runProbe records outcomes on the reliability store; makeStore omits it.
+    state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} } as never;
+    // No model carries an api, so probeOne returns "skipped" without any
+    // network call. runProbe still writes .pi/bifrost-probe.json, so dispatch
+    // from a temp dir rather than over the repo's real probe data.
+    await inTempDir(async () => {
+      await createCommandRouter(state as never)("probe", ctx as never);
+    });
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).startsWith("info:Probing 1 model(s)")));
+    const lines = calls.filter((c) => c.kind === "widget").flatMap((c) => c.lines ?? []);
+    assert.ok(lines.includes("--- probe results (1 models) ---"));
+  });
+
+  it("routes benchmark", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    // makeState configures no tiers, so handleBenchmark reports that and
+    // returns before reaching the classification pipeline.
+    await createCommandRouter(state as never)("benchmark fix the build", ctx as never);
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("no categories configured")));
+  });
+
+  it("routes preview", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    // Bare "preview" with no prompt: only reachable if the prefix route
+    // matches the word alone, and handleInit's usage text is its own.
+    await createCommandRouter(state as never)("preview", ctx as never);
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("usage: /bifrost preview <prompt>")));
+  });
+
+  it("routes init", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} } as never;
+    // Empty temp dir means no cached probe, so handleInit probes inline. Its
+    // wording ("to find working ones") is distinct from the probe route's
+    // ("model(s) with"), so this cannot be satisfied by that route.
+    await inTempDir(async () => {
+      await createCommandRouter(state as never)("init", ctx as never);
+    });
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("Probing 0 models to find working ones")));
   });
 
   it("opens the picker for initialize rather than running init", async () => {
