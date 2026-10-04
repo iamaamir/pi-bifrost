@@ -1,3 +1,5 @@
+import { dispatchTrialPolicy, type DispatchIntent } from "./virtual-routing.ts";
+
 interface AssistantOutcome {
   role?: unknown;
   provider?: unknown;
@@ -15,6 +17,54 @@ function outcomeModelKey(message: AssistantOutcome): string | undefined {
 export interface RuntimeFailure {
   model: string;
   reason: string | undefined;
+}
+
+/** Result of a half-open trial claim attempt. */
+export interface TrialClaim {
+  allowed: boolean;
+  claimed: boolean;
+}
+
+/**
+ * Per-request dispatch ownership. A dispatch releases only the trial claim and
+ * ledger entry it recorded itself — onDispatchFailed can never steal another
+ * dispatch's bookkeeping for the same model.
+ */
+export interface DispatchOwnershipDeps {
+  claimTrial: (modelKey: string) => TrialClaim;
+  abandonTrial: (modelKey: string) => void;
+  begin: (modelKey: string) => void;
+  release: (modelKey: string) => void;
+}
+
+export function createDispatchOwnership(deps: DispatchOwnershipDeps) {
+  let ownedTrialKey: string | undefined;
+  let begunKey: string | undefined;
+  return {
+    claim(modelKey: string, intent: DispatchIntent, onTrial?: (claim: TrialClaim) => void): TrialClaim {
+      const trial = deps.claimTrial(modelKey);
+      onTrial?.(trial);
+      if (trial.claimed) ownedTrialKey = modelKey;
+      // Sticky/degrade are documented continuity exceptions; only an explicit
+      // selection is fail-closed on trial contention.
+      if (!trial.allowed && dispatchTrialPolicy(intent) === "fail-closed") {
+        throw new Error(`Bifrost: half-open trial unavailable for ${modelKey}`);
+      }
+      deps.begin(modelKey);
+      begunKey = modelKey;
+      return trial;
+    },
+    fail(modelKey: string): void {
+      if (begunKey === modelKey) {
+        deps.release(modelKey);
+        begunKey = undefined;
+      }
+      if (ownedTrialKey === modelKey) {
+        deps.abandonTrial(modelKey);
+        ownedTrialKey = undefined;
+      }
+    },
+  };
 }
 
 /**

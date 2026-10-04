@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { createVirtualRoute, dispatchTrialPolicy, noModelError, poolProblem } from "../virtual-routing.ts";
 import { VirtualOverride } from "../virtual-override.ts";
 import type { ModelRouteRequest } from "@earendil-works/pi-coding-agent";
-import { makeModel } from "./helpers.ts";
+import { errorMessage, makeModel } from "./helpers.ts";
 
 const first = makeModel("fixture", "fast");
 const second = makeModel("fixture", "strong");
@@ -132,7 +132,7 @@ describe("virtual Bifrost requests", () => {
     const stickyModel = Object.assign(makeModel("fixture", "sticky-strong"), { reasoning: true });
     const sticky = { model: stickyModel, thinkingLevel: "high" as const };
     const continued = await route(request("continuation", "debug race", { previous: sticky }));
-    const retried = await route(request("retry", "debug race", { failed: { ...sticky, message: { stopReason: "error" } as unknown as NonNullable<ModelRouteRequest["failed"]>["message"] } }));
+    const retried = await route(request("retry", "debug race", { failed: { ...sticky, message: errorMessage() } }));
     assert.deepEqual([continued.model, retried.model], [stickyModel, stickyModel]);
     assert.deepEqual([continued.thinkingLevel, retried.thinkingLevel], ["high", "high"]);
     assert.deepEqual(calls, []);
@@ -165,7 +165,7 @@ describe("virtual Bifrost requests", () => {
     });
     await route(request("user", "prompt"));
     await route(request("continuation", "prompt", { previous: { model: stickyModel, thinkingLevel: level } }));
-    await route(request("retry", "prompt", { failed: { model: stickyModel, thinkingLevel: level, message: { stopReason: "error" } as unknown as NonNullable<ModelRouteRequest["failed"]>["message"] } }));
+    await route(request("retry", "prompt", { failed: { model: stickyModel, thinkingLevel: level, message: errorMessage() } }));
     const degrading = createVirtualRoute({
       overrides: new VirtualOverride(),
       select: async () => undefined,

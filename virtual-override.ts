@@ -9,7 +9,9 @@
 // persisted.
 // Identity limit (accepted residual): no turn id exists on input events, so
 // two queued prompts with identical stripped text but different tiers resolve
-// in queue order.
+// in queue order. A transform-mutated dispatch can also leak its entry to a
+// later identical prompt (a failed match consumes nothing); such a mis-tier is
+// visible in the "Bifrost auto:" decision line.
 type Delivery = "steer" | "followUp" | undefined;
 
 function priorityRank(delivery: Delivery): number {
@@ -20,7 +22,7 @@ export class VirtualOverride {
   private pending: { tier?: string; prompt: string; delivery: Delivery }[] = [];
 
   prepare(tier: string | undefined, prompt: string, delivery?: Delivery): void {
-    this.pending.push({ tier, prompt, delivery });
+    this.pending.push({ tier, prompt: prompt.trim(), delivery });
   }
 
   /** Consume the best matching entry; unknown text consumes nothing. */

@@ -44,9 +44,9 @@ import { createCommandRouter, getBifrostCommandCompletions, runBifrostCommand, l
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
 import { parseInlineOverride } from "./inline-override.ts";
 import { BIFROST_AUTO_ID, BIFROST_AUTO_PROVIDER, isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
-import { RuntimeReliabilityTracker } from "./runtime-reliability.ts";
+import { createDispatchOwnership, RuntimeReliabilityTracker } from "./runtime-reliability.ts";
 import { VirtualOverride } from "./virtual-override.ts";
-import { createVirtualRoute, dispatchTrialPolicy, noModelError, poolProblem } from "./virtual-routing.ts";
+import { createVirtualRoute, noModelError, poolProblem } from "./virtual-routing.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV } from "./classifier-backends.ts";
 import { createTypeSafeClassifier, resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
 import {
@@ -219,7 +219,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   const overridesBySession = new WeakMap<object, VirtualOverride>();
   const trackersBySession = new WeakMap<object, RuntimeReliabilityTracker>();
   function overrideFor(ctx: ExtensionContext): VirtualOverride {
-    const key = ctx.sessionManager as unknown as object;
+    const key = ctx.sessionManager;
     let value = overridesBySession.get(key);
     if (!value) {
       value = new VirtualOverride();
@@ -228,7 +228,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return value;
   }
   function trackerFor(ctx: ExtensionContext): RuntimeReliabilityTracker {
-    const key = ctx.sessionManager as unknown as object;
+    const key = ctx.sessionManager;
     let value = trackersBySession.get(key);
     if (!value) {
       value = new RuntimeReliabilityTracker();
@@ -353,7 +353,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
     async route(request, ctx) {
       let routeFailure: { tier: string; pool: string | string[] | undefined; reason?: RoutedModelResolution["fallbackReason"]; skipped?: readonly SkippedCandidate[] } | undefined;
-      let ownedTrialKey: string | undefined;
+      const ownership = createDispatchOwnership({
+        claimTrial: (key) => state.reliabilityStore.tryClaimTrial(key),
+        abandonTrial: (key) => state.reliabilityStore.abandonTrial(key),
+        begin: (key) => trackerFor(ctx).begin(key),
+        release: (key) => trackerFor(ctx).release(key),
+      });
       const route = createVirtualRoute({
         overrides: overrideFor(ctx),
         fallback: () => lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default).selected : undefined),
@@ -407,26 +412,14 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         },
         onDispatch: (model, thinkingLevel, intent) => {
           const key = modelKey(model);
-          const trial = state.reliabilityStore.tryClaimTrial(key);
-          debug("virtual", "trial", { model: key, allowed: trial.allowed, claimed: trial.claimed });
-          if (trial.claimed) ownedTrialKey = key;
-          // Sticky/degrade are documented continuity exceptions; only an
-          // explicit selection is fail-closed on trial contention.
-          if (!trial.allowed && dispatchTrialPolicy(intent) === "fail-closed") {
-            throw new Error(`Bifrost: half-open trial unavailable for ${key}`);
-          }
-          trackerFor(ctx).begin(key);
+          ownership.claim(key, intent, (trial) => debug("virtual", "trial", { model: key, allowed: trial.allowed, claimed: trial.claimed }));
           debug("virtual", "dispatch", { model: key, thinkingLevel });
         },
         onDispatchFailed: (model) => {
           const key = modelKey(model);
           debug("virtual", "dispatch.release", { model: key });
-          // Release only the claim this dispatch owns.
-          if (ownedTrialKey === key) {
-            state.reliabilityStore.abandonTrial(key);
-            ownedTrialKey = undefined;
-          }
-          trackerFor(ctx).release(key);
+          // Release only the bookkeeping this dispatch owns.
+          ownership.fail(key);
         },
         onDegrade: (model) => {
           const detail = routeFailure ? poolProblem(routeFailure.tier, routeFailure.pool, routeFailure.skipped) : "no configured model resolved";

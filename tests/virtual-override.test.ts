@@ -39,6 +39,13 @@ describe("virtual inline override handoff", () => {
     assert.equal(handoff.take("commit changes"), "quick");
   });
 
+  it("matches padded prepare text (both sides trimmed)", () => {
+    const overrides = new VirtualOverride();
+    overrides.prepare("quick", "  commit changes  ");
+    assert.equal(overrides.take("commit changes\n"), "quick");
+    assert.equal(overrides.take("commit changes"), undefined);
+  });
+
   it("clear() drops abandoned overrides", () => {
     const handoff = new VirtualOverride();
     handoff.prepare("quick", "commit changes");

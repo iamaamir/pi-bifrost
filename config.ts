@@ -184,9 +184,9 @@ const TYPESAFE_PROMPT_FIELDS = [
 
 /** True when no configured tier lists a model — nothing to route. */
 export function configHasNoPools(config: BifrostConfig): boolean {
-  return Object.values(config.models ?? {}).every((pool) =>
-    Array.isArray(pool) ? pool.every((entry) => entry.trim() === "") : pool.trim() === "",
-  );
+  // Unvalidated JSON: treat non-string entries as blank instead of throwing.
+  const blank = (entry: unknown): boolean => typeof entry !== "string" || entry.trim() === "";
+  return Object.values(config.models ?? {}).every((pool) => (Array.isArray(pool) ? pool.every(blank) : blank(pool)));
 }
 
 /**

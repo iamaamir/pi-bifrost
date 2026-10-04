@@ -4,9 +4,24 @@
 // The casts that remain (Model<Api>, ExtensionContext) are contained
 // here because those interfaces require fields the tests don't use.
 
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ClassifierModel } from "../classifier.ts";
+
+/** Build a typed failed assistant message for `ModelRouteRequest["failed"]` fixtures. */
+export function errorMessage(overrides: Partial<AssistantMessage> = {}): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [],
+    api: "openai-completions",
+    provider: "fixture",
+    model: "fixture/model",
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: "error",
+    timestamp: Date.now(),
+    ...overrides,
+  };
+}
 
 /**
  * Build a minimal OpenAI-compatible model for tests.

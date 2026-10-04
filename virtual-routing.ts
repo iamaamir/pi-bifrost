@@ -1,13 +1,13 @@
 import type { Api, Message, Model } from "@earendil-works/pi-ai";
 import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelRouteRequest, ModelRoute } from "@earendil-works/pi-coding-agent";
-import type { SkippedCandidate } from "./routing.ts";
+import type { RoutedModelResolution, SkippedCandidate } from "./routing.ts";
 import type { VirtualOverride } from "./virtual-override.ts";
 
 /** Which path dispatched the model — controls half-open trial strictness. */
 export type DispatchIntent = "select" | "sticky" | "degrade";
 
-const REASON_LABELS: Record<string, string> = {
+const REASON_LABELS: Record<RouteReasonCode, string> = {
   open_circuit: "open circuit",
   trial_active: "trial in progress",
   requested_tier_unhealthy: "tier unhealthy",
@@ -15,8 +15,10 @@ const REASON_LABELS: Record<string, string> = {
   all_tiers_exhausted: "all tiers exhausted",
 };
 
-function reasonLabel(reason: string): string {
-  return REASON_LABELS[reason] ?? reason;
+type RouteReasonCode = SkippedCandidate["reason"] | NonNullable<RoutedModelResolution["fallbackReason"]>;
+
+function reasonLabel(reason: RouteReasonCode): string {
+  return REASON_LABELS[reason];
 }
 
 /** Explains what to fix: empty pool, excluded-only pool, or unresolved pool. */
@@ -40,7 +42,7 @@ export function poolProblem(
 export function noModelError(
   tier: string,
   pool: string | string[] | undefined,
-  reason?: string,
+  reason?: RouteReasonCode,
   skipped?: readonly SkippedCandidate[],
 ): string {
   const suffix = reason ? ` (${reasonLabel(reason)})` : "";
