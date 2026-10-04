@@ -9,6 +9,7 @@
   },
   "classifier": {
     "enabled": true,
+    "backend": "prompt",
     "model": "ollama/qwen2.5-coder:latest",
     "method": "auto",
     "maxTokens": 20,

@@ -10,7 +10,7 @@ New to Bifrost? Start with [Install and initialize](getting-started.md). It expl
 2. [Choose adaptive, explicit-tier, or pinned control](routing-controls.md)
 3. [Configure tiers, model pools, strategies, and rules](configuration.md)
 4. [Understand provider prompt caching across model switches](prompt-caching.md)
-5. [Configure optional prompt or TypeSafe/Jev classifiers](classifiers.md)
+5. [Configure optional prompt, TypeSafe/Jev, or Pi-native classifiers](classifiers.md)
 6. [Troubleshoot setup and routing](troubleshooting.md)
 7. [Use the command reference](commands.md)
 8. [Understand reliability and Bifrost's local cache](reliability-and-cache.md)
@@ -38,7 +38,7 @@ Bifrost separates two decisions:
 - **Which tier fits this prompt?** A tier name in the message, the local classification cache, an optional classifier, a regex rule, or the configured default.
 - **Which model serves that tier?** User-owned model pool, reliability filtering, and configured strategy.
 
-Optional classifiers, including TypeSafe/Jev, choose a tier. They do not receive the provider model pool or choose the exact provider/model. Bifrost applies configured task-fit policy; it does not claim to identify one universally best model or guarantee savings.
+Optional classifiers, including TypeSafe/Jev and Pi-native, choose a tier. They do not receive the provider model pool or choose the exact provider/model. Bifrost applies configured task-fit policy; it does not claim to identify one universally best model or guarantee savings.
 
 ## Choose what to read
 

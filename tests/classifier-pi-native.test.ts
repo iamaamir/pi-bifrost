@@ -105,7 +105,8 @@ describe("pi-native classifier transport", () => {
     const path = join(dir, "trace.jsonl");
     setupDebug({ enabled: true, path }, dir);
     try {
-      const h = harness({ listed: [model()], results: [answer()] });
+      const error = { ...answer(), answers: {}, stopReason: "error", errorMessage: "insufficient_quota secret-token" } as unknown as ClassifierResult;
+      const h = harness({ listed: [model()], results: [error] });
       await createPiNativeClassifier({ registry: h.registry, debug: true })(request);
       let records: Array<{ module: string; event: string; model?: string }> = [];
       for (let i = 0; i < 100; i++) {
@@ -115,6 +116,7 @@ describe("pi-native classifier transport", () => {
       }
       const finish = records.find((entry) => entry.module === "pi-native" && entry.event === "finish");
       assert.equal(finish?.model, "typesafe/jev-latest");
+      assert.doesNotMatch(readFileSync(path, "utf8"), /secret-token/);
     } finally {
       setupDebug({ enabled: false, path }, dir);
       rmSync(dir, { recursive: true, force: true });

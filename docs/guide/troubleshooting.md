@@ -24,7 +24,7 @@ It shows effective routing and reliability state after configuration layers merg
 | Config edit has no effect | `/bifrost debug` | Higher-precedence config overrides it or config was not reloaded | Check all config locations; edit winning layer; run `/bifrost reload` |
 | Init probe result is stale | `/bifrost init -f` | Cached probe is older than one hour | Run `/bifrost init -f` to force a fresh probe |
 | Prompt classifier fails | `/bifrost classifier test`; `/bifrost classifier status` | Missing model, provider error, invalid response, or fallback configuration | Select a working classifier model or disable classifier for rules/default-only routing |
-| TypeSafe/Jev is unavailable | `/bifrost classifier status` | Missing TypeSafe credential, timeout, rate limit, or open classifier circuit | Configure credential; test backend; inspect safe status; use prompt/regex fallback |
+| TypeSafe/Jev or Pi-native is unavailable | `/bifrost classifier status`; `/bifrost classifier test` | Missing TypeSafe credential, empty Pi classifier catalog, timeout, rate limit, or open classifier circuit | Run `/login` or set `TYPESAFE_API_KEY`; inspect Pi's catalog and `enabledModels` filter; use prompt/regex fallback |
 | Tier prefix reaches model unchanged | `/bifrost debug` | Session is pinned, prefix is unknown, or tier key is unsupported syntax | Unpin; use a configured lowercase alphabetic single-word tier followed by whitespace |
 
 ## Lower probe pressure
@@ -54,7 +54,7 @@ Preview reports:
 - selected model;
 - reliability fallback reason when applicable.
 
-Preview does not start the generation turn or activate the selected model. It does run the normal tier pipeline. An enabled prompt or TypeSafe/Jev classifier may receive the preview prompt and incur classifier usage. Preview does not read a tier name from the prompt, so a forced tier cannot be previewed.
+Preview does not start the generation turn or activate the selected model. It does run the normal tier pipeline. An enabled prompt, TypeSafe/Jev, or Pi-native classifier can receive the preview prompt and incur classifier usage. Preview does not read a tier name from the prompt, so a forced tier cannot be previewed.
 
 For local-only preview, disable the classifier first:
 

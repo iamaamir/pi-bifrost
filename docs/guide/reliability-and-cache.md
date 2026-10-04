@@ -106,4 +106,4 @@ Default file:
 
 Normal Bifrost debug events record routing reason, selected tier/model, and timing—not raw prompt bodies.
 
-TypeSafe troubleshooting has additional explicit gates. See [Classifier backends](classifiers.md).
+Direct TypeSafe and Pi-native classifiers have separate reliability circuits. See [Classifier backends](classifiers.md).

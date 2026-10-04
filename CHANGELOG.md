@@ -5,11 +5,14 @@ All notable changes to pi-bifrost are documented here.
 ## [0.5.0] - UNRELEASED
 
 ### Added
+- `pi-native` classifier backend through Pi's `modelRegistry.classify()`. It uses Pi-managed TypeSafe credentials and a classifier model from Pi's catalog. Set `classifier.piNative.model` to `typesafe/jev-latest` or omit it to use the first available model.
+- `/bifrost classifier` now offers `prompt`, `typesafe`, and `pi-native`. Successful init prints the picker command; interactive init can open the picker after writing configuration.
 - `bifrost/auto` virtual model (Pi 1.0.1+): per-request dispatch through the existing tier, cache, reliability, and strategy policy. Select it in `/model`; Pi's footer shows `bifrost/auto → provider/model` and assistant messages record the physical model.
 - Inline tier overrides hand off from input-time prompt stripping to virtual routing without persisting prompt text.
 - Setup offer: selecting `bifrost/auto` with no configured pools asks once (TUI) whether to run `/bifrost init`, disclosing that init probes every available model; non-TUI keeps the actionable error. Init itself still confirms before writing config.
 
 ### Changed
+- When `classifier.backend` is absent, Bifrost now detects Pi-managed TypeSafe credentials first, then `TYPESAFE_API_KEY`, and otherwise uses `prompt`. This can change the classifier for existing configurations that omit the backend. Set `classifier.backend` explicitly to keep the old choice. Detection stays fixed for the extension session and prints its reason on first use.
 - Require Pi 1.0.1+ (`minPiVersion`), matching the virtual-model API.
 - Selecting `bifrost/auto` opts into per-prompt routing; selecting a physical model still pins. `/bifrost pin` and `/bifrost off` exit Auto and lock the last dispatched physical model.
 - Virtual entries (`api: pi-virtual`) are excluded from tier candidate pools; Bifrost never routes a virtual model to another virtual model.

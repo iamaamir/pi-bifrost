@@ -157,6 +157,12 @@ Try:
 
 Tradeoff: more categories to maintain, but routing matches task shape closely.
 
+### `classifier-pi-native.json`
+
+Use Pi's native classifier API with TypeSafe/Jev. Run `/login` in Pi or set `TYPESAFE_API_KEY` first. Replace the chat model placeholders in each tier. The example selects `typesafe/jev-latest` and falls back to regex rules if classification fails.
+
+Omit `classifier.piNative.model` to use the first available TypeSafe classifier model in Pi's catalog. Run `/bifrost classifier status` to see the selected backend.
+
 ### `advanced-classifier-prompt.json`
 
 Use when the built-in classifier prompt is too terse for your workflow and you want the LLM to route by task intent rather than isolated keywords.

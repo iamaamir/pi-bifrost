@@ -107,7 +107,7 @@ For a normal message with routing on and nothing pinned, routing considers:
 1. a tier name at the start of the message;
 2. a regex rule that names an exact `provider/id`;
 3. a matching entry in the local classification cache;
-4. the optional TypeSafe/Jev classifier;
+4. the optional direct classifier (`typesafe` or `pi-native`);
 5. the optional prompt classifier;
 6. other regex rules;
 7. the configured default tier.

@@ -1,0 +1,22 @@
+{
+  "$schema": "../schema.json",
+  "enabled": true,
+  "default": "general",
+  "models": {
+    "quick": ["provider/fast-chat-model"],
+    "general": ["provider/strong-chat-model"],
+    "frontier": ["provider/high-reasoning-chat-model"]
+  },
+  "classifier": {
+    "enabled": true,
+    "backend": "pi-native",
+    "piNative": { "model": "typesafe/jev-latest" },
+    "minConfidence": 0.8,
+    "fallback": "regex",
+    "criteria": {
+      "quick": "Bounded, reversible work",
+      "general": "Normal implementation and moderate reasoning",
+      "frontier": "Complex, ambiguous, or high-consequence work"
+    }
+  }
+}

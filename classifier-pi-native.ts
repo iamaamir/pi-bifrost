@@ -257,7 +257,7 @@ export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTr
 
       const message = result?.errorMessage;
       failure = errorOutcome(message);
-      trace("error", { attempt, stop_reason: result?.stopReason, message });
+      trace("error", { attempt, stop_reason: result?.stopReason, outcome: failure });
       if (NON_RETRYABLE_QUOTA.test(message ?? "")) {
         recordFailure("quota");
         return finish(failure);

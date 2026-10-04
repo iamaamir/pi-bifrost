@@ -17,7 +17,7 @@ Pi-Bifrost is a **configuration-first model-routing extension for [Pi](https://p
 - **Persistent reliability** — repeated model failures survive restart and affect future routing.
 - **No automatic replay** — Bifrost never silently repeats prompts that may have edited files or called tools.
 - **Inspectable control** — preview a route, name a tier directly, pin an exact model, or disable routing.
-- **Optional semantic classifiers** — prompt models and TypeSafe/Jev judge tiers; they never select the provider model.
+- **Optional semantic classifiers** — prompt, direct TypeSafe/Jev, and Pi-native classification judge tiers. They never select the provider model.
 
 ## Install
 
@@ -38,6 +38,8 @@ Inside Pi:
 ```text
 /bifrost init
 ```
+
+After init writes configuration, run `/bifrost classifier` to choose a backend. The Pi UI offers a picker. If you use `init --write`, init prints the same next step.
 
 Initialization reuses probe results newer than one hour or probes every model available through Pi, then proposes tier pools and writes only after confirmation. Pass `-f` to force a fresh probe regardless of cache age. The primary probe transport uses `1+1=` with at most 5 output tokens; empty responses may trigger a minimal-session fallback. Provider usage or rate limits may apply. See [Install and initialize](docs/guide/getting-started.md) before running init.
 
@@ -147,7 +149,7 @@ Detailed reference now lives in versioned guides committed with code:
 - [Tier pools, strategies, rules, and direct bindings](docs/guide/configuration.md)
 - [Provider prompt caching across A → B → A and N model switches](docs/guide/prompt-caching.md)
 - [Reliability and Bifrost's local classification cache](docs/guide/reliability-and-cache.md)
-- [Prompt and TypeSafe/Jev classifiers](docs/guide/classifiers.md)
+- [Prompt, TypeSafe/Jev, and Pi-native classifiers](docs/guide/classifiers.md)
 - [Troubleshooting setup and routing](docs/guide/troubleshooting.md)
 - [Command reference](docs/guide/commands.md)
 - [Configuration examples](examples/README.md)
@@ -173,9 +175,11 @@ Bifrost's local classification cache stores normalized prompt terms and selected
 
 Reliability circuits guard observed model health, not authoritative provider quota. Remove quota-sensitive models from broad adaptive tiers or isolate them behind deliberate policy.
 
-## Optional TypeSafe/Jev classifier
+## Optional classifiers
 
-TypeSafe/Jev is explicit opt-in. Jev returns one configured tier, probabilities, and confidence. Bifrost still owns model pools, reliability filtering, fallback, selection strategy, and Pi model activation.
+Set `classifier.backend` to `prompt`, `typesafe`, or `pi-native` to keep a fixed choice. If you omit it, Bifrost detects Pi-managed TypeSafe credentials first, then `TYPESAFE_API_KEY`; otherwise it uses prompt classification. The first routed request prints the detected backend and reason. Run `/bifrost classifier` to change it.
+
+Pi-native classification uses Pi's `classify()` API and a classifier model from Pi's catalog. Run `/login` in Pi or set `TYPESAFE_API_KEY` before using it. You can set `classifier.piNative.model` to `typesafe/jev-latest`, or omit it to use the first available TypeSafe classifier model. Direct TypeSafe uses Bifrost's own transport. Both backends return one configured tier, probabilities, and confidence. Bifrost still owns model pools, reliability filtering, fallback, selection strategy, and Pi model activation.
 
 Confidence is a routing signal, not proof of correctness. Exploratory evaluation found consistent judgments for clear prompts, but also high-confidence misses when mechanically small tasks had serious consequences. Keep fallback enabled and validate tier criteria against your workload.
 
