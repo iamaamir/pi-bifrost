@@ -72,6 +72,9 @@ These stay parked until the listed dependency is resolved.
 ### Reliability v2 — safe request retry
 Re-sending a prompt after a provider failure risks duplicating work (output may have streamed, tools may have fired). Blocked on Pi extension hooks for pre-output error interception and turn replay. Until then, fail-fast + record + circuit-open. **Effort:** Research first.
 
+### Classifier-type models must stay out of tier pools
+**Note only (2026-10-04).** A System One model is a classifier only, and it cannot serve a coding turn. Exclude by model type and not by provider name. One `type: "classifier"` predicate guards three surfaces: the candidate match in `routing.ts` (the `isVirtualModel` filter sites), the probe list in `probe.ts` (`getAvailable()`), and the config that `init` generates. The phase-5 detection engine raises this exposure, because the `auth-file` path is exactly the user who set up the TypeSafe provider. **Waiting on:** one live proof of whether `ctx.modelRegistry.getAvailable()` returns classifier-typed entries (its type surface reads `Model<Api>[]`). **Effort:** Low (one predicate).
+
 ### PTY test harness evolution
 `agent-tui` POC passed startup/dashboard/preview scenarios; existing Python smoke remains the gate. Promotion blocked on pinning `agent-tui` install and deterministic Pi behavior in CI. See [`docs/agent-tui-evaluation.md`](docs/agent-tui-evaluation.md). **Effort:** Medium.
 
