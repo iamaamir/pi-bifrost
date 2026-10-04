@@ -16,6 +16,8 @@ Set `classifier.backend` to `prompt`, `typesafe`, or `pi-native` for a fixed cho
 
 An explicit backend always wins. Detection stays fixed until the extension restarts, even after `/bifrost reload`. On first use, Bifrost prints the detected backend and reason. `/bifrost classifier status` and `/bifrost classifier test` show `auto: <backend> (<reason>)` when detection supplies the choice. Users upgrading with no explicit backend can switch from prompt to a direct backend. Set `"backend": "prompt"` to keep prompt classification.
 
+If the auto-detected direct backend's settings are invalid (for example a missing criterion for a custom tier), Bifrost prints the config errors and falls back to prompt classification when `fallback` is not `regex`. An explicit `classifier.backend` fails closed instead.
+
 ## Prompt classifier
 
 The prompt backend asks a configured Pi model to return one tier name. In `.pi/bifrost.json`:

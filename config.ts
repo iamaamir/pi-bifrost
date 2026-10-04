@@ -196,8 +196,7 @@ export function configHasNoPools(config: BifrostConfig): boolean {
   return Object.values(config.models ?? {}).every((pool) => (Array.isArray(pool) ? pool.every(blank) : blank(pool)));
 }
 
-/** True when any config error belongs to the classifier family. Every classifier validation message contains the word "classifier". */
-export function hasClassifierConfigErrors(config: BifrostConfig, effectiveBackend?: ClassifierBackend): boolean {
+export function classifierConfigErrors(config: BifrostConfig, effectiveBackend?: ClassifierBackend): string[] {
   let checked = config;
   if (effectiveBackend && config.classifier?.backend === undefined) {
     // Auto-detection chooses the direct transport after layers merge. Retain
@@ -209,7 +208,13 @@ export function hasClassifierConfigErrors(config: BifrostConfig, effectiveBacken
     }
     checked = { ...config, classifier: classifier as ClassifierConfig };
   }
-  return validateConfig(checked).some((issue) => issue.severity === "error" && /classifier/i.test(issue.message));
+  return validateConfig(checked)
+    .filter((issue) => issue.severity === "error" && /classifier/i.test(issue.message))
+    .map((issue) => issue.message);
+}
+
+export function hasClassifierConfigErrors(config: BifrostConfig, effectiveBackend?: ClassifierBackend): boolean {
+  return classifierConfigErrors(config, effectiveBackend).length > 0;
 }
 
 /**

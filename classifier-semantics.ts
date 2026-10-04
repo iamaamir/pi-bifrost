@@ -65,6 +65,37 @@ function stableValue(value: unknown): unknown {
   return value;
 }
 
+export interface DirectStagePlan {
+  readonly useDirect: boolean;
+  readonly usePromptFallback: boolean;
+  readonly directDegraded: boolean;
+}
+
+/**
+ * Stage wiring for the direct transports. An auto-detected direct backend
+ * degrades to prompt classification when its config is invalid (preserving
+ * pre-detection behavior); an explicit backend fails closed with the config
+ * errors printed at startup.
+ */
+export function directStagePlan(input: {
+  readonly backend: ClassifierBackend;
+  readonly auto: boolean;
+  readonly classifierEnabled: boolean;
+  readonly tierCount: number;
+  readonly directConfigOk: boolean;
+  readonly fallback: "prompt" | "regex" | undefined;
+}): DirectStagePlan {
+  const isDirect = input.backend === CLASSIFIER_BACKEND_IDS.typesafe
+    || input.backend === CLASSIFIER_BACKEND_IDS.piNative;
+  const stagesEnabled = input.classifierEnabled && input.tierCount > 0;
+  const useDirect = stagesEnabled && isDirect && input.directConfigOk;
+  const directDegraded = isDirect && input.auto && !input.directConfigOk;
+  const usePromptFallback = stagesEnabled
+    && (input.backend === CLASSIFIER_BACKEND_IDS.prompt
+      || (isDirect && input.fallback !== "regex" && (input.directConfigOk || input.auto)));
+  return { useDirect, usePromptFallback, directDegraded };
+}
+
 /** A floating Pi catalog model has no stable fingerprint before lookup. Do not read or write fuzzy decisions for it. */
 export function classifierCacheEnabled(config: BifrostConfig, effectiveBackend: ClassifierBackend): boolean {
   return (config.cache?.enabled ?? true)

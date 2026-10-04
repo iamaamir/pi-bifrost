@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { fileURLToPath } from "node:url";
 import { classifyWithLLM as invokeClassifier, type ClassifierModel } from "./classifier.ts";
-import { classifierCacheEnabled, classifierCacheKey, boundedClassifierPrompt } from "./classifier-semantics.ts";
+import { classifierCacheEnabled, classifierCacheKey, boundedClassifierPrompt, directStagePlan } from "./classifier-semantics.ts";
 import { ClassifierMetricsStore, classifierMetricsEnabled } from "./classifier-metrics.ts";
 import {
   createPipeline,
@@ -29,6 +29,7 @@ import {
   DEFAULT_CLASSIFIER_CRITERIA,
   validateConfig,
   hasClassifierConfigErrors,
+  classifierConfigErrors,
   type BifrostConfig,
 } from "./config.ts";
 import {
@@ -48,10 +49,10 @@ import { BIFROST_AUTO_ID, BIFROST_AUTO_PROVIDER, isBifrostAuto, isVirtualModel }
 import { createDispatchOwnership, RuntimeReliabilityTracker } from "./runtime-reliability.ts";
 import { VirtualOverride } from "./virtual-override.ts";
 import { createVirtualRoute, noModelError, poolProblem } from "./virtual-routing.ts";
-import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, type ClassifierBackend } from "./classifier-backends.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV } from "./classifier-backends.ts";
 import { createTypeSafeClassifier, resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
 import { createPiNativeClassifier } from "./classifier-pi-native.ts";
-import { collectDetectionFacts, createDetectionEngine, createDetectionNoticeGate, effectiveBackendOf, piNativeCredentialMissing, selectEffectiveBackend } from "./classifier-detection.ts";
+import { collectDetectionFacts, createDetectionEngine, createDetectionNoticeGate, effectiveBackendOf, piNativeCredentialMissing, selectEffectiveBackend, type EffectiveBackend } from "./classifier-detection.ts";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import {
   REGISTRY_REFRESH_TTL_MS,
@@ -104,11 +105,11 @@ function buildPipeline(
   reliabilityStore: ReliabilityStore,
   classifierMetricsStore: ClassifierMetricsStore,
   cacheSemanticKey: string,
-  effectiveBackend: ClassifierBackend,
+  effective: EffectiveBackend,
 ): ClassificationPipeline {
   const tiers = Object.keys(config.models ?? {});
   const cacheCfg = config.cache;
-  const cacheEnabled = classifierCacheEnabled(config, effectiveBackend);
+  const cacheEnabled = classifierCacheEnabled(config, effective.backend);
   const threshold = cacheCfg?.threshold ?? DEFAULT_THRESHOLD;
   const cacheMaxAgeMs = (cacheCfg?.ttlHours ?? DEFAULT_TTL_HOURS) * 60 * 60 * 1000;
 
@@ -116,9 +117,22 @@ function buildPipeline(
   // If classifier is disabled, pass empty array — pipeline skips LLM stage.
   let classifierModels: ClassifierModel[] = [];
   let classifyDirect: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<ClassificationJudgment | undefined>) | undefined;
-  const typeSafeUsable = effectiveBackend === CLASSIFIER_BACKEND_IDS.typesafe && !hasClassifierConfigErrors(config, effectiveBackend);
-  const piNativeUsable = effectiveBackend === CLASSIFIER_BACKEND_IDS.piNative && !hasClassifierConfigErrors(config, effectiveBackend);
-  if (classifierEnabled && typeSafeUsable && tiers.length > 0) {
+  const directConfigOk = !hasClassifierConfigErrors(config, effective.backend);
+  const plan = directStagePlan({
+    backend: effective.backend,
+    auto: effective.auto,
+    classifierEnabled,
+    tierCount: tiers.length,
+    directConfigOk,
+    fallback: config.classifier?.fallback,
+  });
+  if (plan.directDegraded) {
+    for (const message of classifierConfigErrors(config, effective.backend)) {
+      console.error(`[bifrost/config] error: ${message}`);
+    }
+    console.error(`[bifrost/config] auto backend ${effective.backend} is unusable; ${plan.usePromptFallback ? "using prompt classifier fallback" : "regex/default fallback only"}. Fix the errors above or pin classifier.backend.`);
+  }
+  if (plan.useDirect && effective.backend === CLASSIFIER_BACKEND_IDS.typesafe) {
     const classifierConfig = config.classifier!;
     const classify = createTypeSafeClassifier({
       timeoutMs: classifierConfig.typesafe?.timeoutMs,
@@ -133,7 +147,7 @@ function buildPipeline(
       return judgment;
     };
   }
-  if (classifierEnabled && piNativeUsable && tiers.length > 0) {
+  if (plan.useDirect && effective.backend === CLASSIFIER_BACKEND_IDS.piNative) {
     const classify = createPiNativeClassifier({
       registry: ctx.modelRegistry,
       model: config.classifier?.piNative?.model,
@@ -153,11 +167,7 @@ function buildPipeline(
       return judgment;
     };
   }
-  const usePromptClassifier = classifierEnabled && tiers.length > 0 && (
-    effectiveBackend === CLASSIFIER_BACKEND_IDS.prompt ||
-    (typeSafeUsable && config.classifier?.fallback !== "regex") ||
-    (piNativeUsable && config.classifier?.fallback !== "regex")
-  );
+  const usePromptClassifier = plan.usePromptFallback;
   if (usePromptClassifier) {
     const classifierEndpoint = config.classifier?.endpoint;
     if (classifierEndpoint) {
@@ -289,7 +299,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         reliabilityStore,
         classifierMetricsStore,
         activeClassifierCacheKey(state.config, detectionEngine),
-        effective.backend,
+        effective,
       );
     }
     return pipeline;
