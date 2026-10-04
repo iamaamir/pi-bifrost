@@ -188,7 +188,11 @@ cd /Users/mak/git/pi-bifrost/.worktrees/command-registry
 HOME=/tmp/regchk pi -e index.ts --approve --no-session --print -p "/bifrost preview direct hit" 2>&1 | grep -c "bifrost-json"
 ```
 
-Expected: `1`. (Confirms the extension still loads and dispatches after the registry edit; `init -f` dispatch is covered by Task 5's test.)
+Expected: `1`. (Confirms the extension still loads and dispatches after the registry edit.)
+
+> **Corrected during execution.** Two defects in this step were found by the implementer and spec reviewer, and both are recorded here so the plan matches reality:
+> 1. `bifrost-json` never appears on this branch — it is printed only by PR #19's `preview --json`, which is not merged here. Use any command that emits a known string instead.
+> 2. `init -f` **dispatch** was promised here and in Task 2 and Task 5, but none of those tasks contained the test. Task 1 now owns it: `dispatches init -f to init rather than the unknown-subcommand picker`, which asserts `init -f` reaches `handleInit` instead of opening the picker. It needed a `reliabilityStore.applyOutcomes` stub because `makeStore` does not define it.
 
 - [ ] **Step 9: Commit**
 
