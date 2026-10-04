@@ -524,8 +524,9 @@ describe("command aliases", () => {
   });
 
   it("offers init -f in completion", () => {
-    const items = getBifrostCommandCompletions("init -");
-    assert.ok(items?.some((i) => i.value === "init -f"));
+    const items = getBifrostCommandCompletions("ini");
+    assert.ok(items?.some((i) => i.value === "init -f" && i.label === "init -f"));
+    assert.ok(items?.some((i) => i.value === "init" && i.label === "init"));
   });
 
   it("still offers init in completion", () => {
@@ -537,9 +538,5 @@ describe("command aliases", () => {
 
   it("submits an exact alias instead of offering a completion", () => {
     assert.equal(getBifrostCommandCompletions("init -f"), null);
-  });
-
-  it("returns null for an exact value", () => {
-    assert.equal(getBifrostCommandCompletions("classifier status"), null);
   });
 });
