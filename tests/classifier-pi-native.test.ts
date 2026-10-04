@@ -219,6 +219,42 @@ describe("pi-native classifier transport", () => {
     }
   });
 
+  it("reopens a real half-open circuit on terminal non-auth errors", async () => {
+    for (const message of ["400 Bad Request", "unexpected provider failure"]) {
+      let now = 1_000;
+      let persisted: ReliabilityState = emptyReliabilityState();
+      const io: ReliabilityIo = { load: () => persisted, save: (_path, state) => { persisted = state; } };
+      const reliability = new ReliabilityStore({
+        cwd: "/tmp", config: { enabled: true, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 1 },
+        io, now: () => now,
+      });
+      const key = "classifier/pi-native/typesafe/jev-latest";
+      reliability.recordFailure(key, "classifier", "prior failure");
+      now += 61_000;
+      assert.equal(reliability.getCircuitState(key).halfOpen, true);
+      const error = { ...answer(), answers: {}, stopReason: "error", errorMessage: message } as ClassifierResult;
+      const h = harness({ listed: [model()], results: [error] });
+      const classify = createPiNativeClassifier({ registry: h.registry, maxAttempts: 3, reliability });
+      assert.equal(await classify(request), undefined);
+      assert.equal(reliability.getState().models[key]?.lastFailureReason, "http", message);
+      assert.equal(reliability.getState().models[key]?.trialActive, false, message);
+      assert.equal(reliability.getCircuitState(key).open, true, message);
+      assert.equal(await classify(request), undefined);
+      assert.equal(h.calls(), 1, message);
+      assert.equal(persisted.models[key]?.lastFailureReason, "http", message);
+    }
+  });
+
+  it("does not retry permanent free-tier or subscription limits even with HTTP 429", async () => {
+    for (const message of ["429 FreeUsageLimitError", "429 GoUsageLimitError", "429 subscription_sharing_usage_limit_exceeded"]) {
+      const error = { ...answer(), answers: {}, stopReason: "error", errorMessage: message } as ClassifierResult;
+      const h = harness({ listed: [model()], results: [error] });
+      const classify = createPiNativeClassifier({ registry: h.registry, maxAttempts: 3, sleepImpl: async () => {} });
+      assert.equal(await classify(request), undefined);
+      assert.equal(h.calls(), 1, message);
+    }
+  });
+
   it("does not retry a non-retryable quota error", async () => {
     const error = { ...answer(), answers: {}, stopReason: "error", errorMessage: "insufficient_quota: buy more" } as unknown as ClassifierResult;
     const h = harness({ listed: [model()], results: [error] });
@@ -265,6 +301,7 @@ describe("pi-native classifier transport", () => {
     const registry: PiClassifierRegistry = {
       ...h.registry,
       classify: async (_model, _context, options) => new Promise((resolve) => {
+        assert.equal(reliability.getState().models[key]?.trialActive, true);
         options?.signal?.addEventListener("abort", () => resolve({ ...answer(), stopReason: "aborted" } as ClassifierResult), { once: true });
       }),
     };

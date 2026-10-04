@@ -1,9 +1,17 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import type { ClassifierApi, ClassifierModel, ClassifierResult } from "@earendil-works/pi-ai";
-import { makeCtx, makeModel } from "./helpers.ts";
+import { makeCtx, makeModel, makePiClassifierModel } from "./helpers.ts";
 
 describe("fake registry classifier seam", () => {
+  it("hides unavailable classifier entries from the credentialed catalog", async () => {
+    const available = makePiClassifierModel("typesafe", "jev-latest");
+    const unavailable = makePiClassifierModel("typesafe", "jev-private");
+    const ctx = makeCtx([], { classifierModels: [available, unavailable], availableClassifierModels: [available] });
+    assert.deepEqual(ctx.modelRegistry.getModelsOfType("classifier", "typesafe"), [available, unavailable]);
+    assert.deepEqual(await ctx.modelRegistry.getAvailableOfType("classifier", "typesafe"), [available]);
+  });
+
   it("separates chat models from classifier catalog and exposes auth and classify", async () => {
     const classifier = {
       type: "classifier", provider: "typesafe", id: "jev-latest", api: "systemone",

@@ -49,20 +49,37 @@ export function makeModel(
   };
 }
 
+export function makePiClassifierModel(provider: string, id: string): PiClassifierModel<ClassifierApi> {
+  return {
+    type: "classifier",
+    provider,
+    id,
+    name: id,
+    api: "systemone",
+    baseUrl: "http://localhost:1234/v1",
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128000,
+  };
+}
+
 export interface FakeRegistryOptions {
   readonly classifierModels?: readonly PiClassifierModel<ClassifierApi>[];
+  readonly availableClassifierModels?: readonly PiClassifierModel<ClassifierApi>[];
   readonly authSource?: string;
   readonly classify?: (model: PiClassifierModel<ClassifierApi>, context: ClassifierContext) => ClassifierResult;
 }
 
 export function makeRegistry(models: Model<Api>[], options: FakeRegistryOptions = {}) {
   const classifiers = options.classifierModels ?? [];
+  const available = options.availableClassifierModels ?? classifiers;
   const ofType = (provider?: string) => classifiers.filter((model) => !provider || model.provider === provider);
   return {
     find: (provider: string, id: string) => models.find((model) => model.provider === provider && model.id === id),
     getAvailable: () => models,
     getModelsOfType: (_type: "classifier", provider?: string) => ofType(provider),
-    getAvailableOfType: async (_type: "classifier", provider?: string) => ofType(provider),
+    getAvailableOfType: async (_type: "classifier", provider?: string) =>
+      available.filter((model) => !provider || model.provider === provider),
     getModelOfType: (_type: "classifier", provider: string, id: string) => ofType(provider).find((model) => model.id === id),
     findOfType: (_type: "classifier", provider: string, id: string) => ofType(provider).find((model) => model.id === id),
     getProviderAuthStatus: (_provider: string) => ({ configured: options.authSource !== undefined, source: options.authSource }),

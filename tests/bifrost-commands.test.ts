@@ -4,11 +4,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildClassifierTestReport, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, runBifrostCommand } from "../commands.ts";
+import { makePiClassifierModel, makeRegistry } from "./helpers.ts";
 
 function makeCtx(
   models: Array<{ provider: string; id: string }> = [],
   selectOverride?: (title: string, options: string[]) => string | undefined,
   customOverride?: () => Promise<unknown>,
+  registryOverride?: Pick<ReturnType<typeof makeRegistry>, "getAvailableOfType">,
 ) {
   const calls: Array<{ kind: string; value?: unknown; title?: string; options?: string[]; lines?: string[] }> = [];
   const ctx = {
@@ -62,6 +64,7 @@ function makeCtx(
     },
     modelRegistry: {
       getAvailable: () => models,
+      ...registryOverride,
     },
     scopedModels: [],
   };
@@ -390,17 +393,21 @@ describe("bifrost command ui", () => {
     const previousCwd = process.cwd();
     process.chdir(tempDir);
     try {
+      const available = makePiClassifierModel("typesafe", "jev-latest");
+      const unavailable = makePiClassifierModel("typesafe", "jev-private");
+      const registry = makeRegistry([], {
+        classifierModels: [available, unavailable], availableClassifierModels: [available],
+      });
       const { ctx, calls } = makeCtx([], (title, options) => title === "Classifier backend"
         ? options.find((item) => item.startsWith("pi-native"))
-        : options.find((item) => item === "typesafe/jev-latest"));
-      (ctx as any).modelRegistry.getAvailableOfType = async () => [{ provider: "typesafe", id: "jev-latest" }];
+        : options.find((item) => item === "typesafe/jev-latest"), undefined, registry);
       const state = makeState();
       await createCommandRouter(state as never)("classifier", ctx as never);
       const saved = JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8"));
       assert.equal(saved.classifier.backend, "pi-native");
       assert.equal(saved.classifier.piNative.model, "typesafe/jev-latest");
       assert(calls.some((call) => call.kind === "select" && call.title === "Pi native classifier model"
-        && call.options?.includes("typesafe/jev-latest")));
+        && call.options?.includes("typesafe/jev-latest") && !call.options?.includes("typesafe/jev-private")));
     } finally {
       process.chdir(previousCwd);
       rmSync(tempDir, { recursive: true, force: true });

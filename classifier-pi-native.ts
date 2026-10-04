@@ -72,7 +72,6 @@ async function resolveClassifierModel(options: PiNativeOptions, signal: AbortSig
 }
 
 function abortableResult<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(signal.reason);
   return new Promise((resolve, reject) => {
     const abort = () => {
       signal.removeEventListener("abort", abort);
@@ -83,6 +82,8 @@ function abortableResult<T>(promise: Promise<T>, signal: AbortSignal): Promise<T
       (value) => { signal.removeEventListener("abort", abort); resolve(value); },
       (error) => { signal.removeEventListener("abort", abort); reject(error); },
     );
+    // Always attach rejection handling, even if the registry aborted synchronously.
+    if (signal.aborted) abort();
   });
 }
 
@@ -105,7 +106,7 @@ function buildContext(request: ClassifierRequest): ClassifierContext {
  * Pi exposes only errorMessage, not structured HTTP status or headers.
  * Recognize transient errors conservatively; unknown errors stop, not retry.
  */
-const NON_RETRYABLE_QUOTA = /insufficient[_ ]quota|out of budget|quota exceeded|billing|monthly usage limit|available balance/i;
+const NON_RETRYABLE_QUOTA = /insufficient[_ ]quota|out of budget|quota exceeded|billing|monthly usage limit|available balance|GoUsageLimitError|FreeUsageLimitError|subscription_sharing_usage_limit_exceeded/i;
 const AUTH_ERROR = /\b(?:401|403)\b|unauthorized|forbidden|invalid[_ -]?(?:api[_ -]?)?key|authentication|login required/i;
 const RATE_LIMIT = /\b(?:429|529)\b|rate.?limit/i;
 const TERMINAL_HTTP = /\b4\d\d\b|bad request|invalid[_ -]?request|validation failed/i;
@@ -226,9 +227,8 @@ export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTr
       }
       resolvedModelId = resolved.id;
       key = `classifier/${CLASSIFIER_BACKEND_IDS.piNative}/${resolved.id}`;
-      const now = Date.now();
       if (options.reliability) {
-        const claim = options.reliability.tryClaimTrial(key, now);
+        const claim = options.reliability.tryClaimTrial(key);
         if (!claim.allowed) {
           trace("circuit_open");
           return finish("circuit_open");
@@ -297,10 +297,12 @@ export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTr
         failure = policy.outcome;
         trace("error", { attempt, stop_reason: result?.stopReason, outcome: failure, retryable: policy.retry });
         if (!policy.retry) {
-          if (policy.quota) recordFailure("quota");
-          else if (trialClaimed) {
-            options.reliability?.abandonTrial(key);
+          if (failure === "auth") {
+            // New credentials can make the next attempt succeed; do not poison a circuit.
+            if (trialClaimed) options.reliability?.abandonTrial(key);
             trialClaimed = false;
+          } else {
+            recordFailure(policy.quota ? "quota" : failure);
           }
           return finish(failure);
         }
