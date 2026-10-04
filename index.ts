@@ -3,7 +3,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { fileURLToPath } from "node:url";
 import { classifyWithLLM as invokeClassifier, type ClassifierModel } from "./classifier.ts";
 import { classifierCacheKey, boundedClassifierPrompt } from "./classifier-semantics.ts";
-import { ClassifierMetricsStore } from "./classifier-metrics.ts";
+import { ClassifierMetricsStore, classifierMetricsEnabled } from "./classifier-metrics.ts";
 import {
   createPipeline,
   type ClassificationPipeline,
@@ -51,7 +51,7 @@ import { createVirtualRoute, noModelError, poolProblem } from "./virtual-routing
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, type ClassifierBackend } from "./classifier-backends.ts";
 import { createTypeSafeClassifier, resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
 import { createPiNativeClassifier } from "./classifier-pi-native.ts";
-import { collectDetectionFacts, createDetectionEngine, selectEffectiveBackend, type DetectionFacts } from "./classifier-detection.ts";
+import { collectDetectionFacts, createDetectionEngine, effectiveBackendOf, selectEffectiveBackend } from "./classifier-detection.ts";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import {
   REGISTRY_REFRESH_TTL_MS,
@@ -88,15 +88,8 @@ function endpointClassifier(id: string, endpoint: string): ClassifierModel {
   return { kind: "endpoint", id, baseUrl: endpoint };
 }
 
-const detectionEngine = createDetectionEngine();
-
-/** Facts readable without a request context (auth.json + environment). */
-function collectContextFreeFacts(): DetectionFacts {
-  return collectDetectionFacts({ readStoredCredential, env: process.env });
-}
-
-function activeClassifierCacheKey(config: BifrostConfig): string {
-  const effective = selectEffectiveBackend(config.classifier?.backend, detectionEngine.detect(collectContextFreeFacts));
+function activeClassifierCacheKey(config: BifrostConfig, detectionEngine: ReturnType<typeof createDetectionEngine>): string {
+  const effective = effectiveBackendOf(config, detectionEngine);
   return classifierCacheKey(config, Object.keys(config.models ?? {}), {
     typesafeCredentialAvailable: resolveTypeSafeApiKey().source !== "missing",
     effectiveBackend: effective.backend,
@@ -216,6 +209,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   }
 
   const config = bootConfig;
+  const detectionEngine = createDetectionEngine();
 
   // Validate config on startup. Errors are logged; the extension
   // continues with best-effort routing for warnings.
@@ -232,7 +226,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   const reliabilityStore = new ReliabilityStore({ cwd: process.cwd(), config: config.reliability });
   const classifierMetricsStore = new ClassifierMetricsStore({
     cwd: process.cwd(),
-    enabled: config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && (config.classifier.typesafe?.metrics?.enabled ?? true),
+    enabled: classifierMetricsEnabled(config, effectiveBackendOf(config, detectionEngine).backend),
   });
   const runtimeStateFile = runtimeStatePath(process.cwd());
   const runtimeState = loadRuntimeState(runtimeStateFile, {
@@ -276,6 +270,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         env: process.env,
       }));
       const effective = selectEffectiveBackend(state.config.classifier?.backend, detected);
+      classifierMetricsStore.setEnabled(classifierMetricsEnabled(state.config, effective.backend));
       if (effective.auto) {
         state.classifierDetection = { backend: effective.backend, reason: effective.reason };
         if (!detectionNoticeShown) {
@@ -291,7 +286,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         state.classifierEnabled,
         reliabilityStore,
         classifierMetricsStore,
-        activeClassifierCacheKey(state.config),
+        activeClassifierCacheKey(state.config, detectionEngine),
         effective.backend,
       );
     }
@@ -313,6 +308,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     reliabilityStore,
     classifierMetricsStore,
     extensionDir,
+    effectiveClassifierBackend: (config) => effectiveBackendOf(config, detectionEngine).backend,
     getPipeline,
     invalidatePipeline,
     saveModeState: () => saveRuntimeState(runtimeStateFile, {
@@ -347,7 +343,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     try {
       if (result.kind !== "classified" || result.source !== "classifier" || state.config.cache?.enabled === false) return;
       const maxEntries = state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES;
-      state.cacheEntries = updateCache(state.cacheEntries, prompt, result.tier, maxEntries, activeClassifierCacheKey(state.config));
+      state.cacheEntries = updateCache(state.cacheEntries, prompt, result.tier, maxEntries, activeClassifierCacheKey(state.config, detectionEngine));
       saveCache(cachePath(process.cwd(), state.config.cache?.path), state.cacheEntries);
       invalidatePipeline();
     } catch (error) {
@@ -724,7 +720,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         const maxEntries = state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES;
         if (state.config.cache?.enabled ?? true) {
           const endCacheSave = debugMeasure("input", "cacheSave");
-          state.cacheEntries = updateCache(state.cacheEntries, promptText, tier, maxEntries, activeClassifierCacheKey(state.config));
+          state.cacheEntries = updateCache(state.cacheEntries, promptText, tier, maxEntries, activeClassifierCacheKey(state.config, detectionEngine));
           saveCache(cachePath(process.cwd(), state.config.cache?.path), state.cacheEntries);
           invalidatePipeline();
           endCacheSave({ entries: state.cacheEntries.length });

@@ -1,4 +1,6 @@
 import { resolveStoragePath, readJsonFile, writeJsonFile } from "./storage.ts";
+import { CLASSIFIER_BACKEND_IDS, type ClassifierBackend } from "./classifier-backends.ts";
+import type { BifrostConfig } from "./config.ts";
 
 export type TypeSafeOutcome =
   | "success"
@@ -21,9 +23,16 @@ export interface TypeSafeObservation {
   readonly confidence?: number;
 }
 
+/** Metrics record only for direct backends (typesafe, pi-native), per their nested metrics.enabled. */
+export function classifierMetricsEnabled(config: BifrostConfig, effectiveBackend: ClassifierBackend | undefined): boolean {
+  if (effectiveBackend === CLASSIFIER_BACKEND_IDS.typesafe) return config.classifier?.typesafe?.metrics?.enabled ?? true;
+  if (effectiveBackend === CLASSIFIER_BACKEND_IDS.piNative) return config.classifier?.piNative?.metrics?.enabled ?? true;
+  return false;
+}
+
 export interface ClassifierMetricsState {
   readonly version: 1;
-  readonly model: "jev-1.13.0";
+  readonly model: string;
   readonly total: number;
   readonly outcomes: Readonly<Record<string, number>>;
   readonly tiers: Readonly<Record<string, number>>;
@@ -160,6 +169,22 @@ export class ClassifierMetricsStore {
       this.io.save(this.path, this.state);
     } catch (error) {
       console.error(`[bifrost] failed to save classifier metrics: ${error}`);
+    }
+  }
+
+  /** Flip enablement without a file path round-trip. Disabling resets to empty, like reload. */
+  setEnabled(enabled: boolean): void {
+    if (this.enabled === enabled) return;
+    this.enabled = enabled;
+    if (!enabled) {
+      this.state = emptyState();
+      return;
+    }
+    try {
+      this.state = normalizeState(this.io.load(this.path));
+    } catch (error) {
+      console.error(`[bifrost] failed to load classifier metrics: ${error}`);
+      this.state = emptyState();
     }
   }
 

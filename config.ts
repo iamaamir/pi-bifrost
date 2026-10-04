@@ -180,7 +180,7 @@ export interface ConfigIssue {
   readonly message: string;
 }
 
-const PROMPT_ONLY_FIELDS = [
+export const PROMPT_ONLY_FIELDS = [
   "endpoint",
   "method",
   "systemPrompt",

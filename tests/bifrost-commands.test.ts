@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildClassifierTestReport, createCommandRouter, getBifrostCommandCompletions, log, runBifrostCommand } from "../commands.ts";
+import { buildClassifierTestReport, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, runBifrostCommand } from "../commands.ts";
 
 function makeCtx(
   models: Array<{ provider: string; id: string }> = [],
@@ -93,11 +93,41 @@ function makeState(saveModeState: () => void = () => {}) {
       reload: () => {},
     },
     extensionDir: ".",
+    effectiveClassifierBackend: () => "prompt" as const,
     getPipeline: () => ({ classify: async () => ({ kind: "unclassified" as const }) }),
     invalidatePipeline: () => {},
     saveModeState,
   };
 }
+
+describe("classifier chooser config", () => {
+  it("sets pi-native model and removes prompt-only settings without losing fallback model", () => {
+    const next = nextClassifierConfig({
+      model: "chat/fallback", endpoint: "https://old", method: "auto", systemPrompt: "old",
+      maxTokens: 12, temperature: 0, fallbackToRegex: true, piNative: { timeoutMs: 500 },
+    }, { backend: "pi-native", piNativeModel: "typesafe/jev-latest" });
+    assert.equal(next.backend, "pi-native");
+    assert.deepEqual(next.piNative, { timeoutMs: 500, model: "typesafe/jev-latest" });
+    assert.equal(next.model, "chat/fallback");
+    assert.equal(next.fallback, "prompt");
+    assert(next.criteria);
+    for (const field of ["endpoint", "method", "systemPrompt", "maxTokens", "temperature", "fallbackToRegex"]) {
+      assert.equal(field in next, false, field);
+    }
+  });
+
+  it("catalog default clears a prior explicit pi-native model", () => {
+    const next = nextClassifierConfig({ piNative: { model: "typesafe/old", maxAttempts: 2 } },
+      { backend: "pi-native", piNativeModel: null });
+    assert.deepEqual(next.piNative, { maxAttempts: 2 });
+    assert.equal(next.fallback, "regex");
+  });
+
+  it("keeps prompt model on reselect and still clears it when unavailable", () => {
+    assert.equal(nextClassifierConfig({ model: "chat/a" }, { backend: "prompt" }).model, "chat/a");
+    assert.equal("model" in nextClassifierConfig({ model: "chat/a" }, { backend: "prompt", promptModel: null }), false);
+  });
+});
 
 describe("bifrost command ui", () => {
   it("renders TUI log messages once without duplicating them to stderr", () => {

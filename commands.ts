@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { join } from "node:path";
 import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
 import type { BifrostConfig, ClassifierConfig } from "./config.ts";
-import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, loadConfig } from "./config.ts";
+import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, PROMPT_ONLY_FIELDS, loadConfig } from "./config.ts";
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
 import type { ClassificationPipeline, ClassificationResult } from "./classification-pipeline.ts";
@@ -22,7 +22,7 @@ import {
   type RoutingStrategy,
 } from "./routing.ts";
 import type { ReliabilityStore } from "./reliability-store.ts";
-import type { ClassifierMetricsState, ClassifierMetricsStore } from "./classifier-metrics.ts";
+import { classifierMetricsEnabled, type ClassifierMetricsState, type ClassifierMetricsStore } from "./classifier-metrics.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend } from "./classifier-backends.ts";
 import { resolveTypeSafeApiKey, type TypeSafeCredentialSource } from "./typesafe-classifier.ts";
 
@@ -37,6 +37,8 @@ export interface BifrostState {
   reliabilityStore: ReliabilityStore;
   classifierMetricsStore: ClassifierMetricsStore;
   extensionDir: string;
+  /** Uses the extension instance's sticky detector without locking on context-free facts. */
+  effectiveClassifierBackend: (config: BifrostConfig) => ClassifierBackend;
   getPipeline: (ctx: ExtensionContext) => ClassificationPipeline;
   invalidatePipeline: () => void;
   /** Leave Bifrost's virtual selection for its last dispatched physical model. */
@@ -462,7 +464,7 @@ async function handleInit(
   state.reliabilityStore.reload(state.config.reliability, process.cwd());
   state.classifierMetricsStore.reload({
     cwd: process.cwd(),
-    enabled: state.config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
+    enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config)),
   });
   state.invalidatePipeline();
 
@@ -762,6 +764,100 @@ async function pickBifrostCommand(
   return options.find((command) => formatBifrostCommandChoice(command) === selected);
 }
 
+export function nextClassifierConfig(
+  current: Record<string, unknown>,
+  choice: { backend: ClassifierBackend; promptModel?: string | null; piNativeModel?: string | null },
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...current, backend: choice.backend };
+  if (choice.backend === CLASSIFIER_BACKEND_IDS.prompt) {
+    if (choice.promptModel === null) delete next.model;
+    else if (choice.promptModel !== undefined) next.model = choice.promptModel;
+    return next;
+  }
+  for (const field of PROMPT_ONLY_FIELDS) delete next[field];
+  if (choice.backend === CLASSIFIER_BACKEND_IDS.typesafe) {
+    const existing = next.typesafe && typeof next.typesafe === "object" && !Array.isArray(next.typesafe)
+      ? next.typesafe as Record<string, unknown> : {};
+    next.typesafe = { ...existing, model: TYPE_SAFE_MODEL };
+  } else {
+    const existing = next.piNative && typeof next.piNative === "object" && !Array.isArray(next.piNative)
+      ? next.piNative as Record<string, unknown> : {};
+    const piNative = { ...existing };
+    if (choice.piNativeModel === null) delete piNative.model;
+    else if (choice.piNativeModel !== undefined) piNative.model = choice.piNativeModel;
+    next.piNative = piNative;
+  }
+  next.criteria ??= DEFAULT_CLASSIFIER_CRITERIA;
+  next.fallback ??= next.model ? "prompt" : "regex";
+  return next;
+}
+
+async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState): Promise<void> {
+  if (!ctx.hasUI) {
+    log(ctx, "Choose classifier backend in Pi UI: prompt, typesafe, or pi-native", "warning");
+    return;
+  }
+  const selected = await ctx.ui.select("Classifier backend", [
+    "prompt — choose a Pi model",
+    `${CLASSIFIER_BACKEND_IDS.typesafe} — use Jev (requires Pi auth.json or ${TYPE_SAFE_API_KEY_ENV})`,
+    `${CLASSIFIER_BACKEND_IDS.piNative} — use Pi native classify (requires Pi TypeSafe auth)`,
+  ]);
+  if (!selected) return;
+  const backend = selected.startsWith(CLASSIFIER_BACKEND_IDS.typesafe) ? CLASSIFIER_BACKEND_IDS.typesafe
+    : selected.startsWith(CLASSIFIER_BACKEND_IDS.piNative) ? CLASSIFIER_BACKEND_IDS.piNative
+    : CLASSIFIER_BACKEND_IDS.prompt;
+  let selectedPromptModel: string | undefined;
+  const needsPromptModel = backend === CLASSIFIER_BACKEND_IDS.prompt
+    && !promptClassifierModelAvailable(ctx, state.config.classifier?.model);
+  if (needsPromptModel) {
+    if (ctx.modelRegistry.getAvailable().length === 0) {
+      log(ctx, "No Pi models available for prompt classifier; regex fallback remains active.", "warning");
+    } else {
+      selectedPromptModel = await requestPromptClassifierModel(ctx) ?? undefined;
+      if (!selectedPromptModel) {
+        log(ctx, "Prompt classifier model selection cancelled", "warning");
+        return;
+      }
+    }
+  }
+  let selectedPiNativeModel: string | null | undefined;
+  if (backend === CLASSIFIER_BACKEND_IDS.piNative) {
+    const catalogModels = ctx.modelRegistry.getModelsOfType("classifier", "typesafe")
+      .map((model) => `${model.provider}/${model.id}`);
+    const picked = await ctx.ui.select("Pi native classifier model", ["Catalog default", ...catalogModels]);
+    if (!picked) return;
+    selectedPiNativeModel = picked === "Catalog default" ? null : picked;
+  }
+  const path = join(process.cwd(), CONFIG_DIR_NAME, "bifrost.json");
+  let current: Record<string, unknown> = {};
+  try {
+    current = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown> : {};
+  } catch {
+    log(ctx, "Cannot update classifier: .pi/bifrost.json is invalid JSON", "error");
+    return;
+  }
+  const classifier = current.classifier && typeof current.classifier === "object" && !Array.isArray(current.classifier)
+    ? current.classifier as Record<string, unknown> : {};
+  current.classifier = nextClassifierConfig(classifier, {
+    backend,
+    promptModel: backend === CLASSIFIER_BACKEND_IDS.prompt
+      ? selectedPromptModel ?? (needsPromptModel ? null : undefined) : undefined,
+    piNativeModel: selectedPiNativeModel,
+  });
+  mkdirSync(join(process.cwd(), CONFIG_DIR_NAME), { recursive: true });
+  writeFileSync(path, JSON.stringify(current, null, 2) + "\n");
+  state.config = loadConfig(process.cwd(), state.extensionDir);
+  state.classifierMetricsStore.reload({
+    cwd: process.cwd(),
+    enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config)),
+  });
+  state.invalidatePipeline();
+  log(ctx, `classifier backend set to ${backend}; config reloaded`);
+  if (backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
+    log(ctx, `TypeSafe credential missing; use ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`, "warning");
+  }
+}
+
 // ── Route table ─────────────────────────────────────────────
 
 export function createCommandRouter(
@@ -815,7 +911,7 @@ export function createCommandRouter(
       state.reliabilityStore.reload(state.config.reliability, process.cwd());
       state.classifierMetricsStore.reload({
         cwd: process.cwd(),
-        enabled: state.config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
+        enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config)),
       });
       state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
@@ -956,78 +1052,7 @@ export function createCommandRouter(
       value: "classifier",
       description: "Choose classifier backend and prompt model",
       match: (sub) => sub === "classifier",
-      handler: async (_, ctx) => {
-        if (!ctx.hasUI) {
-          log(ctx, "Choose classifier backend in Pi UI: prompt or typesafe", "warning");
-          return;
-        }
-        const selected = await ctx.ui.select("Classifier backend", [
-          "prompt — choose a Pi model",
-          `${CLASSIFIER_BACKEND_IDS.typesafe} — use Jev (requires Pi auth.json or ${TYPE_SAFE_API_KEY_ENV})`,
-        ]);
-        if (!selected) return;
-        const backend = selected.startsWith(CLASSIFIER_BACKEND_IDS.typesafe) ? CLASSIFIER_BACKEND_IDS.typesafe : CLASSIFIER_BACKEND_IDS.prompt;
-        let selectedPromptModel: string | undefined;
-        const configuredPromptModel = state.config.classifier?.model;
-        const needsPromptModel = backend === CLASSIFIER_BACKEND_IDS.prompt && !promptClassifierModelAvailable(ctx, configuredPromptModel);
-        if (needsPromptModel) {
-          if (ctx.modelRegistry.getAvailable().length === 0) {
-            log(ctx, "No Pi models available for prompt classifier; regex fallback remains active.", "warning");
-          } else {
-            selectedPromptModel = await requestPromptClassifierModel(ctx) ?? undefined;
-            if (!selectedPromptModel) {
-              log(ctx, "Prompt classifier model selection cancelled", "warning");
-              return;
-            }
-          }
-        }
-        const path = join(process.cwd(), CONFIG_DIR_NAME, "bifrost.json");
-        let current: Record<string, unknown> = {};
-        try {
-          current = existsSync(path)
-            ? JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>
-            : {};
-        } catch {
-          log(ctx, "Cannot update classifier: .pi/bifrost.json is invalid JSON", "error");
-          return;
-        }
-        const classifier = current.classifier && typeof current.classifier === "object"
-          ? current.classifier as Record<string, unknown>
-          : {};
-        const nextClassifier: Record<string, unknown> = { ...classifier, backend };
-        if (backend === CLASSIFIER_BACKEND_IDS.prompt && selectedPromptModel) {
-          nextClassifier.model = selectedPromptModel;
-        } else if (backend === CLASSIFIER_BACKEND_IDS.prompt && needsPromptModel) {
-          delete nextClassifier.model;
-        }
-        if (backend === CLASSIFIER_BACKEND_IDS.typesafe) {
-          delete nextClassifier.endpoint;
-          delete nextClassifier.method;
-          delete nextClassifier.systemPrompt;
-          delete nextClassifier.maxTokens;
-          delete nextClassifier.temperature;
-          delete nextClassifier.fallbackToRegex;
-          const existingTypeSafe = nextClassifier.typesafe && typeof nextClassifier.typesafe === "object" && !Array.isArray(nextClassifier.typesafe)
-            ? nextClassifier.typesafe as Record<string, unknown>
-            : {};
-          nextClassifier.typesafe = { ...existingTypeSafe, model: TYPE_SAFE_MODEL };
-          nextClassifier.criteria ??= DEFAULT_CLASSIFIER_CRITERIA;
-          nextClassifier.fallback ??= nextClassifier.model ? "prompt" : "regex";
-        }
-        current.classifier = nextClassifier;
-        mkdirSync(join(process.cwd(), CONFIG_DIR_NAME), { recursive: true });
-        writeFileSync(path, JSON.stringify(current, null, 2) + "\n");
-        state.config = loadConfig(process.cwd(), state.extensionDir);
-        state.classifierMetricsStore.reload({
-          cwd: process.cwd(),
-          enabled: state.config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && (state.config.classifier.typesafe?.metrics?.enabled ?? true),
-        });
-        state.invalidatePipeline();
-        log(ctx, `classifier backend set to ${backend}; config reloaded`);
-        if (backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
-          log(ctx, `TypeSafe credential missing; use ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`, "warning");
-        }
-      },
+      handler: (_, ctx) => handleClassifierChoose(ctx, state),
     },
     exact("classifier on", "Enable LLM classifier", (_, ctx) => {
       state.classifierEnabled = true;

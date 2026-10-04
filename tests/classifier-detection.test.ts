@@ -88,6 +88,13 @@ describe("selectEffectiveBackend", () => {
 });
 
 describe("createDetectionEngine", () => {
+  it("peek cannot lock weak context-free facts before a registry-backed detection", () => {
+    const engine = createDetectionEngine();
+    assert.equal(engine.peek(() => ({ piManaged: false, envPresent: false })).backend, CLASSIFIER_BACKEND_IDS.prompt);
+    assert.equal(engine.detect(() => ({ piManaged: true, envPresent: false })).backend, CLASSIFIER_BACKEND_IDS.piNative);
+    assert.equal(engine.peek(() => ({ piManaged: false, envPresent: false })).backend, CLASSIFIER_BACKEND_IDS.piNative);
+  });
+
   it("locks the first result per extension load, so reload cannot flip it", () => {
     const engine = createDetectionEngine();
     assert.equal(engine.detect(() => ({ piManaged: true, envPresent: false })).backend, CLASSIFIER_BACKEND_IDS.piNative);

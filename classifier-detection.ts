@@ -1,3 +1,5 @@
+import { readStoredCredential } from "@earendil-works/pi-coding-agent";
+import type { BifrostConfig } from "./config.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_CREDENTIAL_KEY, type ClassifierBackend } from "./classifier-backends.ts";
 
 /**
@@ -57,7 +59,10 @@ export function selectEffectiveBackend(configured: ClassifierBackend | undefined
 }
 
 export interface DetectionEngine {
+  /** Sticky read: the first call locks the per-load value (Decision 5). */
   detect(collect: () => DetectionFacts): DetectionResult;
+  /** Non-locking read: returns the locked value when present. */
+  peek(collect: () => DetectionFacts): DetectionResult;
 }
 
 /** Sticky per extension load: /bifrost reload must not flip the backend mid-session (Decision 5). */
@@ -68,5 +73,18 @@ export function createDetectionEngine(): DetectionEngine {
       if (!cached) cached = resolveDefaultClassifierBackend(collect());
       return cached;
     },
+    peek(collect: () => DetectionFacts): DetectionResult {
+      return cached ?? resolveDefaultClassifierBackend(collect());
+    },
   };
+}
+
+/** Facts readable without a request context (auth.json + environment). */
+export function collectContextFreeFacts(): DetectionFacts {
+  return collectDetectionFacts({ readStoredCredential, env: process.env });
+}
+
+/** Effective backend from context-free facts. Never locks the per-load value. */
+export function effectiveBackendOf(config: BifrostConfig, engine: DetectionEngine): EffectiveBackend {
+  return selectEffectiveBackend(config.classifier?.backend, engine.peek(collectContextFreeFacts));
 }
