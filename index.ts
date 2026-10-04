@@ -46,7 +46,7 @@ import { parseInlineOverride } from "./inline-override.ts";
 import { BIFROST_AUTO_ID, BIFROST_AUTO_PROVIDER, isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
 import { RuntimeReliabilityTracker } from "./runtime-reliability.ts";
 import { VirtualOverride } from "./virtual-override.ts";
-import { createVirtualRoute, noModelError, poolProblem } from "./virtual-routing.ts";
+import { createVirtualRoute, dispatchTrialPolicy, noModelError, poolProblem } from "./virtual-routing.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV } from "./classifier-backends.ts";
 import { createTypeSafeClassifier, resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
 import {
@@ -412,7 +412,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           if (trial.claimed) ownedTrialKey = key;
           // Sticky/degrade are documented continuity exceptions; only an
           // explicit selection is fail-closed on trial contention.
-          if (!trial.allowed && intent === "select") {
+          if (!trial.allowed && dispatchTrialPolicy(intent) === "fail-closed") {
             throw new Error(`Bifrost: half-open trial unavailable for ${key}`);
           }
           trackerFor(ctx).begin(key);

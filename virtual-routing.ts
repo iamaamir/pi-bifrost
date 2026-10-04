@@ -69,6 +69,12 @@ function latestUserText(messages: readonly Message[]): string {
     : user.content.flatMap((block) => block.type === "text" ? [block.text] : []).join("\n");
 }
 
+/** Trial contention policy: only an explicit selection is fail-closed;
+ * sticky/degrade dispatches are documented continuity exceptions. */
+export function dispatchTrialPolicy(intent: DispatchIntent): "fail-closed" | "continuity" {
+  return intent === "select" ? "fail-closed" : "continuity";
+}
+
 export function createVirtualRoute(deps: VirtualRouteDependencies): (request: ModelRouteRequest) => Promise<ModelRoute> {
   return async (request) => {
     const sticky = request.reason === "retry" ? (request.failed ?? request.previous) : request.previous;

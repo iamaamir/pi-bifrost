@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createVirtualRoute, noModelError, poolProblem } from "../virtual-routing.ts";
+import { createVirtualRoute, dispatchTrialPolicy, noModelError, poolProblem } from "../virtual-routing.ts";
 import { VirtualOverride } from "../virtual-override.ts";
 import type { ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 import { makeModel } from "./helpers.ts";
@@ -144,5 +144,44 @@ describe("virtual Bifrost requests", () => {
     assert.deepEqual(calls, []);
     const noFallback = createVirtualRoute({ overrides: new VirtualOverride(), select: async () => undefined, fallback: () => undefined });
     await assert.rejects(() => noFallback(request("user", "prompt")), /no healthy physical model/);
+  });
+
+  it("trial contention is fail-closed only for explicit selection", () => {
+    assert.equal(dispatchTrialPolicy("select"), "fail-closed");
+    assert.equal(dispatchTrialPolicy("sticky"), "continuity");
+    assert.equal(dispatchTrialPolicy("degrade"), "continuity");
+  });
+
+  it("tags every dispatch intent: select, sticky, and degrade", async () => {
+    const intents: string[] = [];
+    const plain = Object.assign(makeModel("fixture", "plain"), { reasoning: false });
+    const stickyModel = Object.assign(makeModel("fixture", "sticky"), { reasoning: false });
+    const level = "off" as const;
+    const route = createVirtualRoute({
+      overrides: new VirtualOverride(),
+      select: async () => plain,
+      fallback: () => undefined,
+      onDispatch: (_model, _thinkingLevel, intent) => intents.push(intent),
+    });
+    await route(request("user", "prompt"));
+    await route(request("continuation", "prompt", { previous: { model: stickyModel, thinkingLevel: level } }));
+    await route(request("retry", "prompt", { failed: { model: stickyModel, thinkingLevel: level, message: { stopReason: "error" } as unknown as NonNullable<ModelRouteRequest["failed"]>["message"] } }));
+    const degrading = createVirtualRoute({
+      overrides: new VirtualOverride(),
+      select: async () => undefined,
+      fallback: () => undefined,
+      sticky: () => stickyModel,
+      onDispatch: (_model, _thinkingLevel, intent) => intents.push(intent),
+    });
+    await degrading(request("user", "prompt"));
+    assert.deepEqual(intents, ["select", "sticky", "sticky", "degrade"]);
+  });
+
+  it("routes without a forced tier and never throws when prepared text does not match the dispatched prompt", async () => {
+    const { route, overrides, calls } = setup();
+    overrides.prepare("frontier", "frontier hello");
+    const result = await route(request("user", "unrelated pasted text"));
+    assert.equal(result.model, first);
+    assert.deepEqual(calls, ["classify:unrelated pasted text"]);
   });
 });
