@@ -1,228 +1,275 @@
 # Centralized Command Registry
 
-Status: draft for review (revision 2)
+Status: draft for review (revision 3)
 Date: 2026-10-04
 Branch: `refactor/command-registry` (stacked on `chore/no-agent-attribution`, PR #20)
 
-> Revision 2 supersedes revision 1 after independent review. Revision 1 was
-> drafted against the wrong file state, overstated a merge-safety claim, and
-> proposed a design larger than the problem. Changes are listed in
-> [What changed](#what-changed-from-revision-1).
+> Revision 3 supersedes revisions 1 and 2. Revision 1 cited the wrong file and
+> over-engineered the solution. Revision 2 fixed the citations but specified a
+> mechanism that copies a field nothing reads. Changes are listed in
+> [What changed](#what-changed-from-revision-2).
 
-All line numbers refer to `commands.ts` at this branch's base (`e2beb5b`, 1215
-lines). This branch does **not** contain PR #19.
+All line numbers refer to `commands.ts` at commit `e2beb5b` (1215 lines). This
+branch does **not** contain PR #19.
 
 ## Problem
 
-Command metadata lives in two lists that share no common structure:
+Command metadata lives in two lists that share no structure:
 
-| List | Location | Count | Owns |
+| List | Location | Count | Carries |
 |---|---|---|---|
 | `BIFROST_COMMAND_OPTIONS` | `commands.ts:716` | 19 | value, description, argumentHint |
-| `routes` | `commands.ts:892` | 18 | dispatch, plus a second copy of value and description |
+| `routes` | `commands.ts:892` | 18 | value, description, match, handler |
 | `dashboardCommands` | `commands.ts:757` | 8 hardcoded strings | which commands the menu shows |
 
 Three defects are already present:
 
 1. **`classifier` has two different descriptions.**
    `commands.ts:729` says `"Choose classifier backend"`.
-   `commands.ts:1079` says `"Choose classifier backend and prompt model"`.
+   `commands.ts:1077-1082` says `"Choose classifier backend and prompt model"`
+   (`:1079`).
 
-2. **`init -f` is a phantom entry.** It exists in the options list
-   (`commands.ts:725`) with no route of its own, which is why the lists are 19
-   and 18. `init`'s matcher (`commands.ts:1046`) accepts it, so typing
-   `/bifrost init -f` works. Selecting it from a picker does not: both picker
-   paths resolve by value and bail on a miss —
-   `commands.ts:1180-1181` (dashboard) and `commands.ts:1209-1210` (unknown
-   subcommand). The second is reachable, and `runBifrostCommand` has already
-   cleared the editor at `commands.ts:693`, so the user gets a silent no-op.
+2. **`init -f` is a phantom entry.** It exists in the registry (`:725`) with no
+   route of its own, which is why the counts are 19 and 18. `init`'s matcher
+   (`:1046`) happens to accept it, so `/bifrost init -f` works when typed.
+   Selecting it from a picker does not: both picker paths resolve by value and
+   bail on a miss — `commands.ts:1180-1181` and `commands.ts:1209-1210`. The
+   second is reachable, and `runBifrostCommand` has already cleared the editor at
+   `commands.ts:693`, so the user gets a silent no-op.
 
-   The canonical doc disagrees with the code here: `docs/guide/commands.md`
-   documents `init` with a `-f` flag and has no `init -f` row. The code is
-   wrong, not the doc.
+   `docs/guide/commands.md` documents `init` with a `-f` flag and has no
+   `init -f` row. The code is wrong, not the doc.
 
 3. **The menu shows 8 of 19 values.** `benchmark`, `cache stats`,
    `cache clear`, `classifier`, `classifier on`, `classifier off`,
-   `classifier test`, `debug`, and `init -f` never appear. The dashboard also
-   shows only the actionable member of each `on`/`off` and `pin`/`unpin` pair.
+   `classifier test`, `debug`, and `init -f` never appear.
 
 ## Goal
 
-Each fact about a command is written once. Adding a command means adding one
-registry entry; descriptions, completion, and dispatch follow from it.
+**Each description and argument hint is written once, and a route physically
+cannot carry one.**
+
+Not "one list of commands." Command membership, matcher semantics, menu
+membership, and ordering all stay multiply-written; see
+[Known debt](#known-debt).
 
 ## Approach
 
-Keep `BIFROST_COMMAND_OPTIONS` as the single registry, unchanged in name and
-location. Keep `exact()`, `prefix()`, and `routes` where they are. Change one
-thing: **the route helpers stop taking a description and resolve it from the
-registry instead.**
+Narrow `CommandEntry` so it no longer extends `CommandSpec`:
 
 ```ts
-function exact(value: string, handler: CommandFn): CommandEntry {
-  const spec = requireSpec(value);
-  return { ...spec, match: (sub) => sub === value, handler };
-}
-```
-
-`description` and `argumentHint` then exist in exactly one place per command, so
-defect 1 becomes structurally impossible rather than merely test-caught.
-
-`init` keeps its bespoke matcher. `prefix()` is a bare `startsWith` with no
-word boundary; `init` is space-bounded (`commands.ts:1046`). Replacing it with
-a declarative strategy would make `/bifrost initialize` run `handleInit`, where
-today it falls through to the picker. That behavior change is not wanted.
-
-### Why not a bigger refactor
-
-Revision 1 proposed extracting `buildCommandHandlers`, renaming the export to
-`COMMANDS`, replacing the helpers with a declarative `match` discriminant, and
-adding a `menu` rank field. Review found the justification did not survive
-contact with the design:
-
-- Extracting the handler map moves every handler body anyway, so "avoid touching
-  15 handlers" did not discriminate it from the alternative it rejected.
-- A rank field that only orders a flat list is equivalent to array position,
-  and `ctx.ui.select` is called with `string[]`, so there is no grouping
-  primitive to feed.
-- `match: "exact" | "prefix"` cannot express `init`'s space-bounded matcher.
-
-The registry-plus-description-resolution above captures the actual win — one
-owner per fact — at roughly a quarter of the diff, with no renamed export and no
-new module surface.
-
-## Design
-
-### Registry
-
-`BIFROST_COMMAND_OPTIONS` gains one field:
-
-```ts
-interface CommandSpec {
+interface CommandEntry {
   readonly value: string;
-  readonly description: string;
-  readonly argumentHint?: string;
-  readonly aliases?: readonly string[];
+  readonly match: (sub: string) => boolean;
+  readonly handler: CommandFn;
 }
 ```
 
-`init -f` folds into `init` as `aliases: ["init -f"]`. `init`'s description
-becomes:
+Nothing reads a route's description or `argumentHint` today.
+`formatBifrostCommandChoice` takes a `CommandSpec` (`commands.ts:752`) and is
+only ever called with registry entries — from `dashboardCommands`, or from the
+default `options` at `commands.ts:774`. The picker paths read
+`selected.argumentHint` (`:1175`, `:1203`) off a `CommandSpec`, not off a route.
+Routes are touched only for `.match`, `.handler`, and `.value` (`:1180`,
+`:1182`, `:1187`, `:1189`, `:1209`, `:1212`, `:1213`).
+
+So dropping the fields deletes dead data rather than adding a lookup. More
+importantly, `CommandEntry extends CommandSpec` currently *requires* a
+`description` on every route, which is precisely how a hand-written literal with
+a stale description compiles at all. Removing the requirement makes defect 1 a
+type error instead of a convention.
+
+### Matchers
+
+Three helpers, each preserving today's exact semantics:
+
+```ts
+function exact(word: string, handler: CommandFn): CommandEntry
+function prefix(word: string, handler: CommandFn): CommandEntry   // bare startsWith
+function spaced(word: string, handler: CommandFn): CommandEntry   // === word || startsWith(word + " ")
+```
+
+`prefix()` is a bare `startsWith` with no word boundary today, which is correct
+for free-text prompts: `/bifrost previewXYZ` dispatches `handlePreview` with
+prompt `XYZ`. That behavior is preserved.
+
+`init` needs `spaced()`. Converting it to `exact()` would match only
+`sub === "init"` and silently break both `/bifrost init -f` and
+`/bifrost init --write`. Converting it to `prefix()` would make
+`/bifrost initialize` run `handleInit`, where today it falls through to the
+picker. `spaced()` keeps both correct.
+
+`prefix()`'s existing `argumentHint = "<prompt>"` default is deleted. With
+`argumentHint` gone from `CommandEntry`, a default there would be unread.
+
+### `init -f`
+
+Folds into `init` as `aliases: ["init -f"]`, and `init`'s description becomes:
 
 > Probe models and generate config (pass -f to force re-probe)
 
 This matches what `docs/guide/commands.md` already documents and removes the
-phantom entry rather than patching it.
+phantom rather than patching it.
 
 ### Completion
 
-`getBifrostCommandCompletions` (`commands.ts:738`) currently reads `.value` in
-two places: the exact-match early return (`:743`) and the prefix filter
-(`:744`). Both must flatten aliases, or `init -f` silently disappears from
-completion while still working when typed.
+`getBifrostCommandCompletions` (`commands.ts:738`) reads `.value` in exactly two
+places: the exact-match early return (`:743`) and the prefix filter (`:744`).
+Both must flatten aliases, or `init -f` silently disappears from completion
+while still working when typed.
 
-The early return exists to stop Pi accepting a suggestion and leaving the
-command text stuck in the editor (`commands.ts:740-742`). It must cover exact
-aliases too, and that needs its own test.
-
-### Routes
-
-The three hand-written literals — `init` (`commands.ts:1043-1048`),
-`classifier test` (`commands.ts:1071-1076`), `classifier` (`commands.ts:1077-1082`) — are
-converted to `exact()`/`prefix()` calls so all 18 routes carry a
-registry-resolved description. Bypassing the helpers is what allowed the
-description drift.
-
-Dispatch keeps its first-match-wins loop (`commands.ts:1186-1192`) and its array
-order. Order was verified not to be load-bearing: no route's matcher can match
-another route's value.
-
-Dispatch must continue to pass the original argument text, not the spec value.
-`commands.ts:1189` passes `trimmed`; `handleInit` parses `--write` from it and
-`tests/bifrost-commands.test.ts:381` covers that. Passing `spec.value` would
-silently break `init --write` while the report stays green.
+The early return exists so Pi accepts the command instead of leaving the text
+stuck in the editor (`commands.ts:740-742`). It must cover exact aliases too.
 
 ### Menu
 
 `dashboardCommands` keeps its state-aware selection — the actionable member of
 each pair — but resolves values, descriptions, and hints from the registry
-instead of hardcoding eight strings and looking them up.
+instead of hardcoding eight strings.
 
-A flat 18-row menu was considered and rejected: with routing enabled, the first
+Its trailing non-null assertion (`commands.ts:768`) becomes a checked lookup, so
+a renamed command fails a test instead of throwing inside the picker.
+
+A flat 18-row menu was considered and rejected: with routing enabled the first
 row would be `on`, which only re-logs "Bifrost enabled". That trades a real UX
-regression for extra discoverability.
+regression for discoverability.
 
-This leaves defect 3's discoverability half open, so it is addressed directly:
-
-**Add a `/bifrost help` alias that opens the full command list.** `help` is
-already on the roadmap at `docs/ui-enhancements.md:22` ("Explicit help for
-TUI/RPC/print — reuse command metadata and examples"), so this is the planned
-answer rather than a new invention. It is one registry entry plus one route, and
-it makes all 18 discoverable without putting an inert row first.
+That leaves defect 3's discoverability half open. It is addressed by a
+`/bifrost help` alias in a **separate** PR, already on the roadmap at
+`docs/ui-enhancements.md:22`. It is deliberately not in this change: the obvious
+implementation opens a picker, which returns `undefined` without a UI
+(`commands.ts:776`), so it would be a silent no-op in print and RPC — the exact
+defect class this change exists to remove.
 
 ## Testing
 
-New `tests/command-registry.test.ts`:
+New assertions go in `tests/bifrost-commands.test.ts`, which already builds the
+router and the fake context, rather than a new file. That keeps the revert a
+single self-contained `git revert`.
 
-- every `BIFROST_COMMAND_OPTIONS` value resolves to a route, and every route
-  value is in the registry — in both directions
-- every route's description and `argumentHint` equal the registry's, which fails
-  if a hand-written literal reappears
-- every alias is globally unique and does not collide with any value
-- `getBifrostCommandCompletions` offers every alias
-- `getBifrostCommandCompletions` returns `null` for an exact value **and** for an
-  exact alias
-- `/bifrost help` lists every command value
+**Registry and matcher**
+
+- every registry value dispatches through the real router to exactly one route,
+  and that route's `value` equals it
+- `/bifrost initialize` opens the unknown-subcommand picker and does **not** run
+  `handleInit`
+- `classifier status`, `cache stats`, `cache clear`, `classifier test` are not
+  swallowed by a `prefix` route
 - dispatch passes the original argument text through, so `init --write` still
-  works
+  works (`:381` covers this today)
+- `/bifrost init -f` forces a re-probe while `/bifrost init` reuses a fresh one
 
-New `tests/docs-command-drift.test.ts`:
+**Aliases and completion**
 
-- parse the command column from `docs/guide/commands.md` and assert set-equality
-  with the registry, excluding the bare `/bifrost` row and aliases
-- same for `docs/llms.txt`
+- every alias is unique and does not collide with any value
+- completion offers every alias
+- completion returns `null` for an exact value **and** for an exact alias
+- alias case handling, since dispatch lowercases (`:1155`) and so does completion
+  (`:739`)
 
-`tests/bifrost-commands.test.ts:187` asserts the menu is 8 rows. That assertion
-is correct today and must be updated deliberately rather than discovered by a
-failing run.
+**Menu**
+
+- `dashboardCommands` resolves every entry for `enabled`/`pinned` in both states
+- with routing enabled the menu offers `off`, and selecting it runs the `off`
+  route rather than `on`
+- with routing pinned the menu offers `unpin`, not `pin`
+- selecting `preview` prefills the editor and does not run `handlePreview`
+  (`:1175-1178`)
+
+**Documentation drift**
+
+`tests/docs-command-drift.test.ts`, parsing only the first table of
+`docs/guide/commands.md` (rows 7-25; a second table starts at `:79`):
+
+- read the first cell of each row
+- strip the `/bifrost ` prefix and any `<prompt>` suffix
+- drop the bare `/bifrost` row, which is the dashboard entry, not a subcommand
+- assert set-equality with the registry values, excluding aliases
+- on failure, print both sets as a sorted diff
+
+`docs/guide/commands.md:8` is corrected in the same change: it promises `-f`
+(`--force`), but `isForced` (`commands.ts:258`) matches only `-f`, so
+`/bifrost init --force` silently reuses the cached probe and does the opposite
+of what the doc says. The code is not changed.
+
+After folding `init -f` into an alias, the doc has 18 rows and the registry has
+18 values, so the assertion holds without inventing documentation.
+
+`docs/llms.txt` is deliberately excluded. It documents 7 commands
+(`init`, `on`, `off`, `pin`, `unpin`, `preview`, `probe`, `classifier`) as prose
+prose bullets, not as a reference table. Set-equality would fail on roughly 11
+missing commands and would turn a curated overview into a command dump.
 
 ## Docs
 
-`docs/guide/commands.md:8` tells users to pass `-f` (`--force`) to re-probe.
-`isForced` (`commands.ts:258`) only matches `-f`, so `/bifrost init --force`
-silently reuses the cached probe and does the opposite of what the doc promises.
-The drift test will fail on this file; the doc line is corrected to `-f` in the
-same change. The code is not changed.
+One content fix: `docs/guide/commands.md:8`, above.
 
-`docs/ui-enhancements.md:22` names `BIFROST_COMMAND_OPTIONS` as the completion
-source, which stays accurate under this design.
+`docs/ui-enhancements.md:20` names `BIFROST_COMMAND_OPTIONS` as the completion
+source, which stays accurate.
 
-Eleven files enumerate commands. Only the two machine-checkable ones
-(`docs/guide/commands.md`, `docs/llms.txt`) are covered by the drift test; the
-rest are prose and stay hand-written. Generating prose documentation is out of
-scope.
+Everything else that mentions commands stays hand-written.
 
 ## Non-goals
 
-- No rename of `BIFROST_COMMAND_OPTIONS`; no new exported module surface.
+- No rename of `BIFROST_COMMAND_OPTIONS`. No new exported surface.
+- No `/bifrost help`; that is a separate PR.
 - No `DecisionTrace`, no stage timings, no structured candidate records.
   ADR 0007 stays proposed.
-- No change to how any command behaves, apart from `init` gaining the `help`
-  alias and `init -f` resolving through one entry.
+- No change to how any command behaves, except `init -f` resolving through a
+  single entry.
+
+### Behavior changes this does cause
+
+Stated plainly so the diff's blast radius is not understated:
+
+1. `init`'s description gains the `(pass -f to force re-probe)` clause. Visible
+   in the menu row and in autocomplete.
+2. `classifier`'s description becomes the registry's
+   `"Choose classifier backend"`, dropping `"and prompt model"`. This is a
+   product copy decision; the shorter wording is the one already shown in
+   autocomplete today, so autocomplete is unchanged and the menu row changes.
+3. `init -f` is no longer a row in the unknown-subcommand picker. Typing it
+   still works, and it still appears in completion via the alias. The picker
+   goes from 19 rows to 18.
+
+## Revert
+
+Reverting the code leaves the new assertions in `tests/bifrost-commands.test.ts`
+referencing `aliases` and the new helper signatures. The assertions live in the
+existing file specifically so a revert is one commit range rather than a
+coordinated deletion of new files. Commits are ordered so each is independently
+revertible:
+
+1. alias fold and completion flattening
+2. `CommandEntry` narrowing, `spaced()`, and the three literal conversions
+3. `dashboardCommands` checked lookup
+4. `docs/guide/commands.md` correction
+5. drift test
+
+## Known debt
+
+Stated so the goal is not read as more than it is.
+
+- **Command membership** — which values are dispatchable is still written twice,
+  registry and routes.
+- **Matcher semantics** — encoded in the helper call, separate from the registry.
+- **Menu membership** — `dashboardCommands` (`:759-766`) is still a hand-written
+  list of eight values.
+- **Ordering** — registry array order, routes array order, and the
+  `dashboardCommands` list are three independent orderings.
+- **Documentation** — `README.md`, `docs/llms.txt`, and the `docs/guide/*`
+  prose remain hand-written and will drift on the next added command.
 
 ## Risks
 
 - **Merge interaction with PR #19.** Both edit `commands.ts`. `handlePreview`
-  ends near line 682 and the registry region starts near 697, so the regions are
-  close, not far apart. Revision 1 claimed 430 lines of separation; that was
-  wrong and is the main reason merge resolution may be needed. The description
-  pull-through touches `commands.ts:716-736`, the same block PR #19 does not
-  modify, so the overlap should stay small.
-- **Revert leaves tests behind.** Reverting restores the old helpers but leaves
-  `tests/command-registry.test.ts` and the doc-drift test asserting the new
-  shape. Reverting requires removing the two new test files in the same revert.
-- **The `help` alias is new user-facing surface**, small but not zero. It is the
-  smallest thing that makes the remaining commands discoverable.
+  ends at `:682` and the registry region starts at `:697`, a gap of 15 lines, so
+  the regions are close and Git may need help. The blocks touched are
+  `:697-736` (types and registry) and `:892-1151` (routes); PR #19's last hunk
+  ends at old line 684, so the overlap should be limited to the type block.
+- **`init -f` folding changes picker row count** from 19 to 18. No test asserts
+  that count today, so it lands silently unless one is added.
+- **Description changes are user-visible** and are copy decisions, not mechanics.
 
 ## Verification
 
@@ -233,24 +280,33 @@ npm run test:integration
 npm run test:ui
 ```
 
-`npm run test:ui` types `/bifrost` and captures the open menu. It has no golden
-comparison, so it will pass regardless of menu contents; the menu assertions
-live in `tests/bifrost-commands.test.ts`.
+`npm run test:ui` types `/bifrost` and captures the open menu with no golden
+comparison, so it passes regardless of menu contents. Menu assertions live in
+`tests/bifrost-commands.test.ts`.
 
-## What changed from revision 1
+## What changed from revision 2
 
-- Line numbers corrected. Revision 1 cited `commands.ts` from a worktree
-  containing PR #19 and was off by ~85 lines throughout.
-- Merge-gap claim corrected from 430 lines to roughly 15.
-- `tests/bifrost-commands.test.ts:187`'s menu-size assertion was missed entirely.
-- Menu reverted from a flat 18 rows to state-aware rows, plus a `help` alias for
-  discoverability. The annotation predicate revision 1 specified keyed off
-  `"on"` and `state.enabled` and was wrong for the `pin`/`unpin` pair.
-- The claim that an alias keeps `init -f` in completion was false;
-  `getBifrostCommandCompletions` reads only `.value`. Now specified and tested.
-- The `match: "exact" | "prefix"` discriminant was dropped because it cannot
-  express `init`'s space-bounded matcher without changing behavior.
-- `buildCommandHandlers`, the `COMMANDS` rename, and the `menu` rank field were
-  dropped as unjustified diff.
-- Doc drift moved from accepted debt to a test, after `docs/guide/commands.md`
-  was found to be wrong about `--force`.
+- Replaced the registry-lookup mechanism with a narrowed `CommandEntry`.
+  Revision 2 had the helpers resolve the spec and spread it onto the entry,
+  which copied `description` and `argumentHint` onto routes — fields nothing
+  reads — and left `extends CommandSpec` in place, so a stale description on a
+  hand-written literal would still compile. The claim that this made defect 1
+  "structurally impossible" was an overclaim.
+- Added `spaced()`. Revision 2 said `init` keeps its bespoke matcher *and* that
+  all three hand-written literals convert to `exact()`/`prefix()`, which cannot
+  both hold; `exact("init")` breaks `init -f` and `init --write`.
+- Deleted `prefix()`'s `argumentHint` default, which would otherwise inject a
+  hint — and so invert execute into prefill — for a future command.
+- Cut `/bifrost help`. It is new surface in a change whose headline is "no
+  behavior change," the picker-only version is a silent no-op without a UI
+  (`commands.ts:776`), and it would have forced a documentation row.
+- Narrowed the drift test to `docs/guide/commands.md`. `docs/llms.txt` documents
+  7 commands as prose and cannot satisfy set-equality.
+- Specified the doc parser's scope, because `commands.md` has a second table at
+  `:79` and two rows carry `<prompt>` suffixes.
+- Replaced the description-equality test with matcher-bijection and
+  menu-dispatch tests. Set-equality of strings cannot catch a route that exists,
+  holds the right value, and never matches it — the `init -f` bug class.
+- Corrected `docs/ui-enhancements.md` citation: `:20` is the completion-source
+  row, `:22` is the `help` row.
+- Restated the goal, and listed what stays multiply-written.
