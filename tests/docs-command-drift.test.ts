@@ -48,7 +48,15 @@ describe("docs command drift", () => {
     assert.equal(
       documented.size,
       registered.size,
-      `documented ${documented.size} commands but the registry defines ${registered.size}; a count mismatch usually means the parse found the wrong rows`,
+      [
+        `documented ${documented.size} commands but the registry defines ${registered.size}`,
+        undocumented.length
+          ? `missing from the doc: ${undocumented.join(", ")} (check for a missing row, or one the parse skipped due to formatting)`
+          : "missing from the doc: none",
+        unknown.length
+          ? `documented but not in the registry: ${unknown.join(", ")} (the doc documents a command the registry does not define)`
+          : "documented but not in the registry: none",
+      ].join("\n"),
     );
     assert.deepEqual(
       undocumented,
