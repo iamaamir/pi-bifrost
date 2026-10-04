@@ -35,12 +35,14 @@ import {
   getStrategy,
   modelKey,
   resolveModelWithFallback,
+  type SkippedCandidate,
 } from "./routing.js";
 import { ReliabilityStore } from "./reliability-store.js";
 import { loadRuntimeState, runtimeStatePath, saveRuntimeState, isPassiveModelSelection } from "./runtime-state.js";
 import { createCommandRouter, getBifrostCommandCompletions, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.js";
 import { setupDebug, debug, debugMeasure } from "./debug.js";
 import { parseInlineOverride } from "./inline-override.js";
+import { BIFROST_AUTO_ID, BIFROST_AUTO_PROVIDER, isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
 import { RuntimeReliabilityTracker } from "./runtime-reliability.js";
 import { VirtualOverride } from "./virtual-override.ts";
 import { createVirtualRoute, noModelError, poolProblem } from "./virtual-routing.ts";
@@ -56,19 +58,12 @@ import { waitForRegistryRefresh } from "./registry-refresh.js";
 
 // ── Pipeline builder (composition root) ────────────────────────
 
-export const BIFROST_AUTO_PROVIDER = "bifrost";
-export const BIFROST_AUTO_ID = "auto";
-
-function isBifrostAuto(model: Model<Api> | undefined): boolean {
-  return model?.provider === BIFROST_AUTO_PROVIDER && model.id === BIFROST_AUTO_ID && model.api === "pi-virtual";
-}
-
 function lastDispatchedPhysical(ctx: ExtensionContext): Model<Api> | undefined {
   for (const entry of ctx.sessionManager.getBranch().slice().reverse()) {
     if (entry.type !== "message" || entry.message.role !== "assistant") continue;
-    if (entry.message.api === "pi-virtual") continue;
+    if (isVirtualModel(entry.message)) continue;
     const model = ctx.modelRegistry.find(entry.message.provider, entry.message.model);
-    if (model && model.api !== "pi-virtual") return model;
+    if (model && !isVirtualModel(model)) return model;
   }
   return undefined;
 }
@@ -329,7 +324,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     name: "Bifrost Auto",
     thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
     async route(request, ctx) {
-      let routeFailure: { tier: string; pool: string | string[] | undefined; reason?: string; skipped?: readonly { key: string; reason: string }[] } | undefined;
+      let routeFailure: { tier: string; pool: string | string[] | undefined; reason?: string; skipped?: readonly SkippedCandidate[] } | undefined;
       const route = createVirtualRoute({
         overrides: virtualOverride,
         fallback: () => lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default).selected : undefined),

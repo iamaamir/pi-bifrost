@@ -6,7 +6,7 @@ interface AssistantOutcome {
   errorMessage?: unknown;
 }
 
-function modelKey(message: AssistantOutcome): string | undefined {
+function outcomeModelKey(message: AssistantOutcome): string | undefined {
   if (typeof message.provider !== "string" || typeof message.model !== "string") return undefined;
   return `${message.provider}/${message.model}`;
 }
@@ -40,7 +40,7 @@ export class RuntimeReliabilityTracker {
       let last: AssistantOutcome | undefined;
       for (let index = messages.length - 1; index >= 0; index -= 1) {
         const message = messages[index];
-        if (message.role === "assistant" && modelKey(message) === model) {
+        if (message.role === "assistant" && outcomeModelKey(message) === model) {
           last = message;
           break;
         }

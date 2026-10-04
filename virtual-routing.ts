@@ -1,13 +1,14 @@
 import type { Api, Message, Model } from "@earendil-works/pi-ai";
 import { clampThinkingLevel } from "@earendil-works/pi-ai";
 import type { ModelRouteRequest, ModelRoute } from "@earendil-works/pi-coding-agent";
+import type { SkippedCandidate } from "./routing.ts";
 import type { VirtualOverride } from "./virtual-override.ts";
 
 /** Explains what to fix: empty pool, excluded-only pool, or unresolved pool. */
 export function poolProblem(
   tier: string,
   pool: string | string[] | undefined,
-  skipped?: readonly { key: string; reason: string }[],
+  skipped?: readonly SkippedCandidate[],
 ): string {
   const patterns = pool === undefined ? [] : Array.isArray(pool) ? pool : [pool];
   if (patterns.length === 0) {
@@ -25,7 +26,7 @@ export function noModelError(
   tier: string,
   pool: string | string[] | undefined,
   reason?: string,
-  skipped?: readonly { key: string; reason: string }[],
+  skipped?: readonly SkippedCandidate[],
 ): string {
   const suffix = reason ? ` (${reason})` : "";
   return `Bifrost: no healthy physical model for tier ${tier}${suffix}: ${poolProblem(tier, pool, skipped)}`;
