@@ -39,6 +39,17 @@ export interface TypeSafeConfig {
   };
 }
 
+export interface PiNativeConfig {
+  /** Catalog id in "provider/id" form. Absent resolves the first available classifier entry. */
+  model?: string;
+  timeoutMs?: number;
+  maxAttempts?: number;
+  /** Content-free local aggregate observation. Enabled by default when pi-native is active. */
+  metrics?: {
+    enabled?: boolean;
+  };
+}
+
 export interface ClassifierConfig {
   enabled?: boolean;
   backend?: ClassifierBackend;
@@ -52,6 +63,7 @@ export interface ClassifierConfig {
   fallbackToRegex?: boolean;
   criteria?: Record<string, TierCriterion>;
   typesafe?: TypeSafeConfig;
+  piNative?: PiNativeConfig;
   minConfidence?: number;
   fallback?: "prompt" | "regex";
 }
@@ -168,7 +180,7 @@ export interface ConfigIssue {
   readonly message: string;
 }
 
-const TYPESAFE_PROMPT_FIELDS = [
+const PROMPT_ONLY_FIELDS = [
   "endpoint",
   "method",
   "systemPrompt",
@@ -184,6 +196,11 @@ export function configHasNoPools(config: BifrostConfig): boolean {
   return Object.values(config.models ?? {}).every((pool) => (Array.isArray(pool) ? pool.every(blank) : blank(pool)));
 }
 
+/** True when any config error belongs to the classifier family. Every classifier validation message contains the word "classifier". */
+export function hasClassifierConfigErrors(config: BifrostConfig): boolean {
+  return validateConfig(config).some((issue) => issue.severity === "error" && /classifier/i.test(issue.message));
+}
+
 /**
  * Validate a resolved BifrostConfig. Returns issues (errors stop
  * the extension from starting, warnings are logged only).
@@ -197,6 +214,9 @@ export function validateConfig(
   if (classifier?.backend && !Object.values(CLASSIFIER_BACKEND_IDS).includes(classifier.backend)) {
     issues.push({ severity: "error", message: `Unknown classifier backend "${classifier.backend}".` });
   }
+  const directBackend = classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe || classifier?.backend === CLASSIFIER_BACKEND_IDS.piNative;
+  const directLabel = classifier?.backend === CLASSIFIER_BACKEND_IDS.piNative ? "PiNative" : "TypeSafe";
+  const directKey = classifier?.backend === CLASSIFIER_BACKEND_IDS.piNative ? "piNative" : "typesafe";
   if (classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe) {
     if (classifier.typesafe?.model !== undefined && classifier.typesafe.model !== TYPE_SAFE_MODEL) {
       issues.push({ severity: "error", message: `TypeSafe classifier model must be exactly "${TYPE_SAFE_MODEL}".` });
@@ -204,24 +224,34 @@ export function validateConfig(
     if (classifier.typesafe?.endpoint !== undefined && classifier.typesafe.endpoint !== TYPE_SAFE_ENDPOINT) {
       issues.push({ severity: "error", message: `TypeSafe classifier endpoint must be "${TYPE_SAFE_ENDPOINT}".` });
     }
-    if (classifier.backend === CLASSIFIER_BACKEND_IDS.typesafe && (classifier.endpoint !== undefined || classifier.method !== undefined || classifier.systemPrompt !== undefined || classifier.maxTokens !== undefined || classifier.temperature !== undefined || classifier.fallbackToRegex !== undefined)) {
-      issues.push({ severity: "error", message: "TypeSafe classifier does not support endpoint, method, systemPrompt, maxTokens, temperature, or fallbackToRegex; use nested typesafe transport settings." });
-    }
     if (classifier.typesafe?.timeoutMs !== undefined && (!Number.isInteger(classifier.typesafe.timeoutMs) || classifier.typesafe.timeoutMs < 100 || classifier.typesafe.timeoutMs > 60_000)) {
-      issues.push({ severity: "error", message: `TypeSafe timeoutMs must be an integer between 100 and 60000, got ${classifier.typesafe.timeoutMs}.` });
+      issues.push({ severity: "error", message: `TypeSafe classifier timeoutMs must be an integer between 100 and 60000, got ${classifier.typesafe.timeoutMs}.` });
     }
     if (classifier.typesafe?.maxAttempts !== undefined && (!Number.isInteger(classifier.typesafe.maxAttempts) || classifier.typesafe.maxAttempts < 1 || classifier.typesafe.maxAttempts > 3)) {
-      issues.push({ severity: "error", message: `TypeSafe maxAttempts must be an integer between 1 and 3, got ${classifier.typesafe.maxAttempts}.` });
+      issues.push({ severity: "error", message: `TypeSafe classifier maxAttempts must be an integer between 1 and 3, got ${classifier.typesafe.maxAttempts}.` });
+    }
+  }
+  if (classifier?.backend === CLASSIFIER_BACKEND_IDS.piNative) {
+    if (classifier.piNative?.timeoutMs !== undefined && (!Number.isInteger(classifier.piNative.timeoutMs) || classifier.piNative.timeoutMs < 100 || classifier.piNative.timeoutMs > 60_000)) {
+      issues.push({ severity: "error", message: `PiNative classifier timeoutMs must be an integer between 100 and 60000, got ${classifier.piNative.timeoutMs}.` });
+    }
+    if (classifier.piNative?.maxAttempts !== undefined && (!Number.isInteger(classifier.piNative.maxAttempts) || classifier.piNative.maxAttempts < 1 || classifier.piNative.maxAttempts > 3)) {
+      issues.push({ severity: "error", message: `PiNative classifier maxAttempts must be an integer between 1 and 3, got ${classifier.piNative.maxAttempts}.` });
+    }
+  }
+  if (directBackend && classifier) {
+    if (classifier.endpoint !== undefined || classifier.method !== undefined || classifier.systemPrompt !== undefined || classifier.maxTokens !== undefined || classifier.temperature !== undefined || classifier.fallbackToRegex !== undefined) {
+      issues.push({ severity: "error", message: `${directLabel} classifier does not support endpoint, method, systemPrompt, maxTokens, temperature, or fallbackToRegex; use nested ${directKey} transport settings.` });
     }
     if (classifier.minConfidence !== undefined && (!Number.isFinite(classifier.minConfidence) || classifier.minConfidence < 0 || classifier.minConfidence > 1)) {
-      issues.push({ severity: "error", message: `TypeSafe minConfidence must be between 0 and 1, got ${classifier.minConfidence}.` });
+      issues.push({ severity: "error", message: `${directLabel} classifier minConfidence must be between 0 and 1, got ${classifier.minConfidence}.` });
     }
     if (classifier.fallback !== undefined && classifier.fallback !== "prompt" && classifier.fallback !== "regex") {
-      issues.push({ severity: "error", message: `TypeSafe fallback must be "prompt" or "regex", got ${classifier.fallback}.` });
+      issues.push({ severity: "error", message: `${directLabel} classifier fallback must be "prompt" or "regex", got ${classifier.fallback}.` });
     }
     const criteria = classifier.criteria ?? {};
     for (const tier of modelKeys) {
-      if (criteria[tier] === undefined && DEFAULT_CLASSIFIER_CRITERIA[tier] === undefined) issues.push({ severity: "error", message: `TypeSafe classifier criteria missing for tier "${tier}".` });
+      if (criteria[tier] === undefined && DEFAULT_CLASSIFIER_CRITERIA[tier] === undefined) issues.push({ severity: "error", message: `${directLabel} classifier criteria missing for tier "${tier}".` });
     }
     for (const [tier, criterion] of Object.entries(criteria)) {
       if (!modelKeys.includes(tier)) issues.push({ severity: "error", message: `Classifier criteria references unknown tier "${tier}".` });
@@ -409,10 +439,11 @@ export function mergeConfig(
   if (merged.classifier) {
     merged.classifier.criteria = mergeCriteria(base.classifier?.criteria, override.classifier?.criteria);
     merged.classifier.typesafe = mergeObj(base.classifier?.typesafe, override.classifier?.typesafe);
-    if (merged.classifier.backend === CLASSIFIER_BACKEND_IDS.typesafe) {
+    merged.classifier.piNative = mergeObj(base.classifier?.piNative, override.classifier?.piNative);
+    if (merged.classifier.backend === CLASSIFIER_BACKEND_IDS.typesafe || merged.classifier.backend === CLASSIFIER_BACKEND_IDS.piNative) {
       const mergedClassifier = merged.classifier as Record<string, unknown>;
       const overrideClassifier = override.classifier as Record<string, unknown> | undefined;
-      for (const field of TYPESAFE_PROMPT_FIELDS) {
+      for (const field of PROMPT_ONLY_FIELDS) {
         if (overrideClassifier?.[field] === undefined) delete mergedClassifier[field];
       }
     }
@@ -420,6 +451,12 @@ export function mergeConfig(
       merged.classifier.typesafe.metrics = mergeObj(
         base.classifier?.typesafe?.metrics,
         override.classifier?.typesafe?.metrics,
+      );
+    }
+    if (merged.classifier.piNative) {
+      merged.classifier.piNative.metrics = mergeObj(
+        base.classifier?.piNative?.metrics,
+        override.classifier?.piNative?.metrics,
       );
     }
   }

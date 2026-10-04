@@ -28,6 +28,7 @@ import {
   configHasNoPools,
   DEFAULT_CLASSIFIER_CRITERIA,
   validateConfig,
+  hasClassifierConfigErrors,
   type BifrostConfig,
 } from "./config.ts";
 import {
@@ -84,10 +85,6 @@ function endpointClassifier(id: string, endpoint: string): ClassifierModel {
   return { kind: "endpoint", id, baseUrl: endpoint };
 }
 
-function hasTypeSafeConfigErrors(config: BifrostConfig): boolean {
-  return validateConfig(config).some((issue) => issue.severity === "error" && (issue.message.includes("TypeSafe") || issue.message.includes("Classifier criteria")));
-}
-
 function activeClassifierCacheKey(config: BifrostConfig): string {
   return classifierCacheKey(config, Object.keys(config.models ?? {}), {
     typesafeCredentialAvailable: resolveTypeSafeApiKey().source !== "missing",
@@ -113,7 +110,7 @@ function buildPipeline(
   // If classifier is disabled, pass empty array — pipeline skips LLM stage.
   let classifierModels: ClassifierModel[] = [];
   let classifyDirect: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<ClassificationJudgment | undefined>) | undefined;
-  const typeSafeUsable = config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && !hasTypeSafeConfigErrors(config);
+  const typeSafeUsable = config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && !hasClassifierConfigErrors(config);
   if (classifierEnabled && typeSafeUsable && tiers.length > 0) {
     const classifierConfig = config.classifier!;
     const classify = createTypeSafeClassifier({
