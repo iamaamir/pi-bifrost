@@ -18,6 +18,41 @@ export function criterionText(value: TierCriterion): string {
     .filter(Boolean).join(" ");
 }
 
+/** Shared direct-transport helpers (typesafe, pi-native). */
+export function finite(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function abortableDelay(
+  ms: number,
+  delay: (ms: number) => Promise<void>,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(false);
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => signal?.removeEventListener("abort", abort);
+    const finish = (continued: boolean) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(continued);
+    };
+    const abort = () => finish(false);
+    signal?.addEventListener("abort", abort, { once: true });
+    delay(ms).then(() => finish(true), (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    });
+  });
+}
+
 function stableValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableValue);
   if (value && typeof value === "object") {

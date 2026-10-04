@@ -4,7 +4,7 @@ import type { ReliabilityStore } from "./reliability-store.ts";
 import { debug as bifrostDebug } from "./debug.ts";
 import type { TypeSafeObservation, TypeSafeOutcome } from "./classifier-metrics.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_CREDENTIAL_KEY, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassificationJudgment, type ClassifierRequest } from "./classifier-backends.ts";
-import { criterionText } from "./classifier-semantics.ts";
+import { abortableDelay, criterionText, finite, sleep } from "./classifier-semantics.ts";
 
 /** Compatibility exports for the TypeSafe provider seam and benchmark. */
 export const TYPESAFE_SYSTEMONE_URL = TYPE_SAFE_ENDPOINT;
@@ -42,10 +42,6 @@ export interface TypeSafeOptions {
   readonly observe?: (observation: TypeSafeObservation) => void;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 export function buildTypeSafeRequest(input: TypeSafeInput): Record<string, unknown> {
   const criteria: Record<string, string> = {};
   for (const tier of input.tiers) criteria[tier] = criterionText(input.criteria[tier] ?? tier);
@@ -60,10 +56,6 @@ export function buildTypeSafeRequest(input: TypeSafeInput): Record<string, unkno
       },
     },
   };
-}
-
-function finite(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
 }
 
 function strictRecord(value: unknown, required: readonly string[], optional: readonly string[] = []): Record<string, unknown> | undefined {
@@ -127,32 +119,6 @@ function retryAfterMs(response: Response): number | undefined {
   if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
   const date = Date.parse(raw);
   return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
-}
-
-function abortableDelay(
-  ms: number,
-  delay: (ms: number) => Promise<void>,
-  signal?: AbortSignal,
-): Promise<boolean> {
-  if (signal?.aborted) return Promise.resolve(false);
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const cleanup = () => signal?.removeEventListener("abort", abort);
-    const finish = (continued: boolean) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(continued);
-    };
-    const abort = () => finish(false);
-    signal?.addEventListener("abort", abort, { once: true });
-    delay(ms).then(() => finish(true), (error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    });
-  });
 }
 
 async function cancelResponseBody(response: Response | undefined): Promise<void> {
