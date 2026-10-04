@@ -125,4 +125,23 @@ wait_mode_state "$work/.pi/bifrost-state.json" true true false
 echo 'scenario 4: pass'
 "$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true
 
+# ── Scenario 5: /model picker selects Bifrost Auto and routes a prompt ──
+echo '--- scenario 5: model picker -> bifrost/auto ---'
+rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json"
+cat >"$work/bifrost.json" <<'EOF'
+{"enabled":true,"default":"economical","strategy":"cheapest","classifier":{"enabled":false},"models":{"economical":["fake/healthy"]},"rules":[{"pattern":"hello","model":"economical"}],"debug":{"enabled":true}}
+EOF
+sid=$(start_pi)
+"$A" --session "$sid" wait 'Bifrost' --assert --timeout 15000 >/dev/null
+prompt "$sid" '/model'
+"$A" --session "$sid" type 'Bifrost Auto' >/dev/null
+"$A" --session "$sid" press Enter >/dev/null
+"$A" --session "$sid" wait '(bifrost) auto' --assert --timeout 15000 >/dev/null
+prompt "$sid" 'hello world'
+poll_until "$work/.pi/bifrost-debug.jsonl" '"event":"virtual_auto"'
+poll_until "$work/.pi/bifrost-debug.jsonl" '"event":"result"'
+grep -q '"event":"dispatch","entryType":"event","model":"fake/healthy"' "$work/.pi/bifrost-debug.jsonl" || { echo 'FAIL: auto route did not dispatch fake/healthy' >&2; exit 1; }
+echo 'scenario 5: pass'
+"$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true
+
 echo 'all reliability E2E scenarios: pass'
