@@ -19,12 +19,19 @@ const PI_ARGS = [
 ];
 
 let integrationDir;
+// Isolate HOME per run: a developer's ~/.pi/agent may load other bifrost
+// copies or extensions, which collides with this suite's extension instance.
+let integrationHome;
+function homeEnv() {
+  integrationHome ??= mkdtempSync(join(tmpdir(), "bifrost-integration-home-"));
+  return { HOME: integrationHome };
+}
 
 async function runPi(command, cwd = process.cwd(), env = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn("pi", [...PI_ARGS, command], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ...env },
+      env: { ...process.env, ...homeEnv(), ...env },
       cwd,
     });
 
@@ -87,6 +94,7 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
 
   after(() => {
     rmSync(integrationDir, { recursive: true, force: true });
+    if (integrationHome) rmSync(integrationHome, { recursive: true, force: true });
   });
 
   it("reports classifier status", async () => {
