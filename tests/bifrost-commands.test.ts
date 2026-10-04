@@ -568,3 +568,106 @@ describe("command aliases", () => {
     assert.equal(getBifrostCommandCompletions("init -f"), null);
   });
 });
+
+describe("route dispatch", () => {
+  // Cache paths resolve against process.cwd(), and "cache clear" writes one.
+  // Running these in the repo would truncate the developer's real cache, so
+  // both cache routes dispatch from a temp directory like the other tests here.
+  async function inTempDir<T>(fn: () => Promise<T>): Promise<T> {
+    const dir = mkdtempSync(join(tmpdir(), "bifrost-cache-route-"));
+    const previousCwd = process.cwd();
+    process.chdir(dir);
+    try {
+      return await fn();
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("routes on to the enabled state", async () => {
+    const { ctx } = makeCtx();
+    const state = makeState();
+    state.enabled = false;
+    await createCommandRouter(state as never)("on", ctx as never);
+    assert.equal(state.enabled, true);
+  });
+
+  it("routes off to the disabled state", async () => {
+    const { ctx } = makeCtx();
+    const state = makeState();
+    state.enabled = true;
+    await createCommandRouter(state as never)("off", ctx as never);
+    assert.equal(state.enabled, false);
+  });
+
+  it("routes pin and unpin", async () => {
+    const { ctx } = makeCtx();
+    const state = makeState();
+    await createCommandRouter(state as never)("pin", ctx as never);
+    assert.equal(state.pinned, true);
+    await createCommandRouter(state as never)("unpin", ctx as never);
+    assert.equal(state.pinned, false);
+  });
+
+  it("routes classifier on and off", async () => {
+    const { ctx } = makeCtx();
+    const state = makeState();
+    state.classifierEnabled = false;
+    await createCommandRouter(state as never)("classifier on", ctx as never);
+    assert.equal(state.classifierEnabled, true);
+    await createCommandRouter(state as never)("classifier off", ctx as never);
+    assert.equal(state.classifierEnabled, false);
+  });
+
+  // log() reaches the fake as ctx.ui.notify, recorded as kind "notify" with
+  // value "<type>:<message>".
+  it("routes cache stats to its own handler", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await inTempDir(async () => {
+      await createCommandRouter(state as never)("cache stats", ctx as never);
+    });
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("cache:")));
+  });
+
+  it("routes cache clear to its own handler", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await inTempDir(async () => {
+      await createCommandRouter(state as never)("cache clear", ctx as never);
+    });
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("cache cleared")));
+  });
+
+  // debug uses uiOutput, which reaches the fake as ctx.ui.setWidget and is
+  // recorded as kind "widget" with the lines array.
+  it("routes debug to its own handler", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await createCommandRouter(state as never)("debug", ctx as never);
+    assert.ok(calls.some((c) => c.kind === "widget" && (c.lines ?? []).includes("--- config ---")));
+  });
+
+  it("does not let a prefix route swallow a multi-word exact command", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await createCommandRouter(state as never)("classifier status", ctx as never);
+    assert.ok(calls.some((c) => c.kind === "widget" || c.kind === "notify"));
+  });
+
+  it("opens the picker for initialize rather than running init", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await createCommandRouter(state as never)("initialize", ctx as never);
+    assert.ok(calls.some((c) => c.kind === "select"));
+  });
+
+  it("does not let prefix() swallow initialize either", async () => {
+    // Guards against someone converting init to the bare-startsWith helper.
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await createCommandRouter(state as never)("initfoo", ctx as never);
+    assert.ok(calls.some((c) => c.kind === "select"));
+  });
+});

@@ -701,17 +701,26 @@ interface CommandSpec {
   readonly aliases?: readonly string[];
 }
 
-interface CommandEntry extends CommandSpec {
+interface CommandEntry {
+  readonly value: string;
   readonly match: (sub: string) => boolean;
   readonly handler: CommandFn;
 }
 
-function exact(word: string, description: string, handler: CommandFn): CommandEntry {
-  return { value: word, description, match: (sub) => sub === word, handler };
+function exact(word: string, handler: CommandFn): CommandEntry {
+  return { value: word, match: (sub) => sub === word, handler };
 }
 
-function prefix(word: string, description: string, handler: CommandFn, argumentHint = "<prompt>"): CommandEntry {
-  return { value: word, description, argumentHint, match: (sub) => sub.startsWith(word), handler };
+// Bare prefix, no word boundary: benchmark and preview take free-text prompts,
+// so "/bifrost previewXYZ" must keep dispatching with prompt "XYZ".
+function prefix(word: string, handler: CommandFn): CommandEntry {
+  return { value: word, match: (sub) => sub.startsWith(word), handler };
+}
+
+// Space-bounded: init takes flags ("init -f", "init --write") but
+// "/bifrost initialize" must not match, which bare prefix would allow.
+function spaced(word: string, handler: CommandFn): CommandEntry {
+  return { value: word, match: (sub) => sub === word || sub.startsWith(`${word} `), handler };
 }
 
 export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
@@ -897,14 +906,14 @@ export function createCommandRouter(
   state: BifrostState,
 ): (args: string, ctx: ExtensionContext) => Promise<void> {
   const routes: CommandEntry[] = [
-    exact("on", "Enable routing", (_, ctx) => {
+    exact("on", (_, ctx) => {
       state.enabled = true;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost enabled");
     }),
-    exact("off", "Disable routing", async (_, ctx) => {
+    exact("off", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
       state.enabled = false;
       state.saveModeState();
@@ -912,7 +921,7 @@ export function createCommandRouter(
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost disabled");
     }),
-    exact("pin", "Lock current model", async (_, ctx) => {
+    exact("pin", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
       state.pinned = true;
       state.saveModeState();
@@ -920,14 +929,14 @@ export function createCommandRouter(
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost pinned");
     }),
-    exact("unpin", "Resume routing", (_, ctx) => {
+    exact("unpin", (_, ctx) => {
       state.pinned = false;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost unpinned");
     }),
-    exact("reload", "Reload config after editing", (_, ctx) => {
+    exact("reload", (_, ctx) => {
       const done = debugMeasure("command", "reload");
       state.config = loadConfig(process.cwd(), state.extensionDir);
       // Re-init debug — user may have updated debug config since startup.
@@ -959,7 +968,7 @@ export function createCommandRouter(
     }),
 
     // Providers
-    exact("providers", "List available providers", (_, ctx) => {
+    exact("providers", (_, ctx) => {
       uiBusy(ctx, "Loading providers...");
       const available = ctx.modelRegistry.getAvailable();
       const counts = new Map<string, number>();
@@ -976,7 +985,7 @@ export function createCommandRouter(
     }),
 
     // Probe — test every model with a tiny prompt
-    exact("probe", "Probe working models", async (_, ctx) => {
+    exact("probe", async (_, ctx) => {
       const available = ctx.modelRegistry.getAvailable();
       if (available.length === 0) {
         log(ctx, "No models available in registry.", "warning");
@@ -1047,18 +1056,13 @@ export function createCommandRouter(
     }),
 
     // Init
-    {
-      value: "init",
-      description: "Probe models and generate config",
-      match: (sub) => sub === "init" || sub.startsWith("init "),
-      handler: (args, ctx) => handleInit(args, ctx, state),
-    },
+    spaced("init", (args, ctx) => handleInit(args, ctx, state)),
 
     // Benchmark
-    prefix("benchmark", "Classify a benchmark prompt", (args, ctx) => handleBenchmark(args, ctx, state), "<prompt>"),
+    prefix("benchmark", (args, ctx) => handleBenchmark(args, ctx, state)),
 
     // Cache
-    exact("cache stats", "Show classification cache", (_, ctx) => {
+    exact("cache stats", (_, ctx) => {
       const path = cachePath(process.cwd(), state.config.cache?.path);
       const entries = loadCache(path);
       log(
@@ -1066,7 +1070,7 @@ export function createCommandRouter(
         `cache: ${entries.length} entries (cap ${state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES}, retention ${state.config.cache?.ttlHours ?? 720}h, threshold ${state.config.cache?.threshold ?? DEFAULT_THRESHOLD})`,
       );
     }),
-    exact("cache clear", "Clear classification cache", (_, ctx) => {
+    exact("cache clear", (_, ctx) => {
       const path = cachePath(process.cwd(), state.config.cache?.path);
       saveCache(path, []);
       state.cacheEntries = [];
@@ -1075,19 +1079,9 @@ export function createCommandRouter(
     }),
 
     // Classifier
-    {
-      value: "classifier test",
-      description: "Test selected classifier backend",
-      match: (sub) => sub === "classifier test",
-      handler: (_, ctx) => handleClassifierTest(ctx, state),
-    },
-    {
-      value: "classifier",
-      description: "Choose classifier backend and prompt model",
-      match: (sub) => sub === "classifier",
-      handler: (_, ctx) => handleClassifierChoose(ctx, state),
-    },
-    exact("classifier on", "Enable LLM classifier", (_, ctx) => {
+    exact("classifier test", (_, ctx) => handleClassifierTest(ctx, state)),
+    exact("classifier", (_, ctx) => handleClassifierChoose(ctx, state)),
+    exact("classifier on", (_, ctx) => {
       state.classifierEnabled = true;
       state.saveModeState();
       state.invalidatePipeline();
@@ -1095,7 +1089,7 @@ export function createCommandRouter(
       debug("command", "classifier_toggle", { enabled: true });
       log(ctx, "LLM classifier enabled");
     }),
-    exact("classifier off", "Disable LLM classifier", (_, ctx) => {
+    exact("classifier off", (_, ctx) => {
       state.classifierEnabled = false;
       state.saveModeState();
       state.invalidatePipeline();
@@ -1103,7 +1097,7 @@ export function createCommandRouter(
       debug("command", "classifier_toggle", { enabled: false });
       log(ctx, "LLM classifier disabled; regex fallback active");
     }),
-    exact("classifier status", "Show classifier state", (_, ctx) => {
+    exact("classifier status", (_, ctx) => {
       const rawModel = state.config.classifier?.model;
       const modelId = Array.isArray(rawModel)
         ? rawModel.join(", ")
@@ -1129,7 +1123,7 @@ export function createCommandRouter(
     }),
 
     // Debug — show loaded config state
-    exact("debug", "Show config and routing state", (_, ctx) => {
+    exact("debug", (_, ctx) => {
       const rules = state.config.rules ?? [];
       const tiers = Object.keys(state.config.models ?? {});
       const lines = [
@@ -1154,7 +1148,7 @@ export function createCommandRouter(
       uiOutput(ctx, lines);
       log(ctx, "debug info printed above");
     }),
-    prefix("preview", "Preview routing for a prompt", (args, ctx) => handlePreview(args, ctx, state), "<prompt>"),
+    prefix("preview", (args, ctx) => handlePreview(args, ctx, state)),
   ];
 
   return async (args: string, ctx: ExtensionContext) => {
