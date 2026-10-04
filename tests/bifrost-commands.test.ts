@@ -570,11 +570,12 @@ describe("command aliases", () => {
 });
 
 describe("route dispatch", () => {
-  // Cache paths resolve against process.cwd(), and "cache clear" writes one.
-  // Running these in the repo would truncate the developer's real cache, so
-  // both cache routes dispatch from a temp directory like the other tests here.
+  // Config, probe, and cache paths all resolve against process.cwd(), and
+  // several of these routes write: cache clear truncates the cache file, probe
+  // and init overwrite .pi/bifrost-probe.json. Dispatching them in the repo
+  // would damage real developer state, so they run in a temp directory.
   async function inTempDir<T>(fn: () => Promise<T>): Promise<T> {
-    const dir = mkdtempSync(join(tmpdir(), "bifrost-cache-route-"));
+    const dir = mkdtempSync(join(tmpdir(), "bifrost-route-"));
     const previousCwd = process.cwd();
     process.chdir(dir);
     try {
@@ -649,10 +650,11 @@ describe("route dispatch", () => {
     assert.ok(calls.some((c) => c.kind === "widget" && (c.lines ?? []).includes("--- config ---")));
   });
 
-  // Every assertion in this block pins a string only that one handler emits,
-  // or a mutation it alone performs. A predicate that fallthrough also
-  // satisfies — "some widget or notify happened" — cannot tell a routed
-  // command from one that missed every route and opened the picker.
+  // Each assertion below distinguishes the routed command from fallthrough:
+  // if a route is deleted the command misses every route, opens the picker,
+  // and lands on some other handler. So an assertion that merely checks "a
+  // widget or notify happened" proves nothing, and cannot tell correct
+  // routing from no routing at all.
 
   it("routes reload", async () => {
     const { ctx, calls } = makeCtx();
@@ -704,9 +706,22 @@ describe("route dispatch", () => {
     const { ctx, calls } = makeCtx();
     const state = makeState();
     // Bare "preview" with no prompt: only reachable if the prefix route
-    // matches the word alone, and handleInit's usage text is its own.
+    // matches the word alone.
     await createCommandRouter(state as never)("preview", ctx as never);
     assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("usage: /bifrost preview <prompt>")));
+  });
+
+  it("dispatches previewXYZ to preview, which a space-bounded matcher would not", async () => {
+    // prefix() is bare startsWith on purpose: "/bifrost previewXYZ" previews
+    // prompt "XYZ". Requiring a space boundary would send it to the picker.
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await createCommandRouter(state as never)("previewXYZ", ctx as never);
+    // The slice leaves "XYZ", so handlePreview classifies it rather than
+    // printing usage text. The fake pipeline returns "unclassified".
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("no tier matched")));
+    assert.ok(calls.some((c) => c.kind === "status" && String(c.value).includes("previewing prompt")));
+    assert.equal(calls.some((c) => c.kind === "select"), false);
   });
 
   it("routes init", async () => {
@@ -723,17 +738,26 @@ describe("route dispatch", () => {
   });
 
   it("opens the picker for initialize rather than running init", async () => {
+    // Temp dir because the regression this guards sends "initialize" to
+    // handleInit, which probes and writes .pi/bifrost-probe.json into the
+    // working directory. A failing run must not damage real probe data.
     const { ctx, calls } = makeCtx();
     const state = makeState();
-    await createCommandRouter(state as never)("initialize", ctx as never);
+    await inTempDir(async () => {
+      await createCommandRouter(state as never)("initialize", ctx as never);
+    });
     assert.ok(calls.some((c) => c.kind === "select"));
   });
 
   it("does not let prefix() swallow initialize either", async () => {
     // Guards against someone converting init to the bare-startsWith helper.
+    // Same temp-dir reason as the guard above: under that regression
+    // "initfoo" reaches handleInit and rewrites the repo's probe file.
     const { ctx, calls } = makeCtx();
     const state = makeState();
-    await createCommandRouter(state as never)("initfoo", ctx as never);
+    await inTempDir(async () => {
+      await createCommandRouter(state as never)("initfoo", ctx as never);
+    });
     assert.ok(calls.some((c) => c.kind === "select"));
   });
 });
