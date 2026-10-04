@@ -1,6 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { randomUUID } from "node:crypto";
-import type { ClassifierApi, ClassifierContext, ClassifierModel, ClassifierResult, ModelsClassifierOptions } from "@earendil-works/pi-ai";
+import type { AuthOperationOptions, ClassifierApi, ClassifierContext, ClassifierModel, ClassifierResult, ModelsClassifierOptions } from "@earendil-works/pi-ai";
 import type { ReliabilityStore } from "./reliability-store.ts";
 import { debug as bifrostDebug } from "./debug.ts";
 import type { TypeSafeObservation, TypeSafeOutcome } from "./classifier-metrics.ts";
@@ -29,7 +29,7 @@ export interface PiNativeJudgment extends ClassificationJudgment {
 /** Registry surface the transport needs. `ctx.modelRegistry` satisfies it. */
 export interface PiClassifierRegistry {
   getModelOfType(type: "classifier", provider: string, modelId: string): ClassifierModel<ClassifierApi> | undefined;
-  getAvailableOfType(type: "classifier", provider?: string): Promise<readonly ClassifierModel<ClassifierApi>[]>;
+  getAvailableOfType(type: "classifier", provider?: string, options?: AuthOperationOptions): Promise<readonly ClassifierModel<ClassifierApi>[]>;
   classify(model: ClassifierModel<ClassifierApi>, context: ClassifierContext, options?: ModelsClassifierOptions): Promise<ClassifierResult>;
 }
 
@@ -57,7 +57,7 @@ function catalogError(cause: "missing_credential" | "missing_catalog"): string {
     : "no classifier model in Pi's catalog; refresh the catalog and check the enabledModels filter in settings.json";
 }
 
-async function resolveClassifierModel(options: PiNativeOptions): Promise<ModelResolution> {
+async function resolveClassifierModel(options: PiNativeOptions, signal: AbortSignal): Promise<ModelResolution> {
   const cause = (): "missing_credential" | "missing_catalog" => (options.credentialMissing?.() ? "missing_credential" : "missing_catalog");
   const configured = options.model;
   if (configured) {
@@ -67,8 +67,23 @@ async function resolveClassifierModel(options: PiNativeOptions): Promise<ModelRe
       : undefined;
     return model ? { model, id: configured } : cause();
   }
-  const [first] = await options.registry.getAvailableOfType("classifier", "typesafe");
+  const [first] = await options.registry.getAvailableOfType("classifier", "typesafe", { signal });
   return first ? { model: first, id: `${first.provider}/${first.id}` } : cause();
+}
+
+function abortableResult<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      signal.removeEventListener("abort", abort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(
+      (value) => { signal.removeEventListener("abort", abort); resolve(value); },
+      (error) => { signal.removeEventListener("abort", abort); reject(error); },
+    );
+  });
 }
 
 function buildContext(request: ClassifierRequest): ClassifierContext {
@@ -87,16 +102,22 @@ function buildContext(request: ClassifierRequest): ClassifierContext {
 }
 
 /**
- * classify() exposes failures only through stopReason and errorMessage, with no
- * status codes. Retry every error except the known non-retryable quota taxonomy
- * (pi-ai utils/retry.js), which covers the 429/529/network retry policy.
+ * Pi exposes only errorMessage, not structured HTTP status or headers.
+ * Recognize transient errors conservatively; unknown errors stop, not retry.
  */
 const NON_RETRYABLE_QUOTA = /insufficient[_ ]quota|out of budget|quota exceeded|billing|monthly usage limit|available balance/i;
+const AUTH_ERROR = /\b(?:401|403)\b|unauthorized|forbidden|invalid[_ -]?(?:api[_ -]?)?key|authentication|login required/i;
+const RATE_LIMIT = /\b(?:429|529)\b|rate.?limit/i;
+const TERMINAL_HTTP = /\b4\d\d\b|bad request|invalid[_ -]?request|validation failed/i;
+const TRANSIENT_ERROR = /\b(?:408|500|502|503|504)\b|timeout|timed out|temporar|overload|network|connection|socket|fetch failed|econnreset|econnrefused|enotfound/i;
 
-function errorOutcome(message: string | undefined): TypeSafeOutcome {
-  if (message && /429|529|rate.?limit/i.test(message)) return "rate_limited";
-  if (message && /401|403|unauthorized|forbidden/i.test(message)) return "auth";
-  return "network";
+function errorPolicy(message: string | undefined, thrown: boolean): { outcome: TypeSafeOutcome; retry: boolean; quota?: boolean } {
+  if (NON_RETRYABLE_QUOTA.test(message ?? "")) return { outcome: RATE_LIMIT.test(message ?? "") ? "rate_limited" : "http", retry: false, quota: true };
+  if (AUTH_ERROR.test(message ?? "")) return { outcome: "auth", retry: false };
+  if (RATE_LIMIT.test(message ?? "")) return { outcome: "rate_limited", retry: true };
+  if (TERMINAL_HTTP.test(message ?? "") && !/\b408\b/.test(message ?? "")) return { outcome: "http", retry: false };
+  if (TRANSIENT_ERROR.test(message ?? "") || thrown) return { outcome: "network", retry: true };
+  return { outcome: "http", retry: false };
 }
 
 /** Decode only provider data needed for routing. Invalid data is a classifier miss. */
@@ -137,6 +158,12 @@ export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTr
 
   return async function classifyWithPi(request: ClassifierRequest, signal?: AbortSignal): Promise<PiNativeJudgment | undefined> {
     const startedAt = performance.now();
+    const deadline = startedAt + timeoutMs;
+    const controller = new AbortController();
+    const abort = () => controller.abort(new DOMException("Aborted", "AbortError"));
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
+    const timer = setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), timeoutMs);
     const traceId = randomUUID();
     const trace = (event: string, meta: Record<string, unknown> = {}) => {
       if (options.debug) bifrostDebug(CLASSIFIER_BACKEND_IDS.piNative, event, { trace_id: traceId, model: options.model, ...meta });
@@ -178,96 +205,124 @@ export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTr
       return judgment;
     };
 
-    const resolved = await resolveClassifierModel(options);
-    if (typeof resolved === "string") {
-      if (!warnedMissingModel) {
-        warnedMissingModel = true;
-        console.error(`[bifrost] pi-native classifier disabled: ${catalogError(resolved)}`);
-      }
-      trace("model_missing", { cause: resolved });
-      return finish("missing_key");
-    }
-    resolvedModelId = resolved.id;
-    key = `classifier/${CLASSIFIER_BACKEND_IDS.piNative}/${resolved.id}`;
-    const now = Date.now();
-    if (options.reliability) {
-      const claim = options.reliability.tryClaimTrial(key, now);
-      if (!claim.allowed) {
-        trace("circuit_open");
-        return finish("circuit_open");
-      }
-      trialClaimed = claim.claimed;
-    }
-
-    const recordFailure = (reason: string) => {
-      options.reliability?.recordFailure(key, "classifier", reason);
-      trialClaimed = false;
-    };
-    const recordSuccess = () => {
-      options.reliability?.recordSuccess(key, "classifier");
-      trialClaimed = false;
-    };
-
-    const context = buildContext(request);
-    const deadline = performance.now() + timeoutMs;
-    let failure: TypeSafeOutcome = "network";
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
       if (signal?.aborted) return finish("aborted");
-      attempts = attempt;
-      const remaining = deadline - performance.now();
-      trace("attempt", { attempt, model: resolved.id, remaining_ms: Math.max(0, Math.round(remaining)) });
-      if (remaining <= 0) { failure = "timeout"; break; }
-
-      const controller = new AbortController();
-      const abort = () => controller.abort(new DOMException("Aborted", "AbortError"));
-      signal?.addEventListener("abort", abort, { once: true });
-      const timer = setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), remaining);
-      let result: ClassifierResult | undefined;
+      let resolved: ModelResolution;
       try {
-        result = await options.registry.classify(resolved.model, context, { signal: controller.signal });
+        resolved = await abortableResult(resolveClassifierModel(options, controller.signal), controller.signal);
       } catch {
-        // Defensive: classify() never rejects. A thrown error is a transport miss.
-        result = undefined;
-      } finally {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", abort);
+        if (signal?.aborted) return finish("aborted");
+        if (controller.signal.aborted) return finish("timeout");
+        trace("discovery_error", { outcome: "network" });
+        return finish("network");
       }
-      if (signal?.aborted) return finish("aborted");
-
-      if (result?.stopReason === "aborted") {
-        trace("aborted", { attempt });
-        return finish("aborted");
+      if (typeof resolved === "string") {
+        if (!warnedMissingModel) {
+          warnedMissingModel = true;
+          console.error(`[bifrost] pi-native classifier disabled: ${catalogError(resolved)}`);
+        }
+        trace("model_missing", { cause: resolved });
+        return finish(resolved === "missing_credential" ? "missing_key" : "missing_catalog");
       }
-      if (result?.stopReason === "stop") {
-        const judgment = decodePiNativeJudgment(result, request.tiers, 0, resolved.id);
-        trace("decoded", { attempt, tier: judgment?.tier, confidence: judgment?.confidence, valid: Boolean(judgment) });
-        if (!judgment) {
-          recordFailure("decoder");
-          return finish("invalid_response");
+      resolvedModelId = resolved.id;
+      key = `classifier/${CLASSIFIER_BACKEND_IDS.piNative}/${resolved.id}`;
+      const now = Date.now();
+      if (options.reliability) {
+        const claim = options.reliability.tryClaimTrial(key, now);
+        if (!claim.allowed) {
+          trace("circuit_open");
+          return finish("circuit_open");
         }
-        recordSuccess();
-        if (judgment.confidence < (options.minConfidence ?? TYPESAFE_MIN_CONFIDENCE)) {
-          trace("low_confidence", { confidence: judgment.confidence, min_confidence: options.minConfidence ?? TYPESAFE_MIN_CONFIDENCE });
-          finish("low_confidence", judgment);
-          return undefined;
-        }
-        trace("success", { tier: judgment.tier, confidence: judgment.confidence, attempts, model: judgment.model });
-        return finish("success", judgment);
+        trialClaimed = claim.claimed;
       }
 
-      const message = result?.errorMessage;
-      failure = errorOutcome(message);
-      trace("error", { attempt, stop_reason: result?.stopReason, outcome: failure });
-      if (NON_RETRYABLE_QUOTA.test(message ?? "")) {
-        recordFailure("quota");
-        return finish(failure);
+      const recordFailure = (reason: string) => {
+        options.reliability?.recordFailure(key, "classifier", reason);
+        trialClaimed = false;
+      };
+      const recordSuccess = () => {
+        options.reliability?.recordSuccess(key, "classifier");
+        trialClaimed = false;
+      };
+
+      const context = buildContext(request);
+      let failure: TypeSafeOutcome = "network";
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        if (signal?.aborted) return finish("aborted");
+        attempts = attempt;
+        const remaining = deadline - performance.now();
+        trace("attempt", { attempt, model: resolved.id, remaining_ms: Math.max(0, Math.round(remaining)) });
+        if (remaining <= 0) { failure = "timeout"; break; }
+
+        let result: ClassifierResult | undefined;
+        try {
+          result = await abortableResult(options.registry.classify(resolved.model, context, { signal: controller.signal }), controller.signal);
+        } catch {
+          if (signal?.aborted) return finish("aborted");
+          if (controller.signal.aborted) {
+            recordFailure("timeout");
+            return finish("timeout");
+          }
+          // Defensive: classify() never rejects. A thrown error is a transport miss.
+          result = undefined;
+        }
+        if (signal?.aborted) return finish("aborted");
+        if (controller.signal.aborted) {
+          recordFailure("timeout");
+          return finish("timeout");
+        }
+
+        if (result?.stopReason === "aborted") {
+          trace("aborted", { attempt });
+          return finish("aborted");
+        }
+        if (result?.stopReason === "stop") {
+          const judgment = decodePiNativeJudgment(result, request.tiers, 0, resolved.id);
+          trace("decoded", { attempt, tier: judgment?.tier, confidence: judgment?.confidence, valid: Boolean(judgment) });
+          if (!judgment) {
+            recordFailure("decoder");
+            return finish("invalid_response");
+          }
+          recordSuccess();
+          if (judgment.confidence < (options.minConfidence ?? TYPESAFE_MIN_CONFIDENCE)) {
+            trace("low_confidence", { confidence: judgment.confidence, min_confidence: options.minConfidence ?? TYPESAFE_MIN_CONFIDENCE });
+            finish("low_confidence", judgment);
+            return undefined;
+          }
+          trace("success", { tier: judgment.tier, confidence: judgment.confidence, attempts, model: judgment.model });
+          return finish("success", judgment);
+        }
+
+        const policy = errorPolicy(result?.errorMessage, !result);
+        failure = policy.outcome;
+        trace("error", { attempt, stop_reason: result?.stopReason, outcome: failure, retryable: policy.retry });
+        if (!policy.retry) {
+          if (policy.quota) recordFailure("quota");
+          else if (trialClaimed) {
+            options.reliability?.abandonTrial(key);
+            trialClaimed = false;
+          }
+          return finish(failure);
+        }
+        if (attempt < maxAttempts) {
+          const delay = Math.min(1_000 * 2 ** (attempt - 1), 30_000);
+          if (delay >= deadline - performance.now()) {
+            recordFailure("timeout");
+            return finish("timeout");
+          }
+          const continued = await abortableDelay(delay, sleepImpl, controller.signal);
+          if (!continued) {
+            if (signal?.aborted) return finish("aborted");
+            recordFailure("timeout");
+            return finish("timeout");
+          }
+        }
       }
-      if (attempt < maxAttempts) {
-        const continued = await abortableDelay(Math.min(1_000 * 2 ** (attempt - 1), 30_000), sleepImpl, signal);
-        if (!continued) return finish("aborted");
-      }
+      recordFailure(failure);
+      return finish(failure);
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
     }
-    recordFailure(failure);
-    return finish(failure);
   };
 }

@@ -836,8 +836,16 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
   }
   let selectedPiNativeModel: string | null | undefined;
   if (backend === CLASSIFIER_BACKEND_IDS.piNative) {
-    const catalogModels = ctx.modelRegistry.getModelsOfType("classifier", "typesafe")
-      .map((model) => `${model.provider}/${model.id}`);
+    let catalogModels: string[] = [];
+    try {
+      catalogModels = (await ctx.modelRegistry.getAvailableOfType("classifier", "typesafe"))
+        .map((model) => `${model.provider}/${model.id}`);
+    } catch {
+      log(ctx, "Pi classifier catalog unavailable; choose catalog default and check credentials before use.", "warning");
+    }
+    if (catalogModels.length === 0) {
+      log(ctx, `No TypeSafe classifier available now; run /login or set ${TYPE_SAFE_API_KEY_ENV} before use.`, "warning");
+    }
     const picked = await ctx.ui.select("Pi native classifier model", ["Catalog default", ...catalogModels]);
     if (!picked) return;
     selectedPiNativeModel = picked === "Catalog default" ? null : picked;

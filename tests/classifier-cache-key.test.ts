@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { boundedClassifierPrompt, CLASSIFIER_PROMPT_MAX_CHARS, classifierCacheKey } from "../classifier-semantics.ts";
+import { boundedClassifierPrompt, CLASSIFIER_PROMPT_MAX_CHARS, classifierCacheEnabled, classifierCacheKey } from "../classifier-semantics.ts";
 import type { BifrostConfig } from "../config.ts";
 
 describe("boundedClassifierPrompt", () => {
@@ -18,6 +18,16 @@ function config(systemPrompt: string): BifrostConfig {
     classifier: { backend: "prompt", model: "provider/classifier", systemPrompt },
   };
 }
+
+describe("classifierCacheEnabled", () => {
+  it("does not reuse a decision when the default Pi catalog model can change", () => {
+    const floating: BifrostConfig = { models: { general: ["chat/a"] }, classifier: { backend: "pi-native" } };
+    assert.equal(classifierCacheEnabled(floating, "pi-native"), false);
+    assert.equal(classifierCacheEnabled({ ...floating, classifier: { piNative: { model: "typesafe/jev-latest" } } }, "pi-native"), true);
+    assert.equal(classifierCacheEnabled(floating, "typesafe"), true);
+    assert.equal(classifierCacheEnabled({ ...floating, cache: { enabled: false } }, "typesafe"), false);
+  });
+});
 
 describe("classifier cache semantic key", () => {
   it("changes when prompt-classifier instructions change without persisting them", () => {

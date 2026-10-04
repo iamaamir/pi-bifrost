@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   collectDetectionFacts,
   createDetectionEngine,
+  createDetectionNoticeGate,
+  piNativeCredentialMissing,
   resolveDefaultClassifierBackend,
   selectEffectiveBackend,
   type DetectionDeps,
@@ -20,6 +22,14 @@ function deps(overrides: Partial<DetectionDeps> = {}): DetectionDeps {
     ...overrides,
   };
 }
+
+describe("piNativeCredentialMissing", () => {
+  it("trusts Pi-managed models.json keys even when the direct key is absent", () => {
+    assert.equal(piNativeCredentialMissing(() => ({ configured: true }), false), false);
+    assert.equal(piNativeCredentialMissing(() => ({ configured: false }), true), false);
+    assert.equal(piNativeCredentialMissing(() => ({ configured: false }), false), true);
+  });
+});
 
 describe("resolveDefaultClassifierBackend", () => {
   it("maps piManaged to pi-native", () => {
@@ -84,6 +94,17 @@ describe("selectEffectiveBackend", () => {
   it("takes detection when classifier.backend is absent", () => {
     const effective = selectEffectiveBackend(undefined, { backend: CLASSIFIER_BACKEND_IDS.piNative, reason: "Pi-managed TypeSafe credential" });
     assert.deepEqual(effective, { backend: CLASSIFIER_BACKEND_IDS.piNative, reason: "Pi-managed TypeSafe credential", auto: true });
+  });
+});
+
+describe("createDetectionNoticeGate", () => {
+  it("shows once per session even when a pipeline is shared", () => {
+    const shouldNotify = createDetectionNoticeGate();
+    const firstSession = {};
+    const secondSession = {};
+    assert.equal(shouldNotify(firstSession), true);
+    assert.equal(shouldNotify(firstSession), false);
+    assert.equal(shouldNotify(secondSession), true);
   });
 });
 

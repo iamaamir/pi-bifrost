@@ -13,6 +13,7 @@ All notable changes to pi-bifrost are documented here.
 
 ### Changed
 - When `classifier.backend` is absent, Bifrost now detects Pi-managed TypeSafe credentials first, then `TYPESAFE_API_KEY`, and otherwise uses `prompt`. This can change the classifier for existing configurations that omit the backend. Set `classifier.backend` explicitly to keep the old choice. Detection stays fixed for the extension session and prints its reason on first use.
+- Pi-native classification without `classifier.piNative.model` skips the fuzzy classification cache. A changing catalog cannot reuse a tier chosen by a different classifier model. Set an explicit model id to enable the cache.
 - Require Pi 1.0.1+ (`minPiVersion`), matching the virtual-model API.
 - Selecting `bifrost/auto` opts into per-prompt routing; selecting a physical model still pins. `/bifrost pin` and `/bifrost off` exit Auto and lock the last dispatched physical model.
 - Virtual entries (`api: pi-virtual`) are excluded from tier candidate pools; Bifrost never routes a virtual model to another virtual model.

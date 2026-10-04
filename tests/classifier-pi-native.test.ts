@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import type { ClassifierContext, ClassifierModel, ClassifierApi, ClassifierResult } from "@earendil-works/pi-ai";
 import { CLASSIFIER_BACKEND_IDS, type ClassifierRequest } from "../classifier-backends.ts";
 import { createPiNativeClassifier, decodePiNativeJudgment, type PiClassifierRegistry } from "../classifier-pi-native.ts";
+import { ReliabilityStore, type ReliabilityIo } from "../reliability-store.ts";
+import { emptyReliabilityState, type ReliabilityState } from "../reliability.ts";
 import type { TypeSafeObservation } from "../classifier-metrics.ts";
 import { setupDebug } from "../debug.ts";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -136,6 +138,37 @@ describe("pi-native classifier transport", () => {
     assert.equal(question.criteria.general, "normal work Not for: trivial edits Examples: feature work");
   });
 
+  it("bounds catalog discovery by the same deadline and signals cancellation", async () => {
+    const h = harness({ listed: [], results: [answer()] });
+    let lookupSignal: AbortSignal | undefined;
+    const registry: PiClassifierRegistry = {
+      ...h.registry,
+      getAvailableOfType: async (_type, _provider, options) => {
+        lookupSignal = options?.signal;
+        return new Promise(() => {});
+      },
+    };
+    const observations: TypeSafeObservation[] = [];
+    const classify = createPiNativeClassifier({ registry, timeoutMs: 100, observe: (o) => observations.push(o) });
+    assert.equal(await classify(request), undefined);
+    assert.equal(lookupSignal?.aborted, true);
+    assert.equal(observations[0]?.outcome, "timeout");
+    assert.equal(h.calls(), 0);
+  });
+
+  it("reports rejected catalog discovery as a measured miss", async () => {
+    const h = harness({ listed: [], results: [answer()] });
+    const registry: PiClassifierRegistry = {
+      ...h.registry,
+      getAvailableOfType: async () => { throw new Error("auth refresh failed"); },
+    };
+    const observations: TypeSafeObservation[] = [];
+    const classify = createPiNativeClassifier({ registry, observe: (o) => observations.push(o) });
+    assert.equal(await classify(request), undefined);
+    assert.equal(observations[0]?.outcome, "network");
+    assert.equal(h.calls(), 0);
+  });
+
   it("resolves an explicit provider/id model at the first slash without listing", async () => {
     const h = harness({ byId: [model("custom", "jev-9")], results: [answer()] });
     const classify = createPiNativeClassifier({ registry: h.registry, model: "custom/jev-9" });
@@ -145,13 +178,45 @@ describe("pi-native classifier transport", () => {
     assert.equal(judgment?.model, "custom/jev-9");
   });
 
-  it("yields no judgment on stopReason error and retries up to maxAttempts", async () => {
-    const error = { ...answer(), answers: {}, stopReason: "error", errorMessage: "boom" } as unknown as ClassifierResult;
+  it("yields no judgment on transient network error and retries up to maxAttempts", async () => {
+    const error = { ...answer(), answers: {}, stopReason: "error", errorMessage: "ECONNRESET" } as unknown as ClassifierResult;
     const h = harness({ listed: [model()], results: [error] });
     const classify = createPiNativeClassifier({ registry: h.registry, maxAttempts: 3, sleepImpl: async () => {} });
     const judgment = await classify(request);
     assert.equal(judgment, undefined);
     assert.equal(h.calls(), 3);
+  });
+
+  it("stops on auth errors without opening a circuit, so a later login can recover", async () => {
+    const auth = { ...answer(), answers: {}, stopReason: "error", errorMessage: "401 Unauthorized" } as ClassifierResult;
+    const h = harness({ listed: [model()], results: (call) => call === 1 ? auth : answer() });
+    const events: string[] = [];
+    const reliability = {
+      tryClaimTrial: () => ({ allowed: true, claimed: true }),
+      recordFailure: () => events.push("failure"),
+      recordSuccess: () => events.push("success"),
+      abandonTrial: () => events.push("abandoned"),
+    } as unknown as ReliabilityStore;
+    const observations: TypeSafeObservation[] = [];
+    const classify = createPiNativeClassifier({ registry: h.registry, maxAttempts: 3, sleepImpl: async () => {}, reliability, observe: (o) => observations.push(o) });
+    assert.equal(await classify(request), undefined);
+    assert.equal(h.calls(), 1);
+    assert.equal(observations[0]?.outcome, "auth");
+    assert.deepEqual(events, ["abandoned"]);
+    assert.equal((await classify(request))?.tier, "general");
+    assert.deepEqual(events, ["abandoned", "success"]);
+  });
+
+  it("does not retry HTTP 400 or unrecognized provider errors", async () => {
+    for (const message of ["400 Bad Request", "unexpected provider failure"]) {
+      const error = { ...answer(), answers: {}, stopReason: "error", errorMessage: message } as ClassifierResult;
+      const h = harness({ listed: [model()], results: [error] });
+      const observations: TypeSafeObservation[] = [];
+      const classify = createPiNativeClassifier({ registry: h.registry, maxAttempts: 3, sleepImpl: async () => {}, observe: (o) => observations.push(o) });
+      assert.equal(await classify(request), undefined);
+      assert.equal(h.calls(), 1, message);
+      assert.equal(observations[0]?.outcome, "http", message);
+    }
   });
 
   it("does not retry a non-retryable quota error", async () => {
@@ -161,6 +226,53 @@ describe("pi-native classifier transport", () => {
     const judgment = await classify(request);
     assert.equal(judgment, undefined);
     assert.equal(h.calls(), 1);
+  });
+
+  it("records a deadline abort as timeout and settles the claimed trial", async () => {
+    const h = harness({ listed: [model()], results: [answer()] });
+    const events: string[] = [];
+    const reliability = {
+      tryClaimTrial: () => ({ allowed: true, claimed: true }),
+      recordFailure: (_key: string, _source: string, reason: string) => events.push(`failure:${reason}`),
+      abandonTrial: () => events.push("abandoned"),
+    } as unknown as ReliabilityStore;
+    const observations: TypeSafeObservation[] = [];
+    const registry: PiClassifierRegistry = {
+      ...h.registry,
+      classify: async (_model, _context, options) => new Promise((resolve) => {
+        options?.signal?.addEventListener("abort", () => resolve({ ...answer(), stopReason: "aborted" } as ClassifierResult), { once: true });
+      }),
+    };
+    const classify = createPiNativeClassifier({ registry, timeoutMs: 100, reliability, observe: (o) => observations.push(o) });
+    assert.equal(await classify(request), undefined);
+    assert.equal(observations[0]?.outcome, "timeout");
+    assert.deepEqual(events, ["failure:timeout"]);
+  });
+
+  it("persists timeout failure and releases a real half-open trial", async () => {
+    let now = 1_000;
+    let persisted: ReliabilityState = emptyReliabilityState();
+    const io: ReliabilityIo = { load: () => persisted, save: (_path, state) => { persisted = state; } };
+    const reliability = new ReliabilityStore({
+      cwd: "/tmp", config: { enabled: true, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 1 },
+      io, now: () => now,
+    });
+    const key = "classifier/pi-native/typesafe/jev-latest";
+    reliability.recordFailure(key, "classifier", "prior timeout");
+    now += 61_000;
+    assert.equal(reliability.getCircuitState(key).halfOpen, true);
+    const h = harness({ listed: [model()], results: [answer()] });
+    const registry: PiClassifierRegistry = {
+      ...h.registry,
+      classify: async (_model, _context, options) => new Promise((resolve) => {
+        options?.signal?.addEventListener("abort", () => resolve({ ...answer(), stopReason: "aborted" } as ClassifierResult), { once: true });
+      }),
+    };
+    assert.equal(await createPiNativeClassifier({ registry, timeoutMs: 100, reliability })(request), undefined);
+    assert.equal(reliability.getState().models[key]?.trialActive, false);
+    assert.equal(reliability.getState().models[key]?.lastFailureReason, "timeout");
+    assert.equal(reliability.getCircuitState(key).open, true);
+    assert.equal(persisted.models[key]?.trialActive, false);
   });
 
   it("does not retry an aborted result", async () => {
@@ -195,14 +307,17 @@ describe("pi-native classifier transport", () => {
 
   it("branches the empty-catalog error on credential state", async () => {
     const withoutCredential = harness({ listed: [], results: [answer()] });
-    const missing = createPiNativeClassifier({ registry: withoutCredential.registry, credentialMissing: () => true });
+    const outcomes: TypeSafeObservation[] = [];
+    const missing = createPiNativeClassifier({ registry: withoutCredential.registry, credentialMissing: () => true, observe: (o) => outcomes.push(o) });
     const missingErrors = await captureErrors(async () => { await missing(request); });
     assert.ok(missingErrors.some((line) => line.includes("/login")), missingErrors.join("\n"));
+    assert.equal(outcomes[0]?.outcome, "missing_key");
 
     const withCredential = harness({ listed: [], results: [answer()] });
-    const empty = createPiNativeClassifier({ registry: withCredential.registry, credentialMissing: () => false });
+    const empty = createPiNativeClassifier({ registry: withCredential.registry, credentialMissing: () => false, observe: (o) => outcomes.push(o) });
     const emptyErrors = await captureErrors(async () => { await empty(request); });
     assert.ok(emptyErrors.some((line) => line.includes("enabledModels")), emptyErrors.join("\n"));
+    assert.equal(outcomes[1]?.outcome, "missing_catalog");
   });
 });
 

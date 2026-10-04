@@ -385,6 +385,28 @@ describe("bifrost command ui", () => {
     }
   });
 
+  it("lists only available Pi classifier models and writes the chosen id", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-native-chooser-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const { ctx, calls } = makeCtx([], (title, options) => title === "Classifier backend"
+        ? options.find((item) => item.startsWith("pi-native"))
+        : options.find((item) => item === "typesafe/jev-latest"));
+      (ctx as any).modelRegistry.getAvailableOfType = async () => [{ provider: "typesafe", id: "jev-latest" }];
+      const state = makeState();
+      await createCommandRouter(state as never)("classifier", ctx as never);
+      const saved = JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8"));
+      assert.equal(saved.classifier.backend, "pi-native");
+      assert.equal(saved.classifier.piNative.model, "typesafe/jev-latest");
+      assert(calls.some((call) => call.kind === "select" && call.title === "Pi native classifier model"
+        && call.options?.includes("typesafe/jev-latest")));
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("leaves config unchanged when prompt model picker is cancelled", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-command-test-"));
     const previousCwd = process.cwd();

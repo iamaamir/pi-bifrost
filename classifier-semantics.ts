@@ -65,6 +65,12 @@ function stableValue(value: unknown): unknown {
   return value;
 }
 
+/** A floating Pi catalog model has no stable fingerprint before lookup. Do not read or write fuzzy decisions for it. */
+export function classifierCacheEnabled(config: BifrostConfig, effectiveBackend: ClassifierBackend): boolean {
+  return (config.cache?.enabled ?? true)
+    && !(effectiveBackend === CLASSIFIER_BACKEND_IDS.piNative && !config.classifier?.piNative?.model);
+}
+
 export interface ClassifierRuntimeSemantics {
   readonly typesafeCredentialAvailable?: boolean;
   /** Detection-resolved backend. A cached decision must never be tagged with a backend that did not produce it (fix 1). */

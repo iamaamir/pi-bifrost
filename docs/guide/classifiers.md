@@ -99,7 +99,7 @@ The `pi-native` backend calls Pi's `ctx.modelRegistry.classify()` API. Pi resolv
 }
 ```
 
-You can omit `classifier.piNative.model`. Pi then uses the first available TypeSafe classifier model in its catalog. If no model is available, Bifrost reports whether credentials or the catalog need attention. Set `fallback` to `prompt` and provide `classifier.model` to use a chat model after a direct-classifier miss. Set it to `regex` to skip that extra model call. The direct transport retries bounded errors and never replays a user turn.
+You can omit `classifier.piNative.model`. Pi then uses the first available TypeSafe classifier model in its catalog. Bifrost skips its fuzzy classification cache in this mode because the catalog choice can change. Set a model id to enable that cache for Pi-native classification. If no model is available, Bifrost reports whether credentials or the catalog need attention. Set `fallback` to `prompt` and provide `classifier.model` to use a chat model after a direct-classifier miss. Set it to `regex` to skip that extra model call. The direct transport retries bounded errors and never replays a user turn.
 
 See [the full example](../../examples/classifier-pi-native.json).
 

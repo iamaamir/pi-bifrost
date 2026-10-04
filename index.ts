@@ -2,7 +2,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { fileURLToPath } from "node:url";
 import { classifyWithLLM as invokeClassifier, type ClassifierModel } from "./classifier.ts";
-import { classifierCacheKey, boundedClassifierPrompt } from "./classifier-semantics.ts";
+import { classifierCacheEnabled, classifierCacheKey, boundedClassifierPrompt } from "./classifier-semantics.ts";
 import { ClassifierMetricsStore, classifierMetricsEnabled } from "./classifier-metrics.ts";
 import {
   createPipeline,
@@ -51,7 +51,7 @@ import { createVirtualRoute, noModelError, poolProblem } from "./virtual-routing
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, type ClassifierBackend } from "./classifier-backends.ts";
 import { createTypeSafeClassifier, resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
 import { createPiNativeClassifier } from "./classifier-pi-native.ts";
-import { collectDetectionFacts, createDetectionEngine, effectiveBackendOf, selectEffectiveBackend } from "./classifier-detection.ts";
+import { collectDetectionFacts, createDetectionEngine, createDetectionNoticeGate, effectiveBackendOf, piNativeCredentialMissing, selectEffectiveBackend } from "./classifier-detection.ts";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import {
   REGISTRY_REFRESH_TTL_MS,
@@ -108,7 +108,7 @@ function buildPipeline(
 ): ClassificationPipeline {
   const tiers = Object.keys(config.models ?? {});
   const cacheCfg = config.cache;
-  const cacheEnabled = cacheCfg?.enabled ?? true;
+  const cacheEnabled = classifierCacheEnabled(config, effectiveBackend);
   const threshold = cacheCfg?.threshold ?? DEFAULT_THRESHOLD;
   const cacheMaxAgeMs = (cacheCfg?.ttlHours ?? DEFAULT_TTL_HOURS) * 60 * 60 * 1000;
 
@@ -142,7 +142,10 @@ function buildPipeline(
       debug: Boolean(config.debug?.enabled),
       minConfidence: config.classifier?.minConfidence,
       reliability: reliabilityStore,
-      credentialMissing: () => resolveTypeSafeApiKey().source === "missing",
+      credentialMissing: () => piNativeCredentialMissing(
+        (providerId) => ctx.modelRegistry.getProviderAuthStatus(providerId),
+        resolveTypeSafeApiKey().source !== "missing",
+      ),
       observe: (observation) => classifierMetricsStore.record(observation),
     });
     classifyDirect = async (text, availableTiers, signal) => {
@@ -260,25 +263,24 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return value;
   }
   let pipeline: ClassificationPipeline | undefined;
-  let detectionNoticeShown = false;
+  const shouldNotifyDetection = createDetectionNoticeGate();
 
   function getPipeline(ctx: ExtensionContext): ClassificationPipeline {
-    if (!pipeline) {
-      const detected = detectionEngine.detect(() => collectDetectionFacts({
-        readStoredCredential,
-        getProviderAuthStatus: (providerId) => ctx.modelRegistry.getProviderAuthStatus(providerId),
-        env: process.env,
-      }));
-      const effective = selectEffectiveBackend(state.config.classifier?.backend, detected);
-      classifierMetricsStore.setEnabled(classifierMetricsEnabled(state.config, effective.backend));
-      if (effective.auto) {
-        state.classifierDetection = { backend: effective.backend, reason: effective.reason };
-        if (!detectionNoticeShown) {
-          detectionNoticeShown = true;
-          debug("classifier", "backend.detected", { backend: effective.backend, reason: effective.reason });
-          console.warn(`Bifrost: classifier backend auto: ${effective.backend} (${effective.reason}). Run /bifrost classifier to change.`);
-        }
+    const detected = detectionEngine.detect(() => collectDetectionFacts({
+      readStoredCredential,
+      getProviderAuthStatus: (providerId) => ctx.modelRegistry.getProviderAuthStatus(providerId),
+      env: process.env,
+    }));
+    const effective = selectEffectiveBackend(state.config.classifier?.backend, detected);
+    if (effective.auto) {
+      state.classifierDetection = { backend: effective.backend, reason: effective.reason };
+      if (shouldNotifyDetection(ctx.sessionManager)) {
+        debug("classifier", "backend.detected", { backend: effective.backend, reason: effective.reason });
+        console.warn(`Bifrost: classifier backend auto: ${effective.backend} (${effective.reason}). Run /bifrost classifier to change.`);
       }
+    }
+    if (!pipeline) {
+      classifierMetricsStore.setEnabled(classifierMetricsEnabled(state.config, effective.backend));
       pipeline = buildPipeline(
         ctx,
         state.config,
@@ -341,7 +343,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   function saveClassifierDecision(prompt: string, result: ClassificationResult): void {
     try {
-      if (result.kind !== "classified" || result.source !== "classifier" || state.config.cache?.enabled === false) return;
+      if (result.kind !== "classified" || result.source !== "classifier"
+        || !classifierCacheEnabled(state.config, effectiveBackendOf(state.config, detectionEngine).backend)) return;
       const maxEntries = state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES;
       state.cacheEntries = updateCache(state.cacheEntries, prompt, result.tier, maxEntries, activeClassifierCacheKey(state.config, detectionEngine));
       saveCache(cachePath(process.cwd(), state.config.cache?.path), state.cacheEntries);
@@ -724,7 +727,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         classification.source === "classifier"
       ) {
         const maxEntries = state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES;
-        if (state.config.cache?.enabled ?? true) {
+        if (classifierCacheEnabled(state.config, effectiveBackendOf(state.config, detectionEngine).backend)) {
           const endCacheSave = debugMeasure("input", "cacheSave");
           state.cacheEntries = updateCache(state.cacheEntries, promptText, tier, maxEntries, activeClassifierCacheKey(state.config, detectionEngine));
           saveCache(cachePath(process.cwd(), state.config.cache?.path), state.cacheEntries);

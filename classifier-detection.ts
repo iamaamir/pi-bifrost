@@ -24,6 +24,14 @@ export interface DetectionDeps {
 /** Sources Pi resolves itself: stored auth, a runtime flag, or models.json entries (fixes 7 and 8). */
 const PI_MANAGED_SOURCES = new Set(["stored", "runtime", "models_json_key", "models_json_command", "fallback"]);
 
+/** Pi registry knows runtime and models.json keys that the direct transport cannot read. */
+export function piNativeCredentialMissing(
+  getProviderAuthStatus: (providerId: string) => { configured: boolean },
+  directKeyPresent: boolean,
+): boolean {
+  return !getProviderAuthStatus(TYPE_SAFE_CREDENTIAL_KEY).configured && !directKeyPresent;
+}
+
 export function collectDetectionFacts(deps: DetectionDeps): DetectionFacts {
   const status = deps.getProviderAuthStatus?.(TYPE_SAFE_CREDENTIAL_KEY) ?? { configured: false };
   const envPresent = Boolean(deps.env[TYPE_SAFE_API_KEY_ENV]);
@@ -63,6 +71,16 @@ export interface DetectionEngine {
   detect(collect: () => DetectionFacts): DetectionResult;
   /** Non-locking read: returns the locked value when present. */
   peek(collect: () => DetectionFacts): DetectionResult;
+}
+
+/** One first-use notice per session, even when one extension instance serves several sessions. */
+export function createDetectionNoticeGate(): (session: object) => boolean {
+  const shown = new WeakSet<object>();
+  return (session) => {
+    if (shown.has(session)) return false;
+    shown.add(session);
+    return true;
+  };
 }
 
 /** Sticky per extension load: /bifrost reload must not flip the backend mid-session (Decision 5). */

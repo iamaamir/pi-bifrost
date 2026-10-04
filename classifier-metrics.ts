@@ -5,6 +5,7 @@ import type { BifrostConfig } from "./config.ts";
 export type TypeSafeOutcome =
   | "success"
   | "missing_key"
+  | "missing_catalog"
   | "circuit_open"
   | "aborted"
   | "timeout"
