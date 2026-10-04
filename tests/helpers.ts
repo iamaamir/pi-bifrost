@@ -4,7 +4,7 @@
 // The casts that remain (Model<Api>, ExtensionContext) are contained
 // here because those interfaces require fields the tests don't use.
 
-import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Model, ClassifierApi, ClassifierContext, ClassifierModel as PiClassifierModel, ClassifierResult } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ClassifierModel } from "../classifier.ts";
 
@@ -49,11 +49,27 @@ export function makeModel(
   };
 }
 
-function makeRegistry(models: Model<Api>[]) {
+export interface FakeRegistryOptions {
+  readonly classifierModels?: readonly PiClassifierModel<ClassifierApi>[];
+  readonly authSource?: string;
+  readonly classify?: (model: PiClassifierModel<ClassifierApi>, context: ClassifierContext) => ClassifierResult;
+}
+
+export function makeRegistry(models: Model<Api>[], options: FakeRegistryOptions = {}) {
+  const classifiers = options.classifierModels ?? [];
+  const ofType = (provider?: string) => classifiers.filter((model) => !provider || model.provider === provider);
   return {
-    find: (provider: string, id: string) =>
-      models.find((m) => m.provider === provider && m.id === id),
+    find: (provider: string, id: string) => models.find((model) => model.provider === provider && model.id === id),
     getAvailable: () => models,
+    getModelsOfType: (_type: "classifier", provider?: string) => ofType(provider),
+    getAvailableOfType: async (_type: "classifier", provider?: string) => ofType(provider),
+    getModelOfType: (_type: "classifier", provider: string, id: string) => ofType(provider).find((model) => model.id === id),
+    findOfType: (_type: "classifier", provider: string, id: string) => ofType(provider).find((model) => model.id === id),
+    getProviderAuthStatus: (_provider: string) => ({ configured: options.authSource !== undefined, source: options.authSource }),
+    classify: async (model: PiClassifierModel<ClassifierApi>, context: ClassifierContext): Promise<ClassifierResult> =>
+      options.classify?.(model, context) ?? {
+        api: model.api, provider: model.provider, model: model.id, answers: {}, stopReason: "error", timestamp: Date.now(),
+      },
   };
 }
 
@@ -62,8 +78,8 @@ function makeRegistry(models: Model<Api>[]) {
  * Other ExtensionContext fields are left undefined — routing functions
  * in tests only touch `modelRegistry`.
  */
-export function makeCtx(models: Model<Api>[]): ExtensionContext {
-  return { modelRegistry: makeRegistry(models) } as unknown as ExtensionContext;
+export function makeCtx(models: Model<Api>[], options: FakeRegistryOptions = {}): ExtensionContext {
+  return { modelRegistry: makeRegistry(models, options) } as unknown as ExtensionContext;
 }
 
 /**

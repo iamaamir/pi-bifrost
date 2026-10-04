@@ -12,7 +12,6 @@
 
   "classifier": {
     "enabled": true,
-    "backend": "prompt",
     "method": "auto",
     "maxTokens": 20,
     "temperature": 0,

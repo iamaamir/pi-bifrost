@@ -197,8 +197,19 @@ export function configHasNoPools(config: BifrostConfig): boolean {
 }
 
 /** True when any config error belongs to the classifier family. Every classifier validation message contains the word "classifier". */
-export function hasClassifierConfigErrors(config: BifrostConfig): boolean {
-  return validateConfig(config).some((issue) => issue.severity === "error" && /classifier/i.test(issue.message));
+export function hasClassifierConfigErrors(config: BifrostConfig, effectiveBackend?: ClassifierBackend): boolean {
+  let checked = config;
+  if (effectiveBackend && config.classifier?.backend === undefined) {
+    // Auto-detection chooses the direct transport after layers merge. Retain
+    // prompt-only settings for fallback, but do not validate them as direct
+    // transport settings; still validate direct criteria and bounds.
+    const classifier: Record<string, unknown> = { ...config.classifier, backend: effectiveBackend };
+    if (effectiveBackend !== CLASSIFIER_BACKEND_IDS.prompt) {
+      for (const field of PROMPT_ONLY_FIELDS) delete classifier[field];
+    }
+    checked = { ...config, classifier: classifier as ClassifierConfig };
+  }
+  return validateConfig(checked).some((issue) => issue.severity === "error" && /classifier/i.test(issue.message));
 }
 
 /**

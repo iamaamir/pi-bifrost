@@ -116,8 +116,8 @@ function buildPipeline(
   // If classifier is disabled, pass empty array — pipeline skips LLM stage.
   let classifierModels: ClassifierModel[] = [];
   let classifyDirect: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<ClassificationJudgment | undefined>) | undefined;
-  const typeSafeUsable = effectiveBackend === CLASSIFIER_BACKEND_IDS.typesafe && !hasClassifierConfigErrors(config);
-  const piNativeUsable = effectiveBackend === CLASSIFIER_BACKEND_IDS.piNative && !hasClassifierConfigErrors(config);
+  const typeSafeUsable = effectiveBackend === CLASSIFIER_BACKEND_IDS.typesafe && !hasClassifierConfigErrors(config, effectiveBackend);
+  const piNativeUsable = effectiveBackend === CLASSIFIER_BACKEND_IDS.piNative && !hasClassifierConfigErrors(config, effectiveBackend);
   if (classifierEnabled && typeSafeUsable && tiers.length > 0) {
     const classifierConfig = config.classifier!;
     const classify = createTypeSafeClassifier({

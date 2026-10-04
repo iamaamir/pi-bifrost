@@ -1,7 +1,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -94,6 +94,29 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
     assert.ok(out.includes("enabled=true"));
     assert.ok(out.includes("model=integration/test-classifier"));
     assert.ok(out.includes("endpoint=registry"));
+  });
+
+  it("detects env TypeSafe backend in status and a network-free preview trace", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-detected-backend-"));
+    mkdirSync(join(tempDir, ".pi"), { recursive: true });
+    writeFileSync(join(tempDir, ".pi", "bifrost.json"), JSON.stringify({
+      default: "general", classifier: { enabled: true }, debug: { enabled: true },
+      models: { quick: [], general: [] },
+      rules: [{ pattern: "direct hit", model: "fake/chat" }],
+    }));
+    const env = { HOME: tempDir, TYPESAFE_API_KEY: "fixture-only" };
+    try {
+      const status = combined(await runPi("/bifrost classifier status", tempDir, env));
+      assert.match(status, /backend=auto: typesafe \(env key detected\)/);
+      // Direct-model regex runs before the classifier transport; no external API call.
+      const preview = combined(await runPi("/bifrost preview direct hit", tempDir, env));
+      assert.match(preview, /source:\s+regex/);
+      const events = readFileSync(join(tempDir, ".pi", "bifrost-debug.jsonl"), "utf8")
+        .trim().split("\n").map((line) => JSON.parse(line));
+      assert(events.some((event) => event.module === "classifier" && event.event === "backend.detected" && event.backend === "typesafe"));
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("smokes TypeSafe production composition without credentials", async () => {
