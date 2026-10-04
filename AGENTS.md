@@ -35,6 +35,11 @@ Use the feature gate in [`docs/product-philosophy.md`](docs/product-philosophy.m
 - Keep Pi's default footer intact. Use `setStatus("bifrost-state", ...)` for Bifrost status.
 - Treat normalized prompt cache data as potentially sensitive user text. Do not add response caching or prompt replay by default.
 
+## Universal architectural constraints
+- Keep responsibilities focused and dependencies explicit.
+- Prefer extending existing project patterns over introducing new architectural patterns.
+- Make the smallest change necessary to solve the task correctly.
+
 ## Architecture
 
 Keep policy separate from host adaptation.
