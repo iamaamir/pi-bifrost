@@ -558,6 +558,12 @@ describe("command aliases", () => {
     assert.ok(items?.some((i) => i.value === "init -f" && i.label === "init -f"));
   });
 
+  it("still emits init itself alongside its alias", () => {
+    const items = getBifrostCommandCompletions("ini") ?? [];
+    assert.ok(items.some((i) => i.value === "init" && i.label === "init"));
+    assert.ok(items.some((i) => i.value === "init -f"));
+  });
+
   it("submits an exact alias instead of offering a completion", () => {
     assert.equal(getBifrostCommandCompletions("init -f"), null);
   });
