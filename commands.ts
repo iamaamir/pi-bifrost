@@ -25,6 +25,7 @@ import type { ReliabilityStore } from "./reliability-store.ts";
 import { classifierMetricsEnabled, type ClassifierMetricsState, type ClassifierMetricsStore } from "./classifier-metrics.ts";
 import type { EffectiveBackend } from "./classifier-detection.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend } from "./classifier-backends.ts";
+import { piClassificationSupported } from "./classifier-pi-native.ts";
 import { resolveTypeSafeApiKey, type TypeSafeCredentialSource } from "./typesafe-classifier.ts";
 
 // ── Mutable state shared across commands ────────────────────
@@ -811,11 +812,14 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
     log(ctx, "Choose classifier backend in Pi UI: prompt, typesafe, or pi-native", "warning");
     return;
   }
-  const selected = await ctx.ui.select("Classifier backend", [
+  const backendOptions = [
     "prompt — choose a Pi model",
     `${CLASSIFIER_BACKEND_IDS.typesafe} — use Jev (requires Pi auth.json or ${TYPE_SAFE_API_KEY_ENV})`,
-    `${CLASSIFIER_BACKEND_IDS.piNative} — use Pi native classify (requires Pi TypeSafe auth)`,
-  ]);
+  ];
+  if (piClassificationSupported(ctx.modelRegistry)) {
+    backendOptions.push(`${CLASSIFIER_BACKEND_IDS.piNative} — use Pi native classify (requires Pi TypeSafe auth)`);
+  }
+  const selected = await ctx.ui.select("Classifier backend", backendOptions);
   if (!selected) return;
   const backend = selected.startsWith(CLASSIFIER_BACKEND_IDS.typesafe) ? CLASSIFIER_BACKEND_IDS.typesafe
     : selected.startsWith(CLASSIFIER_BACKEND_IDS.piNative) ? CLASSIFIER_BACKEND_IDS.piNative

@@ -33,6 +33,12 @@ export interface PiClassifierRegistry {
   classify(model: ClassifierModel<ClassifierApi>, context: ClassifierContext, options?: ModelsClassifierOptions): Promise<ClassifierResult>;
 }
 
+/** Feature-detect host classification support. Structural only — no host-name checks. */
+export function piClassificationSupported(registry: unknown): boolean {
+  const candidate = registry as Partial<PiClassifierRegistry> | undefined;
+  return typeof candidate?.classify === "function" && typeof candidate?.getAvailableOfType === "function";
+}
+
 export interface PiNativeOptions {
   readonly registry: PiClassifierRegistry;
   /** classifier.piNative.model in provider/id form. Absent resolves from Pi's catalog. */
@@ -207,6 +213,7 @@ export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTr
     };
 
     try {
+      if (!piClassificationSupported(options.registry)) return finish("unsupported");
       if (signal?.aborted) return finish("aborted");
       let resolved: ModelResolution;
       try {

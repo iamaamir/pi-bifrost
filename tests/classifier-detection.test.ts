@@ -37,6 +37,14 @@ describe("resolveDefaultClassifierBackend", () => {
     assert.equal(resolveDefaultClassifierBackend({ piManaged: true, envPresent: false }).backend, CLASSIFIER_BACKEND_IDS.piNative);
   });
 
+  it("skips pi-native on hosts without classification support", () => {
+    const withEnv = resolveDefaultClassifierBackend({ piManaged: true, envPresent: true, nativeSupported: false });
+    assert.equal(withEnv.backend, CLASSIFIER_BACKEND_IDS.typesafe);
+    const withoutEnv = resolveDefaultClassifierBackend({ piManaged: true, envPresent: false, nativeSupported: false });
+    assert.equal(withoutEnv.backend, CLASSIFIER_BACKEND_IDS.prompt);
+    assert.ok(withoutEnv.reason.includes("support"));
+  });
+
   it("maps envPresent to typesafe and neither fact to prompt", () => {
     assert.equal(resolveDefaultClassifierBackend({ piManaged: false, envPresent: true }).backend, CLASSIFIER_BACKEND_IDS.typesafe);
     const quiet = resolveDefaultClassifierBackend({ piManaged: false, envPresent: false });
@@ -48,13 +56,13 @@ describe("collectDetectionFacts", () => {
   it("treats a stored credential as managed even when the snapshot says unconfigured", () => {
     // Fix 6: the registry snapshot can be cold; the auth.json read cannot lie.
     const facts = collectDetectionFacts(deps({ readStoredCredential: () => ({ type: "api_key" }) }));
-    assert.deepEqual(facts, { piManaged: true, envPresent: false });
+    assert.deepEqual(facts, { piManaged: true, envPresent: false, nativeSupported: true });
   });
 
   it("treats runtime and models.json sources as managed", () => {
     for (const source of ["stored", "runtime", "models_json_key", "models_json_command", "fallback"]) {
       const facts = collectDetectionFacts(deps({ getProviderAuthStatus: () => ({ configured: true, source }) }));
-      assert.deepEqual(facts, { piManaged: true, envPresent: false }, source);
+      assert.deepEqual(facts, { piManaged: true, envPresent: false, nativeSupported: true }, source);
     }
   });
 
@@ -62,7 +70,7 @@ describe("collectDetectionFacts", () => {
     // Fix 7: source "environment" without TYPESAFE_API_KEY is interpolation
     // that only Pi resolves. Bifrost cannot consume that key.
     const facts = collectDetectionFacts(deps({ getProviderAuthStatus: () => ({ configured: true, source: "environment" }) }));
-    assert.deepEqual(facts, { piManaged: true, envPresent: false });
+    assert.deepEqual(facts, { piManaged: true, envPresent: false, nativeSupported: true });
   });
 
   it("keys envPresent strictly on TYPESAFE_API_KEY", () => {
@@ -70,7 +78,7 @@ describe("collectDetectionFacts", () => {
       getProviderAuthStatus: () => ({ configured: true, source: "environment" }),
       env: { TYPESAFE_API_KEY: "key" },
     }));
-    assert.deepEqual(facts, { piManaged: false, envPresent: true });
+    assert.deepEqual(facts, { piManaged: false, envPresent: true, nativeSupported: true });
   });
 });
 

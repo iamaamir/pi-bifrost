@@ -388,6 +388,25 @@ describe("bifrost command ui", () => {
     }
   });
 
+  it("hides the pi-native backend on hosts without classification support", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-hide-native-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      // Plain makeCtx registry has no classify(): an unsupported host.
+      const { ctx, calls } = makeCtx([], (_title, options) => options.find((item) => item.startsWith("pi-native")));
+      const state = makeState();
+      await createCommandRouter(state as never)("classifier", ctx as never);
+      const picker = calls.find((call) => call.kind === "select" && call.title === "Classifier backend");
+      assert.ok(picker?.options?.length);
+      assert.ok(picker?.options?.every((item) => !item.startsWith("pi-native")));
+      assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("lists only available Pi classifier models and writes the chosen id", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-native-chooser-"));
     const previousCwd = process.cwd();

@@ -6,6 +6,7 @@ export type TypeSafeOutcome =
   | "success"
   | "missing_key"
   | "missing_catalog"
+  | "unsupported"
   | "circuit_open"
   | "aborted"
   | "timeout"

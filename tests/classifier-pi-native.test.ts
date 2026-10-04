@@ -112,7 +112,7 @@ describe("pi-native classifier transport", () => {
       await createPiNativeClassifier({ registry: h.registry, debug: true })(request);
       let records: Array<{ module: string; event: string; model?: string }> = [];
       for (let i = 0; i < 100; i++) {
-        if (existsSync(path)) records = readFileSync(path, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+        if (existsSync(path)) records = readFileSync(path, "utf8").split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line));
         if (records.some((entry) => entry.module === "pi-native" && entry.event === "finish")) break;
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
@@ -340,6 +340,17 @@ describe("pi-native classifier transport", () => {
     assert.equal(h.calls(), 1);
     assert.equal(observations[0]?.outcome, "low_confidence");
     assert.equal(observations[0]?.confidence, 0.5);
+  });
+
+  it("returns no judgment on hosts without classification support and never retries", async () => {
+    const h = harness({ listed: [model()], results: [answer()] });
+    const { classify: _omitted, ...withoutClassify } = h.registry;
+    const observations: TypeSafeObservation[] = [];
+    const classify = createPiNativeClassifier({ registry: withoutClassify as unknown as PiClassifierRegistry, maxAttempts: 3, observe: (o) => observations.push(o) });
+    assert.equal(await classify(request), undefined);
+    assert.equal(h.calls(), 0);
+    assert.equal(h.listCalls(), 0);
+    assert.equal(observations[0]?.outcome, "unsupported");
   });
 
   it("branches the empty-catalog error on credential state", async () => {

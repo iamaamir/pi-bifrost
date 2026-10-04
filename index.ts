@@ -51,7 +51,7 @@ import { VirtualOverride } from "./virtual-override.ts";
 import { createVirtualRoute, noModelError, poolProblem } from "./virtual-routing.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV } from "./classifier-backends.ts";
 import { createTypeSafeClassifier, resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
-import { createPiNativeClassifier } from "./classifier-pi-native.ts";
+import { createPiNativeClassifier, piClassificationSupported } from "./classifier-pi-native.ts";
 import { collectDetectionFacts, createDetectionEngine, createDetectionNoticeGate, effectiveBackendOf, piNativeCredentialMissing, selectEffectiveBackend, type EffectiveBackend } from "./classifier-detection.ts";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import {
@@ -280,6 +280,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       readStoredCredential,
       getProviderAuthStatus: (providerId) => ctx.modelRegistry.getProviderAuthStatus(providerId),
       env: process.env,
+      nativeSupported: piClassificationSupported(ctx.modelRegistry),
     }));
     const effective = selectEffectiveBackend(state.config.classifier?.backend, detected);
     if (effective.auto) {

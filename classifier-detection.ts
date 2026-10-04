@@ -12,6 +12,8 @@ import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_CREDENTIAL_KEY
 export interface DetectionFacts {
   readonly piManaged: boolean;
   readonly envPresent: boolean;
+  /** Host exposes classify(). False keeps detection off pi-native (default true). */
+  readonly nativeSupported?: boolean;
 }
 
 export interface DetectionDeps {
@@ -19,6 +21,8 @@ export interface DetectionDeps {
   /** Registry auth view. Absent outside a request context. */
   readonly getProviderAuthStatus?: (providerId: string) => { configured: boolean; source?: string };
   readonly env: Record<string, string | undefined>;
+  /** Host capability fact. Absent means supported. */
+  readonly nativeSupported?: boolean;
 }
 
 /** Sources Pi resolves itself: stored auth, a runtime flag, or models.json entries (fixes 7 and 8). */
@@ -41,7 +45,7 @@ export function collectDetectionFacts(deps: DetectionDeps): DetectionFacts {
   const piManaged = deps.readStoredCredential(TYPE_SAFE_CREDENTIAL_KEY) !== undefined
     || (status.source !== undefined && PI_MANAGED_SOURCES.has(status.source))
     || (status.source === "environment" && !envPresent);
-  return { piManaged, envPresent };
+  return { piManaged, envPresent, nativeSupported: deps.nativeSupported ?? true };
 }
 
 export interface DetectionResult {
@@ -50,8 +54,9 @@ export interface DetectionResult {
 }
 
 export function resolveDefaultClassifierBackend(facts: DetectionFacts): DetectionResult {
-  if (facts.piManaged) return { backend: CLASSIFIER_BACKEND_IDS.piNative, reason: "Pi-managed TypeSafe credential" };
+  if (facts.piManaged && facts.nativeSupported !== false) return { backend: CLASSIFIER_BACKEND_IDS.piNative, reason: "Pi-managed TypeSafe credential" };
   if (facts.envPresent) return { backend: CLASSIFIER_BACKEND_IDS.typesafe, reason: "env key detected" };
+  if (facts.piManaged) return { backend: CLASSIFIER_BACKEND_IDS.prompt, reason: "no host classification support" };
   return { backend: CLASSIFIER_BACKEND_IDS.prompt, reason: "no credential detected" };
 }
 

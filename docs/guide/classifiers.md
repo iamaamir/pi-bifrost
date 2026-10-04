@@ -82,7 +82,7 @@ Or configure it in `.pi/bifrost.json`:
 
 ## Pi-native classifier
 
-The `pi-native` backend calls Pi's `ctx.modelRegistry.classify()` API. Pi resolves the TypeSafe credential and classifier model. Set up TypeSafe through Pi's `/login` command, or set `TYPESAFE_API_KEY` in your environment. Select `pi-native` in `/bifrost classifier` or set it in `.pi/bifrost.json`:
+The `pi-native` backend calls Pi's `ctx.modelRegistry.classify()` API. Pi resolves the TypeSafe credential and classifier model. Set up TypeSafe through Pi's `/login` command, or set `TYPESAFE_API_KEY` in your environment. Select `pi-native` in `/bifrost classifier` or set it in `.pi/bifrost.json`. The `pi-native` picker entry appears only when the host exposes classification support (`classify()`).
 
 ```json
 {
