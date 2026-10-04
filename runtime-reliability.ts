@@ -14,7 +14,7 @@ function outcomeModelKey(message: AssistantOutcome): string | undefined {
 /** Tracks one Bifrost-routed agent run across Pi's internal retries. */
 export interface RuntimeFailure {
   model: string;
-  reason?: string;
+  reason: string | undefined;
 }
 
 /**

@@ -2,12 +2,22 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createVirtualRoute, noModelError, poolProblem } from "../virtual-routing.ts";
 import { VirtualOverride } from "../virtual-override.ts";
+import type { ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 import { makeModel } from "./helpers.ts";
 
 const first = makeModel("fixture", "fast");
 const second = makeModel("fixture", "strong");
 const user = (text: string) => [{ role: "user", content: [{ type: "text", text }] }];
-const request = (reason: string, text: string, extra: object = {}) => ({ reason, messages: user(text), thinkingLevel: "low", ...extra });
+// One documented cast pair at the fixture seam; call sites now typecheck
+// against ModelRouteRequest, so fixture drift fails the build.
+const virtualModel = { ...makeModel("bifrost", "auto"), api: "pi-virtual" } as unknown as ModelRouteRequest["model"];
+const request = (reason: ModelRouteRequest["reason"], text: string, extra: Partial<ModelRouteRequest> = {}): ModelRouteRequest => ({
+  model: virtualModel,
+  thinkingLevel: "low",
+  reason,
+  messages: user(text) as unknown as ModelRouteRequest["messages"],
+  ...extra,
+});
 
 function setup() {
   const overrides = new VirtualOverride();
@@ -32,7 +42,7 @@ describe("virtual fail-closed errors", () => {
     assert.match(poolProblem("general", ["x/y"]), /resolved 0 available models/);
     assert.match(
       poolProblem("general", ["x/y"], [{ key: "x/y", reason: "open_circuit" }]),
-      /all excluded: x\/y \(open_circuit\)/,
+      /all excluded: x\/y \(open circuit\)/,
     );
   });
 
@@ -42,7 +52,7 @@ describe("virtual fail-closed errors", () => {
     assert.match(message, /credentials/);
   });
 
-  it("dispatches a thinking level the physical model actually supports", async () => {
+  it("delegates dispatch thinking level to pi-ai clampThinkingLevel", async () => {
     const nonReasoning = Object.assign(makeModel("fixture", "plain"), { reasoning: false });
     const limited = Object.assign(makeModel("fixture", "limited"), {
       reasoning: true,
@@ -53,8 +63,8 @@ describe("virtual fail-closed errors", () => {
       select: async () => model,
       fallback: () => undefined,
     }));
-    assert.equal((await routes[0](request("user", "prompt", { thinkingLevel: "low" }) as never)).thinkingLevel, "off");
-    assert.equal((await routes[1](request("user", "prompt", { thinkingLevel: "medium" }) as never)).thinkingLevel, "high");
+    assert.equal((await routes[0](request("user", "prompt", { thinkingLevel: "low" }))).thinkingLevel, "off");
+    assert.equal((await routes[1](request("user", "prompt", { thinkingLevel: "medium" }))).thinkingLevel, "high");
   });
 
   it("clamps a sticky level that the physical model does not support", async () => {
@@ -66,7 +76,7 @@ describe("virtual fail-closed errors", () => {
     });
     const result = await route(request("continuation", "prompt", {
       previous: { model: nonReasoning, thinkingLevel: "high" },
-    }) as never);
+    }));
     assert.equal(result.thinkingLevel, "off");
   });
 
@@ -79,7 +89,7 @@ describe("virtual fail-closed errors", () => {
       onDispatch: () => { throw new Error("bookkeeping failed"); },
       onDispatchFailed: (model) => { released = model; },
     });
-    await assert.rejects(() => route(request("user", "prompt") as never), /bookkeeping failed/);
+    await assert.rejects(() => route(request("user", "prompt")), /bookkeeping failed/);
     assert.equal(released, first);
   });
 
@@ -92,7 +102,7 @@ describe("virtual fail-closed errors", () => {
       sticky: () => second,
       onDegrade: (model) => { degraded = model; },
     });
-    const result = await route(request("user", "prompt") as never);
+    const result = await route(request("user", "prompt"));
     assert.equal(result.model, second);
     assert.equal(degraded, second);
   });
@@ -104,7 +114,7 @@ describe("virtual fail-closed errors", () => {
       fallback: () => undefined,
       routeError: (detail) => new Error(`custom: ${detail}`),
     });
-    await assert.rejects(() => route(request("user", "prompt") as never), /custom: no healthy physical model/);
+    await assert.rejects(() => route(request("user", "prompt")), /custom: no healthy physical model/);
   });
 });
 
@@ -112,7 +122,7 @@ describe("virtual Bifrost requests", () => {
   it("selects on user request using stripped prompt and forced tier", async () => {
     const { route, overrides, calls } = setup();
     overrides.prepare("frontier", "debug race");
-    const result = await route(request("user", "debug race") as never);
+    const result = await route(request("user", "debug race"));
     assert.equal(result.model, second);
     assert.deepEqual(calls, ["frontier:debug race"]);
   });
@@ -121,8 +131,8 @@ describe("virtual Bifrost requests", () => {
     const { route, calls } = setup();
     const stickyModel = Object.assign(makeModel("fixture", "sticky-strong"), { reasoning: true });
     const sticky = { model: stickyModel, thinkingLevel: "high" as const };
-    const continued = await route(request("continuation", "debug race", { previous: sticky }) as never);
-    const retried = await route(request("retry", "debug race", { failed: { ...sticky, message: { stopReason: "error" } } }) as never);
+    const continued = await route(request("continuation", "debug race", { previous: sticky }));
+    const retried = await route(request("retry", "debug race", { failed: { ...sticky, message: { stopReason: "error" } as unknown as NonNullable<ModelRouteRequest["failed"]>["message"] } }));
     assert.deepEqual([continued.model, retried.model], [stickyModel, stickyModel]);
     assert.deepEqual([continued.thinkingLevel, retried.thinkingLevel], ["high", "high"]);
     assert.deepEqual(calls, []);
@@ -130,9 +140,9 @@ describe("virtual Bifrost requests", () => {
 
   it("does not classify direct requests, and fails closed without an available fallback", async () => {
     const { route, calls } = setup();
-    assert.equal((await route(request("direct", "summary") as never)).model, first);
+    assert.equal((await route(request("direct", "summary"))).model, first);
     assert.deepEqual(calls, []);
     const noFallback = createVirtualRoute({ overrides: new VirtualOverride(), select: async () => undefined, fallback: () => undefined });
-    await assert.rejects(() => noFallback(request("user", "prompt") as never), /no healthy physical model/);
+    await assert.rejects(() => noFallback(request("user", "prompt")), /no healthy physical model/);
   });
 });

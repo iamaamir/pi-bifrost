@@ -4,6 +4,21 @@ import type { ModelRouteRequest, ModelRoute } from "@earendil-works/pi-coding-ag
 import type { SkippedCandidate } from "./routing.ts";
 import type { VirtualOverride } from "./virtual-override.ts";
 
+/** Which path dispatched the model — controls half-open trial strictness. */
+export type DispatchIntent = "select" | "sticky" | "degrade";
+
+const REASON_LABELS: Record<string, string> = {
+  open_circuit: "open circuit",
+  trial_active: "trial in progress",
+  requested_tier_unhealthy: "tier unhealthy",
+  requested_tier_unavailable: "tier unavailable",
+  all_tiers_exhausted: "all tiers exhausted",
+};
+
+function reasonLabel(reason: string): string {
+  return REASON_LABELS[reason] ?? reason;
+}
+
 /** Explains what to fix: empty pool, excluded-only pool, or unresolved pool. */
 export function poolProblem(
   tier: string,
@@ -15,7 +30,7 @@ export function poolProblem(
     return `0 models configured for "${tier}" — add models to bifrost.json or run /bifrost init`;
   }
   if (skipped && skipped.length > 0) {
-    const list = skipped.map((entry) => `${entry.key} (${entry.reason})`).join(", ");
+    const list = skipped.map((entry) => `${entry.key} (${reasonLabel(entry.reason)})`).join(", ");
     return `pool [${patterns.join(", ")}] resolved models, all excluded: ${list}`;
   }
   return `pool [${patterns.join(", ")}] resolved 0 available models — check provider credentials and model ids`;
@@ -28,7 +43,7 @@ export function noModelError(
   reason?: string,
   skipped?: readonly SkippedCandidate[],
 ): string {
-  const suffix = reason ? ` (${reason})` : "";
+  const suffix = reason ? ` (${reasonLabel(reason)})` : "";
   return `Bifrost: no healthy physical model for tier ${tier}${suffix}: ${poolProblem(tier, pool, skipped)}`;
 }
 
@@ -38,7 +53,7 @@ export interface VirtualRouteDependencies {
   fallback: () => Model<Api> | undefined;
   /** Last dispatched physical model — session fact, not routing policy. */
   sticky?: () => Model<Api> | undefined;
-  onDispatch?: (model: Model<Api>, thinkingLevel: ModelRoute["thinkingLevel"]) => void;
+  onDispatch?: (model: Model<Api>, thinkingLevel: ModelRoute["thinkingLevel"], intent: DispatchIntent) => void;
   /** Release dispatch bookkeeping (e.g. claimed half-open trial) when dispatch setup throws. */
   onDispatchFailed?: (model: Model<Api>) => void;
   /** Visible degrade: kept model when no pool resolves. */
@@ -58,9 +73,9 @@ export function createVirtualRoute(deps: VirtualRouteDependencies): (request: Mo
   return async (request) => {
     const sticky = request.reason === "retry" ? (request.failed ?? request.previous) : request.previous;
     const fail = (detail: string) => deps.routeError ? deps.routeError(detail) : new Error(`Bifrost: ${detail}`);
-    const dispatch = (model: Model<Api>, thinkingLevel: ModelRoute["thinkingLevel"]): ModelRoute => {
+    const dispatch = (model: Model<Api>, thinkingLevel: ModelRoute["thinkingLevel"], intent: DispatchIntent): ModelRoute => {
       try {
-        deps.onDispatch?.(model, thinkingLevel);
+        deps.onDispatch?.(model, thinkingLevel, intent);
       } catch (error) {
         deps.onDispatchFailed?.(model);
         throw error;
@@ -70,7 +85,7 @@ export function createVirtualRoute(deps: VirtualRouteDependencies): (request: Mo
     if (request.reason !== "user") {
       const model = sticky?.model ?? deps.fallback();
       if (!model) throw fail("no healthy physical model for virtual request");
-      return dispatch(model, clampThinkingLevel(model, sticky?.thinkingLevel ?? request.thinkingLevel));
+      return dispatch(model, clampThinkingLevel(model, sticky?.thinkingLevel ?? request.thinkingLevel), "sticky");
     }
 
     const prompt = latestUserText(request.messages);
@@ -80,8 +95,8 @@ export function createVirtualRoute(deps: VirtualRouteDependencies): (request: Mo
       const kept = deps.sticky?.();
       if (!kept) throw fail("no healthy physical model for virtual request");
       deps.onDegrade?.(kept);
-      return dispatch(kept, clampThinkingLevel(kept, request.thinkingLevel));
+      return dispatch(kept, clampThinkingLevel(kept, request.thinkingLevel), "degrade");
     }
-    return dispatch(model, clampThinkingLevel(model, request.thinkingLevel));
+    return dispatch(model, clampThinkingLevel(model, request.thinkingLevel), "select");
   };
 }

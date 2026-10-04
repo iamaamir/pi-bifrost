@@ -184,12 +184,9 @@ const TYPESAFE_PROMPT_FIELDS = [
 
 /** True when no configured tier lists a model — nothing to route. */
 export function configHasNoPools(config: BifrostConfig): boolean {
-  const models = config.models ?? {};
-  const keys = Object.keys(models);
-  return keys.every((tier) => {
-    const pool = models[tier];
-    return Array.isArray(pool) ? pool.every((entry) => !entry?.trim()) : !pool?.trim();
-  });
+  return Object.values(config.models ?? {}).every((pool) =>
+    Array.isArray(pool) ? pool.every((entry) => entry.trim() === "") : pool.trim() === "",
+  );
 }
 
 /**

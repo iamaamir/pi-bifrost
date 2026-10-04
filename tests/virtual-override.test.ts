@@ -10,11 +10,17 @@ describe("virtual inline override handoff", () => {
     assert.equal(handoff.take("commit changes"), undefined);
   });
 
-  it("does not apply a stale tier to a different prompt", () => {
+  it("does not apply or drop a tier for unrelated prompt text", () => {
     const handoff = new VirtualOverride();
     handoff.prepare("frontier", "debug race");
-    assert.throws(() => handoff.take("unrelated message"), /mismatch/);
-    assert.equal(handoff.take("debug race"), undefined);
+    assert.equal(handoff.take("unrelated message"), undefined);
+    assert.equal(handoff.take("debug race"), "frontier");
+  });
+
+  it("matches whitespace-padded message text against the trimmed handoff", () => {
+    const handoff = new VirtualOverride();
+    handoff.prepare("quick", "commit changes");
+    assert.equal(handoff.take("commit changes\n"), "quick");
   });
 
   it("keeps queued steering and follow-up overrides separate", () => {

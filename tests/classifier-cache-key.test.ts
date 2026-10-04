@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { boundedClassifierPrompt, CLASSIFIER_PROMPT_MAX_CHARS } from "../classifier-semantics.ts";
+import { boundedClassifierPrompt, CLASSIFIER_PROMPT_MAX_CHARS, classifierCacheKey } from "../classifier-semantics.ts";
+import type { BifrostConfig } from "../config.ts";
 
 describe("boundedClassifierPrompt", () => {
   it("keeps short prompts intact and slices long ones for classifiers", () => {
@@ -9,8 +10,6 @@ describe("boundedClassifierPrompt", () => {
     assert.equal(boundedClassifierPrompt(long).length, CLASSIFIER_PROMPT_MAX_CHARS);
   });
 });
-import { classifierCacheKey } from "../classifier-semantics.ts";
-import type { BifrostConfig } from "../config.ts";
 
 function config(systemPrompt: string): BifrostConfig {
   return {

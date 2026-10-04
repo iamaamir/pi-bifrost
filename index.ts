@@ -1,14 +1,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { fileURLToPath } from "node:url";
-import { classifyWithLLM as invokeClassifier, type ClassifierModel } from "./classifier.js";
-import { classifierCacheKey, boundedClassifierPrompt } from "./classifier-semantics.js";
-import { ClassifierMetricsStore } from "./classifier-metrics.js";
+import { classifyWithLLM as invokeClassifier, type ClassifierModel } from "./classifier.ts";
+import { classifierCacheKey, boundedClassifierPrompt } from "./classifier-semantics.ts";
+import { ClassifierMetricsStore } from "./classifier-metrics.ts";
 import {
   createPipeline,
   type ClassificationPipeline,
   type ClassificationResult,
-} from "./classification-pipeline.js";
+} from "./classification-pipeline.ts";
 import type { ClassificationJudgment } from "./classifier-backends.ts";
 import {
   cachePath,
@@ -21,7 +21,7 @@ import {
   DEFAULT_THRESHOLD,
   DEFAULT_TTL_HOURS,
   type CacheEntry,
-} from "./cache.js";
+} from "./cache.ts";
 import {
   loadConfig,
   loadRules,
@@ -29,21 +29,22 @@ import {
   DEFAULT_CLASSIFIER_CRITERIA,
   validateConfig,
   type BifrostConfig,
-} from "./config.js";
+} from "./config.ts";
 import {
   findCandidates,
   getStrategy,
   modelKey,
   resolveModelWithFallback,
+  type RoutedModelResolution,
   type SkippedCandidate,
-} from "./routing.js";
-import { ReliabilityStore } from "./reliability-store.js";
-import { loadRuntimeState, runtimeStatePath, saveRuntimeState, isPassiveModelSelection } from "./runtime-state.js";
-import { createCommandRouter, getBifrostCommandCompletions, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.js";
-import { setupDebug, debug, debugMeasure } from "./debug.js";
-import { parseInlineOverride } from "./inline-override.js";
+} from "./routing.ts";
+import { ReliabilityStore } from "./reliability-store.ts";
+import { loadRuntimeState, runtimeStatePath, saveRuntimeState, isPassiveModelSelection } from "./runtime-state.ts";
+import { createCommandRouter, getBifrostCommandCompletions, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.ts";
+import { setupDebug, debug, debugMeasure } from "./debug.ts";
+import { parseInlineOverride } from "./inline-override.ts";
 import { BIFROST_AUTO_ID, BIFROST_AUTO_PROVIDER, isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
-import { RuntimeReliabilityTracker } from "./runtime-reliability.js";
+import { RuntimeReliabilityTracker } from "./runtime-reliability.ts";
 import { VirtualOverride } from "./virtual-override.ts";
 import { createVirtualRoute, noModelError, poolProblem } from "./virtual-routing.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV } from "./classifier-backends.ts";
@@ -53,8 +54,8 @@ import {
   setBifrostStatus,
   setBifrostWorkingMessage,
   shouldRefreshRegistry,
-} from "./ux-status.js";
-import { waitForRegistryRefresh } from "./registry-refresh.js";
+} from "./ux-status.ts";
+import { waitForRegistryRefresh } from "./registry-refresh.ts";
 
 // ── Pipeline builder (composition root) ────────────────────────
 
@@ -212,8 +213,29 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
   let selfSelectKey: string | undefined;
   let offeredSetup = false;
-  const virtualOverride = new VirtualOverride();
-  const runtimeReliability = new RuntimeReliabilityTracker();
+  // One extension runtime can host several sessions: scope mutable routing
+  // state per session so concurrent sessions cannot consume each other's
+  // prompt handoffs or reliability outcomes.
+  const overridesBySession = new WeakMap<object, VirtualOverride>();
+  const trackersBySession = new WeakMap<object, RuntimeReliabilityTracker>();
+  function overrideFor(ctx: ExtensionContext): VirtualOverride {
+    const key = ctx.sessionManager as unknown as object;
+    let value = overridesBySession.get(key);
+    if (!value) {
+      value = new VirtualOverride();
+      overridesBySession.set(key, value);
+    }
+    return value;
+  }
+  function trackerFor(ctx: ExtensionContext): RuntimeReliabilityTracker {
+    const key = ctx.sessionManager as unknown as object;
+    let value = trackersBySession.get(key);
+    if (!value) {
+      value = new RuntimeReliabilityTracker();
+      trackersBySession.set(key, value);
+    }
+    return value;
+  }
   let pipeline: ClassificationPipeline | undefined;
 
   function getPipeline(ctx: ExtensionContext): ClassificationPipeline {
@@ -277,34 +299,40 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   }
 
   function saveClassifierDecision(prompt: string, result: ClassificationResult): void {
-    if (result.kind !== "classified" || result.source !== "classifier" || state.config.cache?.enabled === false) return;
-    const maxEntries = state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES;
-    state.cacheEntries = updateCache(state.cacheEntries, prompt, result.tier, maxEntries, activeClassifierCacheKey(state.config));
-    saveCache(cachePath(process.cwd(), state.config.cache?.path), state.cacheEntries);
-    invalidatePipeline();
+    try {
+      if (result.kind !== "classified" || result.source !== "classifier" || state.config.cache?.enabled === false) return;
+      const maxEntries = state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES;
+      state.cacheEntries = updateCache(state.cacheEntries, prompt, result.tier, maxEntries, activeClassifierCacheKey(state.config));
+      saveCache(cachePath(process.cwd(), state.config.cache?.path), state.cacheEntries);
+      invalidatePipeline();
+    } catch (error) {
+      // Cache persistence must never fail the route.
+      debug("virtual", "cache.save_error", { error: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   state.selectPhysicalFromVirtual = async (ctx) => {
     if (!isBifrostAuto(ctx.model)) return true;
     const physical = lastDispatchedPhysical(ctx);
     if (!physical) {
-      log(ctx, "Bifrost: no dispatched physical model to pin; select one in /model first", "warning");
+      log(ctx, "Bifrost: no dispatched physical model to fall back to; select one in /model first", "warning");
       return false;
     }
     selfSelectKey = modelKey(physical);
     try {
       if (!(await pi.setModel(physical))) {
-        log(ctx, `Bifrost: cannot activate ${modelKey(physical)}`, "error");
+        log(ctx, `Bifrost: no dispatched physical model to fall back to — cannot activate ${modelKey(physical)}`, "error");
         return false;
       }
-      virtualOverride.clear();
+      overrideFor(ctx).clear();
       return true;
     } catch {
       log(ctx, `Bifrost: cannot activate ${modelKey(physical)}`, "error");
       return false;
     } finally {
-      // pi.setModel awaits its model_select emission; the key lives only inside
-      // that window, so a stale key can never swallow a later manual selection.
+      // The key's safety comes from this finally: pi.setModel awaits its
+      // model_select emission, but _emitModelSelect early-returns without an
+      // event on same-model sets — either way the key dies here.
       selfSelectKey = undefined;
     }
   };
@@ -324,9 +352,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     name: "Bifrost Auto",
     thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
     async route(request, ctx) {
-      let routeFailure: { tier: string; pool: string | string[] | undefined; reason?: string; skipped?: readonly SkippedCandidate[] } | undefined;
+      let routeFailure: { tier: string; pool: string | string[] | undefined; reason?: RoutedModelResolution["fallbackReason"]; skipped?: readonly SkippedCandidate[] } | undefined;
+      let ownedTrialKey: string | undefined;
       const route = createVirtualRoute({
-        overrides: virtualOverride,
+        overrides: overrideFor(ctx),
         fallback: () => lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default).selected : undefined),
         sticky: () => lastDispatchedPhysical(ctx),
         select: async (prompt, forcedTier, signal) => {
@@ -372,26 +401,32 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             return undefined;
           }
           debug("virtual", "select", { tier: classification.tier, model: modelKey(model), source: classification.kind === "classified" ? classification.source : "fallback", skipped: resolved.skipped });
-          const trial = state.reliabilityStore.tryClaimTrial(modelKey(model));
-          debug("virtual", "trial", { model: modelKey(model), allowed: trial.allowed, claimed: trial.claimed });
-          if (!trial.allowed) throw new Error(`Bifrost: half-open trial unavailable for ${modelKey(model)}`);
-          try {
-            saveClassifierDecision(prompt, classification);
-            log(ctx, `Bifrost auto: ${classification.tier} → ${modelKey(model)} (${classification.kind === "classified" ? classification.source : "fallback"}${resolved.fallbackReason ? `; ${resolved.fallbackReason}` : ""}${resolved.skipped.length > 0 ? `; ${resolved.skipped.length} skipped: ${resolved.skipped.map((s) => s.key).join(", ")}` : ""})`);
-            return model;
-          } catch (error) {
-            if (trial.claimed) state.reliabilityStore.abandonTrial(modelKey(model));
-            throw error;
-          }
+          saveClassifierDecision(prompt, classification);
+          log(ctx, `Bifrost auto: ${classification.tier} → ${modelKey(model)} (${classification.kind === "classified" ? classification.source : "fallback"}${resolved.fallbackReason ? `; ${resolved.fallbackReason}` : ""}${resolved.skipped.length > 0 ? `; ${resolved.skipped.length} skipped: ${resolved.skipped.map((s) => s.key).join(", ")}` : ""})`);
+          return model;
         },
-        onDispatch: (model, thinkingLevel) => {
-          runtimeReliability.begin(modelKey(model));
-          debug("virtual", "dispatch", { model: modelKey(model), thinkingLevel });
+        onDispatch: (model, thinkingLevel, intent) => {
+          const key = modelKey(model);
+          const trial = state.reliabilityStore.tryClaimTrial(key);
+          debug("virtual", "trial", { model: key, allowed: trial.allowed, claimed: trial.claimed });
+          if (trial.claimed) ownedTrialKey = key;
+          // Sticky/degrade are documented continuity exceptions; only an
+          // explicit selection is fail-closed on trial contention.
+          if (!trial.allowed && intent === "select") {
+            throw new Error(`Bifrost: half-open trial unavailable for ${key}`);
+          }
+          trackerFor(ctx).begin(key);
+          debug("virtual", "dispatch", { model: key, thinkingLevel });
         },
         onDispatchFailed: (model) => {
-          debug("virtual", "dispatch.release", { model: modelKey(model) });
-          state.reliabilityStore.abandonTrial(modelKey(model));
-          runtimeReliability.release(modelKey(model));
+          const key = modelKey(model);
+          debug("virtual", "dispatch.release", { model: key });
+          // Release only the claim this dispatch owns.
+          if (ownedTrialKey === key) {
+            state.reliabilityStore.abandonTrial(key);
+            ownedTrialKey = undefined;
+          }
+          trackerFor(ctx).release(key);
         },
         onDegrade: (model) => {
           const detail = routeFailure ? poolProblem(routeFailure.tier, routeFailure.pool, routeFailure.skipped) : "no configured model resolved";
@@ -415,19 +450,21 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    virtualOverride.clear();
+    overrideFor(ctx).clear();
     syncBifrostModeStatus(ctx, state);
     clearBifrostWidgets(ctx);
   });
 
-  pi.on("agent_end", async (event) => {
-    runtimeReliability.observe(event.messages);
+  pi.on("agent_end", async (event, ctx) => {
+    trackerFor(ctx).observe(event.messages);
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
-    const settled = runtimeReliability.settle();
-    // Queues drain before agent_end; anything still pending was abandoned.
-    virtualOverride.clear();
+    const settled = trackerFor(ctx).settle();
+    // Clear at settle, not agent_end: agent_end handlers can queue fresh work
+    // whose input-prepared tiers are still pending. Queued user input drains
+    // before agent_end, so anything left here was abandoned.
+    overrideFor(ctx).clear();
     if (settled.length === 0) return;
     if (!state.enabled || state.config.reliability?.enabled === false) {
       // Policy off mid-run: still resolve claimed trials so models never wedge.
@@ -446,7 +483,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   pi.on("model_select", async (event, ctx) => {
     // Swallow only our own programmatic activation, matched by exact model.
-    if (selfSelectKey && modelKey(event.model) === selfSelectKey) {
+    if (selfSelectKey && event.source === "set" && modelKey(event.model) === selfSelectKey) {
       selfSelectKey = undefined;
       return;
     }
@@ -457,7 +494,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     }
     // Selecting the virtual profile is an explicit request for per-prompt routing.
     if (isBifrostAuto(ctx.model)) {
-      virtualOverride.clear();
+      overrideFor(ctx).clear();
       state.pinned = false;
       state.enabled = true;
       state.saveModeState();
@@ -529,7 +566,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     // Virtual auto: Pi dispatches the physical model in route(); skip the
     // legacy input-time switch. Hand the stripped prompt + forced tier across.
     if (isBifrostAuto(ctx.model)) {
-      virtualOverride.prepare(forcedTier, promptText, event.streamingBehavior);
+      overrideFor(ctx).prepare(forcedTier, promptText, event.streamingBehavior);
       debug("input", "virtual_auto", { forcedTier, streamingBehavior: event.streamingBehavior });
       syncBifrostModeStatus(ctx, state);
       return defaultAction;
@@ -663,7 +700,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         log(ctx, `Bifrost: ${tier} → ${modelKey(model)} (already active, ${source}${reason})`);
         debug("input", "model_unchanged", { model: modelKey(model), selectedTier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", thinkingLevel: ctx.thinkingLevel });
         debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", thinkingLevel: ctx.thinkingLevel });
-        runtimeReliability.begin(modelKey(model));
+        trackerFor(ctx).begin(modelKey(model));
         claimedTrial = undefined;
         endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
         return defaultAction;
@@ -710,7 +747,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         : `Bifrost: ${tier} → ${modelKey(model)} (fallback${detail ? `; ${detail}` : ""})`;
       syncBifrostModeStatus(ctx, state);
       log(ctx, doneMsg);
-      runtimeReliability.begin(modelKey(model));
+      trackerFor(ctx).begin(modelKey(model));
       claimedTrial = undefined;
       debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", routingDurationMs, thinkingLevel: ctx.thinkingLevel });
       endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });

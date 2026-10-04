@@ -29,7 +29,7 @@ export const DEFAULT_RUNTIME_STATE: RuntimeModeState = {
 };
 
 /** Session restore replays a recorded selection — it is not a user action. */
-export function isPassiveModelSelection(source: string): boolean {
+export function isPassiveModelSelection(source: "set" | "cycle" | "restore"): boolean {
   return source === "restore";
 }
 
