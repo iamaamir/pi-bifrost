@@ -34,6 +34,32 @@ export function isPassiveModelSelection(source: ModelSelectSource): boolean {
   return source === "restore";
 }
 
+/**
+ * Programmatic activation keys ("we set this model ourselves"), scoped per
+ * session. A global slot let concurrent sessions swallow each other's
+ * model_select events, which spuriously pinned the loser (issue #17 P1).
+ */
+export function createSelfSelectTracker() {
+  const keys = new WeakMap<object, string>();
+  return {
+    claim(session: object, modelKey: string): void {
+      keys.set(session, modelKey);
+    },
+    /** True when the event is this session's own programmatic activation. */
+    consume(session: object, source: ModelSelectSource, modelKey: string): boolean {
+      const key = keys.get(session);
+      if (key && source === "set" && modelKey === key) {
+        keys.delete(session);
+        return true;
+      }
+      return false;
+    },
+    release(session: object): void {
+      keys.delete(session);
+    },
+  };
+}
+
 export function runtimeStatePath(cwd: string): string {
   return resolveStoragePath(cwd, undefined, ".pi/bifrost-state.json");
 }
