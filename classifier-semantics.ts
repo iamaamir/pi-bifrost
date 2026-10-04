@@ -69,7 +69,7 @@ export interface ClassifierRuntimeSemantics {
   readonly typesafeCredentialAvailable?: boolean;
   /** Detection-resolved backend. A cached decision must never be tagged with a backend that did not produce it (fix 1). */
   readonly effectiveBackend?: ClassifierBackend;
-  /** Resolved pi-native catalog id, recorded once resolution runs (step 11). */
+  /** Optional resolved id for callers with one. Normal routing keys on configured id before discovery. */
   readonly piNativeModel?: string;
 }
 
@@ -83,7 +83,7 @@ export function classifierCacheKey(
     instructionVersion: CLASSIFIER_INSTRUCTION_VERSION,
     backend: runtime.effectiveBackend ?? classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt,
     model: classifier?.model,
-    piNativeModel: classifier?.piNative?.model,
+    piNativeModel: runtime.piNativeModel ?? classifier?.piNative?.model,
     endpoint: classifier?.endpoint,
     method: classifier?.method,
     systemPrompt: classifier?.systemPrompt,

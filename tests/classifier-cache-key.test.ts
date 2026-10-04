@@ -42,6 +42,19 @@ describe("classifier cache semantic key", () => {
     assert.notEqual(fallbackOnly, active);
   });
 
+  it("changes with the configured pi-native model and an explicitly supplied resolved id", () => {
+    const native: BifrostConfig = {
+      models: { quick: ["chat/a"] },
+      classifier: { backend: "pi-native", piNative: { model: "typesafe/jev-latest" } },
+    };
+    const changed: BifrostConfig = {
+      ...native,
+      classifier: { backend: "pi-native", piNative: { model: "typesafe/jev-9" } },
+    };
+    assert.notEqual(classifierCacheKey(native, ["quick"]), classifierCacheKey(changed, ["quick"]));
+    assert.notEqual(classifierCacheKey(native, ["quick"]), classifierCacheKey(native, ["quick"], { piNativeModel: "typesafe/jev-9" }));
+  });
+
   it("is stable for criteria with different property insertion order", () => {
     const first: BifrostConfig = {
       ...config("same"),

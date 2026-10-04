@@ -100,7 +100,7 @@ function errorOutcome(message: string | undefined): TypeSafeOutcome {
 }
 
 /** Decode only provider data needed for routing. Invalid data is a classifier miss. */
-export function decodePiNativeJudgment(result: ClassifierResult, tiers: readonly string[], minConfidence = 0): PiNativeJudgment | undefined {
+export function decodePiNativeJudgment(result: ClassifierResult, tiers: readonly string[], minConfidence = 0, resolvedId?: string): PiNativeJudgment | undefined {
   const answer = result.answers?.tier;
   if (!answer || answer.type !== "choice") return undefined;
   if (typeof answer.choice !== "string" || !tiers.includes(answer.choice)) return undefined;
@@ -125,7 +125,7 @@ export function decodePiNativeJudgment(result: ClassifierResult, tiers: readonly
     confidence: answer.confidence,
     probabilities,
     backend: CLASSIFIER_BACKEND_IDS.piNative,
-    model: `${result.provider}/${result.model}`,
+    model: resolvedId ?? `${result.provider}/${result.model}`,
   };
 }
 
@@ -146,6 +146,7 @@ export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTr
     let observed = false;
     let trialClaimed = false;
     let key = "";
+    let resolvedModelId: string | undefined;
     const finish = (outcome: TypeSafeOutcome, judgment?: PiNativeJudgment): PiNativeJudgment | undefined => {
       if (outcome === "aborted" && trialClaimed) {
         options.reliability?.abandonTrial(key);
@@ -154,6 +155,7 @@ export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTr
       trace("finish", {
         outcome,
         attempts,
+        model: judgment?.model ?? resolvedModelId,
         tier: judgment?.tier,
         confidence: judgment?.confidence,
         elapsed_ms: Math.round(performance.now() - startedAt),
@@ -165,6 +167,7 @@ export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTr
             outcome,
             latencyMs: performance.now() - startedAt,
             attempts,
+            model: judgment?.model ?? resolvedModelId,
             tier: judgment?.tier,
             confidence: judgment?.confidence,
           });
@@ -184,6 +187,7 @@ export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTr
       trace("model_missing", { cause: resolved });
       return finish("missing_key");
     }
+    resolvedModelId = resolved.id;
     key = `classifier/${CLASSIFIER_BACKEND_IDS.piNative}/${resolved.id}`;
     const now = Date.now();
     if (options.reliability) {
@@ -235,7 +239,7 @@ export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTr
         return finish("aborted");
       }
       if (result?.stopReason === "stop") {
-        const judgment = decodePiNativeJudgment(result, request.tiers, 0);
+        const judgment = decodePiNativeJudgment(result, request.tiers, 0, resolved.id);
         trace("decoded", { attempt, tier: judgment?.tier, confidence: judgment?.confidence, valid: Boolean(judgment) });
         if (!judgment) {
           recordFailure("decoder");

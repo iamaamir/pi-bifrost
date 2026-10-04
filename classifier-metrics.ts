@@ -21,6 +21,8 @@ export interface TypeSafeObservation {
   readonly attempts: number;
   readonly tier?: string;
   readonly confidence?: number;
+  /** Resolved provider/model id when available. */
+  readonly model?: string;
 }
 
 /** Metrics record only for direct backends (typesafe, pi-native), per their nested metrics.enabled. */
@@ -89,10 +91,10 @@ function counts(value: unknown): Record<string, number> {
 }
 
 function normalizeState(value: ClassifierMetricsState | undefined): ClassifierMetricsState {
-  if (!value || value.version !== 1 || value.model !== "jev-1.13.0") return emptyState();
+  if (!value || value.version !== 1 || typeof value.model !== "string" || !value.model || value.model.length > 200) return emptyState();
   return {
     version: 1,
-    model: "jev-1.13.0",
+    model: value.model,
     total: count(value.total),
     outcomes: counts(value.outcomes),
     tiers: counts(value.tiers),
@@ -134,17 +136,20 @@ export class ClassifierMetricsStore {
 
   record(observation: TypeSafeObservation): void {
     if (!this.enabled) return;
+    const base = observation.model && observation.model.length <= 200 && observation.model !== this.state.model
+      ? { ...emptyState(), model: observation.model }
+      : this.state;
     const outcome = observation.outcome;
-    const outcomes = { ...this.state.outcomes, [outcome]: (this.state.outcomes[outcome] ?? 0) + 1 };
+    const outcomes = { ...base.outcomes, [outcome]: (base.outcomes[outcome] ?? 0) + 1 };
     const tiers = observation.tier
-      ? { ...this.state.tiers, [observation.tier]: (this.state.tiers[observation.tier] ?? 0) + 1 }
-      : this.state.tiers;
+      ? { ...base.tiers, [observation.tier]: (base.tiers[observation.tier] ?? 0) + 1 }
+      : base.tiers;
     const confidenceBand = observation.confidence === undefined
       ? undefined
       : observation.confidence >= 0.9 ? "0.9-1.0" : observation.confidence >= 0.8 ? "0.8-0.9" : "<0.8";
     const confidenceBands = confidenceBand
-      ? { ...this.state.confidenceBands, [confidenceBand]: (this.state.confidenceBands[confidenceBand] ?? 0) + 1 }
-      : this.state.confidenceBands;
+      ? { ...base.confidenceBands, [confidenceBand]: (base.confidenceBands[confidenceBand] ?? 0) + 1 }
+      : base.confidenceBands;
     const latency = Math.max(0, Math.round(observation.latencyMs));
     const latencyBucket = latency <= 250 ? "<=250ms"
       : latency <= 500 ? "<=500ms"
@@ -152,17 +157,17 @@ export class ClassifierMetricsStore {
       : latency <= 3000 ? "<=3000ms"
       : latency <= 10000 ? "<=10000ms"
       : ">10000ms";
-    const latencyBuckets = { ...this.state.latencyBuckets, [latencyBucket]: (this.state.latencyBuckets[latencyBucket] ?? 0) + 1 };
+    const latencyBuckets = { ...base.latencyBuckets, [latencyBucket]: (base.latencyBuckets[latencyBucket] ?? 0) + 1 };
     this.state = {
       version: 1,
-      model: "jev-1.13.0",
-      total: this.state.total + 1,
+      model: base.model,
+      total: base.total + 1,
       outcomes,
       tiers,
       confidenceBands,
       latencyBuckets,
-      totalLatencyMs: this.state.totalLatencyMs + latency,
-      totalAttempts: this.state.totalAttempts + Math.max(0, Math.floor(observation.attempts)),
+      totalLatencyMs: base.totalLatencyMs + latency,
+      totalAttempts: base.totalAttempts + Math.max(0, Math.floor(observation.attempts)),
       lastObservedAt: this.now(),
     };
     try {

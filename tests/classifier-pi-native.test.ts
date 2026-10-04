@@ -4,6 +4,10 @@ import type { ClassifierContext, ClassifierModel, ClassifierApi, ClassifierResul
 import { CLASSIFIER_BACKEND_IDS, type ClassifierRequest } from "../classifier-backends.ts";
 import { createPiNativeClassifier, decodePiNativeJudgment, type PiClassifierRegistry } from "../classifier-pi-native.ts";
 import type { TypeSafeObservation } from "../classifier-metrics.ts";
+import { setupDebug } from "../debug.ts";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const tiers = ["quick", "general", "frontier"];
 const request: ClassifierRequest = {
@@ -92,7 +96,29 @@ describe("pi-native classifier transport", () => {
       model: "typesafe/jev-latest",
     });
     assert.equal(observations[0]?.outcome, "success");
+    assert.equal(observations[0]?.model, "typesafe/jev-latest");
     assert.equal(h.listCalls(), 1);
+  });
+
+  it("records resolved model id in the finish trace", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bifrost-native-trace-"));
+    const path = join(dir, "trace.jsonl");
+    setupDebug({ enabled: true, path }, dir);
+    try {
+      const h = harness({ listed: [model()], results: [answer()] });
+      await createPiNativeClassifier({ registry: h.registry, debug: true })(request);
+      let records: Array<{ module: string; event: string; model?: string }> = [];
+      for (let i = 0; i < 100; i++) {
+        if (existsSync(path)) records = readFileSync(path, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+        if (records.some((entry) => entry.module === "pi-native" && entry.event === "finish")) break;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      const finish = records.find((entry) => entry.module === "pi-native" && entry.event === "finish");
+      assert.equal(finish?.model, "typesafe/jev-latest");
+    } finally {
+      setupDebug({ enabled: false, path }, dir);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("pre-bounds nothing and flattens criteria into one choice question", async () => {
@@ -114,7 +140,7 @@ describe("pi-native classifier transport", () => {
     const judgment = await classify(request);
     assert.deepEqual(h.lookups, ["custom/jev-9"]);
     assert.equal(h.listCalls(), 0);
-    assert.equal(judgment?.model, "typesafe/jev-latest");
+    assert.equal(judgment?.model, "custom/jev-9");
   });
 
   it("yields no judgment on stopReason error and retries up to maxAttempts", async () => {

@@ -229,6 +229,7 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
             outcome,
             latencyMs: performance.now() - startedAt,
             attempts,
+            model: TYPESAFE_MODEL,
             tier: judgment?.tier,
             confidence: judgment?.confidence,
           });

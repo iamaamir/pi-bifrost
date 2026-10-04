@@ -423,6 +423,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             : await getPipeline(ctx).classify(prompt, signal);
           if (signal?.aborted) throw new Error("Bifrost: route aborted");
           if (classification.kind === "unclassified") throw new Error("Bifrost: no configured tier for virtual request");
+          const classifierIdentity = classification.kind === "classified" && classification.judgment
+            ? { classifierBackend: classification.judgment.backend, classifierModel: classification.judgment.model }
+            : {};
           const resolve = () => resolveForTier(ctx, classification.tier);
           let resolved = resolve();
           if (!resolved.selected && resolved.primary.candidates.length === 0) {
@@ -446,7 +449,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             debug("virtual", "fail", { tier: classification.tier, reason: resolved.fallbackReason, pool: routeFailure.pool, skipped: resolved.skipped });
             return undefined;
           }
-          debug("virtual", "select", { tier: classification.tier, model: modelKey(model), source: classification.kind === "classified" ? classification.source : "fallback", skipped: resolved.skipped });
+          debug("virtual", "select", { tier: classification.tier, model: modelKey(model), source: classification.kind === "classified" ? classification.source : "fallback", ...classifierIdentity, skipped: resolved.skipped });
           saveClassifierDecision(prompt, classification);
           log(ctx, `Bifrost auto: ${classification.tier} → ${modelKey(model)} (${classification.kind === "classified" ? classification.source : "fallback"}${resolved.fallbackReason ? `; ${resolved.fallbackReason}` : ""}${resolved.skipped.length > 0 ? `; ${resolved.skipped.length} skipped: ${resolved.skipped.map((s) => s.key).join(", ")}` : ""})`);
           return model;
@@ -667,6 +670,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       const source = classification.kind === "classified"
         ? classification.source
         : "fallback";
+      const classifierIdentity = classification.kind === "classified" && classification.judgment
+        ? { classifierBackend: classification.judgment.backend, classifierModel: classification.judgment.model }
+        : {};
       const pattern = state.config.models?.[tier] ?? tier;
       const strategy = getStrategy(state.config.categoryStrategies, state.config.strategy, tier);
       const defaultTier = state.config.default;
@@ -732,8 +738,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         syncBifrostModeStatus(ctx, state);
         const reason = resolved.fallbackReason ? `, ${resolved.fallbackReason}` : "";
         log(ctx, `Bifrost: ${tier} → ${modelKey(model)} (already active, ${source}${reason})`);
-        debug("input", "model_unchanged", { model: modelKey(model), selectedTier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", thinkingLevel: ctx.thinkingLevel });
-        debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", thinkingLevel: ctx.thinkingLevel });
+        debug("input", "model_unchanged", { model: modelKey(model), selectedTier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", ...classifierIdentity, thinkingLevel: ctx.thinkingLevel });
+        debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", ...classifierIdentity, thinkingLevel: ctx.thinkingLevel });
         trackerFor(ctx).begin(modelKey(model));
         claimedTrial = undefined;
         endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
@@ -783,7 +789,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       log(ctx, doneMsg);
       trackerFor(ctx).begin(modelKey(model));
       claimedTrial = undefined;
-      debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", routingDurationMs, thinkingLevel: ctx.thinkingLevel });
+      debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", ...classifierIdentity, routingDurationMs, thinkingLevel: ctx.thinkingLevel });
       endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
       return defaultAction;
     } finally {
