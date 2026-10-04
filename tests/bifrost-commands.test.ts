@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildClassifierTestReport, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, runBifrostCommand } from "../commands.ts";
+import { BIFROST_COMMAND_OPTIONS, buildClassifierTestReport, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, runBifrostCommand } from "../commands.ts";
 import { makePiClassifierModel, makeRegistry } from "./helpers.ts";
 
 function makeCtx(
@@ -507,5 +507,39 @@ describe("bifrost command ui", () => {
 
     const widget = calls.find((call) => call.kind === "widget" && String(call.value).startsWith("bifrost-output:"));
     assert(widget?.lines?.some((line) => line.includes("openCircuits: 0")));
+  });
+});
+
+describe("command aliases", () => {
+  it("keeps init -f reachable as an alias of init", () => {
+    const init = BIFROST_COMMAND_OPTIONS.find((c) => c.value === "init");
+    assert.deepEqual(init?.aliases, ["init -f"]);
+  });
+
+  it("no longer lists init -f as its own command", () => {
+    assert.equal(
+      BIFROST_COMMAND_OPTIONS.some((c) => c.value === "init -f"),
+      false,
+    );
+  });
+
+  it("offers init -f in completion", () => {
+    const items = getBifrostCommandCompletions("init -");
+    assert.ok(items?.some((i) => i.value === "init -f"));
+  });
+
+  it("still offers init in completion", () => {
+    // "init" itself is exact-dispatchable, so it must return null (see the
+    // exact-match tests below). A partial prefix is what exercises emission.
+    const items = getBifrostCommandCompletions("ini");
+    assert.ok(items?.some((i) => i.value === "init"));
+  });
+
+  it("submits an exact alias instead of offering a completion", () => {
+    assert.equal(getBifrostCommandCompletions("init -f"), null);
+  });
+
+  it("returns null for an exact value", () => {
+    assert.equal(getBifrostCommandCompletions("classifier status"), null);
   });
 });

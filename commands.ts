@@ -698,6 +698,7 @@ interface CommandSpec {
   readonly value: string;
   readonly description: string;
   readonly argumentHint?: string;
+  readonly aliases?: readonly string[];
 }
 
 interface CommandEntry extends CommandSpec {
@@ -721,8 +722,7 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "reload", description: "Reload config after editing" },
   { value: "providers", description: "List available providers" },
   { value: "probe", description: "Probe working models" },
-  { value: "init", description: "Probe models and generate config" },
-  { value: "init -f", description: "Force Probe models and generate config" },
+  { value: "init", description: "Probe models and generate config (pass -f to force re-probe)", aliases: ["init -f"] },
   { value: "benchmark", description: "Classify a benchmark prompt", argumentHint: "<prompt>" },
   { value: "cache stats", description: "Show classification cache" },
   { value: "cache clear", description: "Clear classification cache" },
@@ -737,14 +737,18 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
 
 export function getBifrostCommandCompletions(prefix: string) {
   const normalized = prefix.trim().toLowerCase();
+  const entries = BIFROST_COMMAND_OPTIONS.flatMap((command) => [
+    { value: command.value, description: command.description },
+    ...(command.aliases ?? []).map((alias) => ({ value: alias, description: command.description })),
+  ]);
   // Exact commands should submit on first Enter. Returning a completion for
   // an already-complete command makes Pi accept the suggestion first and
   // leave the command text stuck in the editor until a second Enter.
-  if (BIFROST_COMMAND_OPTIONS.some((command) => command.value === normalized)) return null;
-  const items = BIFROST_COMMAND_OPTIONS.filter((command) => command.value.startsWith(normalized)).map((command) => ({
-    value: command.value,
-    label: command.value,
-    description: command.description,
+  if (entries.some((entry) => entry.value === normalized)) return null;
+  const items = entries.filter((entry) => entry.value.startsWith(normalized)).map((entry) => ({
+    value: entry.value,
+    label: entry.value,
+    description: entry.description,
   }));
   return items.length > 0 ? items : null;
 }
