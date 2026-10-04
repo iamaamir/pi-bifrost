@@ -23,6 +23,7 @@ import {
 } from "./routing.ts";
 import type { ReliabilityStore } from "./reliability-store.ts";
 import { classifierMetricsEnabled, type ClassifierMetricsState, type ClassifierMetricsStore } from "./classifier-metrics.ts";
+import type { EffectiveBackend } from "./classifier-detection.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend } from "./classifier-backends.ts";
 import { resolveTypeSafeApiKey, type TypeSafeCredentialSource } from "./typesafe-classifier.ts";
 
@@ -38,7 +39,7 @@ export interface BifrostState {
   classifierMetricsStore: ClassifierMetricsStore;
   extensionDir: string;
   /** Uses the extension instance's sticky detector without locking on context-free facts. */
-  effectiveClassifierBackend: (config: BifrostConfig) => ClassifierBackend;
+  effectiveClassifierBackend: (config: BifrostConfig) => EffectiveBackend;
   getPipeline: (ctx: ExtensionContext) => ClassificationPipeline;
   invalidatePipeline: () => void;
   /** Leave Bifrost's virtual selection for its last dispatched physical model. */
@@ -464,7 +465,7 @@ async function handleInit(
   state.reliabilityStore.reload(state.config.reliability, process.cwd());
   state.classifierMetricsStore.reload({
     cwd: process.cwd(),
-    enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config)),
+    enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
   });
   state.invalidatePipeline();
 
@@ -491,9 +492,12 @@ export function buildClassifierTestReport(input: {
   before: ClassifierMetricsState;
   after: ClassifierMetricsState;
   credential?: TypeSafeCredentialSource;
+  effectiveBackend?: EffectiveBackend;
 }): string[] {
   const { classifier, result, before, after, credential } = input;
-  const backend = classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt;
+  const effective = input.effectiveBackend;
+  const backend = effective?.backend ?? classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt;
+  const backendLabel = effective?.auto ? `auto: ${backend} (${effective.reason})` : backend;
   const judgment = result.kind === "classified" ? result.judgment : undefined;
   const outcome = increasedMetric(after.outcomes, before.outcomes);
   const observedTier = judgment?.backend === backend
@@ -508,13 +512,15 @@ export function buildClassifierTestReport(input: {
     ? judgment.model
     : backend === CLASSIFIER_BACKEND_IDS.typesafe
       ? classifier?.typesafe?.model ?? TYPE_SAFE_MODEL
-      : configuredModel;
+      : backend === CLASSIFIER_BACKEND_IDS.piNative
+        ? classifier?.piNative?.model ?? "catalog default"
+        : configuredModel;
   const finalResult = result.kind === "unclassified" ? "unclassified" : result.tier;
   const finalSource = result.kind === "classified" ? result.source : result.kind;
   const accepted = result.kind === "classified" && judgment?.backend === backend;
   const lines = [
     "--- classifier test ---",
-    `backend: ${backend}`,
+    `backend: ${backendLabel}`,
     `model: ${model ?? "none"}`,
     `backend result: ${observedTier ?? "none"}`,
     `confidence: ${observedConfidence}`,
@@ -525,9 +531,9 @@ export function buildClassifierTestReport(input: {
     `final model: ${judgment?.model ?? "none"}`,
     `request observed: ${after.total > before.total ? "yes" : "no"}`,
   ];
-  if (backend === CLASSIFIER_BACKEND_IDS.typesafe) {
-    lines.push(`credential: ${credential ?? "missing"}`);
-    if (after.total > before.total) lines.push(`outcome: ${outcome ?? "recorded"}`);
+  if (backend === CLASSIFIER_BACKEND_IDS.typesafe) lines.push(`credential: ${credential ?? "missing"}`);
+  if (backend !== CLASSIFIER_BACKEND_IDS.prompt && after.total > before.total) {
+    lines.push(`outcome: ${outcome ?? "recorded"}`);
   }
   lines.push("-----------------------");
   return lines;
@@ -560,6 +566,7 @@ async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState):
     before,
     after,
     credential,
+    effectiveBackend: state.effectiveClassifierBackend(state.config),
   }));
 }
 
@@ -849,7 +856,7 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
   state.config = loadConfig(process.cwd(), state.extensionDir);
   state.classifierMetricsStore.reload({
     cwd: process.cwd(),
-    enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config)),
+    enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
   });
   state.invalidatePipeline();
   log(ctx, `classifier backend set to ${backend}; config reloaded`);
@@ -911,7 +918,7 @@ export function createCommandRouter(
       state.reliabilityStore.reload(state.config.reliability, process.cwd());
       state.classifierMetricsStore.reload({
         cwd: process.cwd(),
-        enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config)),
+        enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
       });
       state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
@@ -1076,16 +1083,21 @@ export function createCommandRouter(
         ? rawModel.join(", ")
         : (rawModel ?? "none");
       const classifier = state.config.classifier;
-      const backend = classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt;
+      const effective = state.effectiveClassifierBackend(state.config);
+      const backend = effective.backend;
+      const label = effective.auto ? `auto: ${backend} (${effective.reason})` : backend;
       const credential = backend === CLASSIFIER_BACKEND_IDS.typesafe ? resolveTypeSafeApiKey().source : undefined;
+      const fallback = classifier?.fallback ?? (backend === CLASSIFIER_BACKEND_IDS.typesafe ? "prompt" : modelId === "none" ? "regex" : "prompt");
       const detail = backend === CLASSIFIER_BACKEND_IDS.typesafe
-        ? `backend=${CLASSIFIER_BACKEND_IDS.typesafe} model=${classifier?.typesafe?.model ?? TYPE_SAFE_MODEL} endpoint=${TYPE_SAFE_ENDPOINT} minConfidence=${classifier?.minConfidence ?? 0.8} credential=${credential} fallback=${classifier?.fallback ?? "prompt"} fallbackModel=${classifier?.fallback === "regex" ? "none" : modelId}`
-        : `backend=${CLASSIFIER_BACKEND_IDS.prompt} model=${modelId} endpoint=${classifier?.endpoint ?? "registry"} method=${classifier?.method ?? "auto"}`;
+        ? `backend=${label} model=${classifier?.typesafe?.model ?? TYPE_SAFE_MODEL} endpoint=${TYPE_SAFE_ENDPOINT} minConfidence=${classifier?.minConfidence ?? 0.8} credential=${credential} fallback=${fallback} fallbackModel=${fallback === "regex" ? "none" : modelId}`
+        : backend === CLASSIFIER_BACKEND_IDS.piNative
+          ? `backend=${label} model=${classifier?.piNative?.model ?? "catalog default"} minConfidence=${classifier?.minConfidence ?? 0.8} fallback=${fallback} fallbackModel=${fallback === "regex" ? "none" : modelId}`
+          : `backend=${label} model=${modelId} endpoint=${classifier?.endpoint ?? "registry"} method=${classifier?.method ?? "auto"}`;
       const metrics = state.classifierMetricsStore.snapshot();
       const lines = [
         `classifier: enabled=${state.classifierEnabled}`,
         detail,
-        ...(backend === CLASSIFIER_BACKEND_IDS.typesafe ? [`observations=${metrics.total}`, `outcomes=${JSON.stringify(metrics.outcomes)}`] : []),
+        ...(backend !== CLASSIFIER_BACKEND_IDS.prompt ? [`observations=${metrics.total}`, `outcomes=${JSON.stringify(metrics.outcomes)}`] : []),
       ];
       uiOutput(ctx, lines);
     }),

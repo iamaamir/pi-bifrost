@@ -308,7 +308,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     reliabilityStore,
     classifierMetricsStore,
     extensionDir,
-    effectiveClassifierBackend: (config) => effectiveBackendOf(config, detectionEngine).backend,
+    effectiveClassifierBackend: (config) => effectiveBackendOf(config, detectionEngine),
     getPipeline,
     invalidatePipeline,
     saveModeState: () => saveRuntimeState(runtimeStateFile, {

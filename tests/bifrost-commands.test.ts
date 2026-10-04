@@ -93,7 +93,11 @@ function makeState(saveModeState: () => void = () => {}) {
       reload: () => {},
     },
     extensionDir: ".",
-    effectiveClassifierBackend: () => "prompt" as const,
+    effectiveClassifierBackend: (config: { classifier?: { backend?: string } }) => ({
+      backend: config.classifier?.backend ?? "prompt",
+      reason: config.classifier?.backend ? "explicit config" : "no credential detected",
+      auto: !config.classifier?.backend,
+    }),
     getPipeline: () => ({ classify: async () => ({ kind: "unclassified" as const }) }),
     invalidatePipeline: () => {},
     saveModeState,
@@ -289,6 +293,36 @@ describe("bifrost command ui", () => {
     const output = calls.find((call) => call.kind === "widget")?.lines?.join("\n") ?? "";
     assert.match(output, /backend=typesafe model=jev-1\.13\.0/);
     assert.match(output, /fallback=prompt fallbackModel=fixture\/classifier/);
+  });
+
+  it("shows auto-detected pi-native backend and reason in status", async () => {
+    const { ctx, calls } = makeCtx();
+    const state: any = makeState();
+    state.effectiveClassifierBackend = () => ({ backend: "pi-native", reason: "Pi-managed TypeSafe credential", auto: true });
+    await createCommandRouter(state)("classifier status", ctx as never);
+    const output = calls.find((call) => call.kind === "widget")?.lines?.join("\n") ?? "";
+    assert.match(output, /backend=auto: pi-native \(Pi-managed TypeSafe credential\) model=catalog default/);
+    assert.match(output, /observations=0/);
+  });
+
+  it("names pi-native and its resolved model in classifier test report", () => {
+    const metrics = {
+      version: 1 as const, model: "typesafe/jev-latest", total: 1,
+      outcomes: { success: 1 }, tiers: { quick: 1 }, confidenceBands: {}, latencyBuckets: {},
+      totalLatencyMs: 100, totalAttempts: 1,
+    };
+    const lines = buildClassifierTestReport({
+      classifier: { piNative: {} },
+      effectiveBackend: { backend: "pi-native", reason: "Pi-managed TypeSafe credential", auto: true },
+      result: { kind: "classified", tier: "quick", source: "classifier", judgment: {
+        tier: "quick", backend: "pi-native", model: "typesafe/jev-latest", confidence: 0.93,
+      } },
+      before: { ...metrics, total: 0, outcomes: {} }, after: metrics,
+    });
+    assert(lines.includes("backend: auto: pi-native (Pi-managed TypeSafe credential)"));
+    assert(lines.includes("model: typesafe/jev-latest"));
+    assert(lines.includes("accepted: yes"));
+    assert(lines.includes("outcome: success"));
   });
 
   it("separates a rejected TypeSafe judgment from the final fallback route", () => {
