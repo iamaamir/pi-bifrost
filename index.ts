@@ -48,8 +48,11 @@ import { BIFROST_AUTO_ID, BIFROST_AUTO_PROVIDER, isBifrostAuto, isVirtualModel }
 import { createDispatchOwnership, RuntimeReliabilityTracker } from "./runtime-reliability.ts";
 import { VirtualOverride } from "./virtual-override.ts";
 import { createVirtualRoute, noModelError, poolProblem } from "./virtual-routing.ts";
-import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV } from "./classifier-backends.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, type ClassifierBackend } from "./classifier-backends.ts";
 import { createTypeSafeClassifier, resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
+import { createPiNativeClassifier } from "./classifier-pi-native.ts";
+import { collectDetectionFacts, createDetectionEngine, selectEffectiveBackend, type DetectionFacts } from "./classifier-detection.ts";
+import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import {
   REGISTRY_REFRESH_TTL_MS,
   setBifrostStatus,
@@ -85,9 +88,18 @@ function endpointClassifier(id: string, endpoint: string): ClassifierModel {
   return { kind: "endpoint", id, baseUrl: endpoint };
 }
 
+const detectionEngine = createDetectionEngine();
+
+/** Facts readable without a request context (auth.json + environment). */
+function collectContextFreeFacts(): DetectionFacts {
+  return collectDetectionFacts({ readStoredCredential, env: process.env });
+}
+
 function activeClassifierCacheKey(config: BifrostConfig): string {
+  const effective = selectEffectiveBackend(config.classifier?.backend, detectionEngine.detect(collectContextFreeFacts));
   return classifierCacheKey(config, Object.keys(config.models ?? {}), {
     typesafeCredentialAvailable: resolveTypeSafeApiKey().source !== "missing",
+    effectiveBackend: effective.backend,
   });
 }
 
@@ -99,6 +111,7 @@ function buildPipeline(
   reliabilityStore: ReliabilityStore,
   classifierMetricsStore: ClassifierMetricsStore,
   cacheSemanticKey: string,
+  effectiveBackend: ClassifierBackend,
 ): ClassificationPipeline {
   const tiers = Object.keys(config.models ?? {});
   const cacheCfg = config.cache;
@@ -110,7 +123,8 @@ function buildPipeline(
   // If classifier is disabled, pass empty array — pipeline skips LLM stage.
   let classifierModels: ClassifierModel[] = [];
   let classifyDirect: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<ClassificationJudgment | undefined>) | undefined;
-  const typeSafeUsable = config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && !hasClassifierConfigErrors(config);
+  const typeSafeUsable = effectiveBackend === CLASSIFIER_BACKEND_IDS.typesafe && !hasClassifierConfigErrors(config);
+  const piNativeUsable = effectiveBackend === CLASSIFIER_BACKEND_IDS.piNative && !hasClassifierConfigErrors(config);
   if (classifierEnabled && typeSafeUsable && tiers.length > 0) {
     const classifierConfig = config.classifier!;
     const classify = createTypeSafeClassifier({
@@ -126,9 +140,27 @@ function buildPipeline(
       return judgment;
     };
   }
+  if (classifierEnabled && piNativeUsable && tiers.length > 0) {
+    const classify = createPiNativeClassifier({
+      registry: ctx.modelRegistry,
+      model: config.classifier?.piNative?.model,
+      timeoutMs: config.classifier?.piNative?.timeoutMs,
+      maxAttempts: config.classifier?.piNative?.maxAttempts,
+      debug: Boolean(config.debug?.enabled),
+      minConfidence: config.classifier?.minConfidence,
+      reliability: reliabilityStore,
+      credentialMissing: () => resolveTypeSafeApiKey().source === "missing",
+      observe: (observation) => classifierMetricsStore.record(observation),
+    });
+    classifyDirect = async (text, availableTiers, signal) => {
+      const judgment = await classify({ prompt: boundedClassifierPrompt(text), tiers: availableTiers, criteria: config.classifier?.criteria ?? DEFAULT_CLASSIFIER_CRITERIA }, signal);
+      return judgment;
+    };
+  }
   const usePromptClassifier = classifierEnabled && tiers.length > 0 && (
-    (config.classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt) === CLASSIFIER_BACKEND_IDS.prompt ||
-    (typeSafeUsable && config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && config.classifier.fallback !== "regex")
+    effectiveBackend === CLASSIFIER_BACKEND_IDS.prompt ||
+    (typeSafeUsable && config.classifier?.fallback !== "regex") ||
+    (piNativeUsable && config.classifier?.fallback !== "regex")
   );
   if (usePromptClassifier) {
     const classifierEndpoint = config.classifier?.endpoint;
@@ -234,9 +266,24 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return value;
   }
   let pipeline: ClassificationPipeline | undefined;
+  let detectionNoticeShown = false;
 
   function getPipeline(ctx: ExtensionContext): ClassificationPipeline {
     if (!pipeline) {
+      const detected = detectionEngine.detect(() => collectDetectionFacts({
+        readStoredCredential,
+        getProviderAuthStatus: (providerId) => ctx.modelRegistry.getProviderAuthStatus(providerId),
+        env: process.env,
+      }));
+      const effective = selectEffectiveBackend(state.config.classifier?.backend, detected);
+      if (effective.auto) {
+        state.classifierDetection = { backend: effective.backend, reason: effective.reason };
+        if (!detectionNoticeShown) {
+          detectionNoticeShown = true;
+          debug("classifier", "backend.detected", { backend: effective.backend, reason: effective.reason });
+          console.warn(`Bifrost: classifier backend auto: ${effective.backend} (${effective.reason}). Run /bifrost classifier to change.`);
+        }
+      }
       pipeline = buildPipeline(
         ctx,
         state.config,
@@ -245,6 +292,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         reliabilityStore,
         classifierMetricsStore,
         activeClassifierCacheKey(state.config),
+        effective.backend,
       );
     }
     return pipeline;

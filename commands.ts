@@ -45,6 +45,8 @@ export interface BifrostState {
   saveModeState: () => void;
   lastRegistryRefreshAt?: number;
   forceRegistryRefresh?: boolean;
+  /** Recorded when detection fills an absent classifier.backend; status and test report read it (fix 12). */
+  classifierDetection?: { backend: ClassifierBackend; reason: string };
 }
 
 export function log(

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { BifrostConfig } from "./config.ts";
-import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_MODEL, type TierCriterion } from "./classifier-backends.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_MODEL, type ClassifierBackend, type TierCriterion } from "./classifier-backends.ts";
 
 const CLASSIFIER_INSTRUCTION_VERSION = 1;
 
@@ -67,6 +67,10 @@ function stableValue(value: unknown): unknown {
 
 export interface ClassifierRuntimeSemantics {
   readonly typesafeCredentialAvailable?: boolean;
+  /** Detection-resolved backend. A cached decision must never be tagged with a backend that did not produce it (fix 1). */
+  readonly effectiveBackend?: ClassifierBackend;
+  /** Resolved pi-native catalog id, recorded once resolution runs (step 11). */
+  readonly piNativeModel?: string;
 }
 
 export function classifierCacheKey(
@@ -77,8 +81,9 @@ export function classifierCacheKey(
   const classifier = config.classifier;
   const semantics = JSON.stringify(stableValue({
     instructionVersion: CLASSIFIER_INSTRUCTION_VERSION,
-    backend: classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt,
+    backend: runtime.effectiveBackend ?? classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt,
     model: classifier?.model,
+    piNativeModel: classifier?.piNative?.model,
     endpoint: classifier?.endpoint,
     method: classifier?.method,
     systemPrompt: classifier?.systemPrompt,
