@@ -775,7 +775,7 @@ function formatBifrostCommandChoice(command: CommandSpec): string {
 // user opens /bifrost. Name the offending value at the call site instead.
 function requireCommand(value: string): CommandSpec {
   const spec = BIFROST_COMMAND_OPTIONS.find((command) => command.value === value);
-  if (!spec) throw new Error(`bifrost: dashboard references unknown command "${value}"`);
+  if (!spec) throw new Error(`Bifrost: dashboard references unknown command "${value}"`);
   return spec;
 }
 

@@ -796,6 +796,7 @@ describe("dashboard menu", () => {
     assert.ok(rows.some((row) => row.includes("/bifrost on —")));
     assert.ok(!rows.some((row) => row.includes("/bifrost off —")));
     assert.ok(rows.some((row) => row.includes("/bifrost unpin —")));
+    assert.ok(!rows.some((row) => row.includes("/bifrost pin —")));
   });
 
   it("includes preview so the menu keeps prefilling it", async () => {
@@ -806,5 +807,33 @@ describe("dashboard menu", () => {
     await createCommandRouter(state as never)("", ctx as never);
     const rows = rowsOf(calls);
     assert.ok(rows.some((row) => row.includes("/bifrost preview <prompt>")));
+  });
+
+  it("names the missing value when the menu references a renamed command", async () => {
+    // requireCommand is only reachable for the value the current state asks
+    // for, so disable routing: the menu then requests "on", and renaming that
+    // registry entry must surface a named error. The previous non-null
+    // assertion failed here too, but later and unnamed, inside
+    // formatBifrostCommandChoice, as a TypeError on undefined.
+    const { ctx } = makeCtx();
+    const state = makeState();
+    state.enabled = false;
+    const original = BIFROST_COMMAND_OPTIONS[0];
+    assert.equal(original.value, "on");
+    (BIFROST_COMMAND_OPTIONS as unknown as Array<{ value: string; description: string }>)[0] = {
+      ...original,
+      value: "renamed",
+    };
+    try {
+      await assert.rejects(
+        createCommandRouter(state as never)("", ctx as never),
+        /Bifrost: dashboard references unknown command "on"/,
+      );
+    } finally {
+      // Load-bearing: BIFROST_COMMAND_OPTIONS is module-level shared state.
+      // Without this restore a failing assertion corrupts the registry for
+      // every test that runs afterwards.
+      (BIFROST_COMMAND_OPTIONS as unknown as Array<{ value: string; description: string }>)[0] = original;
+    }
   });
 });
