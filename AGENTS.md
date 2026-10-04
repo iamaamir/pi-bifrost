@@ -86,3 +86,5 @@ Use local browser screenshots when layout or animation changes. Check desktop an
 ## Git
 
 Use Conventional Commits. Keep commits atomic and scoped. Do not commit unrelated changes, generated prototypes, screenshots, research, or ADR drafts unless explicitly requested.
+
+Never add a `Co-Authored-By` trailer to a commit, in any form. Do not add agent, assistant, or tool attribution to a commit message, and do not add "generated with" footers to a pull request body. Authorship belongs to the human author only.
