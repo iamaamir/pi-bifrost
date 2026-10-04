@@ -209,6 +209,14 @@ describe("validateConfig", () => {
     assert.ok(issues.some((issue) => issue.message.includes("does not support")));
   });
 
+  it("accepts the pi-native backend and rejects unknown backend values", () => {
+    const ok = validateConfig({ ...baseConfig, classifier: { backend: "pi-native" } });
+    assert.equal(ok.filter((issue) => issue.message.includes("backend")).length, 0);
+    // A runtime-bad value on purpose: the cast sits at the fixture seam.
+    const bad = validateConfig({ ...baseConfig, classifier: { backend: "bogus" } as unknown as BifrostConfig["classifier"] });
+    assert.ok(bad.some((issue) => issue.message.includes("Unknown classifier backend")));
+  });
+
   it("allows valid probe settings", () => {
     const issues = validateConfig({
       ...baseConfig,

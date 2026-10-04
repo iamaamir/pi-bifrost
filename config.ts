@@ -5,17 +5,12 @@ import type { RoutingStrategy, RouteRule } from "./routing.ts";
 import type { CacheOptions } from "./cache.ts";
 import type { DebugConfig } from "./debug.ts";
 import type { ReliabilityConfig } from "./reliability.ts";
-import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend } from "./classifier-backends.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend, type TierCriterion } from "./classifier-backends.ts";
 
 export { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL } from "./classifier-backends.ts";
-export type { ClassifierBackend } from "./classifier-backends.ts";
+export type { ClassifierBackend, TierCriterion } from "./classifier-backends.ts";
 
 type ClassifierMethod = "direct" | "subprocess" | "auto";
-export type TierCriterion = string | {
-  what: string;
-  notFor?: string;
-  examples?: string[];
-};
 
 /** Conservative defaults used when users opt into TypeSafe through init or the picker. */
 export const DEFAULT_CLASSIFIER_CRITERIA: Record<string, TierCriterion> = {

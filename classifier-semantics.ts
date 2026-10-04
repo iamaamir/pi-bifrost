@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { BifrostConfig } from "./config.ts";
-import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_MODEL } from "./classifier-backends.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_MODEL, type TierCriterion } from "./classifier-backends.ts";
 
 const CLASSIFIER_INSTRUCTION_VERSION = 1;
 
@@ -9,6 +9,13 @@ export const CLASSIFIER_PROMPT_MAX_CHARS = 16_000;
 
 export function boundedClassifierPrompt(text: string, maxChars = CLASSIFIER_PROMPT_MAX_CHARS): string {
   return text.length <= maxChars ? text : text.slice(0, maxChars);
+}
+
+/** Flatten one criterion into the plain text a choice question carries. */
+export function criterionText(value: TierCriterion): string {
+  if (typeof value === "string") return value;
+  return [value.what, value.notFor ? `Not for: ${value.notFor}` : "", value.examples?.length ? `Examples: ${value.examples.join(", ")}` : ""]
+    .filter(Boolean).join(" ");
 }
 
 function stableValue(value: unknown): unknown {

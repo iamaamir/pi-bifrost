@@ -3,7 +3,8 @@ import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import type { ReliabilityStore } from "./reliability-store.ts";
 import { debug as bifrostDebug } from "./debug.ts";
 import type { TypeSafeObservation, TypeSafeOutcome } from "./classifier-metrics.ts";
-import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_CREDENTIAL_KEY, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassificationJudgment } from "./classifier-backends.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_CREDENTIAL_KEY, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassificationJudgment, type ClassifierRequest } from "./classifier-backends.ts";
+import { criterionText } from "./classifier-semantics.ts";
 
 /** Compatibility exports for the TypeSafe provider seam and benchmark. */
 export const TYPESAFE_SYSTEMONE_URL = TYPE_SAFE_ENDPOINT;
@@ -14,17 +15,8 @@ const MAX_TYPESAFE_TIMEOUT_MS = 60_000;
 const MAX_TYPESAFE_ATTEMPTS = 3;
 export const TYPESAFE_MIN_CONFIDENCE = 0.8;
 
-type TierCriterion = string | {
-  readonly what: string;
-  readonly notFor?: string;
-  readonly examples?: readonly string[];
-};
-
-export interface TypeSafeInput {
-  readonly prompt: string;
-  readonly tiers: readonly string[];
-  readonly criteria: Readonly<Record<string, TierCriterion>>;
-}
+/** @deprecated Use `ClassifierRequest`. Kept for the benchmark and provider seam. */
+export type TypeSafeInput = ClassifierRequest;
 
 export interface TypeSafeJudgment extends ClassificationJudgment {
   readonly confidence: number;
@@ -52,12 +44,6 @@ export interface TypeSafeOptions {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function criterionText(value: TierCriterion): string {
-  if (typeof value === "string") return value;
-  return [value.what, value.notFor ? `Not for: ${value.notFor}` : "", value.examples?.length ? `Examples: ${value.examples.join(", ")}` : ""]
-    .filter(Boolean).join(" ");
 }
 
 export function buildTypeSafeRequest(input: TypeSafeInput): Record<string, unknown> {
