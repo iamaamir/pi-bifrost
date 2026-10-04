@@ -37,6 +37,8 @@ const server = http.createServer((request, response) => {
       response.write(`data: ${JSON.stringify({ id: "fake", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: "partial" }, finish_reason: null }] })}\n\n`);
       return response.socket.destroy();
     }
+    // "slow" keeps an agent run open long enough to queue steer prompts.
+    if (model === "slow") return setTimeout(() => sse(response, "slow-done"), 8000);
     return sse(response, "healthy");
   });
 });
