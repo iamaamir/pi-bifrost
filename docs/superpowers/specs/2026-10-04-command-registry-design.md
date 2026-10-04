@@ -113,13 +113,40 @@ phantom rather than patching it.
 
 ### Completion
 
-`getBifrostCommandCompletions` (`commands.ts:738`) reads `.value` in exactly two
-places: the exact-match early return (`:743`) and the prefix filter (`:744`).
-Both must flatten aliases, or `init -f` silently disappears from completion
-while still working when typed.
+`getBifrostCommandCompletions` (`commands.ts:738`) reads `.value` in **four**
+places, and all four must change:
+
+| Line | Read | Purpose |
+|---|---|---|
+| `:743` | `.some((c) => c.value === normalized)` | early return so an exact command submits |
+| `:744` | `.filter((c) => c.value.startsWith(normalized))` | which commands match the typed prefix |
+| `:745` | `value: command.value` | the emitted completion value |
+| `:746` | `label: command.value` | the emitted completion label |
+
+Flattening only `:743` and `:744` would leave `init -f` filterable but never
+*emitted* — reintroducing exactly the "works when typed, missing from
+completion" defect this change removes.
 
 The early return exists so Pi accepts the command instead of leaving the text
 stuck in the editor (`commands.ts:740-742`). It must cover exact aliases too.
+
+### The `aliases` contract
+
+`aliases` is **completion-only**. Dispatch (`commands.ts:1186-1192`) consults
+`route.match(sub)` and nothing else; `aliases` is not on `CommandEntry` at all.
+
+`/bifrost init -f` dispatches because `spaced("init")` accepts
+`"init -f"`, not because the alias is honored.
+
+That makes the following an invariant, stated so it is not broken later:
+
+> Every alias must be reachable by its parent's matcher. For an `exact()` or
+> `spaced()` parent that means `alias === parent.value + " " + <rest>`. An alias
+> on an `exact()` command is a bug: it would appear in autocomplete, submit
+> cleanly on exact match, and then fall through to the unknown-subcommand
+> picker — a silent failure of the class this change removes.
+
+An alias test asserts dispatchability, not just presence in completion.
 
 ### Menu
 
@@ -143,20 +170,51 @@ defect class this change exists to remove.
 
 ## Testing
 
-New assertions go in `tests/bifrost-commands.test.ts`, which already builds the
-router and the fake context, rather than a new file. That keeps the revert a
-single self-contained `git revert`.
+Registry and menu assertions go in `tests/bifrost-commands.test.ts`, which
+ already builds the router and the fake context. Only the drift test gets a new
+ file, deliberately, so it can be reverted alone. Every commit is independently
+ revertible; see [Revert](#revert).
 
 **Registry and matcher**
 
-- every registry value dispatches through the real router to exactly one route,
-  and that route's `value` equals it
+`routes` is a function-local `const` inside `createCommandRouter`
+(`commands.ts:892`), and the router returns only the dispatcher closure
+(`:1153`). No handler echoes its route's `value`, and a first-match-wins loop
+makes "exactly one route matched" unobservable — a shadowed route produces no
+difference. So this asserts **observable effects**, table-driven through the
+real router with the existing fake context, which needs no new export:
+
+| input | asserted effect |
+|---|---|
+| `on` | `state.enabled === true` |
+| `off` | `state.enabled === false` |
+| `pin` | `state.pinned === true` |
+| `unpin` | `state.pinned === false` |
+| `cache stats` | logged output contains `cache:` |
+| `debug` | logged output contains `--- config ---` |
+| `classifier on` / `classifier off` | `state.classifierEnabled` flips |
+
+This catches shadowing, which is the point: if a `prefix` route swallowed
+`cache stats` or `classifier test`, the wrong effect fires and the row fails.
+Every registry value must map to an effect, and every value that produces no
+distinct effect must be listed with the reason.
+
+Two authoring traps in `tests/bifrost-commands.test.ts`:
+
+- the shared fake resolves a selection with
+  `options.find((o) => o.includes("/bifrost off"))`, so any test needing
+  `preview` or `pin` must pass an explicit `selectOverride` or it passes
+  vacuously
+- match on `"/bifrost pin"`, not `"pin"`, or `/bifrost unpin` false-positives
+
+Plus:
+
 - `/bifrost initialize` opens the unknown-subcommand picker and does **not** run
   `handleInit`
 - `classifier status`, `cache stats`, `cache clear`, `classifier test` are not
   swallowed by a `prefix` route
 - dispatch passes the original argument text through, so `init --write` still
-  works (`:381` covers this today)
+  works (`tests/bifrost-commands.test.ts:381` covers this today)
 - `/bifrost init -f` forces a re-probe while `/bifrost init` reuses a fresh one
 
 **Aliases and completion**
@@ -164,8 +222,10 @@ single self-contained `git revert`.
 - every alias is unique and does not collide with any value
 - completion offers every alias
 - completion returns `null` for an exact value **and** for an exact alias
-- alias case handling, since dispatch lowercases (`:1155`) and so does completion
-  (`:739`)
+- every alias is reachable under its parent's matcher, asserted through the real
+  router, not merely present in completion
+- alias case handling, since dispatch lowercases (`commands.ts:1155`) and so
+  does completion (`:739`)
 
 **Menu**
 
@@ -179,7 +239,8 @@ single self-contained `git revert`.
 **Documentation drift**
 
 `tests/docs-command-drift.test.ts`, parsing only the first table of
-`docs/guide/commands.md` (rows 7-25; a second table starts at `:79`):
+`docs/guide/commands.md` (rows 7-25; a second table's header starts at `:78`,
+so parsing stops there):
 
 - read the first cell of each row
 - strip the `/bifrost ` prefix and any `<prompt>` suffix
@@ -192,13 +253,13 @@ single self-contained `git revert`.
 `/bifrost init --force` silently reuses the cached probe and does the opposite
 of what the doc says. The code is not changed.
 
-After folding `init -f` into an alias, the doc has 18 rows and the registry has
-18 values, so the assertion holds without inventing documentation.
+After folding `init -f` into an alias, the table has 19 rows, of which the bare
+`/bifrost` row is excluded, leaving 18 commands against 18 registry values. The
+assertion holds without inventing documentation.
 
-`docs/llms.txt` is deliberately excluded. It documents 7 commands
-(`init`, `on`, `off`, `pin`, `unpin`, `preview`, `probe`, `classifier`) as prose
-prose bullets, not as a reference table. Set-equality would fail on roughly 11
-missing commands and would turn a curated overview into a command dump.
+`docs/llms.txt` is deliberately excluded. It references 10 commands in prose
+bullets, not as a reference table. Set-equality would fail on roughly 10 absent
+commands and would turn a curated overview into a command dump.
 
 ## Docs
 
@@ -263,12 +324,14 @@ Stated so the goal is not read as more than it is.
 ## Risks
 
 - **Merge interaction with PR #19.** Both edit `commands.ts`. `handlePreview`
-  ends at `:682` and the registry region starts at `:697`, a gap of 15 lines, so
+  ends at `:682` and the registry region starts at `:697`, a gap of 14 lines, so
   the regions are close and Git may need help. The blocks touched are
   `:697-736` (types and registry) and `:892-1151` (routes); PR #19's last hunk
   ends at old line 684, so the overlap should be limited to the type block.
-- **`init -f` folding changes picker row count** from 19 to 18. No test asserts
-  that count today, so it lands silently unless one is added.
+- **`init -f` folding changes unknown-subcommand picker rows** from 19 to 18.
+  No test asserts that count today, so it lands silently unless one is added.
+  This is separate from `tests/bifrost-commands.test.ts:187`, which asserts the
+  dashboard is 8 rows and needs no change under this design.
 - **Description changes are user-visible** and are copy decisions, not mechanics.
 
 ## Verification
@@ -278,7 +341,10 @@ npm test
 npm run typecheck
 npm run test:integration
 npm run test:ui
+npm run test:ui:reliability
 ```
+
+`AGENTS.md` requires `test:ui:reliability` for Pi UI and routing changes.
 
 `npm run test:ui` types `/bifrost` and captures the open menu with no golden
 comparison, so it passes regardless of menu contents. Menu assertions live in
@@ -310,3 +376,24 @@ comparison, so it passes regardless of menu contents. Menu assertions live in
 - Corrected `docs/ui-enhancements.md` citation: `:20` is the completion-source
   row, `:22` is the `help` row.
 - Restated the goal, and listed what stays multiply-written.
+
+Revision 3 additionally failed a third review. Two blocking defects, both in
+the spec's own specification rather than in the code:
+
+- The headline matcher test — "every registry value dispatches to exactly one
+  route, and that route's `value` equals it" — is unobservable. `routes` is
+  function-local (`commands.ts:892`), the router returns only the dispatcher
+  closure (`:1153`), no handler echoes its route value, and a first-match-wins
+  loop cannot distinguish one match from a shadowed second. Replaced with a
+  table of observable effects, which catches shadowing without a new export.
+- The completion instruction was wrong in a way that would have shipped the
+  original defect. `.value` is read in four places (`:743`, `:744`, `:745`,
+  `:746`), not two; `:745` and `:746` are what emit the completion. Flattening
+  only the two the spec named would have made `init -f` filterable but never
+  emitted.
+
+Also fixed: the `aliases` contract is now stated (completion-only; every alias
+must be reachable under its parent's matcher, so an alias on an `exact()` route
+is a bug) and tested for dispatchability rather than mere presence; the
+"rather than a new file" sentence no longer contradicts the drift-test file; six
+citation errors corrected; `npm run test:ui:reliability` added to Verification.
