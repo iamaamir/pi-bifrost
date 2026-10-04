@@ -761,3 +761,50 @@ describe("route dispatch", () => {
     assert.ok(calls.some((c) => c.kind === "select"));
   });
 });
+
+describe("dashboard menu", () => {
+  // The dashboard is a state-aware selection, not the whole registry: it shows
+  // the actionable member of the on/off and pin/unpin pairs. These pin that
+  // membership so a later edit cannot quietly change what a user sees.
+
+  function rowsOf(calls: Array<{ kind: string; options?: string[] }>): string[] {
+    return calls.find((call) => call.kind === "select")?.options ?? [];
+  }
+
+  it("offers 8 rows and the actionable member of each pair when routing is on", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    state.enabled = true;
+    state.pinned = false;
+    await createCommandRouter(state as never)("", ctx as never);
+    const rows = rowsOf(calls);
+    assert.equal(rows.length, 8);
+    assert.ok(rows.some((row) => row.includes("/bifrost off —")));
+    assert.ok(!rows.some((row) => row.includes("/bifrost on —")));
+    assert.ok(rows.some((row) => row.includes("/bifrost pin —")));
+    assert.ok(!rows.some((row) => row.includes("/bifrost unpin —")));
+  });
+
+  it("offers the other member of each pair when routing is off and pinned", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    state.enabled = false;
+    state.pinned = true;
+    await createCommandRouter(state as never)("", ctx as never);
+    const rows = rowsOf(calls);
+    assert.equal(rows.length, 8);
+    assert.ok(rows.some((row) => row.includes("/bifrost on —")));
+    assert.ok(!rows.some((row) => row.includes("/bifrost off —")));
+    assert.ok(rows.some((row) => row.includes("/bifrost unpin —")));
+  });
+
+  it("includes preview so the menu keeps prefilling it", async () => {
+    // preview carries an argumentHint, so selecting its row must still
+    // prefill the editor rather than run a handler.
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await createCommandRouter(state as never)("", ctx as never);
+    const rows = rowsOf(calls);
+    assert.ok(rows.some((row) => row.includes("/bifrost preview <prompt>")));
+  });
+});

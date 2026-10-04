@@ -770,6 +770,15 @@ function formatBifrostCommandChoice(command: CommandSpec): string {
   return `/bifrost ${command.value}${hint} — ${command.description}`;
 }
 
+// The registry is a string-valued array, so a renamed command compiles fine
+// here and only resolves to undefined at runtime, inside the picker, when a
+// user opens /bifrost. Name the offending value at the call site instead.
+function requireCommand(value: string): CommandSpec {
+  const spec = BIFROST_COMMAND_OPTIONS.find((command) => command.value === value);
+  if (!spec) throw new Error(`bifrost: dashboard references unknown command "${value}"`);
+  return spec;
+}
+
 function dashboardCommands(state: Pick<BifrostState, "enabled" | "pinned">): CommandSpec[] {
   const values = [
     state.enabled ? "off" : "on",
@@ -781,7 +790,7 @@ function dashboardCommands(state: Pick<BifrostState, "enabled" | "pinned">): Com
     "classifier status",
     "reload",
   ];
-  return values.map((value) => BIFROST_COMMAND_OPTIONS.find((command) => command.value === value)!);
+  return values.map(requireCommand);
 }
 
 async function pickBifrostCommand(
