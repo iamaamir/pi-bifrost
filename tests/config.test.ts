@@ -1,0 +1,312 @@
+import { describe, it } from "node:test";
+import assert from "node:assert/strict";
+import { mergeConfig, validateConfig, configHasNoPools, hasClassifierConfigErrors, type BifrostConfig } from "../config.ts";
+import type { RoutingStrategy } from "../routing.ts";
+
+const baseConfig: BifrostConfig = {
+  enabled: true,
+  default: "economical",
+  strategy: "first",
+  models: {
+    frontier: ["model-a"],
+    economical: ["model-b"],
+  },
+};
+
+describe("configHasNoPools", () => {
+  it("detects missing and empty pools, and accepts any configured model", () => {
+    assert.equal(configHasNoPools({}), true);
+    assert.equal(configHasNoPools({ models: {} }), true);
+    assert.equal(configHasNoPools({ models: { quick: [], general: [] } }), true);
+    assert.equal(configHasNoPools({ models: { quick: "   " } }), true);
+    assert.equal(configHasNoPools({ models: { quick: [" "] } }), true);
+    assert.equal(configHasNoPools({ models: { quick: [" ", "provider/m"] } }), false);
+    assert.equal(configHasNoPools({ models: { quick: "provider/m" } }), false);
+    assert.equal(configHasNoPools({ models: { quick: [], general: ["provider/m"] } }), false);
+  });
+});
+
+describe("validateConfig", () => {
+  it("returns no issues for a valid config", () => {
+    const issues = validateConfig(baseConfig);
+    assert.equal(issues.length, 0);
+  });
+
+  it("errors when models is empty (two errors: no tiers + default missing)", () => {
+    const issues = validateConfig({ ...baseConfig, models: {} });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 2);
+    assert.ok(errors[0].message.includes('No tiers configured'));
+    assert.ok(errors[1].message.includes('not found in models'));
+  });
+
+  it("errors when default tier is missing from models", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      models: { frontier: ["model-a"] },
+    });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes('not found in models'));
+  });
+
+  it("errors when category strategy references missing tier", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      categoryStrategies: { nonexistent: "cheapest" },
+    });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes('not found in models'));
+  });
+
+  it("warns on unknown strategy", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      strategy: "unknown_strategy" as RoutingStrategy,
+    });
+    const warnings = issues.filter((i) => i.severity === "warning");
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].message.includes('Unknown strategy'));
+  });
+
+  it("errors on invalid cache threshold", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      cache: { threshold: 1.5 },
+    });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes('between 0 and 1'));
+  });
+
+  it("errors on invalid cache retention", () => {
+    const issues = validateConfig({ ...baseConfig, cache: { ttlHours: 0 } });
+    assert.ok(issues.some((issue) => issue.severity === "error" && issue.message.includes("ttlHours")));
+  });
+
+  it("warns when cache maxEntries is 0", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      cache: { maxEntries: 0 },
+    });
+    const warnings = issues.filter((i) => i.severity === "warning");
+    assert.equal(warnings.length, 1);
+    assert.ok(warnings[0].message.includes('should be > 0'));
+  });
+
+  it("errors on invalid regex in rules", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      rules: [{ pattern: "[invalid", model: "frontier" }],
+    });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes('Invalid regex'));
+  });
+
+  it("errors on invalid reliability window", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      reliability: { windowMinutes: 0 },
+    });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes("windowMinutes"));
+  });
+
+  it("errors on non-integer reliability window", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      reliability: { windowMinutes: 1.5 },
+    });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes("integer"));
+  });
+
+  it("errors on non-integer reliability threshold", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      reliability: { failureThreshold: NaN },
+    });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes("integer"));
+  });
+
+  it("errors on non-integer reliability cooldown", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      reliability: { cooldownMinutes: 1.5 },
+    });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes("integer"));
+  });
+
+  it("errors on invalid probe concurrency", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      probe: { concurrency: 0 },
+    });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes("Probe"));
+    assert.ok(errors[0].message.includes("integer"));
+  });
+
+  it("errors on non-integer probe timeout", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      probe: { timeoutMs: 10.5 },
+    });
+    const errors = issues.filter((i) => i.severity === "error");
+    assert.equal(errors.length, 1);
+    assert.ok(errors[0].message.includes("Probe"));
+  });
+
+  it("accepts opt-in TypeSafe config with nested pinned transport", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      classifier: {
+        backend: "typesafe",
+        typesafe: { model: "jev-1.13.0" },
+        criteria: { frontier: "complex", economical: "normal" },
+        minConfidence: 0.8,
+      },
+    });
+    assert.equal(issues.length, 0);
+  });
+
+  it("preserves explicitly supplied TypeSafe prompt-only fields for validation", () => {
+    const inherited = mergeConfig(
+      { classifier: { model: "prompt/model", method: "auto" } },
+      { classifier: { backend: "typesafe" } },
+    );
+    assert.equal(inherited.classifier?.method, undefined);
+
+    const explicit = mergeConfig(
+      { classifier: { model: "prompt/model" } },
+      { classifier: { backend: "typesafe", method: "direct" } },
+    );
+    assert.ok(validateConfig({ ...baseConfig, ...explicit }).some((issue) => issue.message.includes("does not support")));
+  });
+
+  it("rejects TypeSafe custom endpoint, model, and prompt-only fields", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      classifier: {
+        backend: "typesafe",
+        model: "prompt/model",
+        typesafe: { model: "other", endpoint: "http://localhost" },
+        method: "direct",
+        criteria: { frontier: "complex", economical: "normal" },
+      },
+    });
+    assert.ok(issues.some((issue) => issue.message.includes("must be exactly")));
+    assert.ok(issues.some((issue) => issue.message.includes("endpoint")));
+    assert.ok(issues.some((issue) => issue.message.includes("does not support")));
+  });
+
+  it("accepts the pi-native backend and rejects unknown backend values", () => {
+    const ok = validateConfig({ ...baseConfig, classifier: { backend: "pi-native" } });
+    assert.equal(ok.filter((issue) => issue.message.includes("backend")).length, 0);
+    // A runtime-bad value on purpose: the cast sits at the fixture seam.
+    const bad = validateConfig({ ...baseConfig, classifier: { backend: "bogus" } as unknown as BifrostConfig["classifier"] });
+    assert.ok(bad.some((issue) => issue.message.includes("Unknown classifier backend")));
+  });
+
+  it("validates the piNative transport block like typesafe", () => {
+    const ok = validateConfig({
+      ...baseConfig,
+      classifier: {
+        backend: "pi-native",
+        piNative: { model: "typesafe/jev-latest", timeoutMs: 2000, maxAttempts: 2, metrics: { enabled: true } },
+        criteria: { frontier: "complex", economical: "normal" },
+      },
+    });
+    assert.equal(ok.length, 0);
+
+    const bounds = validateConfig({
+      ...baseConfig,
+      classifier: { backend: "pi-native", piNative: { timeoutMs: 50, maxAttempts: 9 }, criteria: { frontier: "complex", economical: "normal" } },
+    });
+    assert.ok(bounds.some((issue) => issue.message.includes("PiNative classifier timeoutMs")));
+    assert.ok(bounds.some((issue) => issue.message.includes("PiNative classifier maxAttempts")));
+
+    const promptFields = validateConfig({
+      ...baseConfig,
+      classifier: { backend: "pi-native", method: "direct", criteria: { frontier: "complex", economical: "normal" } },
+    });
+    assert.ok(promptFields.some((issue) => issue.message.includes("PiNative classifier does not support")));
+  });
+
+  it("runs the shared direct-backend gate with the backend prefix", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      // A runtime-bad fallback on purpose: the cast sits at the fixture seam.
+      classifier: {
+        backend: "pi-native",
+        minConfidence: 2,
+        fallback: "sometimes",
+        criteria: { frontier: "complex", economical: "normal" },
+      } as unknown as BifrostConfig["classifier"],
+    });
+    assert.ok(issues.some((issue) => issue.message.includes("PiNative classifier minConfidence")));
+    assert.ok(issues.some((issue) => issue.message.includes("PiNative classifier fallback")));
+
+    const missing = validateConfig({
+      ...baseConfig,
+      models: { mega: ["provider/model"] },
+      default: "mega",
+      classifier: { backend: "pi-native" },
+    });
+    assert.ok(missing.some((issue) => issue.message.includes('PiNative classifier criteria missing for tier "mega"')));
+  });
+
+  it("reaches criterion errors through hasClassifierConfigErrors", () => {
+    // The empty criterion fires the singular "Classifier criterion" message,
+    // which the old includes("Classifier criteria") match missed.
+    const emptyCriterion: BifrostConfig = {
+      ...baseConfig,
+      classifier: { backend: "typesafe", criteria: { frontier: "", economical: "normal" } },
+    };
+    assert.equal(hasClassifierConfigErrors(emptyCriterion), true);
+    const missingCriteria: BifrostConfig = {
+      ...baseConfig,
+      models: { mega: ["provider/model"] },
+      default: "mega",
+      classifier: { backend: "pi-native" },
+    };
+    assert.equal(hasClassifierConfigErrors(missingCriteria), true);
+    assert.equal(hasClassifierConfigErrors({ ...baseConfig, classifier: { backend: "prompt" } }), false);
+    assert.equal(hasClassifierConfigErrors({ ...baseConfig, models: {} }), false);
+  });
+
+  it("merges the piNative nested block across overrides", () => {
+    const merged = mergeConfig(
+      { classifier: { backend: "pi-native", piNative: { model: "typesafe/jev-latest" } } },
+      { classifier: { piNative: { timeoutMs: 2000 } } },
+    );
+    assert.equal(merged.classifier?.piNative?.model, "typesafe/jev-latest");
+    assert.equal(merged.classifier?.piNative?.timeoutMs, 2000);
+  });
+
+  it("allows valid probe settings", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      probe: { concurrency: 8, timeoutMs: 5000 },
+    });
+    assert.equal(issues.length, 0);
+  });
+
+  it("allows multiple issues", () => {
+    const issues = validateConfig({
+      models: {},
+      default: "frontier",
+      rules: [{ pattern: "[invalid", model: "frontier" }],
+    });
+    assert.equal(issues.length, 3);
+  });
+});
