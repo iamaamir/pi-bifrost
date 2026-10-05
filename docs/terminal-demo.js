@@ -178,6 +178,7 @@ if (terminal) {
   let started = false;
   let hasPlayed = false;
   let queuedScroll = false;
+  let ignoreNextChapterSync = false;
   let attentionAnimation;
   let menuOpen = false;
 
@@ -292,6 +293,11 @@ if (terminal) {
 
   function syncChapter() {
     queuedScroll = false;
+    if (ignoreNextChapterSync) {
+      ignoreNextChapterSync = false;
+      syncVisibility();
+      return;
+    }
     const secondary = document.querySelector("#physical").getBoundingClientRect().top <= window.innerHeight * 0.48;
     const point = secondary
       ? window.innerWidth <= 768
@@ -386,7 +392,10 @@ if (terminal) {
     const value = option.dataset.command;
     const chapterName = scenes[`command:${value}`].chapter;
     closeCommandPicker(false);
+    const beforeScroll = window.scrollY;
     chapters.find((item) => item.dataset.demoScene === chapterName).scrollIntoView({ behavior: "instant", block: "start" });
+    // Keep this command's replay when the scroll event probes the next short chapter.
+    ignoreNextChapterSync = window.scrollY !== beforeScroll || queuedScroll;
     observed = chapterName;
     syncVisibility();
     showScene(`command:${value}`, true);
