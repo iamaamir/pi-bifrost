@@ -8,7 +8,7 @@
 //   3. Bump version in package.json (or accept custom --version X.Y.Z)
 //   4. Commit version bump + create git tag
 //   5. Push branch + tag to origin
-//   6. npm publish (if --publish flag, requires confirmation)
+//   6. npm publish (only with --publish; otherwise publish manually)
 
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -151,6 +151,6 @@ async function main() {
     console.log(`[release] ✅ v${newVersion} published to npm.`);
   } else {
     console.log(`[release] ✅ v${newVersion} tagged and pushed.`);
-    console.log(`[release]   To publish to npm: node scripts/release.mjs --publish`);
+    console.log(`[release]   To publish to npm: npm publish`);
   }
 }

@@ -1,7 +1,14 @@
 {
   "name": "pi-bifrost",
-  "version": "0.4.5",
+  "version": "0.5.0",
   "description": "Route Pi turns through models you choose, with configured tiers and opt-in per-request dispatch.",
+  "files": [
+    "*.ts",
+    "bifrost.json",
+    "schema.json",
+    "examples/",
+    "CHANGELOG.md"
+  ],
   "type": "module",
   "license": "MIT",
   "author": {

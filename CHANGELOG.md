@@ -2,14 +2,16 @@
 
 All notable changes to pi-bifrost are documented here.
 
-## [0.5.0] - UNRELEASED
+## [0.5.0] - 2026-10-05
 
 ### Added
+- `/bifrost preview --json <prompt>` writes one `[bifrost-json] ` result line to stderr. It does not generate a turn. An enabled classifier can still receive the prompt.
 - `pi-native` classifier backend through Pi's `modelRegistry.classify()`. It uses Pi-managed TypeSafe credentials and a classifier model from Pi's catalog. Set `classifier.piNative.model` to `typesafe/jev-latest` or omit it to use the first available model.
 - `/bifrost classifier` now offers `prompt`, `typesafe`, and `pi-native`. Successful init prints the picker command; interactive init can open the picker after writing configuration.
 - `bifrost/auto` virtual model (Pi 1.0.1+): per-request dispatch through the existing tier, cache, reliability, and strategy policy. Select it in `/model`; Pi's footer shows `bifrost/auto → provider/model` and assistant messages record the physical model.
 - Inline tier overrides hand off from input-time prompt stripping to virtual routing without persisting prompt text.
 - Setup offer: selecting `bifrost/auto` with no configured pools asks once (TUI) whether to run `/bifrost init`, disclosing that init probes every available model; non-TUI keeps the actionable error. Init itself still confirms before writing config.
+- Landing page with a Pi-style terminal walkthrough of Auto, failure circuits, classifier choice, routing controls, and a searchable command replay.
 
 ### Changed
 - When `classifier.backend` is absent, Bifrost now detects Pi-managed TypeSafe credentials first, then `TYPESAFE_API_KEY`, and otherwise uses `prompt`. This can change the classifier for existing configurations that omit the backend. Set `classifier.backend` explicitly to keep the old choice. Detection stays fixed for the extension session and prints its reason on first use.
@@ -27,9 +29,13 @@ All notable changes to pi-bifrost are documented here.
 - No wedged Auto sessions: when a user turn finds no resolvable model, a session that already dispatched a physical model keeps the last one with a visible warning (continuations already worked this way); fresh sessions fail with the actionable error above.
 - Auto dispatch clamps the thinking level to the physical model's capabilities via pi-ai's `clampThinkingLevel` (non-reasoning targets dispatch `off`), and debug traces log the dispatched level instead of the virtual selection level.
 - Session restore (`model_select` source `restore`) no longer pins or flips Auto state — restore is passive, matching Pi's `model-status` example semantics.
+- Programmatic model changes no longer cause a spurious pin across concurrent sessions. Pin and off can exit Auto before its first dispatch by resolving the default-tier physical model.
 - Classifier backends receive prompt text bounded to 16k chars (matches Pi's `jev-router` example); cache matching still uses the full prompt.
 
-## [0.4.0] - UNRELEASED
+### Security
+- Publish only extension source files, default config, schema, examples, README, and changelog. Local state, unrelated worktrees, and session artifacts no longer enter the npm package.
+
+## [0.4.0] - 2026-08-10
 
 ### Added
 - Direct model bindings, config validation, and inline tier overrides.
