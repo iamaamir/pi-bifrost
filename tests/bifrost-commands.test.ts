@@ -840,4 +840,14 @@ describe("preview json flag", () => {
       json: false,
     });
   });
+
+  it("accepts any whitespace after the flag, not only one space", () => {
+    assert.deepEqual(parsePreviewArgs("preview --json\tfix the bug"), { prompt: "fix the bug", json: true });
+    assert.deepEqual(parsePreviewArgs("preview --json   fix the bug"), { prompt: "fix the bug", json: true });
+    assert.deepEqual(parsePreviewArgs("preview --json\nfix the bug"), { prompt: "fix the bug", json: true });
+  });
+
+  it("does not treat a prompt glued to the flag as a flag", () => {
+    assert.deepEqual(parsePreviewArgs("preview --jsonfix the bug"), { prompt: "--jsonfix the bug", json: false });
+  });
 });

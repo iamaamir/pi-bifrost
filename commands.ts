@@ -696,7 +696,11 @@ export const BIFROST_JSON_PREFIX = "[bifrost-json] ";
 export function parsePreviewArgs(args: string): { prompt: string; json: boolean } {
   const rest = args.slice("preview".length).trim();
   if (rest === "--json") return { prompt: "", json: true };
-  if (rest.startsWith("--json ")) return { prompt: rest.slice("--json".length).trim(), json: true };
+  // Any whitespace separates the flag from the prompt, so a tab or a double space
+  // is not mistaken for prompt text. `--json` is still only a flag as the very
+  // first token: a later mention stays part of the prompt.
+  const flagged = /^--json\s+([\s\S]*)$/.exec(rest);
+  if (flagged) return { prompt: flagged[1].trim(), json: true };
   return { prompt: rest, json: false };
 }
 
