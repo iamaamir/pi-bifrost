@@ -647,24 +647,41 @@ async function handleBenchmark(
  * keys are omitted rather than set to null, so a consumer can test for the
  * absence of a backend, model, confidence, or fallback reason.
  *
+ * `ok` discriminates the outcome: `true` carries a routing decision, `false`
+ * carries the reason no decision was made. Both halves keep `prompt`, so a
+ * caller can always say which prompt it asked about. `--json` emits exactly one
+ * of these lines on every path, so a consumer never has to infer the outcome
+ * from a missing line.
+ *
  * This is a projection of what `resolveTierDisplay` already computes. It carries
  * no stage timings and no structured candidate records, so it is deliberately
  * not a DecisionTrace (see ADR 0007).
  */
-export type BifrostPreviewReport = {
-  prompt: string;
-  source: string;
-  backend?: string;
-  model?: string;
-  confidence?: number;
-  tier: string;
-  strategy: string;
-  selectedTier: string;
-  fallbackReason?: string;
-  requestedCandidates: string[];
-  fallbackCandidates: string[];
-  defaultTier?: string;
-  selected: string;
+export type BifrostPreviewReport = BifrostPreviewSuccess | BifrostPreviewFailure;
+
+/** A routing decision was made for the prompt. */
+export type BifrostPreviewSuccess = {
+  readonly ok: true;
+  readonly prompt: string;
+  readonly source: string;
+  readonly backend?: string;
+  readonly model?: string;
+  readonly confidence?: number;
+  readonly tier: string;
+  readonly strategy: string;
+  readonly selectedTier: string;
+  readonly fallbackReason?: string;
+  readonly requestedCandidates: string[];
+  readonly fallbackCandidates: string[];
+  readonly defaultTier?: string;
+  readonly selected: string;
+};
+
+/** No routing decision was made, so no routing field is reported. */
+export type BifrostPreviewFailure = {
+  readonly ok: false;
+  readonly prompt: string;
+  readonly error: "usage" | "unclassified";
 };
 
 /** Marker prefix for machine-readable command output, so a caller can find the line without guessing. */
@@ -677,14 +694,20 @@ export function parsePreviewArgs(args: string): { prompt: string; json: boolean 
   return { prompt: rest, json: false };
 }
 
+/** Build the failure half of the report. Pure: no classification, no display, no side effects. */
+export function buildPreviewFailure(prompt: string, error: BifrostPreviewFailure["error"]): BifrostPreviewFailure {
+  return { ok: false, prompt, error };
+}
+
 export function buildPreviewReport(input: {
   prompt: string;
   classification: Exclude<ClassificationResult, { kind: "unclassified" }>;
   display: BifrostTierDisplay;
-}): BifrostPreviewReport {
+}): BifrostPreviewSuccess {
   const { prompt, classification, display } = input;
   const judgment = classification.kind === "classified" ? classification.judgment : undefined;
   return {
+    ok: true,
     prompt,
     source: classification.kind === "classified" ? classification.source : "fallback",
     ...(judgment ? { backend: judgment.backend } : {}),
@@ -705,7 +728,7 @@ export function serializePreviewReport(report: BifrostPreviewReport): string {
   return JSON.stringify(report);
 }
 
-export function renderPreviewReport(report: BifrostPreviewReport): string[] {
+export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
   return [
     "--- preview ---",
     `prompt:    ${report.prompt}`,
@@ -731,6 +754,11 @@ export function renderPreviewReport(report: BifrostPreviewReport): string[] {
   ];
 }
 
+/** Write the one machine-readable line for a preview, successful or not. */
+function emitPreviewReport(report: BifrostPreviewReport): void {
+  console.error(`${BIFROST_JSON_PREFIX}${serializePreviewReport(report)}`);
+}
+
 async function handlePreview(
   args: string,
   ctx: ExtensionContext,
@@ -738,6 +766,10 @@ async function handlePreview(
 ): Promise<void> {
   const { prompt, json } = parsePreviewArgs(args);
   if (!prompt) {
+    // A machine caller must still get its line: the text notification below stays
+    // for the interactive path, but a consumer that scans for the marker needs a
+    // parseable outcome even when there is nothing to route.
+    if (json) emitPreviewReport(buildPreviewFailure(prompt, "usage"));
     log(ctx, json ? "usage: /bifrost preview --json <prompt>" : "usage: /bifrost preview <prompt>", "warning");
     return;
   }
@@ -753,6 +785,7 @@ async function handlePreview(
     syncBifrostModeStatus(ctx, state);
   }
   if (classification.kind === "unclassified") {
+    if (json) emitPreviewReport(buildPreviewFailure(prompt, "unclassified"));
     log(ctx, "no tier matched", "warning");
     return;
   }
@@ -764,7 +797,7 @@ async function handlePreview(
   });
 
   if (json) {
-    console.error(`${BIFROST_JSON_PREFIX}${serializePreviewReport(report)}`);
+    emitPreviewReport(report);
     return;
   }
   await uiResult(ctx, "Bifrost preview", renderPreviewReport(report));

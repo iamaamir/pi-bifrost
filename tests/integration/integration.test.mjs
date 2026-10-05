@@ -130,6 +130,7 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
       assert.match(status, /backend=auto: typesafe \(env key detected\)/);
       // Direct-model regex runs before the classifier transport; no external API call.
       const preview = readJsonReport(await runPi("/bifrost preview --json direct hit", tempDir, env), "preview");
+      assert.equal(preview.ok, true);
       assert.equal(preview.source, "regex");
       assert.equal(preview.prompt, "direct hit");
       assert.equal(preview.tier, "fake/chat");
@@ -226,6 +227,37 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
       const out = combined(await runPi("/bifrost preview hello", tempDir));
       assert.ok(out.includes("source:    fallback"));
       assert.ok(out.includes("tier:      general"));
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a usage failure as one json line when the prompt is missing", async () => {
+    const report = readJsonReport(await runPi("/bifrost preview --json", integrationDir), "preview usage");
+
+    assert.deepEqual(report, { ok: false, prompt: "", error: "usage" });
+  });
+
+  it("reports an unclassified failure as one json line when no tier matches", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-unclassified-"));
+    mkdirSync(join(tempDir, ".pi"), { recursive: true });
+    // No default tier, no classifier, no cache: nothing can classify this prompt.
+    writeFileSync(
+      join(tempDir, ".pi", "bifrost.json"),
+      JSON.stringify({
+        default: null,
+        classifier: { enabled: false },
+        cache: { enabled: false },
+        models: { quick: [], general: [] },
+      }),
+    );
+
+    try {
+      const report = readJsonReport(
+        await runPi("/bifrost preview --json hello", tempDir),
+        "preview unclassified",
+      );
+      assert.deepEqual(report, { ok: false, prompt: "hello", error: "unclassified" });
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

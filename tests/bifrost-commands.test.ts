@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildClassifierTestReport, buildPreviewReport, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, runBifrostCommand, serializePreviewReport } from "../commands.ts";
+import { BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, runBifrostCommand, serializePreviewReport } from "../commands.ts";
 import { makePiClassifierModel, makeRegistry } from "./helpers.ts";
 
 function makeCtx(
@@ -529,6 +529,7 @@ describe("preview report", () => {
     });
 
     assert.deepEqual(report, {
+      ok: true,
       prompt: "direct hit",
       source: "regex",
       tier: "general",
@@ -675,6 +676,102 @@ describe("preview report", () => {
 
     assert.equal(line.split("\n").length, 1);
     assert.equal(JSON.parse(line).prompt, 'quote " and\nnewline');
+  });
+});
+
+describe("preview failure report", () => {
+  it("builds a machine-readable usage failure with no routing fields", () => {
+    assert.deepEqual(buildPreviewFailure("", "usage"), { ok: false, prompt: "", error: "usage" });
+  });
+
+  it("builds a machine-readable unclassified failure carrying the prompt", () => {
+    assert.deepEqual(buildPreviewFailure("hello", "unclassified"), {
+      ok: false,
+      prompt: "hello",
+      error: "unclassified",
+    });
+  });
+
+  it("serializes to one parseable line", () => {
+    const line = serializePreviewReport(buildPreviewFailure("hello", "unclassified"));
+
+    assert.equal(line.split("\n").length, 1);
+    assert.deepEqual(JSON.parse(line), { ok: false, prompt: "hello", error: "unclassified" });
+  });
+});
+
+describe("preview json marker", () => {
+  async function captureJsonReports(run: () => Promise<void>): Promise<unknown[]> {
+    const original = console.error;
+    const lines: string[] = [];
+    console.error = (...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "));
+    };
+    try {
+      await run();
+    } finally {
+      console.error = original;
+    }
+    const marked = lines.filter((line) => line.startsWith(BIFROST_JSON_PREFIX));
+    assert.equal(marked.length, 1, `expected exactly one marker line, got:\n${lines.join("\n")}`);
+    return [JSON.parse(marked[0].slice(BIFROST_JSON_PREFIX.length))];
+  }
+
+  it("reports a usage failure when the prompt is missing", async () => {
+    const { ctx, calls } = makeCtx();
+    const dispatch = createCommandRouter(makeState() as never);
+
+    const [report] = await captureJsonReports(async () => {
+      await dispatch("preview --json", ctx as never);
+    });
+
+    assert.deepEqual(report, { ok: false, prompt: "", error: "usage" });
+    assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("usage: /bifrost preview --json")));
+  });
+
+  it("reports an unclassified failure when no tier matches", async () => {
+    const { ctx, calls } = makeCtx();
+    const dispatch = createCommandRouter(makeState() as never);
+
+    const [report] = await captureJsonReports(async () => {
+      await dispatch("preview --json hello", ctx as never);
+    });
+
+    assert.deepEqual(report, { ok: false, prompt: "hello", error: "unclassified" });
+    assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("no tier matched")));
+  });
+
+  it("marks a successful report as ok", async () => {
+    const { ctx } = makeCtx();
+    const state = makeState();
+    state.getPipeline = () => ({
+      classify: async () => ({ kind: "fallback" as const, tier: "general" }),
+    }) as never;
+    const dispatch = createCommandRouter(state as never);
+
+    const [report] = await captureJsonReports(async () => {
+      await dispatch("preview --json hello", ctx as never);
+    });
+
+    assert.equal((report as { ok?: boolean }).ok, true);
+    assert.equal((report as { prompt?: string }).prompt, "hello");
+  });
+
+  it("emits no marker line on the text path", async () => {
+    const { ctx } = makeCtx();
+    const dispatch = createCommandRouter(makeState() as never);
+    const original = console.error;
+    const lines: string[] = [];
+    console.error = (...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "));
+    };
+    try {
+      await dispatch("preview", ctx as never);
+    } finally {
+      console.error = original;
+    }
+
+    assert.deepEqual(lines.filter((line) => line.startsWith(BIFROST_JSON_PREFIX)), []);
   });
 });
 
