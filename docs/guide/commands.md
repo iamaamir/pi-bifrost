@@ -7,7 +7,7 @@
 | `/bifrost` | Open dashboard and quick actions |
 | `/bifrost init` | Reuse fresh probe results or probe registry models, then propose configuration and guide you to `/bifrost classifier`; pass `-f` (`--force`) to skip probe reuse and re-probe |
 | `/bifrost probe` | Send a tiny request to each registry model and report availability; usage may apply |
-| `/bifrost preview <prompt>` | Show the model a prompt would use, without generating; an enabled classifier may receive the prompt, and a tier name in the prompt is not applied |
+| `/bifrost preview <prompt>` | Show the model a prompt would use, without generating; pass `--json` before the prompt for one machine-readable line; an enabled classifier may receive the prompt, and a tier name in the prompt is not applied |
 | `/bifrost on` | Enable routing policy |
 | `/bifrost off` | Disable routing policy |
 | `/bifrost pin` | Hard-lock current model for this session |
@@ -35,6 +35,41 @@
 Preview does not submit a generation turn or activate the selected model. It does run the normal tier pipeline, so an enabled prompt, TypeSafe/Jev, or Pi-native classifier can receive the preview prompt and incur classifier usage. Run `/bifrost classifier off` first for a rules-and-default-only preview.
 
 Preview does not read a tier name from the prompt. To preview a forced tier, confirm that tier's candidates and strategy in configuration instead.
+
+### Scripted preview
+
+```text
+/bifrost preview --json review this authorization design
+```
+
+`--json` is recognized only as the first token, so a prompt that merely contains the string `--json` is passed through unchanged. With the flag, the human view is replaced by exactly one line on stderr, prefixed with `[bifrost-json] `:
+
+```text
+[bifrost-json] {"ok":true,"prompt":"direct hit","source":"fallback","tier":"general","strategy":"first","fallbackReason":"requested_tier_unavailable","requestedCandidates":[],"fallbackCandidates":[],"defaultTier":"general"}
+```
+
+Read the line after the marker, then parse the rest as JSON. Keys are omitted when they do not apply, so test for the key itself rather than for a placeholder value:
+
+| Key | Meaning |
+|-----|---------|
+| `ok` | `true` when a route was resolved, `false` when it was not |
+| `prompt` | The prompt that was classified |
+| `source` | Where the tier came from: `regex`, `classifier`, or `fallback` |
+| `backend`, `model`, `confidence` | Classifier judgment; absent when no classifier ran |
+| `tier`, `strategy` | The tier that resolved and the strategy used for it |
+| `selectedTier`, `selected` | The tier and model actually chosen; both absent when nothing resolved, so a tier named `none` is not mistaken for "no choice" |
+| `fallbackReason` | Why the requested tier could not be used; absent when it was used |
+| `requestedCandidates`, `fallbackCandidates` | Candidate lines for the requested tier and for the default tier |
+| `defaultTier` | The configured default tier; absent when none is configured |
+
+A failure is still one line, so a script never has to infer the outcome from a missing line:
+
+```text
+[bifrost-json] {"ok":false,"prompt":"","error":"usage"}
+[bifrost-json] {"ok":false,"prompt":"hello","error":"unclassified"}
+```
+
+`error` is `usage` when the prompt was missing, and `unclassified` when no tier matched and no default tier is configured. A failure report carries `prompt` and `error` only; it has no routing keys. The human `usage` and `no tier matched` messages still appear, so the same command is usable from a terminal.
 
 ### Keep one model for a long session
 
