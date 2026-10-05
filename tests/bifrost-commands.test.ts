@@ -790,6 +790,35 @@ describe("preview failure report", () => {
   });
 });
 
+describe("preview command hint", () => {
+  it("advertises the --json flag in the dashboard menu row", async () => {
+    const { ctx, calls } = makeCtx();
+    const dispatch = createCommandRouter(makeState() as never);
+
+    await dispatch("", ctx as never);
+
+    const select = calls.find((call) => call.kind === "select");
+    const rows = select?.options ?? [];
+    assert(
+      rows.includes("/bifrost preview [--json] <prompt> — Preview routing for a prompt"),
+      `preview menu row must advertise --json, got:\n${rows.join("\n")}`,
+    );
+  });
+
+  it("keeps the preview completion label and description stable", async () => {
+    // Tab completion shows `value`/`label`/`description` only — the argument hint
+    // is not part of a completion item, so the flag is discoverable in the menu
+    // and not in the completion list. Pinned here so that split is a deliberate
+    // record rather than an accident.
+    const items = getBifrostCommandCompletions("prev") ?? [];
+    assert.deepEqual(items, [{
+      value: "preview",
+      label: "preview",
+      description: "Preview routing for a prompt",
+    }]);
+  });
+});
+
 describe("preview json marker", () => {
   async function captureJsonReports(run: () => Promise<void>): Promise<unknown[]> {
     const original = console.error;
@@ -940,6 +969,36 @@ describe("preview json marker", () => {
     }) as Array<Record<string, unknown>>;
     assert.equal(second.source, "cache");
     assert.equal(second.tier, "general");
+  });
+
+  it("still writes a [bifrost] progress line alongside the marker outside the TUI", async () => {
+    // The guide no longer claims the marker line is the only stderr output, so
+    // the distinguishing property is pinned: the marker and the plain
+    // diagnostics are separate lines, each with its own prefix.
+    const tui = makeCtx();
+    const ctx = { ...(tui.ctx as unknown as Record<string, unknown>), mode: "print" } as never;
+    const state = makeState();
+    state.getPipeline = () => ({
+      classify: async () => ({ kind: "fallback" as const, tier: "general" }),
+    }) as never;
+    const dispatch = createCommandRouter(state as never);
+
+    const original = console.error;
+    const lines: string[] = [];
+    console.error = (...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "));
+    };
+    try {
+      await dispatch("preview --json hello", ctx);
+    } finally {
+      console.error = original;
+    }
+
+    assert.equal(lines.filter((line) => line.startsWith(BIFROST_JSON_PREFIX)).length, 1);
+    assert(
+      lines.includes("[bifrost] Classifying preview prompt..."),
+      `expected the non-TUI progress line, got:\n${lines.join("\n")}`,
+    );
   });
 
   it("emits no marker line on the text path", async () => {

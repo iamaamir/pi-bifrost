@@ -42,13 +42,15 @@ Preview does not read a tier name from the prompt. To preview a forced tier, con
 /bifrost preview --json review this authorization design
 ```
 
-`--json` is recognized only as the first token, so a prompt that merely contains the string `--json` is passed through unchanged. With the flag, the human view is replaced by exactly one line on stderr, prefixed with `[bifrost-json] `:
+`--json` is recognized only as the first token, so a prompt that merely contains the string `--json` is passed through unchanged. With the flag, the human view is replaced by one line on stderr prefixed with `[bifrost-json] `:
 
 ```text
 [bifrost-json] {"ok":true,"prompt":"direct hit","source":"fallback","tier":"general","strategy":"first","fallbackReason":"requested_tier_unavailable","requestedCandidates":[],"fallbackCandidates":[],"defaultTier":"general"}
 ```
 
-Read the line after the marker, then parse the rest as JSON. Keys are omitted when they do not apply, so test for the key itself rather than for a placeholder value:
+That line is not the only output. Outside the TUI, Bifrost also writes progress lines such as `[bifrost] Classifying preview prompt...` to stderr, and the human `usage` and `no tier matched` messages still appear. All of those start with `[bifrost] `. So the contract is the marker, not the absence of other lines: find the line that starts with `[bifrost-json] `, then parse the rest of that line as JSON. Ignore any other stderr output.
+
+Keys are omitted when they do not apply, so test for the key itself rather than for a placeholder value:
 
 | Key | Meaning |
 |-----|---------|

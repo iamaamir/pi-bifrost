@@ -711,7 +711,7 @@ export type BifrostPreviewFailure = {
 /** Marker prefix for machine-readable command output, so a caller can find the line without guessing. */
 export const BIFROST_JSON_PREFIX = "[bifrost-json] ";
 
-/** The subcommand word `handlePreview` receives inside `args`. Shared with the registry entry so the two cannot drift. */
+/** The `preview` subcommand word, as it appears in `args` and in the registry. Single source so the parser, the completion row, and the menu row cannot drift. */
 const PREVIEW_SUB = "preview";
 
 /**
@@ -900,7 +900,7 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "classifier test", description: "Test selected classifier backend" },
   { value: "classifier status", description: "Show classifier state" },
   { value: "debug", description: "Show config and routing state" },
-  { value: "preview", description: "Preview routing for a prompt", argumentHint: "<prompt>" },
+  { value: PREVIEW_SUB, description: "Preview routing for a prompt", argumentHint: `[--json] <prompt>` },
 ] as const;
 
 export function getBifrostCommandCompletions(prefix: string) {
@@ -1315,7 +1315,7 @@ export function createCommandRouter(
       uiOutput(ctx, lines);
       log(ctx, "debug info printed above");
     }),
-    prefix("preview", "Preview routing for a prompt", (args, ctx) => handlePreview(args, ctx, state), "<prompt>"),
+    prefix(PREVIEW_SUB, "Preview routing for a prompt", (args, ctx) => handlePreview(args, ctx, state), `[--json] <prompt>`),
   ];
 
   return async (args: string, ctx: ExtensionContext) => {
