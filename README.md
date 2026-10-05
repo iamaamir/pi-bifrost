@@ -18,10 +18,10 @@ The model above is an example, not a shipped default. Your configuration supplie
 Requires Pi `1.0.1` or newer and at least one authenticated provider model available in Pi.
 
 ```bash
-pi install git:github.com/iamaamir/pi-bifrost
+pi install npm:pi-bifrost
 ```
 
-This repository install includes Bifrost Auto and Pi-native classification. Published npm 0.4.5 does not include them yet. Then, inside Pi:
+Then, inside Pi:
 
 ```text
 /bifrost init

@@ -27,13 +27,7 @@ Open Pi and confirm you can select and use at least one provider model before di
 
 ## Install
 
-For Bifrost Auto and Pi-native classification, install the repository version:
-
-```bash
-pi install git:github.com/iamaamir/pi-bifrost
-```
-
-Published npm 0.4.5 predates those features. For the earlier release, install from npm:
+Install Bifrost from npm:
 
 ```bash
 pi install npm:pi-bifrost

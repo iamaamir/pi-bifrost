@@ -19,10 +19,10 @@
 Requires Pi 1.0.1 or newer and at least one authenticated provider model available in Pi.
 
 ```sh
-pi install git:github.com/iamaamir/pi-bifrost
+pi install npm:pi-bifrost
 ```
 
-Published npm 0.4.5 predates Auto and Pi-native classification. The repository install includes those features. Inside Pi, run `/bifrost init`. Init reuses recent probe results or sends small requests to available models, which can incur usage or rate limits. It proposes a configuration and writes it after confirmation. Then run `/bifrost classifier` to select a classifier backend, or `/bifrost classifier off` to use rules and the default tier without a classifier call.
+Inside Pi, run `/bifrost init`. Init reuses recent probe results or sends small requests to available models, which can incur usage or rate limits. It proposes a configuration and writes it after confirmation. Then run `/bifrost classifier` to select a classifier backend, or `/bifrost classifier off` to use rules and the default tier without a classifier call.
 
 ## Route
 
