@@ -262,4 +262,29 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("omits the unresolved selection keys instead of reporting a none sentinel", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-unresolved-"));
+    mkdirSync(join(tempDir, ".pi"), { recursive: true });
+    // An empty general tier cannot resolve a model in the isolated registry, so
+    // selectedTier and selected must be absent keys, not the string "none".
+    writeFileSync(
+      join(tempDir, ".pi", "bifrost.json"),
+      JSON.stringify({
+        classifier: { enabled: false },
+        default: "general",
+        models: { general: [] },
+      }),
+    );
+
+    try {
+      const report = readJsonReport(await runPi("/bifrost preview --json hello", tempDir), "preview unresolved");
+      assert.equal(report.ok, true);
+      assert.equal(report.tier, "general");
+      assert.equal("selectedTier" in report, false);
+      assert.equal("selected" in report, false);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });

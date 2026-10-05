@@ -653,6 +653,12 @@ async function handleBenchmark(
  * of these lines on every path, so a consumer never has to infer the outcome
  * from a missing line.
  *
+ * `selected` and `selectedTier` are omitted when nothing resolved. A `"none"`
+ * string would be ambiguous: it is also a legal tier name, so it could mean
+ * "nothing selected" or "selected inside a tier named none". The text view
+ * substitutes the `"none"` placeholder itself, so the rendered output is
+ * unchanged.
+ *
  * This is a projection of what `resolveTierDisplay` already computes. It carries
  * no stage timings and no structured candidate records, so it is deliberately
  * not a DecisionTrace (see ADR 0007).
@@ -669,12 +675,12 @@ export type BifrostPreviewSuccess = {
   readonly confidence?: number;
   readonly tier: string;
   readonly strategy: string;
-  readonly selectedTier: string;
+  readonly selectedTier?: string;
   readonly fallbackReason?: string;
   readonly requestedCandidates: string[];
   readonly fallbackCandidates: string[];
   readonly defaultTier?: string;
-  readonly selected: string;
+  readonly selected?: string;
 };
 
 /** No routing decision was made, so no routing field is reported. */
@@ -699,6 +705,9 @@ export function buildPreviewFailure(prompt: string, error: BifrostPreviewFailure
   return { ok: false, prompt, error };
 }
 
+/** Placeholder the text view uses when a selection did not resolve. */
+const PREVIEW_NONE = "none";
+
 export function buildPreviewReport(input: {
   prompt: string;
   classification: Exclude<ClassificationResult, { kind: "unclassified" }>;
@@ -715,12 +724,15 @@ export function buildPreviewReport(input: {
     ...(judgment?.confidence !== undefined ? { confidence: judgment.confidence } : {}),
     tier: classification.tier,
     strategy: display.strategy,
-    selectedTier: display.selectedTier,
+    // `resolveTierDisplay` marks an unresolved selection with the same string a
+    // tier named "none" would carry, so the JSON report drops the key instead of
+    // reporting a sentinel a consumer cannot tell apart from a real value.
+    ...(display.selectedTier !== PREVIEW_NONE ? { selectedTier: display.selectedTier } : {}),
     ...(display.fallbackReason !== undefined ? { fallbackReason: display.fallbackReason } : {}),
     requestedCandidates: display.requestedCandidateLines,
     fallbackCandidates: display.fallbackCandidateLines,
     ...(display.defaultTier !== undefined ? { defaultTier: display.defaultTier } : {}),
-    selected: display.selected,
+    ...(display.selected !== PREVIEW_NONE ? { selected: display.selected } : {}),
   };
 }
 
@@ -742,14 +754,14 @@ export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
     ] : []),
     `tier:      ${report.tier}`,
     `strategy:  ${report.strategy}`,
-    `selected tier: ${report.selectedTier}`,
+    `selected tier: ${report.selectedTier ?? PREVIEW_NONE}`,
     ...(report.fallbackReason ? [`fallback:  ${report.fallbackReason}`] : []),
     `requested candidates (${report.tier}):`,
     ...report.requestedCandidates,
     ...(report.fallbackCandidates.length > 0 && report.defaultTier && report.defaultTier !== report.tier
       ? [`fallback candidates (${report.defaultTier}):`, ...report.fallbackCandidates]
       : []),
-    `selected:  ${report.selected}`,
+    `selected:  ${report.selected ?? PREVIEW_NONE}`,
     "---------------",
   ];
 }

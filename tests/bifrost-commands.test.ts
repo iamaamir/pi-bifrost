@@ -677,6 +677,58 @@ describe("preview report", () => {
     assert.equal(line.split("\n").length, 1);
     assert.equal(JSON.parse(line).prompt, 'quote " and\nnewline');
   });
+
+  it("omits the unresolved selection keys instead of reporting a none sentinel", () => {
+    const report = buildPreviewReport({
+      prompt: "p",
+      classification: { kind: "fallback", tier: "quick" },
+      display: { ...display, selected: "none", selectedTier: "none" },
+    });
+
+    assert.equal("selected" in report, false);
+    assert.equal("selectedTier" in report, false);
+    assert.equal(JSON.parse(serializePreviewReport(report)).selected, undefined);
+  });
+
+  it("keeps the none placeholder in the text view for an unresolved selection", () => {
+    const report = buildPreviewReport({
+      prompt: "p",
+      classification: { kind: "fallback", tier: "quick" },
+      display: { ...display, selected: "none", selectedTier: "none" },
+    });
+    const lines = renderPreviewReport(report);
+
+    assert(lines.includes("selected tier: none"));
+    assert(lines.includes("selected:  none"));
+  });
+
+  it("allows a success report to carry no selection keys at all", () => {
+    // Compile-time pin: the success type must let a consumer or a hand-built
+    // report omit the unresolved selection keys, not require the sentinel.
+    const lines = renderPreviewReport({
+      ok: true,
+      prompt: "p",
+      source: "fallback",
+      tier: "quick",
+      strategy: "first",
+      requestedCandidates: [],
+      fallbackCandidates: [],
+    });
+
+    assert(lines.includes("selected tier: none"));
+    assert(lines.includes("selected:  none"));
+  });
+
+  it("still reports a resolved model whose tier is configured", () => {
+    const report = buildPreviewReport({
+      prompt: "p",
+      classification: { kind: "fallback", tier: "quick" },
+      display,
+    });
+
+    assert.equal(report.selected, "fake/chat");
+    assert.equal(report.selectedTier, "general");
+  });
 });
 
 describe("preview failure report", () => {
