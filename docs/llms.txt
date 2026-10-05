@@ -36,7 +36,7 @@ Physical selection is the default: Bifrost activates Pi's provider/model before 
 
 ## Controls
 
-- `/bifrost preview <prompt>` resolves a route without generating or activating a model. An enabled classifier may receive the preview prompt. A leading tier name in the preview prompt is not applied as an override.
+- `/bifrost preview <prompt>` resolves a route without generating or activating a model. An enabled classifier may receive the preview prompt. A leading tier name in the preview prompt is not applied as an override. Use `/bifrost preview --json <prompt>` for one machine-readable result line prefixed with `[bifrost-json] ` on stderr.
 - A message starting with a configured single-word lowercase alphabetic tier name uses that tier for one turn. The prefix is removed before the model sees the message. Pinned sessions ignore tier prefixes.
 - `/bifrost pin` keeps the current physical model for the session. `/bifrost unpin` resumes routing.
 - `/bifrost off` and `/bifrost on` disable or enable routing. Off or pin exits Auto using the last dispatched physical model, or a default-tier model before any dispatch.
