@@ -7,7 +7,7 @@ import type { BifrostConfig, ClassifierConfig } from "./config.ts";
 import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, PROMPT_ONLY_FIELDS, loadConfig } from "./config.ts";
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
-import type { ClassificationPipeline, ClassificationResult } from "./classification-pipeline.ts";
+import type { ClassificationPipeline, ClassificationResult, ClassificationSource } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
 import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
@@ -163,11 +163,29 @@ function formatCandidateLines(
 
 // ── Shared tier-resolution + display ───────────────────────
 
+/** Placeholder the text views use when a selection did not resolve. */
+const PREVIEW_NONE = "none";
+
+/**
+ * A tier resolution projected for display. `selected` and `selectedTier` are
+ * absent when nothing resolved — never the string "none", which is also a legal
+ * tier name. Renderers substitute the `PREVIEW_NONE` placeholder themselves.
+ */
+export type BifrostTierDisplay = {
+  strategy: string;
+  selected?: string;
+  selectedTier?: string;
+  fallbackReason?: string;
+  requestedCandidateLines: string[];
+  fallbackCandidateLines: string[];
+  defaultTier?: string;
+};
+
 function resolveTierDisplay(
   tier: string,
   state: BifrostState,
   ctx: ExtensionContext,
-) {
+): BifrostTierDisplay {
   const pattern = state.config.models?.[tier] ?? tier;
   const strategy = getStrategy(state.config.categoryStrategies, state.config.strategy, tier);
   const defaultTier = state.config.default;
@@ -201,8 +219,8 @@ function resolveTierDisplay(
 
   return {
     strategy,
-    selected: selectedKey ?? "none",
-    selectedTier: resolved.selectedTier ?? "none",
+    selected: selectedKey,
+    selectedTier: resolved.selectedTier,
     fallbackReason: resolved.fallbackReason,
     requestedCandidateLines,
     fallbackCandidateLines,
@@ -578,13 +596,23 @@ async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState):
   }));
 }
 
+/**
+ * Same precondition as `parsePreviewArgs`: `args` carries the `benchmark`
+ * subcommand word, which `BENCHMARK_SUB.length` characters are removed before
+ * the default prompt is substituted. Extracting the word to a named constant is
+ * all this needed; giving it the explicit-parameter treatment would mean
+ * threading the matched subcommand through `CommandFn`, a broader router change
+ * than this fix warrants. Behavior is unchanged.
+ */
+const BENCHMARK_SUB = "benchmark";
+
 async function handleBenchmark(
   args: string,
   ctx: ExtensionContext,
   state: BifrostState,
 ): Promise<void> {
   const prompt =
-    args.slice("benchmark".length).trim() ||
+    args.slice(BENCHMARK_SUB.length).trim() ||
     "Write a short Python function to reverse a string and explain it briefly.";
   const categories = Object.keys(state.config.models ?? {});
 
@@ -616,7 +644,7 @@ async function handleBenchmark(
 
   for (const tierName of categories) {
     const display = resolveTierDisplay(tierName, state, ctx);
-    lines.push(`  ${tierName} (${display.strategy} → ${display.selectedTier}):`);
+    lines.push(`  ${tierName} (${display.strategy} → ${display.selectedTier ?? PREVIEW_NONE}):`);
     if (display.fallbackReason) lines.push(`    fallback: ${display.fallbackReason}`);
     lines.push(...display.requestedCandidateLines.map((line) => `    ${line}`));
     if (display.fallbackCandidateLines.length > 0 && display.defaultTier && display.defaultTier !== tierName) {
@@ -629,14 +657,166 @@ async function handleBenchmark(
   await uiResult(ctx, "Bifrost benchmark", lines);
 }
 
+// ── Preview report ──────────────────────────────────────────
+
+/**
+ * Machine-readable shape of one `/bifrost preview` decision. Every field is a
+ * primitive so the report survives `JSON.stringify` on a single line. Optional
+ * keys are omitted rather than set to null, so a consumer can test for the
+ * absence of a backend, model, confidence, or fallback reason.
+ *
+ * `ok` discriminates the outcome: `true` carries a routing decision, `false`
+ * carries the reason no decision was made. Both halves keep `prompt`, so a
+ * caller can always say which prompt it asked about. `--json` emits exactly one
+ * of these lines on every path, so a consumer never has to infer the outcome
+ * from a missing line.
+ *
+ * `selected` and `selectedTier` are omitted when nothing resolved. A `"none"`
+ * string would be ambiguous: it is also a legal tier name, so it could mean
+ * "nothing selected" or "selected inside a tier named none". The text view
+ * substitutes the `"none"` placeholder itself, so the rendered output is
+ * unchanged.
+ *
+ * This is a projection of what `resolveTierDisplay` already computes. It carries
+ * no stage timings and no structured candidate records, so it is deliberately
+ * not a DecisionTrace (see ADR 0007).
+ */
+export type BifrostPreviewReport = BifrostPreviewSuccess | BifrostPreviewFailure;
+
+/** A routing decision was made for the prompt. */
+export type BifrostPreviewSuccess = {
+  readonly ok: true;
+  readonly prompt: string;
+  readonly source: ClassificationSource | "fallback";
+  readonly backend?: string;
+  readonly model?: string;
+  readonly confidence?: number;
+  readonly tier: string;
+  readonly strategy: string;
+  readonly selectedTier?: string;
+  readonly fallbackReason?: string;
+  readonly requestedCandidates: string[];
+  readonly fallbackCandidates: string[];
+  readonly defaultTier?: string;
+  readonly selected?: string;
+};
+
+/** No routing decision was made, so no routing field is reported. */
+export type BifrostPreviewFailure = {
+  readonly ok: false;
+  readonly prompt: string;
+  readonly error: "usage" | "unclassified";
+};
+
+/** Marker prefix for machine-readable command output, so a caller can find the line without guessing. */
+export const BIFROST_JSON_PREFIX = "[bifrost-json] ";
+
+/** The `preview` subcommand word, as it appears in `args` and in the registry. Single source so the parser, the completion row, and the menu row cannot drift. */
+const PREVIEW_SUB = "preview";
+
+/**
+ * Split the argument text of a `preview` subcommand into its prompt and whether
+ * `--json` was requested.
+ *
+ * Precondition: `args` is the full argument string including the subcommand
+ * word, and `sub` is that word. `sub` is a parameter rather than a hardcoded
+ * slice so the precondition is visible at every call site and the truncation can
+ * never exceed what the caller actually passed. `args` is sliced by
+ * `sub.length`, so a caller that claims a prefix the args do not have silently
+ * loses that many leading characters; pass the real subcommand, or pass `""` to
+ * parse a bare prompt with nothing removed.
+ */
+export function parsePreviewArgs(args: string, sub: string): { prompt: string; json: boolean } {
+  const rest = args.slice(sub.length).trim();
+  if (rest === "--json") return { prompt: "", json: true };
+  // Any whitespace separates the flag from the prompt, so a tab or a double space
+  // is not mistaken for prompt text. `--json` is still only a flag as the very
+  // first token: a later mention stays part of the prompt.
+  const flagged = /^--json\s+([\s\S]*)$/.exec(rest);
+  if (flagged) return { prompt: flagged[1].trim(), json: true };
+  return { prompt: rest, json: false };
+}
+
+/** Build the failure half of the report. Pure: no classification, no display, no side effects. */
+export function buildPreviewFailure(prompt: string, error: BifrostPreviewFailure["error"]): BifrostPreviewFailure {
+  return { ok: false, prompt, error };
+}
+
+export function buildPreviewReport(input: {
+  prompt: string;
+  classification: Exclude<ClassificationResult, { kind: "unclassified" }>;
+  display: BifrostTierDisplay;
+}): BifrostPreviewSuccess {
+  const { prompt, classification, display } = input;
+  const judgment = classification.kind === "classified" ? classification.judgment : undefined;
+  return {
+    ok: true,
+    prompt,
+    source: classification.kind === "classified" ? classification.source : "fallback",
+    ...(judgment ? { backend: judgment.backend } : {}),
+    ...(judgment?.model !== undefined ? { model: judgment.model } : {}),
+    ...(judgment?.confidence !== undefined ? { confidence: judgment.confidence } : {}),
+    tier: classification.tier,
+    strategy: display.strategy,
+    // An unresolved selection arrives as an absent value, so omitting the key is
+    // a true absence signal. A selection that resolved into a tier named "none"
+    // keeps its key and reports the string.
+    ...(display.selectedTier !== undefined ? { selectedTier: display.selectedTier } : {}),
+    ...(display.fallbackReason !== undefined ? { fallbackReason: display.fallbackReason } : {}),
+    requestedCandidates: display.requestedCandidateLines,
+    fallbackCandidates: display.fallbackCandidateLines,
+    ...(display.defaultTier !== undefined ? { defaultTier: display.defaultTier } : {}),
+    ...(display.selected !== undefined ? { selected: display.selected } : {}),
+  };
+}
+
+export function serializePreviewReport(report: BifrostPreviewReport): string {
+  return JSON.stringify(report);
+}
+
+export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
+  return [
+    "--- preview ---",
+    `prompt:    ${report.prompt}`,
+    `source:    ${report.source}`,
+    // The JSON report omits absent fields; the human view keeps the historical
+    // "none" / "n/a" placeholders so the TUI output does not change.
+    ...(report.backend ? [
+      `backend:   ${report.backend}`,
+      `model:     ${report.model ?? "none"}`,
+      `confidence:${report.confidence === undefined ? " n/a" : ` ${report.confidence}`}`,
+    ] : []),
+    `tier:      ${report.tier}`,
+    `strategy:  ${report.strategy}`,
+    `selected tier: ${report.selectedTier ?? PREVIEW_NONE}`,
+    ...(report.fallbackReason ? [`fallback:  ${report.fallbackReason}`] : []),
+    `requested candidates (${report.tier}):`,
+    ...report.requestedCandidates,
+    ...(report.fallbackCandidates.length > 0 && report.defaultTier && report.defaultTier !== report.tier
+      ? [`fallback candidates (${report.defaultTier}):`, ...report.fallbackCandidates]
+      : []),
+    `selected:  ${report.selected ?? PREVIEW_NONE}`,
+    "---------------",
+  ];
+}
+
+/** Write the one machine-readable line for a preview, successful or not. */
+function emitPreviewReport(report: BifrostPreviewReport): void {
+  console.error(`${BIFROST_JSON_PREFIX}${serializePreviewReport(report)}`);
+}
+
 async function handlePreview(
   args: string,
   ctx: ExtensionContext,
   state: BifrostState,
 ): Promise<void> {
-  const prompt = args.slice("preview".length).trim();
+  const { prompt, json } = parsePreviewArgs(args, PREVIEW_SUB);
   if (!prompt) {
-    log(ctx, "usage: /bifrost preview <prompt>", "warning");
+    // A machine caller must still get its line: the text notification below stays
+    // for the interactive path, but a consumer that scans for the marker needs a
+    // parseable outcome even when there is nothing to route.
+    if (json) emitPreviewReport(buildPreviewFailure(prompt, "usage"));
+    log(ctx, json ? "usage: /bifrost preview --json <prompt>" : "usage: /bifrost preview <prompt>", "warning");
     return;
   }
 
@@ -651,34 +831,22 @@ async function handlePreview(
     syncBifrostModeStatus(ctx, state);
   }
   if (classification.kind === "unclassified") {
+    if (json) emitPreviewReport(buildPreviewFailure(prompt, "unclassified"));
     log(ctx, "no tier matched", "warning");
     return;
   }
-  const tier = classification.tier;
-  const source = classification.kind === "classified" ? classification.source : "fallback";
-  const judgment = classification.kind === "classified" ? classification.judgment : undefined;
-  const display = resolveTierDisplay(tier, state, ctx);
 
-  const lines = [
-    "--- preview ---",
-    `prompt:    ${prompt}`,
-    `source:    ${source}`,
-    ...(judgment ? [`backend:   ${judgment.backend}`, `model:     ${judgment.model ?? "none"}`, `confidence:${judgment.confidence === undefined ? " n/a" : ` ${judgment.confidence}`}`] : []),
-    `tier:      ${tier}`,
-    `strategy:  ${display.strategy}`,
-    `selected tier: ${display.selectedTier}`,
-    ...(display.fallbackReason ? [`fallback:  ${display.fallbackReason}`] : []),
-    `requested candidates (${tier}):`,
-    ...display.requestedCandidateLines,
-  ];
-  if (display.fallbackCandidateLines.length > 0 && display.defaultTier && display.defaultTier !== tier) {
-    lines.push(`fallback candidates (${display.defaultTier}):`);
-    lines.push(...display.fallbackCandidateLines);
+  const report = buildPreviewReport({
+    prompt,
+    classification,
+    display: resolveTierDisplay(classification.tier, state, ctx),
+  });
+
+  if (json) {
+    emitPreviewReport(report);
+    return;
   }
-  lines.push(`selected:  ${display.selected}`);
-  lines.push("---------------");
-
-  await uiResult(ctx, "Bifrost preview", lines);
+  await uiResult(ctx, "Bifrost preview", renderPreviewReport(report));
 }
 
 // ── Command type ────────────────────────────────────────────
@@ -732,7 +900,7 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "classifier test", description: "Test selected classifier backend" },
   { value: "classifier status", description: "Show classifier state" },
   { value: "debug", description: "Show config and routing state" },
-  { value: "preview", description: "Preview routing for a prompt", argumentHint: "<prompt>" },
+  { value: PREVIEW_SUB, description: "Preview routing for a prompt", argumentHint: `[--json] <prompt>` },
 ] as const;
 
 export function getBifrostCommandCompletions(prefix: string) {
@@ -1147,7 +1315,7 @@ export function createCommandRouter(
       uiOutput(ctx, lines);
       log(ctx, "debug info printed above");
     }),
-    prefix("preview", "Preview routing for a prompt", (args, ctx) => handlePreview(args, ctx, state), "<prompt>"),
+    prefix(PREVIEW_SUB, "Preview routing for a prompt", (args, ctx) => handlePreview(args, ctx, state), `[--json] <prompt>`),
   ];
 
   return async (args: string, ctx: ExtensionContext) => {

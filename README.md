@@ -160,7 +160,7 @@ Detailed reference now lives in versioned guides committed with code:
 |---------|--------------|
 | `/bifrost` | Open dashboard and quick actions |
 | `/bifrost init` | Probe models and propose configuration; pass `-f` to force a fresh probe |
-| `/bifrost preview <prompt>` | Show the model a prompt would use, without generating; a tier name in the prompt is not applied |
+| `/bifrost preview <prompt>` | Show the model a prompt would use, without generating; pass `--json` before the prompt for one machine-readable line; a tier name in the prompt is not applied |
 | `/bifrost on` / `off` | Enable or disable routing policy |
 | `/bifrost pin` / `unpin` | Hard-lock current model or resume routing |
 | `/bifrost reload` | Reload merged configuration |

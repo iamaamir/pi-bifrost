@@ -77,6 +77,18 @@ function combined(output) {
   return `${output.stderr}\n${output.stdout}`;
 }
 
+const JSON_PREFIX = "[bifrost-json] ";
+
+/**
+ * Read a machine-readable command report. Asserts on the parsed object so a
+ * change to the report shape fails here instead of being silently scraped past.
+ */
+function readJsonReport(output, label = "command") {
+  const line = combined(output).split("\n").find((candidate) => candidate.startsWith(JSON_PREFIX));
+  assert.ok(line, `expected a ${JSON_PREFIX}report from ${label}, got:\n${combined(output)}`);
+  return JSON.parse(line.slice(JSON_PREFIX.length));
+}
+
 describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
   before(async () => {
     integrationDir = mkdtempSync(join(tmpdir(), "bifrost-integration-"));
@@ -117,8 +129,14 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
       const status = combined(await runPi("/bifrost classifier status", tempDir, env));
       assert.match(status, /backend=auto: typesafe \(env key detected\)/);
       // Direct-model regex runs before the classifier transport; no external API call.
-      const preview = combined(await runPi("/bifrost preview direct hit", tempDir, env));
-      assert.match(preview, /source:\s+regex/);
+      const preview = readJsonReport(await runPi("/bifrost preview --json direct hit", tempDir, env), "preview");
+      assert.equal(preview.ok, true);
+      assert.equal(preview.source, "regex");
+      assert.equal(preview.prompt, "direct hit");
+      assert.equal(preview.tier, "fake/chat");
+      assert.equal(preview.defaultTier, "general");
+      assert.ok(Array.isArray(preview.requestedCandidates));
+      assert.ok(Array.isArray(preview.fallbackCandidates));
       const events = readFileSync(join(tempDir, ".pi", "bifrost-debug.jsonl"), "utf8")
         .trim().split("\n").map((line) => JSON.parse(line));
       assert(events.some((event) => event.module === "classifier" && event.event === "backend.detected" && event.backend === "typesafe"));
@@ -209,6 +227,62 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
       const out = combined(await runPi("/bifrost preview hello", tempDir));
       assert.ok(out.includes("source:    fallback"));
       assert.ok(out.includes("tier:      general"));
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a usage failure as one json line when the prompt is missing", async () => {
+    const report = readJsonReport(await runPi("/bifrost preview --json", integrationDir), "preview usage");
+
+    assert.deepEqual(report, { ok: false, prompt: "", error: "usage" });
+  });
+
+  it("reports an unclassified failure as one json line when no tier matches", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-unclassified-"));
+    mkdirSync(join(tempDir, ".pi"), { recursive: true });
+    // No default tier, no classifier, no cache: nothing can classify this prompt.
+    writeFileSync(
+      join(tempDir, ".pi", "bifrost.json"),
+      JSON.stringify({
+        default: null,
+        classifier: { enabled: false },
+        cache: { enabled: false },
+        models: { quick: [], general: [] },
+      }),
+    );
+
+    try {
+      const report = readJsonReport(
+        await runPi("/bifrost preview --json hello", tempDir),
+        "preview unclassified",
+      );
+      assert.deepEqual(report, { ok: false, prompt: "hello", error: "unclassified" });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("omits the unresolved selection keys instead of reporting a none sentinel", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-unresolved-"));
+    mkdirSync(join(tempDir, ".pi"), { recursive: true });
+    // An empty general tier cannot resolve a model in the isolated registry, so
+    // selectedTier and selected must be absent keys, not the string "none".
+    writeFileSync(
+      join(tempDir, ".pi", "bifrost.json"),
+      JSON.stringify({
+        classifier: { enabled: false },
+        default: "general",
+        models: { general: [] },
+      }),
+    );
+
+    try {
+      const report = readJsonReport(await runPi("/bifrost preview --json hello", tempDir), "preview unresolved");
+      assert.equal(report.ok, true);
+      assert.equal(report.tier, "general");
+      assert.equal("selectedTier" in report, false);
+      assert.equal("selected" in report, false);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
