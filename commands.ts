@@ -866,53 +866,92 @@ interface CommandSpec {
   readonly value: string;
   readonly description: string;
   readonly argumentHint?: string;
+  readonly aliases?: readonly string[];
+  // Orders the dashboard and never hides a command. An entry with no `menu`
+  // still appears, after the common ones. That is what makes a new registry
+  // command show up in /bifrost without a second edit.
+  readonly menu?: "common";
+  // Marks a member of an on/off-style pair, and carries everything the
+  // dashboard needs to place it: which bit of state it mirrors, which way it
+  // pushes that bit, and the note it shows while pushing it is a no-op. One
+  // registry entry, so a new reflected command cannot half-register.
+  readonly reflects?: {
+    readonly state: "enabled" | "pinned";
+    readonly sets: boolean;
+    readonly note: string;
+  };
 }
 
-interface CommandEntry extends CommandSpec {
+interface CommandEntry {
+  readonly value: string;
   readonly match: (sub: string) => boolean;
   readonly handler: CommandFn;
 }
 
-function exact(word: string, description: string, handler: CommandFn): CommandEntry {
-  return { value: word, description, match: (sub) => sub === word, handler };
+function exact(word: string, handler: CommandFn): CommandEntry {
+  return { value: word, match: (sub) => sub === word, handler };
 }
 
-function prefix(word: string, description: string, handler: CommandFn, argumentHint = "<prompt>"): CommandEntry {
-  return { value: word, description, argumentHint, match: (sub) => sub.startsWith(word), handler };
+// Bare prefix, no word boundary: benchmark and preview take free-text prompts,
+// so "/bifrost previewXYZ" must keep dispatching with prompt "XYZ".
+function prefix(word: string, handler: CommandFn): CommandEntry {
+  return { value: word, match: (sub) => sub.startsWith(word), handler };
+}
+
+// Space-bounded: init takes flags ("init -f", "init --write") but
+// "/bifrost initialize" must not match, which bare prefix would allow.
+function spaced(word: string, handler: CommandFn): CommandEntry {
+  return { value: word, match: (sub) => sub === word || sub.startsWith(`${word} `), handler };
 }
 
 export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
-  { value: "on", description: "Enable routing" },
-  { value: "off", description: "Disable routing" },
-  { value: "pin", description: "Lock current model" },
-  { value: "unpin", description: "Resume routing" },
-  { value: "reload", description: "Reload config after editing" },
-  { value: "providers", description: "List available providers" },
-  { value: "probe", description: "Probe working models" },
-  { value: "init", description: "Probe models and generate config" },
-  { value: "init -f", description: "Force Probe models and generate config" },
-  { value: "benchmark", description: "Classify a benchmark prompt", argumentHint: "<prompt>" },
+  // Reflected pairs first. The dashboard puts a reflected pair ahead of every
+  // other row, in the order these states are first mentioned here.
+  { value: "on", description: "Enable routing", reflects: { state: "enabled", sets: true, note: "already on" } },
+  { value: "off", description: "Disable routing", reflects: { state: "enabled", sets: false, note: "already off" } },
+  { value: "pin", description: "Lock current model", reflects: { state: "pinned", sets: true, note: "already pinned" } },
+  { value: "unpin", description: "Resume routing", reflects: { state: "pinned", sets: false, note: "already unpinned" } },
+  // Common commands, in menu order. The two prompt commands lead because both
+  // prefill the editor rather than run: keep them adjacent.
+  { value: PREVIEW_SUB, description: "Preview routing for a prompt", argumentHint: `[--json] <prompt>`, menu: "common" },
+  { value: "benchmark", description: "Classify a benchmark prompt", argumentHint: "<prompt>", menu: "common" },
+  { value: "providers", description: "List available providers", menu: "common" },
+  { value: "probe", description: "Probe working models", menu: "common" },
+  { value: "init", description: "Probe models and generate config (pass -f to force re-probe)", aliases: ["init -f"], menu: "common" },
+  { value: "classifier status", description: "Show classifier state", menu: "common" },
+  { value: "reload", description: "Reload config after editing", menu: "common" },
+  // Everything else, in declaration order.
   { value: "cache stats", description: "Show classification cache" },
+  // Reachable from the dashboard now that the menu is derived from the
+  // registry, and still unconfirmed: this writes the cache file immediately.
+  // docs/ui-enhancements.md lists "Destructive confirmation - Confirm cache
+  // clear/config overwrite/long probe" as a Next item. Deliberately left as is
+  // here; confirmation is a separate behavior change.
   { value: "cache clear", description: "Clear classification cache" },
   { value: "classifier", description: "Choose classifier backend" },
   { value: "classifier on", description: "Enable LLM classifier" },
   { value: "classifier off", description: "Disable LLM classifier" },
   { value: "classifier test", description: "Test selected classifier backend" },
-  { value: "classifier status", description: "Show classifier state" },
   { value: "debug", description: "Show config and routing state" },
-  { value: PREVIEW_SUB, description: "Preview routing for a prompt", argumentHint: `[--json] <prompt>` },
 ] as const;
 
 export function getBifrostCommandCompletions(prefix: string) {
   const normalized = prefix.trim().toLowerCase();
+  // Aliases are completion-only: dispatch reaches them through the parent's
+  // matcher, never through this list. Flattening here also keeps the exact-match
+  // early return below alias-aware.
+  const entries = BIFROST_COMMAND_OPTIONS.flatMap((command) => [
+    { value: command.value, description: command.description },
+    ...(command.aliases ?? []).map((alias) => ({ value: alias, description: command.description })),
+  ]);
   // Exact commands should submit on first Enter. Returning a completion for
   // an already-complete command makes Pi accept the suggestion first and
   // leave the command text stuck in the editor until a second Enter.
-  if (BIFROST_COMMAND_OPTIONS.some((command) => command.value === normalized)) return null;
-  const items = BIFROST_COMMAND_OPTIONS.filter((command) => command.value.startsWith(normalized)).map((command) => ({
-    value: command.value,
-    label: command.value,
-    description: command.description,
+  if (entries.some((entry) => entry.value === normalized)) return null;
+  const items = entries.filter((entry) => entry.value.startsWith(normalized)).map((entry) => ({
+    value: entry.value,
+    label: entry.value,
+    description: entry.description,
   }));
   return items.length > 0 ? items : null;
 }
@@ -922,18 +961,61 @@ function formatBifrostCommandChoice(command: CommandSpec): string {
   return `/bifrost ${command.value}${hint} — ${command.description}`;
 }
 
-function dashboardCommands(state: Pick<BifrostState, "enabled" | "pinned">): CommandSpec[] {
-  const values = [
-    state.enabled ? "off" : "on",
-    state.pinned ? "unpin" : "pin",
-    "preview",
-    "providers",
-    "probe",
-    "init",
-    "classifier status",
-    "reload",
-  ];
-  return values.map((value) => BIFROST_COMMAND_OPTIONS.find((command) => command.value === value)!);
+// The registry is a string-valued array, so a renamed command compiles fine
+// here and only resolves to undefined at runtime, inside the picker, when a
+// user opens /bifrost. Name the offending value at the call site instead.
+function requireCommand(value: string): CommandSpec {
+  const spec = BIFROST_COMMAND_OPTIONS.find((command) => command.value === value);
+  if (!spec) throw new Error(`Bifrost: dashboard references unknown command "${value}"`);
+  return spec;
+}
+
+type ReflectedState = NonNullable<CommandSpec["reflects"]>["state"];
+
+// The member of a pair whose effect matches the state as it stands would change
+// nothing, so it is annotated rather than hidden: hiding it meant the menu
+// silently reshuffled as state flipped. Everything read here comes off the
+// command's own registry entry, so a reflected command cannot be placed without
+// also saying which way it points and what it says while it is a no-op.
+function reflectedIsInert(spec: CommandSpec, state: Pick<BifrostState, ReflectedState>): boolean {
+  return spec.reflects ? spec.reflects.sets === state[spec.reflects.state] : false;
+}
+
+// Every registered command, ordered for the state as it stands: the member of
+// each reflected pair that changes something first, then the `common`
+// commands, then everything else. Ordering is all `menu` and `reflects` decide;
+// nothing here decides membership.
+function dashboardCommands(state: Pick<BifrostState, ReflectedState>): CommandSpec[] {
+  const reflectedStates = BIFROST_COMMAND_OPTIONS
+    .map((spec) => spec.reflects?.state)
+    .filter((reflects): reflects is ReflectedState => Boolean(reflects));
+  // Groups follow the order the registry first mentions them, so the pair order
+  // is registry order too and needs no second list.
+  const groupOf = (reflects: ReflectedState): number => reflectedStates.indexOf(reflects);
+  const tierOf = (spec: CommandSpec): number => (spec.reflects ? 0 : spec.menu === "common" ? 1 : 2);
+
+  const rows = BIFROST_COMMAND_OPTIONS.map((spec) => {
+    const inert = reflectedIsInert(spec, state);
+    return {
+      spec,
+      tier: tierOf(spec),
+      group: spec.reflects ? groupOf(spec.reflects.state) : 0,
+      inert,
+      note: inert ? spec.reflects?.note : undefined,
+    };
+  });
+  // Array sort is stable, so an equal key leaves the row in registry order.
+  rows.sort((a, b) => a.tier - b.tier || a.group - b.group || Number(a.inert) - Number(b.inert));
+
+  return rows.map(({ spec, note }) => {
+    // Resolve rather than reuse the mapped spec: requireCommand keeps the
+    // checked lookup on the one path that feeds the picker, so a future
+    // change that builds rows from anywhere but a registry read fails with a
+    // named error instead of a TypeError inside the formatter.
+    const resolved = requireCommand(spec.value);
+    // A copy, so the registry keeps the bare description for autocomplete.
+    return note ? { ...resolved, description: `${resolved.description} (${note})` } : resolved;
+  });
 }
 
 async function pickBifrostCommand(
@@ -1058,14 +1140,14 @@ export function createCommandRouter(
   state: BifrostState,
 ): (args: string, ctx: ExtensionContext) => Promise<void> {
   const routes: CommandEntry[] = [
-    exact("on", "Enable routing", (_, ctx) => {
+    exact("on", (_, ctx) => {
       state.enabled = true;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost enabled");
     }),
-    exact("off", "Disable routing", async (_, ctx) => {
+    exact("off", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
       state.enabled = false;
       state.saveModeState();
@@ -1073,7 +1155,7 @@ export function createCommandRouter(
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost disabled");
     }),
-    exact("pin", "Lock current model", async (_, ctx) => {
+    exact("pin", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
       state.pinned = true;
       state.saveModeState();
@@ -1081,14 +1163,14 @@ export function createCommandRouter(
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost pinned");
     }),
-    exact("unpin", "Resume routing", (_, ctx) => {
+    exact("unpin", (_, ctx) => {
       state.pinned = false;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost unpinned");
     }),
-    exact("reload", "Reload config after editing", (_, ctx) => {
+    exact("reload", (_, ctx) => {
       const done = debugMeasure("command", "reload");
       state.config = loadConfig(process.cwd(), state.extensionDir);
       // Re-init debug — user may have updated debug config since startup.
@@ -1120,7 +1202,7 @@ export function createCommandRouter(
     }),
 
     // Providers
-    exact("providers", "List available providers", (_, ctx) => {
+    exact("providers", (_, ctx) => {
       uiBusy(ctx, "Loading providers...");
       const available = ctx.modelRegistry.getAvailable();
       const counts = new Map<string, number>();
@@ -1137,7 +1219,7 @@ export function createCommandRouter(
     }),
 
     // Probe — test every model with a tiny prompt
-    exact("probe", "Probe working models", async (_, ctx) => {
+    exact("probe", async (_, ctx) => {
       const available = ctx.modelRegistry.getAvailable();
       if (available.length === 0) {
         log(ctx, "No models available in registry.", "warning");
@@ -1208,18 +1290,13 @@ export function createCommandRouter(
     }),
 
     // Init
-    {
-      value: "init",
-      description: "Probe models and generate config",
-      match: (sub) => sub === "init" || sub.startsWith("init "),
-      handler: (args, ctx) => handleInit(args, ctx, state),
-    },
+    spaced("init", (args, ctx) => handleInit(args, ctx, state)),
 
     // Benchmark
-    prefix("benchmark", "Classify a benchmark prompt", (args, ctx) => handleBenchmark(args, ctx, state), "<prompt>"),
+    prefix("benchmark", (args, ctx) => handleBenchmark(args, ctx, state)),
 
     // Cache
-    exact("cache stats", "Show classification cache", (_, ctx) => {
+    exact("cache stats", (_, ctx) => {
       const path = cachePath(process.cwd(), state.config.cache?.path);
       const entries = loadCache(path);
       log(
@@ -1227,7 +1304,7 @@ export function createCommandRouter(
         `cache: ${entries.length} entries (cap ${state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES}, retention ${state.config.cache?.ttlHours ?? 720}h, threshold ${state.config.cache?.threshold ?? DEFAULT_THRESHOLD})`,
       );
     }),
-    exact("cache clear", "Clear classification cache", (_, ctx) => {
+    exact("cache clear", (_, ctx) => {
       const path = cachePath(process.cwd(), state.config.cache?.path);
       saveCache(path, []);
       state.cacheEntries = [];
@@ -1236,19 +1313,9 @@ export function createCommandRouter(
     }),
 
     // Classifier
-    {
-      value: "classifier test",
-      description: "Test selected classifier backend",
-      match: (sub) => sub === "classifier test",
-      handler: (_, ctx) => handleClassifierTest(ctx, state),
-    },
-    {
-      value: "classifier",
-      description: "Choose classifier backend and prompt model",
-      match: (sub) => sub === "classifier",
-      handler: (_, ctx) => handleClassifierChoose(ctx, state),
-    },
-    exact("classifier on", "Enable LLM classifier", (_, ctx) => {
+    exact("classifier test", (_, ctx) => handleClassifierTest(ctx, state)),
+    exact("classifier", (_, ctx) => handleClassifierChoose(ctx, state)),
+    exact("classifier on", (_, ctx) => {
       state.classifierEnabled = true;
       state.saveModeState();
       state.invalidatePipeline();
@@ -1256,7 +1323,7 @@ export function createCommandRouter(
       debug("command", "classifier_toggle", { enabled: true });
       log(ctx, "LLM classifier enabled");
     }),
-    exact("classifier off", "Disable LLM classifier", (_, ctx) => {
+    exact("classifier off", (_, ctx) => {
       state.classifierEnabled = false;
       state.saveModeState();
       state.invalidatePipeline();
@@ -1264,7 +1331,7 @@ export function createCommandRouter(
       debug("command", "classifier_toggle", { enabled: false });
       log(ctx, "LLM classifier disabled; regex fallback active");
     }),
-    exact("classifier status", "Show classifier state", (_, ctx) => {
+    exact("classifier status", (_, ctx) => {
       const rawModel = state.config.classifier?.model;
       const modelId = Array.isArray(rawModel)
         ? rawModel.join(", ")
@@ -1290,7 +1357,7 @@ export function createCommandRouter(
     }),
 
     // Debug — show loaded config state
-    exact("debug", "Show config and routing state", (_, ctx) => {
+    exact("debug", (_, ctx) => {
       const rules = state.config.rules ?? [];
       const tiers = Object.keys(state.config.models ?? {});
       const lines = [
@@ -1315,7 +1382,7 @@ export function createCommandRouter(
       uiOutput(ctx, lines);
       log(ctx, "debug info printed above");
     }),
-    prefix(PREVIEW_SUB, "Preview routing for a prompt", (args, ctx) => handlePreview(args, ctx, state), `[--json] <prompt>`),
+    prefix(PREVIEW_SUB, (args, ctx) => handlePreview(args, ctx, state)),
   ];
 
   return async (args: string, ctx: ExtensionContext) => {

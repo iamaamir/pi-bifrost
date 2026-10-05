@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
+import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
 import { makeModel, makePiClassifierModel, makeRegistry } from "./helpers.ts";
 import { createPipeline } from "../classification-pipeline.ts";
 import { DEFAULT_THRESHOLD, lookupCache, touchCacheEntry, updateCache, type CacheEntry } from "../cache.ts";
@@ -190,7 +190,7 @@ describe("bifrost command ui", () => {
     const select = calls.find((call) => call.kind === "select");
     assert(select, "dashboard should open");
     assert.match(String(select?.title ?? ""), /Bifrost · on · model none/);
-    assert.equal(select?.options?.length, 8);
+    assert.equal(select?.options?.length, BIFROST_COMMAND_OPTIONS.length);
     assert((select?.options ?? []).some((option) => option.includes("Disable routing")));
     assert.equal(state.enabled, false);
   });
@@ -1097,5 +1097,484 @@ describe("preview json flag", () => {
   it("drops the prefix when the caller claims one the args do not have", () => {
     // The hazard made explicit: claiming a prefix that is not there truncates.
     assert.deepEqual(parsePreviewArgs("--json fix the bug", "preview"), { prompt: "fix the bug", json: false });
+  });
+});
+
+describe("command aliases", () => {
+  it("declares init -f as an alias of init", () => {
+    const init = BIFROST_COMMAND_OPTIONS.find((c) => c.value === "init");
+    assert.deepEqual(init?.aliases, ["init -f"]);
+  });
+
+  it("dispatches init -f to init rather than the unknown-subcommand picker", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-f-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      // Fresh, therefore reusable probe data: plain `init` would reuse it and
+      // never probe. Only `-f` forces a re-probe, so "Probing" proves both
+      // that the alias matched and that the flag reached handleInit.
+      writeFileSync(join(tempDir, ".pi", "bifrost-probe.json"), JSON.stringify([
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]));
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      const state = makeState();
+      // handleInit's forced-probe branch calls applyOutcomes, which makeStore
+      // does not provide. The only existing init test uses --write, which
+      // returns before that branch, so nothing else ever reached it.
+      state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} } as never;
+      await createCommandRouter(state as never)("init -f", ctx as never);
+      assert.equal(calls.some((call) => call.kind === "select" && call.title === "Bifrost commands"), false);
+      assert(calls.some((call) => call.kind === "notify" && String(call.value).startsWith("info:Probing")));
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("no longer lists init -f as its own command", () => {
+    assert.equal(
+      BIFROST_COMMAND_OPTIONS.some((c) => c.value === "init -f"),
+      false,
+    );
+  });
+
+  it("offers init -f in completion", () => {
+    // "init -" isolates the alias: it is the only entry that matches, so this
+    // cannot pass by `init` merely prefix-matching. Under "ini" both entries
+    // are returned and the assertion could not tell them apart.
+    const items = getBifrostCommandCompletions("init -");
+    assert.ok(items?.some((i) => i.value === "init -f" && i.label === "init -f"));
+  });
+
+  it("still emits init itself alongside its alias", () => {
+    const items = getBifrostCommandCompletions("ini") ?? [];
+    assert.ok(items.some((i) => i.value === "init" && i.label === "init"));
+    assert.ok(items.some((i) => i.value === "init -f"));
+  });
+
+  it("submits an exact alias instead of offering a completion", () => {
+    assert.equal(getBifrostCommandCompletions("init -f"), null);
+  });
+});
+
+describe("route dispatch", () => {
+  // Config, probe, and cache paths all resolve against process.cwd(), and
+  // several of these routes write: cache clear truncates the cache file, probe
+  // and init overwrite .pi/bifrost-probe.json. Dispatching them in the repo
+  // would damage real developer state, so they run in a temp directory.
+  async function inTempDir<T>(fn: () => Promise<T>): Promise<T> {
+    const dir = mkdtempSync(join(tmpdir(), "bifrost-route-"));
+    const previousCwd = process.cwd();
+    process.chdir(dir);
+    try {
+      return await fn();
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("routes on to the enabled state", async () => {
+    const { ctx } = makeCtx();
+    const state = makeState();
+    state.enabled = false;
+    await createCommandRouter(state as never)("on", ctx as never);
+    assert.equal(state.enabled, true);
+  });
+
+  it("routes off to the disabled state", async () => {
+    const { ctx } = makeCtx();
+    const state = makeState();
+    state.enabled = true;
+    await createCommandRouter(state as never)("off", ctx as never);
+    assert.equal(state.enabled, false);
+  });
+
+  it("routes pin and unpin", async () => {
+    const { ctx } = makeCtx();
+    const state = makeState();
+    await createCommandRouter(state as never)("pin", ctx as never);
+    assert.equal(state.pinned, true);
+    await createCommandRouter(state as never)("unpin", ctx as never);
+    assert.equal(state.pinned, false);
+  });
+
+  it("routes classifier on and off", async () => {
+    const { ctx } = makeCtx();
+    const state = makeState();
+    state.classifierEnabled = false;
+    await createCommandRouter(state as never)("classifier on", ctx as never);
+    assert.equal(state.classifierEnabled, true);
+    await createCommandRouter(state as never)("classifier off", ctx as never);
+    assert.equal(state.classifierEnabled, false);
+  });
+
+  // log() reaches the fake as ctx.ui.notify, recorded as kind "notify" with
+  // value "<type>:<message>".
+  it("routes cache stats to its own handler", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await inTempDir(async () => {
+      await createCommandRouter(state as never)("cache stats", ctx as never);
+    });
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("cache:")));
+  });
+
+  it("routes cache clear to its own handler", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await inTempDir(async () => {
+      await createCommandRouter(state as never)("cache clear", ctx as never);
+    });
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("cache cleared")));
+  });
+
+  // debug uses uiOutput, which reaches the fake as ctx.ui.setWidget and is
+  // recorded as kind "widget" with the lines array.
+  it("routes debug to its own handler", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await createCommandRouter(state as never)("debug", ctx as never);
+    assert.ok(calls.some((c) => c.kind === "widget" && (c.lines ?? []).includes("--- config ---")));
+  });
+
+  // Each assertion below distinguishes the routed command from fallthrough:
+  // if a route is deleted the command misses every route, opens the picker,
+  // and lands on some other handler. So an assertion that merely checks "a
+  // widget or notify happened" proves nothing, and cannot tell correct
+  // routing from no routing at all.
+
+  it("routes reload", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await inTempDir(async () => {
+      await createCommandRouter(state as never)("reload", ctx as never);
+    });
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("Bifrost config reloaded")));
+  });
+
+  it("routes providers", async () => {
+    const { ctx, calls } = makeCtx([
+      { provider: "fixture", id: "chat" },
+      { provider: "fixture", id: "reason" },
+    ]);
+    const state = makeState();
+    await createCommandRouter(state as never)("providers", ctx as never);
+    const lines = calls.filter((c) => c.kind === "widget").flatMap((c) => c.lines ?? []);
+    assert.ok(lines.includes("available providers:"));
+    assert.ok(lines.includes("  fixture: 2 model(s)"));
+  });
+
+  it("routes probe", async () => {
+    const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+    const state = makeState();
+    // runProbe records outcomes on the reliability store; makeStore omits it.
+    state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} } as never;
+    // No model carries an api, so probeOne returns "skipped" without any
+    // network call. runProbe still writes .pi/bifrost-probe.json, so dispatch
+    // from a temp dir rather than over the repo's real probe data.
+    await inTempDir(async () => {
+      await createCommandRouter(state as never)("probe", ctx as never);
+    });
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).startsWith("info:Probing 1 model(s)")));
+    const lines = calls.filter((c) => c.kind === "widget").flatMap((c) => c.lines ?? []);
+    assert.ok(lines.includes("--- probe results (1 models) ---"));
+  });
+
+  it("routes benchmark", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    // makeState configures no tiers, so handleBenchmark reports that and
+    // returns before reaching the classification pipeline.
+    await createCommandRouter(state as never)("benchmark fix the build", ctx as never);
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("no categories configured")));
+  });
+
+  it("routes preview", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    // Bare "preview" with no prompt: only reachable if the prefix route
+    // matches the word alone.
+    await createCommandRouter(state as never)("preview", ctx as never);
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("usage: /bifrost preview <prompt>")));
+  });
+
+  it("dispatches previewXYZ to preview, which a space-bounded matcher would not", async () => {
+    // prefix() is bare startsWith on purpose: "/bifrost previewXYZ" previews
+    // prompt "XYZ". Requiring a space boundary would send it to the picker.
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await createCommandRouter(state as never)("previewXYZ", ctx as never);
+    // The slice leaves "XYZ", so handlePreview classifies it rather than
+    // printing usage text. The fake pipeline returns "unclassified".
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("no tier matched")));
+    assert.ok(calls.some((c) => c.kind === "status" && String(c.value).includes("previewing prompt")));
+    assert.equal(calls.some((c) => c.kind === "select"), false);
+  });
+
+  it("routes init", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} } as never;
+    // Empty temp dir means no cached probe, so handleInit probes inline. Its
+    // wording ("to find working ones") is distinct from the probe route's
+    // ("model(s) with"), so this cannot be satisfied by that route.
+    await inTempDir(async () => {
+      await createCommandRouter(state as never)("init", ctx as never);
+    });
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("Probing 0 models to find working ones")));
+  });
+
+  it("opens the picker for initialize rather than running init", async () => {
+    // Temp dir because the regression this guards sends "initialize" to
+    // handleInit, which probes and writes .pi/bifrost-probe.json into the
+    // working directory. A failing run must not damage real probe data.
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await inTempDir(async () => {
+      await createCommandRouter(state as never)("initialize", ctx as never);
+    });
+    assert.ok(calls.some((c) => c.kind === "select"));
+  });
+
+  it("does not let prefix() swallow initialize either", async () => {
+    // Guards against someone converting init to the bare-startsWith helper.
+    // Same temp-dir reason as the guard above: under that regression
+    // "initfoo" reaches handleInit and rewrites the repo's probe file.
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await inTempDir(async () => {
+      await createCommandRouter(state as never)("initfoo", ctx as never);
+    });
+    assert.ok(calls.some((c) => c.kind === "select"));
+  });
+});
+
+describe("dashboard menu", () => {
+  // The dashboard is derived from BIFROST_COMMAND_OPTIONS, so it holds every
+  // registered command: a command added to the registry appears in /bifrost
+  // with no second edit. On top of that, ordering stays state-aware so the top
+  // row always changes something.
+
+  function rowsOf(calls: Array<{ kind: string; options?: string[] }>): string[] {
+    return calls.find((call) => call.kind === "select")?.options ?? [];
+  }
+
+  async function rowsFor(overrides: { enabled?: boolean; pinned?: boolean } = {}): Promise<string[]> {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    state.enabled = overrides.enabled ?? true;
+    state.pinned = overrides.pinned ?? false;
+    await createCommandRouter(state as never)("", ctx as never);
+    return rowsOf(calls);
+  }
+
+  function rowAt(rows: string[], value: string): number {
+    return rows.findIndex((row) => row.startsWith(`/bifrost ${value} `));
+  }
+
+  it("offers every registered command exactly once", async () => {
+    const rows = await rowsFor();
+    // Parsed rather than prefix-matched: "/bifrost classifier " also prefixes
+    // "classifier on" and friends.
+    const commandOf = (row: string): string => {
+      const match = /^\/bifrost (.+?) — /.exec(row);
+      assert.ok(match, `unparseable row: ${row}`);
+      // The hint grammar is `[optional-flag] <prompt>`: one or more bracketed
+      // flag segments followed by one or more angle-bracketed operands. The
+      // value is whatever precedes the first hint token, so any number of flags
+      // or operands parses here without another edit - `[--json] [--tier]
+      // <prompt>` needs no special case. The discarded tail is shape-checked so
+      // a hint this parser does not understand fails loudly here rather than
+      // silently yielding a value that is not in the registry.
+      const head = match[1];
+      const hintAt = head.search(/[[<]/);
+      const command = hintAt === -1 ? head : head.slice(0, hintAt).trimEnd();
+      assert.ok(command.length > 0, `no command value in row: ${row}`);
+      if (hintAt !== -1) {
+        assert.match(head.slice(hintAt), /^(?:\[[^\]]*\] ?|<[^>]*> ?)+$/, `malformed hint: ${row}`);
+      }
+      return command;
+    };
+    const rendered = rows.map(commandOf);
+    const registered = BIFROST_COMMAND_OPTIONS.map((command) => command.value);
+    // Same multiset, so no command is hidden and none is repeated.
+    assert.equal(rendered.length, registered.length);
+    assert.deepEqual([...rendered].sort(), [...registered].sort());
+  });
+
+  it("renders each command's registry argumentHint into its row", async () => {
+    // The hint travels registry -> row, so `[--json]` is advertised by editing
+    // the one registry entry rather than by editing the menu. The test above
+    // checks membership and ignores hints entirely, so without this a hint that
+    // the renderer silently dropped would go unnoticed.
+    //
+    // Scoped to the menu hint, deliberately not to completion items: completion
+    // labels carry value/label/description only, never the argument hint, and
+    // the test "keeps the preview completion label and description stable" pins
+    // that split on purpose. Asserting menu and completion agree on the hint
+    // would contradict that decision rather than guard it.
+    const rows = await rowsFor();
+    for (const command of BIFROST_COMMAND_OPTIONS) {
+      const spec = command as { value: string; argumentHint?: string };
+      const opening = spec.argumentHint ? ` ${spec.argumentHint} — ` : " — ";
+      assert.ok(
+        rows.some((row) => row.startsWith(`/bifrost ${spec.value}${opening}`)),
+        `no row renders "/bifrost ${spec.value}${opening}": ${JSON.stringify(rows)}`,
+      );
+    }
+  });
+
+  it("shows a registry entry that declares neither menu nor reflects", async () => {
+    // The auto-add guarantee, stated as a test: menu and reflects order a
+    // command, they never hide one. Without this, the previous behaviour
+    // (hand-written row list) and this behaviour both pass every other test
+    // here.
+    const registry = BIFROST_COMMAND_OPTIONS as unknown as Array<{ value: string; description: string }>;
+    registry.push({ value: "probe entry", description: "Temporary probe" });
+    try {
+      const rows = await rowsFor();
+      assert.ok(rows.some((row) => row.includes("/bifrost probe entry — Temporary probe")));
+      assert.equal(rows.length, BIFROST_COMMAND_OPTIONS.length);
+    } finally {
+      // Load-bearing: BIFROST_COMMAND_OPTIONS is module-level shared state.
+      // Without this restore a failing assertion corrupts the registry for
+      // every test that runs afterwards.
+      registry.pop();
+    }
+  });
+
+  it("offers 18 rows", async () => {
+    assert.equal((await rowsFor()).length, 18);
+  });
+
+  it("keeps the top row actionable in every state combination", async () => {
+    for (const enabled of [true, false]) {
+      for (const pinned of [true, false]) {
+        const rows = await rowsFor({ enabled, pinned });
+        const expected = enabled ? "/bifrost off —" : "/bifrost on —";
+        assert.ok(rows[0]?.startsWith(expected), `enabled=${enabled} pinned=${pinned}: ${rows[0]}`);
+        assert.ok(!rows[0]?.includes("already"), `row 1 must not be annotated: ${rows[0]}`);
+      }
+    }
+  });
+
+  it("marks the already-satisfied member of each pair, leaving the actionable one bare", async () => {
+    const off = await rowsFor({ enabled: false, pinned: false });
+    assert.deepEqual(
+      off.filter((row) => row.startsWith("/bifrost on ") || row.startsWith("/bifrost off ")),
+      ["/bifrost on — Enable routing", "/bifrost off — Disable routing (already off)"],
+    );
+    assert.deepEqual(
+      off.filter((row) => row.startsWith("/bifrost pin ") || row.startsWith("/bifrost unpin ")),
+      ["/bifrost pin — Lock current model", "/bifrost unpin — Resume routing (already unpinned)"],
+    );
+
+    const on = await rowsFor({ enabled: true, pinned: true });
+    assert.deepEqual(
+      on.filter((row) => row.startsWith("/bifrost on ") || row.startsWith("/bifrost off ")),
+      ["/bifrost off — Disable routing", "/bifrost on — Enable routing (already on)"],
+    );
+    assert.deepEqual(
+      on.filter((row) => row.startsWith("/bifrost pin ") || row.startsWith("/bifrost unpin ")),
+      ["/bifrost unpin — Resume routing", "/bifrost pin — Lock current model (already pinned)"],
+    );
+  });
+
+  it("places and annotates a reflected entry declared only in the registry", async () => {
+    // Which way a command pushes its state lives on its registry entry, so a
+    // new reflected command costs one edit. When that direction lived in a
+    // side table keyed by value, an entry the table did not list silently lost
+    // both its leading row and its annotation - nothing failed, the ordering
+    // was just wrong.
+    const registry = BIFROST_COMMAND_OPTIONS as unknown as Array<Record<string, unknown>>;
+    registry.unshift({
+      value: "probe mute",
+      description: "Temporary probe",
+      reflects: { state: "enabled", sets: false, note: "already off" },
+    });
+    try {
+      // Routing is on, so a command that turns routing off changes something
+      // and leads. Unshifted, it also precedes the registry's own member.
+      const actionable = await rowsFor({ enabled: true, pinned: false });
+      assert.equal(actionable[0], "/bifrost probe mute — Temporary probe");
+
+      // Routing is off, so it is the no-op member: second, and annotated.
+      const inert = await rowsFor({ enabled: false, pinned: false });
+      assert.equal(inert[1], "/bifrost probe mute — Temporary probe (already off)");
+    } finally {
+      // Load-bearing: BIFROST_COMMAND_OPTIONS is module-level shared state.
+      // Without this restore a failing assertion corrupts the registry for
+      // every test that runs afterwards.
+      registry.shift();
+    }
+  });
+
+  it("keeps the prompt commands together in the common block", async () => {
+    const rows = await rowsFor();
+    assert.deepEqual(rows.slice(4, 11), [
+      "/bifrost preview [--json] <prompt> — Preview routing for a prompt",
+      "/bifrost benchmark <prompt> — Classify a benchmark prompt",
+      "/bifrost providers — List available providers",
+      "/bifrost probe — Probe working models",
+      "/bifrost init — Probe models and generate config (pass -f to force re-probe)",
+      "/bifrost classifier status — Show classifier state",
+      "/bifrost reload — Reload config after editing",
+    ]);
+    // Adjacency is the point: both take a prompt and prefill the editor, so
+    // they must not be separated by a command that runs instead.
+    assert.equal(rowAt(rows, "benchmark") - rowAt(rows, "preview"), 1);
+  });
+
+  it("renders no two identical rows", async () => {
+    // pickBifrostCommand resolves the user's choice by rendered text, so a
+    // duplicated row would run whichever command matches first.
+    const rows = await rowsFor();
+    assert.equal(new Set(rows).size, rows.length);
+  });
+
+  it("orders reflected rows first, then common rows, then the rest", async () => {
+    const rows = await rowsFor({ enabled: true, pinned: false });
+    assert.ok(rowAt(rows, "on") < rowAt(rows, "pin"), "reflected groups follow registry order");
+    assert.ok(rowAt(rows, "unpin") < rowAt(rows, "reload"), "reflected rows precede common rows");
+    assert.ok(rowAt(rows, "reload") < rowAt(rows, "cache stats"), "common rows precede the tail");
+  });
+
+  it("includes preview so the menu keeps prefilling it", async () => {
+    // preview carries an argumentHint, so selecting its row must still
+    // prefill the editor rather than run a handler.
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await createCommandRouter(state as never)("", ctx as never);
+    const rows = rowsOf(calls);
+    assert.ok(rows.some((row) => row.includes("/bifrost preview [--json] <prompt>")));
+  });
+
+  it("cannot go stale when a command is renamed in the registry", async () => {
+    // The dashboard used to list command values by hand, so renaming one left
+    // the menu pointing at a value that no longer existed and the picker threw
+    // a TypeError. Deriving from the registry removes that class of drift:
+    // the rename shows up in the menu.
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    const original = BIFROST_COMMAND_OPTIONS[0];
+    assert.equal(original.value, "on");
+    (BIFROST_COMMAND_OPTIONS as unknown as Array<{ value: string; description: string }>)[0] = {
+      ...original,
+      value: "renamed",
+    };
+    try {
+      await createCommandRouter(state as never)("", ctx as never);
+      const rows = rowsOf(calls);
+      assert.ok(rows.some((row) => row.includes("/bifrost renamed —")));
+      assert.ok(!rows.some((row) => row.includes("/bifrost on —")));
+    } finally {
+      // Load-bearing: BIFROST_COMMAND_OPTIONS is module-level shared state.
+      // Without this restore a failing assertion corrupts the registry for
+      // every test that runs afterwards.
+      (BIFROST_COMMAND_OPTIONS as unknown as Array<{ value: string; description: string }>)[0] = original;
+    }
   });
 });
