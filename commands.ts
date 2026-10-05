@@ -163,10 +163,18 @@ function formatCandidateLines(
 
 // ── Shared tier-resolution + display ───────────────────────
 
+/** Placeholder the text views use when a selection did not resolve. */
+const PREVIEW_NONE = "none";
+
+/**
+ * A tier resolution projected for display. `selected` and `selectedTier` are
+ * absent when nothing resolved — never the string "none", which is also a legal
+ * tier name. Renderers substitute the `PREVIEW_NONE` placeholder themselves.
+ */
 export type BifrostTierDisplay = {
   strategy: string;
-  selected: string;
-  selectedTier: string;
+  selected?: string;
+  selectedTier?: string;
   fallbackReason?: string;
   requestedCandidateLines: string[];
   fallbackCandidateLines: string[];
@@ -211,8 +219,8 @@ function resolveTierDisplay(
 
   return {
     strategy,
-    selected: selectedKey ?? "none",
-    selectedTier: resolved.selectedTier ?? "none",
+    selected: selectedKey,
+    selectedTier: resolved.selectedTier,
     fallbackReason: resolved.fallbackReason,
     requestedCandidateLines,
     fallbackCandidateLines,
@@ -626,7 +634,7 @@ async function handleBenchmark(
 
   for (const tierName of categories) {
     const display = resolveTierDisplay(tierName, state, ctx);
-    lines.push(`  ${tierName} (${display.strategy} → ${display.selectedTier}):`);
+    lines.push(`  ${tierName} (${display.strategy} → ${display.selectedTier ?? PREVIEW_NONE}):`);
     if (display.fallbackReason) lines.push(`    fallback: ${display.fallbackReason}`);
     lines.push(...display.requestedCandidateLines.map((line) => `    ${line}`));
     if (display.fallbackCandidateLines.length > 0 && display.defaultTier && display.defaultTier !== tierName) {
@@ -709,9 +717,6 @@ export function buildPreviewFailure(prompt: string, error: BifrostPreviewFailure
   return { ok: false, prompt, error };
 }
 
-/** Placeholder the text view uses when a selection did not resolve. */
-const PREVIEW_NONE = "none";
-
 export function buildPreviewReport(input: {
   prompt: string;
   classification: Exclude<ClassificationResult, { kind: "unclassified" }>;
@@ -728,15 +733,15 @@ export function buildPreviewReport(input: {
     ...(judgment?.confidence !== undefined ? { confidence: judgment.confidence } : {}),
     tier: classification.tier,
     strategy: display.strategy,
-    // `resolveTierDisplay` marks an unresolved selection with the same string a
-    // tier named "none" would carry, so the JSON report drops the key instead of
-    // reporting a sentinel a consumer cannot tell apart from a real value.
-    ...(display.selectedTier !== PREVIEW_NONE ? { selectedTier: display.selectedTier } : {}),
+    // An unresolved selection arrives as an absent value, so omitting the key is
+    // a true absence signal. A selection that resolved into a tier named "none"
+    // keeps its key and reports the string.
+    ...(display.selectedTier !== undefined ? { selectedTier: display.selectedTier } : {}),
     ...(display.fallbackReason !== undefined ? { fallbackReason: display.fallbackReason } : {}),
     requestedCandidates: display.requestedCandidateLines,
     fallbackCandidates: display.fallbackCandidateLines,
     ...(display.defaultTier !== undefined ? { defaultTier: display.defaultTier } : {}),
-    ...(display.selected !== PREVIEW_NONE ? { selected: display.selected } : {}),
+    ...(display.selected !== undefined ? { selected: display.selected } : {}),
   };
 }
 

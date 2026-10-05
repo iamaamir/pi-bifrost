@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, runBifrostCommand, serializePreviewReport } from "../commands.ts";
-import { makePiClassifierModel, makeRegistry } from "./helpers.ts";
+import { makeModel, makePiClassifierModel, makeRegistry } from "./helpers.ts";
 
 function makeCtx(
   models: Array<{ provider: string; id: string }> = [],
@@ -86,7 +86,11 @@ function makeStore(reliabilityState?: Record<string, { failures: number[]; openU
 
 function makeState(saveModeState: () => void = () => {}) {
   return {
-    config: { models: {}, reliability: { enabled: true, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60 } },
+    config: {
+      models: {},
+      default: undefined as string | undefined,
+      reliability: { enabled: true, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60 },
+    },
     enabled: true,
     classifierEnabled: true,
     pinned: false,
@@ -682,7 +686,7 @@ describe("preview report", () => {
     const report = buildPreviewReport({
       prompt: "p",
       classification: { kind: "fallback", tier: "quick" },
-      display: { ...display, selected: "none", selectedTier: "none" },
+      display: { ...display, selected: undefined, selectedTier: undefined },
     });
 
     assert.equal("selected" in report, false);
@@ -690,14 +694,46 @@ describe("preview report", () => {
     assert.equal(JSON.parse(serializePreviewReport(report)).selected, undefined);
   });
 
+  it("reports a selection that really is the string none", () => {
+    // `none` is a legal tier name and a legal config.default, so an unresolved
+    // selection must be absent — not the string "none". Omitting the key for a
+    // selection that resolved *into* a tier named none would misreport a
+    // successful routing decision as nothing resolved.
+    const report = buildPreviewReport({
+      prompt: "p",
+      classification: { kind: "fallback", tier: "none" },
+      display: { ...display, selected: "none", selectedTier: "none", defaultTier: "none" },
+    });
+
+    assert.equal("selected" in report, true);
+    assert.equal(report.selected, "none");
+    assert.equal(report.selectedTier, "none");
+    assert.equal(report.tier, "none");
+  });
+
   it("keeps the none placeholder in the text view for an unresolved selection", () => {
     const report = buildPreviewReport({
       prompt: "p",
       classification: { kind: "fallback", tier: "quick" },
-      display: { ...display, selected: "none", selectedTier: "none" },
+      display: { ...display, selected: undefined, selectedTier: undefined },
     });
     const lines = renderPreviewReport(report);
 
+    assert(lines.includes("selected tier: none"));
+    assert(lines.includes("selected:  none"));
+  });
+
+  it("renders a selection that really is the string none the same way", () => {
+    // The placeholder and a real "none" render to the same bytes, which is why
+    // the JSON report has to carry the distinction rather than the text view.
+    const report = buildPreviewReport({
+      prompt: "p",
+      classification: { kind: "fallback", tier: "none" },
+      display: { ...display, selected: "none", selectedTier: "none", defaultTier: "none" },
+    });
+    const lines = renderPreviewReport(report);
+
+    assert(lines.includes("tier:      none"));
     assert(lines.includes("selected tier: none"));
     assert(lines.includes("selected:  none"));
   });
@@ -807,6 +843,52 @@ describe("preview json marker", () => {
 
     assert.equal((report as { ok?: boolean }).ok, true);
     assert.equal((report as { prompt?: string }).prompt, "hello");
+  });
+
+  it("keeps the selection keys for a tier literally named none", async () => {
+    // End-to-end through resolveTierDisplay, which the pure buildPreviewReport
+    // tests bypass. `none` is a legal tier name and a legal config.default, so a
+    // successful resolution into it must not be reported as nothing resolved.
+    const { ctx } = makeCtx([makeModel("openai", "gpt-5.4")]);
+    const state = makeState();
+    // A bare substring pattern keeps this on the getAvailable path, which the
+    // local fake registry supports.
+    state.config.models = { none: ["gpt-5.4"] };
+    state.config.default = "none";
+    state.getPipeline = () => ({
+      classify: async () => ({ kind: "classified" as const, tier: "none", source: "regex" }),
+    }) as never;
+    const dispatch = createCommandRouter(state as never);
+
+    const [report] = await captureJsonReports(async () => {
+      await dispatch("preview --json hello", ctx as never);
+    }) as Array<Record<string, unknown>>;
+
+    assert.equal(report.tier, "none");
+    assert.equal(report.selectedTier, "none");
+    assert.equal(report.selected, "openai/gpt-5.4");
+    assert.equal(report.defaultTier, "none");
+  });
+
+  it("omits the selection keys when the tier resolves to nothing", async () => {
+    // The counterpart to the literal-none case above, through the same path: an
+    // empty tier and no default must report absent keys, not "none".
+    const { ctx } = makeCtx([makeModel("openai", "gpt-5.4")]);
+    const state = makeState();
+    state.config.models = { general: ["no-such-model"] };
+    state.config.default = undefined;
+    state.getPipeline = () => ({
+      classify: async () => ({ kind: "classified" as const, tier: "general", source: "regex" }),
+    }) as never;
+    const dispatch = createCommandRouter(state as never);
+
+    const [report] = await captureJsonReports(async () => {
+      await dispatch("preview --json hello", ctx as never);
+    }) as Array<Record<string, unknown>>;
+
+    assert.equal(report.tier, "general");
+    assert.equal("selectedTier" in report, false);
+    assert.equal("selected" in report, false);
   });
 
   it("emits no marker line on the text path", async () => {
