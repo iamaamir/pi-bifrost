@@ -997,25 +997,46 @@ describe("preview source values", () => {
 
 describe("preview json flag", () => {
   it("treats --json as a flag only in the first position", () => {
-    assert.deepEqual(parsePreviewArgs("preview --json fix the bug"), { prompt: "fix the bug", json: true });
-    assert.deepEqual(parsePreviewArgs("preview fix the bug"), { prompt: "fix the bug", json: false });
-    assert.deepEqual(parsePreviewArgs("preview --json"), { prompt: "", json: true });
+    assert.deepEqual(parsePreviewArgs("preview --json fix the bug", "preview"), { prompt: "fix the bug", json: true });
+    assert.deepEqual(parsePreviewArgs("preview fix the bug", "preview"), { prompt: "fix the bug", json: false });
+    assert.deepEqual(parsePreviewArgs("preview --json", "preview"), { prompt: "", json: true });
   });
 
   it("leaves a later --json inside the prompt text", () => {
-    assert.deepEqual(parsePreviewArgs("preview explain the --json flag"), {
+    assert.deepEqual(parsePreviewArgs("preview explain the --json flag", "preview"), {
       prompt: "explain the --json flag",
       json: false,
     });
   });
 
   it("accepts any whitespace after the flag, not only one space", () => {
-    assert.deepEqual(parsePreviewArgs("preview --json\tfix the bug"), { prompt: "fix the bug", json: true });
-    assert.deepEqual(parsePreviewArgs("preview --json   fix the bug"), { prompt: "fix the bug", json: true });
-    assert.deepEqual(parsePreviewArgs("preview --json\nfix the bug"), { prompt: "fix the bug", json: true });
+    assert.deepEqual(parsePreviewArgs("preview --json\tfix the bug", "preview"), { prompt: "fix the bug", json: true });
+    assert.deepEqual(parsePreviewArgs("preview --json   fix the bug", "preview"), { prompt: "fix the bug", json: true });
+    assert.deepEqual(parsePreviewArgs("preview --json\nfix the bug", "preview"), { prompt: "fix the bug", json: true });
   });
 
   it("does not treat a prompt glued to the flag as a flag", () => {
-    assert.deepEqual(parsePreviewArgs("preview --jsonfix the bug"), { prompt: "--jsonfix the bug", json: false });
+    assert.deepEqual(parsePreviewArgs("preview --jsonfix the bug", "preview"), { prompt: "--jsonfix the bug", json: false });
+  });
+
+  it("slices exactly the subcommand passed in, not a hardcoded length", () => {
+    // `sub` is the precondition, so the slice follows it. This is the silent
+    // truncation the review flagged: the old signature hardcoded 7 characters
+    // regardless of what they were.
+    assert.deepEqual(parsePreviewArgs("preview fix the bug", "bench"), { prompt: "ew fix the bug", json: false });
+  });
+
+  it("keeps the whole string when no subcommand prefix is claimed", () => {
+    // The documented precondition: `args` still carries the subcommand. A caller
+    // that passes an empty `sub` for a bare prompt loses nothing, which is what
+    // the old hardcoded slice could not express — the whole string survives, so
+    // `--json` is then the first token and parses as the flag.
+    assert.deepEqual(parsePreviewArgs("fix the bug", ""), { prompt: "fix the bug", json: false });
+    assert.deepEqual(parsePreviewArgs("--json fix the bug", ""), { prompt: "fix the bug", json: true });
+  });
+
+  it("drops the prefix when the caller claims one the args do not have", () => {
+    // The hazard made explicit: claiming a prefix that is not there truncates.
+    assert.deepEqual(parsePreviewArgs("--json fix the bug", "preview"), { prompt: "fix the bug", json: false });
   });
 });

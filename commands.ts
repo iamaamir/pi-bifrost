@@ -596,13 +596,23 @@ async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState):
   }));
 }
 
+/**
+ * Same precondition as `parsePreviewArgs`: `args` carries the `benchmark`
+ * subcommand word, which `BENCHMARK_SUB.length` characters are removed before
+ * the default prompt is substituted. Extracting the word to a named constant is
+ * all this needed; giving it the explicit-parameter treatment would mean
+ * threading the matched subcommand through `CommandFn`, a broader router change
+ * than this fix warrants. Behavior is unchanged.
+ */
+const BENCHMARK_SUB = "benchmark";
+
 async function handleBenchmark(
   args: string,
   ctx: ExtensionContext,
   state: BifrostState,
 ): Promise<void> {
   const prompt =
-    args.slice("benchmark".length).trim() ||
+    args.slice(BENCHMARK_SUB.length).trim() ||
     "Write a short Python function to reverse a string and explain it briefly.";
   const categories = Object.keys(state.config.models ?? {});
 
@@ -701,8 +711,23 @@ export type BifrostPreviewFailure = {
 /** Marker prefix for machine-readable command output, so a caller can find the line without guessing. */
 export const BIFROST_JSON_PREFIX = "[bifrost-json] ";
 
-export function parsePreviewArgs(args: string): { prompt: string; json: boolean } {
-  const rest = args.slice("preview".length).trim();
+/** The subcommand word `handlePreview` receives inside `args`. Shared with the registry entry so the two cannot drift. */
+const PREVIEW_SUB = "preview";
+
+/**
+ * Split the argument text of a `preview` subcommand into its prompt and whether
+ * `--json` was requested.
+ *
+ * Precondition: `args` is the full argument string including the subcommand
+ * word, and `sub` is that word. `sub` is a parameter rather than a hardcoded
+ * slice so the precondition is visible at every call site and the truncation can
+ * never exceed what the caller actually passed. `args` is sliced by
+ * `sub.length`, so a caller that claims a prefix the args do not have silently
+ * loses that many leading characters; pass the real subcommand, or pass `""` to
+ * parse a bare prompt with nothing removed.
+ */
+export function parsePreviewArgs(args: string, sub: string): { prompt: string; json: boolean } {
+  const rest = args.slice(sub.length).trim();
   if (rest === "--json") return { prompt: "", json: true };
   // Any whitespace separates the flag from the prompt, so a tab or a double space
   // is not mistaken for prompt text. `--json` is still only a flag as the very
@@ -785,7 +810,7 @@ async function handlePreview(
   ctx: ExtensionContext,
   state: BifrostState,
 ): Promise<void> {
-  const { prompt, json } = parsePreviewArgs(args);
+  const { prompt, json } = parsePreviewArgs(args, PREVIEW_SUB);
   if (!prompt) {
     // A machine caller must still get its line: the text notification below stays
     // for the interactive path, but a consumer that scans for the marker needs a
