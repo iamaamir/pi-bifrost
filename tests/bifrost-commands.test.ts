@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, runBifrostCommand, serializePreviewReport } from "../commands.ts";
+import { BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
 import { makeModel, makePiClassifierModel, makeRegistry } from "./helpers.ts";
+import { createPipeline } from "../classification-pipeline.ts";
+import { DEFAULT_THRESHOLD, lookupCache, touchCacheEntry, updateCache, type CacheEntry } from "../cache.ts";
 
 function makeCtx(
   models: Array<{ provider: string; id: string }> = [],
@@ -891,6 +893,55 @@ describe("preview json marker", () => {
     assert.equal("selected" in report, false);
   });
 
+  it("reports source cache when the prompt is already cached", async () => {
+    // The review found the documented `source` values incomplete by tracing
+    // `classify`: `handlePreview` calls the real pipeline, whose stage 2 is the
+    // cache. Preview does not write the cache itself — the turn handler does —
+    // so the entry is seeded the way index.ts seeds it after a real turn, then
+    // the same prompt is previewed again. This must not be faked with a stub
+    // `classify`, or the very path being pinned would be the one bypassed.
+    const { ctx } = makeCtx([makeModel("openai", "gpt-5.4")]);
+    const state = makeState();
+    state.config.models = { general: ["gpt-5.4"] };
+    state.config.default = "general";
+
+    // Same wiring as index.ts: lookupCache + touchCacheEntry over shared entries.
+    let entries: CacheEntry[] = [];
+    state.cacheEntries = entries as never;
+    const pipeline = createPipeline({
+      cacheLookup: (text) => {
+        const entry = lookupCache(entries, text, DEFAULT_THRESHOLD);
+        if (!entry) return undefined;
+        touchCacheEntry(entry);
+        return entry.category;
+      },
+      classifierModels: [],
+      classifyWithLLM: async () => undefined,
+      regexRules: [],
+      defaultTier: "general",
+      tiers: ["general"],
+    });
+    state.getPipeline = () => pipeline as never;
+    const dispatch = createCommandRouter(state as never);
+
+    const prompt = "review this authorization design";
+    const [first] = await captureJsonReports(async () => {
+      await dispatch(`preview --json ${prompt}`, ctx as never);
+    }) as Array<Record<string, unknown>>;
+    // Cold: nothing cached and no rule matches, so the default tier resolves.
+    assert.equal(first.source, "fallback");
+
+    // The turn handler's write path (index.ts), then preview the same prompt.
+    entries = updateCache(entries, prompt, "general", 500);
+    state.cacheEntries = entries as never;
+
+    const [second] = await captureJsonReports(async () => {
+      await dispatch(`preview --json ${prompt}`, ctx as never);
+    }) as Array<Record<string, unknown>>;
+    assert.equal(second.source, "cache");
+    assert.equal(second.tier, "general");
+  });
+
   it("emits no marker line on the text path", async () => {
     const { ctx } = makeCtx();
     const dispatch = createCommandRouter(makeState() as never);
@@ -906,6 +957,41 @@ describe("preview json marker", () => {
     }
 
     assert.deepEqual(lines.filter((line) => line.startsWith(BIFROST_JSON_PREFIX)), []);
+  });
+});
+
+describe("preview source values", () => {
+  const docsRoot = new URL("../", import.meta.url);
+
+  function sourceRow(): string {
+    const doc = readFileSync(new URL("docs/guide/commands.md", docsRoot), "utf8");
+    const row = doc.split("\n").find((line) => line.startsWith("| `source`"));
+    assert(row, "docs/guide/commands.md must document a `source` row for the preview report");
+    return row;
+  }
+
+  it("documents every reachable source value", () => {
+    // The union is `ClassificationSource | "fallback"`. A consumer switching
+    // exhaustively on `source` must not hit a value the guide never names, so
+    // the guide row is pinned to the declared union rather than trusted.
+    for (const value of ["cache", "classifier", "regex", "inline", "fallback"]) {
+      assert.match(sourceRow(), new RegExp(`\`${value}\``), `source row must name \`${value}\``);
+    }
+  });
+
+  it("rejects a source outside the union at compile time", () => {
+    // Compile-time pin, verified by `npm run typecheck` (tests are in the
+    // tsconfig include set). `@ts-expect-error` becomes an error of its own the
+    // moment `source` widens back to `string`, which is how this pin detects
+    // the regression it exists to prevent.
+    // @ts-expect-error `source` is the pipeline union, not an arbitrary string.
+    const bogus: BifrostPreviewSuccess["source"] = "guessed";
+    assert.equal(bogus, "guessed");
+  });
+
+  it("accepts every union member on the report type", () => {
+    const every: readonly BifrostPreviewSuccess["source"][] = ["cache", "classifier", "regex", "inline", "fallback"];
+    assert.equal(every.length, 5);
   });
 });
 

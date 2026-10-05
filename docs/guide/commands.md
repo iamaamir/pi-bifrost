@@ -54,7 +54,7 @@ Read the line after the marker, then parse the rest as JSON. Keys are omitted wh
 |-----|---------|
 | `ok` | `true` when a route was resolved, `false` when it was not |
 | `prompt` | The prompt that was classified |
-| `source` | Where the tier came from: `regex`, `classifier`, or `fallback` |
+| `source` | Where the tier came from: `cache`, `classifier`, `regex`, `inline`, or `fallback`. `cache` means the prompt was already classified in this session, so previewing it twice reports `cache` the second time; `inline` means a tier named in the prompt as an inline override |
 | `backend`, `model`, `confidence` | Classifier judgment; absent when no classifier ran |
 | `tier`, `strategy` | The tier that resolved and the strategy used for it |
 | `selectedTier`, `selected` | The tier and model actually chosen; both absent when nothing resolved, so a tier named `none` is not mistaken for "no choice" |

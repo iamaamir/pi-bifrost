@@ -7,7 +7,7 @@ import type { BifrostConfig, ClassifierConfig } from "./config.ts";
 import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, PROMPT_ONLY_FIELDS, loadConfig } from "./config.ts";
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
-import type { ClassificationPipeline, ClassificationResult } from "./classification-pipeline.ts";
+import type { ClassificationPipeline, ClassificationResult, ClassificationSource } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
 import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
@@ -677,7 +677,7 @@ export type BifrostPreviewReport = BifrostPreviewSuccess | BifrostPreviewFailure
 export type BifrostPreviewSuccess = {
   readonly ok: true;
   readonly prompt: string;
-  readonly source: string;
+  readonly source: ClassificationSource | "fallback";
   readonly backend?: string;
   readonly model?: string;
   readonly confidence?: number;
