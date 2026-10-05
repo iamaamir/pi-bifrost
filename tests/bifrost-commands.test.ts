@@ -857,6 +857,51 @@ describe("dashboard menu", () => {
     );
   });
 
+  it("places and annotates a reflected entry declared only in the registry", async () => {
+    // Which way a command pushes its state lives on its registry entry, so a
+    // new reflected command costs one edit. When that direction lived in a
+    // side table keyed by value, an entry the table did not list silently lost
+    // both its leading row and its annotation - nothing failed, the ordering
+    // was just wrong.
+    const registry = BIFROST_COMMAND_OPTIONS as unknown as Array<Record<string, unknown>>;
+    registry.unshift({
+      value: "probe mute",
+      description: "Temporary probe",
+      reflects: { state: "enabled", sets: false, note: "already off" },
+    });
+    try {
+      // Routing is on, so a command that turns routing off changes something
+      // and leads. Unshifted, it also precedes the registry's own member.
+      const actionable = await rowsFor({ enabled: true, pinned: false });
+      assert.equal(actionable[0], "/bifrost probe mute — Temporary probe");
+
+      // Routing is off, so it is the no-op member: second, and annotated.
+      const inert = await rowsFor({ enabled: false, pinned: false });
+      assert.equal(inert[1], "/bifrost probe mute — Temporary probe (already off)");
+    } finally {
+      // Load-bearing: BIFROST_COMMAND_OPTIONS is module-level shared state.
+      // Without this restore a failing assertion corrupts the registry for
+      // every test that runs afterwards.
+      registry.shift();
+    }
+  });
+
+  it("keeps the prompt commands together in the common block", async () => {
+    const rows = await rowsFor();
+    assert.deepEqual(rows.slice(4, 11), [
+      "/bifrost preview <prompt> — Preview routing for a prompt",
+      "/bifrost benchmark <prompt> — Classify a benchmark prompt",
+      "/bifrost providers — List available providers",
+      "/bifrost probe — Probe working models",
+      "/bifrost init — Probe models and generate config (pass -f to force re-probe)",
+      "/bifrost classifier status — Show classifier state",
+      "/bifrost reload — Reload config after editing",
+    ]);
+    // Adjacency is the point: both take a prompt and prefill the editor, so
+    // they must not be separated by a command that runs instead.
+    assert.equal(rowAt(rows, "benchmark") - rowAt(rows, "preview"), 1);
+  });
+
   it("renders no two identical rows", async () => {
     // pickBifrostCommand resolves the user's choice by rendered text, so a
     // duplicated row would run whichever command matches first.
@@ -868,7 +913,7 @@ describe("dashboard menu", () => {
     const rows = await rowsFor({ enabled: true, pinned: false });
     assert.ok(rowAt(rows, "on") < rowAt(rows, "pin"), "reflected groups follow registry order");
     assert.ok(rowAt(rows, "unpin") < rowAt(rows, "reload"), "reflected rows precede common rows");
-    assert.ok(rowAt(rows, "reload") < rowAt(rows, "benchmark"), "common rows precede the tail");
+    assert.ok(rowAt(rows, "reload") < rowAt(rows, "cache stats"), "common rows precede the tail");
   });
 
   it("includes preview so the menu keeps prefilling it", async () => {

@@ -703,10 +703,15 @@ interface CommandSpec {
   // still appears, after the common ones. That is what makes a new registry
   // command show up in /bifrost without a second edit.
   readonly menu?: "common";
-  // Marks a member of an on/off-style pair that mirrors one bit of routing
-  // state, so the dashboard can put the member that changes something first
-  // and say why the other one would not.
-  readonly reflects?: "enabled" | "pinned";
+  // Marks a member of an on/off-style pair, and carries everything the
+  // dashboard needs to place it: which bit of state it mirrors, which way it
+  // pushes that bit, and the note it shows while pushing it is a no-op. One
+  // registry entry, so a new reflected command cannot half-register.
+  readonly reflects?: {
+    readonly state: "enabled" | "pinned";
+    readonly sets: boolean;
+    readonly note: string;
+  };
 }
 
 interface CommandEntry {
@@ -732,15 +737,22 @@ function spaced(word: string, handler: CommandFn): CommandEntry {
 }
 
 export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
-  { value: "on", description: "Enable routing", reflects: "enabled" },
-  { value: "off", description: "Disable routing", reflects: "enabled" },
-  { value: "pin", description: "Lock current model", reflects: "pinned" },
-  { value: "unpin", description: "Resume routing", reflects: "pinned" },
-  { value: "reload", description: "Reload config after editing", menu: "common" },
+  // Reflected pairs first. The dashboard puts a reflected pair ahead of every
+  // other row, in the order these states are first mentioned here.
+  { value: "on", description: "Enable routing", reflects: { state: "enabled", sets: true, note: "already on" } },
+  { value: "off", description: "Disable routing", reflects: { state: "enabled", sets: false, note: "already off" } },
+  { value: "pin", description: "Lock current model", reflects: { state: "pinned", sets: true, note: "already pinned" } },
+  { value: "unpin", description: "Resume routing", reflects: { state: "pinned", sets: false, note: "already unpinned" } },
+  // Common commands, in menu order. The two prompt commands lead because both
+  // prefill the editor rather than run: keep them adjacent.
+  { value: "preview", description: "Preview routing for a prompt", argumentHint: "<prompt>", menu: "common" },
+  { value: "benchmark", description: "Classify a benchmark prompt", argumentHint: "<prompt>", menu: "common" },
   { value: "providers", description: "List available providers", menu: "common" },
   { value: "probe", description: "Probe working models", menu: "common" },
   { value: "init", description: "Probe models and generate config (pass -f to force re-probe)", aliases: ["init -f"], menu: "common" },
-  { value: "benchmark", description: "Classify a benchmark prompt", argumentHint: "<prompt>" },
+  { value: "classifier status", description: "Show classifier state", menu: "common" },
+  { value: "reload", description: "Reload config after editing", menu: "common" },
+  // Everything else, in declaration order.
   { value: "cache stats", description: "Show classification cache" },
   // Reachable from the dashboard now that the menu is derived from the
   // registry, and still unconfirmed: this writes the cache file immediately.
@@ -752,9 +764,7 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "classifier on", description: "Enable LLM classifier" },
   { value: "classifier off", description: "Disable LLM classifier" },
   { value: "classifier test", description: "Test selected classifier backend" },
-  { value: "classifier status", description: "Show classifier state", menu: "common" },
   { value: "debug", description: "Show config and routing state" },
-  { value: "preview", description: "Preview routing for a prompt", argumentHint: "<prompt>", menu: "common" },
 ] as const;
 
 export function getBifrostCommandCompletions(prefix: string) {
@@ -792,27 +802,15 @@ function requireCommand(value: string): CommandSpec {
   return spec;
 }
 
-type ReflectedState = NonNullable<CommandSpec["reflects"]>;
-
-// `reflects` names the bit of state a command mirrors but cannot say which way
-// that command pushes it, so the direction is stated once here, per value.
-// Keeping it out of CommandSpec is what lets the dashboard stay derived: the
-// table holds effects, not menu membership. A reflected value with no entry
-// here is treated as having no known effect, which costs it the leading row
-// and its annotation, never its visibility.
-const REFLECTED_EFFECTS: Record<string, { readonly sets: boolean; readonly note: string }> = {
-  on: { sets: true, note: "already on" },
-  off: { sets: false, note: "already off" },
-  pin: { sets: true, note: "already pinned" },
-  unpin: { sets: false, note: "already unpinned" },
-};
+type ReflectedState = NonNullable<CommandSpec["reflects"]>["state"];
 
 // The member of a pair whose effect matches the state as it stands would change
 // nothing, so it is annotated rather than hidden: hiding it meant the menu
-// silently reshuffled as state flipped.
+// silently reshuffled as state flipped. Everything read here comes off the
+// command's own registry entry, so a reflected command cannot be placed without
+// also saying which way it points and what it says while it is a no-op.
 function reflectedIsInert(spec: CommandSpec, state: Pick<BifrostState, ReflectedState>): boolean {
-  const effect = spec.reflects && REFLECTED_EFFECTS[spec.value];
-  return effect ? effect.sets === state[spec.reflects] : false;
+  return spec.reflects ? spec.reflects.sets === state[spec.reflects.state] : false;
 }
 
 // Every registered command, ordered for the state as it stands: the member of
@@ -821,31 +819,34 @@ function reflectedIsInert(spec: CommandSpec, state: Pick<BifrostState, Reflected
 // nothing here decides membership.
 function dashboardCommands(state: Pick<BifrostState, ReflectedState>): CommandSpec[] {
   const reflectedStates = BIFROST_COMMAND_OPTIONS
-    .map((spec) => spec.reflects)
+    .map((spec) => spec.reflects?.state)
     .filter((reflects): reflects is ReflectedState => Boolean(reflects));
   // Groups follow the order the registry first mentions them, so the pair order
   // is registry order too and needs no second list.
   const groupOf = (reflects: ReflectedState): number => reflectedStates.indexOf(reflects);
   const tierOf = (spec: CommandSpec): number => (spec.reflects ? 0 : spec.menu === "common" ? 1 : 2);
 
-  const rows = BIFROST_COMMAND_OPTIONS.map((spec) => ({
-    spec,
-    tier: tierOf(spec),
-    group: spec.reflects ? groupOf(spec.reflects) : 0,
-    inert: reflectedIsInert(spec, state),
-  }));
+  const rows = BIFROST_COMMAND_OPTIONS.map((spec) => {
+    const inert = reflectedIsInert(spec, state);
+    return {
+      spec,
+      tier: tierOf(spec),
+      group: spec.reflects ? groupOf(spec.reflects.state) : 0,
+      inert,
+      note: inert ? spec.reflects?.note : undefined,
+    };
+  });
   // Array sort is stable, so an equal key leaves the row in registry order.
   rows.sort((a, b) => a.tier - b.tier || a.group - b.group || Number(a.inert) - Number(b.inert));
 
-  return rows.map(({ spec, inert }) => {
+  return rows.map(({ spec, note }) => {
     // Resolve rather than reuse the mapped spec: requireCommand keeps the
     // checked lookup on the one path that feeds the picker, so a future
     // change that builds rows from anywhere but a registry read fails with a
     // named error instead of a TypeError inside the formatter.
     const resolved = requireCommand(spec.value);
-    if (!inert) return resolved;
     // A copy, so the registry keeps the bare description for autocomplete.
-    return { ...resolved, description: `${resolved.description} (${REFLECTED_EFFECTS[spec.value].note})` };
+    return note ? { ...resolved, description: `${resolved.description} (${note})` } : resolved;
   });
 }
 
