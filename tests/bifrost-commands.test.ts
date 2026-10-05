@@ -184,7 +184,7 @@ describe("bifrost command ui", () => {
     const select = calls.find((call) => call.kind === "select");
     assert(select, "dashboard should open");
     assert.match(String(select?.title ?? ""), /Bifrost · on · model none/);
-    assert.equal(select?.options?.length, 8);
+    assert.equal(select?.options?.length, BIFROST_COMMAND_OPTIONS.length);
     assert((select?.options ?? []).some((option) => option.includes("Disable routing")));
     assert.equal(state.enabled, false);
   });
@@ -763,40 +763,112 @@ describe("route dispatch", () => {
 });
 
 describe("dashboard menu", () => {
-  // The dashboard is a state-aware selection, not the whole registry: it shows
-  // the actionable member of the on/off and pin/unpin pairs. These pin that
-  // membership so a later edit cannot quietly change what a user sees.
+  // The dashboard is derived from BIFROST_COMMAND_OPTIONS, so it holds every
+  // registered command: a command added to the registry appears in /bifrost
+  // with no second edit. On top of that, ordering stays state-aware so the top
+  // row always changes something.
 
   function rowsOf(calls: Array<{ kind: string; options?: string[] }>): string[] {
     return calls.find((call) => call.kind === "select")?.options ?? [];
   }
 
-  it("offers 8 rows and the actionable member of each pair when routing is on", async () => {
+  async function rowsFor(overrides: { enabled?: boolean; pinned?: boolean } = {}): Promise<string[]> {
     const { ctx, calls } = makeCtx();
     const state = makeState();
-    state.enabled = true;
-    state.pinned = false;
+    state.enabled = overrides.enabled ?? true;
+    state.pinned = overrides.pinned ?? false;
     await createCommandRouter(state as never)("", ctx as never);
-    const rows = rowsOf(calls);
-    assert.equal(rows.length, 8);
-    assert.ok(rows.some((row) => row.includes("/bifrost off —")));
-    assert.ok(!rows.some((row) => row.includes("/bifrost on —")));
-    assert.ok(rows.some((row) => row.includes("/bifrost pin —")));
-    assert.ok(!rows.some((row) => row.includes("/bifrost unpin —")));
+    return rowsOf(calls);
+  }
+
+  function rowAt(rows: string[], value: string): number {
+    return rows.findIndex((row) => row.startsWith(`/bifrost ${value} `));
+  }
+
+  it("offers every registered command exactly once", async () => {
+    const rows = await rowsFor();
+    // Parsed rather than prefix-matched: "/bifrost classifier " also prefixes
+    // "classifier on" and friends.
+    const commandOf = (row: string): string => {
+      const match = /^\/bifrost (.+?)(?: <[^>]*>)? — /.exec(row);
+      assert.ok(match, `unparseable row: ${row}`);
+      return match[1];
+    };
+    const rendered = rows.map(commandOf);
+    const registered = BIFROST_COMMAND_OPTIONS.map((command) => command.value);
+    // Same multiset, so no command is hidden and none is repeated.
+    assert.equal(rendered.length, registered.length);
+    assert.deepEqual([...rendered].sort(), [...registered].sort());
   });
 
-  it("offers the other member of each pair when routing is off and pinned", async () => {
-    const { ctx, calls } = makeCtx();
-    const state = makeState();
-    state.enabled = false;
-    state.pinned = true;
-    await createCommandRouter(state as never)("", ctx as never);
-    const rows = rowsOf(calls);
-    assert.equal(rows.length, 8);
-    assert.ok(rows.some((row) => row.includes("/bifrost on —")));
-    assert.ok(!rows.some((row) => row.includes("/bifrost off —")));
-    assert.ok(rows.some((row) => row.includes("/bifrost unpin —")));
-    assert.ok(!rows.some((row) => row.includes("/bifrost pin —")));
+  it("shows a registry entry that declares neither menu nor reflects", async () => {
+    // The auto-add guarantee, stated as a test: menu and reflects order a
+    // command, they never hide one. Without this, the previous behaviour
+    // (hand-written row list) and this behaviour both pass every other test
+    // here.
+    const registry = BIFROST_COMMAND_OPTIONS as unknown as Array<{ value: string; description: string }>;
+    registry.push({ value: "probe entry", description: "Temporary probe" });
+    try {
+      const rows = await rowsFor();
+      assert.ok(rows.some((row) => row.includes("/bifrost probe entry — Temporary probe")));
+      assert.equal(rows.length, BIFROST_COMMAND_OPTIONS.length);
+    } finally {
+      // Load-bearing: BIFROST_COMMAND_OPTIONS is module-level shared state.
+      // Without this restore a failing assertion corrupts the registry for
+      // every test that runs afterwards.
+      registry.pop();
+    }
+  });
+
+  it("offers 18 rows", async () => {
+    assert.equal((await rowsFor()).length, 18);
+  });
+
+  it("keeps the top row actionable in every state combination", async () => {
+    for (const enabled of [true, false]) {
+      for (const pinned of [true, false]) {
+        const rows = await rowsFor({ enabled, pinned });
+        const expected = enabled ? "/bifrost off —" : "/bifrost on —";
+        assert.ok(rows[0]?.startsWith(expected), `enabled=${enabled} pinned=${pinned}: ${rows[0]}`);
+        assert.ok(!rows[0]?.includes("already"), `row 1 must not be annotated: ${rows[0]}`);
+      }
+    }
+  });
+
+  it("marks the already-satisfied member of each pair, leaving the actionable one bare", async () => {
+    const off = await rowsFor({ enabled: false, pinned: false });
+    assert.deepEqual(
+      off.filter((row) => row.startsWith("/bifrost on ") || row.startsWith("/bifrost off ")),
+      ["/bifrost on — Enable routing", "/bifrost off — Disable routing (already off)"],
+    );
+    assert.deepEqual(
+      off.filter((row) => row.startsWith("/bifrost pin ") || row.startsWith("/bifrost unpin ")),
+      ["/bifrost pin — Lock current model", "/bifrost unpin — Resume routing (already unpinned)"],
+    );
+
+    const on = await rowsFor({ enabled: true, pinned: true });
+    assert.deepEqual(
+      on.filter((row) => row.startsWith("/bifrost on ") || row.startsWith("/bifrost off ")),
+      ["/bifrost off — Disable routing", "/bifrost on — Enable routing (already on)"],
+    );
+    assert.deepEqual(
+      on.filter((row) => row.startsWith("/bifrost pin ") || row.startsWith("/bifrost unpin ")),
+      ["/bifrost unpin — Resume routing", "/bifrost pin — Lock current model (already pinned)"],
+    );
+  });
+
+  it("renders no two identical rows", async () => {
+    // pickBifrostCommand resolves the user's choice by rendered text, so a
+    // duplicated row would run whichever command matches first.
+    const rows = await rowsFor();
+    assert.equal(new Set(rows).size, rows.length);
+  });
+
+  it("orders reflected rows first, then common rows, then the rest", async () => {
+    const rows = await rowsFor({ enabled: true, pinned: false });
+    assert.ok(rowAt(rows, "on") < rowAt(rows, "pin"), "reflected groups follow registry order");
+    assert.ok(rowAt(rows, "unpin") < rowAt(rows, "reload"), "reflected rows precede common rows");
+    assert.ok(rowAt(rows, "reload") < rowAt(rows, "benchmark"), "common rows precede the tail");
   });
 
   it("includes preview so the menu keeps prefilling it", async () => {
@@ -809,15 +881,13 @@ describe("dashboard menu", () => {
     assert.ok(rows.some((row) => row.includes("/bifrost preview <prompt>")));
   });
 
-  it("names the missing value when the menu references a renamed command", async () => {
-    // requireCommand is only reachable for the value the current state asks
-    // for, so disable routing: the menu then requests "on", and renaming that
-    // registry entry must surface a named error. The previous non-null
-    // assertion failed here too, but later and unnamed, inside
-    // formatBifrostCommandChoice, as a TypeError on undefined.
-    const { ctx } = makeCtx();
+  it("cannot go stale when a command is renamed in the registry", async () => {
+    // The dashboard used to list command values by hand, so renaming one left
+    // the menu pointing at a value that no longer existed and the picker threw
+    // a TypeError. Deriving from the registry removes that class of drift:
+    // the rename shows up in the menu.
+    const { ctx, calls } = makeCtx();
     const state = makeState();
-    state.enabled = false;
     const original = BIFROST_COMMAND_OPTIONS[0];
     assert.equal(original.value, "on");
     (BIFROST_COMMAND_OPTIONS as unknown as Array<{ value: string; description: string }>)[0] = {
@@ -825,10 +895,10 @@ describe("dashboard menu", () => {
       value: "renamed",
     };
     try {
-      await assert.rejects(
-        createCommandRouter(state as never)("", ctx as never),
-        /Bifrost: dashboard references unknown command "on"/,
-      );
+      await createCommandRouter(state as never)("", ctx as never);
+      const rows = rowsOf(calls);
+      assert.ok(rows.some((row) => row.includes("/bifrost renamed —")));
+      assert.ok(!rows.some((row) => row.includes("/bifrost on —")));
     } finally {
       // Load-bearing: BIFROST_COMMAND_OPTIONS is module-level shared state.
       // Without this restore a failing assertion corrupts the registry for
