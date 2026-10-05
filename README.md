@@ -2,116 +2,64 @@
 
 ![Pi-Bifrost social card](docs/social-card.png)
 
-Pi-Bifrost is a **configuration-first model-routing extension for [Pi](https://pi.dev)**, not an LLM gateway or proxy. You define model pools and per-tier selection strategies. Before generation, Bifrost resolves a configured tier, filters unhealthy candidates, applies your strategy, and activates Pi's actual provider/model — or, with [Bifrost Auto](#bifrost-auto-virtual-model), dispatches it per request through Pi's virtual models. It applies your task-fit policy; it does not claim to discover a universally best model.
+**Route Pi turns through models you choose.** Pi-Bifrost is a model-routing extension for [Pi](https://pi.dev). You put models in named tiers and choose how each tier selects a model. Bifrost resolves a tier for each turn, skips models with open reliability circuits, and sends the turn to a configured model. No proxy, hidden model pool, or automatic prompt replay.
 
 ```text
-"quick commit the changes"  → explicit quick tier → configured cheapest candidate
-"debug this race condition" → adaptive frontier   → configured largest-context candidate
+You:   quick fix the flaky test
+       └─ explicit tier: quick
+          └─ your quick pool → healthy candidate → your strategy
+             └─ Pi runs provider/fast-model
 ```
 
-## Why Bifrost
+The model above is an example, not a shipped default. Your configuration supplies the actual provider and model IDs. A classifier can suggest a **tier**, but it cannot choose a model outside your pool.
 
-- **User-owned model pools** — add or remove Pi models directly in config.
-- **Per-tier strategies** — choose list order, cost, context window, probe-sorted speed, or explicit random selection.
-- **Native activation** — Pi uses the selected provider/model for the turn; no proxy. Bifrost Auto is opt-in and shows `auto → physical` in the footer.
-- **Persistent reliability** — repeated model failures survive restart and affect future routing.
-- **No automatic replay** — Bifrost never silently repeats prompts that may have edited files or called tools.
-- **Inspectable control** — preview a route, name a tier directly, pin an exact model, or disable routing.
-- **Optional semantic classifiers** — prompt, direct TypeSafe/Jev, and Pi-native classification judge tiers. They never select the provider model.
+## Start in Pi
 
-## Install
-
-Requires Pi `1.0.1` or newer and at least one configured, authenticated provider model visible in Pi.
-
-```bash
-pi install npm:pi-bifrost
-```
-
-Or from source:
+Requires Pi `1.0.1` or newer and at least one authenticated provider model available in Pi.
 
 ```bash
 pi install git:github.com/iamaamir/pi-bifrost
 ```
 
-Inside Pi:
+This repository install includes Bifrost Auto and Pi-native classification. Published npm 0.4.5 does not include them yet. Then, inside Pi:
 
 ```text
 /bifrost init
 ```
 
-After init writes configuration, run `/bifrost classifier` to choose a backend. The Pi UI offers a picker. If you use `init --write`, init prints the same next step.
+Init checks models available through Pi, proposes `quick`, `general`, and `frontier` pools, and writes `.pi/bifrost.json` after you confirm. It reuses recent probe results or sends small requests to available models. Those requests can consume provider credits or hit rate limits. [Review the init steps and probe limits](docs/guide/getting-started.md) before confirming.
 
-Initialization reuses probe results newer than one hour or probes every model available through Pi, then proposes tier pools and writes only after confirmation. Pass `-f` to force a fresh probe regardless of cache age. The primary probe transport uses `1+1=` with at most 5 output tokens; empty responses may trigger a minimal-session fallback. Provider usage or rate limits may apply. See [Install and initialize](docs/guide/getting-started.md) before running init.
+After init, run `/bifrost classifier` to choose how Bifrost judges tiers. Use `/bifrost classifier off` for rules and the default tier without a classifier call.
 
-## How routing works
+## One policy, two ways to run it
 
-```text
-prompt
-  → pick a tier
-  → configured model pool
-  → reliability filtering
-  → per-tier strategy
-  → Pi's active provider/model
-```
+**Physical selection is the default.** Bifrost selects Pi's active provider/model before generation. Pi shows the actual model for the turn. You can also select a physical model yourself to pin it for the session.
 
-Bifrost picks a tier from a tier name at the start of the message, a rule that names an exact model, the local classification cache, an optional classifier, another regex rule, or your configured default. A rule that names an exact `provider/id` skips tiers and binds one model.
+**Bifrost Auto is opt-in.** Select `bifrost/auto` in Pi's `/model` picker. Pi then dispatches the physical model for each request using the same tiers, reliability state, and selection strategies. The footer shows `bifrost/auto → provider/model`, and assistant messages record the physical model that answered. Tool continuations and retries stay on the model that started the turn. Auto requires Pi `1.0.1` or newer.
 
-| Decision | Owner |
-|----------|-------|
-| Models allowed in each tier | Your config |
-| Strategy used inside each tier | Your config |
-| Tier that fits the prompt | Override, cache, classifier, rule, or default |
-| Unhealthy candidates excluded | Bifrost reliability |
-| Model that generates the turn | Pi, after Bifrost activates it |
+Both modes use the same policy. Neither asks a model to follow routing instructions or replays a failed user prompt. [Read the routing controls](docs/guide/routing-controls.md).
 
-## Routing controls
-
-| What you do | What happens |
-|-------------|--------------|
-| Send a normal message with routing on and nothing pinned | Bifrost picks a configured model for that message |
-| Start a message with a tier name, for example `quick commit the changes` | Bifrost uses that tier for that message only |
-| Select a model in Pi, or run `/bifrost pin` | That exact model stays active for the rest of the session |
-| Run `/bifrost unpin` | Bifrost goes back to picking a model per message |
-| Run `/bifrost off` | Bifrost stops routing until you turn it on again |
-
-A prefix is the configured tier name itself:
+## How a route is chosen
 
 ```text
-quick commit the changes
-frontier debug this race condition
+prompt → tier → your model pool → reliability filter → your strategy → Pi model
 ```
 
-Bifrost removes the tier name before the model sees the prompt, then uses that tier's model pool, reliability filter, and strategy. Custom tier names must currently be lowercase alphabetic single-word config keys. Pinned sessions ignore tier names in messages; a prefix does not override `/bifrost pin`.
+A tier is a named group such as `quick`, `general`, or `frontier`. Bifrost finds one through a tier name at the start of the message, a rule, its local classification cache, an optional classifier, or your default tier. A rule can also name an exact `provider/id` instead of a tier.
 
-## Bifrost Auto (virtual model)
+The pool limits which models qualify. The strategy selects a healthy candidate by list order, price, context window, probe-sorted speed, or random choice. Repeated failures open a persistent circuit so later turns avoid that model until a controlled recovery trial. A failed turn is **never sent again automatically**.
 
-Requires Pi `1.0.1` or newer. Select `bifrost/auto` in Pi's `/model` picker and Bifrost routes **each request** through the same tier, cache, reliability, and strategy policy — but Pi dispatches the physical model at request time instead of Bifrost switching the active model at input time.
+Start a message with a configured tier name to choose it for one turn:
 
-- Pi's footer shows `bifrost/auto → provider/model`; every assistant message records the physical model that answered.
-- Tier prefixes work exactly as in adaptive mode and stay hidden from the model.
-- Footer pairs: `auto • <level>` is your reasoning preference for routing; the right pair is what actually runs. Bifrost clamps the dispatched level to the target's capabilities, so non-reasoning models run `off` regardless of the preference.
-- Tool continuations and retries stay on the model that started the turn. Bifrost never replays prompts and never switches models mid-retry.
-- Selecting `bifrost/auto` opts into routing; selecting any physical model pins it as before.
-- `/bifrost pin` or `/bifrost off` while Auto is selected leaves Auto and locks the last dispatched physical model.
-- If no pool resolves a model: a fresh session fails with an actionable explanation (empty pool → `run /bifrost init`); a session that already dispatched a physical model keeps the last one with a visible warning. Nothing silently reroutes elsewhere.
-- Selecting `bifrost/auto` with no pools configured offers to run `/bifrost init` once (TUI), disclosing probe usage first.
+```text
+frontier review this authorization flow
+```
 
-Physical selection stays the default: with no virtual model selected, Bifrost behaves exactly as described above.
+Bifrost removes `frontier` before the model receives the message. If you pin a model, Bifrost leaves the message unchanged. Tier names used this way must be single lowercase alphabetic words in your configuration.
 
-## When not to use adaptive routing
+## A small configuration
 
-Keep one exact model selected or run `/bifrost pin` when:
-
-- a long session repeatedly builds on the same context;
-- provider prompt-cache locality matters more than per-turn task fit;
-- you already know which exact model you want;
-- switching providers or models would disrupt latency, billing, or workflow expectations.
-
-Adaptive routing may improve policy fit, but it does not guarantee better coding results, lower cost, lower latency, or provider cache savings. Every provider/model pair has an independent cache history. Use explicit tier names for deliberate one-turn routing, or pin for continuity.
-
-## Minimal configuration
-
-In `.pi/bifrost.json`:
+Create `.pi/bifrost.json` in your project, or let `/bifrost init` propose one:
 
 ```json
 {
@@ -123,71 +71,51 @@ In `.pi/bifrost.json`:
     "frontier": ["provider/frontier-model"]
   },
   "categoryStrategies": {
-    "quick": "cheapest",
+    "quick": "first",
     "general": "first",
     "frontier": "largest_context"
   }
 }
 ```
 
-Tier arrays are eligibility boundaries. Strategies choose the exact healthy candidate after tier resolution. The built-in default uses `random` for `quick` and `first` for `general` and `frontier`, so `quick` can vary between messages until you set its strategy. `fastest` behaves as `first` over current list order, which init may sort using its one-time probe.
+Replace the example IDs with models configured in Pi. The built-in default has empty model pools, not maintainer-chosen providers. `init` proposes pools from your available models. [Configure tiers, rules, and strategies](docs/guide/configuration.md).
 
-Config precedence, later wins:
+## Stay in control
 
-1. extension default
-2. `~/.pi/agent/bifrost.json`
-3. project-root `bifrost.json`
-4. `.pi/bifrost.json`
+| In Pi | Result |
+| --- | --- |
+| `/bifrost preview [--json] <prompt>` | Inspect a route without generating or activating its model. Pass `--json` before the prompt for one machine-readable line. An enabled classifier can still receive the preview prompt. |
+| `quick <message>` | Use the configured `quick` tier for this message only. |
+| Select a physical model or run `/bifrost pin` | Keep that exact model for the session. |
+| `/bifrost unpin` | Resume routing each message. |
+| `/bifrost off` / `/bifrost on` | Stop or resume routing. |
+| `/bifrost classifier test` | Make a fresh tier-classification request and inspect its outcome. |
 
-## Documentation
+If you run `/bifrost pin` or `/bifrost off` while Auto is selected, Bifrost exits Auto. It uses the last dispatched physical model, or resolves your default tier if no model has dispatched yet. [See all commands](docs/guide/commands.md).
 
-Detailed reference now lives in versioned guides committed with code:
+## Classification is optional
 
-- [Guide index](docs/guide/index.md)
-- [Install and initialize](docs/guide/getting-started.md)
-- [Adaptive, explicit-tier, and pinned controls](docs/guide/routing-controls.md)
-- [Tier pools, strategies, rules, and direct bindings](docs/guide/configuration.md)
-- [Provider prompt caching across A → B → A and N model switches](docs/guide/prompt-caching.md)
-- [Reliability and Bifrost's local classification cache](docs/guide/reliability-and-cache.md)
-- [Prompt, TypeSafe/Jev, and Pi-native classifiers](docs/guide/classifiers.md)
-- [Troubleshooting setup and routing](docs/guide/troubleshooting.md)
-- [Command reference](docs/guide/commands.md)
-- [Configuration examples](examples/README.md)
+A classifier only judges which configured tier fits a prompt. Bifrost still owns candidate eligibility, reliability filtering, and model selection.
 
-## Common commands
+- **Prompt:** Ask a configured Pi chat model for a tier.
+- **TypeSafe/Jev:** Call the direct TypeSafe classifier. Requires a TypeSafe credential.
+- **Pi-native:** Use Pi's `classify()` API and its classifier catalog. This option appears only when Pi supports classification.
 
-| Command | What it does |
-|---------|--------------|
-| `/bifrost` | Open dashboard and quick actions |
-| `/bifrost init` | Probe models and propose configuration; pass `-f` to force a fresh probe |
-| `/bifrost preview <prompt>` | Show the model a prompt would use, without generating; pass `--json` before the prompt for one machine-readable line; a tier name in the prompt is not applied |
-| `/bifrost on` / `off` | Enable or disable routing policy |
-| `/bifrost pin` / `unpin` | Hard-lock current model or resume routing |
-| `/bifrost reload` | Reload merged configuration |
+Set `classifier.backend` to keep a fixed choice. If you leave it unset, Bifrost detects Pi-managed TypeSafe credentials first, then `TYPESAFE_API_KEY`; otherwise it uses the prompt backend. The first routed request reports the detected backend and reason. Init can propose an enabled prompt classifier, so review the proposal before confirming. Disable classification for rules/default-only routing.
 
-See the [full command guide](docs/guide/commands.md).
+Optional classifiers receive the current prompt and tier criteria, not your provider model pool. Preview can make a classifier request. Confidence is not proof that a tier is correct. [Compare backends, credentials, privacy, and fallback](docs/guide/classifiers.md).
 
-## Reliability and cache behavior
+## When to keep one model
 
-Bifrost records probe, activation, and settled stream failures in `.pi/bifrost-reliability.json`. Repeated failures open a circuit, so future turns skip unhealthy candidates until cooldown and one controlled recovery trial. The failed user prompt is never replayed automatically.
+Pin an exact model when your session depends on one provider's context or prompt cache, or when you already know which model you want. Switching models can fragment provider prompt-cache locality. Returning to a model can reuse a valid prefix, but new conversation content may not be cached. Bifrost does not promise better code, lower cost, lower latency, or cache savings. [Read the model-switching cache guide](docs/guide/prompt-caching.md).
 
-Bifrost's local classification cache stores normalized prompt terms and selected tiers, not assistant answers. Provider prompt caches are separate. Treat every provider/model pair as an independent cache history: switching may fragment locality, and returning to a model may reuse its longest still-valid prefix while newer conversation content remains an uncached tail. `/bifrost pin` keeps one model stable when continuity matters more than per-turn routing. See [Provider prompt caching and model switching](docs/guide/prompt-caching.md).
+Bifrost stores normalized prompt terms and selected tiers in its local classification cache, not model answers. Treat those terms as potentially sensitive. Reliability state persists locally across restarts. Circuits help avoid observed failures on **future** turns; they do not enforce provider quota or replay the failed turn. [Read about reliability and the local cache](docs/guide/reliability-and-cache.md).
 
-Reliability circuits guard observed model health, not authoritative provider quota. Remove quota-sensitive models from broad adaptive tiers or isolate them behind deliberate policy.
+## Guides
 
-## Optional classifiers
+[Getting started](docs/guide/getting-started.md) · [Routing controls](docs/guide/routing-controls.md) · [Configuration](docs/guide/configuration.md) · [Classifier backends](docs/guide/classifiers.md) · [Commands](docs/guide/commands.md) · [Troubleshooting](docs/guide/troubleshooting.md) · [Examples](examples/README.md)
 
-Set `classifier.backend` to `prompt`, `typesafe`, or `pi-native` to keep a fixed choice. If you omit it, Bifrost detects Pi-managed TypeSafe credentials first, then `TYPESAFE_API_KEY`; otherwise it uses prompt classification. The first routed request prints the detected backend and reason. Run `/bifrost classifier` to change it.
-
-Pi-native classification uses Pi's `classify()` API and a classifier model from Pi's catalog. Run `/login` in Pi or set `TYPESAFE_API_KEY` before using it. You can set `classifier.piNative.model` to `typesafe/jev-latest`, or omit it to use the first available TypeSafe classifier model. Direct TypeSafe uses Bifrost's own transport. Both backends return one configured tier, probabilities, and confidence. Bifrost still owns model pools, reliability filtering, fallback, selection strategy, and Pi model activation.
-
-Confidence is a routing signal, not proof of correctness. Exploratory evaluation found consistent judgments for clear prompts, but also high-confidence misses when mechanically small tasks had serious consequences. Keep fallback enabled and validate tier criteria against your workload.
-
-See [Classifier backends](docs/guide/classifiers.md).
-
-## Related project
-
-[Bifrost Patterns](https://github.com/iamaamir/bifrost-pattern) explores multi-agent and workflow experiments on top of Bifrost. It is optional and outside Bifrost's core router.
+[Bifrost Patterns](https://github.com/iamaamir/bifrost-pattern) explores optional multi-agent workflows outside Bifrost's router.
 
 ## Development
 
@@ -198,8 +126,6 @@ npm run test:integration
 npm run test:ui
 npm run test:ui:reliability
 ```
-
-UI smoke output lands in `screenshots/ui-smoke/`.
 
 ## License
 
