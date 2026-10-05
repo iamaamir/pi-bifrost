@@ -4,7 +4,7 @@
 
 ## What Bifrost does
 
-Pi-Bifrost chooses from models already available in [Pi](https://pi.dev). For each message it resolves a configured capability tier, filters unhealthy candidates, applies your tier strategy, and activates Pi's actual provider/model before generation.
+Pi-Bifrost chooses from models already available in [Pi](https://pi.dev). For each routed message it resolves a configured capability tier, filters unhealthy candidates, and applies your tier strategy. It activates Pi's actual provider/model before generation by default. Select `bifrost/auto` for opt-in per-request dispatch through Pi's virtual model API.
 
 Bifrost does not provide model credentials or a model proxy.
 
@@ -27,16 +27,10 @@ Open Pi and confirm you can select and use at least one provider model before di
 
 ## Install
 
-From npm:
+Install Bifrost from npm:
 
 ```bash
 pi install npm:pi-bifrost
-```
-
-Or directly from GitHub:
-
-```bash
-pi install git:github.com/iamaamir/pi-bifrost
 ```
 
 Restart Pi if the extension is not loaded in the current session.

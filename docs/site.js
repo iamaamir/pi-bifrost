@@ -8,6 +8,7 @@ function setupGatewayAnimation(canvas) {
   const routes = [];
   let animationFrame;
   let isRunning = false;
+  let isVisible = false;
   let width = 0;
   let height = 0;
   let pixelRatio = 1;
@@ -30,8 +31,8 @@ function setupGatewayAnimation(canvas) {
   }
 
   function resize() {
-    width = window.innerWidth;
-    height = window.innerHeight;
+    width = canvas.clientWidth || window.innerWidth;
+    height = canvas.clientHeight || window.innerHeight;
     pixelRatio = Math.min(window.devicePixelRatio || 1, 1.5);
     canvas.width = Math.floor(width * pixelRatio);
     canvas.height = Math.floor(height * pixelRatio);
@@ -225,7 +226,7 @@ function setupGatewayAnimation(canvas) {
   }
 
   function start() {
-    if (isRunning || document.hidden) return;
+    if (isRunning || document.hidden || !isVisible) return;
     if (reducedMotionQuery.matches) {
       draw(0);
       return;
@@ -233,6 +234,11 @@ function setupGatewayAnimation(canvas) {
     isRunning = true;
     const animate = (timestamp) => {
       if (!isRunning) return;
+      if (reducedMotionQuery.matches) {
+        stop();
+        draw(0);
+        return;
+      }
       draw(timestamp);
       animationFrame = window.requestAnimationFrame(animate);
     };
@@ -241,6 +247,12 @@ function setupGatewayAnimation(canvas) {
 
   resize();
   window.addEventListener("resize", resize, { passive: true });
+  new ResizeObserver(resize).observe(canvas);
+  new IntersectionObserver(([entry]) => {
+    isVisible = entry.isIntersecting;
+    if (isVisible) start();
+    else stop();
+  }, { threshold: 0.05 }).observe(canvas);
   window.addEventListener("pointermove", (event) => {
     if (reducedMotionQuery.matches || event.pointerType !== "mouse") return;
     pointerTargetX = (event.clientX / width - 0.5) * width * 0.018;
@@ -587,43 +599,40 @@ function setupJevAnimation(canvas) {
 
 if (jevCanvas) setupJevAnimation(jevCanvas);
 
-const bridgeCanvas = document.querySelector("#bridge");
+const autoCanvas = document.querySelector("#auto-canvas");
 
-function setupBridgeAnimation(canvas) {
+function setupAutoAnimation(canvas) {
   const context = canvas.getContext("2d");
-  const caption = document.querySelector("#bridge-caption");
-  const stageLabel = document.querySelector("#bridge-stage-label");
-  const stageDetail = document.querySelector("#bridge-stage-detail");
-  const toggle = document.querySelector("#bridge-toggle");
-  const toggleLabel = document.querySelector("#bridge-toggle-label");
+  const stageLabel = document.querySelector("#auto-stage-label");
+  const stageDetail = document.querySelector("#auto-stage-detail");
+  const toggle = document.querySelector("#auto-toggle");
+  const toggleLabel = document.querySelector("#auto-toggle-label");
 
-  if (!context || !caption || !stageLabel || !stageDetail || !toggle || !toggleLabel) return;
+  if (!context || !stageLabel || !stageDetail || !toggle || !toggleLabel) return;
 
   const stages = [
     {
-      label: "01 · Request reaches Bifrost",
-      detail: "Bifrost resolves a configured tier, then checks candidate health before Pi generates a response.",
+      label: "01 · Select bifrost/auto",
+      detail: "Auto starts only when you select it in Pi's model picker.",
     },
     {
-      label: "02 · Open circuit blocks failed model",
-      detail: "Repeated failures persist across restarts. The unavailable path stays visible, but receives no request.",
+      label: "02 · Resolve the user turn",
+      detail: "Bifrost resolves a tier and filters your configured pool before selection.",
     },
     {
-      label: "03 · Healthy candidate becomes active",
-      detail: "Bifrost applies the tier strategy, activates Pi's model, and sends the original prompt once.",
+      label: "03 · Dispatch a physical model",
+      detail: "Pi runs the chosen provider/model and records which physical model answered.",
     },
     {
-      label: "04 · Recovery uses one controlled trial",
-      detail: "After cooldown, one new matching request tests the half-open model. Success closes the circuit; failure extends cooldown.",
+      label: "04 · Continue on the same model",
+      detail: "Tool continuations and retries keep the turn's model. Bifrost never replays a failed prompt.",
     },
   ];
   const colors = {
     blue: "#75b5dc",
     mint: "#85c8aa",
-    rose: "#c77b80",
-    amber: "#d6ad72",
     line: "#31404b",
-    faint: "#7b8a94",
+    faint: "#a6b0b8",
     white: "#e4e8ea",
   };
   const loopDuration = 16000;
@@ -633,9 +642,8 @@ function setupBridgeAnimation(canvas) {
   let pixelRatio = 1;
   let elapsed = 0;
   let lastTimestamp = 0;
-  let currentStage = 0;
+  let currentStage = -1;
   let animationFrame;
-  let transitionTimer;
   let isRunning = false;
   let isVisible = true;
   let pausedByUser = false;
@@ -685,78 +693,35 @@ function setupBridgeAnimation(canvas) {
     context.restore();
   }
 
-  function drawLabel(text, x, y, color) {
-    context.fillStyle = color;
-    context.font = "11px SFMono-Regular, Consolas, monospace";
-    context.textAlign = "center";
-    context.fillText(text, x, y);
-  }
-
-  function drawEndpoint(x, y, state, label) {
-    const color =
-      state === "failed"
-        ? colors.rose
-        : state === "selected"
-          ? colors.mint
-          : state === "trial"
-            ? colors.amber
-            : colors.faint;
-    const alpha = state === "idle" ? 0.38 : 1;
-    context.save();
-    context.globalAlpha = alpha;
+  function drawNode(point, label, active, compact) {
+    const color = active ? colors.mint : colors.blue;
     context.strokeStyle = color;
-    context.lineWidth = 1.5;
+    context.globalAlpha = active ? 1 : 0.55;
+    context.lineWidth = active ? 1.8 : 1;
     context.beginPath();
-    context.arc(x, y, 16, 0, Math.PI * 2);
+    context.arc(...point, 13, 0, Math.PI * 2);
     context.stroke();
-    context.beginPath();
-    context.arc(x, y, 9, 0, Math.PI * 2);
-    context.stroke();
-    if (state === "failed") {
-      context.beginPath();
-      context.moveTo(x - 7, y - 7);
-      context.lineTo(x + 7, y + 7);
-      context.moveTo(x + 7, y - 7);
-      context.lineTo(x - 7, y + 7);
-      context.stroke();
-    }
-    if (state === "selected") drawOrb(x, y, 4, color, 15);
-    if (state === "trial") {
-      context.beginPath();
-      context.moveTo(x, y - 7);
-      context.lineTo(x + 7, y);
-      context.lineTo(x, y + 7);
-      context.lineTo(x - 7, y);
-      context.closePath();
-      context.stroke();
-    }
-    context.restore();
-    drawLabel(label, x, y + 39, color);
+    if (active) drawOrb(...point, 3, colors.mint, 10);
+    context.globalAlpha = 1;
+    context.fillStyle = active ? colors.white : colors.faint;
+    context.font = "11px SFMono-Regular, Consolas, monospace";
+    context.textAlign = compact ? "left" : "center";
+    context.fillText(label, point[0] + (compact ? 25 : 0), point[1] + (compact ? 4 : 38));
   }
 
-  function drawStarfield() {
-    for (let index = 0; index < 24; index += 1) {
-      drawOrb((index * 89) % width, (index * 47) % height, 1, colors.blue, 0, 0.13);
+  function pathBetween(start, end, compact) {
+    if (compact) {
+      return [start, [start[0] - 12, start[1] + 24], [end[0] - 12, end[1] - 24], end];
     }
+    const distance = end[0] - start[0];
+    return [start, [start[0] + distance * 0.4, start[1] - 18], [end[0] - distance * 0.4, end[1] + 18], end];
   }
 
-  function applyStage(stage, immediate = false) {
-    if (stage === currentStage && !immediate) return;
-    window.clearTimeout(transitionTimer);
-    const update = () => {
-      currentStage = stage;
-      stageLabel.textContent = stages[stage].label;
-      stageDetail.textContent = stages[stage].detail;
-      caption.classList.remove("bridge-s0", "bridge-s1", "bridge-s2", "bridge-s3");
-      caption.classList.add(`bridge-s${stage}`);
-      caption.classList.remove("is-transitioning");
-    };
-    if (immediate || reducedMotionQuery.matches) {
-      update();
-      return;
-    }
-    caption.classList.add("is-transitioning");
-    transitionTimer = window.setTimeout(update, 180);
+  function applyStage(stage) {
+    if (stage === currentStage) return;
+    currentStage = stage;
+    stageLabel.textContent = stages[stage].label;
+    stageDetail.textContent = stages[stage].detail;
   }
 
   function drawScene() {
@@ -764,96 +729,39 @@ function setupBridgeAnimation(canvas) {
     context.clearRect(0, 0, width, height);
     const phase = elapsed % loopDuration;
     const stage = Math.min(stages.length - 1, Math.floor(phase / stageDuration));
-    const stageProgress = (phase - stage * stageDuration) / stageDuration;
-    const fadeIn = Math.min(1, stageProgress / 0.18);
-    const fadeOut = Math.min(1, (1 - stageProgress) / 0.18);
-    const travelerAlpha = Math.min(fadeIn, fadeOut);
-    const travelProgress = Math.min(1, stageProgress / 0.58);
-    const compact = width < 420;
-    const points = {
-      start: [width * (compact ? 0.17 : 0.1), height * 0.56],
-      hub: [width * (compact ? 0.4 : 0.39), height * 0.56],
-      failed: [width * (compact ? 0.78 : 0.84), height * 0.18],
-      selected: [width * (compact ? 0.78 : 0.84), height * 0.58],
-    };
-    const paths = {
-      incoming: [
-        points.start,
-        [width * 0.18, height * 0.56],
-        [width * 0.3, height * 0.56],
-        points.hub,
-      ],
-      failed: [
-        points.hub,
-        [width * 0.5, height * 0.44],
-        [width * 0.64, height * 0.1],
-        points.failed,
-      ],
-      selected: [
-        points.hub,
-        [width * 0.55, height * 0.66],
-        [width * 0.66, height * 0.76],
-        points.selected,
-      ],
-    };
+    const progress = (phase - stage * stageDuration) / stageDuration;
+    const compact = width < 520;
+    const points = compact
+      ? [0.14, 0.38, 0.62, 0.86].map((y) => [width * 0.16, height * y])
+      : [0.11, 0.37, 0.65, 0.89].map((x) => [width * x, height * 0.45]);
+    const paths = [0, 1, 2].map((index) => pathBetween(points[index], points[index + 1], compact));
+    const continuation = [
+      points[3],
+      compact ? [width * 0.72, points[3][1]] : [width * 0.9, height * 0.1],
+      compact ? [width * 0.72, points[2][1]] : [width * 0.62, height * 0.1],
+      points[2],
+    ];
 
     applyStage(stage);
-    drawStarfield();
-    drawCurve(paths.incoming, colors.line, 8, 0.55);
-    drawCurve(
-      paths.failed,
-      stage === 3 && stageProgress < 0.62 ? colors.amber : colors.rose,
-      1.6,
-      stage === 3 && stageProgress < 0.62 ? 0.85 : 0.45,
-      stage === 3 && stageProgress < 0.62 ? [4, 6] : [],
-    );
-    drawCurve(paths.selected, colors.blue, 8, 0.12);
-    drawCurve(paths.selected, colors.mint, 1.6, 0.32);
-    drawEndpoint(
-      ...points.failed,
-      stage === 3 && stageProgress < 0.62 ? "trial" : "failed",
-      stage === 3 && stageProgress < 0.62 ? "half-open trial" : "failed model",
-    );
-    drawEndpoint(...points.selected, stage >= 2 ? "selected" : "idle", "selected model");
-    drawLabel("new request", points.start[0], points.start[1] + 34, colors.blue);
-    drawLabel("Bifrost", points.hub[0], points.hub[1] - 19, colors.blue);
-    drawOrb(...points.start, 7, colors.blue, 20);
-    drawOrb(...points.hub, 4, colors.blue, 12, stage > 0 ? 1 : 0.28);
+    paths.forEach((path, index) => {
+      drawCurve(path, colors.line, 6, 0.55);
+      drawCurve(path, index < stage ? colors.mint : colors.blue, 1.5, index < stage ? 0.8 : 0.35);
+    });
+    drawCurve(continuation, colors.blue, 1.2, stage === 3 ? 0.8 : 0.2, [4, 7]);
+    const labels = ["bifrost/auto", "tier + pool", "provider/model", "Pi turn"];
+    const lastActive = stage === 0 ? 0 : stage === 1 ? 1 : stage === 2 && progress < 0.5 ? 2 : 3;
+    points.forEach((point, index) => {
+      drawNode(point, labels[index], index <= lastActive, compact);
+    });
 
-    if (stage === 0) {
-      const traveler = pointOnCurve(paths.incoming, ease(travelProgress));
-      drawCurve(paths.incoming, colors.blue, 2.2, 0.9);
-      drawOrb(...traveler, 5, colors.white, 18, travelerAlpha);
-    } else if (stage === 1) {
-      const pulse = 0.5 + 0.35 * Math.sin(stageProgress * Math.PI * 3);
-      drawCurve(paths.incoming, colors.blue, 2.2, 0.9);
-      drawCurve(paths.failed, colors.rose, 1.8 + pulse * 1.2, pulse * 0.8 + 0.2);
-      drawOrb(...points.hub, 5, colors.white, 18);
-      drawOrb(
-        ...points.failed,
-        6,
-        colors.rose,
-        8,
-        0.4 + 0.4 * Math.sin(stageProgress * Math.PI * 2.5 - 0.5),
-      );
-    } else if (stage === 2) {
-      const traveler = pointOnCurve(paths.selected, ease(travelProgress));
-      drawCurve(paths.incoming, colors.blue, 2.2, 0.9);
-      drawCurve(paths.selected, colors.blue, 10, 0.24);
-      drawCurve(paths.selected, colors.mint, 2.3, 0.95);
-      drawOrb(...traveler, 5, colors.white, 19, travelerAlpha);
-    } else {
-      const arrivalEnd = 0.2;
-      const usesIncomingPath = stageProgress < arrivalEnd;
-      const progress = usesIncomingPath
-        ? stageProgress / arrivalEnd
-        : Math.min(1, (stageProgress - arrivalEnd) / (1 - arrivalEnd) / 0.5);
-      const path = usesIncomingPath ? paths.incoming : paths.failed;
-      const traveler = pointOnCurve(path, ease(progress));
-      drawCurve(paths.incoming, colors.blue, usesIncomingPath ? 2.2 : 1.2, usesIncomingPath ? 0.7 : 0.38);
-      drawCurve(paths.selected, colors.mint, 1.6, 0.35);
-      drawCurve(paths.failed, colors.amber, 1.5, 0.85, [4, 6]);
-      drawOrb(...traveler, 5, colors.amber, 18, travelerAlpha);
+    if (stage > 0) {
+      const segment = stage === 1 ? paths[0] : stage === 2
+        ? (progress < 0.5 ? paths[1] : paths[2])
+        : continuation;
+      const travel = stage === 2 ? (progress * 2) % 1 : progress;
+      const traveler = pointOnCurve(segment, ease(Math.min(1, travel)));
+      const fade = Math.min(1, progress * 8, (1 - progress) * 8);
+      drawOrb(...traveler, 4, colors.white, 14, fade);
     }
   }
 
@@ -894,6 +802,10 @@ function setupBridgeAnimation(canvas) {
     isRunning = true;
     const animate = (timestamp) => {
       if (!isRunning) return;
+      if (reducedMotionQuery.matches) {
+        syncAnimation();
+        return;
+      }
       if (lastTimestamp) elapsed += timestamp - lastTimestamp;
       lastTimestamp = timestamp;
       drawScene();
@@ -906,7 +818,7 @@ function setupBridgeAnimation(canvas) {
     stop();
     if (reducedMotionQuery.matches) {
       elapsed = loopDuration * 0.62;
-      applyStage(2, true);
+      applyStage(2);
       drawScene();
       return;
     }
@@ -919,7 +831,7 @@ function setupBridgeAnimation(canvas) {
     toggleLabel.textContent = pausedByUser ? "Play" : "Pause";
     toggle.setAttribute(
       "aria-label",
-      `${pausedByUser ? "Play" : "Pause"} reliability animation`,
+      `${pausedByUser ? "Play" : "Pause"} Auto animation`,
     );
     toggle.dataset.paused = String(pausedByUser);
     syncAnimation();
@@ -940,11 +852,11 @@ function setupBridgeAnimation(canvas) {
   document.addEventListener("visibilitychange", syncAnimation);
   reducedMotionQuery.addEventListener("change", syncAnimation);
   resize();
-  applyStage(0, true);
+  applyStage(0);
   syncAnimation();
 }
 
-if (bridgeCanvas) setupBridgeAnimation(bridgeCanvas);
+if (autoCanvas) setupAutoAnimation(autoCanvas);
 
 const copyStatus = document.querySelector("#copy-status");
 const copyButtons = document.querySelectorAll(".copy-button");

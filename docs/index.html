@@ -6,14 +6,14 @@
     <title>Pi-Bifrost | Model routing for Pi</title>
     <meta
       name="description"
-      content="Define model pools and per-tier strategies, then let Pi-Bifrost apply your routing policy before each Pi coding-agent turn."
+      content="Stop switching Pi models by hand. Bifrost selects from your configured models, skips open circuits on later turns, and offers opt-in Pi-native Auto dispatch."
     >
     <meta name="robots" content="index, follow">
     <meta name="theme-color" content="#111a23">
     <meta property="og:title" content="Pi-Bifrost | Model routing for Pi">
     <meta
       property="og:description"
-      content="You define model policy. Pi-Bifrost resolves the tier, filters unhealthy candidates, and activates Pi's actual model before generation."
+      content="Choose models for quick and demanding work. Bifrost shows which model Pi runs, with persistent failure circuits, classifier choice, and opt-in Auto."
     >
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://iamaamir.github.io/pi-bifrost/">
@@ -49,12 +49,6 @@
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
-    <canvas
-      class="gateway-canvas"
-      id="gateway-canvas"
-      aria-hidden="true"
-    ></canvas>
-
     <header class="site-header">
       <nav class="wrap nav" aria-label="Primary">
         <a class="wordmark" href="#top">Pi-Bifrost</a>
@@ -69,96 +63,154 @@
     </header>
 
     <main id="main" tabindex="-1">
-      <section class="hero wrap" id="top" aria-labelledby="hero-title">
-        <p class="eyebrow">Native model routing for Pi</p>
-        <h1 id="hero-title">You set model policy. <br> Bifrost applies it before each turn.</h1>
-        <p class="lede">
-          Group models into capability tiers, choose how each tier selects a
-          candidate, and let Bifrost activate Pi's actual provider/model before
-          generation. Task-fit policy, not a claim of one universally best model.
-          No proxy. No hidden replay. No opaque model pool.
-        </p>
-        <div class="route-preview">
-          <div class="route-example">
-            <code>quick commit the changes</code>
-            <span aria-hidden="true">→</span>
-            <strong>explicit quick · configured cheapest</strong>
-          </div>
-          <div class="route-example">
-            <code>debug this race condition</code>
-            <span aria-hidden="true">→</span>
-            <strong>adaptive frontier · configured largest context</strong>
-          </div>
-        </div>
-        <div class="hero-actions">
-          <a href="#install">Install in Pi</a>
-          <a href="#how">See routing flow</a>
-          <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/index.md">Read documentation</a>
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <canvas class="gateway-canvas" id="gateway-canvas" aria-hidden="true"></canvas>
+        <div class="wrap">
+          <p class="eyebrow">Model routing for Pi</p>
+          <h1 id="hero-title">Stop switching models by hand.</h1>
+          <p class="lede">Choose which of your Pi models can handle quick work and demanding work. Bifrost picks from your list, then Pi runs that model.</p>
+          <div class="hero-actions"><a class="primary-cta" href="#install">Install Bifrost</a><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/index.md">Read the docs</a></div>
         </div>
       </section>
 
-      <section class="section wrap" id="how" aria-labelledby="how-title">
-        <div class="section-heading">
-          <h2 id="how-title">One turn. Four clear decisions.</h2>
-          <p>
-            Bifrost separates the tier choice from exact-model selection. The
-            classifier never receives authority to ignore your configured pool
-            or strategy.
-          </p>
+      <div class="story-shell" id="how">
+        <div class="wrap story-layout">
+          <div class="demo-rail">
+            <div class="demo-terminal" role="group" aria-label="Pi-style terminal walkthrough">
+              <div class="demo-title"><span>Pi / Bifrost</span><span class="demo-signal" aria-hidden="true"></span></div>
+              <div class="demo-screen" id="demo-screen">
+                <p class="demo-greeting">Pi · Bifrost loaded</p>
+                <div class="demo-output" id="demo-output" aria-live="off">
+                  <p class="command">/model</p>
+                  <p class="good">selected: bifrost/auto</p>
+                  <p class="command">quick commit these changes</p>
+                  <p class="accent">Bifrost auto: quick → example/fast-model</p>
+                  <p class="good">Pi runs example/fast-model</p>
+                  <p class="muted">tool continuation → same physical model</p>
+                </div>
+              </div>
+              <div class="demo-input">
+                <div class="demo-command-picker" id="demo-command-picker" role="group" aria-label="Bifrost demo commands" hidden>
+                  <label for="demo-command-search">Bifrost commands</label>
+                  <input id="demo-command-search" type="search" placeholder="Filter commands" autocomplete="off" aria-describedby="demo-command-hint">
+                  <ul id="demo-command-list" role="list"></ul>
+                  <p class="demo-command-empty" hidden>No matching commands.</p>
+                  <p class="demo-command-hint" id="demo-command-hint">↑ ↓ select · Enter play · Esc close</p>
+                </div>
+                <button class="demo-prompt" id="demo-prompt" type="button" aria-label="Open Bifrost demo commands" aria-expanded="false" aria-controls="demo-command-picker">
+                  <span aria-hidden="true">›</span><span id="demo-typed" aria-hidden="true"></span><span class="demo-cursor" aria-hidden="true"></span>
+                </button>
+                <span class="demo-prompt-fallback" aria-hidden="true">› <span class="demo-cursor"></span></span>
+              </div>
+              <div class="demo-footer"><span>⎇ <strong id="demo-mode">Auto selected</strong></span><span id="demo-model">bifrost/auto</span></div>
+              <div class="demo-controls" role="group" aria-label="Terminal demo controls">
+                <span class="demo-count" id="demo-count" aria-hidden="true">01 / 11</span>
+                <div class="demo-switch" role="group" aria-label="Featured scenes">
+                  <button type="button" data-demo-button="auto" aria-pressed="true">Auto</button>
+                  <button type="button" data-demo-button="circuit" aria-pressed="false">Circuit</button>
+                  <button type="button" data-demo-button="classifier" aria-pressed="false">Classifier</button>
+                </div>
+                <div class="demo-actions">
+                  <button type="button" id="demo-pause" aria-label="Pause terminal replay">Pause</button>
+                  <button type="button" id="demo-replay" aria-label="Replay terminal scenario">Replay</button>
+                </div>
+              </div>
+            </div>
+            <p class="demo-note">Illustrative model IDs and output. No provider requests.</p>
+            <span class="sr-only" id="demo-announcement" aria-live="polite"></span>
+          </div>
+          <div class="story-chapters">
+            <section id="auto" data-demo-scene="auto" aria-labelledby="auto-title">
+              <p class="eyebrow">01 / Pi-native virtual model</p>
+              <h2 id="auto-title">Auto routes inside Pi, not through a proxy.</h2>
+              <p>Run <code>/model</code> in Pi and select <code>bifrost/auto</code>. For each new user turn, Bifrost chooses from your configured models. Pi dispatches the physical model and records which model answered.</p>
+              <p>Tool continuations stay with that physical model. Selecting Auto is deliberate; normal routing instead sets Pi's active physical model before generation.</p>
+              <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/routing-controls.md#bifrost-auto-virtual-model">How Auto works in Pi</a></p>
+            </section>
+            <section id="circuit" data-demo-scene="circuit" aria-labelledby="circuit-title">
+              <p class="eyebrow">02 / Persistent failure circuit</p>
+              <h2 id="circuit-title">Failed model? Skip it on the next turn.</h2>
+              <p>After repeated failures within your configured window, Bifrost opens that model's circuit. It excludes the model from new routing decisions and can choose another healthy model from your list.</p>
+              <p>The circuit survives a restart. After cooldown, one controlled trial checks recovery. Set thresholds under <code>reliability</code> in <code>.pi/bifrost.json</code>. Bifrost never replays the failed user prompt.</p>
+              <p class="story-fact">This scene shows the third failure with the default threshold, then a separate new user turn. <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/reliability-and-cache.md#reliability-circuits">See reliability rules</a>.</p>
+            </section>
+            <section id="classifier" data-demo-scene="classifier" aria-labelledby="classifier-title">
+              <p class="eyebrow">03 / Classifier choice</p>
+              <h2 id="classifier-title">Choose who decides the group.</h2>
+              <p>Run <code>/bifrost classifier</code> to choose a Pi chat model, TypeSafe/Jev, or Pi's native classifier API. Pi-native appears only on hosts that support classification. Run <code>/bifrost classifier off</code> to use rules and the default group without a classifier.</p>
+              <p>A classifier chooses a group such as quick or frontier. It does not choose your provider model. Your pools, reliability circuit, and selection strategy make that decision.</p>
+              <p class="story-fact">An omitted backend can be detected from credentials; an explicit backend overrides detection. Classifier requests can incur usage. <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/classifiers.md">Compare backends</a>.</p>
+            </section>
+            <div class="story-more" id="more">
+              <p class="eyebrow">More of Bifrost</p>
+              <h2>Everyday tools, each with its own terminal scene.</h2>
+              <p>Scroll through them, or jump to one. Nothing is tucked away.</p>
+              <nav class="story-index" aria-label="More Bifrost capabilities">
+                <a href="#physical">Physical routing</a><a href="#setup">Probe-first setup</a>
+                <a href="#rules">Explicit routes</a><a href="#strategies">Selection strategies</a>
+                <a href="#preview">Preview</a><a href="#control">Pin and off</a>
+                <a href="#cache">Local cache</a><a href="#debug">Diagnostics</a>
+              </nav>
+            </div>
+            <section id="physical" class="story-secondary" data-demo-scene="physical" aria-labelledby="physical-title">
+              <p class="eyebrow">04 / Default route</p><h2 id="physical-title">Pi switches models before the prompt.</h2>
+              <p>After <code>/bifrost init</code>, send a normal message with routing on and no pin. Bifrost selects a tier, skips unhealthy candidates, and sets Pi's active provider/model before generation. You do not need to select Auto.</p>
+              <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/routing-controls.md#what-happens-when-you-send-a-message">See the default route</a>.</p>
+            </section>
+            <section id="setup" class="story-secondary" data-demo-scene="setup" aria-labelledby="setup-title">
+              <p class="eyebrow">05 / Setup</p><h2 id="setup-title">Probe, propose, then review.</h2>
+              <p>Run <code>/bifrost init</code> inside Pi. It reuses recent probe results or tests available models, then proposes groups. Review the model IDs before you confirm writing <code>.pi/bifrost.json</code>, especially if the file already exists. Probes can incur provider usage or rate limits.</p>
+              <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/getting-started.md#initialize">Read the init steps and probe limits</a>.</p>
+            </section>
+            <section id="rules" class="story-secondary" data-demo-scene="rules" aria-labelledby="rules-title">
+              <p class="eyebrow">06 / Explicit routes</p><h2 id="rules-title">Use rules, a direct model, or a tier prefix.</h2>
+              <p>Each rule in <code>.pi/bifrost.json</code> has a text <code>pattern</code> and a <code>model</code> value. Below, <code>quick</code> means “choose from the quick pool.” <code>example/deep-model</code> means “use this exact model,” without a tier strategy.</p>
+              <pre class="story-code" tabindex="0"><code>{
+  "rules": [
+    { "pattern": "commit",
+      "model": "quick" },
+    { "pattern": "security audit",
+      "model": "example/deep-model" }
+  ]
+}</code></pre>
+              <p>Replace <code>example/deep-model</code> with a model ID available in Pi. The commit rule can select quick if no earlier tier choice wins. To force quick for one unpinned turn, type <code>quick commit the changes</code>. Bifrost removes <code>quick</code> before the model sees it.</p>
+              <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/configuration.md#tier-rules">Configure tier and direct-model rules</a> · <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/routing-controls.md#start-a-message-with-a-tier-name">Use a tier prefix</a>.</p>
+            </section>
+            <section id="strategies" class="story-secondary" data-demo-scene="strategies" aria-labelledby="strategies-title">
+              <p class="eyebrow">07 / Your selection policy</p><h2 id="strategies-title">Pick how each group chooses a model.</h2>
+              <p>Set <code>categoryStrategies</code> in <code>.pi/bifrost.json</code>. This example makes the quick pool choose the healthy model with the lowest combined input and output price:</p>
+              <pre class="story-code" tabindex="0"><code>{
+  "categoryStrategies": {
+    "quick": "cheapest"
+  }
+}</code></pre>
+              <p>Other choices include <code>first</code>, <code>largest_context</code>, and <code>random</code>. <code>fastest</code> uses list order, not live speed. Init can sort that list using one-time probe results. Open circuits are removed first.</p>
+              <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/configuration.md#selection-strategies">See every strategy and configuration example</a>.</p>
+            </section>
+            <section id="preview" class="story-secondary" data-demo-scene="preview" aria-labelledby="preview-title">
+              <p class="eyebrow">08 / Check before sending</p><h2 id="preview-title">Preview the actual model.</h2>
+              <p>Run <code>/bifrost preview security audit this code</code> in Pi. It shows the chosen tier, model, source, and exclusions without starting a generation turn or switching Pi's active model. An enabled classifier can receive the preview text and incur usage. Preview does not treat a leading tier name as an override. Pass <code>--json</code> before the prompt for a machine-readable report.</p>
+              <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/commands.md#preview-before-generation">Learn what preview does and does not run</a>.</p>
+            </section>
+            <section id="control" class="story-secondary" data-demo-scene="control" aria-labelledby="control-title">
+              <p class="eyebrow">09 / Manual control</p><h2 id="control-title">Pin, unpin, or switch routing off.</h2>
+              <p>Run <code>/bifrost pin</code> to keep the current physical model for this session. Even a tier prefix stays in the prompt while pinned. Run <code>/bifrost unpin</code> to resume routing. Selecting a physical model in Pi's <code>/model</code> picker also pins it.</p>
+              <p>Run <code>/bifrost off</code> to stop routing, then <code>/bifrost on</code> to resume. On/off survives a restart; a pin does not. Pin or off while Auto is selected switches back to a physical model.</p>
+              <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/routing-controls.md#what-happens-when-you-send-a-message">See every control and Auto exit behavior</a>.</p>
+            </section>
+            <section id="cache" class="story-secondary" data-demo-scene="cache" aria-labelledby="cache-title">
+              <p class="eyebrow">10 / Local classification cache</p><h2 id="cache-title">Reuse a tier decision, not an answer.</h2>
+              <p>Run <code>/bifrost cache stats</code> to inspect stored tier decisions or <code>/bifrost cache clear</code> to remove them. To disable this cache, set <code>"cache": { "enabled": false }</code> in <code>.pi/bifrost.json</code> and run <code>/bifrost reload</code>. Normalized prompt words can contain sensitive text. Bifrost never caches generated answers.</p>
+              <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/reliability-and-cache.md#local-classification-cache">Read cache storage and privacy details</a>.</p>
+            </section>
+            <section id="debug" class="story-secondary" data-demo-scene="debug" aria-labelledby="debug-title">
+              <p class="eyebrow">11 / Inspect</p><h2 id="debug-title">See status and local diagnostics.</h2>
+              <p>Run <code>/bifrost debug</code> to see effective routing settings and open-circuit count. To record local JSONL events, set <code>"debug": { "enabled": true }</code> in <code>.pi/bifrost.json</code> and run <code>/bifrost reload</code>. Normal traces omit raw prompt bodies.</p>
+              <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/reliability-and-cache.md#debug-logging">Set up local diagnostics</a>.</p>
+            </section>
+          </div>
         </div>
-
-        <dl class="glossary-strip">
-          <div><dt>Tier</dt><dd>A named capability group.</dd></div>
-          <div><dt>Pool</dt><dd>Models allowed for that tier.</dd></div>
-          <div><dt>Strategy</dt><dd>How one healthy model is chosen.</dd></div>
-          <div><dt>Classifier</dt><dd>Optional tier judge, not model selector.</dd></div>
-        </dl>
-
-        <ol class="routing-flow">
-          <li>
-            <span class="step-number">01</span>
-            <div>
-              <h3>Resolve a tier</h3>
-              <p>
-                A tier prefix, cache hit, optional classifier, regex rule, or
-                configured default resolves <code>quick</code>,
-                <code>general</code>, <code>frontier</code>, or your own tier.
-              </p>
-            </div>
-          </li>
-          <li>
-            <span class="step-number">02</span>
-            <div>
-              <h3>Load your model pool</h3>
-              <p>
-                Only models you placed in that tier become candidates. Add or
-                remove provider/model IDs directly in configuration.
-              </p>
-            </div>
-          </li>
-          <li>
-            <span class="step-number">03</span>
-            <div>
-              <h3>Filter unhealthy candidates</h3>
-              <p>
-                Persistent reliability circuits exclude repeatedly failing
-                models before selection and later permit controlled recovery.
-              </p>
-            </div>
-          </li>
-          <li>
-            <span class="step-number">04</span>
-            <div>
-              <h3>Apply your tier strategy</h3>
-              <p>
-                Choose list order, cost, context window, probe-sorted speed, or
-                explicit random selection. Bifrost then activates Pi's actual
-                model before generation.
-              </p>
-            </div>
-          </li>
-        </ol>
-      </section>
+      </div>
 
       <section class="section wrap" id="policy" aria-labelledby="policy-title">
         <div class="section-heading">
@@ -192,20 +244,14 @@
     "frontier": "largest_context"
   }
 }</code></pre>
+        <p class="section-link"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/configuration.md">Configure pools, rules, and strategies</a></p>
       </section>
 
       <section class="section wrap" id="jev" aria-labelledby="jev-title">
         <div class="section-heading">
-          <p class="eyebrow">Optional classifier backend</p>
-          <h2 id="jev-title">Jev judges the tier. Your policy chooses the model.</h2>
-          <p>
-            TypeSafe/Jev is optional and requires a TypeSafe credential. It receives
-            the current prompt plus your tier criteria, then returns a tier choice,
-            probabilities, and confidence. It never receives your provider model
-            pool and never selects the exact model. Confidence is a routing signal,
-            not proof that a judgment is correct. Keep fallback enabled and test
-            criteria against your workload, especially small but high-consequence tasks.
-          </p>
+          <p class="eyebrow">Another view of classification</p>
+          <h2 id="jev-title">What TypeSafe/Jev sees.</h2>
+          <p>This optional backend receives your current prompt and tier criteria, not your provider model pool. It returns a tier, probabilities, and confidence. Confidence does not prove the tier is correct.</p>
         </div>
 
         <figure
@@ -233,110 +279,31 @@
           </figcaption>
         </figure>
 
-        <ol class="jev-contract">
-          <li><strong>Input</strong><span>Current prompt and tier criteria</span></li>
-          <li><strong>Judgment</strong><span>Tier, probabilities, confidence</span></li>
-          <li><strong>Boundary</strong><span>No provider model pool</span></li>
-          <li><strong>Selection</strong><span>Bifrost health filter and strategy</span></li>
-        </ol>
-
         <p class="section-link">
-          <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/classifiers.md#typesafejev">Set up TypeSafe/Jev and understand prompt handling</a>
+          <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/classifiers.md">Compare classifier backends and prompt handling</a>
         </p>
       </section>
 
-      <section class="section wrap" id="control" aria-labelledby="control-title">
-        <div class="section-heading">
-          <h2 id="control-title">Automatic when useful. Explicit when you know.</h2>
-          <p>
-            Use only as much routing as the task needs. Every control operates on
-            Pi's real active model.
-          </p>
+      <section class="section wrap" id="auto-visual" aria-labelledby="auto-visual-title">
+        <div class="section-heading compact">
+          <p class="eyebrow">Another view of Auto</p>
+          <h2 id="auto-visual-title">From virtual selection to physical model.</h2>
+          <p>Watch the same Pi-native dispatch as a route. The terminal above shows what you see in Pi.</p>
         </div>
-
-        <div class="feature-list control-options">
-          <article>
-            <h3>Adaptive</h3>
-            <p>
-              Leave routing on with nothing pinned and Bifrost picks a model for
-              every message through your configured routing policy.
-            </p>
-          </article>
-          <article>
-            <h3>Explicit tier</h3>
-            <p>
-              Start a prompt with a configured tier name, such as
-              <code>quick commit the changes</code>. Bifrost strips the tier name
-              and applies that tier's pool and strategy for one message.
-            </p>
-          </article>
-          <article>
-            <h3>Exact model</h3>
-            <p>
-              Select a model manually or run <code>/bifrost pin</code>. Pin is a
-              session-local hard lock: no automatic routing or tier-prefix parsing.
-            </p>
-          </article>
-        </div>
-      </section>
-
-      <section class="section wrap" id="trust" aria-labelledby="trust-title">
-        <div class="section-heading">
-          <h2 id="trust-title">Predictable under failure. Inspectable by default.</h2>
-          <p>
-            Bifrost changes future routing without silently repeating work that
-            may already have edited files, called tools, or touched external systems.
-          </p>
-        </div>
-
-        <ul class="proof-strip" aria-label="Pi-Bifrost product guarantees">
-          <li><strong>Native</strong><span>activates Pi's actual model</span></li>
-          <li><strong>Persistent</strong><span>remembers model failures</span></li>
-          <li><strong>Replay-free</strong><span>never resends failed work</span></li>
-        </ul>
-
-        <figure
-          class="bridge-figure"
-          aria-labelledby="bridge-stage-label"
-          aria-describedby="bridge-stage-detail"
-        >
-          <canvas id="bridge" aria-hidden="true"></canvas>
-          <figcaption class="bridge-caption" id="bridge-caption">
-            <div class="bridge-caption-head">
-              <span class="bridge-stage" id="bridge-stage-label">01 · Request reaches Bifrost</span>
-              <button
-                class="bridge-toggle"
-                id="bridge-toggle"
-                type="button"
-                aria-label="Pause reliability animation"
-              >
-                <span aria-hidden="true" id="bridge-toggle-label">Pause</span>
+        <figure class="auto-figure" aria-labelledby="auto-stage-label" aria-describedby="auto-stage-detail">
+          <canvas id="auto-canvas" aria-hidden="true"></canvas>
+          <figcaption class="auto-caption">
+            <div class="auto-caption-head">
+              <span class="auto-stage" id="auto-stage-label">01 · Select bifrost/auto</span>
+              <button class="auto-toggle" id="auto-toggle" type="button" aria-label="Pause Auto animation">
+                <span aria-hidden="true" id="auto-toggle-label">Pause</span>
               </button>
             </div>
-            <p class="bridge-detail" id="bridge-stage-detail">
-              Bifrost resolves a configured tier, then checks candidate health
-              before Pi generates a response.
-            </p>
+            <p class="auto-detail" id="auto-stage-detail">Auto starts only when you select it in Pi's model picker.</p>
+            <small class="auto-note">Illustrative route. No model or provider request is sent.</small>
           </figcaption>
         </figure>
-
-        <div class="feature-list trust-details">
-          <article>
-            <h3>Preview before generation</h3>
-            <p>
-              <code>/bifrost preview</code> resolves the route without starting
-              generation or activating the model. An enabled classifier may still
-              receive the preview prompt.
-            </p>
-          </article>
-          <article>
-            <h3>Keep cache tradeoffs visible</h3>
-            <p>
-              Per-turn switching can fragment provider prompt-cache locality.
-              Pin for continuity, or <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/prompt-caching.md">read the N-switch cache guide</a>.
-            </p>
-          </article>
-        </div>
+        <p class="section-link"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/routing-controls.md#bifrost-auto-virtual-model">Read Auto routing and continuation behavior</a></p>
       </section>
 
       <section
@@ -346,49 +313,37 @@
       >
         <div class="wrap">
           <div class="section-heading compact">
-            <h2 id="install-title">Install, probe, review.</h2>
-            <p>
-              Requires Pi 0.86.0 or newer and at least one authenticated provider
-              model visible in Pi. <code>/bifrost init</code> uses a recent probe or
-              tests registry models, then writes only after confirmation.
-            </p>
-            <p class="install-note">
-              Primary probe requests use <code>1+1=</code> with at most 5 output
-              tokens; empty responses may trigger a minimal-session fallback.
-              Provider usage or rate limits may apply. The proposal may enable a
-              prompt classifier, so review it before confirmation.
-            </p>
+            <p class="eyebrow">Get started</p>
+            <h2 id="install-title">Your models. Your route.</h2>
+            <p>Use Pi 1.0.1 or newer with at least one authenticated provider model.</p>
           </div>
 
           <ol class="install-list">
             <li>
-              <span>1</span>
-              <div class="command">
-                <code>pi install npm:pi-bifrost</code>
-                <button
-                  class="copy-button"
-                  type="button"
-                  data-copy="pi install npm:pi-bifrost"
-                >
-                  Copy<span class="sr-only"> install command</span>
-                </button>
+              <span>01</span>
+              <div>
+                <h3>Install Bifrost</h3>
+                <p>Run this in your shell, then open Pi.</p>
+                <div class="command">
+                  <code>pi install npm:pi-bifrost</code>
+                  <button class="copy-button" type="button" data-copy="pi install npm:pi-bifrost">Copy<span class="sr-only"> install command</span></button>
+                </div>
               </div>
             </li>
             <li>
-              <span>2</span>
-              <div class="command">
-                <code>/bifrost init</code>
-                <button
-                  class="copy-button"
-                  type="button"
-                  data-copy="/bifrost init"
-                >
-                  Copy<span class="sr-only"> initialization command</span>
-                </button>
+              <span>02</span>
+              <div>
+                <h3>Set up your model groups</h3>
+                <p>Run this inside Pi. It probes available models, which can incur provider usage or rate limits. Review the proposal before confirming it.</p>
+                <div class="command">
+                  <code>/bifrost init</code>
+                  <button class="copy-button" type="button" data-copy="/bifrost init">Copy<span class="sr-only"> initialization command</span></button>
+                </div>
               </div>
             </li>
           </ol>
 
+          <p class="install-after">Two independent choices: <code>/bifrost classifier</code> changes how Bifrost picks a tier; selecting <code>bifrost/auto</code> in Pi's model picker changes how Pi dispatches the chosen model. Use either, both, or neither. Rules work without a classifier.</p>
           <div class="hero-actions install-actions">
             <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/getting-started.md">Getting started</a>
             <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/configuration.md">Configuration guide</a>
@@ -409,8 +364,8 @@
             <p>
               No. A tier name at the start of a message, regex rules, or the
               configured default can route without another model call. Prompt
-              classifiers and <a href="#jev">TypeSafe/Jev</a> are optional when
-              semantic tier judgment adds value.
+              classifiers are optional when semantic tier judgment adds value.
+              Choose a <a href="#classifier">prompt, Pi-native, or TypeSafe backend</a>.
             </p>
           </div>
         </details>
@@ -483,5 +438,6 @@
       src="//gc.zgo.at/count.js"
     ></script>
     <script src="./site.js" defer></script>
+    <script src="./terminal-demo.js" defer></script>
   </body>
 </html>

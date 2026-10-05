@@ -2,12 +2,12 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://pi.dev/schemas/bifrost.json",
   "title": "Bifrost Model Router Config",
-  "description": "Configuration for the pi-bifrost query-aware model router. Maps user prompts to model tiers via regex rules and an optional LLM classifier. Merged from extension defaults → global → project root → project config (.pi/bifrost.json), with later layers winning.",
+  "description": "Configuration for the pi-bifrost model router. Routes prompts to configured tiers or exact provider models. Optional classifiers can select a tier. Merged from extension defaults → global → project root → project config (.pi/bifrost.json), with later layers winning.",
   "type": "object",
   "properties": {
     "enabled": {
       "type": "boolean",
-      "description": "Enable or disable the model router. When disabled, all requests use the default model.",
+      "description": "Enable or disable routing. When disabled, Bifrost does not switch models for new turns. Pi uses the selected physical model.",
       "default": true
     },
     "default": {
@@ -54,7 +54,7 @@
     },
     "rules": {
       "type": "array",
-      "description": "Regex-based routing rules applied in order. First matching rule determines the model tier. Case-insensitive matching. If no rule matches, the 'default' tier is used. Prefer using bifrost-routes.json for project-specific rules — it overrides this field.",
+      "description": "Regex-based routing rules applied in order. The first case-insensitive match names a configured tier or an exact provider/model. A bifrost-routes.json file overrides this field.",
       "x-aiHints": {
         "danger": "Wrong regex can misroute all requests. Test with /bifrost preview <prompt> before committing.",
         "atomic": true
