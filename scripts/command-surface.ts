@@ -1,4 +1,4 @@
-import { BIFROST_COMMAND_OPTIONS, dashboardCommands } from "../commands.ts";
+import { BIFROST_COMMAND_OPTIONS, bifrostModePhrase, dashboardCommands } from "../commands.ts";
 
 type CommandRow = (typeof BIFROST_COMMAND_OPTIONS)[number];
 type MenuState = Parameters<typeof dashboardCommands>[0];
@@ -24,10 +24,6 @@ export function groupOf(row: SurfaceRow): number {
   return row.reflects ? 0 : row.menu === "common" ? 1 : 2;
 }
 
-export function statePhrase(state: MenuState): string {
-  return state.pinned ? "pinned" : state.enabled ? "on" : "off";
-}
-
 const GROUP_LABELS = ["State toggles", "Common", "Everything else"] as const;
 
 function escapeCell(text: string): string {
@@ -42,7 +38,7 @@ function commandCell(row: SurfaceRow): string {
 export function renderMarkdown(rows: readonly SurfaceRow[], state: MenuState): string {
   const total = BIFROST_COMMAND_OPTIONS.length;
   const lines = [
-    `Bifrost command surface — routing ${statePhrase(state)}`,
+    `Bifrost command surface — routing ${bifrostModePhrase(state)}`,
     `${total} commands. Order matches the /bifrost dashboard; grouping is editorial.`,
     "",
     "Open the surface by typing /bifrost and pressing enter.",

@@ -1,12 +1,15 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { BIFROST_COMMAND_OPTIONS, dashboardCommands } from "../commands.ts";
+import {
+  BIFROST_COMMAND_OPTIONS,
+  bifrostModePhrase,
+  dashboardCommands,
+} from "../commands.ts";
 import {
   buildCommandSurface,
   main,
   renderJson,
   renderMarkdown,
-  statePhrase,
   type SurfaceRow,
 } from "../scripts/command-surface.ts";
 
@@ -171,12 +174,30 @@ describe("group placement", () => {
   });
 });
 
-describe("statePhrase", () => {
+describe("bifrostModePhrase", () => {
+  // All four states are pinned because the header has to agree with the
+  // dashboard title on every one of them. `off` only clears `enabled` and `pin`
+  // only sets `pinned`, so {enabled: false, pinned: true} is reachable — and it
+  // is the state the two copies disagreed on.
   it("names the mode the way the dashboard title does", () => {
-    assert.equal(statePhrase({ enabled: true, pinned: false }), "on");
-    assert.equal(statePhrase({ enabled: true, pinned: true }), "pinned");
-    assert.equal(statePhrase({ enabled: false, pinned: false }), "off");
-    assert.equal(statePhrase({ enabled: false, pinned: true }), "pinned");
+    assert.equal(bifrostModePhrase({ enabled: true, pinned: false }), "on");
+    assert.equal(bifrostModePhrase({ enabled: true, pinned: true }), "pinned");
+    assert.equal(bifrostModePhrase({ enabled: false, pinned: false }), "off");
+    assert.equal(bifrostModePhrase({ enabled: false, pinned: true }), "off");
+  });
+
+  it("is the single source of the generator's header phrase", () => {
+    for (const state of [
+      { enabled: true, pinned: false },
+      { enabled: true, pinned: true },
+      { enabled: false, pinned: false },
+      { enabled: false, pinned: true },
+    ]) {
+      assert.match(
+        renderMarkdown(buildCommandSurface(state), state),
+        new RegExp(`^Bifrost command surface — routing ${bifrostModePhrase(state)}$`, "m"),
+      );
+    }
   });
 });
 
