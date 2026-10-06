@@ -24,9 +24,9 @@ import {
 import type { ReliabilityStore } from "./reliability-store.ts";
 import { classifierMetricsEnabled, type ClassifierMetricsState, type ClassifierMetricsStore } from "./classifier-metrics.ts";
 import type { EffectiveBackend } from "./classifier-detection.ts";
-import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend } from "./classifier-backends.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_MODEL, systemOneEndpoint, systemOneModel, type ClassifierBackend } from "./classifier-backends.ts";
 import { piClassificationSupported } from "./classifier-pi-native.ts";
-import { resolveTypeSafeApiKey, type TypeSafeCredentialSource } from "./typesafe-classifier.ts";
+import { systemOneCredentialSource, type TypeSafeCredentialSource } from "./typesafe-classifier.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
@@ -537,7 +537,7 @@ export function buildClassifierTestReport(input: {
   const model = judgment?.backend === backend
     ? judgment.model
     : backend === CLASSIFIER_BACKEND_IDS.typesafe
-      ? classifier?.typesafe?.model ?? TYPE_SAFE_MODEL
+      ? systemOneModel(classifier)
       : backend === CLASSIFIER_BACKEND_IDS.piNative
         ? classifier?.piNative?.model ?? "catalog default"
         : configuredModel;
@@ -584,7 +584,7 @@ async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState):
   }
   const after = state.classifierMetricsStore.snapshot();
   const credential = classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe
-    ? resolveTypeSafeApiKey().source
+    ? systemOneCredentialSource(classifier)
     : undefined;
   await uiResult(ctx, "Classifier test", buildClassifierTestReport({
     classifier,
@@ -1129,7 +1129,7 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
   });
   state.invalidatePipeline();
   log(ctx, `classifier backend set to ${backend}; config reloaded`);
-  if (backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
+  if (backend === CLASSIFIER_BACKEND_IDS.typesafe && systemOneCredentialSource(state.config.classifier) === "missing") {
     log(ctx, `TypeSafe credential missing; use ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`, "warning");
   }
 }
@@ -1340,10 +1340,10 @@ export function createCommandRouter(
       const effective = state.effectiveClassifierBackend(state.config);
       const backend = effective.backend;
       const label = effective.auto ? `auto: ${backend} (${effective.reason})` : backend;
-      const credential = backend === CLASSIFIER_BACKEND_IDS.typesafe ? resolveTypeSafeApiKey().source : undefined;
+      const credential = backend === CLASSIFIER_BACKEND_IDS.typesafe ? systemOneCredentialSource(classifier) : undefined;
       const fallback = classifier?.fallback ?? (backend === CLASSIFIER_BACKEND_IDS.typesafe ? "prompt" : modelId === "none" ? "regex" : "prompt");
       const detail = backend === CLASSIFIER_BACKEND_IDS.typesafe
-        ? `backend=${label} model=${classifier?.typesafe?.model ?? TYPE_SAFE_MODEL} endpoint=${TYPE_SAFE_ENDPOINT} minConfidence=${classifier?.minConfidence ?? 0.8} credential=${credential} fallback=${fallback} fallbackModel=${fallback === "regex" ? "none" : modelId}`
+        ? `backend=${label} model=${systemOneModel(classifier)} endpoint=${systemOneEndpoint(classifier)} minConfidence=${classifier?.minConfidence ?? 0.8} credential=${credential} fallback=${fallback} fallbackModel=${fallback === "regex" ? "none" : modelId}`
         : backend === CLASSIFIER_BACKEND_IDS.piNative
           ? `backend=${label} model=${classifier?.piNative?.model ?? "catalog default"} minConfidence=${classifier?.minConfidence ?? 0.8} fallback=${fallback} fallbackModel=${fallback === "regex" ? "none" : modelId}`
           : `backend=${label} model=${modelId} endpoint=${classifier?.endpoint ?? "registry"} method=${classifier?.method ?? "auto"}`;

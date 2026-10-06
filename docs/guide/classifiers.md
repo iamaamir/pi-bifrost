@@ -50,7 +50,19 @@ Jev does not receive Bifrost's provider model pool and does not select an exact 
 
 Confidence measures how concentrated Jev's returned distribution is. It is not a correctness guarantee. Exploratory Pi-Bifrost evaluation found stable judgments for clear, bounded prompts, but current criteria also produced high-confidence under-routing for some mechanically small, high-consequence tasks. Treat tier criteria as versioned policy: keep fallback enabled, pin the evaluated Jev version, and test criteria against representative locked cases before relying on thresholds.
 
-TypeSafe/Jev support uses a fixed hosted endpoint. Bifrost does not provide a generic local, self-hosted, or OpenRouter-compatible classifier transport.
+By default the `typesafe` backend calls the hosted TypeSafe endpoint and requires `jev-1.13.0`. Set `typesafe.endpoint` to another System One server (`POST /v1/systemone`), such as a loopback Von server, and set `typesafe.model` to the model it serves. A `<name>-latest` model accepts any `<name>-` response model. A custom endpoint never receives the stored TypeSafe key and needs no credential. Bifrost does not provide a generic OpenRouter-compatible classifier transport.
+
+```json
+{
+  "classifier": {
+    "backend": "typesafe",
+    "typesafe": {
+      "endpoint": "http://127.0.0.1:8008/v1/systemone",
+      "model": "von-latest"
+    }
+  }
+}
+```
 
 Choose TypeSafe in Pi:
 
@@ -130,7 +142,7 @@ Or use:
 export TYPESAFE_API_KEY="ts_..."
 ```
 
-Repository config cannot redirect TypeSafe credentials to arbitrary origins. TypeSafe transport is pinned to its supported model and official endpoint contract.
+Repository config cannot redirect TypeSafe credentials to arbitrary origins. Only the hosted TypeSafe endpoint receives the stored key, and it stays pinned to its supported model. A custom `typesafe.endpoint` receives no Authorization header.
 
 ## Test and inspect
 

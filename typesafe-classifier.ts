@@ -3,7 +3,7 @@ import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import type { ReliabilityStore } from "./reliability-store.ts";
 import { debug as bifrostDebug } from "./debug.ts";
 import type { TypeSafeObservation, TypeSafeOutcome } from "./classifier-metrics.ts";
-import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_CREDENTIAL_KEY, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassificationJudgment, type ClassifierRequest } from "./classifier-backends.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_CREDENTIAL_KEY, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, systemOneRequiresKey, type ClassificationJudgment, type ClassifierRequest } from "./classifier-backends.ts";
 import { abortableDelay, criterionText, finite, sleep } from "./classifier-semantics.ts";
 
 /** Compatibility exports for the TypeSafe provider seam and benchmark. */
@@ -22,7 +22,7 @@ export interface TypeSafeJudgment extends ClassificationJudgment {
   readonly confidence: number;
   readonly probabilities: Readonly<Record<string, number>>;
   readonly backend: typeof CLASSIFIER_BACKEND_IDS.typesafe;
-  readonly model: typeof TYPESAFE_MODEL;
+  readonly model: string;
 }
 
 export interface TypeSafeFetch {
@@ -31,6 +31,10 @@ export interface TypeSafeFetch {
 
 export interface TypeSafeOptions {
   readonly apiKey?: string;
+  /** System One endpoint. Defaults to TypeSafe; any other endpoint never receives the stored TypeSafe key. */
+  readonly endpoint?: string;
+  /** Requested model. Defaults to Jev; a `<name>-latest` model accepts any `<name>-` response model. */
+  readonly model?: string;
   readonly fetchImpl?: TypeSafeFetch;
   readonly sleepImpl?: (ms: number) => Promise<void>;
   readonly timeoutMs?: number;
@@ -42,12 +46,12 @@ export interface TypeSafeOptions {
   readonly observe?: (observation: TypeSafeObservation) => void;
 }
 
-export function buildTypeSafeRequest(input: TypeSafeInput): Record<string, unknown> {
+export function buildTypeSafeRequest(input: TypeSafeInput, model: string = TYPESAFE_MODEL): Record<string, unknown> {
   const criteria: Record<string, string> = {};
   for (const tier of input.tiers) criteria[tier] = criterionText(input.criteria[tier] ?? tier);
   return {
     state: input.prompt,
-    model: TYPESAFE_MODEL,
+    model,
     questions: {
       tier: {
         type: "choice",
@@ -81,10 +85,17 @@ function strictRecord(value: unknown, required: readonly string[], optional: rea
   }
 }
 
+export function responseModelMatches(requested: string, observed: unknown): observed is string {
+  if (typeof observed !== "string" || observed.length === 0) return false;
+  if (observed === requested) return true;
+  return requested.endsWith("-latest") && observed.startsWith(requested.slice(0, -"latest".length));
+}
+
 /** Decode only provider data needed for routing. Invalid data is a classifier miss. */
-export function decodeTypeSafeJudgment(payload: unknown, tiers: readonly string[], minConfidence = TYPESAFE_MIN_CONFIDENCE): TypeSafeJudgment | undefined {
+export function decodeTypeSafeJudgment(payload: unknown, tiers: readonly string[], minConfidence = TYPESAFE_MIN_CONFIDENCE, expectedModel: string = TYPESAFE_MODEL): TypeSafeJudgment | undefined {
   const body = strictRecord(payload, ["model", "answers"], ["usage"]);
-  if (!body || body.model !== TYPESAFE_MODEL) return undefined;
+  if (!body || !responseModelMatches(expectedModel, body.model)) return undefined;
+  const model = body.model;
   const answers = strictRecord(body.answers, ["tier"]);
   if (!answers) return undefined;
   const value = strictRecord(answers.tier, ["type", "choice", "confidence", "probabilities"]);
@@ -105,7 +116,7 @@ export function decodeTypeSafeJudgment(payload: unknown, tiers: readonly string[
   if (Math.abs(sum - 1) > 0.001) return undefined;
   const max = Math.max(...tiers.map((tier) => probabilities[tier]));
   if (Math.abs(probabilities[value.choice] - max) > 1e-9) return undefined;
-  return { tier: value.choice, confidence: value.confidence, probabilities, backend: CLASSIFIER_BACKEND_IDS.typesafe, model: TYPESAFE_MODEL };
+  return { tier: value.choice, confidence: value.confidence, probabilities, backend: CLASSIFIER_BACKEND_IDS.typesafe, model };
 }
 
 function retryable(status: number | undefined): boolean {
@@ -165,7 +176,7 @@ async function readResponseJson(response: Response, signal: AbortSignal): Promis
   return JSON.parse(new TextDecoder().decode(bytes));
 }
 
-export type TypeSafeCredentialSource = "auth-file" | "environment" | "missing";
+export type TypeSafeCredentialSource = "auth-file" | "environment" | "missing" | "not-required";
 
 function resolveCredentialKey(value: unknown): string | undefined {
   if (typeof value !== "string" || !value) return undefined;
@@ -188,11 +199,18 @@ export function resolveTypeSafeApiKey(): { apiKey?: string; source: TypeSafeCred
   return apiKey ? { apiKey, source: "environment" } : { source: "missing" };
 }
 
-function circuitKey(): string { return `classifier/${CLASSIFIER_BACKEND_IDS.typesafe}/${TYPESAFE_MODEL}`; }
+function circuitKey(model: string): string { return `classifier/${CLASSIFIER_BACKEND_IDS.typesafe}/${model}`; }
+
+export function systemOneCredentialSource(classifier: Parameters<typeof systemOneRequiresKey>[0]): TypeSafeCredentialSource {
+  return systemOneRequiresKey(classifier) ? resolveTypeSafeApiKey().source : "not-required";
+}
 
 /** Thin System One adapter. Returns misses for all transport/decoder failures. */
 export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
-  const apiKey = options.apiKey ?? resolveTypeSafeApiKey().apiKey;
+  const endpoint = options.endpoint ?? TYPESAFE_SYSTEMONE_URL;
+  const model = options.model ?? TYPESAFE_MODEL;
+  const requiresApiKey = endpoint === TYPESAFE_SYSTEMONE_URL;
+  const apiKey = options.apiKey ?? (requiresApiKey ? resolveTypeSafeApiKey().apiKey : undefined);
   const fetchImpl = options.fetchImpl ?? fetch;
   const sleepImpl = options.sleepImpl ?? sleep;
   const timeoutMs = Math.min(MAX_TYPESAFE_TIMEOUT_MS, Math.max(100, Math.floor(options.timeoutMs ?? DEFAULT_TYPESAFE_TIMEOUT_MS)));
@@ -204,7 +222,7 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
     const startedAt = performance.now();
     const traceId = `ts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const trace = (event: string, meta: Record<string, unknown> = {}) => {
-      if (options.debug) bifrostDebug(CLASSIFIER_BACKEND_IDS.typesafe, event, { trace_id: traceId, model: TYPESAFE_MODEL, ...meta });
+      if (options.debug) bifrostDebug(CLASSIFIER_BACKEND_IDS.typesafe, event, { trace_id: traceId, model, ...meta });
     };
     trace("start", { tiers: input.tiers, prompt_length: input.prompt.length, timeout_ms: timeoutMs, max_attempts: maxAttempts });
     let attempts = 0;
@@ -212,7 +230,7 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
     let trialClaimed = false;
     const finish = (outcome: TypeSafeOutcome, judgment?: TypeSafeJudgment): TypeSafeJudgment | undefined => {
       if (outcome === "aborted" && trialClaimed) {
-        options.reliability?.abandonTrial(circuitKey());
+        options.reliability?.abandonTrial(circuitKey(model));
         trialClaimed = false;
       }
       trace("finish", {
@@ -229,7 +247,7 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
             outcome,
             latencyMs: performance.now() - startedAt,
             attempts,
-            model: TYPESAFE_MODEL,
+            model,
             tier: judgment?.tier,
             confidence: judgment?.confidence,
           });
@@ -239,12 +257,12 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
       }
       return judgment;
     };
-    if (!apiKey) {
+    if (requiresApiKey && !apiKey) {
       trace("credential_missing");
       if (!warnedMissingKey) { warnedMissingKey = true; console.error(`[bifrost] TypeSafe classifier disabled: configure ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`); }
       return finish("missing_key");
     }
-    const key = circuitKey();
+    const key = circuitKey(model);
     const now = Date.now();
     if (options.reliability) {
       const claim = options.reliability.tryClaimTrial(key, now);
@@ -281,11 +299,11 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
       let shouldRetry = false;
       let delay = 0;
       try {
-        trace("request", { attempt, endpoint: TYPESAFE_SYSTEMONE_URL });
-        response = await fetchImpl(TYPESAFE_SYSTEMONE_URL, {
+        trace("request", { attempt, endpoint });
+        response = await fetchImpl(endpoint, {
           method: "POST",
-          headers: { "content-type": "application/json", authorization: `Bearer ${apiKey}` },
-          body: JSON.stringify(buildTypeSafeRequest(input)),
+          headers: apiKey ? { "content-type": "application/json", authorization: `Bearer ${apiKey}` } : { "content-type": "application/json" },
+          body: JSON.stringify(buildTypeSafeRequest(input, model)),
           signal: controller.signal,
           redirect: "error",
         });
@@ -294,7 +312,7 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
         if (response.ok) {
           phase = "body";
           const body = await readResponseJson(response, controller.signal);
-          const judgment = decodeTypeSafeJudgment(body, input.tiers, 0);
+          const judgment = decodeTypeSafeJudgment(body, input.tiers, 0, model);
           trace("decoded", { attempt, tier: judgment?.tier, confidence: judgment?.confidence, valid: Boolean(judgment) });
           if (!judgment) {
             recordFailure("decoder");

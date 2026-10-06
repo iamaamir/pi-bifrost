@@ -128,6 +128,7 @@ export function classifierCacheKey(
     temperature: classifier?.temperature,
     fallbackToRegex: classifier?.fallbackToRegex,
     typesafeModel: classifier?.typesafe?.model ?? TYPE_SAFE_MODEL,
+    typesafeEndpoint: classifier?.typesafe?.endpoint,
     criteria: classifier?.criteria,
     minConfidence: classifier?.minConfidence ?? 0.8,
     fallback: classifier?.fallback,

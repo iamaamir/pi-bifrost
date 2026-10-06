@@ -49,8 +49,8 @@ import { BIFROST_AUTO_ID, BIFROST_AUTO_PROVIDER, isBifrostAuto, isVirtualModel }
 import { createDispatchOwnership, RuntimeReliabilityTracker } from "./runtime-reliability.ts";
 import { VirtualOverride } from "./virtual-override.ts";
 import { createVirtualRoute, noModelError, poolProblem } from "./virtual-routing.ts";
-import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV } from "./classifier-backends.ts";
-import { createTypeSafeClassifier, resolveTypeSafeApiKey } from "./typesafe-classifier.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, systemOneEndpoint, systemOneModel } from "./classifier-backends.ts";
+import { createTypeSafeClassifier, resolveTypeSafeApiKey, systemOneCredentialSource } from "./typesafe-classifier.ts";
 import { createPiNativeClassifier, piClassificationSupported } from "./classifier-pi-native.ts";
 import { collectDetectionFacts, createDetectionEngine, createDetectionNoticeGate, effectiveBackendOf, piNativeCredentialMissing, selectEffectiveBackend, type EffectiveBackend } from "./classifier-detection.ts";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
@@ -95,7 +95,7 @@ function endpointClassifier(id: string, endpoint: string): ClassifierModel {
 function activeClassifierCacheKey(config: BifrostConfig, detectionEngine: ReturnType<typeof createDetectionEngine>): string {
   const effective = effectiveBackendOf(config, detectionEngine);
   return classifierCacheKey(config, Object.keys(config.models ?? {}), {
-    typesafeCredentialAvailable: resolveTypeSafeApiKey().source !== "missing",
+    typesafeCredentialAvailable: systemOneCredentialSource(config.classifier) !== "missing",
     effectiveBackend: effective.backend,
   });
 }
@@ -138,6 +138,8 @@ function buildPipeline(
   if (plan.useDirect && effective.backend === CLASSIFIER_BACKEND_IDS.typesafe) {
     const classifierConfig = config.classifier!;
     const classify = createTypeSafeClassifier({
+      endpoint: systemOneEndpoint(classifierConfig),
+      model: systemOneModel(classifierConfig),
       timeoutMs: classifierConfig.typesafe?.timeoutMs,
       maxAttempts: classifierConfig.typesafe?.maxAttempts,
       debug: Boolean(config.debug?.enabled && classifierConfig.typesafe?.debug),
@@ -230,7 +232,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   // Validate config on startup. Errors are logged; the extension
   // continues with best-effort routing for warnings.
   const configIssues = validateConfig(config);
-  if (config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
+  if (config.classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe && systemOneCredentialSource(config.classifier) === "missing") {
     console.warn(`[bifrost/config] warning: TypeSafe classifier unavailable; configure typesafe in ~/.pi/agent/auth.json or set ${TYPE_SAFE_API_KEY_ENV}`);
   }
   for (const issue of configIssues) {

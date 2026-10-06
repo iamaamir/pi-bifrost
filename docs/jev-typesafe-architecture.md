@@ -228,7 +228,7 @@ Prompt-backend fields are incompatible with TypeSafe and must not be used for ac
 - `temperature`;
 - `fallbackToRegex`.
 
-TypeSafe uses its fixed official endpoint and nested `typesafe` transport settings.
+TypeSafe uses the official endpoint by default and nested `typesafe` transport settings. A custom `typesafe.endpoint` requires `typesafe.model` and never receives the TypeSafe key.
 
 ## Commands and observability
 

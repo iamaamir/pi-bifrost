@@ -114,8 +114,8 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "model": { "type": "string", "const": "jev-1.13.0" },
-            "endpoint": { "type": "string", "const": "https://api.typesafe.ai/v1/systemone" },
+            "model": { "type": "string", "minLength": 1, "description": "System One model. Must be jev-1.13.0 on the hosted TypeSafe endpoint; required for a custom endpoint. A <name>-latest model accepts any <name>- response model." },
+            "endpoint": { "type": "string", "format": "uri", "default": "https://api.typesafe.ai/v1/systemone", "description": "System One endpoint (POST /v1/systemone). Only the hosted TypeSafe endpoint receives the stored TypeSafe key; custom endpoints such as a loopback Von server get no Authorization header." },
             "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 },
             "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 3 },
             "debug": { "type": "boolean", "default": false, "description": "Detailed TypeSafe operational trace with redacted metadata only; active only when global debug.enabled is true. Raw prompts, request bodies, provider responses, and external error text are never persisted." },

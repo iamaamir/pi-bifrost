@@ -48,6 +48,39 @@ describe("TypeSafe classifier", () => {
     assert.equal(JSON.parse(String(request?.init.body)).model, TYPESAFE_MODEL);
   });
 
+  it("posts to a custom System One endpoint without any credential", async () => {
+    const previous = process.env.TYPESAFE_API_KEY;
+    process.env.TYPESAFE_API_KEY = "must-not-leak";
+    try {
+      let request: { url: string; init: RequestInit } | undefined;
+      const classifier = createTypeSafeClassifier({
+        endpoint: "http://127.0.0.1:8008/v1/systemone",
+        model: "von-latest",
+        fetchImpl: async (url, init) => {
+          request = { url: String(url), init: init! };
+          return new Response(JSON.stringify({ ...payload("frontier", 0.9), model: "von-1.2.0" }), { status: 200 });
+        },
+      });
+      const result = await classifier({ prompt: "debug a race", tiers: ["quick", "general", "frontier"], criteria });
+      assert.equal(result?.tier, "frontier");
+      assert.equal(result?.model, "von-1.2.0");
+      assert.equal(request?.url, "http://127.0.0.1:8008/v1/systemone");
+      assert.equal((request?.init.headers as Record<string, string>).authorization, undefined);
+      assert.equal(JSON.parse(String(request?.init.body)).model, "von-latest");
+    } finally {
+      if (previous === undefined) delete process.env.TYPESAFE_API_KEY;
+      else process.env.TYPESAFE_API_KEY = previous;
+    }
+  });
+
+  it("accepts only matching response models", () => {
+    const tiers = ["quick", "general", "frontier"];
+    assert.equal(decodeTypeSafeJudgment({ ...payload(), model: "von-1.2.0" }, tiers, 0, "von-latest")?.model, "von-1.2.0");
+    assert.equal(decodeTypeSafeJudgment({ ...payload(), model: "jev-1.13.0" }, tiers, 0, "von-latest"), undefined);
+    assert.equal(decodeTypeSafeJudgment({ ...payload(), model: "von-1.2.0" }, tiers, 0, "von-1.1.0"), undefined);
+    assert.equal(decodeTypeSafeJudgment({ ...payload(), model: "von-1.2.0" }, tiers, 0), undefined);
+  });
+
   it("emits one content-free operational observation", async () => {
     const observations: unknown[] = [];
     const classifier = createTypeSafeClassifier({

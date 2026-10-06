@@ -5,7 +5,7 @@ import type { RoutingStrategy, RouteRule } from "./routing.ts";
 import type { CacheOptions } from "./cache.ts";
 import type { DebugConfig } from "./debug.ts";
 import type { ReliabilityConfig } from "./reliability.ts";
-import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend, type TierCriterion } from "./classifier-backends.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, isHttpUrl, systemOneEndpoint, systemOneRequiresKey, type ClassifierBackend, type TierCriterion } from "./classifier-backends.ts";
 
 export { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL } from "./classifier-backends.ts";
 export type { ClassifierBackend, TierCriterion } from "./classifier-backends.ts";
@@ -234,11 +234,15 @@ export function validateConfig(
   const directLabel = classifier?.backend === CLASSIFIER_BACKEND_IDS.piNative ? "PiNative" : "TypeSafe";
   const directKey = classifier?.backend === CLASSIFIER_BACKEND_IDS.piNative ? "piNative" : "typesafe";
   if (classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe) {
-    if (classifier.typesafe?.model !== undefined && classifier.typesafe.model !== TYPE_SAFE_MODEL) {
-      issues.push({ severity: "error", message: `TypeSafe classifier model must be exactly "${TYPE_SAFE_MODEL}".` });
+    const customEndpoint = !systemOneRequiresKey(classifier);
+    if (customEndpoint && !isHttpUrl(systemOneEndpoint(classifier))) {
+      issues.push({ severity: "error", message: `TypeSafe System One endpoint must be an http(s) URL, got "${systemOneEndpoint(classifier)}".` });
     }
-    if (classifier.typesafe?.endpoint !== undefined && classifier.typesafe.endpoint !== TYPE_SAFE_ENDPOINT) {
-      issues.push({ severity: "error", message: `TypeSafe classifier endpoint must be "${TYPE_SAFE_ENDPOINT}".` });
+    if (customEndpoint && (typeof classifier.typesafe?.model !== "string" || !classifier.typesafe.model.trim())) {
+      issues.push({ severity: "error", message: "TypeSafe classifier with a custom System One endpoint requires typesafe.model." });
+    }
+    if (!customEndpoint && classifier.typesafe?.model !== undefined && classifier.typesafe.model !== TYPE_SAFE_MODEL) {
+      issues.push({ severity: "error", message: `TypeSafe classifier model must be exactly "${TYPE_SAFE_MODEL}" on ${TYPE_SAFE_ENDPOINT}.` });
     }
     if (classifier.typesafe?.timeoutMs !== undefined && (!Number.isInteger(classifier.typesafe.timeoutMs) || classifier.typesafe.timeoutMs < 100 || classifier.typesafe.timeoutMs > 60_000)) {
       issues.push({ severity: "error", message: `TypeSafe classifier timeoutMs must be an integer between 100 and 60000, got ${classifier.typesafe.timeoutMs}.` });

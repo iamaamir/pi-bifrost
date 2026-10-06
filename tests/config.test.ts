@@ -193,19 +193,18 @@ describe("validateConfig", () => {
     assert.ok(validateConfig({ ...baseConfig, ...explicit }).some((issue) => issue.message.includes("does not support")));
   });
 
-  it("rejects TypeSafe custom endpoint, model, and prompt-only fields", () => {
+  it("rejects a non-Jev model on the hosted endpoint and prompt-only fields", () => {
     const issues = validateConfig({
       ...baseConfig,
       classifier: {
         backend: "typesafe",
         model: "prompt/model",
-        typesafe: { model: "other", endpoint: "http://localhost" },
+        typesafe: { model: "other" },
         method: "direct",
         criteria: { frontier: "complex", economical: "normal" },
       },
     });
     assert.ok(issues.some((issue) => issue.message.includes("must be exactly")));
-    assert.ok(issues.some((issue) => issue.message.includes("endpoint")));
     assert.ok(issues.some((issue) => issue.message.includes("does not support")));
   });
 
@@ -291,6 +290,16 @@ describe("validateConfig", () => {
     );
     assert.equal(merged.classifier?.piNative?.model, "typesafe/jev-latest");
     assert.equal(merged.classifier?.piNative?.timeoutMs, 2000);
+  });
+
+  it("accepts a custom System One endpoint with a model and rejects one without", () => {
+    const classifier = { backend: "typesafe" as const, criteria: { frontier: "complex", economical: "normal" } };
+    const ok = validateConfig({ ...baseConfig, classifier: { ...classifier, typesafe: { endpoint: "http://127.0.0.1:8008/v1/systemone", model: "von-latest" } } });
+    assert.deepEqual(ok.filter((issue) => issue.severity === "error"), []);
+    const missingModel = validateConfig({ ...baseConfig, classifier: { ...classifier, typesafe: { endpoint: "http://127.0.0.1:8008/v1/systemone" } } });
+    assert.ok(missingModel.some((issue) => issue.message.includes("requires typesafe.model")));
+    const badUrl = validateConfig({ ...baseConfig, classifier: { ...classifier, typesafe: { endpoint: "localhost:8008", model: "von-latest" } } });
+    assert.ok(badUrl.some((issue) => issue.message.includes("http(s) URL")));
   });
 
   it("allows valid probe settings", () => {
