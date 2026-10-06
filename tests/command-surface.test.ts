@@ -13,6 +13,12 @@ import {
   type SurfaceRow,
 } from "../scripts/command-surface.ts";
 
+// The three group labels are a contract in both renderers: they are the markdown
+// headings and the JSON `groups[].label`. Written out here rather than imported,
+// because GROUP_LABELS is not exported and a test that read it back could only
+// ever confirm the renderer used the list it was handed.
+const GROUP_LABELS = ["State toggles", "Common", "Everything else"];
+
 // BIFROST_COMMAND_OPTIONS is module-level shared state and is typed readonly, so
 // a probe has to cast its way in and restore the length in a finally. Without
 // the restore the rest of the suite would see the extra entries.
@@ -86,6 +92,23 @@ describe("command-surface cli", () => {
     assert.equal(
       parsed.groups[0].rows.slice(0, 4).map((r: { value: string }) => r.value).join(","),
       "on,off,unpin,pin",
+    );
+  });
+
+  // The false half of each flag pair had no case of its own. Only `--pinned=true`
+  // and the unpinned default were exercised, so the assignment could be
+  // tightened from "anything but false" to "literally true" — a change no test
+  // could see, because on the two values strict validation accepts the two
+  // spellings agree.
+  it("reads --pinned=false as false, not as any value that is not true", async () => {
+    const out = await captureRunAsync(() => main(["--json", "--pinned=false"]));
+    assert.deepEqual(JSON.parse(out).state, { enabled: true, pinned: false });
+    assert.match(out, /"pinned": false/);
+    // The state also has to reach the rows, or a flag could be parsed and then
+    // dropped before the surface was built.
+    assert.equal(
+      JSON.parse(out).groups[0].rows.slice(0, 4).map((r: { value: string }) => r.value).join(","),
+      "off,on,pin,unpin",
     );
   });
 
@@ -297,6 +320,22 @@ describe("renderMarkdown", () => {
     assert.match(renderMarkdown(rows, state), /typing \/bifrost and pressing enter/);
   });
 
+  it("emits one three-column header per group and nothing else in the header row", () => {
+    const lines = renderMarkdown(rows, state).split("\n");
+    // Asserted whole rather than by regex: a fourth column appended to the
+    // header still matches every `contains`-shaped check, and a markdown table
+    // takes its shape from the header, so an extra column there misaligns every
+    // data row too.
+    assert.deepEqual(
+      lines.filter((line) => line.startsWith("| Command")),
+      GROUP_LABELS.map(() => "| Command | Description | Note |"),
+    );
+    assert.deepEqual(
+      lines.filter((line) => line.startsWith("|---")),
+      GROUP_LABELS.map(() => "|---|---|---|"),
+    );
+  });
+
   it("escapes pipes and wraps angle brackets", () => {
     const markdown = renderMarkdown(
       [{ ...rows[0], description: "a | b <c>" }] as SurfaceRow[],
@@ -355,6 +394,23 @@ describe("renderMarkdown", () => {
 });
 
 describe("renderJson", () => {
+  it("labels every group with the same words the markdown headings use", () => {
+    const state = { enabled: true, pinned: false };
+    const parsed = JSON.parse(renderJson(buildCommandSurface(state), state));
+    // Unpinned before this, a rename in GROUP_LABELS failed only the markdown
+    // heading assertion, so the machine-readable labels were free to drift.
+    assert.deepEqual(
+      parsed.groups.map((g: { label: string }) => g.label),
+      GROUP_LABELS,
+    );
+    // Both renderers read the same list, so the headings cannot disagree with the
+    // labels asserted above.
+    const markdown = renderMarkdown(buildCommandSurface(state), state);
+    for (const label of GROUP_LABELS) {
+      assert.match(markdown, new RegExp(`^## ${label}$`, "m"));
+    }
+  });
+
   it("emits state, total and the same rows", () => {
     const state = { enabled: false, pinned: true };
     const parsed = JSON.parse(renderJson(buildCommandSurface(state), state));
