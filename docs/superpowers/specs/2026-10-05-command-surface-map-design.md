@@ -213,7 +213,7 @@ Registry and state are the reference for every assertion; none compares the buil
 - Registry order is also pinned by `tests/landing-command-menu.test.mjs` for `docs/terminal-demo.js`. Adding a 19th command correctly fails that test; this change inherits the coupling.
 - The map is only as current as the commit it is run from.
 - The header's `/bifrost` is the one output string with no drift guard.
-- `commands.ts:1402` already renders a mode phrase for the dashboard title (`off` / `pinned` / `on`). The generator's header phrase is worded differently — a second convention to keep aligned.
+- `commands.ts` renders a mode phrase for the dashboard title (`off` / `pinned` / `on`) and exports it as `bifrostModePhrase`. The generator's header phrase is that same function, so there is one definition rather than a second convention to keep aligned.
 
 ## Verification
 
