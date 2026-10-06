@@ -57,7 +57,7 @@ function runAuto({ home, work, messages }) {
       ["-e", EXTENSION_PATH, "--approve", "--no-session", "--no-tools", "--model", "bifrost/auto", "-p", ...messages],
       {
         stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, PI_CODING_AGENT_DIR: join(home, ".pi", "agent"), PI_SKIP_VERSION_CHECK: "1" },
+        env: { ...process.env, PI_CODING_AGENT_DIR: join(home, ".pi", "agent"), PI_SKIP_VERSION_CHECK: "1", PI_ACP_DELEGATE_DEPTH: "0" },
         cwd: work,
       },
     );

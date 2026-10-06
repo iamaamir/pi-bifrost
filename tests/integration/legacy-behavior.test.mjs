@@ -58,7 +58,7 @@ function runPi({ home, work, args }) {
   return new Promise((resolve, reject) => {
     const child = spawn("pi", ["-e", EXTENSION_PATH, "--approve", "--no-tools", ...args], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, PI_CODING_AGENT_DIR: join(home, ".pi", "agent"), PI_SKIP_VERSION_CHECK: "1" },
+      env: { ...process.env, PI_CODING_AGENT_DIR: join(home, ".pi", "agent"), PI_SKIP_VERSION_CHECK: "1", PI_ACP_DELEGATE_DEPTH: "0" },
       cwd: work,
     });
     let stdout = "";

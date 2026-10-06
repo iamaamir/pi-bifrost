@@ -42,6 +42,7 @@ import {
 } from "./routing.ts";
 import { ReliabilityStore } from "./reliability-store.ts";
 import { loadRuntimeState, runtimeStatePath, saveRuntimeState, isPassiveModelSelection, createSelfSelectTracker } from "./runtime-state.ts";
+import { BIFROST_LOCK_EVENT, BIFROST_RELEASE_EVENT, acquireLock, isDelegateSession, parseLockRequest, parseReleaseRequest, releaseLock } from "./tier-lock.ts";
 import { createCommandRouter, getBifrostCommandCompletions, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
 import { parseInlineOverride } from "./inline-override.ts";
@@ -319,11 +320,14 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   }
 
   // Mutable state shared with command handlers.
+  const delegateSession = isDelegateSession();
   const state: BifrostState = {
     config,
     enabled: runtimeState.enabled,
     classifierEnabled: runtimeState.classifierEnabled,
-    pinned: runtimeState.pinned,
+    pinned: delegateSession || runtimeState.pinned,
+    pinSource: delegateSession ? "delegate" : (runtimeState.pinned ? "manual" : undefined),
+    lock: undefined,
     cacheEntries,
     reliabilityStore,
     classifierMetricsStore,
@@ -429,7 +433,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         fallback: () => lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default).selected : undefined),
         sticky: () => lastDispatchedPhysical(ctx),
         select: async (prompt, forcedTier, signal) => {
-          if (!state.enabled || state.pinned) throw new Error("Bifrost: virtual auto is disabled or pinned; select a physical model");
+          if (!state.enabled || (state.pinned && state.pinSource !== "delegate")) throw new Error("Bifrost: virtual auto is disabled or pinned; select a physical model");
           if (state.classifierEnabled && shouldRefreshRegistry(state, Date.now(), REGISTRY_REFRESH_TTL_MS)) {
             try {
               const outcome = await waitForRegistryRefresh((refreshSignal) => ctx.modelRegistry.refresh(refreshSignal ? { signal: refreshSignal } : undefined), signal);
@@ -502,6 +506,37 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   const handleCommand = createCommandRouter(state);
 
+  pi.events.on(BIFROST_LOCK_EVENT, (data) => {
+    const request = parseLockRequest(data);
+    if ("invalid" in request) {
+      request.reply?.({ ok: false, reason: request.invalid });
+      return;
+    }
+    const result = acquireLock(state, request, Object.keys(state.config.models ?? {}));
+    if (!result.ok) {
+      debug("lock", "rejected", { owner: request.owner, tier: request.tier, reason: result.reason });
+      request.reply?.(result);
+      return;
+    }
+    state.pinned = result.next.pinned;
+    state.pinSource = result.next.pinSource;
+    state.lock = result.next.lock;
+    debug("lock", "acquired", { owner: request.owner, tier: request.tier });
+    request.reply?.({ ok: true, tier: request.tier });
+  });
+
+  pi.events.on(BIFROST_RELEASE_EVENT, (data) => {
+    const request = parseReleaseRequest(data);
+    if ("invalid" in request) {
+      request.reply?.({ ok: false, reason: request.invalid });
+      return;
+    }
+    const result = releaseLock(state, request.owner);
+    if (result.ok) state.lock = result.next.lock;
+    debug("lock", result.ok ? "released" : "release_rejected", { owner: request.owner });
+    request.reply?.(result.ok ? { ok: true } : result);
+  });
+
   pi.registerCommand("bifrost", {
     description: "Bifrost model router control",
     getArgumentCompletions: getBifrostCommandCompletions,
@@ -553,7 +588,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     // Selecting the virtual profile is an explicit request for per-prompt routing.
     if (isBifrostAuto(ctx.model)) {
       overrideFor(ctx).clear();
-      state.pinned = false;
+      if (state.pinSource !== "delegate") {
+        state.pinned = false;
+        state.pinSource = undefined;
+      }
       state.enabled = true;
       state.saveModeState();
       debug("bifrost", "model_select.virtual_auto");
@@ -574,8 +612,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       return;
     }
     if (!state.enabled) return;
+    if (state.pinSource === "delegate") return;
 
     state.pinned = true;
+    state.pinSource = "manual";
     state.saveModeState();
     debug("bifrost", "model_select", { model: modelKey(ctx.model) });
     syncBifrostModeStatus(ctx, state);
@@ -611,13 +651,17 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
     // Inline tier override: "frontier debug this" forces that tier for one prompt.
     // Pi reserves / for commands, ! for bash. Just type the tier name as first word.
-    const { forcedTier, promptText } = parseInlineOverride(text, state.config.models);
-    if (forcedTier) {
+    const inline = parseInlineOverride(text, state.config.models);
+    const forcedTier = state.lock?.tier ?? inline.forcedTier;
+    const promptText = inline.promptText;
+    if (state.lock) {
+      debug("input", "locked", { tier: state.lock.tier, owner: state.lock.owner });
+    } else if (forcedTier) {
       debug("input", "inline_override", { tier: forcedTier });
     }
 
     // Inline override should strip the tier keyword from what LLM sees.
-    const defaultAction = forcedTier
+    const defaultAction = inline.forcedTier
       ? { action: "transform" as const, text: promptText }
       : { action: "continue" as const };
 

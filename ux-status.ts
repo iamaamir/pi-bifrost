@@ -11,6 +11,7 @@ export interface BifrostModeState {
   enabled: boolean;
   pinned: boolean;
   classifierEnabled: boolean;
+  lock?: { readonly tier: string; readonly owner: string };
 }
 
 export function shouldRefreshRegistry(
@@ -70,6 +71,7 @@ export function setBifrostWorkingMessage(ctx: ExtensionContext, message?: string
 function modeLabel(state: BifrostModeState): { tone: "warning" | "success"; text: string } {
   if (!state.enabled) return { tone: "warning", text: "off" };
   if (state.pinned) return { tone: "warning", text: "pinned" };
+  if (state.lock) return { tone: "warning", text: `locked · ${state.lock.tier}` };
   if (!state.classifierEnabled) return { tone: "warning", text: "on · classifier off" };
   return { tone: "success", text: "on" };
 }

@@ -31,7 +31,7 @@ async function runPi(command, cwd = process.cwd(), env = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn("pi", [...PI_ARGS, command], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ...homeEnv(), ...env },
+      env: { ...process.env, PI_ACP_DELEGATE_DEPTH: "0", ...homeEnv(), ...env },
       cwd,
     });
 

@@ -27,6 +27,7 @@ import type { EffectiveBackend } from "./classifier-detection.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_MODEL, systemOneEndpoint, systemOneModel, type ClassifierBackend } from "./classifier-backends.ts";
 import { piClassificationSupported } from "./classifier-pi-native.ts";
 import { systemOneCredentialSource, type TypeSafeCredentialSource } from "./typesafe-classifier.ts";
+import type { PinSource, TierLock } from "./tier-lock.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
@@ -35,6 +36,8 @@ export interface BifrostState {
   enabled: boolean;
   classifierEnabled: boolean;
   pinned: boolean;
+  pinSource?: PinSource;
+  lock?: TierLock;
   cacheEntries: CacheEntry[];
   reliabilityStore: ReliabilityStore;
   classifierMetricsStore: ClassifierMetricsStore;
@@ -134,7 +137,7 @@ export function clearBifrostWidgets(ctx: ExtensionContext) {
   }
 }
 
-export function syncBifrostModeStatus(ctx: ExtensionContext, state: Pick<BifrostState, "enabled" | "pinned" | "classifierEnabled">) {
+export function syncBifrostModeStatus(ctx: ExtensionContext, state: Pick<BifrostState, "enabled" | "pinned" | "classifierEnabled" | "lock">) {
   setBifrostModeStatus(ctx, state);
 }
 
@@ -479,7 +482,8 @@ async function handleInit(
     classifierEnabled: state.config.classifier?.enabled ?? true,
   });
   state.enabled = runtimeState.enabled;
-  state.pinned = runtimeState.pinned;
+  state.pinned = state.pinSource === "delegate" || runtimeState.pinned;
+  if (state.pinSource !== "delegate") state.pinSource = undefined;
   state.classifierEnabled = runtimeState.classifierEnabled;
   state.reliabilityStore.reload(state.config.reliability, process.cwd());
   state.classifierMetricsStore.reload({
@@ -1158,13 +1162,19 @@ export function createCommandRouter(
     exact("pin", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
       state.pinned = true;
+      if (state.pinSource !== "delegate") state.pinSource = "manual";
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost pinned");
     }),
     exact("unpin", (_, ctx) => {
+      if (state.pinSource === "delegate") {
+        log(ctx, "Bifrost: delegate sessions stay pinned to the model they were launched with", "warning");
+        return;
+      }
       state.pinned = false;
+      state.pinSource = undefined;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
@@ -1182,7 +1192,8 @@ export function createCommandRouter(
       });
       state.enabled = runtimeState.enabled;
       state.classifierEnabled = runtimeState.classifierEnabled;
-      state.pinned = runtimeState.pinned;
+      state.pinned = state.pinSource === "delegate" || runtimeState.pinned;
+      if (state.pinSource !== "delegate") state.pinSource = undefined;
       state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path), (state.config.cache?.ttlHours ?? 720) * 60 * 60 * 1000);
       state.reliabilityStore.reload(state.config.reliability, process.cwd());
       state.classifierMetricsStore.reload({
@@ -1364,7 +1375,8 @@ export function createCommandRouter(
         "--- config ---",
         `cwd: ${process.cwd()}`,
         `enabled: ${state.enabled}`,
-        `pinned: ${state.pinned}`,
+        `pinned: ${state.pinned}${state.pinSource ? ` (${state.pinSource})` : ""}`,
+        `lock: ${state.lock ? `${state.lock.tier} by ${state.lock.owner}` : "none"}`,
         `classifierEnabled: ${state.classifierEnabled}`,
         `default: ${state.config.default}`,
         `strategy: ${state.config.strategy}`,
