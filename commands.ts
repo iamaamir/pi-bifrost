@@ -985,7 +985,7 @@ function reflectedIsInert(spec: CommandSpec, state: Pick<BifrostState, Reflected
 // each reflected pair that changes something first, then the `common`
 // commands, then everything else. Ordering is all `menu` and `reflects` decide;
 // nothing here decides membership.
-function dashboardCommands(state: Pick<BifrostState, ReflectedState>): CommandSpec[] {
+export function dashboardCommands(state: Pick<BifrostState, ReflectedState>): CommandSpec[] {
   const reflectedStates = BIFROST_COMMAND_OPTIONS
     .map((spec) => spec.reflects?.state)
     .filter((reflects): reflects is ReflectedState => Boolean(reflects));
