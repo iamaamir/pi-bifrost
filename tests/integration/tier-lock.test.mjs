@@ -219,4 +219,19 @@ describe("tier lock end to end", { timeout: 360_000, concurrency: 1 }, () => {
       assert.deepEqual(sent, ["fail"], "the second prompt must neither reach the open circuit nor fall back to the default tier");
     });
   });
+
+  it("refuses a locked Bifrost Auto request once the locked tier turns unhealthy instead of falling back", async () => {
+    await withFixture(["fake/fail"], async ({ home, work }) => {
+      const before = (await serverStats(server.port)).length;
+      const { stderr, result } = await runLockTest({ home, work, command: "/locktest frontier first second", model: "bifrost/auto" });
+      assert.match(stderr, /recorded provider failure for fake\/fail/);
+      assert.deepEqual(result.reply, { ok: true, tier: "frontier", model: "fake/fail" });
+      assert.match(stderr, /lock-test locked the frontier tier but no healthy frontier model is available/);
+      const sent = (await serverStats(server.port)).slice(before).map((entry) => entry.model);
+      assert.deepEqual(sent, ["fail"], "the second Auto request must neither reach the open circuit nor fall back to the default tier");
+      const refused = debugEvents(work).find((entry) => entry.module === "virtual" && entry.event === "locked_refused");
+      assert.equal(refused?.tier, "frontier");
+      assert.equal(refused?.owner, "lock-test");
+    });
+  });
 });

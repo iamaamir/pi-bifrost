@@ -462,7 +462,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       });
       const route = createVirtualRoute({
         overrides: overrideFor(ctx),
-        fallback: () => lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default).selected : undefined),
+        fallback: () => lastDispatchedPhysical(ctx) ?? (state.lock
+          ? resolveForTier(ctx, state.lock.tier, false).selected
+          : state.config.default ? resolveForTier(ctx, state.config.default).selected : undefined),
         sticky: () => lastDispatchedPhysical(ctx),
         select: async (prompt, forcedTier, signal) => {
           if (!state.enabled || (state.pinned && state.pinSource !== "delegate")) throw new Error("Bifrost: virtual auto is disabled or pinned; select a physical model");
@@ -478,15 +480,17 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               debug("virtual", "registry.refresh.error", { category: "registry_refresh_failure" });
             }
           }
-          const classification: ClassificationResult = forcedTier
-            ? { kind: "classified", tier: forcedTier, source: "inline" }
+          const lock = state.lock;
+          const tier = lock?.tier ?? forcedTier;
+          const classification: ClassificationResult = tier
+            ? { kind: "classified", tier, source: "inline" }
             : await getPipeline(ctx).classify(prompt, signal);
           if (signal?.aborted) throw new Error("Bifrost: route aborted");
           if (classification.kind === "unclassified") throw new Error("Bifrost: no configured tier for virtual request");
           const classifierIdentity = classification.kind === "classified" && classification.judgment
             ? { classifierBackend: classification.judgment.backend, classifierModel: classification.judgment.model }
             : {};
-          const resolve = () => resolveForTier(ctx, classification.tier);
+          const resolve = () => resolveForTier(ctx, classification.tier, !lock);
           let resolved = resolve();
           if (!resolved.selected && resolved.primary.candidates.length === 0) {
             // Registry merge can lag the first request; one bounded refresh + re-resolve.
@@ -507,6 +511,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             state.forceRegistryRefresh = true;
             routeFailure = { tier: classification.tier, pool: state.config.models?.[classification.tier], reason: resolved.fallbackReason, skipped: resolved.skipped };
             debug("virtual", "fail", { tier: classification.tier, reason: resolved.fallbackReason, pool: routeFailure.pool, skipped: resolved.skipped });
+            if (lock) {
+              // Degrading to the last dispatched model could leave the locked tier, so the request fails instead.
+              debug("virtual", "locked_refused", { tier: lock.tier, owner: lock.owner });
+              throw new Error(`Bifrost: ${lock.owner} locked the ${lock.tier} tier but no healthy ${lock.tier} model is available: ${poolProblem(lock.tier, routeFailure.pool, routeFailure.skipped)}`);
+            }
             return undefined;
           }
           debug("virtual", "select", { tier: classification.tier, model: modelKey(model), source: classification.kind === "classified" ? classification.source : "fallback", ...classifierIdentity, skipped: resolved.skipped });

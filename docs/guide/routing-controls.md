@@ -101,7 +101,7 @@ pi.events.emit("bifrost:release", { owner: "plan-mode" });
 While locked, every message, including input sent by other extensions, routes through the locked tier's pool with the usual health filtering and strategy, both with input-time routing and with `bifrost/auto`.
 A tier name at the start of a message is still stripped, but the lock decides the tier.
 Taking a lock switches to the tier's first healthy model right away; `bifrost/auto` stays selected and dispatches the locked tier.
-With input-time routing, a locked message is refused instead of falling back to the default tier when the locked tier has no healthy model.
+When the locked tier has no healthy model, a locked message is refused instead of falling back to the default tier: input-time routing does not send the prompt, and `bifrost/auto` fails the request with an error naming the locked tier and its owner rather than keeping the last dispatched model.
 The optional `reply` callback receives `{ ok: true, tier, model? }` or `{ ok: false, reason }`.
 A lock is rejected when routing is off, the tier is not configured or has no healthy model, switching to it fails, another owner holds the lock, or the session is a delegate.
 Only the owner can release it, and a lock is session-local.
