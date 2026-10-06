@@ -121,6 +121,16 @@ describe("command-surface cli", () => {
   it("rejects an unknown flag", async () => {
     await assert.rejects(() => main(["--nope"]), /unknown flag/);
   });
+
+  // `--enabled=no` used to mean enabled. Reading every value that is not "false"
+  // as true turned a typo into a silent state flip, while USAGE promised only
+  // true or false.
+  it("rejects a flag value that is neither true nor false", async () => {
+    for (const flag of ["--enabled", "--pinned"]) {
+      await assert.rejects(() => main([`${flag}=yes`]), /invalid value for/, `${flag}=yes`);
+      await assert.rejects(() => main([`${flag}=`]), /invalid value for/, `${flag}= with no value`);
+    }
+  });
 });
 
 describe("dashboardCommands", () => {

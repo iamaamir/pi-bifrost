@@ -79,13 +79,25 @@ export function renderJson(rows: readonly SurfaceRow[], state: MenuState): strin
 
 const USAGE = "usage: command-surface [--json] [--enabled=true|false] [--pinned=true|false]";
 
+// "anything that is not false" read a typo as true, so `--enabled=no` enabled
+// routing and said nothing. Only the two values in USAGE are accepted, and an
+// empty value is as wrong as a misspelt one.
+function booleanFlagValue(flag: string, value: string): boolean {
+  if (value !== "true" && value !== "false") {
+    throw new Error(`invalid value for ${flag}: ${JSON.stringify(value)}\n${USAGE}`);
+  }
+  return value === "true";
+}
+
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   let json = false;
   const state = { enabled: true, pinned: false };
   for (const arg of argv) {
     if (arg === "--json") json = true;
-    else if (arg.startsWith("--enabled=")) state.enabled = arg.slice("--enabled=".length) !== "false";
-    else if (arg.startsWith("--pinned=")) state.pinned = arg.slice("--pinned=".length) !== "false";
+    else if (arg.startsWith("--enabled="))
+      state.enabled = booleanFlagValue("--enabled", arg.slice("--enabled=".length));
+    else if (arg.startsWith("--pinned="))
+      state.pinned = booleanFlagValue("--pinned", arg.slice("--pinned=".length));
     else throw new Error(`unknown flag: ${arg}\n${USAGE}`);
   }
   const rows = buildCommandSurface(state);
