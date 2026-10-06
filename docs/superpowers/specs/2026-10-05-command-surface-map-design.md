@@ -118,10 +118,10 @@ One lossiness, accepted: the map collapses `on`/`off` and `pin`/`unpin` into one
 
 Markdown by default, both renderers over one row array so they cannot disagree. The command count is **interpolated from `BIFROST_COMMAND_OPTIONS.length`**, never a literal.
 
-The sample below was produced by running the specified builder against the real registry, not written by hand:
+The sample below is captured output from `node --experimental-strip-types scripts/command-surface.ts` at the default state, pasted verbatim. Note the header reads `routing on`, not `routing on, unpinned`: `statePhrase` returns one of `on` / `pinned` / `off`, so the unpinned-but-enabled state is simply `on`.
 
 ```
-Bifrost command surface — routing on, unpinned
+Bifrost command surface — routing on
 18 commands. Order matches the /bifrost dashboard; grouping is editorial.
 
 Open the surface by typing /bifrost and pressing enter.
@@ -130,34 +130,34 @@ Open the surface by typing /bifrost and pressing enter.
 
 | Command | Description | Note |
 |---|---|---|
-| /bifrost off | Disable routing | |
-| /bifrost on | Enable routing | already on |
-| /bifrost pin | Lock current model | |
-| /bifrost unpin | Resume routing | already unpinned |
+| `/bifrost off` | Disable routing |  |
+| `/bifrost on` | Enable routing | already on |
+| `/bifrost pin` | Lock current model |  |
+| `/bifrost unpin` | Resume routing | already unpinned |
 
 ## Common
 
 | Command | Description | Note |
 |---|---|---|
-| /bifrost preview [--json] <prompt> | Preview routing for a prompt | |
-| /bifrost benchmark <prompt> | Classify a benchmark prompt | |
-| /bifrost providers | List available providers | |
-| /bifrost probe | Probe working models | |
-| /bifrost init | Probe models and generate config (pass -f to force re-probe) | |
-| /bifrost classifier status | Show classifier state | |
-| /bifrost reload | Reload config after editing | |
+| `/bifrost preview [--json] <prompt>` | Preview routing for a prompt |  |
+| `/bifrost benchmark <prompt>` | Classify a benchmark prompt |  |
+| `/bifrost providers` | List available providers |  |
+| `/bifrost probe` | Probe working models |  |
+| `/bifrost init` | Probe models and generate config (pass -f to force re-probe) |  |
+| `/bifrost classifier status` | Show classifier state |  |
+| `/bifrost reload` | Reload config after editing |  |
 
 ## Everything else
 
 | Command | Description | Note |
 |---|---|---|
-| /bifrost cache stats | Show classification cache | |
-| /bifrost cache clear | Clear classification cache | |
-| /bifrost classifier | Choose classifier backend | |
-| /bifrost classifier on | Enable LLM classifier | |
-| /bifrost classifier off | Disable LLM classifier | |
-| /bifrost classifier test | Test selected classifier backend | |
-| /bifrost debug | Show config and routing state | |
+| `/bifrost cache stats` | Show classification cache |  |
+| `/bifrost cache clear` | Clear classification cache |  |
+| `/bifrost classifier` | Choose classifier backend |  |
+| `/bifrost classifier on` | Enable LLM classifier |  |
+| `/bifrost classifier off` | Disable LLM classifier |  |
+| `/bifrost classifier test` | Test selected classifier backend |  |
+| `/bifrost debug` | Show config and routing state |  |
 ```
 
 Three columns. There is no separate Argument column: the command cell already carries the argument hint, exactly as `formatBifrostCommandChoice` renders the menu row, so a second column would duplicate it.
