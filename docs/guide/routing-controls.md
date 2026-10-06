@@ -98,10 +98,12 @@ pi.events.emit("bifrost:lock", { tier: "frontier", owner: "plan-mode", reply: (r
 pi.events.emit("bifrost:release", { owner: "plan-mode" });
 ```
 
-While locked, every message routes through the locked tier's pool with the usual health filtering, failover, and strategy, both with input-time routing and with `bifrost/auto`.
+While locked, every message, including input sent by other extensions, routes through the locked tier's pool with the usual health filtering and strategy, both with input-time routing and with `bifrost/auto`.
 A tier name at the start of a message is still stripped, but the lock decides the tier.
-The optional `reply` callback receives `{ ok: true, tier }` or `{ ok: false, reason }`.
-A lock is rejected when routing is off, the tier is not configured, another owner holds the lock, or the session is a delegate.
+Taking a lock switches to the tier's first healthy model right away; `bifrost/auto` stays selected and dispatches the locked tier.
+With input-time routing, a locked message is refused instead of falling back to the default tier when the locked tier has no healthy model.
+The optional `reply` callback receives `{ ok: true, tier, model? }` or `{ ok: false, reason }`.
+A lock is rejected when routing is off, the tier is not configured or has no healthy model, switching to it fails, another owner holds the lock, or the session is a delegate.
 Only the owner can release it, and a lock is session-local.
 Taking a lock clears a manual pin, and selecting a model in Pi still pins it; `/bifrost debug` and the status show the active lock.
 

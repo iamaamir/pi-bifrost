@@ -258,6 +258,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   // Programmatic activation keys, scoped per session: two sessions selecting
   // the same model concurrently must never swallow each other's event (#17).
   const selfSelect = createSelfSelectTracker();
+  // Lock events carry no ctx, so the immediate tier switch targets the session Bifrost saw last.
+  let latestCtx: ExtensionContext | undefined;
   let offeredSetup = false;
   // One extension runtime can host several sessions: scope mutable routing
   // state per session so concurrent sessions cannot consume each other's
@@ -345,10 +347,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     forceRegistryRefresh: false,
   };
 
-  function resolveForTier(ctx: ExtensionContext, tier: string) {
+  function resolveForTier(ctx: ExtensionContext, tier: string, fallbackToDefault = true) {
     const pattern = state.config.models?.[tier] ?? tier;
     const strategy = getStrategy(state.config.categoryStrategies, state.config.strategy, tier);
-    const defaultTier = state.config.default;
+    const defaultTier = fallbackToDefault ? state.config.default : undefined;
     const defaultPattern = defaultTier ? (state.config.models?.[defaultTier] ?? defaultTier) : undefined;
     const defaultStrategy = defaultTier
       ? getStrategy(state.config.categoryStrategies, state.config.strategy, defaultTier)
@@ -363,6 +365,34 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       reliabilityState: state.reliabilityStore.getState(),
       reliabilityConfig: state.config.reliability,
     });
+  }
+
+  async function switchToLockedTier(ctx: ExtensionContext, tier: string):
+    Promise<{ readonly ok: true; readonly model: string } | { readonly ok: false; readonly reason: string }> {
+    const resolved = resolveForTier(ctx, tier, false);
+    const model = resolved.selected;
+    if (!model) {
+      const why = resolved.fallbackReason ? ` (${resolved.fallbackReason})` : "";
+      return { ok: false, reason: `no healthy ${tier} model is available${why}` };
+    }
+    const key = modelKey(model);
+    // Bifrost Auto already dispatches the locked tier per request; leaving it would drop the user's selection.
+    if (isBifrostAuto(ctx.model) || key === modelKey(ctx.model)) return { ok: true, model: key };
+    selfSelect.claim(ctx.sessionManager, key);
+    let switched = false;
+    try {
+      switched = await pi.setModel(model);
+    } catch {
+      switched = false;
+    } finally {
+      selfSelect.release(ctx.sessionManager);
+    }
+    if (!switched) {
+      state.reliabilityStore.recordFailure(key, "setModel", "tier lock setModel failed");
+      return { ok: false, reason: `could not switch to ${key}` };
+    }
+    log(ctx, `Bifrost: locked to ${tier} → ${key}`);
+    return { ok: true, model: key };
   }
 
   function saveClassifierDecision(prompt: string, result: ClassificationResult): void {
@@ -508,7 +538,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   const handleCommand = createCommandRouter(state);
 
-  pi.events.on(BIFROST_LOCK_EVENT, (data) => {
+  pi.events.on(BIFROST_LOCK_EVENT, async (data) => {
     const request = parseLockRequest(data);
     if ("invalid" in request) {
       request.reply?.({ ok: false, reason: request.invalid });
@@ -520,11 +550,29 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       request.reply?.(result);
       return;
     }
+    const previous = { pinned: state.pinned, pinSource: state.pinSource, lock: state.lock };
     state.pinned = result.next.pinned;
     state.pinSource = result.next.pinSource;
     state.lock = result.next.lock;
-    debug("lock", "acquired", { owner: request.owner, tier: request.tier });
-    request.reply?.({ ok: true, tier: request.tier });
+    const ctx = latestCtx;
+    if (!ctx) {
+      debug("lock", "acquired", { owner: request.owner, tier: request.tier, switched: false });
+      request.reply?.({ ok: true, tier: request.tier });
+      return;
+    }
+    const switched = await switchToLockedTier(ctx, request.tier);
+    if (!switched.ok) {
+      state.pinned = previous.pinned;
+      state.pinSource = previous.pinSource;
+      state.lock = previous.lock;
+      syncBifrostModeStatus(ctx, state);
+      debug("lock", "rejected", { owner: request.owner, tier: request.tier, reason: switched.reason });
+      request.reply?.({ ok: false, reason: switched.reason });
+      return;
+    }
+    syncBifrostModeStatus(ctx, state);
+    debug("lock", "acquired", { owner: request.owner, tier: request.tier, model: switched.model });
+    request.reply?.({ ok: true, tier: request.tier, model: switched.model });
   });
 
   pi.events.on(BIFROST_RELEASE_EVENT, (data) => {
@@ -548,6 +596,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    latestCtx = ctx;
     overrideFor(ctx).clear();
     syncBifrostModeStatus(ctx, state);
     clearBifrostWidgets(ctx);
@@ -629,7 +678,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("input", async (event, ctx) => {
-    if (event.source === "extension") return { action: "continue" };
+    latestCtx = ctx;
+    if (event.source === "extension" && !state.lock) return { action: "continue" };
     clearBifrostWidgets(ctx);
     // Passive subagent observation — logged even when routing is disabled,
     // so child-session model usage stays visible in debug logs.
@@ -742,7 +792,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         : {};
       const pattern = state.config.models?.[tier] ?? tier;
       const strategy = getStrategy(state.config.categoryStrategies, state.config.strategy, tier);
-      const defaultTier = state.config.default;
+      const defaultTier = state.lock ? undefined : state.config.default;
       const defaultPattern = defaultTier ? (state.config.models?.[defaultTier] ?? defaultTier) : undefined;
       const defaultStrategy = defaultTier
         ? getStrategy(state.config.categoryStrategies, state.config.strategy, defaultTier)
@@ -780,6 +830,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         state.forceRegistryRefresh = true;
         debug("input", "no_model", { tier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache" });
         const why = resolved.fallbackReason ? ` (${resolved.fallbackReason})` : "";
+        if (state.lock) {
+          log(ctx, `Bifrost: ${state.lock.owner} locked the ${tier} tier but no healthy ${tier} model is available${why}; prompt not sent`, "error");
+          syncBifrostModeStatus(ctx, state);
+          endInput();
+          return { action: "handled" as const };
+        }
         log(ctx, `Bifrost: tier "${tier}" matched but no healthy model available${why}`, "warning");
         syncBifrostModeStatus(ctx, state);
         endInput();
