@@ -191,6 +191,8 @@
           }
         },
         "minConfidence": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.8 },
+        "tiers": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1, "uniqueItems": true, "description": "Tiers the classifier may choose. Other tiers stay reachable through rules and inline overrides. Defaults to every tier." },
+        "rulesFirst": { "type": "boolean", "default": false, "description": "Let a regex rule that matches a tier decide before the classifier runs." },
         "fallback": { "type": "string", "enum": ["prompt", "regex"], "default": "prompt", "description": "Fallback after a direct classifier miss or rejected judgment. Prompt uses classifier.model; regex skips prompt classification." },
         "systemPrompt": {
           "type": "string",

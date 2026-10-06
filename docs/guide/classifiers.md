@@ -117,6 +117,31 @@ You can omit `classifier.piNative.model`. Pi then uses the first available TypeS
 
 See [the full example](../../examples/classifier-pi-native.json).
 
+## Classifier tiers and rules first
+
+Set `classifier.tiers` to limit which tiers any classifier may choose.
+Other configured tiers stay reachable through regex rules and tier names at the start of a message.
+Criteria are required only for the listed tiers, and a judgment outside the list is treated as a miss.
+Set `classifier.rulesFirst` to `true` to let a regex rule that names a tier decide before any classifier runs.
+Without it, tier rules are checked after the classifiers.
+
+```json
+{
+  "models": {
+    "quick": ["provider/fast-model"],
+    "frontier": ["provider/reasoning-model"],
+    "local": ["local/private-model"]
+  },
+  "rules": [{ "pattern": "\\b(secret|credential)\\b", "model": "local" }],
+  "classifier": {
+    "backend": "typesafe",
+    "tiers": ["quick", "frontier"],
+    "rulesFirst": true,
+    "criteria": { "quick": "Small, bounded edits", "frontier": "Hard reasoning or high-consequence changes" }
+  }
+}
+```
+
 ## Credentials
 
 Recommended Pi user auth file, `~/.pi/agent/auth.json`:

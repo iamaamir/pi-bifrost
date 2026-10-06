@@ -292,6 +292,15 @@ describe("validateConfig", () => {
     assert.equal(merged.classifier?.piNative?.timeoutMs, 2000);
   });
 
+  it("validates classifier tiers against models and limits required criteria to them", () => {
+    const classifier = { backend: "typesafe" as const, typesafe: { endpoint: "http://127.0.0.1:8008/v1/systemone", model: "von-latest" } };
+    const models = { ...baseConfig.models, local: ["mlx/q"] };
+    const ok = validateConfig({ ...baseConfig, models, classifier: { ...classifier, tiers: ["frontier", "economical"], criteria: { frontier: "hard", economical: "easy" } } });
+    assert.deepEqual(ok.filter((issue) => issue.severity === "error"), []);
+    const unknown = validateConfig({ ...baseConfig, models, classifier: { ...classifier, tiers: ["nope"], criteria: {} } });
+    assert.ok(unknown.some((issue) => issue.message.includes('unknown tier "nope"')));
+  });
+
   it("accepts a custom System One endpoint with a model and rejects one without", () => {
     const classifier = { backend: "typesafe" as const, criteria: { frontier: "complex", economical: "normal" } };
     const ok = validateConfig({ ...baseConfig, classifier: { ...classifier, typesafe: { endpoint: "http://127.0.0.1:8008/v1/systemone", model: "von-latest" } } });

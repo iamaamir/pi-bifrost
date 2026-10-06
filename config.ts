@@ -66,6 +66,10 @@ export interface ClassifierConfig {
   piNative?: PiNativeConfig;
   minConfidence?: number;
   fallback?: "prompt" | "regex";
+  /** Tiers the classifier may choose; the others are reachable only through rules or overrides. */
+  tiers?: string[];
+  /** Let a tier-matching regex rule decide before the classifier runs. */
+  rulesFirst?: boolean;
 }
 
 export interface BifrostConfig {
@@ -227,6 +231,9 @@ export function validateConfig(
   const issues: ConfigIssue[] = [];
   const modelKeys = Object.keys(config.models ?? {});
   const classifier = config.classifier;
+  for (const tier of classifier?.tiers ?? []) {
+    if (!modelKeys.includes(tier)) issues.push({ severity: "error", message: `Classifier tiers references unknown tier "${tier}".` });
+  }
   if (classifier?.backend && !Object.values(CLASSIFIER_BACKEND_IDS).includes(classifier.backend)) {
     issues.push({ severity: "error", message: `Unknown classifier backend "${classifier.backend}".` });
   }
@@ -270,7 +277,7 @@ export function validateConfig(
       issues.push({ severity: "error", message: `${directLabel} classifier fallback must be "prompt" or "regex", got ${classifier.fallback}.` });
     }
     const criteria = classifier.criteria ?? {};
-    for (const tier of modelKeys) {
+    for (const tier of classifier.tiers ?? modelKeys) {
       if (criteria[tier] === undefined && DEFAULT_CLASSIFIER_CRITERIA[tier] === undefined) issues.push({ severity: "error", message: `${directLabel} classifier criteria missing for tier "${tier}".` });
     }
     for (const [tier, criterion] of Object.entries(criteria)) {

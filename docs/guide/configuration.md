@@ -107,12 +107,13 @@ For a normal message with routing on and nothing pinned, routing considers:
 1. a tier name at the start of the message;
 2. a regex rule that names an exact `provider/id`;
 3. a matching entry in the local classification cache;
-4. the optional direct classifier (`typesafe` or `pi-native`);
-5. the optional prompt classifier;
-6. other regex rules;
-7. the configured default tier.
+4. a regex rule that names a tier, only when `classifier.rulesFirst` is `true`;
+5. the optional direct classifier (`typesafe` or `pi-native`);
+6. the optional prompt classifier;
+7. other regex rules;
+8. the configured default tier.
 
-First matching step wins; later steps are skipped. A rule naming an exact model wins before the cache and classifiers; a rule naming a tier is checked after them. Reliability filtering and strategy selection happen after a tier is resolved.
+First matching step wins; later steps are skipped. A rule naming an exact model wins before the cache and classifiers; a rule naming a tier is checked after them unless `classifier.rulesFirst` is `true`. `classifier.tiers` limits which tiers the classifiers may choose. Reliability filtering and strategy selection happen after a tier is resolved.
 
 ## Complete example
 

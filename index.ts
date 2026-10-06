@@ -214,6 +214,8 @@ function buildPipeline(
     regexRules: loadRules(process.cwd(), config),
     defaultTier: config.default,
     tiers,
+    classifierTiers: config.classifier?.tiers,
+    rulesFirst: config.classifier?.rulesFirst,
   });
 }
 

@@ -39,6 +39,10 @@ export interface PipelineDeps {
   readonly defaultTier: string | undefined;
   /** Known tier names, from config.models keys. */
   readonly tiers: readonly string[];
+  /** Tiers the classifiers may choose. Defaults to every tier. */
+  readonly classifierTiers?: readonly string[];
+  /** Let a tier-matching regex rule decide before any classifier runs. */
+  readonly rulesFirst?: boolean;
 }
 
 // ── Pipeline interface ─────────────────────────────────────────
@@ -64,7 +68,9 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
     regexRules: rawRegexRules,
     defaultTier,
     tiers,
+    rulesFirst = false,
   } = deps;
+  const classifierTiers = deps.classifierTiers?.filter((tier) => tiers.includes(tier)) ?? tiers;
 
   // Compile rules once at pipeline construction — no per-turn regex building.
   // Per-rule testing preserves rule-order match precedence exactly.
@@ -94,14 +100,22 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
       return { kind: "classified", tier: cached, source: "cache" };
     }
 
+    if (rulesFirst) {
+      const ruled = classifyCompiled(text, regexRules);
+      if (ruled && tiers.includes(ruled)) {
+        debug("pipeline", "result", { source: "regex", tier: ruled, rulesFirst: true });
+        return { kind: "classified", tier: ruled, source: "regex" };
+      }
+    }
+
     // Stage 3: optional direct classifier (typesafe or pi-native), then prompt fallback.
-    if (classifyDirect) {
+    if (classifyDirect && classifierTiers.length > 0) {
       try {
         const endDirect = debugMeasure("pipeline", "direct.attempt");
-        const judgment = await classifyDirect(text, tiers, signal);
+        const judgment = await classifyDirect(text, classifierTiers, signal);
         const tier = judgment?.tier;
         endDirect({ tier, backend: judgment?.backend, confidence: judgment?.confidence });
-        if (judgment && tiers.includes(judgment.tier)) {
+        if (judgment && classifierTiers.includes(judgment.tier)) {
           debug("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model, confidence: judgment.confidence });
           return { kind: "classified", tier: judgment.tier, source: "classifier", judgment };
         }
@@ -112,15 +126,15 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
     }
 
     // Existing prompt classifier — try each model in priority order.
-    for (const model of classifierModels) {
+    for (const model of classifierTiers.length > 0 ? classifierModels : []) {
       try {
         const endLLM = debugMeasure("pipeline", "classifier.attempt");
-        const output = await classifyWithLLM(model, text, tiers);
+        const output = await classifyWithLLM(model, text, classifierTiers);
         const modelId = model.kind === "registry" ? model.model.id : model.id;
         const judgment = output === undefined ? undefined : normalizeJudgment(output, CLASSIFIER_BACKEND_IDS.prompt);
         const tier = judgment?.tier;
         endLLM({ model: modelId, tier, backend: judgment?.backend, confidence: judgment?.confidence });
-        if (judgment && tiers.includes(judgment.tier)) {
+        if (judgment && classifierTiers.includes(judgment.tier)) {
           debug("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model ?? modelId, confidence: judgment.confidence });
           return { kind: "classified", tier: judgment.tier, source: "classifier", judgment: { ...judgment, model: judgment.model ?? modelId } };
         }

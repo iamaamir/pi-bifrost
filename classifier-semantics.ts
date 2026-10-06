@@ -132,6 +132,8 @@ export function classifierCacheKey(
     criteria: classifier?.criteria,
     minConfidence: classifier?.minConfidence ?? 0.8,
     fallback: classifier?.fallback,
+    classifierTiers: classifier?.tiers,
+    rulesFirst: classifier?.rulesFirst ?? false,
     typesafeCredentialAvailable: runtime.typesafeCredentialAvailable ?? false,
     tiers,
   }));

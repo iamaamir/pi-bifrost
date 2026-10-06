@@ -350,4 +350,61 @@ describe("classification-pipeline", () => {
       }
     });
   });
+
+  describe("rulesFirst and classifierTiers", () => {
+    const tiers = ["quick", "general", "frontier", "review", "local"];
+
+    it("lets a matching rule decide before the classifier", async () => {
+      let calls = 0;
+      const p = createPipeline(deps({
+        tiers,
+        rulesFirst: true,
+        regexRules: [{ pattern: "\\brace\\b", model: "frontier" }],
+        classifyDirect: async () => { calls += 1; return { tier: "quick", confidence: 0.99, backend: "typesafe" as const }; },
+      }));
+      const r = await p.classify("debug this race");
+      assert.equal(r.kind, "classified");
+      assert.equal(r.tier, "frontier");
+      assert.equal(calls, 0);
+    });
+
+    it("runs the classifier first without rulesFirst", async () => {
+      const p = createPipeline(deps({
+        tiers,
+        regexRules: [{ pattern: "\\brace\\b", model: "frontier" }],
+        classifyDirect: async () => ({ tier: "quick", confidence: 0.99, backend: "typesafe" as const }),
+      }));
+      const r = await p.classify("debug this race");
+      assert.equal(r.kind === "unclassified" ? undefined : r.tier, "quick");
+    });
+
+    it("offers only classifierTiers and rejects judgments outside them", async () => {
+      const offered: string[][] = [];
+      const p = createPipeline(deps({
+        tiers,
+        defaultTier: "general",
+        classifierTiers: ["quick", "general", "frontier", "missing"],
+        classifyDirect: async (_text, candidates) => { offered.push([...candidates]); return { tier: "local", confidence: 0.99, backend: "typesafe" as const }; },
+      }));
+      const r = await p.classify("anything");
+      assert.deepEqual(offered, [["quick", "general", "frontier"]]);
+      assert.equal(r.kind, "fallback");
+      assert.equal(r.tier, "general");
+    });
+
+    it("falls back to rules then default when the classifier fails", async () => {
+      const p = createPipeline(deps({
+        tiers,
+        defaultTier: "general",
+        rulesFirst: true,
+        regexRules: [{ pattern: "\\brace\\b", model: "frontier" }],
+        classifyDirect: async () => { throw new Error("connection refused"); },
+      }));
+      const ruled = await p.classify("debug this race");
+      assert.equal(ruled.kind === "unclassified" ? undefined : ruled.tier, "frontier");
+      const r = await p.classify("write a haiku");
+      assert.equal(r.kind, "fallback");
+      assert.equal(r.tier, "general");
+    });
+  });
 });
