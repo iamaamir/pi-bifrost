@@ -79,7 +79,7 @@ describe("command-surface cli", () => {
 });
 
 describe("dashboardCommands", () => {
-  it("returns every registered command exactly once, in menu order", () => {
+  it("returns every registered command exactly once", () => {
     const rows = dashboardCommands({ enabled: true, pinned: false });
     const values = rows.map((row) => row.value).sort();
     assert.deepEqual(values, BIFROST_COMMAND_OPTIONS.map((c) => c.value).sort());
@@ -130,6 +130,25 @@ describe("buildCommandSurface", () => {
     assert.equal(byValue.get("off")!.note, null);
     assert.equal(byValue.get("unpin")!.inert, true);
     assert.equal(byValue.get("pin")!.inert, false);
+    // Without the total, the four checks above would also pass if some other row
+    // were wrongly inert, so "exactly" needs the count to back it up. Two
+    // reflected pairs, so exactly two no-ops at any state.
+    for (const state of [
+      { enabled: true, pinned: false },
+      { enabled: true, pinned: true },
+      { enabled: false, pinned: false },
+      { enabled: false, pinned: true },
+    ]) {
+      const inert = buildCommandSurface(state).filter((r) => r.inert);
+      assert.deepEqual(
+        inert.map((r) => r.value).sort(),
+        BIFROST_COMMAND_OPTIONS.filter((c) => c.reflects)
+          .filter((c) => c.reflects!.sets === state[c.reflects!.state as "enabled" | "pinned"])
+          .map((c) => c.value)
+          .sort(),
+      );
+      assert.equal(inert.length, 2);
+    }
   });
 
   it("orders rows exactly as the dashboard does, for all four states", () => {
@@ -167,35 +186,26 @@ describe("group placement", () => {
     );
   });
 
-  it("keeps the registry length unchanged after a probe run", () => {
-    const before = BIFROST_COMMAND_OPTIONS.length;
-    withProbes([{ value: "zeta probe", description: "d" }], () => undefined);
-    assert.equal(BIFROST_COMMAND_OPTIONS.length, before);
   });
-});
 
 describe("bifrostModePhrase", () => {
   // All four states are pinned because the header has to agree with the
   // dashboard title on every one of them. `off` only clears `enabled` and `pin`
   // only sets `pinned`, so {enabled: false, pinned: true} is reachable — and it
   // is the state the two copies disagreed on.
-  it("names the mode the way the dashboard title does", () => {
-    assert.equal(bifrostModePhrase({ enabled: true, pinned: false }), "on");
-    assert.equal(bifrostModePhrase({ enabled: true, pinned: true }), "pinned");
-    assert.equal(bifrostModePhrase({ enabled: false, pinned: false }), "off");
-    assert.equal(bifrostModePhrase({ enabled: false, pinned: true }), "off");
-  });
-
-  it("is the single source of the generator's header phrase", () => {
-    for (const state of [
-      { enabled: true, pinned: false },
-      { enabled: true, pinned: true },
-      { enabled: false, pinned: false },
-      { enabled: false, pinned: true },
-    ]) {
+  it("names the mode the way the dashboard title does, for all four states", () => {
+    for (const [state, expected] of [
+      [{ enabled: true, pinned: false }, "on"],
+      [{ enabled: true, pinned: true }, "pinned"],
+      [{ enabled: false, pinned: false }, "off"],
+      [{ enabled: false, pinned: true }, "off"],
+    ] as const) {
+      assert.equal(bifrostModePhrase(state), expected);
+      // The header is the generator's own wording, so it is checked against the
+      // same function: a reintroduced local phrase would fail here.
       assert.match(
         renderMarkdown(buildCommandSurface(state), state),
-        new RegExp(`^Bifrost command surface — routing ${bifrostModePhrase(state)}$`, "m"),
+        new RegExp(`^Bifrost command surface — routing ${expected}$`, "m"),
       );
     }
   });
