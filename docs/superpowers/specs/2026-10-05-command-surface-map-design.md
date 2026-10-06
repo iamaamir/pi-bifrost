@@ -1,14 +1,14 @@
 # Command Surface Map
 
-Status: draft for review (revision 3)
+Status: draft for review (revision 4)
 Date: 2026-10-05
 Branch: `feat/feature-map` (off `main` = `v0.5.0`, `236622d`)
 
-> Revision 3 drops the pure-module extraction, which revision 2 introduced and
-> whose first review found a load-time `ReferenceError`. It also fixes a
-> self-contradictory `description` contract and relocates the renderers out of the
-> untypechecked `scripts/` directory. Corrections are listed in
-> [What changed](#what-changed-from-revision-2).
+> Revision 4 corrects a sample output that contradicted the spec's own design and
+> test, and moves all logic into `scripts/` following the existing
+> `scripts/jev-benchmark.ts` pattern. Review round 3 confirmed the architecture is
+> sound and all four revision-2 blockers fixed; what remained were accuracy
+> defects. Corrections are listed in [What changed](#what-changed-from-revision-3).
 
 ## Purpose
 
@@ -18,13 +18,13 @@ Answer one question, for a human or an agent with zero context: **what commands 
 
 ## What this is not
 
-- **Not a coverage matrix.** All 18 commands are already dispatch-tested somewhere. `classifier test`'s only dispatch is `tests/integration/integration.test.mjs:161`, which is outside `npm test`'s glob. There are no undiscovered commands, so a coverage map would track a gap that does not exist.
-- **Not a routing-surface map** (prompt → tier → candidate → model). Overlaps ADR 0007 and ADR 0011, both still Proposed.
+- **Not a coverage matrix.** All 18 commands are already dispatch-tested somewhere. `classifier test`'s only dispatch is `tests/integration/integration.test.mjs:161`, outside `npm test`'s glob. No command is undiscovered, so a coverage map would track a gap that does not exist.
+- **Not a routing-surface map.** Overlaps ADR 0007 and ADR 0011, both Proposed.
 - **Not committed.** See below.
 
 ## Generated, never committed
 
-Produced on demand, never written to the repo. A committed map would be a second ordering of the same 18 commands alongside `docs/guide/commands.md`, which is pedagogically ordered. Two committed orderings are two drift surfaces. Precedent: `scripts/jev-benchmark.ts` prints to stdout and never writes a file.
+Produced on demand, never written to the repo. A committed map would be a second ordering of the same 18 commands alongside `docs/guide/commands.md`, which is pedagogically ordered; two committed orderings are two drift surfaces. Precedent: `scripts/jev-benchmark.ts` prints to stdout and never writes a file.
 
 ## Design
 
@@ -32,59 +32,77 @@ Produced on demand, never written to the repo. A committed map would be a second
 
 `commands.ts` exports `dashboardCommands`. Nothing else moves.
 
-Revision 2 proposed extracting the registry into a root-level pure module to avoid loading the Pi SDK (~394 ms measured for the SDK, ~17 ms without). That is a real but modest gain for a script a human runs by hand, and it cost correctness: `PREVIEW_SUB` (`commands.ts:715`) is referenced *inside* `BIFROST_COMMAND_OPTIONS` at `:916`, so moving the registry without it creates a circular import, and the module-level array literal then reads `PREVIEW_SUB` while `commands.ts` is still in its temporal dead zone — a `ReferenceError` on module load. Dropped.
+Revision 2 proposed extracting the registry into a pure module to avoid the Pi SDK load. It shipped a load-time `ReferenceError`: `PREVIEW_SUB` (`commands.ts:715`) is referenced *inside* `BIFROST_COMMAND_OPTIONS` at `:916`, so moving the registry without it creates a cycle, and the module-level array literal then reads `PREVIEW_SUB` while `commands.ts` is still in its temporal dead zone. Dropped. The SDK load costs a few hundred milliseconds for a script a human runs by hand.
 
-`dashboardCommands`'s dependencies are `BIFROST_COMMAND_OPTIONS`, `requireCommand`, and `reflectedIsInert` — all already in `commands.ts`. No hidden coupling.
+The import graph is acyclic: `commands.ts` imports 15 local modules, none of which import it back.
 
-### Where the logic lives
+### Everything lives in `scripts/command-surface.ts`
 
-| File | Contents | Typechecked? |
-|---|---|---|
-| `command-surface.ts` (repo root) | `buildCommandSurface`, `renderMarkdown`, `renderJson` | **yes** — `tsconfig.json` includes `"*.ts"` |
-| `scripts/command-surface.ts` | argv parsing, print | **no** — `scripts/` is outside the program |
+Following `scripts/jev-benchmark.ts`: the module exports `main(argv = process.argv.slice(2))` and self-invokes under a guard (`import.meta.url === \`file://${process.argv[1]}\``), and `tests/jev-benchmark.test.ts` imports its helpers directly.
 
-`tsconfig.json:17` includes `["*.ts", "tests/**/*.ts"]`. A planted type error under `scripts/` produces zero errors from `npm run typecheck`; the same file at the repo root errors. So all logic lives at the root and is directly importable by tests; the script is a thin wrapper whose argv handling is covered by an `execFileSync` smoke test instead.
+This placement is deliberate on three counts:
 
-The root file imports `commands.ts`. `commands.ts` does not import it, so there is no cycle.
+- **Not published.** `package.json:6` is `files: ["*.ts", …]`, which matches the repo root only. Logic under `scripts/` stays out of the npm tarball. A root-level module would ship as a public entry point nothing imports, and `tests/release-package.test.mjs` asserts every root `*.ts` is packed.
+- **Typechecked.** `tsconfig.json:17` is `include: ["*.ts", "tests/**/*.ts"]`, so `scripts/` is outside the program directly — but importing it from `tests/command-surface.test.ts` brings it into the program transitively. A planted type error in an imported script is reported.
+- **Deterministic argv coverage.** `main(argv)` takes arguments as a parameter, so both renderers and both state flags are unit-testable without spawning a process.
+
+`package.json:44` globs `tests/*.test.ts`, which is what makes the new test run.
+
+### Signatures
+
+`CommandSpec` is not exported (`commands.ts:865`), so the row type is derived:
+
+```ts
+type CommandRow = typeof BIFROST_COMMAND_OPTIONS[number];
+type MenuState = Parameters<typeof dashboardCommands>[0];   // { enabled: boolean; pinned: boolean }
+
+export function buildCommandSurface(state: MenuState): CommandRow[];
+export function renderMarkdown(rows: CommandRow[], state: MenuState): string;
+export function renderJson(rows: CommandRow[], state: MenuState): string;
+export async function main(argv?: string[]): Promise<void>;
+```
 
 ### Row construction
 
 `buildCommandSurface` uses `dashboardCommands` **for order only**, and reads every field from the registry:
 
 ```ts
-const ordered = dashboardCommands(state);              // order, nothing else
+const ordered = dashboardCommands(state);
 return ordered.map((row) => {
   const spec = BIFROST_COMMAND_OPTIONS.find((s) => s.value === row.value)!;
   const inert = spec.reflects ? spec.reflects.sets === state[spec.reflects.state] : false;
   return {
-    value: spec.value,
-    description: spec.description,                     // bare, from the registry
-    argument: spec.argumentHint ?? null,
-    note: inert ? spec.reflects!.note : null,
+    ...spec,
     inert,
-    aliases: spec.aliases ?? [],
+    note: inert ? spec.reflects!.note : null,
   };
 });
 ```
 
-Revision 2 said "copy the row before annotating" and "emit `description` unmodified." Those conflict. `dashboardCommands` already folds the note into `description` for inert rows (`commands.ts:1017`: `` `${resolved.description} (${note})` ``), so taking `description` from its return value double-reports it — `Enable routing (already on)` plus a separate `note`. Stripping the parenthetical with a regex is worse: it corrupts `init`, whose `(pass -f to force re-probe)` is genuine prose. Reading the bare description from the registry avoids both, and `reflects` is already the authority for whether a note applies.
+`dashboardCommands` already folds the note into `description` for inert rows (`commands.ts:1017`), so taking `description` from its return value double-reports it. Stripping the parenthetical instead corrupts `init`, whose `(pass -f to force re-probe)` is genuine prose. Reading from the registry avoids both, and `reflects` is the authority for whether a note applies.
 
-The one non-null assertion is safe because `dashboardCommands` resolves every row through `requireCommand`, so a row without a registry entry throws before reaching it.
+The non-null assertion is safe: `dashboardCommands` builds rows from `BIFROST_COMMAND_OPTIONS.map(…)` and resolves each through `requireCommand`, which throws on a miss, so every returned `value` is in the registry. `spec.reflects!` is required and sound — the `inert` ternary does not narrow through the alias.
+
+The re-`find` is O(n²) over 18 rows. It is deliberate: only `description` genuinely requires the second read, and `dashboardCommands`'s return value is the one place it is already polluted.
 
 ### State is an input
 
-The reflected pair sorts actionable-first, so output differs by state. Default `enabled: true, pinned: false`.
+The reflected pairs sort actionable-first, so output differs by state. Default `enabled: true, pinned: false`.
 
-```
-node --experimental-strip-types scripts/command-surface.ts --enabled=false
-node --experimental-strip-types scripts/command-surface.ts --pinned=true
-```
+Reflected order by state, measured against the real `dashboardCommands`:
 
-Invoke via `node`, not `npm run` — npm writes its `> pkg@ver script` banner to **stdout**, which corrupts `--json`. (`npm run --silent command-surface -- --json` also works; the `node` form is documented because it does not depend on npm's flag handling.)
+| `enabled` | `pinned` | first four rows |
+|---|---|---|
+| true | false | `off, on, pin, unpin` |
+| true | true | `off, on, unpin, pin` |
+| false | false | `on, off, pin, unpin` |
+| false | true | `on, off, unpin, pin` |
+
+Invoke via `node`, not `npm run` — npm writes its `> pkg@ver script` banner to **stdout**, which corrupts `--json`. `npm run --silent command-surface -- --json` also works.
 
 ### Grouping, and what is editorial
 
-The dashboard has **no grouping**: `pickBifrostCommand` passes 18 flat strings to `ctx.ui.select` (`commands.ts:1027`). The map *invents* three groups from the same fields the dashboard sorts by:
+The dashboard has **no grouping**: `pickBifrostCommand` passes flat strings to `ctx.ui.select` (`commands.ts:1027`). The map *invents* three groups from the same fields the dashboard sorts by, matching `tierOf` (`commands.ts:995`) read top-down as ordered precedence:
 
 | Label | Condition |
 |---|---|
@@ -92,13 +110,15 @@ The dashboard has **no grouping**: `pickBifrostCommand` passes 18 flat strings t
 | `Common` | `spec.menu === "common"` |
 | `Everything else` | neither |
 
-Read top-down as ordered precedence, matching `tierOf` at `commands.ts:995`. `CommandSpec` permits `reflects` *and* `menu: "common"` together; `tierOf` places that in tier 0, and so does this table. No live entry does.
+`tierOf` is a local inside `dashboardCommands`, not module-scope, so nothing cross-checks against it.
 
 One lossiness, accepted: the map collapses `on`/`off` and `pin`/`unpin` into one `State toggles` table. The dashboard's sort keeps them as two groups (`reflectedStates` is `["enabled","enabled","pinned","pinned"]`). Order is preserved; the pairing is not visible.
 
 ### Output
 
-Markdown by default, both renderers over one row array so they cannot disagree.
+Markdown by default, both renderers over one row array so they cannot disagree. The command count is **interpolated from `BIFROST_COMMAND_OPTIONS.length`**, never a literal.
+
+The sample below was produced by running the specified builder against the real registry, not written by hand:
 
 ```
 Bifrost command surface — routing on, unpinned
@@ -108,39 +128,57 @@ Open the surface by typing /bifrost and pressing enter.
 
 ## State toggles
 
-| Command | Description | Argument | Note |
-|---|---|---|---|
-| /bifrost off | Disable routing | | |
-| /bifrost on | Enable routing | | already on |
+| Command | Description | Note |
+|---|---|---|
+| /bifrost off | Disable routing | |
+| /bifrost on | Enable routing | already on |
+| /bifrost pin | Lock current model | |
+| /bifrost unpin | Resume routing | already unpinned |
 
 ## Common
 
-| /bifrost preview | Preview routing for a prompt | [--json] <prompt> | |
-| /bifrost init | Probe models and generate config | | |
+| Command | Description | Note |
+|---|---|---|
+| /bifrost preview [--json] <prompt> | Preview routing for a prompt | |
+| /bifrost benchmark <prompt> | Classify a benchmark prompt | |
+| /bifrost providers | List available providers | |
+| /bifrost probe | Probe working models | |
+| /bifrost init | Probe models and generate config (pass -f to force re-probe) | |
+| /bifrost classifier status | Show classifier state | |
+| /bifrost reload | Reload config after editing | |
 
 ## Everything else
 
-| /bifrost cache clear | Clear classification cache | | |
+| Command | Description | Note |
+|---|---|---|
+| /bifrost cache stats | Show classification cache | |
+| /bifrost cache clear | Clear classification cache | |
+| /bifrost classifier | Choose classifier backend | |
+| /bifrost classifier on | Enable LLM classifier | |
+| /bifrost classifier off | Disable LLM classifier | |
+| /bifrost classifier test | Test selected classifier backend | |
+| /bifrost debug | Show config and routing state | |
 ```
 
-Markdown cells escape `|` as `\|`. No current description contains a pipe, so the table renders correctly today by luck; this makes it a rule.
+Three columns. There is no separate Argument column: the command cell already carries the argument hint, exactly as `formatBifrostCommandChoice` renders the menu row, so a second column would duplicate it.
 
-The `Note` column is populated only for the four reflected commands.
+**Escaping.** `|` becomes `\|`, and `<`/`>` are wrapped in backticks. The second rule is not cosmetic: `argumentHint` values are `[--json] <prompt>` and `<prompt>`, and in GitHub-flavored markdown a bare `<prompt>` is parsed as a raw HTML tag and renders as nothing — the argument hints would silently vanish wherever the map is pasted.
 
-**The bare `/bifrost` entry point is stated in the header.** It is not a registry entry — `tests/docs-command-drift.test.ts:34-35` drops it deliberately as "the dashboard, not a subcommand" — so the generator states it. Without it the map cannot answer "how do I reach each one."
+**The bare `/bifrost` entry point** is stated in the header. It is not a registry entry — `tests/docs-command-drift.test.ts:34-35` drops it deliberately as "the dashboard, not a subcommand."
 
-**No alias column.** Aliases are completion-only and are not on `CommandEntry`, so a column headed "Also accepted as" would assert a dispatchability the contract does not guarantee. Aliases are carried in the JSON output, where no claim is attached.
+**No alias column.** Aliases are not on `CommandEntry`, so the registry cannot prove per-alias dispatchability in general. (For the one live alias the registry *does* imply it — `spaced("init", …)` at `commands.ts:903` matches `init -f` — but that is a property of the matcher, not something the alias field asserts.) Aliases are carried in the JSON output, where no claim is attached.
 
-`--json` emits `{ state, total, groups: [{ label, rows: [{ command, value, description, argument, note, inert, aliases }] }] }`, with `null` where inapplicable.
+`--json` emits `{ state, total, groups: [{ label, rows }] }` with `null` where inapplicable. `total` is `BIFROST_COMMAND_OPTIONS.length`.
 
 ### Discoverability
 
-One prose line in `docs/guide/commands.md`, **outside** the command table, pointing at the script. Without it an uncommitted artifact is unreachable by its stated audience. The drift test's parse is set-based over `` | `/bifrost `` rows, so a prose line outside the table does not affect it.
+One prose line in `docs/guide/commands.md` pointing at the script.
+
+**Placement constraint.** The drift test anchors on `| Command |` and the next `| Control` header, which is at line 115 — so it slices roughly 110 lines past the command table. A prose line is safe anywhere in that span *only because* the parse skips rows not starting with `` | `/bifrost ``. A line written as a table row beginning `` | `/bifrost` `` would break it. The line must be prose, not a row.
 
 ### Files
 
-- Create: `command-surface.ts` — pure row builder and renderers
-- Create: `scripts/command-surface.ts` — thin CLI
+- Create: `scripts/command-surface.ts` — row builder, renderers, `main`
 - Create: `tests/command-surface.test.ts`
 - Modify: `commands.ts` — export `dashboardCommands`
 - Modify: `docs/guide/commands.md` — one prose line
@@ -148,20 +186,23 @@ One prose line in `docs/guide/commands.md`, **outside** the command table, point
 
 ## Testing
 
-- every registry `value` appears exactly once
-- row order equals `dashboardCommands(state)` for **all four** state combinations
-- `description` equals the **registry entry's** description — asserted against `BIFROST_COMMAND_OPTIONS`, not against the builder's own output, since the vacuous reading ("the builder did not mutate it") cannot catch the double-report this design exists to avoid
-- `note` and `inert` are non-null exactly when `spec.reflects.sets === state[spec.reflects.state]`; `init` has `note === null` despite its parenthetical
-- markdown output escapes a `|` in a description
-- the header's command count equals `BIFROST_COMMAND_OPTIONS.length`
-- a probe entry inserted into `BIFROST_COMMAND_OPTIONS` appears in the output and is restored in a `finally` — the registry is module-level shared state and the array is `readonly`, so the test needs a cast
-- **one `execFileSync` smoke test** runs the CLI with `--json --enabled=false --pinned=true`, parses the output, and asserts the reflected pair swapped. This covers argv parsing and both renderers — including that the two state flags actually take effect, which is the entire reason `dashboardCommands` is state-parameterised. Precedent: `tests/release-package.test.mjs` uses `execFileSync`.
+Registry and state are the reference for every assertion; none compares the builder to itself.
 
-There is deliberately **no labels-match-tiers test**. Revision 2 proposed one; it was a tautology, because the builder's label and the test's expected label derive from the same fields through the same expression, and `tierOf` is module-private so neither reads it. Cross-checking would require exporting `tierOf` purely for the test, which is surface for no gain. The order test is the real one.
+- **Markdown content.** Parse the command out of each rendered row and assert the sequence equals `dashboardCommands(state).map(r => r.value)` for all four states. This crosses builder → grouping → renderer, the only place a permutation or dropped row can hide, and it cannot be satisfied by re-deriving the same expression. Revision 3 had no test on the default output at all.
+- **`description` equals the registry entry's**, asserted against `BIFROST_COMMAND_OPTIONS` — the only reading that catches the double-report this design exists to avoid.
+- **Membership is a multiset check**: sorted row values deep-equal sorted registry values. A `some()`-per-value loop tolerates duplicates and extras.
+- **`note`/`inert` are non-null exactly when the registry's `reflects.sets` equals the state's value** — computed from registry and state, not from the builder's internals.
+- `init` has `note === null` despite its parenthetical.
+- Markdown escapes `|` and wraps `<…>` in backticks.
+- Header count equals `BIFROST_COMMAND_OPTIONS.length`.
+- **argv:** `main(["--json", "--enabled=false", "--pinned=true"])` emits `state` deep-equal to `{ enabled: false, pinned: true }`, `total === 18`, and reflected order `["on", "off", "unpin", "pin"]`. Asserts both pairs, not one. `main(["--json"])` yields the default tuple `["off", "on", "pin", "unpin"]`.
+- **Both renderers** are invoked directly, so neither is unexercised.
+- Unknown flags are rejected with a usage line and a non-zero exit, rather than silently ignored.
+- A probe entry in `BIFROST_COMMAND_OPTIONS` appears in the output, restored in a `finally` — the registry is module-level shared state and the array is `readonly`, so the test needs a cast. Insert two probes, one `menu: "common"` and one bare, so group *placement* is pinned, not just membership.
 
 ## Non-goals
 
-- No committed artifact, and therefore no new drift test for one.
+- No committed artifact, and no new drift test for one.
 - No matcher, side-effect, or test-coverage columns.
 - No change to the dashboard's contents, order, or rendering.
 - No change to `docs/guide/commands.md`'s command rows or ordering.
@@ -171,8 +212,8 @@ There is deliberately **no labels-match-tiers test**. Revision 2 proposed one; i
 - The map inherits the menu's ordering. `benchmark` and `providers` sit in the tail because they carry no `menu: "common"`.
 - Registry order is also pinned by `tests/landing-command-menu.test.mjs` for `docs/terminal-demo.js`. Adding a 19th command correctly fails that test; this change inherits the coupling.
 - The map is only as current as the commit it is run from.
-- `scripts/command-surface.ts` remains outside the tsconfig program. Its whole surface is argv handling, covered by the smoke test.
-- The header's `/bifrost` string is the one output line with no drift guard. `docs/guide/commands.md:7` documents it, but nothing asserts the two stay in step.
+- The header's `/bifrost` is the one output string with no drift guard.
+- `commands.ts:1402` already renders a mode phrase for the dashboard title (`off` / `pinned` / `on`). The generator's header phrase is worded differently — a second convention to keep aligned.
 
 ## Verification
 
@@ -183,11 +224,11 @@ node --experimental-strip-types scripts/command-surface.ts | head -30
 node --experimental-strip-types scripts/command-surface.ts --json | head -40
 ```
 
-## What changed from revision 2
+## What changed from revision 3
 
-- **Dropped the pure-module extraction.** It introduced a load-time `ReferenceError`: `PREVIEW_SUB` is used inside `BIFROST_COMMAND_OPTIONS`, so moving the registry without it creates a cycle and a TDZ read. The ~394 ms SDK load is accepted.
-- **Fixed a self-contradictory `description` contract.** Revision 2 said both "copy the row before annotating" and "emit `description` unmodified"; `dashboardCommands` already folds the note in, so the two combined into a double-report. Row fields now come from the registry; only order comes from `dashboardCommands`.
-- **Moved the renderers to the repo root**, out of the untypechecked and unimportable `scripts/` directory, which is what made one of revision 2's seven tests impossible to write.
-- **Deleted the tautological labels-match-tiers test**, with the reason stated.
-- **Extended the smoke test to cover `--enabled` and `--pinned`**, which revision 2 left untested despite state being the reason `dashboardCommands` is parameterised.
-- **Corrected three facts:** the SDK load is ~394 ms and the pure module ~17 ms (directionally right, ~23×, but the earlier figures were wrong); there are **three** importers of `BIFROST_COMMAND_OPTIONS`, not two; `ReflectedState` would have been exported and used by nobody.
+- **Replaced the hand-written sample with generated output.** It was wrong three ways: it truncated `init`'s description to `Probe models and generate config`, omitting `(pass -f to force re-probe)` — the exact corruption the spec refuses elsewhere — it showed only two of four state toggles while the header claimed 18 commands, and it led the last group with `cache clear` when the real first row is `cache stats`.
+- **Dropped the Argument column**, which duplicated the hint already present in the command cell.
+- **Escape `<` and `>` as well as `|`.** `<prompt>` renders as nothing in GitHub-flavored markdown, so the argument hints would vanish wherever the map is pasted.
+- **Moved all logic into `scripts/command-surface.ts` with `export main(argv)`,** following `scripts/jev-benchmark.ts`. No root module, so nothing dead is published into the tarball; the test import brings it into the typecheck program; and argv is testable without spawning a process.
+- **Added a markdown-content test** — the default output had no content assertion at all, so a renderer that dropped a group or a column would pass.
+- **Changed membership to a multiset check; specified the builder's signature; made the count derivation explicit; corrected the alias rationale** (`spaced()` does make `init -f` dispatchable); corrected `tierOf` to function-private; cited `package.json:44` and `package.json:6`; replaced the `execFileSync` smoke test with direct `main()` tests covering both renderers and both state flags, and dropped the false "covers both renderers" claim; and stated the prose-line placement constraint.
