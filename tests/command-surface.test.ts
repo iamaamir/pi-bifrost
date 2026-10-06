@@ -1,7 +1,57 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { BIFROST_COMMAND_OPTIONS, dashboardCommands } from "../commands.ts";
-import { buildCommandSurface, renderJson, renderMarkdown, type SurfaceRow } from "../scripts/command-surface.ts";
+import {
+  buildCommandSurface,
+  main,
+  renderJson,
+  renderMarkdown,
+  type SurfaceRow,
+} from "../scripts/command-surface.ts";
+
+async function captureRunAsync(run: () => Promise<void>): Promise<string> {
+  const chunks: string[] = [];
+  const original = console.log;
+  console.log = (...parts: unknown[]) => chunks.push(parts.join(" "));
+  try {
+    await run();
+  } finally {
+    console.log = original;
+  }
+  return chunks.join("\n");
+}
+
+describe("command-surface cli", () => {
+  it("defaults to routing on, unpinned", async () => {
+    const parsed = JSON.parse(await captureRunAsync(() => main(["--json"])));
+    assert.deepEqual(parsed.state, { enabled: true, pinned: false });
+    assert.equal(
+      parsed.groups[0].rows.slice(0, 4).map((r: { value: string }) => r.value).join(","),
+      "off,on,pin,unpin",
+    );
+  });
+
+  it("honours both state flags", async () => {
+    const parsed = JSON.parse(
+      await captureRunAsync(() => main(["--json", "--enabled=false", "--pinned=true"])),
+    );
+    assert.deepEqual(parsed.state, { enabled: false, pinned: true });
+    assert.equal(
+      parsed.groups[0].rows.slice(0, 4).map((r: { value: string }) => r.value).join(","),
+      "on,off,unpin,pin",
+    );
+  });
+
+  it("emits markdown by default", async () => {
+    const out = await captureRunAsync(() => main([]));
+    assert.match(out, /^Bifrost command surface/);
+    assert.match(out, /## State toggles/);
+  });
+
+  it("rejects an unknown flag", async () => {
+    await assert.rejects(() => main(["--nope"]), /unknown flag/);
+  });
+});
 
 describe("dashboardCommands", () => {
   it("returns every registered command exactly once, in menu order", () => {

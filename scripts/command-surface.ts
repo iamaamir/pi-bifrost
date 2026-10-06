@@ -72,3 +72,25 @@ export function renderJson(rows: readonly SurfaceRow[], state: MenuState): strin
     2,
   )}\n`;
 }
+
+const USAGE = "usage: command-surface [--json] [--enabled=true|false] [--pinned=true|false]";
+
+export async function main(argv = process.argv.slice(2)): Promise<void> {
+  let json = false;
+  const state = { enabled: true, pinned: false };
+  for (const arg of argv) {
+    if (arg === "--json") json = true;
+    else if (arg.startsWith("--enabled=")) state.enabled = arg.slice("--enabled=".length) !== "false";
+    else if (arg.startsWith("--pinned=")) state.pinned = arg.slice("--pinned=".length) !== "false";
+    else throw new Error(`unknown flag: ${arg}\n${USAGE}`);
+  }
+  const rows = buildCommandSurface(state);
+  console.log(json ? renderJson(rows, state).trimEnd() : renderMarkdown(rows, state).trimEnd());
+}
+
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : "command-surface failed");
+    process.exitCode = 1;
+  });
+}
