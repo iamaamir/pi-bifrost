@@ -27,7 +27,7 @@ export function groupOf(row: SurfaceRow): number {
 const GROUP_LABELS = ["State toggles", "Common", "Everything else"] as const;
 
 function escapePipes(text: string): string {
-  return text.replace(/\|/g, "\\|");
+  return text.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
 }
 
 function escapeCell(text: string): string {
