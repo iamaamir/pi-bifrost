@@ -1,12 +1,14 @@
 # Command Surface Map
 
-Status: draft for review (revision 2)
+Status: draft for review (revision 3)
 Date: 2026-10-05
 Branch: `feat/feature-map` (off `main` = `v0.5.0`, `236622d`)
 
-> Revision 2 fixes five blocking defects found in review. Revision 1 asserted
-> three things that were false about the code; the corrections are listed in
-> [What changed](#what-changed-from-revision-1).
+> Revision 3 drops the pure-module extraction, which revision 2 introduced and
+> whose first review found a load-time `ReferenceError`. It also fixes a
+> self-contradictory `description` contract and relocates the renderers out of the
+> untypechecked `scripts/` directory. Corrections are listed in
+> [What changed](#what-changed-from-revision-2).
 
 ## Purpose
 
@@ -16,51 +18,73 @@ Answer one question, for a human or an agent with zero context: **what commands 
 
 ## What this is not
 
-- **Not a coverage matrix.** All 18 commands are already dispatch-tested somewhere. `classifier test`'s only dispatch is `tests/integration/integration.test.mjs:161`, which is not in `npm test` — but there are no undiscovered commands, so a coverage map would track a gap that does not exist.
-- **Not a routing-surface map** (prompt → tier → candidate → model). That overlaps ADR 0007 and ADR 0011, both still Proposed.
+- **Not a coverage matrix.** All 18 commands are already dispatch-tested somewhere. `classifier test`'s only dispatch is `tests/integration/integration.test.mjs:161`, which is outside `npm test`'s glob. There are no undiscovered commands, so a coverage map would track a gap that does not exist.
+- **Not a routing-surface map** (prompt → tier → candidate → model). Overlaps ADR 0007 and ADR 0011, both still Proposed.
 - **Not committed.** See below.
 
 ## Generated, never committed
 
-Produced on demand, never written to the repo. A committed map would be a second ordering of the same 18 commands alongside `docs/guide/commands.md`, which is pedagogically ordered. Two committed orderings are two drift surfaces; an on-demand generator has none. Precedent: `scripts/jev-benchmark.ts` prints to stdout and never writes a file.
+Produced on demand, never written to the repo. A committed map would be a second ordering of the same 18 commands alongside `docs/guide/commands.md`, which is pedagogically ordered. Two committed orderings are two drift surfaces. Precedent: `scripts/jev-benchmark.ts` prints to stdout and never writes a file.
 
 ## Design
 
-### Extract a pure registry module
+### One export, no extraction
 
-New `command-registry.ts` at the repo root, importing nothing from the Pi SDK, holding:
+`commands.ts` exports `dashboardCommands`. Nothing else moves.
 
-- `CommandSpec`
-- `ReflectedState` and a `MenuState` type (`{ enabled: boolean; pinned: boolean }`)
-- `BIFROST_COMMAND_OPTIONS`
-- `requireCommand`, `reflectedIsInert`, `dashboardCommands`
+Revision 2 proposed extracting the registry into a root-level pure module to avoid loading the Pi SDK (~394 ms measured for the SDK, ~17 ms without). That is a real but modest gain for a script a human runs by hand, and it cost correctness: `PREVIEW_SUB` (`commands.ts:715`) is referenced *inside* `BIFROST_COMMAND_OPTIONS` at `:916`, so moving the registry without it creates a circular import, and the module-level array literal then reads `PREVIEW_SUB` while `commands.ts` is still in its temporal dead zone — a `ReferenceError` on module load. Dropped.
 
-`commands.ts` re-exports `BIFROST_COMMAND_OPTIONS` so the two existing test imports (`tests/docs-command-drift.test.ts`, `tests/landing-command-menu.test.mjs`) keep working unchanged.
+`dashboardCommands`'s dependencies are `BIFROST_COMMAND_OPTIONS`, `requireCommand`, and `reflectedIsInert` — all already in `commands.ts`. No hidden coupling.
 
-**Why extract rather than just export from `commands.ts`:** `commands.ts:2` has a runtime import of `@earendil-works/pi-coding-agent`. A generator importing it loads the whole SDK — 453 ms measured — to read an array of 18 static objects. A pure module loads in single-digit milliseconds. It also satisfies the prior registry spec's non-goal ("No new exported surface") rather than overriding it, and lets `CommandSpec` be exported, so the generator's row type is nameable.
+### Where the logic lives
 
-Note: `dashboardCommands` currently takes `Pick<BifrostState, ReflectedState>`, and `BifrostState` lives in `commands.ts`. The pure module cannot import it without a cycle, so the parameter becomes the structurally identical local `MenuState`.
+| File | Contents | Typechecked? |
+|---|---|---|
+| `command-surface.ts` (repo root) | `buildCommandSurface`, `renderMarkdown`, `renderJson` | **yes** — `tsconfig.json` includes `"*.ts"` |
+| `scripts/command-surface.ts` | argv parsing, print | **no** — `scripts/` is outside the program |
 
-### The generator calls the real menu builder
+`tsconfig.json:17` includes `["*.ts", "tests/**/*.ts"]`. A planted type error under `scripts/` produces zero errors from `npm run typecheck`; the same file at the repo root errors. So all logic lives at the root and is directly importable by tests; the script is a thin wrapper whose argv handling is covered by an `execFileSync` smoke test instead.
 
-`scripts/command-surface.ts` calls `dashboardCommands(state)`. It does not re-derive the order. One implementation, two consumers.
+The root file imports `commands.ts`. `commands.ts` does not import it, so there is no cycle.
 
-`dashboardCommands` returns **registry objects by identity** for the 14 rows that carry no state note. `buildCommandSurface` must copy any row before annotating, or a consumer that mutates a row corrupts `BIFROST_COMMAND_OPTIONS`.
+### Row construction
+
+`buildCommandSurface` uses `dashboardCommands` **for order only**, and reads every field from the registry:
+
+```ts
+const ordered = dashboardCommands(state);              // order, nothing else
+return ordered.map((row) => {
+  const spec = BIFROST_COMMAND_OPTIONS.find((s) => s.value === row.value)!;
+  const inert = spec.reflects ? spec.reflects.sets === state[spec.reflects.state] : false;
+  return {
+    value: spec.value,
+    description: spec.description,                     // bare, from the registry
+    argument: spec.argumentHint ?? null,
+    note: inert ? spec.reflects!.note : null,
+    inert,
+    aliases: spec.aliases ?? [],
+  };
+});
+```
+
+Revision 2 said "copy the row before annotating" and "emit `description` unmodified." Those conflict. `dashboardCommands` already folds the note into `description` for inert rows (`commands.ts:1017`: `` `${resolved.description} (${note})` ``), so taking `description` from its return value double-reports it — `Enable routing (already on)` plus a separate `note`. Stripping the parenthetical with a regex is worse: it corrupts `init`, whose `(pass -f to force re-probe)` is genuine prose. Reading the bare description from the registry avoids both, and `reflects` is already the authority for whether a note applies.
+
+The one non-null assertion is safe because `dashboardCommands` resolves every row through `requireCommand`, so a row without a registry entry throws before reaching it.
 
 ### State is an input
 
-The reflected pair sorts actionable-first, so output differs by state:
+The reflected pair sorts actionable-first, so output differs by state. Default `enabled: true, pinned: false`.
 
 ```
 node --experimental-strip-types scripts/command-surface.ts --enabled=false
 node --experimental-strip-types scripts/command-surface.ts --pinned=true
 ```
 
-Default is `enabled: true, pinned: false`. Invoke through `node` directly, **not** `npm run` — npm writes its `> pkg@ver script` banner to **stdout**, which corrupts `--json` output. `npm run command-surface` is fine for reading; `--json` is documented with the `node` form.
+Invoke via `node`, not `npm run` — npm writes its `> pkg@ver script` banner to **stdout**, which corrupts `--json`. (`npm run --silent command-surface -- --json` also works; the `node` form is documented because it does not depend on npm's flag handling.)
 
 ### Grouping, and what is editorial
 
-The dashboard has **no grouping**. `pickBifrostCommand` passes 18 flat strings to `ctx.ui.select` (`commands.ts:1027`) — no headers, no separators. The map *invents* three groups, derived from the same registry fields the dashboard sorts by:
+The dashboard has **no grouping**: `pickBifrostCommand` passes 18 flat strings to `ctx.ui.select` (`commands.ts:1027`). The map *invents* three groups from the same fields the dashboard sorts by:
 
 | Label | Condition |
 |---|---|
@@ -68,17 +92,17 @@ The dashboard has **no grouping**. `pickBifrostCommand` passes 18 flat strings t
 | `Common` | `spec.menu === "common"` |
 | `Everything else` | neither |
 
-This is label-only; the map preserves `dashboardCommands`' array order and cannot disagree with the menu about ordering. But it is editorial, and the header line must say so rather than claiming fidelity.
+Read top-down as ordered precedence, matching `tierOf` at `commands.ts:995`. `CommandSpec` permits `reflects` *and* `menu: "common"` together; `tierOf` places that in tier 0, and so does this table. No live entry does.
 
-One known lossiness: the map collapses `on`/`off` and `pin`/`unpin` into a single `State toggles` table. The dashboard's own sort keeps them as two groups (`reflectedStates` is `["enabled","enabled","pinned","pinned"]`). Order is preserved; the pairing is not visible. Accepted.
+One lossiness, accepted: the map collapses `on`/`off` and `pin`/`unpin` into one `State toggles` table. The dashboard's sort keeps them as two groups (`reflectedStates` is `["enabled","enabled","pinned","pinned"]`). Order is preserved; the pairing is not visible.
 
 ### Output
 
-Markdown by default. Rows come from `buildCommandSurface`, rendered by two functions over the same row array so they cannot disagree.
+Markdown by default, both renderers over one row array so they cannot disagree.
 
 ```
 Bifrost command surface — routing on, unpinned
-18 commands. Order matches the /bifrost dashboard. Grouping is editorial.
+18 commands. Order matches the /bifrost dashboard; grouping is editorial.
 
 Open the surface by typing /bifrost and pressing enter.
 
@@ -99,69 +123,56 @@ Open the surface by typing /bifrost and pressing enter.
 | /bifrost cache clear | Clear classification cache | | |
 ```
 
-Four changes from revision 1:
+Markdown cells escape `|` as `\|`. No current description contains a pipe, so the table renders correctly today by luck; this makes it a rule.
 
-1. **A `Note` column, and `description` stays bare.** Revision 1 claimed the state note was unrecoverable because `dashboardCommands` folds it into `description`. That is false: the spread at `commands.ts:1017` carries `reflects` through, so `spec.reflects.note` and `spec.reflects.sets === state[spec.reflects.state]` are both available per row. Emitting them means a consumer can tell a state note from genuine prose — `init`'s `(pass -f to force re-probe)` has `reflects === undefined`, `on`'s `(already on)` does not. `description` is emitted unmodified.
-2. **The bare `/bifrost` entry point is stated in the header.** It is not a registry entry — `tests/docs-command-drift.test.ts` drops it deliberately as "the dashboard, not a subcommand" — so the generator states it explicitly. Without this the map cannot answer "how do I reach each one."
-3. **No alias column.** Per the registry spec, aliases are **completion-only** and are not on `CommandEntry`. A column headed "Also accepted as" would assert a dispatchability the contract does not guarantee. Dropped rather than mislabelled.
-4. **Markdown cells are escaped.** `|` becomes `\|`. Zero current descriptions contain a pipe, so the table renders correctly today **by luck**; this makes it a rule.
+The `Note` column is populated only for the four reflected commands.
 
-`--json` emits:
+**The bare `/bifrost` entry point is stated in the header.** It is not a registry entry — `tests/docs-command-drift.test.ts:34-35` drops it deliberately as "the dashboard, not a subcommand" — so the generator states it. Without it the map cannot answer "how do I reach each one."
 
-```json
-{
-  "state": { "enabled": true, "pinned": false },
-  "total": 18,
-  "groups": [
-    { "label": "State toggles", "rows": [
-      { "command": "/bifrost on", "value": "on", "description": "Enable routing",
-        "argument": null, "note": "already on", "inert": true, "aliases": ["init -f"] }
-    ]}
-  ]
-}
-```
+**No alias column.** Aliases are completion-only and are not on `CommandEntry`, so a column headed "Also accepted as" would assert a dispatchability the contract does not guarantee. Aliases are carried in the JSON output, where no claim is attached.
 
-`note` and `inert` are `null` when not applicable. `aliases` is carried in JSON (structured, no claim attached) but not rendered in the markdown table.
+`--json` emits `{ state, total, groups: [{ label, rows: [{ command, value, description, argument, note, inert, aliases }] }] }`, with `null` where inapplicable.
 
 ### Discoverability
 
-One line is added to `docs/guide/commands.md` pointing at the script, because an uncommitted, undocumented artifact is unreachable by its stated audience. This moves that file out of revision 1's non-goals.
+One prose line in `docs/guide/commands.md`, **outside** the command table, pointing at the script. Without it an uncommitted artifact is unreachable by its stated audience. The drift test's parse is set-based over `` | `/bifrost `` rows, so a prose line outside the table does not affect it.
 
 ### Files
 
-- Create: `command-registry.ts` — pure registry + menu builder
+- Create: `command-surface.ts` — pure row builder and renderers
 - Create: `scripts/command-surface.ts` — thin CLI
 - Create: `tests/command-surface.test.ts`
-- Modify: `commands.ts` — remove the moved code, re-export `BIFROST_COMMAND_OPTIONS`, use `MenuState`
-- Modify: `docs/guide/commands.md` — one discoverability line
+- Modify: `commands.ts` — export `dashboardCommands`
+- Modify: `docs/guide/commands.md` — one prose line
 - Modify: `package.json` — `"command-surface": "node --experimental-strip-types scripts/command-surface.ts"`
-
-`buildCommandSurface` lives in `command-registry.ts`, **not** in `scripts/`. `tsconfig.json` includes `["*.ts", "tests/**/*.ts"]`, so `scripts/` is outside the program: I planted a type error there and `npm run typecheck` reported zero errors. Root-level `command-registry.ts` is covered.
 
 ## Testing
 
 - every registry `value` appears exactly once
 - row order equals `dashboardCommands(state)` for **all four** state combinations
-- **labels match tiers** — a test that each row's group label equals the label implied by its `reflects`/`menu` fields. Without this, widening `menu` and rewriting the dashboard's tier logic could silently desynchronise labels while the order test stayed green.
-- a probe entry inserted into `BIFROST_COMMAND_OPTIONS` appears in the output, restored in a `finally` — the registry is module-level shared state
-- `description` is emitted unmodified; `note`/`inert` derive from `reflects`; a row with a genuine parenthetical (`init`) has `note === null`
-- the header's command count equals `BIFROST_COMMAND_OPTIONS.length`
+- `description` equals the **registry entry's** description — asserted against `BIFROST_COMMAND_OPTIONS`, not against the builder's own output, since the vacuous reading ("the builder did not mutate it") cannot catch the double-report this design exists to avoid
+- `note` and `inert` are non-null exactly when `spec.reflects.sets === state[spec.reflects.state]`; `init` has `note === null` despite its parenthetical
 - markdown output escapes a `|` in a description
-- **one `execFileSync` smoke test** runs the CLI end to end, parses its `--json`, and asserts exit code. This covers argv parsing and both renderers — none of which the pure-function tests touch. Precedent: `tests/release-package.test.mjs` already uses `execFileSync`.
+- the header's command count equals `BIFROST_COMMAND_OPTIONS.length`
+- a probe entry inserted into `BIFROST_COMMAND_OPTIONS` appears in the output and is restored in a `finally` — the registry is module-level shared state and the array is `readonly`, so the test needs a cast
+- **one `execFileSync` smoke test** runs the CLI with `--json --enabled=false --pinned=true`, parses the output, and asserts the reflected pair swapped. This covers argv parsing and both renderers — including that the two state flags actually take effect, which is the entire reason `dashboardCommands` is state-parameterised. Precedent: `tests/release-package.test.mjs` uses `execFileSync`.
+
+There is deliberately **no labels-match-tiers test**. Revision 2 proposed one; it was a tautology, because the builder's label and the test's expected label derive from the same fields through the same expression, and `tierOf` is module-private so neither reads it. Cross-checking would require exporting `tierOf` purely for the test, which is surface for no gain. The order test is the real one.
 
 ## Non-goals
 
 - No committed artifact, and therefore no new drift test for one.
-- No matcher, side-effect, or test-coverage columns. Those need data the registry does not hold.
+- No matcher, side-effect, or test-coverage columns.
 - No change to the dashboard's contents, order, or rendering.
 - No change to `docs/guide/commands.md`'s command rows or ordering.
 
 ## Known constraints
 
-- The map inherits the menu's ordering. `benchmark` and `providers` sit in the tail because they carry no `menu: "common"` — faithful to the menu, not an editorial choice.
-- Registry order is also pinned by `tests/landing-command-menu.test.mjs` for `docs/terminal-demo.js`. Adding a 19th command correctly fails that test; this change does not alter the coupling, it inherits it.
+- The map inherits the menu's ordering. `benchmark` and `providers` sit in the tail because they carry no `menu: "common"`.
+- Registry order is also pinned by `tests/landing-command-menu.test.mjs` for `docs/terminal-demo.js`. Adding a 19th command correctly fails that test; this change inherits the coupling.
 - The map is only as current as the commit it is run from.
-- `scripts/` remains outside the tsconfig program. The `execFileSync` test is what keeps the CLI honest; the pure logic is typechecked only because it lives at the repo root.
+- `scripts/command-surface.ts` remains outside the tsconfig program. Its whole surface is argv handling, covered by the smoke test.
+- The header's `/bifrost` string is the one output line with no drift guard. `docs/guide/commands.md:7` documents it, but nothing asserts the two stay in step.
 
 ## Verification
 
@@ -172,13 +183,11 @@ node --experimental-strip-types scripts/command-surface.ts | head -30
 node --experimental-strip-types scripts/command-surface.ts --json | head -40
 ```
 
-## What changed from revision 1
+## What changed from revision 2
 
-- **Corrected a false claim.** Revision 1 said the state note is unrecoverable because it was folded into `description`. `reflects` survives on every returned row, so it is recoverable — and revision 1 specified `--json` wrong for exactly that reason.
-- **Corrected a false verification command.** Revision 1 documented `npm run command-surface -- --json`, whose output includes npm's stdout banner and does not parse.
-- **Corrected an unstated typecheck gap.** `scripts/` is outside the tsconfig program; `buildCommandSurface` moved to root.
-- **Extract a pure module** rather than exporting from `commands.ts`, dropping a 453 ms SDK load and satisfying the prior non-goal instead of overriding it.
-- **Copy rows before annotating**, because `dashboardCommands` returns registry objects by identity for 14 of 18.
-- **Added the bare `/bifrost` entry point**, without which the map cannot answer its own question.
-- **Added discoverability**, without which the artifact is unreachable by its stated audience.
-- **Dropped the alias column**, added markdown escaping, added the labels-match-tiers test and the `execFileSync` smoke test, and stopped claiming the dashboard has grouping.
+- **Dropped the pure-module extraction.** It introduced a load-time `ReferenceError`: `PREVIEW_SUB` is used inside `BIFROST_COMMAND_OPTIONS`, so moving the registry without it creates a cycle and a TDZ read. The ~394 ms SDK load is accepted.
+- **Fixed a self-contradictory `description` contract.** Revision 2 said both "copy the row before annotating" and "emit `description` unmodified"; `dashboardCommands` already folds the note in, so the two combined into a double-report. Row fields now come from the registry; only order comes from `dashboardCommands`.
+- **Moved the renderers to the repo root**, out of the untypechecked and unimportable `scripts/` directory, which is what made one of revision 2's seven tests impossible to write.
+- **Deleted the tautological labels-match-tiers test**, with the reason stated.
+- **Extended the smoke test to cover `--enabled` and `--pinned`**, which revision 2 left untested despite state being the reason `dashboardCommands` is parameterised.
+- **Corrected three facts:** the SDK load is ~394 ms and the pure module ~17 ms (directionally right, ~23×, but the earlier figures were wrong); there are **three** importers of `BIFROST_COMMAND_OPTIONS`, not two; `ReflectedState` would have been exported and used by nobody.
