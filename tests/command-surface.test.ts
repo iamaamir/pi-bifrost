@@ -6,8 +6,30 @@ import {
   main,
   renderJson,
   renderMarkdown,
+  statePhrase,
   type SurfaceRow,
 } from "../scripts/command-surface.ts";
+
+// BIFROST_COMMAND_OPTIONS is module-level shared state and is typed readonly, so
+// a probe has to cast its way in and restore the length in a finally. Without
+// the restore the rest of the suite would see the extra entries.
+function withProbes<T>(
+  extra: Array<{ value: string; description: string; menu?: "common" }>,
+  fn: () => T,
+): T {
+  const registry = BIFROST_COMMAND_OPTIONS as unknown as Array<{
+    value: string;
+    description: string;
+    menu?: "common";
+  }>;
+  const original = registry.length;
+  registry.push(...extra);
+  try {
+    return fn();
+  } finally {
+    registry.length = original;
+  }
+}
 
 async function captureRunAsync(run: () => Promise<void>): Promise<string> {
   const chunks: string[] = [];
@@ -122,25 +144,64 @@ describe("buildCommandSurface", () => {
   });
 });
 
+describe("group placement", () => {
+  it("puts a menu:common probe in Common and a bare probe in Everything else", () => {
+    const state = { enabled: true, pinned: false };
+    withProbes(
+      [
+        { value: "zeta common", description: "probe in the common group", menu: "common" },
+        { value: "alpha bare", description: "probe in the tail group" },
+      ],
+      () => {
+        const markdown = renderMarkdown(buildCommandSurface(state), state);
+        const common = markdown.split("## Common")[1].split("## Everything else")[0];
+        const tail = markdown.split("## Everything else")[1];
+        assert.match(common, /zeta common/);
+        assert.doesNotMatch(common, /alpha bare/);
+        assert.match(tail, /alpha bare/);
+        assert.doesNotMatch(tail, /zeta common/);
+      },
+    );
+  });
+
+  it("keeps the registry length unchanged after a probe run", () => {
+    const before = BIFROST_COMMAND_OPTIONS.length;
+    withProbes([{ value: "zeta probe", description: "d" }], () => undefined);
+    assert.equal(BIFROST_COMMAND_OPTIONS.length, before);
+  });
+});
+
+describe("statePhrase", () => {
+  it("names the mode the way the dashboard title does", () => {
+    assert.equal(statePhrase({ enabled: true, pinned: false }), "on");
+    assert.equal(statePhrase({ enabled: true, pinned: true }), "pinned");
+    assert.equal(statePhrase({ enabled: false, pinned: false }), "off");
+    assert.equal(statePhrase({ enabled: false, pinned: true }), "pinned");
+  });
+});
+
 describe("renderMarkdown", () => {
   const state = { enabled: true, pinned: false };
   const rows = buildCommandSurface(state);
 
-  it("renders command order identical to the dashboard", () => {
-    const markdown = renderMarkdown(rows, state);
-    const rendered = rows
-      .map((row) => new RegExp(`^\\| \`/bifrost ${row.value}[^\`]*\` \\|`, "m").test(markdown))
-      .every(Boolean);
-    assert.ok(rendered);
-    // Compare whole cells, not bare values: values contain spaces (`classifier
-    // status`) and two of them carry an argument hint, so a value-only capture
-    // would either truncate or leave the hint attached.
-    const order = [...markdown.matchAll(/^\| `\/bifrost (.+?)` \|/gm)].map((match) => match[1]);
-    const expected = dashboardCommands(state).map((spec) => {
-      const hint = spec.argumentHint ? ` ${spec.argumentHint}` : "";
-      return `${spec.value}${hint}`;
-    });
-    assert.deepEqual(order, expected);
+  it("renders command order identical to the dashboard for all four states", () => {
+    for (const current of [
+      { enabled: true, pinned: false },
+      { enabled: true, pinned: true },
+      { enabled: false, pinned: false },
+      { enabled: false, pinned: true },
+    ]) {
+      const markdown = renderMarkdown(buildCommandSurface(current), current);
+      // Compare whole cells, not bare values: values contain spaces (`classifier
+      // status`) and two of them carry an argument hint, so a value-only capture
+      // would either truncate or leave the hint attached.
+      const order = [...markdown.matchAll(/^\| `\/bifrost (.+?)`/gm)].map((match) => match[1]);
+      const expected = dashboardCommands(current).map((spec) => {
+        const hint = spec.argumentHint ? ` ${spec.argumentHint}` : "";
+        return `${spec.value}${hint}`;
+      });
+      assert.deepEqual(order, expected);
+    }
   });
 
   it("shows every command exactly once", () => {
@@ -155,12 +216,13 @@ describe("renderMarkdown", () => {
     }
   });
 
-  it("carries the state note on the no-op row only", () => {
+  it("renders a three-column row with an empty Note cell when there is no note", () => {
     const markdown = renderMarkdown(rows, state);
-    assert.match(markdown, /\| `\/bifrost on` \| Enable routing \| already on \|/);
-    // An absent note leaves an empty cell, so the two delimiters are separated
-    // by padding rather than sitting flush: `| |` would never match.
-    assert.match(markdown, /\| `\/bifrost off` \| Disable routing \|\s+\|/);
+    assert.match(markdown, /^\| `\/bifrost on` \| Enable routing \| already on \|$/m);
+    // "m" plus the ^…$ anchors are load-bearing: \s+ spans newlines, so an
+    // unanchored version of this assertion still matches when the Note column is
+    // dropped entirely and the next row's cells line up across the boundary.
+    assert.match(markdown, /^\| `\/bifrost off` \| Disable routing \| *\|$/m);
   });
 
   it("keeps init's parenthetical in the description column", () => {
