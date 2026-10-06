@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { BIFROST_COMMAND_OPTIONS, dashboardCommands } from "../commands.ts";
-import { buildCommandSurface } from "../scripts/command-surface.ts";
+import { buildCommandSurface, renderJson, renderMarkdown, type SurfaceRow } from "../scripts/command-surface.ts";
 
 describe("dashboardCommands", () => {
   it("returns every registered command exactly once, in menu order", () => {
@@ -69,5 +69,100 @@ describe("buildCommandSurface", () => {
         dashboardCommands(state).map((r) => r.value),
       );
     }
+  });
+});
+
+describe("renderMarkdown", () => {
+  const state = { enabled: true, pinned: false };
+  const rows = buildCommandSurface(state);
+
+  it("renders command order identical to the dashboard", () => {
+    const markdown = renderMarkdown(rows, state);
+    const rendered = rows
+      .map((row) => new RegExp(`^\\| \`/bifrost ${row.value}[^\`]*\` \\|`, "m").test(markdown))
+      .every(Boolean);
+    assert.ok(rendered);
+    // Compare whole cells, not bare values: values contain spaces (`classifier
+    // status`) and two of them carry an argument hint, so a value-only capture
+    // would either truncate or leave the hint attached.
+    const order = [...markdown.matchAll(/^\| `\/bifrost (.+?)` \|/gm)].map((match) => match[1]);
+    const expected = dashboardCommands(state).map((spec) => {
+      const hint = spec.argumentHint ? ` ${spec.argumentHint}` : "";
+      return `${spec.value}${hint}`;
+    });
+    assert.deepEqual(order, expected);
+  });
+
+  it("shows every command exactly once", () => {
+    const markdown = renderMarkdown(rows, state);
+    for (const command of BIFROST_COMMAND_OPTIONS) {
+      // The cell carries the argument hint, so match the whole cell: a bare value
+      // would miss `preview` (its cell continues past the value) and would
+      // count `classifier` inside `classifier status` as a duplicate.
+      const hint = command.argumentHint ? ` ${command.argumentHint}` : "";
+      const occurrences = markdown.split(`\`/bifrost ${command.value}${hint}\``).length - 1;
+      assert.equal(occurrences, 1, `${command.value} appeared ${occurrences} times`);
+    }
+  });
+
+  it("carries the state note on the no-op row only", () => {
+    const markdown = renderMarkdown(rows, state);
+    assert.match(markdown, /\| `\/bifrost on` \| Enable routing \| already on \|/);
+    // An absent note leaves an empty cell, so the two delimiters are separated
+    // by padding rather than sitting flush: `| |` would never match.
+    assert.match(markdown, /\| `\/bifrost off` \| Disable routing \|\s+\|/);
+  });
+
+  it("keeps init's parenthetical in the description column", () => {
+    assert.match(
+      renderMarkdown(rows, state),
+      /Probe models and generate config \(pass -f to force re-probe\)/,
+    );
+  });
+
+  it("interpolates the count from the registry", () => {
+    assert.match(
+      renderMarkdown(rows, state),
+      // "m" is load-bearing: the count is on line two, not at the string start.
+      new RegExp(`^${BIFROST_COMMAND_OPTIONS.length} commands\\.`, "m"),
+    );
+  });
+
+  it("states the /bifrost entry point", () => {
+    assert.match(renderMarkdown(rows, state), /typing \/bifrost and pressing enter/);
+  });
+
+  it("escapes pipes and wraps angle brackets", () => {
+    const markdown = renderMarkdown(
+      [{ ...rows[0], description: "a | b <c>" }] as SurfaceRow[],
+      state,
+    );
+    assert.match(markdown, /a \\\| b `<c>`/);
+    // The hint rides inside the command cell's own code span, which is what
+    // keeps a bare `<prompt>` from parsing as a raw HTML tag.
+    assert.match(renderMarkdown(rows, state), /`\/bifrost preview \[--json\] <prompt>`/);
+  });
+});
+
+describe("renderJson", () => {
+  it("emits state, total and the same rows", () => {
+    const state = { enabled: false, pinned: true };
+    const parsed = JSON.parse(renderJson(buildCommandSurface(state), state));
+    assert.deepEqual(parsed.state, state);
+    assert.equal(parsed.total, BIFROST_COMMAND_OPTIONS.length);
+    assert.deepEqual(
+      parsed.groups.flatMap((g: { rows: Array<{ value: string }> }) => g.rows.map((r) => r.value)).sort(),
+      BIFROST_COMMAND_OPTIONS.map((c) => c.value).sort(),
+    );
+  });
+
+  it("uses null for an absent note", () => {
+    const state = { enabled: true, pinned: false };
+    const parsed = JSON.parse(renderJson(buildCommandSurface(state), state));
+    const off = parsed.groups
+      .flatMap((g: { rows: Array<Record<string, unknown>> }) => g.rows)
+      .find((r: Record<string, unknown>) => r.value === "off");
+    assert.equal(off!.note, null);
+    assert.equal(off!.inert, false);
   });
 });

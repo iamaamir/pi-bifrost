@@ -27,3 +27,48 @@ export function groupOf(row: SurfaceRow): number {
 export function statePhrase(state: MenuState): string {
   return state.pinned ? "pinned" : state.enabled ? "on" : "off";
 }
+
+const GROUP_LABELS = ["State toggles", "Common", "Everything else"] as const;
+
+function escapeCell(text: string): string {
+  return text.replace(/\|/g, "\\|").replace(/</g, "`<").replace(/>/g, ">`");
+}
+
+function commandCell(row: SurfaceRow): string {
+  const hint = row.argumentHint ? ` ${row.argumentHint}` : "";
+  return `\`/bifrost ${row.value}${hint}\``;
+}
+
+export function renderMarkdown(rows: readonly SurfaceRow[], state: MenuState): string {
+  const total = BIFROST_COMMAND_OPTIONS.length;
+  const lines = [
+    `Bifrost command surface — routing ${statePhrase(state)}`,
+    `${total} commands. Order matches the /bifrost dashboard; grouping is editorial.`,
+    "",
+    "Open the surface by typing /bifrost and pressing enter.",
+  ];
+  for (let tier = 0; tier < GROUP_LABELS.length; tier += 1) {
+    const tierRows = rows.filter((row) => groupOf(row) === tier);
+    if (tierRows.length === 0) continue;
+    lines.push("", `## ${GROUP_LABELS[tier]}`, "", "| Command | Description | Note |", "|---|---|---|");
+    for (const row of tierRows) {
+      lines.push(`| ${commandCell(row)} | ${escapeCell(row.description)} | ${row.note ?? ""} |`);
+    }
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+export function renderJson(rows: readonly SurfaceRow[], state: MenuState): string {
+  return `${JSON.stringify(
+    {
+      state: { enabled: state.enabled, pinned: state.pinned },
+      total: BIFROST_COMMAND_OPTIONS.length,
+      groups: GROUP_LABELS.map((label, tier) => ({
+        label,
+        rows: rows.filter((row) => groupOf(row) === tier),
+      })),
+    },
+    null,
+    2,
+  )}\n`;
+}
