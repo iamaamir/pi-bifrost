@@ -24,6 +24,8 @@
 | `/bifrost providers` | List providers available through Pi |
 | `/bifrost benchmark <prompt>` | Classify a prompt and show the outcome without generating |
 
+To print this same list on demand, run `npm run command-surface`; add `--json` for machine-readable output.
+
 ## Common workflows
 
 ### Preview before generation
