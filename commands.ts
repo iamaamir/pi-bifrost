@@ -981,11 +981,20 @@ function reflectedIsInert(spec: CommandSpec, state: Pick<BifrostState, Reflected
   return spec.reflects ? spec.reflects.sets === state[spec.reflects.state] : false;
 }
 
+// The one wording of the routing mode, for the dashboard title and for anything
+// that describes the dashboard. `off` only clears `enabled` and `pin` only sets
+// `pinned`, so {enabled: false, pinned: true} is reachable, and `!enabled` has to
+// be read first or that state reads `pinned` while the dashboard reads `off`.
+// Exported so there is a single definition rather than a copy to keep aligned.
+export function bifrostModePhrase(state: Pick<BifrostState, "enabled" | "pinned">): string {
+  return !state.enabled ? "off" : state.pinned ? "pinned" : "on";
+}
+
 // Every registered command, ordered for the state as it stands: the member of
 // each reflected pair that changes something first, then the `common`
 // commands, then everything else. Ordering is all `menu` and `reflects` decide;
 // nothing here decides membership.
-function dashboardCommands(state: Pick<BifrostState, ReflectedState>): CommandSpec[] {
+export function dashboardCommands(state: Pick<BifrostState, ReflectedState>): CommandSpec[] {
   const reflectedStates = BIFROST_COMMAND_OPTIONS
     .map((spec) => spec.reflects?.state)
     .filter((reflects): reflects is ReflectedState => Boolean(reflects));
@@ -1399,7 +1408,7 @@ export function createCommandRouter(
         return;
       }
 
-      const mode = !state.enabled ? "off" : state.pinned ? "pinned" : "on";
+      const mode = bifrostModePhrase(state);
       const selected = await pickBifrostCommand(
         ctx,
         `Bifrost · ${mode} · model ${modelKey(ctx.model)}${openCircuitCount(state) > 0 ? ` · circuits ${openCircuitCount(state)} open` : ""}`,
