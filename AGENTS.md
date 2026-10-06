@@ -58,6 +58,7 @@ Do not introduce a proxy as the default design. Do not build multi-agent orchest
 - Keep docs, schema, examples, defaults, and generated init behavior consistent when changing config semantics.
 - Use accessible semantic HTML for site work. Native `<details>/<summary>` for FAQs/disclosure unless a custom interaction is necessary.
 - Treat prototypes as throwaway. Mark them clearly; do not promote prototype code directly to production.
+- Validate a specification against running code before building on it. When a decision cannot be checked yet, prototype rather than committing to prose across several revisions. Unverified specs surface their errors late, during review, when they cost most to fix.
 
 ## Verification
 
@@ -82,6 +83,20 @@ git diff --check
 ```
 
 Use local browser screenshots when layout or animation changes. Check desktop and narrow mobile viewports. Respect `prefers-reduced-motion`.
+
+## Evidence discipline
+
+A passing suite is a floor, not proof. On this project a fully green run has hidden a function that contradicted the code it was copied from, four guards no test exercised, and a documented command that could not parse its own advertised output. Run the checks, then show what they do not cover.
+
+- **Never transcribe output.** Any sample in a spec, plan, doc, or PR body must be captured from a real run and diffed against live output. A hand-written sample described as generated is a defect, not a shortcut.
+- **Execute every command you document.** If a doc claims machine-readable output, pipe it into a parser and paste the result.
+- **Mutation-check assertions that guard a contract.** Revert the guard, confirm the test goes red, report the count. An assertion never seen failing is not evidence. Scope this to behavioural contracts — routing, model selection, reliability, state precedence, escaping, output shape — and leave pure wiring tests alone.
+- **Claim with evidence attached.** Say "verified" only alongside the command and its output in the same message. Never assert a suite passed without the count.
+- **Correct an instruction you were given.** If a prescribed step is wrong, say so and show the contradiction rather than reporting the expected result.
+
+### Reviewing
+
+Confirm the target before reviewing: base and head refs, both SHAs, and the changed-file list. Abort if the diff does not match the branch under discussion. A review of the wrong branch yields confident findings about unrelated code and costs a full round.
 
 ## Git
 
