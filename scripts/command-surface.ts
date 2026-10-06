@@ -26,13 +26,21 @@ export function groupOf(row: SurfaceRow): number {
 
 const GROUP_LABELS = ["State toggles", "Common", "Everything else"] as const;
 
+function escapePipes(text: string): string {
+  return text.replace(/\|/g, "\\|");
+}
+
 function escapeCell(text: string): string {
-  return text.replace(/\|/g, "\\|").replace(/</g, "`<").replace(/>/g, ">`");
+  return escapePipes(text).replace(/</g, "`<").replace(/>/g, ">`");
 }
 
 function commandCell(row: SurfaceRow): string {
-  const hint = row.argumentHint ? ` ${row.argumentHint}` : "";
-  return `\`/bifrost ${row.value}${hint}\``;
+  // Only pipes are escaped here. The cell's own backticks already protect `<`
+  // and `>`, and a backtick-wrapped angle bracket would render literally inside
+  // the span, so the hint must not go through escapeCell. A pipe has no such
+  // protection: it ends the cell wherever it appears, hint or value.
+  const inner = `/bifrost ${row.value}${row.argumentHint ? ` ${row.argumentHint}` : ""}`;
+  return `\`${escapePipes(inner)}\``;
 }
 
 export function renderMarkdown(rows: readonly SurfaceRow[], state: MenuState): string {
@@ -48,7 +56,7 @@ export function renderMarkdown(rows: readonly SurfaceRow[], state: MenuState): s
     if (tierRows.length === 0) continue;
     lines.push("", `## ${GROUP_LABELS[tier]}`, "", "| Command | Description | Note |", "|---|---|---|");
     for (const row of tierRows) {
-      lines.push(`| ${commandCell(row)} | ${escapeCell(row.description)} | ${row.note ?? ""} |`);
+      lines.push(`| ${commandCell(row)} | ${escapeCell(row.description)} | ${escapeCell(row.note ?? "")} |`);
     }
   }
   return `${lines.join("\n")}\n`;

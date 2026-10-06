@@ -16,15 +16,16 @@ import {
 // BIFROST_COMMAND_OPTIONS is module-level shared state and is typed readonly, so
 // a probe has to cast its way in and restore the length in a finally. Without
 // the restore the rest of the suite would see the extra entries.
-function withProbes<T>(
-  extra: Array<{ value: string; description: string; menu?: "common" }>,
-  fn: () => T,
-): T {
-  const registry = BIFROST_COMMAND_OPTIONS as unknown as Array<{
-    value: string;
-    description: string;
-    menu?: "common";
-  }>;
+type ProbeSpec = {
+  value: string;
+  description: string;
+  menu?: "common";
+  argumentHint?: string;
+  reflects?: { state: "enabled" | "pinned"; sets: boolean; note: string };
+};
+
+function withProbes<T>(extra: ProbeSpec[], fn: () => T): T {
+  const registry = BIFROST_COMMAND_OPTIONS as unknown as ProbeSpec[];
   const original = registry.length;
   registry.push(...extra);
   try {
@@ -32,6 +33,27 @@ function withProbes<T>(
   } finally {
     registry.length = original;
   }
+}
+
+// Splits one rendered table row into its cells. Asserting the cell count, not
+// just that the text is present, is what catches an unescaped pipe: the pipe
+// turns into a fourth column and every cell after it shifts left.
+function cellsOf(row: string): string[] {
+  assert.ok(row.startsWith("| ") && row.endsWith(" |"), `not a table row: ${row}`);
+  return row
+    .slice(1, -1)
+    .split(/(?<!\\)\|/)
+    .map((cell) => cell.trim());
+}
+
+// The rendered row for one command. Matched on the cell's own opening so a value
+// that carries an argument hint is still found.
+function rowFor(markdown: string, value: string): string {
+  const row = markdown
+    .split("\n")
+    .find((line) => line.startsWith(`| \`/bifrost ${value}`));
+  assert.ok(row, `no rendered row for ${value}`);
+  return row;
 }
 
 async function captureRunAsync(run: () => Promise<void>): Promise<string> {
@@ -284,6 +306,51 @@ describe("renderMarkdown", () => {
     // The hint rides inside the command cell's own code span, which is what
     // keeps a bare `<prompt>` from parsing as a raw HTML tag.
     assert.match(renderMarkdown(rows, state), /`\/bifrost preview \[--json\] <prompt>`/);
+  });
+
+  // The note and the argument hint come from a registry that contributors edit,
+  // so neither is reachable today and both are latent rather than absent. A pipe
+  // in either one splits the row: marked then reads four columns, the first cell
+  // lands in the wrong place, and every assertion that only looks for the text
+  // still passes. So each case asserts the cell count, not the substring.
+  it("escapes a pipe in the note so the row stays three columns", () => {
+    const note = "already pinned | see docs";
+    const pinned = { enabled: true, pinned: true };
+    const markdown = withProbes(
+      [
+        {
+          value: "pipe note",
+          description: "probe with a pipe in its note",
+          reflects: { state: "pinned", sets: true, note },
+        },
+      ],
+      () => renderMarkdown(buildCommandSurface(pinned), pinned),
+    );
+    const cells = cellsOf(rowFor(markdown, "pipe note"));
+    assert.equal(cells.length, 3);
+    assert.equal(cells[0], "`/bifrost pipe note`");
+    assert.equal(cells[1], "probe with a pipe in its note");
+    assert.equal(cells[2], "already pinned \\| see docs");
+  });
+
+  it("escapes a pipe in the argument hint so the code span stays one cell", () => {
+    const markdown = withProbes(
+      [
+        {
+          value: "pipe hint",
+          description: "probe with a pipe in its hint",
+          argumentHint: "--json | tee <prompt>",
+        },
+      ],
+      () => renderMarkdown(buildCommandSurface(state), state),
+    );
+    const cells = cellsOf(rowFor(markdown, "pipe hint"));
+    assert.equal(cells.length, 3);
+    // Only the pipe is escaped: the hint sits inside the cell's code span, where
+    // `<prompt>` is already safe and backtick-wrapping it would show the
+    // backticks literally.
+    assert.equal(cells[0], "`/bifrost pipe hint --json \\| tee <prompt>`");
+    assert.equal(cells[2], "");
   });
 });
 
