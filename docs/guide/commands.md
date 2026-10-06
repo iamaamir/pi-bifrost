@@ -24,7 +24,7 @@
 | `/bifrost providers` | List providers available through Pi |
 | `/bifrost benchmark <prompt>` | Classify a prompt and show the outcome without generating |
 
-To print this same list on demand, run `npm run command-surface`; add `--json` for machine-readable output.
+To print this same list on demand, run `npm run command-surface`; add `--json` for machine-readable output. For that JSON form, silence npm's banner with `npm run --silent command-surface -- --json`, or call `node --experimental-strip-types scripts/command-surface.ts --json` directly — npm prints its banner to stdout, in front of the JSON.
 
 ## Common workflows
 
