@@ -252,51 +252,78 @@ Extend the existing `../scripts/command-surface.ts` import to also pull in `rend
 
 ```ts
 describe("renderMarkdown", () => {
-  const rows = buildCommandSurface({ enabled: true, pinned: false });
+  const state = { enabled: true, pinned: false };
+  const rows = buildCommandSurface(state);
 
-  it("renders command order identical to the dashboard", () => {
-    const rendered = rows
-      .map((row) => /^(\| `\/bifrost [^`]*`) \|/.exec(renderMarkdown(rows, { enabled: true, pinned: false })))
-      .filter((match): match is RegExpExecArray => match !== null)
-      .map((match) => match[1]);
-    assert.deepEqual(
-      rendered,
-      dashboardCommands({ enabled: true, pinned: false }).map((r) => `/bifrost ${r.value}`),
-    );
+  it("renders command order identical to the dashboard for all four states", () => {
+    for (const current of [
+      { enabled: true, pinned: false },
+      { enabled: true, pinned: true },
+      { enabled: false, pinned: false },
+      { enabled: false, pinned: true },
+    ]) {
+      const markdown = renderMarkdown(buildCommandSurface(current), current);
+      // Compare whole cells, not bare values: values contain spaces (`classifier
+      // status`) and two of them carry an argument hint, so a value-only capture
+      // would either truncate or leave the hint attached.
+      const order = [...markdown.matchAll(/^\| `\/bifrost (.+?)`/gm)].map((match) => match[1]);
+      const expected = dashboardCommands(current).map((spec) => {
+        const hint = spec.argumentHint ? ` ${spec.argumentHint}` : "";
+        return `${spec.value}${hint}`;
+      });
+      assert.deepEqual(order, expected);
+    }
   });
 
   it("shows every command exactly once", () => {
-    const markdown = renderMarkdown(rows, { enabled: true, pinned: false });
+    const markdown = renderMarkdown(rows, state);
     for (const command of BIFROST_COMMAND_OPTIONS) {
-      const occurrences = markdown.split(`/bifrost ${command.value}`).length - 1;
+      // The cell carries the argument hint, so match the whole cell: a bare value
+      // would miss `preview` (its cell continues past the value) and would
+      // count `classifier` inside `classifier status` as a duplicate.
+      const hint = command.argumentHint ? ` ${command.argumentHint}` : "";
+      const occurrences = markdown.split(`\`/bifrost ${command.value}${hint}\``).length - 1;
       assert.equal(occurrences, 1, `${command.value} appeared ${occurrences} times`);
     }
   });
 
-  it("carries the state note on the no-op row only", () => {
-    const markdown = renderMarkdown(rows, { enabled: true, pinned: false });
-    assert.match(markdown, /\| `\/bifrost on` \| Enable routing \| already on \|/);
-    assert.match(markdown, /\| `\/bifrost off` \| Disable routing \| \|/);
+  it("renders a three-column row with an empty Note cell when there is no note", () => {
+    const markdown = renderMarkdown(rows, state);
+    assert.match(markdown, /^\| `\/bifrost on` \| Enable routing \| already on \|$/m);
+    // "m" plus the ^…$ anchors are load-bearing: \s+ spans newlines, so an
+    // unanchored version of this assertion still matches when the Note column is
+    // dropped entirely and the next row's cells line up across the boundary.
+    assert.match(markdown, /^\| `\/bifrost off` \| Disable routing \| *\|$/m);
   });
 
   it("keeps init's parenthetical in the description column", () => {
-    const markdown = renderMarkdown(rows, { enabled: true, pinned: false });
-    assert.match(markdown, /Probe models and generate config \(pass -f to force re-probe\)/);
+    assert.match(
+      renderMarkdown(rows, state),
+      /Probe models and generate config \(pass -f to force re-probe\)/,
+    );
   });
 
   it("interpolates the count from the registry", () => {
-    assert.match(renderMarkdown(rows, { enabled: true, pinned: false }), new RegExp(`^${BIFROST_COMMAND_OPTIONS.length} commands\\.`));
+    assert.match(
+      renderMarkdown(rows, state),
+      // "m" is load-bearing: the count is on line two, not at the string start.
+      new RegExp(`^${BIFROST_COMMAND_OPTIONS.length} commands\\.`, "m"),
+    );
   });
 
   it("states the /bifrost entry point", () => {
-    assert.match(renderMarkdown(rows, { enabled: true, pinned: false }), /typing \/bifrost and pressing enter/);
+    assert.match(renderMarkdown(rows, state), /typing \/bifrost and pressing enter/);
   });
 
   it("escapes pipes and wraps angle brackets", () => {
-    const withPipe = [{ ...rows[0], description: "a | b" }];
-    const markdown = renderMarkdown(withPipe as SurfaceRow[], { enabled: true, pinned: false });
-    assert.match(markdown, /a \\\| b/);
-    assert.match(markdown, /`\[--json\] <prompt>`/);
+    const markdown = renderMarkdown(
+      [{ ...rows[0], description: "a | b <c>" }] as SurfaceRow[],
+      state,
+    );
+    assert.match(markdown, /a \\\| b `<c>`/);
+    // The hint rides inside the command cell's own code span, which is what
+    // keeps a bare `<prompt>` from parsing as a raw HTML tag.
+    assert.match(renderMarkdown(rows, state), /`\/bifrost preview \[--json\] <prompt>`/);
   });
 });
 
@@ -315,9 +342,11 @@ describe("renderJson", () => {
   it("uses null for an absent note", () => {
     const state = { enabled: true, pinned: false };
     const parsed = JSON.parse(renderJson(buildCommandSurface(state), state));
-    const off = parsed.groups.flatMap((g: { rows: any[] }) => g.rows).find((r) => r.value === "off");
-    assert.equal(off.note, null);
-    assert.equal(off.inert, false);
+    const off = parsed.groups
+      .flatMap((g: { rows: Array<Record<string, unknown>> }) => g.rows)
+      .find((r: Record<string, unknown>) => r.value === "off");
+    assert.equal(off!.note, null);
+    assert.equal(off!.inert, false);
   });
 });
 ```
@@ -361,17 +390,23 @@ export function renderMarkdown(rows: readonly SurfaceRow[], state: MenuState): s
   return `${lines.join("\n")}\n`;
 }
 
-export function renderJson(rows: readonly SurfaceRow[], state: MenuState): unknown {
-  return {
-    state: { enabled: state.enabled, pinned: state.pinned },
-    total: BIFROST_COMMAND_OPTIONS.length,
-    groups: GROUP_LABELS.map((label, tier) => ({
-      label,
-      rows: rows.filter((row) => groupOf(row) === tier),
-    })),
-  };
+export function renderJson(rows: readonly SurfaceRow[], state: MenuState): string {
+  return `${JSON.stringify(
+    {
+      state: { enabled: state.enabled, pinned: state.pinned },
+      total: BIFROST_COMMAND_OPTIONS.length,
+      groups: GROUP_LABELS.map((label, tier) => ({
+        label,
+        rows: rows.filter((row) => groupOf(row) === tier),
+      })),
+    },
+    null,
+    2,
+  )}\n`;
 }
 ```
+
+`renderJson` returns the serialised string rather than the object, because `main` writes it straight to stdout and the tests `JSON.parse` it; returning `unknown` would make `JSON.parse(renderJson(...))` a typecheck error and would print `[object Object]` from the CLI.
 
 `commandCell` embeds the argument hint in the command column, matching `formatBifrostCommandChoice`, so there is no separate Argument column.
 
@@ -475,7 +510,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     else throw new Error(`unknown flag: ${arg}\n${USAGE}`);
   }
   const rows = buildCommandSurface(state);
-  console.log(json ? renderJson(rows, state) : renderMarkdown(rows, state).trimEnd());
+  console.log(json ? renderJson(rows, state).trimEnd() : renderMarkdown(rows, state).trimEnd());
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
