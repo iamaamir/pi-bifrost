@@ -23,6 +23,7 @@ export type ReliabilityV2StoreErrorCode =
   | "invalid_options"
   | "unsafe_state_target"
   | "corrupt_state"
+  | "uninitialized_state"
   | "lock_contended"
   | "orphan_lock"
   | "invalid_lock"
@@ -56,6 +57,7 @@ export interface ReliabilityV2StoreOptions {
   lockPollMs?: number;
   now?: () => number;
   io?: Partial<ReliabilityV2StoreIo>;
+  requireInitialized?: boolean;
 }
 
 export interface ReliabilityV2MigrationResult {
@@ -408,6 +410,19 @@ function safeDataArray(value: unknown, validItem: (item: unknown) => boolean): u
   }
 }
 
+function immutableStateCopy(state: ReliabilityV2State): Readonly<ReliabilityV2State> {
+  const copy = JSON.parse(JSON.stringify(state)) as ReliabilityV2State;
+  const seen = new WeakSet<object>();
+  const freeze = (value: unknown): void => {
+    if (typeof value !== "object" || value === null || seen.has(value)) return;
+    seen.add(value);
+    for (const child of Object.values(value)) freeze(child);
+    Object.freeze(value);
+  };
+  freeze(copy);
+  return copy;
+}
+
 export class ReliabilityV2Store {
   readonly path: string;
   readonly lockPath: string;
@@ -416,6 +431,7 @@ export class ReliabilityV2Store {
   private readonly now: () => number;
   private readonly lockTimeoutMs: number;
   private readonly lockPollMs: number;
+  private readonly requireInitialized: boolean;
 
   constructor(options: ReliabilityV2StoreOptions) {
     if (!options || typeof options.path !== "string" || options.path.length === 0
@@ -425,7 +441,8 @@ export class ReliabilityV2Store {
     const lockTimeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS;
     const lockPollMs = options.lockPollMs ?? DEFAULT_LOCK_POLL_MS;
     if (!Number.isSafeInteger(lockTimeoutMs) || lockTimeoutMs < 0 || lockTimeoutMs > MAX_LOCK_TIMEOUT_MS
-      || !Number.isSafeInteger(lockPollMs) || lockPollMs < 1 || lockPollMs > MAX_LOCK_POLL_MS) {
+      || !Number.isSafeInteger(lockPollMs) || lockPollMs < 1 || lockPollMs > MAX_LOCK_POLL_MS
+      || (options.requireInitialized !== undefined && typeof options.requireInitialized !== "boolean")) {
       throw new ReliabilityV2StoreError("invalid_options", "Reliability v2 lock wait settings are outside their safe bounds");
     }
     this.path = resolve(options.path);
@@ -435,6 +452,12 @@ export class ReliabilityV2Store {
     this.now = options.now ?? Date.now;
     this.lockTimeoutMs = lockTimeoutMs;
     this.lockPollMs = lockPollMs;
+    this.requireInitialized = options.requireInitialized ?? false;
+  }
+
+  /** Read the latest validated sidecar without locking, writing, or reserving admission. */
+  readSnapshot(): Readonly<ReliabilityV2State> {
+    return immutableStateCopy(this.loadState());
   }
 
   async admit(requestValue: Omit<ReliabilityV2Admission, "now">): Promise<ReliabilityV2Result> {
@@ -488,7 +511,7 @@ export class ReliabilityV2Store {
     let failure: unknown;
     try {
       const existing = targetStat(this.path);
-      const current = this.loadState();
+      const current = this.loadState(true);
       if (existing) {
         result = { status: "already_initialized", state: current };
       } else {
@@ -575,7 +598,7 @@ export class ReliabilityV2Store {
     return result!;
   }
 
-  private loadState(): ReliabilityV2State {
+  private loadState(allowMissing = false): ReliabilityV2State {
     this.assertSafeStateTarget();
     let loaded: unknown;
     try {
@@ -584,7 +607,12 @@ export class ReliabilityV2Store {
       if (error instanceof ReliabilityV2StoreError) throw error;
       throw new ReliabilityV2StoreError("corrupt_state", "Cannot read reliability v2 state", { cause: error });
     }
-    if (loaded === undefined) return emptyReliabilityV2State();
+    if (loaded === undefined) {
+      if (this.requireInitialized && !allowMissing) {
+        throw new ReliabilityV2StoreError("uninitialized_state", "Reliability v2 sidecar is not initialized");
+      }
+      return emptyReliabilityV2State();
+    }
     if (!validateReliabilityV2State(loaded, this.config)) {
       throw new ReliabilityV2StoreError("corrupt_state", "Reliability v2 state failed schema or lease validation");
     }

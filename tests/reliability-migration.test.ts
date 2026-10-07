@@ -92,7 +92,7 @@ describe("reliability v1 migration foundation", () => {
     const statePath = join(directory, "reliability-v2.json");
     const backupPath = join(directory, "reliability-v1.backup.json");
     const snapshot = v1Snapshot();
-    const store = new ReliabilityV2Store({ path: statePath, config });
+    const store = new ReliabilityV2Store({ path: statePath, config, requireInitialized: true });
 
     const result = await store.initializeFromV1Migration({ sourceSnapshot: snapshot, backupPath });
     assert.equal(result.status, "seeded");

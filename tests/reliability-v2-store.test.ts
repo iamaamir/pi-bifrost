@@ -162,6 +162,39 @@ describe("experimental reliability v2 file transactions", () => {
     assert.equal(fs.existsSync(path), false);
   });
 
+  it("requires initialized state for runtime snapshots and admission when configured", async () => {
+    const directory = tempDirectory();
+    const path = join(directory, "state.json");
+    const store = new ReliabilityV2Store({ path, config, requireInitialized: true });
+
+    assert.throws(() => store.readSnapshot(), (error: unknown) => error instanceof ReliabilityV2StoreError && error.code === "uninitialized_state");
+    await errorCode(store.admit({ ownerToken: "owner", dispatchId: "dispatch", outcomeId: "outcome", modelKeys: ["provider/model"] }), "uninitialized_state");
+    assert.equal(fs.existsSync(path), false);
+  });
+
+  it("reads a detached latest snapshot without writing and fails admission after sidecar deletion", async () => {
+    const directory = tempDirectory();
+    const path = join(directory, "state.json");
+    const writer = new ReliabilityV2Store({ path, config });
+    const reader = new ReliabilityV2Store({ path, config, requireInitialized: true });
+    const admitted = await writer.admit({ ownerToken: "owner", dispatchId: "dispatch", outcomeId: "outcome", modelKeys: ["provider/model"] });
+    assert.equal(admitted.status, "admitted");
+    const before = fs.readFileSync(path);
+    const lockPath = `${path}.lock`;
+    fs.writeFileSync(lockPath, JSON.stringify({ ownerToken: "unrelated-live-owner", pid: process.pid, createdAt: Date.now() }));
+    const snapshot = reader.readSnapshot();
+    assert.equal(snapshot.revision, 1);
+    assert.equal(Object.keys(snapshot.dispatches).length, 1);
+    assert.equal(Object.isFrozen(snapshot), true);
+    assert.deepEqual(fs.readFileSync(path), before);
+    assert.equal(JSON.parse(fs.readFileSync(lockPath, "utf8")).ownerToken, "unrelated-live-owner");
+
+    fs.unlinkSync(lockPath);
+    fs.unlinkSync(path);
+    await errorCode(reader.admit({ ownerToken: "owner-next", dispatchId: "dispatch-next", outcomeId: "outcome-next", modelKeys: ["provider/model"] }), "uninitialized_state");
+    assert.equal(fs.existsSync(path), false);
+  });
+
   it("reports live and malformed locks without taking ownership", async () => {
     const directory = tempDirectory();
     const path = join(directory, "state.json");
