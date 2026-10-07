@@ -193,4 +193,46 @@ describe("reliability", () => {
     assert.equal(circuit.openUntil, t1 + 120 * 60_000);
     assert.equal(circuit.trialActive, false);
   });
+
+  it("half-open: failed trial reopens after prior failures age out of the window", () => {
+    const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60 };
+    const key = "openai/gpt-5.4";
+    const t0 = Date.UTC(2026, 0, 1, 12, 0, 0);
+    let state = emptyReliabilityState();
+    state = recordModelFailure(state, key, cfg, t0, "probe", "timeout");
+    state = recordModelFailure(state, key, cfg, t0 + 60_000, "probe", "timeout");
+    state = recordModelFailure(state, key, cfg, t0 + 120_000, "probe", "timeout");
+
+    const trialAt = t0 + 63 * 60_000;
+    assert.equal(getCircuitState(state, key, trialAt, cfg).halfOpen, true);
+    state = beginTrial(state, key);
+    state = recordModelFailure(state, key, cfg, trialAt, "trial", "timeout");
+
+    const circuit = getCircuitState(state, key, trialAt, cfg);
+    assert.equal(circuit.open, true);
+    assert.equal(circuit.openUntil, trialAt + 120 * 60_000);
+    assert.equal(circuit.recentFailures, 1);
+    assert.equal(circuit.trialActive, false);
+  });
+
+  it("half-open: canceling an expired trial does not record a failure or reopen", () => {
+    const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60 };
+    const key = "openai/gpt-5.4";
+    const t0 = Date.UTC(2026, 0, 1, 12, 0, 0);
+    let state = emptyReliabilityState();
+    state = recordModelFailure(state, key, cfg, t0, "probe", "timeout");
+    state = recordModelFailure(state, key, cfg, t0 + 60_000, "probe", "timeout");
+    state = recordModelFailure(state, key, cfg, t0 + 120_000, "probe", "timeout");
+
+    const trialAt = t0 + 63 * 60_000;
+    const trial = beginTrial(state, key);
+    const canceled = abandonTrial(trial, key);
+    const circuit = getCircuitState(canceled, key, trialAt, cfg);
+    assert.equal(circuit.open, false);
+    assert.equal(circuit.halfOpen, true);
+    assert.equal(circuit.trialActive, false);
+    assert.equal(circuit.recentFailures, 0);
+    assert.equal(canceled.models[key]?.openUntil, state.models[key]?.openUntil);
+    assert.equal(canceled.models[key]?.cooldownMultiplier, state.models[key]?.cooldownMultiplier);
+  });
 });

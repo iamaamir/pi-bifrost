@@ -122,7 +122,9 @@ export function recordModelFailure(
   const multiplier = wasTrial ? (current.cooldownMultiplier ?? 1) * 2 : (current.cooldownMultiplier ?? 1);
   const cooldownMs = resolved.cooldownMinutes * 60_000 * multiplier;
   const failures = [...pruneFailures(current.failures, now, resolved.windowMinutes), now];
-  const openUntil = failures.length >= resolved.failureThreshold ? now + cooldownMs : current.openUntil;
+  const openUntil = wasTrial || failures.length >= resolved.failureThreshold
+    ? now + cooldownMs
+    : current.openUntil;
 
   return {
     ...state,
