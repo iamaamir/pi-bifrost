@@ -378,8 +378,14 @@ function safeRequest(value: unknown, required: readonly string[], optional: read
         });
       } else if (key === "settlement") {
         const settlement = plainRecord(item);
-        if (!settlement || !exactKeys(settlement, ["kind"])) return undefined;
-        result[key] = Object.assign(Object.create(null) as DataRecord, { kind: ownData(settlement, "kind") });
+        if (!settlement || !exactKeys(settlement, ["kind"], ["observation"])) return undefined;
+        const copied: DataRecord = Object.assign(Object.create(null) as DataRecord, { kind: ownData(settlement, "kind") });
+        if (Object.prototype.hasOwnProperty.call(settlement, "observation")) {
+          const observation = safeObservation(ownData(settlement, "observation"));
+          if (!observation) return undefined;
+          copied.observation = observation;
+        }
+        result[key] = copied;
       } else if (item === null || ["string", "number", "boolean", "undefined"].includes(typeof item)) {
         result[key] = item;
       } else {
@@ -390,6 +396,34 @@ function safeRequest(value: unknown, required: readonly string[], optional: read
   } catch {
     return undefined;
   }
+}
+
+function safeObservation(value: unknown): DataRecord | undefined {
+  const source = plainRecord(value);
+  if (!source || !exactKeys(source,
+    ["outcomeId", "modelKey", "category", "categoryEvidence", "scope", "scopeEvidence", "observedAt", "source"], ["retryAt"])) return undefined;
+  const scope = plainRecord(ownData(source, "scope"));
+  if (!scope || !exactKeys(scope, ["kind", "modelKey"])) return undefined;
+  const result: DataRecord = Object.assign(Object.create(null) as DataRecord, {
+    outcomeId: ownData(source, "outcomeId"),
+    modelKey: ownData(source, "modelKey"),
+    category: ownData(source, "category"),
+    categoryEvidence: ownData(source, "categoryEvidence"),
+    scope: Object.assign(Object.create(null) as DataRecord, {
+      kind: ownData(scope, "kind"),
+      modelKey: ownData(scope, "modelKey"),
+    }),
+    scopeEvidence: ownData(source, "scopeEvidence"),
+    observedAt: ownData(source, "observedAt"),
+    source: ownData(source, "source"),
+  });
+  if (Object.prototype.hasOwnProperty.call(source, "retryAt")) result.retryAt = ownData(source, "retryAt");
+  const scalars = ["outcomeId", "modelKey", "category", "categoryEvidence", "scopeEvidence", "observedAt", "source"]
+    .map((key) => ownData(result, key));
+  if (Object.prototype.hasOwnProperty.call(source, "retryAt")) scalars.push(ownData(result, "retryAt"));
+  return scalars.some((entry) => entry !== undefined && typeof entry !== "string" && typeof entry !== "number")
+    ? undefined
+    : result;
 }
 
 function safeDataArray(value: unknown, validItem: (item: unknown) => boolean): unknown[] | undefined {

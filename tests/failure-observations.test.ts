@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { normalizeFailureObservation, type FailureCategory } from "../failure-observations.ts";
+import { isNormalizedFailureObservation, normalizeFailureObservation, type FailureCategory } from "../failure-observations.ts";
 
 const base = {
   outcomeId: "turn-7:dispatch-2",
@@ -115,6 +115,31 @@ describe("failure observation normalization", () => {
     assert.equal(observation?.categoryEvidence, "unknown");
     assert.equal(observation?.observedAt, 2000);
     assert.equal(observation?.retryAt, 2000);
+  });
+
+  it("validates normalized unknown and text evidence when structured retry timing is present", () => {
+    const unknown = normalizeFailureObservation({
+      ...base,
+      observedAt: 2000,
+      structured: { retryAt: 2100 },
+      errorText: "provider returned an unusual response",
+    }, { now: 2500 });
+    assert.equal(unknown?.categoryEvidence, "unknown");
+    assert.equal(unknown?.retryAt, 2100);
+    assert.equal(isNormalizedFailureObservation(unknown, { now: 2500 }), true);
+
+    const heuristic = normalizeFailureObservation({
+      ...base,
+      observedAt: 2000,
+      structured: { retryAt: 2200 },
+      errorText: "connection reset while sending request",
+    }, { now: 2500 });
+    assert.equal(heuristic?.category, "transport");
+    assert.equal(heuristic?.categoryEvidence, "text_heuristic");
+    assert.equal(heuristic?.retryAt, 2200);
+    assert.equal(isNormalizedFailureObservation(heuristic, { now: 2500 }), true);
+    assert.equal(isNormalizedFailureObservation({ ...heuristic, errorText: "private metadata" }, { now: 2500 }), false);
+    assert.equal(isNormalizedFailureObservation({ ...heuristic, scopeEvidence: "provider" }, { now: 2500 }), false);
   });
 
   it("rejects future observations and accepts model IDs with slashes after the provider", () => {

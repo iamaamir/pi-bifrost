@@ -1,5 +1,7 @@
 /** Pure experimental reliability transitions. No filesystem or Pi runtime wiring. */
 
+import { isNormalizedFailureObservation, type CategoryEvidence, type FailureCategory, type FailureObservation, type FailureSource } from "./failure-observations.ts";
+
 export interface ReliabilityV2Config {
   failureThreshold: number;
   windowMs: number;
@@ -54,7 +56,17 @@ export interface ReliabilityV2State {
   revision: number;
   scopes: Record<string, ReliabilityV2Scope>;
   dispatches: Record<string, ReliabilityV2DispatchReceipt>;
-  settledOutcomes: Record<string, { expiresAt: number }>;
+  settledOutcomes: Record<string, { expiresAt: number; observation?: ReliabilityV2ObservationSummary }>;
+}
+
+/** Content-free failure facts retained only for the existing dedup lifetime. */
+export interface ReliabilityV2ObservationSummary {
+  modelKey: string;
+  category: FailureCategory;
+  categoryEvidence: CategoryEvidence;
+  observedAt: number;
+  retryAt?: number;
+  source: FailureSource;
 }
 
 export interface ReliabilityV2LeaseReference {
@@ -105,7 +117,7 @@ export interface ReliabilityV2LeaseOperation {
 export type ReliabilityV2Settlement =
   | { kind: "success" }
   | { kind: "cancelled" }
-  | { kind: "failure" };
+  | { kind: "failure"; observation?: FailureObservation };
 
 export interface ReliabilityV2SettleRequest {
   ownerToken: string;
@@ -196,6 +208,43 @@ function modelKey(value: unknown): value is string {
   return typeof value === "string" && value.length <= 256 && MODEL_KEY.test(value);
 }
 
+function normalizeObservationFields(value: unknown, now: number): FailureObservation | undefined {
+  return isNormalizedFailureObservation(value, { now }) ? value : undefined;
+}
+
+function validObservationSummary(value: unknown, outcomeId: string, now: number): value is ReliabilityV2ObservationSummary {
+  const summary = plainRecord(value);
+  if (!summary || !hasOnlyKeys(summary,
+    ["modelKey", "category", "categoryEvidence", "observedAt", "source"], ["retryAt"])) return false;
+  const dto: DataRecord = {
+    outcomeId,
+    modelKey: ownValue(summary, "modelKey"),
+    category: ownValue(summary, "category"),
+    categoryEvidence: ownValue(summary, "categoryEvidence"),
+    scope: { kind: "model", modelKey: ownValue(summary, "modelKey") },
+    scopeEvidence: "model-only",
+    observedAt: ownValue(summary, "observedAt"),
+    source: ownValue(summary, "source"),
+  };
+  const retryAt = ownValue(summary, "retryAt");
+  if (retryAt !== undefined) dto.retryAt = retryAt;
+  return !!normalizeObservationFields(dto, now);
+}
+
+function sameObservationSummary(
+  left: ReliabilityV2ObservationSummary | undefined,
+  right: ReliabilityV2ObservationSummary | undefined,
+): boolean {
+  return left === undefined ? right === undefined
+    : right !== undefined
+      && left.modelKey === right.modelKey
+      && left.category === right.category
+      && left.categoryEvidence === right.categoryEvidence
+      && left.observedAt === right.observedAt
+      && left.retryAt === right.retryAt
+      && left.source === right.source;
+}
+
 function hasOnlyKeys(record: DataRecord, required: readonly string[], optional: readonly string[] = []): boolean {
   return exactKeys(record, required, optional);
 }
@@ -235,7 +284,7 @@ export function emptyReliabilityV2State(): ReliabilityV2State {
     revision: 0,
     scopes: nullMap<ReliabilityV2Scope>(),
     dispatches: nullMap<ReliabilityV2DispatchReceipt>(),
-    settledOutcomes: nullMap<{ expiresAt: number }>(),
+    settledOutcomes: nullMap<{ expiresAt: number; observation?: ReliabilityV2ObservationSummary }>(),
   };
 }
 
@@ -354,13 +403,34 @@ function validState(value: unknown, config: ReliabilityV2Config): value is Relia
       const outcome = ownValue(outcomes, receipt.outcomeId);
       const record = plainRecord(outcome);
       if (!record || !timestamp(ownValue(record, "expiresAt")) || (ownValue(record, "expiresAt") as number) < receipt.proofUntil) return false;
+      const observation = ownValue(record, "observation");
+      if (observation !== undefined) {
+        if (receipt.settledKind !== "failure" || receipt.scopes.length !== 1) return false;
+        const summary = plainRecord(observation);
+        const scopeReceipt = receipt.scopes[0]!;
+        if (!summary || ownValue(summary, "modelKey") !== scopeReceipt.modelKey
+          || !timestamp(ownValue(summary, "observedAt"))
+          || (ownValue(summary, "observedAt") as number) < receipt.admittedAt
+          || (ownValue(summary, "observedAt") as number) > receipt.settledAt
+          || !validObservationSummary(summary, receipt.outcomeId, ownValue(summary, "observedAt") as number)) return false;
+      }
     } else if (ownValue(outcomes, receipt.outcomeId) !== undefined) {
       return false;
     }
   }
   for (const id of outcomeKeys) {
     const outcome = plainRecord(ownValue(outcomes, id));
-    if (!opaqueId(id) || !outcome || !hasOnlyKeys(outcome, ["expiresAt"]) || !timestamp(ownValue(outcome, "expiresAt"))) return false;
+    if (!opaqueId(id) || !outcome || !hasOnlyKeys(outcome, ["expiresAt"], ["observation"]) || !timestamp(ownValue(outcome, "expiresAt"))) return false;
+    const observation = ownValue(outcome, "observation");
+    if (observation !== undefined) {
+      const summary = plainRecord(observation);
+      const key = summary ? ownValue(summary, "modelKey") : undefined;
+      const observedAt = summary ? ownValue(summary, "observedAt") : undefined;
+      if (!summary || !modelKey(key) || !timestamp(observedAt)
+        || observedAt > (ownValue(outcome, "expiresAt") as number)
+        || !scopeKeys.includes(modelScopeKey(key))
+        || !validObservationSummary(summary, id, observedAt)) return false;
+    }
   }
   for (const key of scopeKeys) {
     const current = ownValue(scopes, key) as ReliabilityV2Scope;
@@ -411,8 +481,13 @@ function cloneState(state: ReliabilityV2State): ReliabilityV2State {
       scopes: receipt.scopes.map((scope) => ({ ...scope })),
     };
   }
-  const settledOutcomes = nullMap<{ expiresAt: number }>();
-  for (const [id, outcome] of Object.entries(state.settledOutcomes)) settledOutcomes[id] = { ...outcome };
+  const settledOutcomes = nullMap<{ expiresAt: number; observation?: ReliabilityV2ObservationSummary }>();
+  for (const [id, outcome] of Object.entries(state.settledOutcomes)) {
+    settledOutcomes[id] = {
+      expiresAt: outcome.expiresAt,
+      ...(outcome.observation === undefined ? {} : { observation: { ...outcome.observation } }),
+    };
+  }
   return { version: 2, revision: state.revision, scopes, dispatches, settledOutcomes };
 }
 
@@ -690,8 +765,33 @@ function validSettlement(value: unknown): value is ReliabilityV2Settlement {
   const settlement = plainRecord(value);
   if (!settlement) return false;
   const kind = ownValue(settlement, "kind");
-  return (kind === "success" || kind === "cancelled" || kind === "failure")
-    && hasOnlyKeys(settlement, ["kind"]);
+  if (kind === "success" || kind === "cancelled") return hasOnlyKeys(settlement, ["kind"]);
+  return kind === "failure" && hasOnlyKeys(settlement, ["kind"], ["observation"])
+    && (ownValue(settlement, "observation") === undefined
+      || !!normalizeObservationFields(ownValue(settlement, "observation"), MAX_TIMESTAMP));
+}
+
+function observationSummaryForReceipt(
+  value: unknown,
+  receipt: ReliabilityV2DispatchReceipt,
+  now: number,
+): ReliabilityV2ObservationSummary | undefined {
+  if (value === undefined) return undefined;
+  if (receipt.scopes.length !== 1) return undefined;
+  const observation = normalizeObservationFields(value, now);
+  const scope = receipt.scopes[0]!;
+  if (!observation || observation.outcomeId !== receipt.outcomeId
+    || observation.modelKey !== scope.modelKey
+    || observation.observedAt < receipt.admittedAt
+    || observation.observedAt > receipt.proofUntil) return undefined;
+  return {
+    modelKey: observation.modelKey,
+    category: observation.category,
+    categoryEvidence: observation.categoryEvidence,
+    observedAt: observation.observedAt,
+    ...(observation.retryAt === undefined ? {} : { retryAt: observation.retryAt }),
+    source: observation.source,
+  };
 }
 
 function settleDedupExpiry(receipt: ReliabilityV2DispatchReceipt, now: number, retention: number): number | undefined {
@@ -709,12 +809,16 @@ function settledClone(
   checked: NonNullable<ReturnType<typeof validation>>,
   receipt: ReliabilityV2DispatchReceipt,
   settlement: ReliabilityV2Settlement,
+  observation?: ReliabilityV2ObservationSummary,
 ): ReliabilityV2State | undefined {
   const next = cleanupCandidate(checked.state, checked.now);
   if (Object.keys(next.settledOutcomes).length >= checked.config.maxDedupEntries) return undefined;
   const expiry = settleDedupExpiry(receipt, checked.now, checked.config.dedupRetentionMs);
   if (expiry === undefined) return undefined;
-  next.settledOutcomes[receipt.outcomeId] = { expiresAt: expiry };
+  next.settledOutcomes[receipt.outcomeId] = {
+    expiresAt: expiry,
+    ...(observation === undefined ? {} : { observation }),
+  };
   const nextReceipt = next.dispatches[receipt.dispatchId]!;
   nextReceipt.settledAt = checked.now;
   nextReceipt.settledKind = settlement.kind;
@@ -738,14 +842,22 @@ export function settleReliabilityV2Dispatch(
   if (!opaqueId(ownerToken) || !opaqueId(dispatchId) || !opaqueId(outcomeId) || !validSettlement(settlement)) {
     return noChange("invalid", "invalid_settlement_identity_or_kind", checked.state);
   }
-  const priorOutcome = mapValue(checked.state.settledOutcomes, outcomeId);
-  if (priorOutcome && priorOutcome.expiresAt >= checked.now) {
-    return noChange("duplicate", "outcome_already_settled", checked.state);
-  }
   const receipt = ownDispatch(checked.state, ownerToken, dispatchId, outcomeId);
   if (!receipt) return noChange("stale", "admission_receipt_missing_or_owner_mismatch", checked.state);
   if (checked.now > receipt.proofUntil) return noChange("expired", "dispatch_proof_horizon_expired", checked.state);
   if (checked.now < receipt.admittedAt) return noChange("stale", "clock_before_admission", checked.state);
+  const suppliedObservation = ownValue(plainRecord(settlement)!, "observation");
+  const observation = observationSummaryForReceipt(suppliedObservation, receipt, checked.now);
+  if (suppliedObservation !== undefined && (!observation || settlement.kind !== "failure")) {
+    return noChange("invalid", "invalid_failure_observation_binding", checked.state);
+  }
+  const priorOutcome = mapValue(checked.state.settledOutcomes, outcomeId);
+  if (priorOutcome && priorOutcome.expiresAt >= checked.now) {
+    if (!sameObservationSummary(priorOutcome.observation, observation)) {
+      return noChange("invalid", "duplicate_observation_mismatch", checked.state);
+    }
+    return noChange("duplicate", "outcome_already_settled", checked.state);
+  }
   if (receipt.settledAt !== undefined) return noChange("duplicate", "dispatch_already_settled", checked.state);
   if (Object.keys(cleanupCandidate(checked.state, checked.now).settledOutcomes).length >= checked.config.maxDedupEntries) {
     return noChange("capacity", "outcome_dedup_capacity", checked.state);
@@ -776,7 +888,7 @@ export function settleReliabilityV2Dispatch(
     }
   }
 
-  const next = settledClone(checked, receipt, settlement);
+  const next = settledClone(checked, receipt, settlement, observation);
   if (!next) return noChange("capacity", "outcome_dedup_capacity_or_time_overflow", checked.state);
   if (staleSuccess) releaseExpiredReceiptLeases(next, receipt, checked.now);
   if (settlement.kind === "failure") {

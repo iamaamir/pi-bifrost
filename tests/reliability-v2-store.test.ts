@@ -12,6 +12,7 @@ import {
   type ReliabilityV2Config,
   type ReliabilityV2State,
 } from "../reliability-v2.ts";
+import { normalizeFailureObservation } from "../failure-observations.ts";
 import {
   ReliabilityV2Store,
   ReliabilityV2StoreError,
@@ -338,5 +339,32 @@ describe("experimental reliability v2 file transactions", () => {
     const settled = await settling;
     assert.equal(settled.status, "settled");
     assert.equal(settled.state.dispatches["dispatch-b"]?.settledKind, "success");
+  });
+
+  it("clones a normalized observation before waiting for the settlement lock", async () => {
+    const directory = tempDirectory();
+    const path = join(directory, "state.json");
+    const store = new ReliabilityV2Store({ path, config, lockTimeoutMs: 1000, lockPollMs: 5 });
+    const admitted = await store.admit({
+      ownerToken: "owner-observation", dispatchId: "dispatch-observation", outcomeId: "outcome-observation",
+      modelKeys: ["provider/model"],
+    });
+    assert.equal(admitted.status, "admitted");
+    const observedAt = Date.now();
+    const observation = normalizeFailureObservation({
+      outcomeId: "outcome-observation", modelKey: "provider/model", source: "runtime", observedAt,
+      structured: { category: "transport" },
+    }, { now: observedAt })!;
+    releaseLiveLockSoon(path);
+    const settling = store.settle({
+      ownerToken: "owner-observation", dispatchId: "dispatch-observation", outcomeId: "outcome-observation",
+      settlement: { kind: "failure", observation },
+    });
+    (observation as { category: string }).category = "unknown";
+    (observation as { scope: { kind: "model"; modelKey: string } }).scope.modelKey = "provider/changed";
+    const result = await settling;
+    assert.equal(result.status, "settled");
+    assert.equal(result.state.settledOutcomes["outcome-observation"]?.observation?.category, "transport");
+    assert.equal(result.state.settledOutcomes["outcome-observation"]?.observation?.modelKey, "provider/model");
   });
 });

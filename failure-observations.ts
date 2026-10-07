@@ -114,6 +114,69 @@ function sourceValue(value: unknown): FailureSource | undefined {
     : undefined;
 }
 
+/** Validate the exact allowlisted DTO returned by normalizeFailureObservation. */
+export function isNormalizedFailureObservation(
+  value: unknown,
+  clock: FailureObservationClock = {},
+): value is FailureObservation {
+  const observation = asDataRecord(value);
+  const clockRecord = asDataRecord(clock);
+  const suppliedNow = clockRecord ? ownValue(clockRecord, "now") : undefined;
+  const now = suppliedNow === undefined ? Date.now() : suppliedNow;
+  if (!observation || !validTimestamp(now)) return false;
+
+  const required = ["outcomeId", "modelKey", "category", "categoryEvidence", "scope", "scopeEvidence", "observedAt", "source"];
+  const optional = ["retryAt"];
+  try {
+    const keys = Reflect.ownKeys(observation);
+    if (keys.some((key) => typeof key !== "string" || (!required.includes(key) && !optional.includes(key)))
+      || required.some((key) => !keys.includes(key))) return false;
+    for (const key of keys) {
+      if (typeof key !== "string") return false;
+      const descriptor = Object.getOwnPropertyDescriptor(observation, key);
+      if (!descriptor || !("value" in descriptor)) return false;
+    }
+  } catch {
+    return false;
+  }
+
+  const outcomeId = ownValue(observation, "outcomeId");
+  const modelKey = ownValue(observation, "modelKey");
+  const category = categoryValue(ownValue(observation, "category"));
+  const evidence = ownValue(observation, "categoryEvidence");
+  const scope = asDataRecord(ownValue(observation, "scope"));
+  const scopeKind = scope ? ownValue(scope, "kind") : undefined;
+  const scopeModel = scope ? ownValue(scope, "modelKey") : undefined;
+  const scopeEvidence = ownValue(observation, "scopeEvidence");
+  let scopeKeys: PropertyKey[] = [];
+  try {
+    scopeKeys = scope ? Reflect.ownKeys(scope) : [];
+    if (scope && scopeKeys.some((key) => typeof key !== "string"
+      || (key !== "kind" && key !== "modelKey")
+      || !Object.getOwnPropertyDescriptor(scope, key)
+      || !("value" in Object.getOwnPropertyDescriptor(scope, key)!))) return false;
+  } catch {
+    return false;
+  }
+  const observedAt = ownValue(observation, "observedAt");
+  const retryAt = ownValue(observation, "retryAt");
+  const source = sourceValue(ownValue(observation, "source"));
+  if (!validOutcomeId(outcomeId) || !validModelKey(modelKey) || !category || !source
+    || !validTimestamp(observedAt) || observedAt > now
+    || (evidence !== "structured" && evidence !== "http_status" && evidence !== "text_heuristic" && evidence !== "unknown")
+    || !scope || scopeKeys.length !== 2 || scopeKind !== "model" || scopeModel !== modelKey || scopeEvidence !== "model-only"
+    || scopeKeys.some((key) => key !== "kind" && key !== "modelKey")) return false;
+
+  if (evidence === "http_status" && category !== "rate_limit" && category !== "overload") return false;
+  if (evidence === "text_heuristic" && (category === "unknown" || category === "activation_failed")) return false;
+  if (evidence === "unknown" && category !== "unknown") return false;
+  if (!Reflect.ownKeys(observation).includes("retryAt")) return true;
+  if (!validTimestamp(retryAt) || retryAt < observedAt) return false;
+  const transient = category === "rate_limit" || category === "overload"
+    || category === "transport" || category === "model_unavailable";
+  return !transient || retryAt - observedAt <= MAX_RETRY_DELAY_MS;
+}
+
 function statusCategory(value: unknown): FailureCategory | undefined {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 100 || value > 599) return undefined;
   if (value === 429) return "rate_limit";

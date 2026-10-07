@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { normalizeFailureObservation } from "../failure-observations.ts";
 import {
   abandonReliabilityV2Dispatch,
   admitReliabilityV2Dispatch,
@@ -295,6 +296,122 @@ describe("experimental reliability v2 transitions", () => {
     assert.equal(result.status, "overflow");
     assert.deepEqual(result.state, admitted.state);
     assert.equal(scope(result.state).lease?.ownerToken, "owner-overflow");
+  });
+
+  it("persists only a model-bound content-free summary with the failure dedup outcome", () => {
+    const admitted = admit(emptyReliabilityV2State(), "dispatch-observe", "outcome-observe", "owner-observe", [modelA], 1);
+    const observation = normalizeFailureObservation({
+      outcomeId: "outcome-observe", modelKey: modelA, source: "runtime", observedAt: 2,
+      structured: { category: "allowance_exhausted" },
+      errorText: "secret prompt and /private/path must not persist",
+    }, { now: 2 })!;
+    const settled = settleReliabilityV2Dispatch(admitted.state, {
+      ownerToken: "owner-observe", dispatchId: "dispatch-observe", outcomeId: "outcome-observe",
+      settlement: { kind: "failure", observation }, now: 3,
+    }, config);
+    assertResultState(settled);
+    assert.equal(settled.status, "settled");
+    assert.deepEqual(settled.state.settledOutcomes["outcome-observe"]?.observation, {
+      modelKey: modelA, category: "allowance_exhausted", categoryEvidence: "structured", observedAt: 2, source: "runtime",
+    });
+    assert.equal(JSON.stringify(settled.state).includes("secret prompt"), false);
+    assert.equal(JSON.stringify(settled.state).includes("/private/path"), false);
+    assert.equal(Object.hasOwn(settled.state.settledOutcomes["outcome-observe"]!.observation!, "outcomeId"), false);
+  });
+
+  it("accepts actual normalized unknown and text evidence with retry timing", () => {
+    const cases = [
+      {
+        dispatchId: "dispatch-unknown-retry", outcomeId: "outcome-unknown-retry",
+        input: { structured: { retryAt: 12 }, errorText: "unusual response" },
+        category: "unknown", evidence: "unknown",
+      },
+      {
+        dispatchId: "dispatch-text-retry", outcomeId: "outcome-text-retry",
+        input: { structured: { retryAt: 12 }, errorText: "connection reset" },
+        category: "transport", evidence: "text_heuristic",
+      },
+    ] as const;
+    for (const item of cases) {
+      const admitted = admit(emptyReliabilityV2State(), item.dispatchId, item.outcomeId, `owner-${item.dispatchId}`, [modelA], 10);
+      const observation = normalizeFailureObservation({
+        ...item.input, outcomeId: item.outcomeId, modelKey: modelA, source: "runtime", observedAt: 11,
+      }, { now: 11 })!;
+      assert.equal(observation.category, item.category);
+      assert.equal(observation.categoryEvidence, item.evidence);
+      assert.equal(observation.retryAt, 12);
+      const settled = settleReliabilityV2Dispatch(admitted.state, {
+        ownerToken: `owner-${item.dispatchId}`, dispatchId: item.dispatchId, outcomeId: item.outcomeId,
+        settlement: { kind: "failure", observation }, now: 12,
+      }, config);
+      assert.equal(settled.status, "settled");
+      assert.equal(settled.state.settledOutcomes[item.outcomeId]?.observation?.category, item.category);
+      assert.equal(settled.state.settledOutcomes[item.outcomeId]?.observation?.retryAt, 12);
+    }
+  });
+
+  it("rejects mismatched, multi-model, raw-metadata, and out-of-window observations atomically", () => {
+    const admitted = admit(emptyReliabilityV2State(), "dispatch-observe-bad", "outcome-observe-bad", "owner-observe-bad", [modelA], 10);
+    const good = normalizeFailureObservation({
+      outcomeId: "outcome-observe-bad", modelKey: modelA, source: "runtime", observedAt: 11,
+      structured: { category: "transport" },
+    }, { now: 11 })!;
+    const variants = [
+      { ...good, outcomeId: "outcome-other" },
+      { ...good, modelKey: modelB, scope: { kind: "model" as const, modelKey: modelB } },
+      { ...good, observedAt: 9 },
+      { ...good, errorText: "private caller metadata" },
+    ];
+    for (const observation of variants) {
+      const result = settleReliabilityV2Dispatch(admitted.state, {
+        ownerToken: "owner-observe-bad", dispatchId: "dispatch-observe-bad", outcomeId: "outcome-observe-bad",
+        settlement: { kind: "failure", observation }, now: 12,
+      }, config);
+      assert.equal(result.status, "invalid");
+      assert.deepEqual(result.state, admitted.state);
+    }
+    const multi = admit(emptyReliabilityV2State(), "dispatch-observe-multi", "outcome-observe-multi", "owner-observe-multi", [modelA, modelB], 10);
+    const multiObservation = normalizeFailureObservation({
+      outcomeId: "outcome-observe-multi", modelKey: modelA, source: "runtime", observedAt: 11,
+      structured: { category: "transport" },
+    }, { now: 11 })!;
+    const rejected = settleReliabilityV2Dispatch(multi.state, {
+      ownerToken: "owner-observe-multi", dispatchId: "dispatch-observe-multi", outcomeId: "outcome-observe-multi",
+      settlement: { kind: "failure", observation: multiObservation }, now: 12,
+    }, config);
+    assert.equal(rejected.status, "invalid");
+    assert.deepEqual(rejected.state, multi.state);
+    const ordinaryFailure = settle(multi.state, "dispatch-observe-multi", "outcome-observe-multi", "owner-observe-multi", "failure", 12);
+    assert.equal(ordinaryFailure.status, "settled");
+    assert.equal(scope(ordinaryFailure.state, modelA).generation, 1);
+    assert.equal(scope(ordinaryFailure.state, modelB).generation, 1);
+  });
+
+  it("keeps duplicate observations idempotent and accepts legacy dedup entries without summaries", () => {
+    const admitted = admit(emptyReliabilityV2State(), "dispatch-observe-dup", "outcome-observe-dup", "owner-observe-dup", [modelA], 10);
+    const observation = normalizeFailureObservation({
+      outcomeId: "outcome-observe-dup", modelKey: modelA, source: "runtime", observedAt: 11,
+      structured: { httpStatus: 429 },
+    }, { now: 11 })!;
+    const request = {
+      ownerToken: "owner-observe-dup", dispatchId: "dispatch-observe-dup", outcomeId: "outcome-observe-dup",
+      settlement: { kind: "failure" as const, observation }, now: 12,
+    };
+    const settled = settleReliabilityV2Dispatch(admitted.state, request, config);
+    assert.equal(settled.status, "settled");
+    assert.equal(settled.state.settledOutcomes["outcome-observe-dup"]?.observation?.category, "rate_limit");
+    assert.equal(settled.state.settledOutcomes["outcome-observe-dup"]?.observation?.categoryEvidence, "http_status");
+    const duplicate = settleReliabilityV2Dispatch(settled.state, request, config);
+    assert.equal(duplicate.status, "duplicate");
+    const changed = settleReliabilityV2Dispatch(settled.state, {
+      ...request,
+      settlement: { kind: "failure", observation: { ...observation, category: "overload", categoryEvidence: "http_status" } },
+    }, config);
+    assert.equal(changed.status, "invalid");
+    assert.deepEqual(changed.state, settled.state);
+    const legacy = JSON.parse(JSON.stringify(settled.state)) as ReliabilityV2State;
+    delete legacy.settledOutcomes["outcome-observe-dup"]!.observation;
+    assert.equal(validateReliabilityV2State(legacy, config), true);
   });
 
   it("preserves the fence across serialization and deterministic admission sequences", () => {
