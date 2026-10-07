@@ -91,9 +91,11 @@ function makeState(saveModeState: () => void = () => {}) {
     config: {
       models: {},
       default: undefined as string | undefined,
+      strategy: "first",
       reliability: { enabled: true, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60 },
     },
     enabled: true,
+    tierPolicyValid: true,
     classifierEnabled: true,
     pinned: false,
     cacheEntries: [],
@@ -112,6 +114,22 @@ function makeState(saveModeState: () => void = () => {}) {
     invalidatePipeline: () => {},
     saveModeState,
   };
+}
+
+async function captureJsonReports(run: () => Promise<void>): Promise<unknown[]> {
+  const original = console.error;
+  const lines: string[] = [];
+  console.error = (...args: unknown[]) => {
+    lines.push(args.map((arg) => String(arg)).join(" "));
+  };
+  try {
+    await run();
+  } finally {
+    console.error = original;
+  }
+  const marked = lines.filter((line) => line.startsWith(BIFROST_JSON_PREFIX));
+  assert.equal(marked.length, 1, `expected exactly one marker line, got:\n${lines.join("\n")}`);
+  return [JSON.parse(marked[0].slice(BIFROST_JSON_PREFIX.length))];
 }
 
 describe("classifier chooser config", () => {
@@ -463,7 +481,7 @@ describe("bifrost command ui", () => {
 
   it("shows picker for unknown subcommand", async () => {
     const { ctx, calls } = makeCtx();
-    const state = makeState();
+    const state = makeState() as ReturnType<typeof makeState> & { lastRegistryRefreshAt?: number };
     const dispatch = createCommandRouter(state as never);
 
     await dispatch("abc", ctx as never);
@@ -800,7 +818,7 @@ describe("preview command hint", () => {
     const select = calls.find((call) => call.kind === "select");
     const rows = select?.options ?? [];
     assert(
-      rows.includes("/bifrost preview [--json] <prompt> — Preview routing for a prompt"),
+      rows.includes("/bifrost preview [--trace] [--json] <prompt> — Preview routing for a prompt"),
       `preview menu row must advertise --json, got:\n${rows.join("\n")}`,
     );
   });
@@ -820,22 +838,6 @@ describe("preview command hint", () => {
 });
 
 describe("preview json marker", () => {
-  async function captureJsonReports(run: () => Promise<void>): Promise<unknown[]> {
-    const original = console.error;
-    const lines: string[] = [];
-    console.error = (...args: unknown[]) => {
-      lines.push(args.map((arg) => String(arg)).join(" "));
-    };
-    try {
-      await run();
-    } finally {
-      console.error = original;
-    }
-    const marked = lines.filter((line) => line.startsWith(BIFROST_JSON_PREFIX));
-    assert.equal(marked.length, 1, `expected exactly one marker line, got:\n${lines.join("\n")}`);
-    return [JSON.parse(marked[0].slice(BIFROST_JSON_PREFIX.length))];
-  }
-
   it("reports a usage failure when the prompt is missing", async () => {
     const { ctx, calls } = makeCtx();
     const dispatch = createCommandRouter(makeState() as never);
@@ -874,6 +876,45 @@ describe("preview json marker", () => {
 
     assert.equal((report as { ok?: boolean }).ok, true);
     assert.equal((report as { prompt?: string }).prompt, "hello");
+  });
+
+  it("reports only attempted tiers for an explicit boundary, not the unvisited default", async () => {
+    const { ctx } = makeCtx([
+      makeModel("fixture", "allowed-model", 1, 1, 2000),
+      makeModel("fixture", "default-model", 0, 0, 4000),
+    ]);
+    const state = makeState();
+    Object.assign(state.config, {
+      schemaVersion: 2,
+      default: "default",
+      models: {
+        restricted: ["missing-model"],
+        backup: ["backup-missing"],
+        allowed: ["allowed-model"],
+        default: ["default-model"],
+      },
+      categoryStrategies: { restricted: "first", backup: "cheapest", allowed: "largest_context" },
+      tierPolicies: { restricted: { fallbackTiers: ["backup", "allowed"] } },
+    });
+    state.getPipeline = () => ({
+      classify: async () => ({ kind: "classified" as const, tier: "restricted", source: "regex" }),
+    }) as never;
+    const dispatch = createCommandRouter(state as never);
+
+    const [report] = await captureJsonReports(async () => {
+      await dispatch("preview --json inspect", ctx as never);
+    }) as Array<Record<string, unknown>>;
+
+    assert.equal(report.fallbackBoundary, "explicit");
+    assert.equal("defaultTier" in report, false);
+    assert.deepEqual((report.attemptedTiers as Array<{ tier: string }>).map(({ tier }) => tier), ["restricted", "backup", "allowed"]);
+    assert.equal(report.strategy, "largest_context");
+    assert.doesNotMatch(JSON.stringify(report), /default-model/);
+    const lines = renderPreviewReport(report as unknown as BifrostPreviewSuccess);
+    assert(lines.includes("fallback boundary: explicit"));
+    assert(lines.some((line) => line.includes("attempt 2 (backup,")));
+    assert(lines.some((line) => line.includes("attempt 3 (allowed, largest_context):")));
+    assert.doesNotMatch(lines.join("\n"), /default-model/);
   });
 
   it("keeps the selection keys for a tier literally named none", async () => {
@@ -1098,6 +1139,85 @@ describe("preview json flag", () => {
     // The hazard made explicit: claiming a prefix that is not there truncates.
     assert.deepEqual(parsePreviewArgs("--json fix the bug", "preview"), { prompt: "fix the bug", json: false });
   });
+
+  it("accepts trace and json flags only as unique leading tokens", () => {
+    assert.deepEqual(parsePreviewArgs("preview --trace --json fix the bug", "preview"), {
+      prompt: "fix the bug", json: true, trace: true,
+    });
+    assert.deepEqual(parsePreviewArgs("preview --json --trace fix the bug", "preview"), {
+      prompt: "fix the bug", json: true, trace: true,
+    });
+    assert.deepEqual(parsePreviewArgs("preview --trace explain the --json flag", "preview"), {
+      prompt: "explain the --json flag", json: false, trace: true,
+    });
+    assert.deepEqual(parsePreviewArgs("preview --json --json explain", "preview"), {
+      prompt: "--json explain", json: true,
+    });
+    assert.deepEqual(parsePreviewArgs("preview --trace --trace explain", "preview"), {
+      prompt: "--trace explain", json: false, trace: true,
+    });
+  });
+});
+
+describe("preview route trace", () => {
+  it("emits versioned content-free JSON and discloses classifier access", async () => {
+    const model = makeModel("openai", "gpt-5.4");
+    const { ctx } = makeCtx([model]);
+    const state = makeState();
+    state.config.models = { general: ["gpt-5.4"] };
+    state.config.default = "general";
+    state.getPipeline = () => ({
+      classify: async () => ({ kind: "classified" as const, tier: "general", source: "regex" as const }),
+    }) as never;
+    const dispatch = createCommandRouter(state as never);
+    const [trace] = await captureJsonReports(async () => {
+      await dispatch("preview --trace --json private prompt words", ctx as never);
+    }) as Array<Record<string, unknown>>;
+
+    assert.equal(trace.version, 1);
+    assert.equal(trace.kind, "route-decision");
+    assert.equal(trace.outcome, "selected");
+    assert.equal(trace.selected, "openai/gpt-5.4");
+    assert.deepEqual(trace.classifierDisclosure, { enabled: true, configuredClassifierMayReceivePrompt: true });
+    assert.equal(JSON.stringify(trace).includes("private prompt words"), false);
+  });
+
+  it("reports usage explicitly for a missing trace prompt", async () => {
+    const { ctx } = makeCtx();
+    const dispatch = createCommandRouter(makeState() as never);
+    const [trace] = await captureJsonReports(async () => {
+      await dispatch("preview --trace --json", ctx as never);
+    }) as Array<Record<string, unknown>>;
+
+    assert.equal(trace.outcome, "usage");
+    assert.equal(trace.error, "usage");
+  });
+
+  it("does not select a random route twice to build the summary", async () => {
+    const { ctx } = makeCtx([
+      makeModel("fixture", "model-a"),
+      makeModel("fixture", "model-b"),
+    ]);
+    const state = makeState();
+    state.config.models = { quick: ["model"] };
+    state.config.default = "quick";
+    state.config.strategy = "random";
+    state.getPipeline = () => ({
+      classify: async () => ({ kind: "classified" as const, tier: "quick", source: "regex" as const }),
+    }) as never;
+    const dispatch = createCommandRouter(state as never);
+    const originalRandom = Math.random;
+    let calls = 0;
+    Math.random = () => { calls++; return 0.5; };
+    try {
+      await captureJsonReports(async () => {
+        await dispatch("preview --trace --json hello", ctx as never);
+      });
+    } finally {
+      Math.random = originalRandom;
+    }
+    assert.equal(calls, 1);
+  });
 });
 
 describe("command aliases", () => {
@@ -1249,10 +1369,57 @@ describe("route dispatch", () => {
   it("routes reload", async () => {
     const { ctx, calls } = makeCtx();
     const state = makeState();
+    state.pinned = true;
     await inTempDir(async () => {
       await createCommandRouter(state as never)("reload", ctx as never);
     });
     assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("Bifrost config reloaded")));
+    assert.equal(state.pinned, true, "reload must preserve the session-local pin");
+  });
+
+  it("rejects an invalid tier policy reload and retains the last-good routing state", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    state.tierPolicyValid = true;
+    const lastGoodConfig = state.config;
+    let invalidations = 0;
+    state.invalidatePipeline = () => { invalidations++; };
+    await inTempDir(async () => {
+      writeFileSync("bifrost.json", JSON.stringify({
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["fixture/model"] },
+        tierPolicies: { general: { fallbackTiers: ["missing"] } },
+      }));
+      await createCommandRouter(state as never)("reload", ctx as never);
+    });
+    assert.equal(state.config, lastGoodConfig);
+    assert.equal(state.tierPolicyValid, true);
+    assert.equal(invalidations, 0);
+    assert.ok(calls.some((call) => String(call.value).includes("reload rejected") && String(call.value).includes("missing")));
+  });
+
+  it("retains an active strict config when a reload source is corrupt or has a non-object root", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    Object.assign(state.config, {
+      schemaVersion: 2,
+      default: "general",
+      models: { restricted: ["fixture/missing"], general: ["fixture/default"] },
+      tierPolicies: { restricted: { fallbackTiers: [] } },
+    });
+    state.tierPolicyValid = true;
+    const lastGoodConfig = state.config;
+    const dispatch = createCommandRouter(state as never);
+    await inTempDir(async () => {
+      for (const [source, expected] of [["{ broken", "not valid JSON"], ["null", "must contain an object"]] as const) {
+        writeFileSync("bifrost.json", source);
+        await dispatch("reload", ctx as never);
+        assert.equal(state.config, lastGoodConfig);
+        assert.equal(state.tierPolicyValid, true);
+        assert.ok(calls.some((call) => String(call.value).includes("reload rejected") && String(call.value).includes(expected)));
+      }
+    });
   });
 
   it("routes providers", async () => {
@@ -1446,8 +1613,8 @@ describe("dashboard menu", () => {
     }
   });
 
-  it("offers 18 rows", async () => {
-    assert.equal((await rowsFor()).length, 18);
+  it("offers 20 rows", async () => {
+    assert.equal((await rowsFor()).length, 20);
   });
 
   it("keeps the top row actionable in every state combination", async () => {
@@ -1515,7 +1682,7 @@ describe("dashboard menu", () => {
   it("keeps the prompt commands together in the common block", async () => {
     const rows = await rowsFor();
     assert.deepEqual(rows.slice(4, 11), [
-      "/bifrost preview [--json] <prompt> — Preview routing for a prompt",
+      "/bifrost preview [--trace] [--json] <prompt> — Preview routing for a prompt",
       "/bifrost benchmark <prompt> — Classify a benchmark prompt",
       "/bifrost providers — List available providers",
       "/bifrost probe — Probe working models",
@@ -1549,7 +1716,7 @@ describe("dashboard menu", () => {
     const state = makeState();
     await createCommandRouter(state as never)("", ctx as never);
     const rows = rowsOf(calls);
-    assert.ok(rows.some((row) => row.includes("/bifrost preview [--json] <prompt>")));
+    assert.ok(rows.some((row) => row.includes("/bifrost preview [--trace] [--json] <prompt>")));
   });
 
   it("cannot go stale when a command is renamed in the registry", async () => {
@@ -1576,5 +1743,132 @@ describe("dashboard menu", () => {
       // every test that runs afterwards.
       (BIFROST_COMMAND_OPTIONS as unknown as Array<{ value: string; description: string }>)[0] = original;
     }
+  });
+});
+
+describe("diagnostics commands", () => {
+  function diagnosticHarness() {
+    const model = makeModel("fixture", "known");
+    const { ctx, calls } = makeCtx([model]);
+    const context = ctx as unknown as { modelRegistry: Record<string, (...args: unknown[]) => unknown> };
+    let registryReads = 0;
+    let networkCalls = 0;
+    Object.assign(context.modelRegistry, {
+      getAll: () => { registryReads += 1; return [model]; },
+      getAvailable: () => { registryReads += 1; return [model]; },
+      find: () => model,
+      getProviderAuthStatus: () => ({ configured: true, source: "PRIVATE_AUTH_SENTINEL", label: "PRIVATE_LABEL_SENTINEL" }),
+      refresh: async () => { networkCalls += 1; throw new Error("refresh forbidden"); },
+      classify: async () => { networkCalls += 1; throw new Error("classification forbidden"); },
+    });
+    const reliability = { version: 1 as const, models: { "fixture/known": { failures: [10], openUntil: Date.now() + 60_000 } } };
+    let writes = 0;
+    const state = makeState() as ReturnType<typeof makeState> & { lastRegistryRefreshAt?: number };
+    state.config.models = { general: ["fixture/known"] };
+    state.reliabilityStore = {
+      getState: () => reliability,
+      openCircuitCount: () => 1,
+      reload: () => { writes += 1; },
+      recordFailure: () => { writes += 1; },
+      recordSuccess: () => { writes += 1; },
+      applyOutcomes: () => { writes += 1; },
+    } as never;
+    state.getPipeline = () => ({ classify: async () => { networkCalls += 1; throw new Error("pipeline forbidden"); } }) as never;
+    state.lastRegistryRefreshAt = 1000;
+    return { state, context, calls, reliability, counters: () => ({ registryReads, networkCalls, writes }) };
+  }
+
+  async function withStubs(run: () => Promise<void>): Promise<string[]> {
+    const oldRandom = Math.random;
+    const oldError = console.error;
+    const lines: string[] = [];
+    Math.random = () => { throw new Error("random forbidden"); };
+    console.error = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+    try { await run(); } finally { Math.random = oldRandom; console.error = oldError; }
+    return lines;
+  }
+
+  it("registers validate and inspect with JSON argument hints", () => {
+    for (const command of ["validate", "inspect"]) {
+      const spec = BIFROST_COMMAND_OPTIONS.find((item) => item.value === command);
+      assert.equal(spec?.argumentHint, "[--json]");
+      assert.equal(getBifrostCommandCompletions(command), null, "complete command submits without a suggestion");
+      assert.ok(getBifrostCommandCompletions(command.slice(0, 1))?.some((item) => item.value === command));
+    }
+  });
+
+  it("emits versioned validate JSON from the loaded config without private auth details", async () => {
+    const h = diagnosticHarness();
+    const before = JSON.stringify(h.reliability);
+    const lines = await withStubs(() => createCommandRouter(h.state as never)("validate --json", h.context as never));
+    const reports = lines.filter((line) => line.startsWith(BIFROST_JSON_PREFIX));
+    assert.equal(reports.length, 1);
+    const report = JSON.parse(reports[0]!.slice(BIFROST_JSON_PREFIX.length));
+    assert.deepEqual({ version: report.version, kind: report.kind, configSource: report.configSource }, {
+      version: 1, kind: "validation", configSource: "loaded-effective-config",
+    });
+    assert.equal(JSON.stringify(report).includes("PRIVATE_AUTH_SENTINEL"), false);
+    assert.equal(JSON.stringify(report).includes("PRIVATE_LABEL_SENTINEL"), false);
+    assert.equal(JSON.stringify(h.reliability), before);
+    assert.deepEqual(h.counters(), { registryReads: 1, networkCalls: 0, writes: 0 });
+  });
+
+  it("emits a local inspect snapshot without refreshing, classifying, randomness, or writes", async () => {
+    const h = diagnosticHarness();
+    const before = JSON.stringify(h.reliability);
+    const lines = await withStubs(() => createCommandRouter(h.state as never)("inspect --json", h.context as never));
+    const report = JSON.parse(lines.find((line) => line.startsWith(BIFROST_JSON_PREFIX))!.slice(BIFROST_JSON_PREFIX.length));
+    assert.equal(report.kind, "inspection");
+    assert.equal(report.registry.knownModelCount, 1);
+    assert.equal(report.registry.availableModelCount, 1);
+    assert.equal(report.registry.bifrostLastRefreshAgeMs >= 0, true);
+    assert.deepEqual(report.tiers[0].candidates[0], {
+      model: "fixture/known", available: true, auth: "configured", circuit: "open", openUntil: h.reliability.models["fixture/known"].openUntil,
+    });
+    assert.equal(JSON.stringify(report).includes("PRIVATE_AUTH_SENTINEL"), false);
+    assert.equal(JSON.stringify(report).includes("PRIVATE_LABEL_SENTINEL"), false);
+    assert.equal(JSON.stringify(h.reliability), before);
+    assert.deepEqual(h.counters(), { registryReads: 2, networkCalls: 0, writes: 0 });
+  });
+
+  it("renders text labels for loaded config and local last-refresh age", async () => {
+    const h = diagnosticHarness();
+    (h.context as unknown as { mode: string }).mode = "cli";
+    const output = (await withStubs(async () => {
+      const dispatch = createCommandRouter(h.state as never);
+      await dispatch("validate", h.context as never);
+      await dispatch("inspect", h.context as never);
+    })).join("\n");
+    assert.match(output, /loaded effective config \(run \/bifrost reload after editing files\)/);
+    assert.match(output, /Bifrost last registry refresh age:/);
+    assert.doesNotMatch(output, /provider data freshness/i);
+    assert.doesNotMatch(output, /PRIVATE_(?:AUTH|LABEL)_SENTINEL/);
+  });
+
+  it("shows a sanitized strict-config field path in text validation output", async () => {
+    const h = diagnosticHarness();
+    const config = h.state.config as unknown as { schemaVersion?: number; tierPolicies?: unknown };
+    config.schemaVersion = 2;
+    config.tierPolicies = { general: { fallbackTiers: ["PRIVATE_BAD_FALLBACK"] } };
+    (h.context as unknown as { mode: string }).mode = "cli";
+    const output = (await withStubs(() => createCommandRouter(h.state as never)("validate", h.context as never))).join("\n");
+    assert.match(output, /config\.tier_policy_unknown_fallback \(path=tierPolicies\.\*\.fallbackTiers\)/);
+    assert.doesNotMatch(output, /PRIVATE_BAD_FALLBACK/);
+  });
+
+  it("renders an unusable circuit timestamp safely", async () => {
+    const h = diagnosticHarness();
+    h.reliability.models["fixture/known"].openUntil = Number.MAX_VALUE;
+    (h.context as unknown as { mode: string }).mode = "cli";
+    const output = (await withStubs(() => createCommandRouter(h.state as never)("inspect", h.context as never))).join("\n");
+    assert.match(output, /until unknown/);
+  });
+
+  it("rejects extra flags without inspecting", async () => {
+    const h = diagnosticHarness();
+    const lines = await withStubs(() => createCommandRouter(h.state as never)("inspect --json extra", h.context as never));
+    assert.ok(h.calls.some((call) => call.kind === "notify" && String(call.value).includes("usage: /bifrost inspect [--json]")));
+    assert.equal(lines.some((line) => line.startsWith(BIFROST_JSON_PREFIX)), false);
+    assert.deepEqual(h.counters(), { registryReads: 0, networkCalls: 0, writes: 0 });
   });
 });

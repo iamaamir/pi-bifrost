@@ -196,6 +196,82 @@ export interface RoutedModelResolution {
   fallbackReason?: "requested_tier_unhealthy" | "requested_tier_unavailable" | "all_tiers_exhausted";
   primary: HealthyModelResolution;
   fallback?: HealthyModelResolution;
+  /** Ordered pools attempted when an explicit tierPolicies boundary is active. */
+  attemptedTiers?: readonly RoutedTierAttempt[];
+  explicitBoundary?: boolean;
+}
+
+export interface RoutedTierAttempt {
+  tier: string;
+  strategy: RoutingStrategy;
+  pattern: string | string[] | undefined;
+  resolution: HealthyModelResolution;
+}
+
+export interface TierResolutionOptions {
+  requestedTier: string;
+  requestedPattern: string | string[] | undefined;
+  requestedStrategy: RoutingStrategy;
+  defaultTier?: string;
+  defaultPattern?: string | string[] | undefined;
+  defaultStrategy?: RoutingStrategy;
+}
+
+export interface TierResolutionConfig {
+  schemaVersion?: number;
+  tierPolicies?: Record<string, { fallbackTiers?: string[] }>;
+  models?: Record<string, string | string[]>;
+  default?: string;
+  strategy?: RoutingStrategy;
+  categoryStrategies?: Record<string, RoutingStrategy>;
+}
+
+export interface ConfiguredTierResolution {
+  options: TierResolutionOptions;
+  resolution: RoutedModelResolution;
+}
+
+/** Compose configured tier pools and strategies identically for preview and runtime routes. */
+export function buildTierResolutionOptions(
+  tier: string,
+  config: {
+    models?: Record<string, string | string[]>;
+    categoryStrategies?: Record<string, RoutingStrategy>;
+    strategy?: RoutingStrategy;
+    default?: string;
+  },
+): TierResolutionOptions {
+  const requestedStrategy = getStrategy(config.categoryStrategies, config.strategy, tier);
+  const defaultTier = config.default;
+  return {
+    requestedTier: tier,
+    requestedPattern: config.models?.[tier] ?? tier,
+    requestedStrategy,
+    ...(defaultTier !== undefined ? { defaultTier } : {}),
+    ...(defaultTier
+      ? { defaultPattern: config.models?.[defaultTier] ?? defaultTier }
+      : {}),
+    defaultStrategy: defaultTier
+      ? getStrategy(config.categoryStrategies, config.strategy, defaultTier)
+      : requestedStrategy,
+  };
+}
+
+/** Resolve a configured tier and return the exact options used for explanation. */
+export function resolveConfiguredTier(
+  ctx: ExtensionContext,
+  tier: string,
+  config: TierResolutionConfig,
+  reliabilityState?: ReliabilityState,
+  reliabilityConfig?: ReliabilityConfig,
+  now?: number,
+): ConfiguredTierResolution {
+  const options = buildTierResolutionOptions(tier, config);
+  const policy = config.schemaVersion === 2 ? config.tierPolicies?.[tier] : undefined;
+  const resolution = policy && Array.isArray(policy.fallbackTiers)
+    ? resolveWithExplicitTierBoundary(ctx, options, policy.fallbackTiers, config, reliabilityState, reliabilityConfig, now)
+    : resolveModelWithFallback(ctx, { ...options, reliabilityState, reliabilityConfig, now });
+  return { options, resolution };
 }
 
 export function resolveHealthyModel(
@@ -317,6 +393,59 @@ export function resolveModelWithFallback(
     fallbackReason: resolveFinalReason(fallback),
     primary,
     fallback,
+  };
+}
+
+function resolveWithExplicitTierBoundary(
+  ctx: ExtensionContext,
+  options: TierResolutionOptions,
+  fallbackTiers: readonly string[],
+  config: TierResolutionConfig,
+  reliabilityState: ReliabilityState | undefined,
+  reliabilityConfig: ReliabilityConfig | undefined,
+  now = Date.now(),
+): RoutedModelResolution {
+  const tierOptions = [options.requestedTier, ...fallbackTiers].map((tier) => ({
+    tier,
+    pattern: config.models?.[tier] ?? tier,
+    strategy: getStrategy(config.categoryStrategies, config.strategy, tier),
+  }));
+  const attemptedTiers: RoutedTierAttempt[] = [];
+  for (const { tier, pattern, strategy } of tierOptions) {
+    const resolution = resolveHealthyModel(ctx, pattern, strategy, reliabilityState, reliabilityConfig, now);
+    attemptedTiers.push({ tier, strategy, pattern, resolution });
+    if (resolution.selected) break;
+  }
+  const selectedAttempt = attemptedTiers.find(({ resolution }) => resolution.selected);
+  const primary = attemptedTiers[0].resolution;
+  const allPoolsUnavailable = attemptedTiers.every(({ resolution }) => resolution.candidates.length === 0);
+  const anySkipped = attemptedTiers.some(({ resolution }) => resolution.skipped.length > 0);
+  const fallbackReason: RoutedModelResolution["fallbackReason"] = selectedAttempt
+    ? selectedAttempt.tier === options.requestedTier
+      ? undefined
+      : primary.candidates.length === 0
+        ? "requested_tier_unavailable"
+        : primary.skipped.length > 0
+          ? "requested_tier_unhealthy"
+          : undefined
+    : attemptedTiers.length === 1 && primary.skipped.length > 0
+      ? "requested_tier_unhealthy"
+      : allPoolsUnavailable
+        ? "requested_tier_unavailable"
+        : anySkipped
+          ? "all_tiers_exhausted"
+          : undefined;
+  return {
+    requestedTier: options.requestedTier,
+    selectedTier: selectedAttempt?.tier,
+    selected: selectedAttempt?.resolution.selected,
+    strategy: selectedAttempt?.strategy ?? options.requestedStrategy,
+    skipped: attemptedTiers.flatMap(({ resolution }) => resolution.skipped),
+    ...(fallbackReason !== undefined ? { fallbackReason } : {}),
+    primary,
+    ...(attemptedTiers[1] ? { fallback: attemptedTiers[1].resolution } : {}),
+    attemptedTiers,
+    explicitBoundary: true,
   };
 }
 

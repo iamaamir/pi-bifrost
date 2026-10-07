@@ -10,4 +10,5 @@ screenshots/
 .plan/
 docs/adr/*
 docs/adr/*
+!docs/adr/0021-explicit-tier-fallback-boundaries.md
 .agents/

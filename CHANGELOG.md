@@ -2,6 +2,16 @@
 
 All notable changes to pi-bifrost are documented here.
 
+## [Unreleased]
+
+### Added
+- `/bifrost validate [--json]` checks the active loaded config and local model references; `/bifrost inspect [--json]` reports local registry, auth-presence, and circuit snapshots without routing, probing, or writing state.
+- `/bifrost preview --trace [--json] <prompt>` shows a versioned, content-free route decision with configured pools, selected strategy, and reliability exclusions. The existing `--json` preview report stays unchanged.
+- Schema version 2 supports explicit per-tier `fallbackTiers` boundaries. Each policy tries only its requested tier and listed tiers in order; tiers without a policy keep the legacy default fallback.
+
+### Fixed
+- Invalid schema versions or tier-policy configuration block physical and Auto routing. Reload rejects unreadable, malformed, or non-object config layers and keeps the active config; an exhausted explicit boundary also does not degrade to a previously dispatched model.
+
 ## [0.5.0] - 2026-10-05
 
 ### Added

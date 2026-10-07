@@ -21,7 +21,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "screenshots" / "ui-smoke"
-PI = shutil.which("pi")
+PI = os.environ.get("PI_BIN") or shutil.which("pi")
 
 WIDTH = 120
 HEIGHT = 36
@@ -420,7 +420,12 @@ def wait_stable(path: Path, timeout: float = 8.0, stable_for: float = 0.6) -> No
     raise TimeoutError(f"log not stable: {path}")
 
 
-def capture(name: str, enabled: bool, actions: Iterable[tuple[float, str]] = ()) -> Path:
+def capture(
+    name: str,
+    enabled: bool,
+    actions: Iterable[tuple[float, str]] = (),
+    config_override: dict[str, object] | None = None,
+) -> Path:
     OUT.mkdir(parents=True, exist_ok=True)
     log_path = OUT / f"{name}.ansi.log"
     png_path = OUT / f"{name}.png"
@@ -432,6 +437,8 @@ def capture(name: str, enabled: bool, actions: Iterable[tuple[float, str]] = ())
     workspace = Path(tmp.name)
     config = json.loads((ROOT / "bifrost.json").read_text())
     config["enabled"] = enabled
+    if config_override:
+        config.update(config_override)
     (workspace / "bifrost.json").write_text(json.dumps(config, indent=2) + "\n")
 
     proc, master = spawn_pi(log_path, workspace)
@@ -477,16 +484,50 @@ def main() -> int:
     captures = [
         ("startup", True, []),
         ("dashboard", True, [(1.0, "/bifrost\r")]),
+        ("validate", True, [(0.5, "/bifrost validate\r")]),
+        ("inspect", True, [(0.5, "/bifrost inspect\r")]),
         ("preview", True, [(0.5, "/bifrost classifier off\r"), (0.5, "/bifrost preview hello\r")]),
+        ("preview-trace", True, [(0.5, "/bifrost classifier off\r"), (0.5, "/bifrost preview --trace hello\r")]),
+        (
+            "strict-no-route",
+            True,
+            [(0.5, "restricted keep this text\r")],
+            {
+                "schemaVersion": 2,
+                "classifier": {"enabled": False},
+                "default": "general",
+                "models": {"general": ["gemma4:12b-mlx"], "restricted": ["missing-strict-model"]},
+                "rules": [{"pattern": "restricted", "model": "restricted"}],
+                "tierPolicies": {"restricted": {"fallbackTiers": []}},
+            },
+        ),
         ("preview-dismiss", True, [(0.5, "/bifrost classifier off\r"), (0.5, "/bifrost preview hello\r"), (0.5, "\x1b")]),
         ("disabled", False, []),
         ("classify", True, [(1.0, "hello\r")]),
         ("pinned", True, [(1.0, "\x10")]),
     ]
     results = []
-    for name, enabled, actions in captures:
+    for capture_spec in captures:
+        name, enabled, actions = capture_spec[:3]
+        config_override = capture_spec[3] if len(capture_spec) > 3 else None
         print(f"[ui-smoke] capturing {name}…")
-        results.append(capture(name, enabled, actions))
+        results.append(capture(name, enabled, actions, config_override))
+        if name == "preview-trace":
+            trace_text = (OUT / "preview-trace.txt").read_text(errors="ignore")
+            if "route trace v1" not in trace_text:
+                raise AssertionError("preview trace UI did not render the versioned route trace")
+        if name == "validate":
+            validate_text = (OUT / "validate.txt").read_text(errors="ignore")
+            if "validation (loaded effective config)" not in validate_text:
+                raise AssertionError("validate UI did not render the loaded-config label")
+        if name == "inspect":
+            inspect_text = (OUT / "inspect.txt").read_text(errors="ignore")
+            if "inspection (local snapshot)" not in inspect_text or "registry:" not in inspect_text:
+                raise AssertionError("inspect UI did not render its local snapshot labels")
+        if name == "strict-no-route":
+            strict_text = (OUT / "strict-no-route.txt").read_text(errors="ignore")
+            if "restricted keep this text" not in strict_text or "turn was not sent" not in strict_text:
+                raise AssertionError("strict no-route did not show the rejection and restore the typed prompt")
     print("[ui-smoke] done")
     for p in results:
         print(p)

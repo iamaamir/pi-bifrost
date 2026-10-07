@@ -258,6 +258,26 @@ describe("classification-pipeline", () => {
   });
 
   describe("priority order", () => {
+    it("does not skip an earlier matching tier rule to reach a later direct-model rule", async () => {
+      let classifierCalled = false;
+      const p = createPipeline(deps({
+        classifierModels: [makeClassifierModel("fixture", "classifier")],
+        classifyWithLLM: async () => {
+          classifierCalled = true;
+          return "economical";
+        },
+        regexRules: [
+          { pattern: "debug", model: "frontier" },
+          { pattern: "debug", model: "custom/direct-model" },
+        ],
+      }));
+
+      const result = await p.classify("debug this");
+
+      assert.equal(classifierCalled, true);
+      assert.deepEqual(result, { kind: "classified", tier: "economical", source: "classifier", judgment: { tier: "economical", backend: "prompt", model: "classifier" } });
+    });
+
     it("cache beats classifier", async () => {
       let classifierCalled = false;
       const p = createPipeline(

@@ -132,6 +132,8 @@ if (terminal) {
     ["init", "Probe models and generate config (use -f to re-probe)", "setup", "Proposes model groups for review before writing."],
     ["classifier status", "Show classifier state", "classifier", "Shows effective backend, model, and fallback."],
     ["reload", "Reload config after editing", "setup", "Configuration reloaded from disk."],
+    ["validate", "Validate loaded config and model references", "setup", "Checks loaded configuration and local registry references without probing."],
+    ["inspect", "Inspect configured models and local health", "debug", "Shows local registry availability, auth presence, and reliability circuits."],
     ["cache stats", "Show classification cache", "cache", "Shows local tier-decision cache statistics."],
     ["cache clear", "Clear classification cache", "cache", "Clears stored tier decisions, not provider responses."],
     ["classifier", "Choose classifier backend", "classifier", "Choose a tier classifier; Pi-native requires host support."],

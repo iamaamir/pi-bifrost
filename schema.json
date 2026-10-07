@@ -5,6 +5,31 @@
   "description": "Configuration for the pi-bifrost model router. Routes prompts to configured tiers or exact provider models. Optional classifiers can select a tier. Merged from extension defaults → global → project root → project config (.pi/bifrost.json), with later layers winning.",
   "type": "object",
   "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [1, 2],
+      "description": "Config schema version. Omit or set 1 to retain legacy routing behavior. Version 2 permits explicit per-tier fallback boundaries; each boundary is activated only by its tierPolicies entry.",
+      "examples": [2]
+    },
+    "tierPolicies": {
+      "type": "object",
+      "description": "Optional strict fallback boundaries. A configured tier with fallbackTiers resolves only itself and the listed tiers in order. An empty list allows no fallback. Requires schemaVersion 2.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["fallbackTiers"],
+        "additionalProperties": false,
+        "properties": {
+          "fallbackTiers": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Ordered configured tier names to try after this tier. Must not include this tier, duplicates, missing tiers, or form a cycle."
+          }
+        }
+      },
+      "examples": [
+        { "quick": { "fallbackTiers": ["general"] }, "general": { "fallbackTiers": [] } }
+      ]
+    },
     "enabled": {
       "type": "boolean",
       "description": "Enable or disable routing. When disabled, Bifrost does not switch models for new turns. Pi uses the selected physical model.",
@@ -303,5 +328,14 @@
         }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": { "required": ["tierPolicies"] },
+      "then": {
+        "properties": { "schemaVersion": { "const": 2 } },
+        "required": ["schemaVersion"]
+      }
+    }
+  ]
 }

@@ -14,6 +14,18 @@ describe("shipped JSON artifacts", () => {
     assert.ok(schema !== null && typeof schema === "object" && "$schema" in schema);
   });
 
+  it("requires schemaVersion 2 whenever tierPolicies is present", () => {
+    const schema = readJson("schema.json") as {
+      allOf?: Array<{
+        if?: { required?: string[] };
+        then?: { required?: string[]; properties?: { schemaVersion?: { const?: number } } };
+      }>;
+    };
+    const gate = schema.allOf?.find((item) => item.if?.required?.includes("tierPolicies"));
+    assert.deepEqual(gate?.then?.required, ["schemaVersion"]);
+    assert.equal(gate?.then?.properties?.schemaVersion?.const, 2);
+  });
+
   it("keeps checked-in examples parseable", () => {
     for (const path of [
       "bifrost.json",

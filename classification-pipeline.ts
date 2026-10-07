@@ -1,5 +1,6 @@
 import type { ClassifierModel } from "./classifier.ts";
 import { classifyCompiled, compileRules, type RouteRule } from "./routing.ts";
+import type { RoutedModelResolution, RoutingStrategy, SkippedCandidate, TierResolutionOptions } from "./routing.ts";
 import { debug, debugMeasure } from "./debug.ts";
 import { CLASSIFIER_BACKEND_IDS, type ClassificationJudgment, type ClassifierOutput, type ClassifierBackend } from "./classifier-backends.ts";
 
@@ -11,6 +12,145 @@ export type ClassificationResult =
   | { readonly kind: "classified"; readonly tier: string; readonly source: ClassificationSource; readonly judgment?: ClassificationJudgment }
   | { readonly kind: "fallback"; readonly tier: string }
   | { readonly kind: "unclassified" };
+
+export interface RouteDecisionCandidate {
+  readonly model: string;
+  readonly status: "eligible" | "excluded";
+  readonly exclusion?: SkippedCandidate["reason"];
+}
+
+export interface RouteDecisionPool {
+  readonly tier: string;
+  readonly strategy: RoutingStrategy;
+  readonly patterns: readonly string[];
+  readonly candidates: readonly RouteDecisionCandidate[];
+}
+
+/** Content-free summary shared by runtime observation and preview output. */
+export interface RouteDecisionSummary {
+  readonly version: 1;
+  readonly kind: "route-decision";
+  readonly outcome: "selected" | "unresolved" | "unclassified" | "usage";
+  readonly error?: "usage";
+  readonly classification: {
+    readonly source: ClassificationSource | "fallback" | "unclassified";
+    readonly tier?: string;
+    readonly classifier?: {
+      readonly backend: string;
+      readonly model?: string;
+      readonly confidence?: number;
+    };
+  };
+  readonly requested?: RouteDecisionPool;
+  readonly fallback?: RouteDecisionPool;
+  readonly attempted?: readonly RouteDecisionPool[];
+  readonly explicitBoundary?: boolean;
+  readonly selectedTier?: string;
+  readonly selected?: string;
+  readonly selectedStrategy?: RoutingStrategy;
+  readonly fallbackReason?: RoutedModelResolution["fallbackReason"];
+}
+
+export interface ResolvedRouteDecisionInput {
+  readonly resolution: RoutedModelResolution;
+  readonly options: TierResolutionOptions;
+}
+
+function summarizePool(
+  tier: string,
+  strategy: RoutingStrategy,
+  pattern: string | readonly string[] | undefined,
+  candidates: RoutedModelResolution["primary"]["candidates"],
+  skipped: readonly SkippedCandidate[],
+): RouteDecisionPool {
+  const exclusions = new Map(skipped.map((candidate) => [candidate.key, candidate.reason]));
+  return {
+    tier,
+    strategy,
+    patterns: pattern === undefined ? [] : Array.isArray(pattern) ? [...pattern] : [pattern],
+    candidates: candidates.map((candidate) => {
+      const model = `${candidate.provider}/${candidate.id}`;
+      const exclusion = exclusions.get(model);
+      return exclusion
+        ? { model, status: "excluded", exclusion }
+        : { model, status: "eligible" };
+    }),
+  };
+}
+
+/** Summarize the actual classification and resolver result without retaining prompt or model objects. */
+export function buildRouteDecisionSummary(
+  classification: ClassificationResult,
+  route?: ResolvedRouteDecisionInput,
+): RouteDecisionSummary {
+  if (classification.kind === "unclassified") {
+    return {
+      version: 1,
+      kind: "route-decision",
+      outcome: "unclassified",
+      classification: { source: "unclassified" },
+    };
+  }
+
+  const resolution = route?.resolution;
+  const options = route?.options;
+  const judgment = classification.kind === "classified" ? classification.judgment : undefined;
+  const summary: RouteDecisionSummary = {
+    version: 1,
+    kind: "route-decision",
+    outcome: resolution?.selected ? "selected" : "unresolved",
+    classification: {
+      source: classification.kind === "classified" ? classification.source : "fallback",
+      tier: classification.tier,
+      ...(judgment ? {
+        classifier: {
+          backend: judgment.backend,
+          ...(judgment.model !== undefined ? { model: judgment.model } : {}),
+          ...(judgment.confidence !== undefined ? { confidence: judgment.confidence } : {}),
+        },
+      } : {}),
+    },
+    ...(resolution && options ? {
+      requested: summarizePool(
+        options.requestedTier,
+        options.requestedStrategy,
+        options.requestedPattern,
+        resolution.primary.candidates,
+        resolution.primary.skipped,
+      ),
+      ...(resolution.fallback ? {
+        fallback: summarizePool(
+          options.defaultTier ?? options.requestedTier,
+          options.defaultStrategy ?? options.requestedStrategy,
+          options.defaultPattern,
+          resolution.fallback.candidates,
+          resolution.fallback.skipped,
+        ),
+      } : {}),
+      ...(resolution.selectedTier !== undefined ? { selectedTier: resolution.selectedTier } : {}),
+      ...(resolution.selected ? { selected: `${resolution.selected.provider}/${resolution.selected.id}` } : {}),
+      ...(resolution.selected ? { selectedStrategy: resolution.strategy } : {}),
+      ...(resolution.fallbackReason !== undefined ? { fallbackReason: resolution.fallbackReason } : {}),
+    } : {}),
+  };
+  if (resolution?.explicitBoundary && resolution.attemptedTiers) {
+    const attempted = resolution.attemptedTiers.map((attempt) => summarizePool(
+      attempt.tier,
+      attempt.strategy,
+      attempt.pattern,
+      attempt.resolution.candidates,
+      attempt.resolution.skipped,
+    ));
+    return {
+      ...summary,
+      explicitBoundary: true,
+      ...(attempted[0] ? { requested: attempted[0] } : {}),
+      ...(attempted[1] ? { fallback: attempted[1] } : {}),
+      attempted,
+    };
+  }
+  return summary;
+}
 
 // ── Pipeline dependencies ──────────────────────────────────────
 

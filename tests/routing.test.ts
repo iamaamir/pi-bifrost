@@ -1,6 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  buildRouteDecisionSummary,
+  type ClassificationResult,
+} from "../classification-pipeline.ts";
+import {
+  buildTierResolutionOptions,
+  resolveConfiguredTier,
   findOneModel,
   findCandidates,
   selectModel,
@@ -95,7 +101,7 @@ describe("routing", () => {
         "anthropic/claude-opus",
         "anthropic/claude-opus",
       ]);
-      assert.equal(candidates.length, 1);
+      assert.deepEqual(candidates.map(modelKey), ["anthropic/claude-opus"]);
     });
 
     it("matches substring and exact together", () => {
@@ -104,7 +110,10 @@ describe("routing", () => {
         makeModel("lmstudio", "qwen/qwen3-vl-8b", 0),
       ]);
       const candidates = findCandidates(ctx, ["anthropic/claude-opus", "lmstudio"]);
-      assert.equal(candidates.length, 2);
+      assert.deepEqual(candidates.map(modelKey), [
+        "anthropic/claude-opus",
+        "lmstudio/qwen/qwen3-vl-8b",
+      ]);
     });
   });
 
@@ -261,10 +270,27 @@ describe("routing", () => {
     it("returns a random candidate", () => {
       const a = makeModel("a", "a", 0, 0);
       const b = makeModel("b", "b", 0, 0);
-      const results = new Set();
-      for (let i = 0; i < 20; i++) results.add(selectModel([a, b], "random")!.id);
-      assert.ok(results.has("a"));
-      assert.ok(results.has("b"));
+      const originalRandom = Math.random;
+      try {
+        Math.random = () => 0.75;
+        assert.equal(modelKey(selectModel([a, b], "random")), "b/b");
+        Math.random = () => 0;
+        assert.equal(modelKey(selectModel([a, b], "random")), "a/a");
+      } finally {
+        Math.random = originalRandom;
+      }
+    });
+
+    it("keeps candidate order for fastest and metric ties", () => {
+      const first = makeModel("a", "first", 2, 3, 128_000);
+      const second = makeModel("b", "second", 2, 3, 128_000);
+      const tied = [first, second];
+
+      assert.equal(modelKey(selectModel(tied, "fastest")), "a/first");
+      assert.equal(modelKey(selectModel(tied, "cheapest")), "a/first");
+      assert.equal(modelKey(selectModel(tied, "cheapest_input")), "a/first");
+      assert.equal(modelKey(selectModel(tied, "cheapest_output")), "a/first");
+      assert.equal(modelKey(selectModel(tied, "largest_context")), "a/first");
     });
 
     it("returns undefined for empty candidates", () => {
@@ -387,6 +413,132 @@ describe("routing", () => {
       });
       assert.equal(result.selected, undefined);
       assert.equal(result.fallbackReason, "all_tiers_exhausted");
+    });
+  });
+
+  describe("route decision summary", () => {
+    it("preserves structured exclusions, fallback strategy, and selection without prompt text", () => {
+      const blocked = makeModel("fixture", "blocked", 1, 1, 64_000);
+      const fallback = makeModel("fixture", "fallback", 2, 1, 128_000);
+      const ctx = makeCtx([blocked, fallback]);
+      const now = Date.UTC(2026, 0, 1);
+      const reliabilityState = {
+        version: 1 as const,
+        models: {
+          [modelKey(blocked)]: { failures: [now - 1_000], openUntil: now + 60_000, trialActive: false },
+        },
+      };
+      const config = {
+        models: { frontier: [modelKey(blocked)], quick: [modelKey(fallback)] },
+        categoryStrategies: { frontier: "largest_context" as const, quick: "cheapest_output" as const },
+        default: "quick",
+      };
+      const options = buildTierResolutionOptions("frontier", config);
+      const resolution = resolveModelWithFallback(ctx, {
+        ...options,
+        reliabilityState,
+        reliabilityConfig: DEFAULT_RELIABILITY,
+        now,
+      });
+      const classification: ClassificationResult = {
+        kind: "classified",
+        tier: "frontier",
+        source: "classifier",
+        judgment: { tier: "frontier", backend: "prompt", model: "fixture/classifier", confidence: 0.91 },
+      };
+
+      const summary = buildRouteDecisionSummary(classification, { resolution, options });
+
+      assert.equal(summary.outcome, "selected");
+      assert.deepEqual(summary.requested?.candidates, [
+        { model: "fixture/blocked", status: "excluded", exclusion: "open_circuit" },
+      ]);
+      assert.equal(summary.requested?.strategy, "largest_context");
+      assert.equal(summary.fallback?.tier, "quick");
+      assert.equal(summary.fallback?.strategy, "cheapest_output");
+      assert.equal(summary.selected, "fixture/fallback");
+      assert.equal(summary.selectedStrategy, "cheapest_output");
+      assert.equal(JSON.stringify(summary).includes("private prompt words"), false);
+    });
+
+    it("keeps an unresolved configured pool visible without inventing a selection", () => {
+      const ctx = makeCtx([]);
+      const config = { models: { frontier: ["fixture/missing"] } };
+      const options = buildTierResolutionOptions("frontier", config);
+      const resolution = resolveModelWithFallback(ctx, { ...options });
+      const summary = buildRouteDecisionSummary(
+        { kind: "classified", tier: "frontier", source: "regex" },
+        { resolution, options },
+      );
+
+      assert.equal(summary.outcome, "unresolved");
+      assert.deepEqual(summary.requested?.patterns, ["fixture/missing"]);
+      assert.deepEqual(summary.requested?.candidates, []);
+      assert.equal("selected" in summary, false);
+    });
+  });
+
+  describe("tier resolution options across registry refresh", () => {
+    it("rebuilds the configured pool after an awaited refresh and config reload", async () => {
+      const available = [makeModel("fixture", "old")];
+      const ctx = makeCtx(available);
+      const config = { models: { quick: ["fixture/missing"] }, default: "quick" };
+      const beforeRefresh = resolveConfiguredTier(ctx, "quick", config);
+      assert.equal(beforeRefresh.resolution.selected, undefined);
+      assert.deepEqual(beforeRefresh.options.requestedPattern, ["fixture/missing"]);
+
+      await Promise.resolve().then(() => {
+        config.models.quick = ["fixture/new"];
+        available.splice(0, available.length, makeModel("fixture", "new"));
+      });
+      const afterRefresh = resolveConfiguredTier(ctx, "quick", config);
+
+      assert.equal(modelKey(afterRefresh.resolution.selected), "fixture/new");
+      assert.deepEqual(afterRefresh.options.requestedPattern, ["fixture/new"]);
+    });
+  });
+
+  describe("explicit tier fallback boundaries", () => {
+    it("tries only explicit fallback tiers in order and records every attempted pool", () => {
+      const preferred = makeModel("fixture", "preferred");
+      const legacyDefault = makeModel("fixture", "legacy-default");
+      const ctx = makeCtx([preferred, legacyDefault]);
+      const config = {
+        schemaVersion: 2,
+        default: "economical",
+        strategy: "first" as const,
+        models: { quick: ["fixture/missing"], frontier: ["fixture/preferred"], economical: ["fixture/legacy-default"] },
+        tierPolicies: { quick: { fallbackTiers: ["frontier", "economical"] } },
+      };
+
+      const result = resolveConfiguredTier(ctx, "quick", config);
+
+      assert.equal(modelKey(result.resolution.selected), "fixture/preferred");
+      assert.equal(result.resolution.selectedTier, "frontier");
+      assert.equal(result.resolution.explicitBoundary, true);
+      assert.deepEqual(result.resolution.attemptedTiers?.map((attempt) => attempt.tier), ["quick", "frontier"]);
+    });
+
+    it("treats an explicit empty list as a singleton and v2 without policy as legacy", () => {
+      const fallback = makeModel("fixture", "fallback");
+      const ctx = makeCtx([fallback]);
+      const emptyBoundary = resolveConfiguredTier(ctx, "quick", {
+        schemaVersion: 2,
+        default: "general",
+        models: { quick: ["fixture/missing"], general: ["fixture/fallback"] },
+        tierPolicies: { quick: { fallbackTiers: [] } },
+      });
+      assert.equal(emptyBoundary.resolution.selected, undefined);
+      assert.equal(emptyBoundary.resolution.explicitBoundary, true);
+      assert.deepEqual(emptyBoundary.resolution.attemptedTiers?.map((attempt) => attempt.tier), ["quick"]);
+
+      const legacy = resolveConfiguredTier(ctx, "quick", {
+        schemaVersion: 2,
+        default: "general",
+        models: { quick: ["fixture/missing"], general: ["fixture/fallback"] },
+      });
+      assert.equal(modelKey(legacy.resolution.selected), "fixture/fallback");
+      assert.equal(legacy.resolution.explicitBoundary, undefined);
     });
   });
 

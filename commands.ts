@@ -4,21 +4,22 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { join } from "node:path";
 import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
 import type { BifrostConfig, ClassifierConfig } from "./config.ts";
-import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, PROMPT_ONLY_FIELDS, loadConfig } from "./config.ts";
+import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, PROMPT_ONLY_FIELDS, loadConfigForReload, validateTierPolicyConfig } from "./config.ts";
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
-import type { ClassificationPipeline, ClassificationResult, ClassificationSource } from "./classification-pipeline.ts";
+import { buildRouteDecisionSummary, type ClassificationPipeline, type ClassificationResult, type ClassificationSource, type RouteDecisionSummary } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
 import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
 import { showBifrostResult } from "./result-viewer.ts";
 import {
   findCandidates,
-  getStrategy,
+  buildTierResolutionOptions,
+  resolveConfiguredTier,
   guessTier,
   modelKey,
-  resolveModelWithFallback,
   type HealthyModelResolution,
+  type RoutedModelResolution,
   type RoutingStrategy,
 } from "./routing.ts";
 import type { ReliabilityStore } from "./reliability-store.ts";
@@ -27,11 +28,14 @@ import type { EffectiveBackend } from "./classifier-detection.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend } from "./classifier-backends.ts";
 import { piClassificationSupported } from "./classifier-pi-native.ts";
 import { resolveTypeSafeApiKey, type TypeSafeCredentialSource } from "./typesafe-classifier.ts";
+import { inspectDiagnostics, validateDiagnostics, type BifrostDiagnostic, type InspectDiagnosticsReport, type ValidateDiagnosticsReport } from "./diagnostics.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
 export interface BifrostState {
   config: BifrostConfig;
+  /** New routing config semantics are blocked until an accepted config is installed. */
+  tierPolicyValid?: boolean;
   enabled: boolean;
   classifierEnabled: boolean;
   pinned: boolean;
@@ -51,6 +55,34 @@ export interface BifrostState {
   forceRegistryRefresh?: boolean;
   /** Recorded when detection fills an absent classifier.backend; status and test report read it (fix 12). */
   classifierDetection?: { backend: ClassifierBackend; reason: string };
+}
+
+function installConfigIfTierPoliciesValid(
+  state: BifrostState,
+  config: BifrostConfig,
+  ctx: ExtensionContext,
+): boolean {
+  const errors = validateTierPolicyConfig(config).filter((issue) => issue.severity === "error");
+  if (errors.length > 0) {
+    log(ctx, `Bifrost config reload rejected: ${errors.map((issue) => issue.message).join(" ")}`, "error");
+    return false;
+  }
+  state.config = config;
+  state.tierPolicyValid = true;
+  state.invalidatePipeline();
+  return true;
+}
+
+function installReloadedConfig(
+  state: BifrostState,
+  loaded: ReturnType<typeof loadConfigForReload>,
+  ctx: ExtensionContext,
+): boolean {
+  if (loaded.diagnostics.length > 0) {
+    log(ctx, `Bifrost config reload rejected: ${loaded.diagnostics.map(({ message }) => message).join(" ")}`, "error");
+    return false;
+  }
+  return installConfigIfTierPoliciesValid(state, loaded.config, ctx);
 }
 
 export function log(
@@ -179,40 +211,37 @@ export type BifrostTierDisplay = {
   requestedCandidateLines: string[];
   fallbackCandidateLines: string[];
   defaultTier?: string;
+  explicitBoundary?: true;
+  attemptedTiers?: Array<{ tier: string; strategy: string; candidates: string[] }>;
 };
+
+type ResolvedTierDisplay = BifrostTierDisplay & { resolution: RoutedModelResolution };
 
 function resolveTierDisplay(
   tier: string,
   state: BifrostState,
   ctx: ExtensionContext,
-): BifrostTierDisplay {
-  const pattern = state.config.models?.[tier] ?? tier;
-  const strategy = getStrategy(state.config.categoryStrategies, state.config.strategy, tier);
-  const defaultTier = state.config.default;
-  const defaultPattern = defaultTier ? (state.config.models?.[defaultTier] ?? defaultTier) : undefined;
-  const defaultStrategy = defaultTier
-    ? getStrategy(state.config.categoryStrategies, state.config.strategy, defaultTier)
-    : strategy;
-
-  const resolved = resolveModelWithFallback(ctx, {
-    requestedTier: tier,
-    requestedPattern: pattern,
-    requestedStrategy: strategy,
-    defaultTier,
-    defaultPattern,
-    defaultStrategy,
-    reliabilityState: state.reliabilityStore.getState(),
-    reliabilityConfig: state.config.reliability,
-  });
+): ResolvedTierDisplay {
+  const { options, resolution: resolved } = resolveConfiguredTier(
+    ctx,
+    tier,
+    state.config,
+    state.reliabilityStore.getState(),
+    state.config.reliability,
+  );
+  const explicitBoundary = resolved.explicitBoundary === true;
+  const defaultTier = explicitBoundary ? undefined : options.defaultTier;
+  const strategy = explicitBoundary ? resolved.strategy : options.requestedStrategy;
 
   const selectedKey = resolved.selected ? modelKey(resolved.selected) : undefined;
   const requestedCandidateLines = formatCandidateLines(
     resolved.primary,
     resolved.selectedTier === tier ? selectedKey : undefined,
   );
-  const fallbackCandidateLines = resolved.fallback
+  const fallbackResolution = explicitBoundary ? resolved.attemptedTiers?.[1]?.resolution : resolved.fallback;
+  const fallbackCandidateLines = fallbackResolution
     ? formatCandidateLines(
-        resolved.fallback,
+        fallbackResolution,
         resolved.selectedTier && resolved.selectedTier !== tier ? selectedKey : undefined,
       )
     : [];
@@ -225,6 +254,18 @@ function resolveTierDisplay(
     requestedCandidateLines,
     fallbackCandidateLines,
     defaultTier,
+    ...(explicitBoundary ? {
+      explicitBoundary: true as const,
+      attemptedTiers: (resolved.attemptedTiers ?? []).map((attempt) => ({
+        tier: attempt.tier,
+        strategy: attempt.strategy,
+        candidates: formatCandidateLines(
+          attempt.resolution,
+          resolved.selectedTier === attempt.tier ? selectedKey : undefined,
+        ),
+      })),
+    } : {}),
+    resolution: resolved,
   };
 }
 
@@ -472,22 +513,20 @@ async function handleInit(
   writeFileSync(join(dir, "bifrost.json"), JSON.stringify(proposal, null, 2));
 
   // Auto-reload so the extension picks up the new config immediately.
-  state.config = loadConfig(process.cwd(), state.extensionDir);
+  const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
+  if (!installReloadedConfig(state, loadedConfig, ctx)) return;
   const runtimeState = loadRuntimeState(runtimeStatePath(process.cwd()), {
     enabled: state.config.enabled ?? true,
     pinned: false,
     classifierEnabled: state.config.classifier?.enabled ?? true,
   });
   state.enabled = runtimeState.enabled;
-  state.pinned = runtimeState.pinned;
   state.classifierEnabled = runtimeState.classifierEnabled;
   state.reliabilityStore.reload(state.config.reliability, process.cwd());
   state.classifierMetricsStore.reload({
     cwd: process.cwd(),
     enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
   });
-  state.invalidatePipeline();
-
   log(ctx, "wrote .pi/bifrost.json and reloaded config");
   log(ctx, `Bifrost active with ${Object.keys(state.config.models ?? {}).length} tier(s). Try a prompt.`);
   log(ctx, "Next: run /bifrost classifier to choose the routing backend.");
@@ -678,8 +717,8 @@ async function handleBenchmark(
  * unchanged.
  *
  * This is a projection of what `resolveTierDisplay` already computes. It carries
- * no stage timings and no structured candidate records, so it is deliberately
- * not a DecisionTrace (see ADR 0007).
+ * no stage timings or structured candidate records. The opt-in `--trace` path
+ * uses the separate RouteDecisionSummary type (ADR 0007).
  */
 export type BifrostPreviewReport = BifrostPreviewSuccess | BifrostPreviewFailure;
 
@@ -699,6 +738,8 @@ export type BifrostPreviewSuccess = {
   readonly fallbackCandidates: string[];
   readonly defaultTier?: string;
   readonly selected?: string;
+  readonly fallbackBoundary?: "explicit";
+  readonly attemptedTiers?: Array<{ readonly tier: string; readonly strategy: string; readonly candidates: string[] }>;
 };
 
 /** No routing decision was made, so no routing field is reported. */
@@ -715,8 +756,8 @@ export const BIFROST_JSON_PREFIX = "[bifrost-json] ";
 const PREVIEW_SUB = "preview";
 
 /**
- * Split the argument text of a `preview` subcommand into its prompt and whether
- * `--json` was requested.
+ * Split leading preview flags from the prompt. Each supported flag is consumed
+ * at most once; a duplicate flag remains prompt text for compatibility.
  *
  * Precondition: `args` is the full argument string including the subcommand
  * word, and `sub` is that word. `sub` is a parameter rather than a hardcoded
@@ -726,15 +767,20 @@ const PREVIEW_SUB = "preview";
  * loses that many leading characters; pass the real subcommand, or pass `""` to
  * parse a bare prompt with nothing removed.
  */
-export function parsePreviewArgs(args: string, sub: string): { prompt: string; json: boolean } {
-  const rest = args.slice(sub.length).trim();
-  if (rest === "--json") return { prompt: "", json: true };
-  // Any whitespace separates the flag from the prompt, so a tab or a double space
-  // is not mistaken for prompt text. `--json` is still only a flag as the very
-  // first token: a later mention stays part of the prompt.
-  const flagged = /^--json\s+([\s\S]*)$/.exec(rest);
-  if (flagged) return { prompt: flagged[1].trim(), json: true };
-  return { prompt: rest, json: false };
+export function parsePreviewArgs(args: string, sub: string): { prompt: string; json: boolean; trace?: true } {
+  let rest = args.slice(sub.length).trim();
+  let json = false;
+  let trace = false;
+  while (rest.startsWith("--json") || rest.startsWith("--trace")) {
+    const flag = /^(--json|--trace)(?=\s|$)/.exec(rest)?.[1];
+    if (!flag) break;
+    if ((flag === "--json" && json) || (flag === "--trace" && trace)) break;
+    json ||= flag === "--json";
+    trace ||= flag === "--trace";
+    rest = rest.slice(flag.length).trimStart();
+  }
+  const parsed = { prompt: rest.trim(), json };
+  return trace ? { ...parsed, trace: true } : parsed;
 }
 
 /** Build the failure half of the report. Pure: no classification, no display, no side effects. */
@@ -767,11 +813,70 @@ export function buildPreviewReport(input: {
     fallbackCandidates: display.fallbackCandidateLines,
     ...(display.defaultTier !== undefined ? { defaultTier: display.defaultTier } : {}),
     ...(display.selected !== undefined ? { selected: display.selected } : {}),
+    ...(display.explicitBoundary ? {
+      fallbackBoundary: "explicit" as const,
+      attemptedTiers: display.attemptedTiers ?? [],
+    } : {}),
   };
 }
 
 export function serializePreviewReport(report: BifrostPreviewReport): string {
   return JSON.stringify(report);
+}
+
+export type BifrostTracePreview = RouteDecisionSummary & {
+  readonly classifierDisclosure: {
+    readonly enabled: boolean;
+    readonly configuredClassifierMayReceivePrompt: boolean;
+  };
+};
+
+export function buildTracePreview(
+  summary: RouteDecisionSummary,
+  classifierEnabled: boolean,
+): BifrostTracePreview {
+  return {
+    ...summary,
+    classifierDisclosure: {
+      enabled: classifierEnabled,
+      configuredClassifierMayReceivePrompt: classifierEnabled,
+    },
+  };
+}
+
+export function renderTracePreview(trace: BifrostTracePreview): string[] {
+  const lines = [
+    "--- route trace v1 ---",
+    `outcome: ${trace.outcome}`,
+    `classification: ${trace.classification.source}${trace.classification.tier ? ` → ${trace.classification.tier}` : ""}`,
+    `classifier disclosure: ${trace.classifierDisclosure.enabled
+      ? "enabled; the configured classifier may receive the preview prompt"
+      : "disabled; preview prompt is not sent to a classifier"}`,
+  ];
+  if (trace.classification.classifier) {
+    lines.push(`classifier: ${trace.classification.classifier.backend}`);
+    if (trace.classification.classifier.model !== undefined) lines.push(`classifier model: ${trace.classification.classifier.model}`);
+    if (trace.classification.classifier.confidence !== undefined) lines.push(`classifier confidence: ${trace.classification.classifier.confidence}`);
+  }
+  const renderPool = (label: string, pool: RouteDecisionSummary["requested"] | RouteDecisionSummary["fallback"]) => {
+    if (!pool) return;
+    lines.push(`${label}: ${pool.tier} (${pool.strategy})`);
+    for (const candidate of pool.candidates) {
+      lines.push(`  ${candidate.status}: ${candidate.model}${candidate.exclusion ? ` (${candidate.exclusion})` : ""}`);
+    }
+  };
+  if (trace.explicitBoundary && trace.attempted) {
+    lines.push("fallback boundary: explicit");
+    trace.attempted.forEach((pool, index) => renderPool(`attempt ${index + 1}`, pool));
+  } else {
+    renderPool("requested", trace.requested);
+    renderPool("fallback", trace.fallback);
+  }
+  if (trace.fallbackReason) lines.push(`fallback reason: ${trace.fallbackReason}`);
+  if (trace.selectedStrategy) lines.push(`selected strategy: ${trace.selectedStrategy}`);
+  lines.push(`selected: ${trace.selected ? `${trace.selectedTier} → ${trace.selected}` : "none"}`);
+  lines.push("----------------------");
+  return lines;
 }
 
 export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
@@ -795,6 +900,13 @@ export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
     ...(report.fallbackCandidates.length > 0 && report.defaultTier && report.defaultTier !== report.tier
       ? [`fallback candidates (${report.defaultTier}):`, ...report.fallbackCandidates]
       : []),
+    ...(report.fallbackBoundary === "explicit" ? [
+      "fallback boundary: explicit",
+      ...(report.attemptedTiers ?? []).flatMap((attempt, index) => [
+        `attempt ${index + 1} (${attempt.tier}, ${attempt.strategy}):`,
+        ...attempt.candidates.map((candidate) => `  ${candidate}`),
+      ]),
+    ] : []),
     `selected:  ${report.selected ?? PREVIEW_NONE}`,
     "---------------",
   ];
@@ -810,17 +922,29 @@ async function handlePreview(
   ctx: ExtensionContext,
   state: BifrostState,
 ): Promise<void> {
-  const { prompt, json } = parsePreviewArgs(args, PREVIEW_SUB);
+  const { prompt, json, trace } = parsePreviewArgs(args, PREVIEW_SUB);
   if (!prompt) {
     // A machine caller must still get its line: the text notification below stays
     // for the interactive path, but a consumer that scans for the marker needs a
     // parseable outcome even when there is nothing to route.
-    if (json) emitPreviewReport(buildPreviewFailure(prompt, "usage"));
-    log(ctx, json ? "usage: /bifrost preview --json <prompt>" : "usage: /bifrost preview <prompt>", "warning");
+    if (json && trace) {
+      const summary: RouteDecisionSummary = {
+        version: 1,
+        kind: "route-decision",
+        outcome: "usage",
+        error: "usage",
+        classification: { source: "unclassified" },
+      };
+      console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(buildTracePreview(summary, state.classifierEnabled))}`);
+    } else if (json) emitPreviewReport(buildPreviewFailure(prompt, "usage"));
+    log(ctx, json ? `usage: /bifrost preview ${trace ? "--trace " : ""}--json <prompt>` : `usage: /bifrost preview ${trace ? "--trace " : ""}<prompt>`, "warning");
     return;
   }
 
   clearBifrostWidgets(ctx);
+  if (trace && state.classifierEnabled) {
+    log(ctx, "Preview may send the prompt to the configured classifier", "warning");
+  }
   setBifrostStatus(ctx, "previewing prompt...", "accent");
   uiBusy(ctx, "Classifying preview prompt...");
   let classification;
@@ -831,15 +955,35 @@ async function handlePreview(
     syncBifrostModeStatus(ctx, state);
   }
   if (classification.kind === "unclassified") {
+    if (trace) {
+      const summary = buildRouteDecisionSummary(classification);
+      const report = buildTracePreview(summary, state.classifierEnabled);
+      if (json) console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(report)}`);
+      else await uiResult(ctx, "Bifrost route trace", renderTracePreview(report));
+      return;
+    }
     if (json) emitPreviewReport(buildPreviewFailure(prompt, "unclassified"));
     log(ctx, "no tier matched", "warning");
+    return;
+  }
+
+  const display = resolveTierDisplay(classification.tier, state, ctx);
+  if (trace) {
+    const options = buildTierResolutionOptions(classification.tier, state.config);
+    const summary = buildRouteDecisionSummary(classification, {
+      resolution: display.resolution,
+      options,
+    });
+    const report = buildTracePreview(summary, state.classifierEnabled);
+    if (json) console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(report)}`);
+    else await uiResult(ctx, "Bifrost route trace", renderTracePreview(report));
     return;
   }
 
   const report = buildPreviewReport({
     prompt,
     classification,
-    display: resolveTierDisplay(classification.tier, state, ctx),
+    display,
   });
 
   if (json) {
@@ -913,13 +1057,15 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "unpin", description: "Resume routing", reflects: { state: "pinned", sets: false, note: "already unpinned" } },
   // Common commands, in menu order. The two prompt commands lead because both
   // prefill the editor rather than run: keep them adjacent.
-  { value: PREVIEW_SUB, description: "Preview routing for a prompt", argumentHint: `[--json] <prompt>`, menu: "common" },
+  { value: PREVIEW_SUB, description: "Preview routing for a prompt", argumentHint: `[--trace] [--json] <prompt>`, menu: "common" },
   { value: "benchmark", description: "Classify a benchmark prompt", argumentHint: "<prompt>", menu: "common" },
   { value: "providers", description: "List available providers", menu: "common" },
   { value: "probe", description: "Probe working models", menu: "common" },
   { value: "init", description: "Probe models and generate config (pass -f to force re-probe)", aliases: ["init -f"], menu: "common" },
   { value: "classifier status", description: "Show classifier state", menu: "common" },
   { value: "reload", description: "Reload config after editing", menu: "common" },
+  { value: "validate", description: "Validate loaded config and model references", argumentHint: "[--json]", menu: "common" },
+  { value: "inspect", description: "Inspect configured models and local health", argumentHint: "[--json]", menu: "common" },
   // Everything else, in declaration order.
   { value: "cache stats", description: "Show classification cache" },
   // Reachable from the dashboard now that the menu is derived from the
@@ -959,6 +1105,81 @@ export function getBifrostCommandCompletions(prefix: string) {
 function formatBifrostCommandChoice(command: CommandSpec): string {
   const hint = command.argumentHint ? ` ${command.argumentHint}` : "";
   return `/bifrost ${command.value}${hint} — ${command.description}`;
+}
+
+function parseDiagnosticJsonFlag(args: string, command: "validate" | "inspect"): boolean | undefined {
+  const rest = args.slice(command.length).trim();
+  if (!rest) return false;
+  if (rest === "--json") return true;
+  return undefined;
+}
+
+const DIAGNOSTIC_FIELD_PATHS = new Set([
+  "schemaVersion",
+  "tierPolicies",
+  "tierPolicies.*",
+  "tierPolicies.*.fallbackTiers",
+]);
+
+function renderDiagnostic(item: BifrostDiagnostic): string {
+  const fieldPath = item.path && DIAGNOSTIC_FIELD_PATHS.has(item.path) ? `path=${item.path}` : "";
+  const location = [fieldPath, item.tier ? `tier=${item.tier}` : "", item.entryIndex !== undefined ? `entry=${item.entryIndex}` : "", item.ruleIndex !== undefined ? `rule=${item.ruleIndex}` : "", item.model ? `model=${item.model}` : ""].filter(Boolean).join(" ");
+  return `  ${item.severity} ${item.code}${location ? ` (${location})` : ""}: ${item.repair}`;
+}
+
+function formatDiagnosticTimestamp(timestamp: number): string {
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? "unknown" : date.toISOString();
+}
+
+function renderDiagnosticLines(report: ValidateDiagnosticsReport | InspectDiagnosticsReport): string[] {
+  const lines = [report.kind === "validation" ? "--- validation (loaded effective config) ---" : "--- inspection (local snapshot) ---"];
+  if (report.kind === "validation") {
+    lines.push("config source: loaded effective config (run /bifrost reload after editing files)");
+  } else {
+    lines.push(`observed: ${formatDiagnosticTimestamp(report.observedAt)}`);
+    lines.push(`registry: ${report.registry.knownModelCount} known, ${report.registry.availableModelCount} available`);
+    if (report.registry.bifrostLastRefreshAgeMs !== undefined) {
+      lines.push(`Bifrost last registry refresh age: ${report.registry.bifrostLastRefreshAgeMs} ms`);
+    }
+    for (const tier of report.tiers) {
+      lines.push(`${tier.tier}: ${tier.configuredEntryCount} configured entries`);
+      for (const candidate of tier.candidates) {
+        lines.push(`  ${candidate.model}: available=${candidate.available}, auth=${candidate.auth}, circuit=${candidate.circuit}${candidate.openUntil === undefined ? "" : ` until ${formatDiagnosticTimestamp(candidate.openUntil)}`}`);
+      }
+    }
+  }
+  if (report.diagnostics.length === 0) lines.push("diagnostics: none");
+  else lines.push("diagnostics:", ...report.diagnostics.map(renderDiagnostic));
+  lines.push("----------------");
+  return lines;
+}
+
+async function handleDiagnosticsCommand(
+  command: "validate" | "inspect",
+  args: string,
+  ctx: ExtensionContext,
+  state: BifrostState,
+): Promise<void> {
+  const json = parseDiagnosticJsonFlag(args, command);
+  if (json === undefined) {
+    log(ctx, `usage: /bifrost ${command} [--json]`, "warning");
+    return;
+  }
+  const report = command === "validate"
+    ? validateDiagnostics({ config: state.config, registry: ctx.modelRegistry })
+    : inspectDiagnostics({
+      config: state.config,
+      registry: ctx.modelRegistry,
+      reliabilityState: state.reliabilityStore.getState(),
+      reliabilityConfig: state.config.reliability,
+      lastRegistryRefreshAt: state.lastRegistryRefreshAt,
+    });
+  if (json) {
+    console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(report)}`);
+    return;
+  }
+  await uiResult(ctx, `Bifrost ${command}`, renderDiagnosticLines(report));
 }
 
 // The registry is a string-valued array, so a renamed command compiles fine
@@ -1122,12 +1343,12 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
   });
   mkdirSync(join(process.cwd(), CONFIG_DIR_NAME), { recursive: true });
   writeFileSync(path, JSON.stringify(current, null, 2) + "\n");
-  state.config = loadConfig(process.cwd(), state.extensionDir);
+  const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
+  if (!installReloadedConfig(state, loadedConfig, ctx)) return;
   state.classifierMetricsStore.reload({
     cwd: process.cwd(),
     enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
   });
-  state.invalidatePipeline();
   log(ctx, `classifier backend set to ${backend}; config reloaded`);
   if (backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
     log(ctx, `TypeSafe credential missing; use ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`, "warning");
@@ -1172,7 +1393,11 @@ export function createCommandRouter(
     }),
     exact("reload", (_, ctx) => {
       const done = debugMeasure("command", "reload");
-      state.config = loadConfig(process.cwd(), state.extensionDir);
+      const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
+      if (!installReloadedConfig(state, loadedConfig, ctx)) {
+        done({ accepted: false });
+        return;
+      }
       // Re-init debug — user may have updated debug config since startup.
       setupDebug(state.config.debug ?? { enabled: false }, process.cwd());
       const runtimeState = loadRuntimeState(runtimeStatePath(process.cwd()), {
@@ -1182,14 +1407,12 @@ export function createCommandRouter(
       });
       state.enabled = runtimeState.enabled;
       state.classifierEnabled = runtimeState.classifierEnabled;
-      state.pinned = runtimeState.pinned;
       state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path), (state.config.cache?.ttlHours ?? 720) * 60 * 60 * 1000);
       state.reliabilityStore.reload(state.config.reliability, process.cwd());
       state.classifierMetricsStore.reload({
         cwd: process.cwd(),
         enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
       });
-      state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       done();
@@ -1200,6 +1423,9 @@ export function createCommandRouter(
       });
       log(ctx, "Bifrost config reloaded");
     }),
+
+    spaced("validate", (args, ctx) => handleDiagnosticsCommand("validate", args, ctx, state)),
+    spaced("inspect", (args, ctx) => handleDiagnosticsCommand("inspect", args, ctx, state)),
 
     // Providers
     exact("providers", (_, ctx) => {

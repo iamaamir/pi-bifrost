@@ -50,6 +50,12 @@ function writeFixture({ home, work, port, models, bifrost }) {
   writeFileSync(join(work, "bifrost.json"), JSON.stringify(bifrost));
 }
 
+async function fakeStats(port) {
+  const response = await fetch(`http://127.0.0.1:${port}/_stats`);
+  assert.equal(response.ok, true);
+  return response.json();
+}
+
 function runAuto({ home, work, messages }) {
   return new Promise((resolve, reject) => {
     const child = spawn(
@@ -206,12 +212,48 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
           reliability: { enabled: true, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 60 },
         },
       });
+      const before = await fakeStats(server.port);
       const { code, stderr } = await runAuto({ home, work, messages: ["hello one", "hello two"] });
+      const after = await fakeStats(server.port);
       assert.equal(code, 0);
       assert.match(stderr, /Bifrost auto: quick → fake\/fail-then-ok/);
       assert.match(stderr, /Bifrost: keeping fake\/fail-then-ok/);
+      assert.equal((after.attempts["fail-then-ok"] ?? 0) - (before.attempts["fail-then-ok"] ?? 0), 2,
+        "the two user turns must produce two provider attempts; Bifrost must not replay the failed prompt");
       const reliability = JSON.parse(readFileSync(join(work, ".pi", "bifrost-reliability.json"), "utf8"));
       assert.equal(reliability.models["fake/fail-then-ok"].lastFailureSource, "agent_settled");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+
+  it("does not degrade an exhausted explicit tier boundary to the last dispatched model", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-auto-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-auto-work-"));
+    try {
+      writeFixture({
+        home, work, port: server.port,
+        models: [{ id: "healthy", reasoning: false }],
+        bifrost: {
+          schemaVersion: 2,
+          enabled: true, default: "quick", strategy: "first", classifier: { enabled: false },
+          models: { quick: ["fake/healthy"], frontier: ["fake/missing"] },
+          tierPolicies: { frontier: { fallbackTiers: [] } },
+          rules: [
+            { pattern: "warmup", model: "quick" },
+            { pattern: "strict-boundary", model: "frontier" },
+          ],
+        },
+      });
+      const before = await fakeStats(server.port);
+      const { stderr } = await runAuto({ home, work, messages: ["warmup", "strict-boundary"] });
+      const after = await fakeStats(server.port);
+      assert.equal((after.attempts.healthy ?? 0) - (before.attempts.healthy ?? 0), 1,
+        "only the warmup turn may reach the healthy model; the exhausted frontier boundary must not dispatch it");
+      assert.match(stderr, /Bifrost auto: quick → fake\/healthy/);
+      assert.match(stderr, /no healthy physical model for tier frontier/);
+      assert.doesNotMatch(stderr, /Bifrost: keeping fake\/healthy/);
     } finally {
       rmSync(home, { recursive: true, force: true });
       rmSync(work, { recursive: true, force: true });

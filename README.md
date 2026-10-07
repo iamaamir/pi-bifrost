@@ -49,6 +49,8 @@ A tier is a named group such as `quick`, `general`, or `frontier`. Bifrost finds
 
 The pool limits which models qualify. The strategy selects a healthy candidate by list order, price, context window, probe-sorted speed, or random choice. Repeated failures open a persistent circuit so later turns avoid that model until a controlled recovery trial. A failed turn is **never sent again automatically**.
 
+Legacy configurations may fall back to the configured default tier when a requested tier has no eligible model. Schema version 2 can set an explicit ordered `tierPolicies.<tier>.fallbackTiers` list; an empty list makes that tier a singleton boundary. Version 2 alone preserves legacy fallback behavior. See the [configuration guide](docs/guide/configuration.md#explicit-fallback-boundaries-schema-version-2).
+
 Start a message with a configured tier name to choose it for one turn:
 
 ```text
@@ -84,7 +86,7 @@ Replace the example IDs with models configured in Pi. The built-in default has e
 
 | In Pi | Result |
 | --- | --- |
-| `/bifrost preview [--json] <prompt>` | Inspect a route without generating or activating its model. Pass `--json` before the prompt for one machine-readable line. An enabled classifier can still receive the preview prompt. |
+| `/bifrost preview [--trace] [--json] <prompt>` | Inspect a route without generating or activating its model. `--json` keeps the existing report; `--trace` adds a content-free decision summary, optionally as versioned JSON. An enabled classifier can still receive the preview prompt. |
 | `quick <message>` | Use the configured `quick` tier for this message only. |
 | Select a physical model or run `/bifrost pin` | Keep that exact model for the session. |
 | `/bifrost unpin` | Resume routing each message. |

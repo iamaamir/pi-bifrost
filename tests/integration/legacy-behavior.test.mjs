@@ -84,6 +84,12 @@ function readState(work) {
   }
 }
 
+async function fakeStats(port) {
+  const response = await fetch(`http://127.0.0.1:${port}/_stats`);
+  assert.equal(response.ok, true);
+  return response.json();
+}
+
 describe("legacy physical routing regression", { timeout: 240_000, concurrency: 1 }, () => {
   let server;
   before(async () => {
@@ -140,6 +146,106 @@ describe("legacy physical routing regression", { timeout: 240_000, concurrency: 
       });
       assert.equal(code, 0);
       assert.doesNotMatch(stderr, /\[bifrost\] classify: frontier/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the active physical model when the resolved tier has no available model", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-legacy-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-legacy-work-"));
+    try {
+      writeFixture({
+        home, work, port: server.port,
+        models: [{ id: "fast", reasoning: false }],
+        bifrost: {
+          enabled: true, default: "quick", strategy: "first", classifier: { enabled: false },
+          models: { quick: ["fake/missing"] },
+        },
+      });
+      const before = await fakeStats(server.port);
+      const { code, stderr } = await runPi({
+        home, work,
+        args: ["--no-session", "--model", "fake/fast", "-p", "hello"],
+      });
+      const after = await fakeStats(server.port);
+
+      assert.equal(code, 0);
+      assert.match(stderr, /no healthy model available/);
+      assert.equal((after.attempts.fast ?? 0) - (before.attempts.fast ?? 0), 1,
+        "legacy physical mode must continue this turn on Pi's active model");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+
+  it("does not generate on the active physical model after an explicit boundary is exhausted", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-legacy-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-legacy-work-"));
+    try {
+      writeFixture({
+        home, work, port: server.port,
+        models: [{ id: "fast", reasoning: false }],
+        bifrost: {
+          schemaVersion: 2,
+          enabled: true, default: "quick", strategy: "first", classifier: { enabled: false },
+          models: { quick: ["fake/fast"], restricted: ["fake/missing"] },
+          tierPolicies: { restricted: { fallbackTiers: [] } },
+          rules: [{ pattern: "restricted", model: "restricted" }],
+        },
+      });
+      const before = await fakeStats(server.port);
+      const { code, stderr } = await runPi({
+        home, work,
+        args: ["--no-session", "--model", "fake/fast", "-p", "restricted keep this turn"],
+      });
+      const after = await fakeStats(server.port);
+
+      assert.equal(code, 0);
+      assert.match(stderr, /tier "restricted" matched but no healthy model available/);
+      assert.match(stderr, /the turn was not sent/);
+      assert.equal((after.attempts.fast ?? 0) - (before.attempts.fast ?? 0), 0,
+        "an exhausted strict physical route must not fall through to Pi's active model");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the last-good strict boundary after a null project reload and blocks active-model generation", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-legacy-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-legacy-work-"));
+    try {
+      const strictConfig = {
+        schemaVersion: 2,
+        enabled: true, default: "quick", strategy: "first", classifier: { enabled: false },
+        models: { quick: ["fake/fast"], restricted: ["fake/missing"] },
+        tierPolicies: { restricted: { fallbackTiers: [] } },
+        rules: [{ pattern: "restricted", model: "restricted" }],
+      };
+      writeFixture({
+        home, work, port: server.port,
+        models: [{ id: "fast", reasoning: false }],
+        bifrost: strictConfig,
+      });
+      writeFileSync(join(home, ".pi", "agent", "bifrost.json"), JSON.stringify(strictConfig));
+      writeFileSync(join(work, "bifrost.json"), "null\n");
+
+      const before = await fakeStats(server.port);
+      const { code, stderr } = await runPi({
+        home, work,
+        args: ["--no-session", "--model", "fake/fast", "-p", "/bifrost reload", "restricted keep this turn"],
+      });
+      const after = await fakeStats(server.port);
+
+      assert.equal(code, 0);
+      assert.match(stderr, /config reload rejected: workspace config must contain an object/);
+      assert.match(stderr, /strict route for tier "restricted" has no available model/);
+      assert.match(stderr, /the turn was not sent/);
+      assert.equal((after.attempts.fast ?? 0) - (before.attempts.fast ?? 0), 0,
+        "a malformed project layer must not erase the last-good strict boundary and continue on Pi's active model");
     } finally {
       rmSync(home, { recursive: true, force: true });
       rmSync(work, { recursive: true, force: true });

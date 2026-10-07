@@ -33,6 +33,27 @@ Adding a model makes it available in that tier. Removing it prevents selection t
 
 Patterns containing `/` may resolve an exact `provider/id`. Shorter strings may substring-match multiple registry IDs. Use exact IDs when ambiguity matters, then confirm candidates with `/bifrost preview <prompt>`.
 
+### Explicit fallback boundaries (schema version 2)
+
+By default, an unavailable or unhealthy tier can still fall back to the configured `default` tier. To limit one tier to an explicit ordered list, set `schemaVersion` to `2` and add that tier's `fallbackTiers` policy:
+
+```json
+{
+  "schemaVersion": 2,
+  "models": {
+    "frontier": ["provider/frontier-model"],
+    "general": ["provider/general-model"],
+    "quick": ["provider/quick-model"]
+  },
+  "tierPolicies": {
+    "frontier": { "fallbackTiers": ["general", "quick"] },
+    "quick": { "fallbackTiers": [] }
+  }
+}
+```
+
+For `frontier`, Bifrost tries `frontier`, then `general`, then `quick`; it stops at the first tier with an eligible model. The empty list makes `quick` a singleton boundary. A tier without a `tierPolicies` entry keeps the legacy default-tier fallback, including when `schemaVersion` is `2`. Version 2 by itself does not change routing. References must name configured tiers, and duplicate, self, or cyclic fallback references are rejected. Invalid version-2 policy configuration blocks physical and Auto routing until corrected. Reload rejects unreadable, malformed, or non-object config layers and keeps the active configuration, including any session-local pin.
+
 ## Selection strategies
 
 Strategies choose the exact healthy candidate after a tier has resolved:

@@ -5,6 +5,7 @@ import { classifyWithLLM as invokeClassifier, type ClassifierModel } from "./cla
 import { classifierCacheEnabled, classifierCacheKey, boundedClassifierPrompt, directStagePlan } from "./classifier-semantics.ts";
 import { ClassifierMetricsStore, classifierMetricsEnabled } from "./classifier-metrics.ts";
 import {
+  buildRouteDecisionSummary,
   createPipeline,
   type ClassificationPipeline,
   type ClassificationResult,
@@ -28,15 +29,17 @@ import {
   configHasNoPools,
   DEFAULT_CLASSIFIER_CRITERIA,
   validateConfig,
+  hasExplicitTierPolicy,
+  hasExplicitTierPolicies,
   hasClassifierConfigErrors,
   classifierConfigErrors,
+  validateTierPolicyConfig,
   type BifrostConfig,
 } from "./config.ts";
 import {
+  resolveConfiguredTier,
   findCandidates,
-  getStrategy,
   modelKey,
-  resolveModelWithFallback,
   type RoutedModelResolution,
   type SkippedCandidate,
 } from "./routing.ts";
@@ -75,6 +78,44 @@ function lastDispatchedPhysical(ctx: ExtensionContext): Model<Api> | undefined {
     if (model && !isVirtualModel(model)) return model;
   }
   return undefined;
+}
+
+function readEditorText(ctx: ExtensionContext): string | undefined {
+  if (ctx.mode !== "tui" || !ctx.hasUI) return undefined;
+  try {
+    return ctx.ui.getEditorText();
+  } catch {
+    return undefined;
+  }
+}
+
+function restoreRejectedPrompt(
+  ctx: ExtensionContext,
+  originalText: string,
+  editorTextAtInput: string | undefined,
+): void {
+  if (ctx.mode !== "tui" || !ctx.hasUI) return;
+  try {
+    const current = ctx.ui.getEditorText();
+    if (current === "" || current === editorTextAtInput) ctx.ui.setEditorText(originalText);
+  } catch {
+    // Failing to restore the text must never let the rejected turn continue.
+  }
+}
+
+function strictInputHandled(
+  ctx: ExtensionContext,
+  state: Pick<BifrostState, "enabled" | "pinned" | "classifierEnabled">,
+  originalText: string,
+  editorTextAtInput: string | undefined,
+  message: string,
+) {
+  restoreRejectedPrompt(ctx, originalText, editorTextAtInput);
+  try { log(ctx, message, "error"); } catch { /* preserve handled result */ }
+  try { uiDone(ctx); } catch { /* best effort */ }
+  try { setBifrostWorkingMessage(ctx, undefined); } catch { /* best effort */ }
+  try { syncBifrostModeStatus(ctx, state); } catch { /* best effort */ }
+  return { action: "handled" as const };
 }
 
 function resolveClassifierModels(
@@ -319,6 +360,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   // Mutable state shared with command handlers.
   const state: BifrostState = {
     config,
+    tierPolicyValid: validateTierPolicyConfig(config).every((issue) => issue.severity !== "error"),
     enabled: runtimeState.enabled,
     classifierEnabled: runtimeState.classifierEnabled,
     pinned: runtimeState.pinned,
@@ -337,24 +379,17 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     forceRegistryRefresh: false,
   };
 
-  function resolveForTier(ctx: ExtensionContext, tier: string) {
-    const pattern = state.config.models?.[tier] ?? tier;
-    const strategy = getStrategy(state.config.categoryStrategies, state.config.strategy, tier);
-    const defaultTier = state.config.default;
-    const defaultPattern = defaultTier ? (state.config.models?.[defaultTier] ?? defaultTier) : undefined;
-    const defaultStrategy = defaultTier
-      ? getStrategy(state.config.categoryStrategies, state.config.strategy, defaultTier)
-      : strategy;
-    return resolveModelWithFallback(ctx, {
-      requestedTier: tier,
-      requestedPattern: pattern,
-      requestedStrategy: strategy,
-      defaultTier,
-      defaultPattern,
-      defaultStrategy,
-      reliabilityState: state.reliabilityStore.getState(),
-      reliabilityConfig: state.config.reliability,
-    });
+  function resolveForTier(
+    ctx: ExtensionContext,
+    tier: string,
+  ) {
+    return resolveConfiguredTier(
+      ctx,
+      tier,
+      state.config,
+      state.reliabilityStore.getState(),
+      state.config.reliability,
+    );
   }
 
   function saveClassifierDecision(prompt: string, result: ClassificationResult): void {
@@ -376,7 +411,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     // Prefer the last dispatched model; otherwise resolve the default tier —
     // the same fallback route() uses — so a fresh session can still exit Auto.
     const physical = lastDispatchedPhysical(ctx)
-      ?? (state.config.default ? resolveForTier(ctx, state.config.default).selected : undefined);
+      ?? (state.config.default ? resolveForTier(ctx, state.config.default).resolution.selected : undefined);
     if (!physical) {
       log(ctx, "Bifrost: no healthy physical model to fall back to; configure a default-tier model or select one in /model", "warning");
       return false;
@@ -415,7 +450,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     name: "Bifrost Auto",
     thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
     async route(request, ctx) {
-      let routeFailure: { tier: string; pool: string | string[] | undefined; reason?: RoutedModelResolution["fallbackReason"]; skipped?: readonly SkippedCandidate[] } | undefined;
+      let routeFailure: { tier: string; pool: string | string[] | undefined; reason?: RoutedModelResolution["fallbackReason"]; skipped?: readonly SkippedCandidate[]; explicitBoundary?: boolean } | undefined;
       const ownership = createDispatchOwnership({
         claimTrial: (key) => state.reliabilityStore.tryClaimTrial(key),
         abandonTrial: (key) => state.reliabilityStore.abandonTrial(key),
@@ -424,9 +459,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       });
       const route = createVirtualRoute({
         overrides: overrideFor(ctx),
-        fallback: () => lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default).selected : undefined),
-        sticky: () => lastDispatchedPhysical(ctx),
+        fallback: () => routeFailure?.explicitBoundary ? undefined : lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default).resolution.selected : undefined),
+        sticky: () => routeFailure?.explicitBoundary ? undefined : lastDispatchedPhysical(ctx),
         select: async (prompt, forcedTier, signal) => {
+          if (state.tierPolicyValid === false) {
+            throw new Error("Bifrost routing blocked by invalid schemaVersion or tierPolicies config; fix it and run /bifrost reload");
+          }
           if (!state.enabled || state.pinned) throw new Error("Bifrost: virtual auto is disabled or pinned; select a physical model");
           if (state.classifierEnabled && shouldRefreshRegistry(state, Date.now(), REGISTRY_REFRESH_TTL_MS)) {
             try {
@@ -440,16 +478,24 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               debug("virtual", "registry.refresh.error", { category: "registry_refresh_failure" });
             }
           }
-          const classification: ClassificationResult = forcedTier
+          if (!state.enabled || state.pinned) throw new Error("Bifrost: virtual auto was disabled or pinned during routing; select a physical model");
+          const classificationConfig = state.config;
+          let classification: ClassificationResult = forcedTier
             ? { kind: "classified", tier: forcedTier, source: "inline" }
             : await getPipeline(ctx).classify(prompt, signal);
           if (signal?.aborted) throw new Error("Bifrost: route aborted");
+          if (!state.enabled || state.pinned) throw new Error("Bifrost: virtual auto was disabled or pinned during routing; select a physical model");
+          if (!forcedTier && state.config !== classificationConfig) {
+            throw new Error("Bifrost: configuration changed during routing; retry the turn");
+          }
           if (classification.kind === "unclassified") throw new Error("Bifrost: no configured tier for virtual request");
           const classifierIdentity = classification.kind === "classified" && classification.judgment
             ? { classifierBackend: classification.judgment.backend, classifierModel: classification.judgment.model }
             : {};
-          const resolve = () => resolveForTier(ctx, classification.tier);
-          let resolved = resolve();
+          // Resolve from current config on every attempt. A registry refresh
+          // may overlap /bifrost reload, so options cannot be captured ahead.
+          let attempt = resolveForTier(ctx, classification.tier);
+          let resolved = attempt.resolution;
           if (!resolved.selected && resolved.primary.candidates.length === 0) {
             // Registry merge can lag the first request; one bounded refresh + re-resolve.
             try {
@@ -458,19 +504,26 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               state.lastRegistryRefreshAt = Date.now();
               state.forceRegistryRefresh = false;
               invalidatePipeline();
-              resolved = resolve();
+              attempt = resolveForTier(ctx, classification.tier);
+              resolved = attempt.resolution;
             } catch (error) {
               if (signal?.aborted) throw error;
               debug("virtual", "registry.refresh.error", { category: "registry_refresh_failure" });
             }
           }
+          if (state.config.debug?.enabled) {
+            debug("virtual", "route_decision", {
+              decision: buildRouteDecisionSummary(classification, attempt),
+            });
+          }
           const model = resolved.selected;
           if (!model) {
             state.forceRegistryRefresh = true;
-            routeFailure = { tier: classification.tier, pool: state.config.models?.[classification.tier], reason: resolved.fallbackReason, skipped: resolved.skipped };
+            routeFailure = { tier: classification.tier, pool: state.config.models?.[classification.tier], reason: resolved.fallbackReason, skipped: resolved.skipped, explicitBoundary: resolved.explicitBoundary };
             debug("virtual", "fail", { tier: classification.tier, reason: resolved.fallbackReason, pool: routeFailure.pool, skipped: resolved.skipped });
             return undefined;
           }
+          if (!state.enabled || state.pinned) throw new Error("Bifrost: virtual auto was disabled or pinned during routing; select a physical model");
           debug("virtual", "select", { tier: classification.tier, model: modelKey(model), source: classification.kind === "classified" ? classification.source : "fallback", ...classifierIdentity, skipped: resolved.skipped });
           saveClassifierDecision(prompt, classification);
           log(ctx, `Bifrost auto: ${classification.tier} → ${modelKey(model)} (${classification.kind === "classified" ? classification.source : "fallback"}${resolved.fallbackReason ? `; ${resolved.fallbackReason}` : ""}${resolved.skipped.length > 0 ? `; ${resolved.skipped.length} skipped: ${resolved.skipped.map((s) => s.key).join(", ")}` : ""})`);
@@ -585,7 +638,17 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("input", async (event, ctx) => {
-    if (event.source === "extension") return { action: "continue" };
+    const originalText = event.text;
+    const editorTextAtInput = readEditorText(ctx);
+    let strictBoundary = !state.tierPolicyValid || hasExplicitTierPolicies(state.config);
+    let begunStrictModel: string | undefined;
+    let claimedTrial: string | undefined;
+    try {
+    if (event.source === "extension") {
+      strictBoundary = false;
+      return { action: "continue" };
+    }
+    if (!state.enabled || state.pinned) strictBoundary = false;
     clearBifrostWidgets(ctx);
     // Passive subagent observation — logged even when routing is disabled,
     // so child-session model usage stays visible in debug logs.
@@ -605,11 +668,18 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     }
 
     const text = event.text.trim();
-    if (text.startsWith("/")) return { action: "continue" };
+    if (text.startsWith("/")) {
+      strictBoundary = false;
+      return { action: "continue" };
+    }
+    if (!state.tierPolicyValid) {
+      return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing is blocked by an invalid schemaVersion or tierPolicies config; fix the config and run /bifrost reload.");
+    }
 
     // Inline tier override: "frontier debug this" forces that tier for one prompt.
     // Pi reserves / for commands, ! for bash. Just type the tier name as first word.
     const { forcedTier, promptText } = parseInlineOverride(text, state.config.models);
+    if (forcedTier) strictBoundary = hasExplicitTierPolicy(state.config, forcedTier);
     if (forcedTier) {
       debug("input", "inline_override", { tier: forcedTier });
     }
@@ -622,6 +692,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     // Virtual auto: Pi dispatches the physical model in route(); skip the
     // legacy input-time switch. Hand the stripped prompt + forced tier across.
     if (isBifrostAuto(ctx.model)) {
+      strictBoundary = strictBoundary || (!!forcedTier && hasExplicitTierPolicy(state.config, forcedTier));
       overrideFor(ctx).prepare(forcedTier, promptText, event.streamingBehavior);
       debug("input", "virtual_auto", { forcedTier, streamingBehavior: event.streamingBehavior });
       syncBifrostModeStatus(ctx, state);
@@ -635,7 +706,6 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       ? shouldRefreshRegistry(state, Date.now(), REGISTRY_REFRESH_TTL_MS)
       : false;
 
-    let claimedTrial: string | undefined;
     try {
       if (shouldRefresh) {
         setBifrostWorkingMessage(ctx, "Bifrost checking models...");
@@ -646,7 +716,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           if (result === "aborted") {
             refreshOutcome = "aborted";
             endInput({ outcome: "aborted" });
-            return defaultAction;
+            return strictBoundary
+              ? strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing was cancelled; the turn was not sent. Resubmit after repair.")
+              : defaultAction;
           }
           refreshOutcome = "success";
           state.lastRegistryRefreshAt = Date.now();
@@ -660,13 +732,37 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         }
       }
 
+      if (!state.enabled || state.pinned) return { action: "continue" };
+      if (!state.tierPolicyValid) {
+        return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing is blocked by an invalid schemaVersion or tierPolicies config; fix the config and run /bifrost reload.");
+      }
+
       setBifrostStatus(ctx, forcedTier ? `using ${forcedTier}...` : "classifying prompt...", "accent");
       uiBusy(ctx, forcedTier ? `Bifrost using ${forcedTier}...` : "Bifrost classifying...");
       setBifrostWorkingMessage(ctx, forcedTier ? `Bifrost using ${forcedTier}...` : "Bifrost classifying...");
       const endClassify = debugMeasure("input", "classify");
-      const classification = forcedTier
+      const classificationConfig = state.config;
+      let classification = forcedTier
         ? { kind: "classified" as const, tier: forcedTier, source: "inline" as const }
         : await getPipeline(ctx).classify(promptText, ctx.signal);
+
+      if (!state.enabled || state.pinned) return { action: "continue" };
+      if (!state.tierPolicyValid) {
+        return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing is blocked by an invalid schemaVersion or tierPolicies config; fix the config and run /bifrost reload.");
+      }
+      if (!forcedTier && state.config !== classificationConfig) {
+        strictBoundary = strictBoundary || hasExplicitTierPolicies(state.config);
+        return strictBoundary
+          ? strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost configuration changed during routing; the turn was not sent. Resubmit after repair.")
+          : { action: "continue" };
+      }
+      if (ctx.signal?.aborted) {
+        endClassify({ kind: classification.kind, outcome: "aborted" });
+        endInput({ outcome: "aborted" });
+        return strictBoundary
+          ? strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing was cancelled; the turn was not sent. Resubmit after repair.")
+          : defaultAction;
+      }
 
       if (classification.kind === "classified") {
         const tag = classification.source === "inline" ? "!" : classification.source;
@@ -678,6 +774,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       setBifrostWorkingMessage(ctx, undefined);
 
       if (classification.kind === "unclassified") {
+        strictBoundary = false;
         log(ctx, "Bifrost: no tier matched — using default model", "warning");
         debug("input", "unclassified");
         syncBifrostModeStatus(ctx, state);
@@ -686,32 +783,24 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       }
 
       const tier = classification.tier;
+      strictBoundary = hasExplicitTierPolicy(state.config, tier);
+      const attempt = resolveForTier(ctx, tier);
+      const options = attempt.options;
+      const strategy = options.requestedStrategy;
       const source = classification.kind === "classified"
         ? classification.source
         : "fallback";
       const classifierIdentity = classification.kind === "classified" && classification.judgment
         ? { classifierBackend: classification.judgment.backend, classifierModel: classification.judgment.model }
         : {};
-      const pattern = state.config.models?.[tier] ?? tier;
-      const strategy = getStrategy(state.config.categoryStrategies, state.config.strategy, tier);
-      const defaultTier = state.config.default;
-      const defaultPattern = defaultTier ? (state.config.models?.[defaultTier] ?? defaultTier) : undefined;
-      const defaultStrategy = defaultTier
-        ? getStrategy(state.config.categoryStrategies, state.config.strategy, defaultTier)
-        : strategy;
-
       const routeStart = performance.now();
-      const resolved = resolveModelWithFallback(ctx, {
-        requestedTier: tier,
-        requestedPattern: pattern,
-        requestedStrategy: strategy,
-        defaultTier,
-        defaultPattern,
-        defaultStrategy,
-        reliabilityState: state.reliabilityStore.getState(),
-        reliabilityConfig: state.config.reliability,
-      });
+      const resolved = attempt.resolution;
       const routingDurationMs = +(performance.now() - routeStart).toFixed(3);
+      if (state.config.debug?.enabled) {
+        debug("input", "route_decision", {
+          decision: buildRouteDecisionSummary(classification, attempt),
+        });
+      }
       const model = resolved.selected;
       const selectedTier = resolved.selectedTier ?? tier;
 
@@ -723,7 +812,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           log(ctx, `Bifrost: ${modelKey(model)} already has a half-open trial in progress`, "warning");
           syncBifrostModeStatus(ctx, state);
           endInput();
-          return defaultAction;
+          return strictBoundary
+            ? strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost strict route is unavailable; the turn was not sent. Resubmit after repair.")
+            : defaultAction;
         }
         if (trial.claimed) claimedTrial = modelKey(model);
       }
@@ -735,7 +826,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         log(ctx, `Bifrost: tier "${tier}" matched but no healthy model available${why}`, "warning");
         syncBifrostModeStatus(ctx, state);
         endInput();
-        return defaultAction;
+        return strictBoundary
+          ? strictInputHandled(ctx, state, originalText, editorTextAtInput, `Bifrost strict route for tier "${tier}" has no available model; the turn was not sent. Resubmit after repair.`)
+          : defaultAction;
       }
 
       if (
@@ -759,14 +852,20 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         log(ctx, `Bifrost: ${tier} → ${modelKey(model)} (already active, ${source}${reason})`);
         debug("input", "model_unchanged", { model: modelKey(model), selectedTier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", ...classifierIdentity, thinkingLevel: ctx.thinkingLevel });
         debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", ...classifierIdentity, thinkingLevel: ctx.thinkingLevel });
-        trackerFor(ctx).begin(modelKey(model));
-        claimedTrial = undefined;
+        begunStrictModel = modelKey(model);
+        trackerFor(ctx).begin(begunStrictModel);
         endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
+        claimedTrial = undefined;
+        begunStrictModel = undefined;
         return defaultAction;
       }
 
       uiBusy(ctx, `Bifrost routing to ${modelKey(model)}...`);
       setBifrostWorkingMessage(ctx, `Bifrost routing to ${modelKey(model)}...`);
+      if (!state.enabled || state.pinned) return { action: "continue" };
+      if (!state.tierPolicyValid) {
+        return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing is blocked by an invalid schemaVersion or tierPolicies config; fix the config and run /bifrost reload.");
+      }
       selfSelect.claim(ctx.sessionManager, modelKey(model));
       const endSwitch = debugMeasure("input", "setModel");
       let ok = false;
@@ -780,9 +879,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         // Key lives only inside the awaited setModel window (see selectPhysicalFromVirtual).
         selfSelect.release(ctx.sessionManager);
       }
-      endSwitch({ model: modelKey(model), ok });
-      uiDone(ctx);
-      setBifrostWorkingMessage(ctx, undefined);
+      try { endSwitch({ model: modelKey(model), ok }); } catch { /* optional timing output */ }
+      try { uiDone(ctx); } catch { /* optional UI output must not suppress an activated turn */ }
+      try { setBifrostWorkingMessage(ctx, undefined); } catch { /* optional UI output must not suppress an activated turn */ }
       if (!ok) {
         state.forceRegistryRefresh = true;
         const reason = setModelError
@@ -790,10 +889,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           : "setModel returned false";
         state.reliabilityStore.recordFailure(modelKey(model), "setModel", reason);
         claimedTrial = undefined;
-        syncBifrostModeStatus(ctx, state);
-        log(ctx, `Bifrost: no API key for ${modelKey(model)}`, "error");
-        endInput({ model: modelKey(model), ok: false });
-        return defaultAction;
+        try { syncBifrostModeStatus(ctx, state); } catch { /* best effort */ }
+        try { log(ctx, `Bifrost: no API key for ${modelKey(model)}`, "error"); } catch { /* best effort */ }
+        try { endInput({ model: modelKey(model), ok: false }); } catch { /* optional timing output */ }
+        return strictBoundary
+          ? strictInputHandled(ctx, state, originalText, editorTextAtInput, `Bifrost strict route could not activate ${modelKey(model)}; the turn was not sent. Resubmit after repair.`)
+          : defaultAction;
       }
 
       const detail = [
@@ -804,18 +905,26 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       const doneMsg = classification.kind === "classified"
         ? `Bifrost: ${tier} → ${modelKey(model)} (${classification.source}${detail ? `; ${detail}` : ""})`
         : `Bifrost: ${tier} → ${modelKey(model)} (fallback${detail ? `; ${detail}` : ""})`;
-      syncBifrostModeStatus(ctx, state);
-      log(ctx, doneMsg);
-      trackerFor(ctx).begin(modelKey(model));
+      begunStrictModel = modelKey(model);
+      trackerFor(ctx).begin(begunStrictModel);
       claimedTrial = undefined;
-      debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", ...classifierIdentity, routingDurationMs, thinkingLevel: ctx.thinkingLevel });
-      endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
+      begunStrictModel = undefined;
+      try { syncBifrostModeStatus(ctx, state); } catch { /* optional status must not suppress an activated turn */ }
+      try { log(ctx, doneMsg); } catch { /* optional notification must not suppress an activated turn */ }
+      try { debug("input", "model_selected", { model: modelKey(model), tier: selectedTier, strategy, source, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache", ...classifierIdentity, routingDurationMs, thinkingLevel: ctx.thinkingLevel }); } catch { /* optional trace output */ }
+      try { endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel }); } catch { /* optional timing output */ }
       return defaultAction;
     } finally {
-      if (claimedTrial) state.reliabilityStore.abandonTrial(claimedTrial);
-      uiDone(ctx);
-      setBifrostWorkingMessage(ctx, undefined);
-      syncBifrostModeStatus(ctx, state);
+      try { if (claimedTrial) state.reliabilityStore.abandonTrial(claimedTrial); } catch { /* best effort */ }
+      try { uiDone(ctx); } catch { /* best effort */ }
+      try { setBifrostWorkingMessage(ctx, undefined); } catch { /* best effort */ }
+      try { syncBifrostModeStatus(ctx, state); } catch { /* best effort */ }
+    }
+    } catch (error) {
+      if (!strictBoundary) throw error;
+      try { if (begunStrictModel) trackerFor(ctx).release(begunStrictModel); } catch { /* best effort */ }
+      try { if (claimedTrial) state.reliabilityStore.abandonTrial(claimedTrial); } catch { /* best effort */ }
+      return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost strict routing failed; the turn was not sent. Resubmit after repair.");
     }
   });
 }

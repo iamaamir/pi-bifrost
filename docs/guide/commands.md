@@ -7,12 +7,14 @@
 | `/bifrost` | Open dashboard and quick actions |
 | `/bifrost init` | Reuse fresh probe results or probe registry models, then propose configuration and guide you to `/bifrost classifier`; pass `-f` to skip probe reuse and re-probe |
 | `/bifrost probe` | Send a tiny request to each registry model and report availability; usage may apply |
-| `/bifrost preview <prompt>` | Show the model a prompt would use, without generating; pass `--json` before the prompt for one machine-readable line; an enabled classifier may receive the prompt, and a tier name in the prompt is not applied |
+| `/bifrost preview <prompt>` | Show the route without generating; leading `--json` keeps the existing report, while leading `--trace` adds a content-free decision summary; an enabled classifier may receive the prompt, and a tier name in the prompt is not applied |
 | `/bifrost on` | Enable routing policy |
 | `/bifrost off` | Disable routing policy |
 | `/bifrost pin` | Hard-lock current model for this session |
 | `/bifrost unpin` | Resume per-message routing |
 | `/bifrost reload` | Reload merged configuration |
+| `/bifrost validate` | Check the active loaded configuration and local registry references; run `/bifrost reload` after editing config files |
+| `/bifrost inspect` | Show configured model availability, auth presence, and local reliability circuits without routing or probing |
 | `/bifrost cache stats` | Inspect local classification cache |
 | `/bifrost cache clear` | Clear local classification cache |
 | `/bifrost classifier` | Choose `prompt`, `typesafe`, or `pi-native`. The Pi-native picker can select a catalog model or use the default |
@@ -23,6 +25,8 @@
 | `/bifrost debug` | Show effective routing and reliability diagnostics |
 | `/bifrost providers` | List providers available through Pi |
 | `/bifrost benchmark <prompt>` | Classify a prompt and show the outcome without generating |
+
+`validate` and `inspect` accept a leading `--json` flag. Both commands are read-only: they do not classify, refresh the registry, probe providers, or write reliability state. `inspect` shows only local registry/auth/circuit snapshots. Its “Bifrost last registry refresh age” is the time since this extension last refreshed Pi's registry, not a freshness claim about provider data. JSON mode emits a version-1 `[bifrost-json] ` report line to stderr. The validation report names its source as `loaded-effective-config`; it does not read un-reloaded disk edits.
 
 ## Common workflows
 
@@ -72,6 +76,8 @@ A failure is still one line, so a script never has to infer the outcome from a m
 ```
 
 `error` is `usage` when the prompt was missing, and `unclassified` when no tier matched and no default tier is configured. A failure report carries `prompt` and `error` only; it has no routing keys. The human `usage` and `no tier matched` messages still appear, so the same command is usable from a terminal.
+
+Add `--trace` as a leading flag to inspect a versioned, content-free route decision. You can use it alone or with `--json`, in either order. The text view shows the classification source, configured candidate pools, reliability exclusions, selected model and strategy. `--trace --json` uses the same `[bifrost-json] ` marker and emits a version-1 `route-decision` object. It contains model identity strings and configured patterns, but never the prompt or model objects. If classifier routing is enabled, Bifrost warns that the classifier may receive the preview prompt before running classification and includes that disclosure in the result. The summary describes the resolver's selection; it does not report activation success or classifier stage timings. Without `--trace`, the existing `--json` fields and output remain unchanged.
 
 ### Keep one model for a long session
 

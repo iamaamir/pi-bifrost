@@ -2,7 +2,7 @@
 
 ## Status
 
-**Proposed** (2026-07-29). Pending review. Do **not** implement until the design is accepted and the implementation gate is green.
+**Accepted for narrowed M0b scope** (2026-10-07). The user approved execution of the release design. This slice adds a typed, content-free route-decision summary, structured candidate and exclusion records, shared tier-option construction, and opt-in preview rendering. The full phase-timing trace proposal below remains deferred; it needs separate review and does not ship in M0b.
 
 ## Context
 

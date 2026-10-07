@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mergeConfig, validateConfig, configHasNoPools, hasClassifierConfigErrors, type BifrostConfig } from "../config.ts";
+import { mergeConfig, validateConfig, validateTierPolicyConfig, configHasNoPools, hasClassifierConfigErrors, type BifrostConfig } from "../config.ts";
 import type { RoutingStrategy } from "../routing.ts";
 
 const baseConfig: BifrostConfig = {
@@ -30,6 +30,96 @@ describe("validateConfig", () => {
   it("returns no issues for a valid config", () => {
     const issues = validateConfig(baseConfig);
     assert.equal(issues.length, 0);
+  });
+
+  it("keeps version 2 legacy when no explicit tier policy exists", () => {
+    assert.equal(validateConfig({ ...baseConfig, schemaVersion: 2 }).length, 0);
+    assert.equal(validateConfig({ ...baseConfig, legacyUnknown: true } as BifrostConfig).length, 0);
+  });
+
+  it("requires version 2 for tierPolicies and rejects unsupported versions", () => {
+    const legacyPolicy = validateConfig({
+      ...baseConfig,
+      tierPolicies: { frontier: { fallbackTiers: [] } },
+    });
+    assert.ok(legacyPolicy.some((issue) => issue.message.includes("schemaVersion 2")));
+    const unsupported = validateConfig({ ...baseConfig, schemaVersion: 3 });
+    assert.ok(unsupported.some((issue) => issue.message.includes("Unsupported schemaVersion")));
+  });
+
+  it("returns stable content-free metadata for strict tier-policy validation issues", () => {
+    const issues = validateTierPolicyConfig({
+      ...baseConfig,
+      schemaVersion: 2,
+      tierPolicies: {
+        frontier: { fallbackTiers: ["economical", "economical", "frontier", "PRIVATE_FALLBACK"], PRIVATE_FIELD: true },
+        economical: { fallbackTiers: ["frontier"] },
+        PRIVATE_TIER: { fallbackTiers: [] },
+      },
+    } as BifrostConfig);
+    const metadata = issues.map(({ code, path }) => ({ code, path }));
+    for (const expected of [
+      { code: "config.tier_policy_unknown_field", path: "tierPolicies.*" },
+      { code: "config.tier_policy_unknown_tier", path: "tierPolicies.*" },
+      { code: "config.tier_policy_unknown_fallback", path: "tierPolicies.*.fallbackTiers" },
+      { code: "config.tier_policy_self_fallback", path: "tierPolicies.*.fallbackTiers" },
+      { code: "config.tier_policy_duplicate_fallback", path: "tierPolicies.*.fallbackTiers" },
+      { code: "config.tier_policy_cycle", path: "tierPolicies.*.fallbackTiers" },
+    ]) {
+      assert.ok(metadata.some((item) => item.code === expected.code && item.path === expected.path), expected.code);
+    }
+    const serialized = JSON.stringify(metadata);
+    assert.doesNotMatch(serialized, /PRIVATE_(?:FALLBACK|FIELD|TIER)/);
+
+    const unsupported = validateTierPolicyConfig({ ...baseConfig, schemaVersion: 9 });
+    assert.ok(unsupported.some((issue) => issue.code === "config.schema_version_unsupported" && issue.path === "schemaVersion"));
+    const malformedNamespace = validateTierPolicyConfig({ ...baseConfig, schemaVersion: 2, tierPolicies: null } as unknown as BifrostConfig);
+    assert.ok(malformedNamespace.some((issue) => issue.code === "config.tier_policies_invalid" && issue.path === "tierPolicies"));
+    const missingVersion = validateTierPolicyConfig({ ...baseConfig, tierPolicies: { frontier: { fallbackTiers: [] } } });
+    assert.ok(missingVersion.some((issue) => issue.code === "config.tier_policies_requires_v2" && issue.path === "tierPolicies"));
+    const invalidPolicy = validateTierPolicyConfig({ ...baseConfig, schemaVersion: 2, tierPolicies: { frontier: null } } as unknown as BifrostConfig);
+    assert.ok(invalidPolicy.some((issue) => issue.code === "config.tier_policy_invalid" && issue.path === "tierPolicies.*"));
+    const invalidFallbacks = validateTierPolicyConfig({ ...baseConfig, schemaVersion: 2, tierPolicies: { frontier: { fallbackTiers: "PRIVATE_FALLBACK" } } } as unknown as BifrostConfig);
+    assert.ok(invalidFallbacks.some((issue) => issue.code === "config.tier_policy_fallback_invalid" && issue.path === "tierPolicies.*.fallbackTiers"));
+  });
+
+  it("validates fallback tier references, duplicates, self-links, cycles, and namespace fields", () => {
+    const issues = validateConfig({
+      ...baseConfig,
+      schemaVersion: 2,
+      tierPolicies: {
+        frontier: { fallbackTiers: ["economical", "economical", "frontier", "missing"], extra: true },
+        economical: { fallbackTiers: ["frontier"] },
+        unknownTier: { fallbackTiers: [] },
+      },
+    } as BifrostConfig);
+    const messages = issues.filter((issue) => issue.severity === "error").map((issue) => issue.message);
+    assert.ok(messages.some((message) => message.includes("Unknown field") && message.includes("tierPolicies.frontier")));
+    assert.ok(messages.some((message) => message.includes("not found in models") && message.includes("missing")));
+    assert.ok(messages.some((message) => message.includes("Duplicate fallback tier") && message.includes("economical")));
+    assert.ok(messages.some((message) => message.includes("cannot fall back to itself")));
+    assert.ok(messages.some((message) => message.includes("cycle")));
+    assert.ok(messages.some((message) => message.includes("tierPolicies.unknownTier")));
+  });
+
+  it("allows an empty strict fallback list and merges per-tier policies with list replacement", () => {
+    const valid = { ...baseConfig, schemaVersion: 2, tierPolicies: { frontier: { fallbackTiers: [] } } };
+    assert.equal(validateConfig(valid).length, 0);
+    const merged = mergeConfig(
+      { ...baseConfig, schemaVersion: 2, tierPolicies: { frontier: { fallbackTiers: ["economical"] } } },
+      { tierPolicies: { frontier: { fallbackTiers: [] } } },
+    );
+    assert.deepEqual(merged.tierPolicies?.frontier?.fallbackTiers, []);
+  });
+
+  it("preserves malformed tierPolicies namespaces through layer merge for rejection", () => {
+    for (const tierPolicies of [null, "invalid", []]) {
+      const merged = mergeConfig(
+        { ...baseConfig, schemaVersion: 2 },
+        { tierPolicies } as unknown as BifrostConfig,
+      );
+      assert.ok(validateConfig(merged).some((issue) => issue.message.includes("tierPolicies must be an object")));
+    }
   });
 
   it("errors when models is empty (two errors: no tiers + default missing)", () => {
