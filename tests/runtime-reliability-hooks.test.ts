@@ -1,0 +1,163 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, it } from "node:test";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import bifrostExtension from "../index.ts";
+import { makeModel } from "./helpers.ts";
+
+type Hook = (event: unknown, ctx: ExtensionContext) => Promise<unknown>;
+
+function startTrialHarness() {
+  const previousCwd = process.cwd();
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const cwd = mkdtempSync(join(tmpdir(), "bifrost-settlement-hook-"));
+  const agentDir = join(cwd, "agent");
+  mkdirSync(agentDir, { recursive: true });
+  mkdirSync(join(cwd, ".pi"), { recursive: true });
+  const modelKey = "fixture/trial";
+  const now = Date.now();
+  const openUntil = now - 1;
+  const reliabilityPath = join(cwd, ".pi", "bifrost-reliability.json");
+  writeFileSync(reliabilityPath, JSON.stringify({
+    version: 1,
+    models: { [modelKey]: { failures: [now - 1000], openUntil, cooldownMultiplier: 1 } },
+  }));
+  writeFileSync(join(cwd, ".pi", "bifrost.json"), JSON.stringify({
+    enabled: true,
+    default: "restricted",
+    strategy: "first",
+    classifier: { enabled: false, backend: "prompt" },
+    reliability: { enabled: true, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 1 },
+    models: { restricted: [modelKey] },
+    rules: [{ pattern: "hello", model: "restricted" }],
+  }));
+  process.chdir(cwd);
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+
+  const active = makeModel("fixture", "active");
+  const trial = makeModel("fixture", "trial");
+  const available: Model<Api>[] = [active, trial];
+  const handlers = new Map<string, Hook>();
+  let selected: string | undefined;
+  const ctx = {
+    cwd,
+    mode: "rpc",
+    hasUI: false,
+    model: active,
+    modelRegistry: {
+      getAvailable: () => available,
+      find: (provider: string, id: string) => available.find((model) => model.provider === provider && model.id === id),
+      getProviderAuthStatus: () => ({ configured: false }),
+      getAvailableOfType: async () => [],
+      refresh: async () => ({ refreshed: [], errors: [] }),
+    },
+    sessionManager: { getBranch: () => [] },
+    ui: {},
+  } as unknown as ExtensionContext;
+  const pi = {
+    registerVirtualModel: () => {},
+    registerCommand: () => {},
+    on: (event: string, handler: Hook) => { handlers.set(event, handler); return () => {}; },
+    setModel: async (model: Model<Api>) => { selected = `${model.provider}/${model.id}`; return true; },
+  } as unknown as ExtensionAPI;
+  bifrostExtension(pi);
+
+  return {
+    ctx,
+    handlers,
+    reliabilityPath,
+    openUntil,
+    selected: () => selected,
+    run: async (messages: unknown[]) => {
+      const input = handlers.get("input");
+      const agentEnd = handlers.get("agent_end");
+      const agentSettled = handlers.get("agent_settled");
+      assert.ok(input && agentEnd && agentSettled);
+      const result = await input({ text: "hello", source: "interactive", streamingBehavior: "steer" }, ctx);
+      assert.deepEqual(result, { action: "continue" });
+      agentEnd({ type: "agent_end", messages }, ctx);
+      await agentSettled({ type: "agent_settled" }, ctx);
+    },
+    state: () => JSON.parse(readFileSync(reliabilityPath, "utf8")).models[modelKey] as {
+      failures: number[];
+      openUntil?: number;
+      trialActive?: boolean;
+      lastSuccessAt?: number;
+      lastFailureReason?: string;
+    },
+    cleanup: () => {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(cwd, { recursive: true, force: true });
+    },
+  };
+}
+
+describe("reliability settlement through registered Pi hooks", () => {
+  it("does not close a half-open trial for missing, canceled, or unknown assistant outcomes", async () => {
+    const abandonedMessages = [
+      [],
+      [{ role: "assistant", provider: "fixture", model: "trial", stopReason: "aborted" }],
+      [{ role: "assistant", provider: "fixture", model: "trial", stopReason: "future-value" }],
+    ];
+    for (const messages of abandonedMessages) {
+      const harness = startTrialHarness();
+      try {
+        await harness.run(messages);
+        assert.equal(harness.selected(), "fixture/trial");
+        const record = harness.state();
+        assert.equal(record.trialActive, false);
+        assert.equal(record.failures.length, 1);
+        assert.equal(record.openUntil, harness.openUntil);
+        assert.equal(record.lastSuccessAt, undefined);
+      } finally {
+        harness.cleanup();
+      }
+    }
+  });
+
+  it("closes a half-open trial only for a known successful assistant stop reason", async () => {
+    const harness = startTrialHarness();
+    try {
+      await harness.run([{ role: "assistant", provider: "fixture", model: "trial", stopReason: "toolUse" }]);
+      const record = harness.state();
+      assert.equal(record.trialActive, false);
+      assert.deepEqual(record.failures, []);
+      assert.equal(record.openUntil, undefined);
+      assert.equal(typeof record.lastSuccessAt, "number");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("records a matching provider error as a failure", async () => {
+    const harness = startTrialHarness();
+    try {
+      await harness.run([{ role: "assistant", provider: "fixture", model: "trial", stopReason: "error", errorMessage: "fixture error" }]);
+      const record = harness.state();
+      assert.equal(record.trialActive, false);
+      assert.equal(record.failures.length, 2);
+      assert.ok((record.openUntil ?? 0) > Date.now());
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("does not treat an empty provider error string as successful settlement", async () => {
+    const harness = startTrialHarness();
+    try {
+      await harness.run([{ role: "assistant", provider: "fixture", model: "trial", stopReason: "error", errorMessage: "" }]);
+      const record = harness.state();
+      assert.equal(record.trialActive, false);
+      assert.equal(record.failures.length, 2);
+      assert.ok((record.openUntil ?? 0) > Date.now());
+      assert.equal(record.lastFailureReason, "provider request failed");
+    } finally {
+      harness.cleanup();
+    }
+  });
+});

@@ -654,13 +654,21 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       for (const outcome of settled) state.reliabilityStore.abandonTrial(outcome.model);
       return;
     }
-    // Policy A: failure logged, clean settle silent (trial-only success).
-    // Intentional — normal routing produces no log noise.
+    // Only explicit known completion can settle success. Cancellation, a
+    // missing assistant response, and unknown stop reasons release the claim
+    // without changing the circuit. Failures use an explicit write so an empty
+    // host error string can never be mistaken for successful settlement.
     for (const outcome of settled) {
-      state.reliabilityStore.recordSettled(outcome.model, outcome.reason);
-      if (outcome.reason) {
-        log(ctx, `Bifrost: recorded provider failure for ${outcome.model}; future prompts may route around it.`, "warning");
+      if (outcome.outcome === "abandoned") {
+        state.reliabilityStore.abandonTrial(outcome.model);
+        continue;
       }
+      if (outcome.outcome === "failure") {
+        state.reliabilityStore.recordFailure(outcome.model, "agent_settled", outcome.reason ?? "provider request failed");
+        log(ctx, `Bifrost: recorded provider failure for ${outcome.model}; future prompts may route around it.`, "warning");
+        continue;
+      }
+      state.reliabilityStore.recordSettled(outcome.model);
     }
   });
 

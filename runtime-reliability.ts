@@ -16,8 +16,11 @@ function outcomeModelKey(message: AssistantOutcome): string | undefined {
 /** Tracks one Bifrost-routed agent run across Pi's internal retries. */
 export interface RuntimeFailure {
   model: string;
-  reason: string | undefined;
+  outcome: "success" | "failure" | "abandoned";
+  reason?: string;
 }
+
+const SUCCESS_STOP_REASONS = new Set(["stop", "length", "toolUse"]);
 
 /** Result of a half-open trial claim attempt. */
 export interface TrialClaim {
@@ -74,10 +77,13 @@ export function createDispatchOwnership(deps: DispatchOwnershipDeps) {
  * wedge them. Every dispatched model settles individually.
  */
 export class RuntimeReliabilityTracker {
-  private pending = new Map<string, string | undefined>();
+  private pending = new Map<string, RuntimeFailure>();
 
   begin(selectedModel: string): void {
-    if (!this.pending.has(selectedModel)) this.pending.set(selectedModel, undefined);
+    // A newer dispatch must not inherit an earlier success if it later settles
+    // without a matching assistant response. Same-model dispatch IDs remain a
+    // separate ledger concern; this model-keyed tracker fails conservatively.
+    this.pending.set(selectedModel, { model: selectedModel, outcome: "abandoned" });
   }
 
   /** Drop one dispatch (e.g. dispatch bookkeeping failed before the request). */
@@ -96,18 +102,24 @@ export class RuntimeReliabilityTracker {
         }
       }
       if (!last) continue;
-      this.pending.set(
-        model,
-        last.stopReason === "error"
-          ? (typeof last.errorMessage === "string" ? last.errorMessage : "provider request failed")
-          : undefined,
-      );
+      if (last.stopReason === "error") {
+        const rawReason = typeof last.errorMessage === "string" ? last.errorMessage : "";
+        this.pending.set(model, {
+          model,
+          outcome: "failure",
+          reason: rawReason.trim() ? rawReason : "provider request failed",
+        });
+      } else if (typeof last.stopReason === "string" && SUCCESS_STOP_REASONS.has(last.stopReason)) {
+        this.pending.set(model, { model, outcome: "success" });
+      } else {
+        this.pending.set(model, { model, outcome: "abandoned" });
+      }
     }
   }
 
-  /** Returns every dispatch on both success and failure. reason undefined = clean settle. */
+  /** Returns each tracked model with explicit success, failure, or abandonment. */
   settle(): RuntimeFailure[] {
-    const settled = [...this.pending.entries()].map(([model, reason]) => ({ model, reason }));
+    const settled = [...this.pending.values()];
     this.pending.clear();
     return settled;
   }
