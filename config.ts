@@ -7,6 +7,7 @@ import type { CacheOptions } from "./cache.ts";
 import type { DebugConfig } from "./debug.ts";
 import type { ReliabilityConfig } from "./reliability.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend, type TierCriterion } from "./classifier-backends.ts";
+import { emptyEconomicSnapshot, publishEconomicObservation, validateEconomicPolicy, type EconomicSignal, type ReservePolicy } from "./economic-signals.ts";
 
 export { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL } from "./classifier-backends.ts";
 export type { ClassifierBackend, TierCriterion } from "./classifier-backends.ts";
@@ -29,6 +30,11 @@ export interface ProbeConfig {
 
 export interface TierPolicy {
   fallbackTiers: string[];
+}
+
+export interface EconomicConfig extends ReservePolicy {
+  /** User-entered static/manual observations. No source adapter is inferred. */
+  observations?: readonly EconomicSignal[];
 }
 
 export interface TypeSafeConfig {
@@ -76,6 +82,7 @@ export interface ClassifierConfig {
 export interface BifrostConfig {
   schemaVersion?: number;
   tierPolicies?: Record<string, TierPolicy>;
+  economics?: EconomicConfig;
   enabled?: boolean;
   default?: string;
   strategy?: RoutingStrategy;
@@ -308,6 +315,89 @@ export function validateTierPolicyConfig(config: BifrostConfig): ConfigIssue[] {
     visited.add(tier);
   };
   for (const tier of edges.keys()) visitTier(tier);
+  issues.push(...validateEconomicConfig(config));
+  return issues;
+}
+
+export function validateEconomicConfig(config: BifrostConfig): ConfigIssue[] {
+  const raw = (config as unknown as Record<string, unknown>).economics;
+  if (raw === undefined) return [];
+  const issues: ConfigIssue[] = [];
+  const add = (code: string, path: string, message: string): void => {
+    issues.push({ severity: "error", code, path, message });
+  };
+  if (config.schemaVersion !== 2) {
+    add("config.economics_requires_v2", "economics", "economics requires schemaVersion 2.");
+  }
+  if (!criterionObject(raw)) {
+    add("config.economics_invalid", "economics", "economics must be an object.");
+    return issues;
+  }
+  const allowedFields = new Set(["mode", "scopes", "sources", "sourceOrder", "admission", "tierOverrides", "observations"]);
+  for (const key of Object.keys(raw)) {
+    if (!allowedFields.has(key)) add("config.economics_unknown_field", "economics.*", "economics contains an unsupported field.");
+  }
+  const { observations, ...policyValue } = raw;
+  const checkUnknownFields = (value: unknown, allowed: readonly string[], path: string): void => {
+    if (!criterionObject(value)) return;
+    for (const key of Object.keys(value)) {
+      if (!allowed.includes(key)) add("config.economics_unknown_field", path, "economics contains an unsupported field.");
+    }
+  };
+  if (criterionObject(policyValue.scopes)) {
+    for (const scope of Object.values(policyValue.scopes)) {
+      checkUnknownFields(scope, scope && typeof scope === "object" && (scope as { kind?: unknown }).kind === "model"
+        ? ["kind", "model"] : ["kind", "provider"], "economics.scopes.*");
+    }
+  }
+  if (Array.isArray(policyValue.sources)) {
+    for (const source of policyValue.sources) {
+      checkUnknownFields(source, ["id", "scopeRef", "authority"], "economics.sources[]");
+      if (criterionObject(source) && source.authority === "authoritative") {
+        add("config.economics_authority_forbidden", "economics.sources[].authority", "Config-declared economic sources cannot claim authoritative status.");
+      }
+    }
+  }
+  if (Array.isArray(policyValue.admission)) {
+    for (const rule of policyValue.admission) {
+      checkUnknownFields(rule, ["id", "scopeRef", "windowId", "reserveRatio", "unknown"], "economics.admission[]");
+    }
+  }
+  if (criterionObject(policyValue.tierOverrides)) {
+    for (const overrides of Object.values(policyValue.tierOverrides)) {
+      if (!criterionObject(overrides)) continue;
+      for (const override of Object.values(overrides)) {
+        checkUnknownFields(override, ["reserveRatio", "unknown"], "economics.tierOverrides.*.*");
+      }
+    }
+  }
+  const validation = validateEconomicPolicy(policyValue as unknown as ReservePolicy, { accountDispatch: false });
+  for (const issue of validation.diagnostics) {
+    const code = issue.code === "policy.unsupported_account_scope" ? "config.economics_account_scope_unsupported" : `config.economics_${issue.code.replaceAll(".", "_")}`;
+    const path = issue.scopeRef ? "economics.scopes.*" : issue.sourceId ? "economics.sources[]" : issue.ruleId ? "economics.admission[]" : "economics";
+    add(code, path, "The configured economic policy is invalid or unsupported.");
+  }
+  if (observations !== undefined && !Array.isArray(observations)) {
+    add("config.economics_observations_invalid", "economics.observations", "economics.observations must be an array of static signals.");
+  } else if (Array.isArray(observations)) {
+    if (observations.length > 64) add("config.economics_observation_limit", "economics.observations", "economics.observations exceeds the configured observation limit.");
+    let snapshot = emptyEconomicSnapshot();
+    for (const observation of observations) {
+      checkUnknownFields(observation, ["sourceId", "scopeRef", "billing", "observedAt", "expiresAt", "revision", "windows"], "economics.observations[]");
+      if (criterionObject(observation) && Array.isArray(observation.windows)) {
+        for (const window of observation.windows) {
+          checkUnknownFields(window, ["id", "period", "unit", "currency", "remaining", "limit", "resetsAt"], "economics.observations[].windows[]");
+          if (criterionObject(window)) checkUnknownFields(window.period, ["id", "sequence"], "economics.observations[].windows[].period");
+        }
+      }
+      const result = publishEconomicObservation(snapshot, policyValue as unknown as ReservePolicy, observation as EconomicSignal);
+      if (!result.accepted) {
+        add("config.economics_observation_invalid", "economics.observations[]", "A configured static economic observation is invalid or stale.");
+      } else {
+        snapshot = result.snapshot;
+      }
+    }
+  }
   return issues;
 }
 

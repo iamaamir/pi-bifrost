@@ -52,6 +52,13 @@ describe("virtual fail-closed errors", () => {
     assert.match(message, /credentials/);
   });
 
+  it("explains reserve-excluded candidates without calling them unavailable", () => {
+    const message = noModelError("restricted", ["fixture/reserved"], "requested_tier_excluded", undefined, { count: 1, reasonCodes: ["reserve_reached"] });
+    assert.match(message, /no eligible physical model/);
+    assert.match(message, /reserve policy exclusion\): reserve policy excluded 1 configured candidate\(s\) \(reasons: reserve_reached\)/);
+    assert.doesNotMatch(message, /resolved 0 available models|credentials/);
+  });
+
   it("delegates dispatch thinking level to pi-ai clampThinkingLevel", async () => {
     const nonReasoning = Object.assign(makeModel("fixture", "plain"), { reasoning: false });
     const limited = Object.assign(makeModel("fixture", "limited"), {

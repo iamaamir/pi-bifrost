@@ -3,6 +3,7 @@ import { classifyCompiled, compileRules, type RouteRule } from "./routing.ts";
 import type { RoutedModelResolution, RoutingStrategy, SkippedCandidate, TierResolutionOptions } from "./routing.ts";
 import { debug, debugMeasure } from "./debug.ts";
 import { CLASSIFIER_BACKEND_IDS, type ClassificationJudgment, type ClassifierOutput, type ClassifierBackend } from "./classifier-backends.ts";
+import type { EconomicCandidateEvaluation } from "./routing.ts";
 
 // ── ADT result type ────────────────────────────────────────────
 
@@ -16,7 +17,12 @@ export type ClassificationResult =
 export interface RouteDecisionCandidate {
   readonly model: string;
   readonly status: "eligible" | "excluded";
-  readonly exclusion?: SkippedCandidate["reason"];
+  readonly exclusion?: SkippedCandidate["reason"] | "economic_reserve";
+  readonly reserve?: {
+    readonly disposition: string;
+    readonly wouldReject: boolean;
+    readonly reasons: readonly string[];
+  };
 }
 
 export interface RouteDecisionPool {
@@ -62,8 +68,10 @@ function summarizePool(
   pattern: string | readonly string[] | undefined,
   candidates: RoutedModelResolution["primary"]["candidates"],
   skipped: readonly SkippedCandidate[],
+  economic?: readonly EconomicCandidateEvaluation[],
 ): RouteDecisionPool {
   const exclusions = new Map(skipped.map((candidate) => [candidate.key, candidate.reason]));
+  const reserveEvaluations = new Map((economic ?? []).map(({ key, evaluation }) => [key, evaluation]));
   return {
     tier,
     strategy,
@@ -71,9 +79,20 @@ function summarizePool(
     candidates: candidates.map((candidate) => {
       const model = `${candidate.provider}/${candidate.id}`;
       const exclusion = exclusions.get(model);
-      return exclusion
-        ? { model, status: "excluded", exclusion }
-        : { model, status: "eligible" };
+      const reserve = reserveEvaluations.get(model);
+      const hardExcluded = reserve?.mode === "policy" && reserve.disposition === "rejected";
+      return {
+        model,
+        status: exclusion || hardExcluded ? "excluded" : "eligible",
+        ...(exclusion ? { exclusion } : hardExcluded ? { exclusion: "economic_reserve" as const } : {}),
+        ...(reserve ? {
+          reserve: {
+            disposition: reserve.disposition,
+            wouldReject: reserve.wouldReject,
+            reasons: reserve.results.map((result) => result.reason),
+          },
+        } : {}),
+      };
     }),
   };
 }
@@ -117,6 +136,7 @@ export function buildRouteDecisionSummary(
         options.requestedPattern,
         resolution.primary.candidates,
         resolution.primary.skipped,
+        resolution.primary.economic,
       ),
       ...(resolution.fallback ? {
         fallback: summarizePool(
@@ -125,6 +145,7 @@ export function buildRouteDecisionSummary(
           options.defaultPattern,
           resolution.fallback.candidates,
           resolution.fallback.skipped,
+          resolution.fallback.economic,
         ),
       } : {}),
       ...(resolution.selectedTier !== undefined ? { selectedTier: resolution.selectedTier } : {}),
@@ -140,6 +161,7 @@ export function buildRouteDecisionSummary(
       attempt.pattern,
       attempt.resolution.candidates,
       attempt.resolution.skipped,
+      attempt.resolution.economic,
     ));
     return {
       ...summary,
@@ -161,6 +183,8 @@ export function buildRouteDecisionSummary(
  * tracking — this is an accepted impurity (see ADR candidate #4).
  */
 export interface PipelineDeps {
+  /** Disable process-global debug instrumentation for isolated resolve-only callers. */
+  readonly instrumentation?: "none";
   /** Query cache. Returns tier or undefined. */
   readonly cacheLookup: (text: string) => string | undefined;
   /** Optional direct backend (typesafe or pi-native) attempted before the prompt classifier. */
@@ -205,6 +229,17 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
     defaultTier,
     tiers,
   } = deps;
+  const emitDebug = (
+    module: string,
+    event: string,
+    meta?: Record<string, unknown>,
+  ): void => {
+    if (deps.instrumentation !== "none") debug(module, event, meta);
+  };
+  const measureDebug = (module: string, event: string) => {
+    if (deps.instrumentation === "none") return (_meta?: Record<string, unknown>) => {};
+    return debugMeasure(module, event);
+  };
 
   // Compile rules once at pipeline construction — no per-turn regex building.
   // Per-rule testing preserves rule-order match precedence exactly.
@@ -214,11 +249,11 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
     // Stage 1: pre-check regex for direct model references only.
     // Runs before tiers check — direct bindings work even with zero tiers.
     {
-      const endPre = debugMeasure("pipeline", "regex_pre");
+      const endPre = measureDebug("pipeline", "regex_pre");
       const pre = classifyCompiled(text, regexRules);
       endPre({ match: !!pre, tier: pre });
       if (pre && pre.includes("/") && !tiers.includes(pre)) {
-        debug("pipeline", "result", { source: "regex", tier: pre, direct: true });
+        emitDebug("pipeline", "result", { source: "regex", tier: pre, direct: true });
         return { kind: "classified", tier: pre, source: "regex" };
       }
     }
@@ -226,27 +261,27 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
     if (tiers.length === 0) return { kind: "unclassified" };
 
     // Stage 2: cache lookup
-    const endCache = debugMeasure("pipeline", "cache");
+    const endCache = measureDebug("pipeline", "cache");
     const cached = cacheLookup(text);
     endCache({ hit: !!cached });
     if (cached && tiers.includes(cached)) {
-      debug("pipeline", "result", { source: "cache", tier: cached });
+      emitDebug("pipeline", "result", { source: "cache", tier: cached });
       return { kind: "classified", tier: cached, source: "cache" };
     }
 
     // Stage 3: optional direct classifier (typesafe or pi-native), then prompt fallback.
     if (classifyDirect) {
       try {
-        const endDirect = debugMeasure("pipeline", "direct.attempt");
+        const endDirect = measureDebug("pipeline", "direct.attempt");
         const judgment = await classifyDirect(text, tiers, signal);
         const tier = judgment?.tier;
         endDirect({ tier, backend: judgment?.backend, confidence: judgment?.confidence });
         if (judgment && tiers.includes(judgment.tier)) {
-          debug("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model, confidence: judgment.confidence });
+          emitDebug("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model, confidence: judgment.confidence });
           return { kind: "classified", tier: judgment.tier, source: "classifier", judgment };
         }
       } catch {
-        debug("pipeline", "direct.error", { aborted: signal?.aborted ?? false });
+        emitDebug("pipeline", "direct.error", { aborted: signal?.aborted ?? false });
       }
       if (signal?.aborted) return { kind: "unclassified" };
     }
@@ -254,18 +289,18 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
     // Existing prompt classifier — try each model in priority order.
     for (const model of classifierModels) {
       try {
-        const endLLM = debugMeasure("pipeline", "classifier.attempt");
+        const endLLM = measureDebug("pipeline", "classifier.attempt");
         const output = await classifyWithLLM(model, text, tiers);
         const modelId = model.kind === "registry" ? model.model.id : model.id;
         const judgment = output === undefined ? undefined : normalizeJudgment(output, CLASSIFIER_BACKEND_IDS.prompt);
         const tier = judgment?.tier;
         endLLM({ model: modelId, tier, backend: judgment?.backend, confidence: judgment?.confidence });
         if (judgment && tiers.includes(judgment.tier)) {
-          debug("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model ?? modelId, confidence: judgment.confidence });
+          emitDebug("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model ?? modelId, confidence: judgment.confidence });
           return { kind: "classified", tier: judgment.tier, source: "classifier", judgment: { ...judgment, model: judgment.model ?? modelId } };
         }
       } catch {
-        debug("pipeline", "classifier.error", { category: "classifier_failure" });
+        emitDebug("pipeline", "classifier.error", { category: "classifier_failure" });
         console.error("[bifrost] classifier model failed");
       }
     }
@@ -273,24 +308,24 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
     if (signal?.aborted) return { kind: "unclassified" };
 
     // Stage 4: regex rules
-    const endRegex = debugMeasure("pipeline", "regex");
+    const endRegex = measureDebug("pipeline", "regex");
     const regex = classifyCompiled(text, regexRules);
     endRegex({ match: !!regex, tier: regex });
     if (regex) {
       if (tiers.includes(regex)) {
         // Tier name match — route through strategy.
-        debug("pipeline", "result", { source: "regex", tier: regex });
+        emitDebug("pipeline", "result", { source: "regex", tier: regex });
         return { kind: "classified", tier: regex, source: "regex" };
       }
       if (regex.includes("/")) {
         // Direct model reference (e.g. "opencode-go/glm-5.1" in rule).
-        debug("pipeline", "result", { source: "regex", tier: regex, direct: true });
+        emitDebug("pipeline", "result", { source: "regex", tier: regex, direct: true });
         return { kind: "classified", tier: regex, source: "regex" };
       }
     }
 
     // Stage 4: default fallback
-    debug("pipeline", "result", { source: "fallback", tier: defaultTier });
+    emitDebug("pipeline", "result", { source: "fallback", tier: defaultTier });
     if (defaultTier) {
       return { kind: "fallback", tier: defaultTier };
     }

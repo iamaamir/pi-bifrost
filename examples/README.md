@@ -63,6 +63,18 @@ Preview before sending:
 
 ## Recipes
 
+### `economic-reserve-observe.json`
+
+Starts with a provider-scoped estimate in observe mode. The example includes no balance or remaining allowance. Add a user-entered observation only when you have a current fact, then use `mode: "policy"` only after reviewing `/bifrost inspect` and the configured unknown handling. Pi does not fetch billing data or provide an account-level spend cap.
+
+Try:
+
+```text
+/bifrost inspect
+```
+
+The command shows the source alias, period, and freshness without printing quota values.
+
 ### `rules-only-local.json`
 
 Use when prompts must stay local or routing should never make an extra classifier call.

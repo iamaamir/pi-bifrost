@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { join } from "node:path";
 import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
 import type { BifrostConfig, ClassifierConfig } from "./config.ts";
-import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, PROMPT_ONLY_FIELDS, loadConfigForReload, validateTierPolicyConfig } from "./config.ts";
+import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, PROMPT_ONLY_FIELDS, loadConfigForReload, validateEconomicConfig, validateTierPolicyConfig } from "./config.ts";
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
 import { buildRouteDecisionSummary, type ClassificationPipeline, type ClassificationResult, type ClassificationSource, type RouteDecisionSummary } from "./classification-pipeline.ts";
@@ -29,6 +29,8 @@ import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_ENDPOINT, TYPE
 import { piClassificationSupported } from "./classifier-pi-native.ts";
 import { resolveTypeSafeApiKey, type TypeSafeCredentialSource } from "./typesafe-classifier.ts";
 import { inspectDiagnostics, validateDiagnostics, type BifrostDiagnostic, type InspectDiagnosticsReport, type ValidateDiagnosticsReport } from "./diagnostics.ts";
+import type { EconomicDiagnostic, EconomicSnapshot, ReservePolicy } from "./economic-signals.ts";
+import { reconcileEconomicSnapshot } from "./economic-config.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
@@ -36,6 +38,13 @@ export interface BifrostState {
   config: BifrostConfig;
   /** New routing config semantics are blocked until an accepted config is installed. */
   tierPolicyValid?: boolean;
+  economicSnapshot?: EconomicSnapshot;
+  economicPolicy?: ReservePolicy;
+  /** Private compatibility provenance retained while economics is absent. */
+  economicHistoryPolicy?: ReservePolicy;
+  economicPolicyValid?: boolean;
+  economicDiagnostics?: readonly EconomicDiagnostic[];
+  economicQuarantinedSourceRevisions?: ReadonlyMap<string, number>;
   enabled: boolean;
   classifierEnabled: boolean;
   pinned: boolean;
@@ -67,8 +76,20 @@ function installConfigIfTierPoliciesValid(
     log(ctx, `Bifrost config reload rejected: ${errors.map((issue) => issue.message).join(" ")}`, "error");
     return false;
   }
+  const reconciled = reconcileEconomicSnapshot(
+    state.economicSnapshot,
+    state.economicHistoryPolicy ?? state.economicPolicy,
+    config.economics,
+    state.economicQuarantinedSourceRevisions,
+  );
   state.config = config;
   state.tierPolicyValid = true;
+  state.economicSnapshot = reconciled.snapshot;
+  state.economicPolicy = reconciled.policy;
+  state.economicHistoryPolicy = reconciled.historyPolicy;
+  state.economicPolicyValid = validateEconomicConfig(config).every((issue) => issue.severity !== "error");
+  state.economicDiagnostics = reconciled.diagnostics;
+  state.economicQuarantinedSourceRevisions = reconciled.quarantinedSourceRevisions;
   state.invalidatePipeline();
   return true;
 }
@@ -166,8 +187,14 @@ export function clearBifrostWidgets(ctx: ExtensionContext) {
   }
 }
 
-export function syncBifrostModeStatus(ctx: ExtensionContext, state: Pick<BifrostState, "enabled" | "pinned" | "classifierEnabled">) {
-  setBifrostModeStatus(ctx, state);
+export function syncBifrostModeStatus(ctx: ExtensionContext, state: Pick<BifrostState, "enabled" | "pinned" | "classifierEnabled" | "config" | "economicPolicyValid">) {
+  setBifrostModeStatus(ctx, {
+    enabled: state.enabled,
+    pinned: state.pinned,
+    classifierEnabled: state.classifierEnabled,
+    economicMode: state.config.economics?.mode,
+    economicPolicyValid: state.economicPolicyValid,
+  });
 }
 
 function openCircuitCount(state: BifrostState, now = Date.now()): number {
@@ -179,17 +206,21 @@ function formatCandidateLines(
   selectedKey: string | undefined,
 ): string[] {
   const skipped = new Map(resolution.skipped.map((item) => [item.key, item]));
+  const reserves = new Map((resolution.economic ?? []).map((item) => [item.key, item.evaluation]));
   return resolution.candidates.map((m) => {
     const key = modelKey(m);
     const skippedCandidate = skipped.get(key);
+    const reserve = reserves.get(key);
     if (skippedCandidate) {
       const until = skippedCandidate.openUntil
         ? new Date(skippedCandidate.openUntil).toISOString()
         : "unknown";
       return `xx ${key} (open circuit until ${until})`;
     }
+    if (reserve?.mode === "policy" && reserve.disposition === "rejected") return `xx ${key} (reserve policy)`;
     const marker = key === selectedKey ? "=>" : "  ";
-    return `${marker} ${key} ($${(m.cost.input + m.cost.output).toFixed(2)}/1M tokens, ctx ${m.contextWindow})`;
+    const reserveNote = reserve?.mode === "observe" && reserve.wouldReject ? "; reserve would reject" : "";
+    return `${marker} ${key} ($${(m.cost.input + m.cost.output).toFixed(2)}/1M tokens, ctx ${m.contextWindow}${reserveNote})`;
   });
 }
 
@@ -228,6 +259,10 @@ function resolveTierDisplay(
     state.config,
     state.reliabilityStore.getState(),
     state.config.reliability,
+    undefined,
+    state.config.economics && state.economicPolicyValid && state.economicPolicy && state.economicSnapshot
+      ? { policy: state.economicPolicy, snapshot: state.economicSnapshot }
+      : undefined,
   );
   const explicitBoundary = resolved.explicitBoundary === true;
   const defaultTier = explicitBoundary ? undefined : options.defaultTier;
@@ -1121,6 +1156,70 @@ const DIAGNOSTIC_FIELD_PATHS = new Set([
   "tierPolicies.*.fallbackTiers",
 ]);
 
+interface EconomicInspectEvidence {
+  readonly mode: "off" | "observe" | "policy" | "invalid";
+  readonly sources: readonly {
+    readonly source: string;
+    readonly scope: string;
+    readonly authority: string;
+    readonly freshness: "missing" | "current" | "expired" | "future";
+    readonly observedAgeMs?: number;
+    readonly periods: readonly {
+      readonly window: string;
+      readonly period: string;
+      readonly unit: string;
+      readonly applicability: "current" | "reset" | "expired" | "future";
+    }[];
+  }[];
+  readonly diagnostics: readonly { readonly code: string; readonly severity: string; readonly source?: string; readonly scope?: string }[];
+}
+
+function inspectEconomicEvidence(state: BifrostState, now = Date.now()): EconomicInspectEvidence {
+  if (state.economicPolicyValid === false) return { mode: "invalid", sources: [], diagnostics: [] };
+  if (!state.config.economics) return { mode: "off", sources: [], diagnostics: [] };
+  const policy = state.economicPolicy;
+  if (!policy) return { mode: "off", sources: [], diagnostics: [] };
+  const signals = state.economicSnapshot?.signals ?? [];
+  const sources = policy.sources.map((source) => {
+    const signal = signals.find((item) => item.sourceId === source.id && item.scopeRef === source.scopeRef);
+    const freshness = !signal
+      ? "missing" as const
+      : now < signal.observedAt
+        ? "future" as const
+        : signal.expiresAt <= now ? "expired" as const : "current" as const;
+    const periods = signal ? signal.windows.map((window) => ({
+      window: window.id,
+      period: window.period.id,
+      unit: window.unit,
+      applicability: now < signal.observedAt
+        ? "future" as const
+        : signal.expiresAt <= now
+          ? "expired" as const
+          : window.resetsAt !== undefined && window.resetsAt <= now
+            ? "reset" as const
+            : "current" as const,
+    })) : [];
+    return {
+      source: source.id,
+      scope: source.scopeRef,
+      authority: source.authority,
+      freshness,
+      ...(signal ? { observedAgeMs: Math.max(0, now - signal.observedAt) } : {}),
+      periods,
+    };
+  });
+  return {
+    mode: policy.mode,
+    sources,
+    diagnostics: (state.economicDiagnostics ?? []).map((item) => ({
+      code: item.code,
+      severity: item.severity,
+      ...(item.sourceId ? { source: item.sourceId } : {}),
+      ...(item.scopeRef ? { scope: item.scopeRef } : {}),
+    })),
+  };
+}
+
 function renderDiagnostic(item: BifrostDiagnostic): string {
   const fieldPath = item.path && DIAGNOSTIC_FIELD_PATHS.has(item.path) ? `path=${item.path}` : "";
   const location = [fieldPath, item.tier ? `tier=${item.tier}` : "", item.entryIndex !== undefined ? `entry=${item.entryIndex}` : "", item.ruleIndex !== undefined ? `rule=${item.ruleIndex}` : "", item.model ? `model=${item.model}` : ""].filter(Boolean).join(" ");
@@ -1132,7 +1231,7 @@ function formatDiagnosticTimestamp(timestamp: number): string {
   return Number.isNaN(date.getTime()) ? "unknown" : date.toISOString();
 }
 
-function renderDiagnosticLines(report: ValidateDiagnosticsReport | InspectDiagnosticsReport): string[] {
+function renderDiagnosticLines(report: ValidateDiagnosticsReport | (InspectDiagnosticsReport & { economics?: EconomicInspectEvidence })): string[] {
   const lines = [report.kind === "validation" ? "--- validation (loaded effective config) ---" : "--- inspection (local snapshot) ---"];
   if (report.kind === "validation") {
     lines.push("config source: loaded effective config (run /bifrost reload after editing files)");
@@ -1146,6 +1245,17 @@ function renderDiagnosticLines(report: ValidateDiagnosticsReport | InspectDiagno
       lines.push(`${tier.tier}: ${tier.configuredEntryCount} configured entries`);
       for (const candidate of tier.candidates) {
         lines.push(`  ${candidate.model}: available=${candidate.available}, auth=${candidate.auth}, circuit=${candidate.circuit}${candidate.openUntil === undefined ? "" : ` until ${formatDiagnosticTimestamp(candidate.openUntil)}`}`);
+      }
+    }
+    if (report.economics) {
+      lines.push(`reserve policy: ${report.economics.mode}`);
+      for (const source of report.economics.sources) {
+        const age = source.observedAgeMs === undefined ? "" : ` age=${source.observedAgeMs}ms`;
+        const periods = source.periods.map((period) => `${period.window}:${period.period}(${period.applicability})`).join(", ") || "none";
+        lines.push(`  source=${source.source} scope=${source.scope} authority=${source.authority} freshness=${source.freshness}${age} periods=${periods}`);
+      }
+      for (const diagnostic of report.economics.diagnostics) {
+        lines.push(`  ${diagnostic.severity} ${diagnostic.code}${diagnostic.source ? ` source=${diagnostic.source}` : ""}${diagnostic.scope ? ` scope=${diagnostic.scope}` : ""}`);
       }
     }
   }
@@ -1168,13 +1278,16 @@ async function handleDiagnosticsCommand(
   }
   const report = command === "validate"
     ? validateDiagnostics({ config: state.config, registry: ctx.modelRegistry })
-    : inspectDiagnostics({
+    : {
+      ...inspectDiagnostics({
       config: state.config,
       registry: ctx.modelRegistry,
       reliabilityState: state.reliabilityStore.getState(),
       reliabilityConfig: state.config.reliability,
       lastRegistryRefreshAt: state.lastRegistryRefreshAt,
-    });
+      }),
+      economics: inspectEconomicEvidence(state),
+    };
   if (json) {
     console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(report)}`);
     return;

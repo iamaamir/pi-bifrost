@@ -5,6 +5,8 @@ All notable changes to pi-bifrost are documented here.
 ## [Unreleased]
 
 ### Added
+- Optional schema-version-2 economic reserves. Static declared/estimated provider or model facts can be observed first, then explicitly applied as a pre-strategy candidate filter. No live billing adapter, account scope, or spend-cap guarantee is included.
+- `/bifrost inspect` includes reserve mode and source freshness metadata without printing remaining allowance values.
 - `/bifrost validate [--json]` checks the active loaded config and local model references; `/bifrost inspect [--json]` reports local registry, auth-presence, and circuit snapshots without routing, probing, or writing state.
 - `/bifrost preview --trace [--json] <prompt>` shows a versioned, content-free route decision with configured pools, selected strategy, and reliability exclusions. The existing `--json` preview report stays unchanged.
 - Schema version 2 supports explicit per-tier `fallbackTiers` boundaries. Each policy tries only its requested tier and listed tiers in order; tiers without a policy keep the legacy default fallback.

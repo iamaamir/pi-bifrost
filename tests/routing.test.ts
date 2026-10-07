@@ -22,8 +22,100 @@ import {
 } from "../routing.ts";
 import { emptyReliabilityState, recordModelFailure, DEFAULT_RELIABILITY } from "../reliability.ts";
 import { makeCtx, makeModel, withoutCost } from "./helpers.ts";
+import { emptyEconomicSnapshot, publishEconomicObservation, type EconomicSignal, type ReservePolicy } from "../economic-signals.ts";
 
 describe("routing", () => {
+  describe("economic reserve filtering", () => {
+    const now = 1_000;
+    const policy = (mode: ReservePolicy["mode"]): ReservePolicy => ({
+      mode,
+      scopes: { reserved: { kind: "model", model: "fixture/a" } },
+      sources: [{ id: "manual", scopeRef: "reserved", authority: "declared" }],
+      admission: [{ id: "daily", scopeRef: "reserved", windowId: "day", reserveRatio: 0.2, unknown: "block" }],
+    });
+    const observation: EconomicSignal = {
+      sourceId: "manual", scopeRef: "reserved", billing: "metered", observedAt: 100, expiresAt: 2_000, revision: 1,
+      windows: [{ id: "day", period: { id: "p1", sequence: 1 }, unit: "ratio", remaining: 0.1 }],
+    };
+
+    it("filters reserved models before selection in requested and legacy default pools", () => {
+      const ctx = makeCtx([makeModel("fixture", "a"), makeModel("fixture", "b")]);
+      const reservePolicy = policy("policy");
+      const snapshot = publishEconomicObservation(emptyEconomicSnapshot(), reservePolicy, observation).snapshot;
+      const result = resolveConfiguredTier(ctx, "restricted", {
+        default: "general", models: { restricted: ["fixture/a"], general: ["fixture/a", "fixture/b"] }, strategy: "first",
+      }, undefined, undefined, now, { policy: reservePolicy, snapshot }).resolution;
+      assert.equal(result.selected && modelKey(result.selected), "fixture/b");
+      assert.equal(result.selectedTier, "general");
+      assert.equal(result.primary.economic?.[0]?.evaluation.disposition, "rejected");
+      assert.equal(result.fallback?.healthyCandidates.map(modelKey).join(","), "fixture/b");
+    });
+
+    it("filters every tier in an explicit ordered fallback chain before strategy", () => {
+      const ctx = makeCtx([makeModel("fixture", "a"), makeModel("fixture", "b")]);
+      const reservePolicy = policy("policy");
+      const snapshot = publishEconomicObservation(emptyEconomicSnapshot(), reservePolicy, observation).snapshot;
+      const result = resolveConfiguredTier(ctx, "restricted", {
+        schemaVersion: 2,
+        default: "unvisited",
+        models: { restricted: ["fixture/a"], backup: ["fixture/a", "fixture/b"], unvisited: ["fixture/a"] },
+        tierPolicies: { restricted: { fallbackTiers: ["backup"] } },
+        strategy: "first",
+      }, undefined, undefined, now, { policy: reservePolicy, snapshot }).resolution;
+      assert.equal(result.selected && modelKey(result.selected), "fixture/b");
+      assert.deepEqual(result.attemptedTiers?.map(({ tier }) => tier), ["restricted", "backup"]);
+      assert.equal(result.explicitBoundary, true);
+    });
+
+    it("reports a reserve-excluded legacy default pool as excluded, not unavailable", () => {
+      const ctx = makeCtx([makeModel("fixture", "a")]);
+      const reservePolicy = policy("policy");
+      const snapshot = publishEconomicObservation(emptyEconomicSnapshot(), reservePolicy, observation).snapshot;
+      const result = resolveConfiguredTier(ctx, "restricted", {
+        default: "general",
+        models: { restricted: [], general: ["fixture/a"] },
+        strategy: "first",
+      }, undefined, undefined, now, { policy: reservePolicy, snapshot }).resolution;
+      assert.equal(result.selected, undefined);
+      assert.equal(result.fallback?.economic?.[0]?.evaluation.disposition, "rejected");
+      assert.equal(result.fallbackReason, "requested_tier_excluded");
+    });
+
+    it("does not report all-excluded explicit pools as unavailable", () => {
+      const ctx = makeCtx([makeModel("fixture", "a")]);
+      const reservePolicy = policy("policy");
+      const snapshot = publishEconomicObservation(emptyEconomicSnapshot(), reservePolicy, observation).snapshot;
+      const result = resolveConfiguredTier(ctx, "restricted", {
+        schemaVersion: 2,
+        models: { restricted: ["fixture/a"], backup: ["fixture/a"] },
+        tierPolicies: { restricted: { fallbackTiers: ["backup"] } },
+        strategy: "first",
+      }, undefined, undefined, now, { policy: reservePolicy, snapshot }).resolution;
+      assert.equal(result.selected, undefined);
+      assert.equal(result.fallbackReason, "requested_tier_excluded");
+    });
+
+    it("observe mode records would-reject evidence without changing candidates or random calls", () => {
+      const ctx = makeCtx([makeModel("fixture", "a"), makeModel("fixture", "b")]);
+      const reservePolicy = policy("observe");
+      const snapshot = publishEconomicObservation(emptyEconomicSnapshot(), reservePolicy, observation).snapshot;
+      let randomCalls = 0;
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture/a", "fixture/b"] }, strategy: "random",
+      }, undefined, undefined, now, { policy: reservePolicy, snapshot }, () => { randomCalls += 1; return 0; }).resolution;
+      assert.equal(result.selected && modelKey(result.selected), "fixture/a");
+      assert.equal(result.primary.economic?.[0]?.evaluation.wouldReject, true);
+      assert.equal(result.primary.healthyCandidates.length, 2);
+      assert.equal(randomCalls, 1);
+      const summary = buildRouteDecisionSummary({ kind: "classified", tier: "general", source: "regex" }, {
+        resolution: result,
+        options: buildTierResolutionOptions("general", { models: { general: ["fixture/a", "fixture/b"] }, strategy: "random" }),
+      });
+      assert.deepEqual(summary.requested?.candidates[0]?.reserve, {
+        disposition: "observed", wouldReject: true, reasons: ["reserve_reached"],
+      });
+    });
+  });
   describe("modelKey", () => {
     it("returns provider/id", () => {
       const m = makeModel("anthropic", "claude-opus", 15);

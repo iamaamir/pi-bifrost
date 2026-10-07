@@ -54,6 +54,14 @@ By default, an unavailable or unhealthy tier can still fall back to the configur
 
 For `frontier`, Bifrost tries `frontier`, then `general`, then `quick`; it stops at the first tier with an eligible model. The empty list makes `quick` a singleton boundary. A tier without a `tierPolicies` entry keeps the legacy default-tier fallback, including when `schemaVersion` is `2`. Version 2 by itself does not change routing. References must name configured tiers, and duplicate, self, or cyclic fallback references are rejected. Invalid version-2 policy configuration blocks physical and Auto routing until corrected. Reload rejects unreadable, malformed, or non-object config layers and keeps the active configuration, including any session-local pin.
 
+### Reserve observations (schema version 2)
+
+The optional `economics` namespace starts off when omitted. It accepts provider- or model-scoped facts that you enter in config. Sources must be marked `declared` or `estimated`; Pi does not read billing APIs or account scopes. Use `mode: "observe"` first. It records whether each rule would reject a candidate and leaves selection order and random selection unchanged.
+
+`mode: "policy"` filters rejected candidates before the configured strategy. Each rule sets `unknown` to `block` or `ignore`, which controls candidates without a fresh fact. A policy-mode no-route is handled by physical routing and does not fall through to Auto's last dispatched model. Manual pin and off controls remain in charge. Existing tool continuations and retries keep Pi's established model.
+
+Observations include an expiry and ordered period. Bifrost rejects stale revisions, retains compatible watermarks across reload, and reports a changed source binding as unknown until new evidence is entered. `/bifrost inspect` shows reserve mode, source alias, period, and freshness. It omits remaining allowance values by default. This local filter is not a spend cap and does not prefer subscription billing. See [`examples/economic-reserve-observe.json`](../../examples/economic-reserve-observe.json).
+
 ## Selection strategies
 
 Strategies choose the exact healthy candidate after a tier has resolved:

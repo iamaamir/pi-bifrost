@@ -12,6 +12,7 @@ const REASON_LABELS: Record<RouteReasonCode, string> = {
   trial_active: "trial in progress",
   requested_tier_unhealthy: "tier unhealthy",
   requested_tier_unavailable: "tier unavailable",
+  requested_tier_excluded: "reserve policy exclusion",
   all_tiers_exhausted: "all tiers exhausted",
 };
 
@@ -44,9 +45,19 @@ export function noModelError(
   pool: string | string[] | undefined,
   reason?: RouteReasonCode,
   skipped?: readonly SkippedCandidate[],
+  reserveExcluded?: { readonly count: number; readonly reasonCodes: readonly string[] },
 ): string {
   const suffix = reason ? ` (${reasonLabel(reason)})` : "";
-  return `Bifrost: no healthy physical model for tier ${tier}${suffix}: ${poolProblem(tier, pool, skipped)}`;
+  const reserveCount = reserveExcluded?.count ?? 0;
+  const reasonCodes = reserveExcluded?.reasonCodes ?? [];
+  const reserveFiltered = reserveCount > 0;
+  const problem = reason === "requested_tier_excluded" || reserveFiltered
+    ? (reserveFiltered
+      ? `reserve policy excluded ${reserveCount} configured candidate(s)${reasonCodes.length ? ` (reasons: ${reasonCodes.join(", ")})` : ""}`
+      : "configured candidates excluded by reserve policy")
+    : poolProblem(tier, pool, skipped);
+  const availability = reason === "requested_tier_excluded" || reserveFiltered ? "no eligible physical model" : "no healthy physical model";
+  return `Bifrost: ${availability} for tier ${tier}${suffix}: ${problem}`;
 }
 
 export interface VirtualRouteDependencies {

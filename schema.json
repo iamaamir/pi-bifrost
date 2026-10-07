@@ -30,6 +30,10 @@
         { "quick": { "fallbackTiers": ["general"] }, "general": { "fallbackTiers": [] } }
       ]
     },
+    "economics": {
+      "$ref": "#/definitions/EconomicsConfig",
+      "description": "Optional local reserve signals and admission policy. Without this namespace, Bifrost keeps legacy routing behavior. Config-declared facts are declared or estimated; Pi does not query live billing or account APIs."
+    },
     "enabled": {
       "type": "boolean",
       "description": "Enable or disable routing. When disabled, Bifrost does not switch models for new turns. Pi uses the selected physical model.",
@@ -327,11 +331,88 @@
           "default": 10000
         }
       }
+    },
+    "EconomicsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "scopes", "sources", "admission"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["observe", "policy"], "description": "observe records whether a reserve would reject a candidate without changing selection. policy excludes rejected candidates before strategy selection." },
+        "scopes": {
+          "type": "object",
+          "maxProperties": 64,
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "object", "required": ["kind", "model"], "additionalProperties": false, "properties": { "kind": { "const": "model" }, "model": { "type": "string", "minLength": 1, "maxLength": 256 } } },
+              { "type": "object", "required": ["kind", "provider"], "additionalProperties": false, "properties": { "kind": { "const": "provider" }, "provider": { "type": "string", "minLength": 1, "maxLength": 128 } } }
+            ]
+          }
+        },
+        "sources": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object", "required": ["id", "scopeRef", "authority"], "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "scopeRef": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "authority": { "type": "string", "enum": ["declared", "estimated"], "description": "A static fact entered by the user; it is not authoritative provider billing data." }
+            }
+          }
+        },
+        "sourceOrder": { "type": "object", "additionalProperties": { "type": "array", "maxItems": 16, "items": { "type": "string" } } },
+        "admission": {
+          "type": "array", "maxItems": 128,
+          "items": {
+            "type": "object", "required": ["id", "scopeRef", "windowId", "reserveRatio", "unknown"], "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "scopeRef": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "windowId": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "reserveRatio": { "type": "number", "minimum": 0, "maximum": 1 },
+              "unknown": { "type": "string", "enum": ["block", "ignore"] }
+            }
+          }
+        },
+        "tierOverrides": { "type": "object", "additionalProperties": { "type": "object", "additionalProperties": { "type": "object", "additionalProperties": false, "properties": { "reserveRatio": { "type": "number", "minimum": 0, "maximum": 1 }, "unknown": { "type": "string", "enum": ["block", "ignore"] } } } } },
+        "observations": {
+          "type": "array", "maxItems": 64,
+          "description": "User-entered static observations only. Values are local evidence and must be refreshed by the user; no provider adapter is invoked.",
+          "items": {
+            "type": "object", "required": ["sourceId", "scopeRef", "billing", "observedAt", "expiresAt", "revision", "windows"], "additionalProperties": false,
+            "properties": {
+              "sourceId": { "type": "string" }, "scopeRef": { "type": "string" },
+              "billing": { "type": "string", "enum": ["subscription", "metered", "free", "unknown"] },
+              "observedAt": { "type": "integer", "minimum": 0 }, "expiresAt": { "type": "integer", "minimum": 0 }, "revision": { "type": "integer", "minimum": 0 },
+              "windows": { "type": "array", "maxItems": 16, "items": { "$ref": "#/definitions/EconomicWindow" } }
+            }
+          }
+        }
+      }
+    },
+    "EconomicWindow": {
+      "type": "object", "required": ["id", "period", "unit", "remaining"], "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "period": { "type": "object", "required": ["id", "sequence"], "additionalProperties": false, "properties": { "id": { "type": "string" }, "sequence": { "type": "integer", "minimum": 0 } } },
+        "unit": { "type": "string", "enum": ["requests", "tokens", "credits", "ratio", "currency"] },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "remaining": { "type": "number", "minimum": 0 },
+        "limit": { "type": "number", "exclusiveMinimum": 0 },
+        "resetsAt": { "type": "integer", "minimum": 0 }
+      }
     }
   },
   "allOf": [
     {
       "if": { "required": ["tierPolicies"] },
+      "then": {
+        "properties": { "schemaVersion": { "const": 2 } },
+        "required": ["schemaVersion"]
+      }
+    },
+    {
+      "if": { "required": ["economics"] },
       "then": {
         "properties": { "schemaVersion": { "const": 2 } },
         "required": ["schemaVersion"]

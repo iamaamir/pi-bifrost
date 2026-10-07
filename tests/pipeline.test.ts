@@ -1,6 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createPipeline, type PipelineDeps } from "../classification-pipeline.ts";
+import { debug, setupDebug } from "../debug.ts";
 import { makeClassifierModel } from "./helpers.ts";
 
 function deps(overrides: Partial<PipelineDeps> = {}): PipelineDeps {
@@ -16,6 +20,36 @@ function deps(overrides: Partial<PipelineDeps> = {}): PipelineDeps {
 }
 
 describe("classification-pipeline", () => {
+  it("can disable the process-global debug sink for isolated callers", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "bifrost-pipeline-debug-"));
+    const logPath = join(directory, "debug.jsonl");
+    setupDebug({ enabled: true, path: logPath }, directory);
+    debug("pipeline-test", "baseline");
+    let baseline: string | undefined;
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline) {
+      try {
+        baseline = await readFile(logPath, "utf8");
+        if (baseline.includes('"event":"baseline"')) break;
+      } catch { /* async debug flush has not created the file yet */ }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    try {
+      assert.ok(baseline?.includes('"event":"baseline"'));
+      const pipeline = createPipeline(deps({
+        instrumentation: "none",
+        regexRules: [{ pattern: "hello", model: "frontier" }],
+      }));
+      const result = await pipeline.classify("hello");
+      assert.equal(result.kind, "classified");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(await readFile(logPath, "utf8"), baseline);
+    } finally {
+      setupDebug({ enabled: false, path: logPath }, directory);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   describe("unclassified", () => {
     it("returns unclassified when no tiers configured", async () => {
       const p = createPipeline(deps({ tiers: [] }));

@@ -486,6 +486,21 @@ def main() -> int:
         ("dashboard", True, [(1.0, "/bifrost\r")]),
         ("validate", True, [(0.5, "/bifrost validate\r")]),
         ("inspect", True, [(0.5, "/bifrost inspect\r")]),
+        (
+            "inspect-reserve",
+            True,
+            [(0.5, "/bifrost inspect\r")],
+            {
+                "schemaVersion": 2,
+                "economics": {
+                    "mode": "observe",
+                    "scopes": {"example-provider": {"kind": "provider", "provider": "example"}},
+                    "sources": [{"id": "manual-estimate", "scopeRef": "example-provider", "authority": "estimated"}],
+                    "admission": [{"id": "monthly-reserve", "scopeRef": "example-provider", "windowId": "monthly", "reserveRatio": 0.15, "unknown": "ignore"}],
+                    "observations": [],
+                },
+            },
+        ),
         ("preview", True, [(0.5, "/bifrost classifier off\r"), (0.5, "/bifrost preview hello\r")]),
         ("preview-trace", True, [(0.5, "/bifrost classifier off\r"), (0.5, "/bifrost preview --trace hello\r")]),
         (
@@ -524,6 +539,10 @@ def main() -> int:
             inspect_text = (OUT / "inspect.txt").read_text(errors="ignore")
             if "inspection (local snapshot)" not in inspect_text or "registry:" not in inspect_text:
                 raise AssertionError("inspect UI did not render its local snapshot labels")
+        if name == "inspect-reserve":
+            reserve_text = (OUT / "inspect-reserve.txt").read_text(errors="ignore")
+            if "reserve policy: observe" not in reserve_text or "source=manual-estimate scope=example-provider authority=estimated" not in reserve_text:
+                raise AssertionError("inspect UI did not render sanitized reserve policy evidence")
         if name == "strict-no-route":
             strict_text = (OUT / "strict-no-route.txt").read_text(errors="ignore")
             if "restricted keep this text" not in strict_text or "turn was not sent" not in strict_text:

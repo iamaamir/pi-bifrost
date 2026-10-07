@@ -259,4 +259,49 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
       rmSync(work, { recursive: true, force: true });
     }
   });
+
+  it("does not send an exhausted reserve-policy turn to Auto's previous model", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-auto-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-auto-work-"));
+    try {
+      writeFixture({
+        home, work, port: server.port,
+        models: [{ id: "healthy", reasoning: false }, { id: "reserved", reasoning: false }],
+        bifrost: {
+          schemaVersion: 2,
+          enabled: true, default: "reserve", strategy: "first", classifier: { enabled: false },
+          models: { quick: ["fake/healthy"], restricted: ["fake/missing"], reserve: ["fake/reserved"] },
+          rules: [
+            { pattern: "warmup", model: "quick" },
+            { pattern: "reserve-task", model: "restricted" },
+          ],
+          economics: {
+            mode: "policy",
+            scopes: { reserved: { kind: "model", model: "fake/reserved" } },
+            sources: [{ id: "manual", scopeRef: "reserved", authority: "declared" }],
+            admission: [{ id: "daily", scopeRef: "reserved", windowId: "day", reserveRatio: 0.2, unknown: "block" }],
+            observations: [{
+              sourceId: "manual", scopeRef: "reserved", billing: "metered", observedAt: Date.now() - 1, expiresAt: Date.now() + 60_000, revision: 1,
+              windows: [{ id: "day", period: { id: "p1", sequence: 1 }, unit: "ratio", remaining: 0.1 }],
+            }],
+          },
+        },
+      });
+      const before = await fakeStats(server.port);
+      const { stderr } = await runAuto({ home, work, messages: ["warmup", "reserve-task"] });
+      const after = await fakeStats(server.port);
+      assert.equal((after.attempts.healthy ?? 0) - (before.attempts.healthy ?? 0), 1,
+        "the warmup may reach its selected model once");
+      assert.equal((after.attempts.reserved ?? 0) - (before.attempts.reserved ?? 0), 0,
+        "a reserve-excluded candidate must never reach the fake provider");
+      assert.match(stderr, /no eligible physical model for tier restricted \(reserve policy exclusion\)/);
+      assert.match(stderr, /reserve policy excluded 1 configured candidate\(s\) \(reasons: reserve_reached\)/);
+      assert.doesNotMatch(stderr, /resolved 0 available models|check provider credentials/);
+      assert.doesNotMatch(stderr, /reserve-task|0\.1/);
+      assert.doesNotMatch(stderr, /Bifrost: keeping fake\/healthy/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
 });

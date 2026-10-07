@@ -26,12 +26,31 @@ describe("shipped JSON artifacts", () => {
     assert.equal(gate?.then?.properties?.schemaVersion?.const, 2);
   });
 
+  it("requires schemaVersion 2 for economics and only permits static non-authoritative scopes", () => {
+    const schema = readJson("schema.json") as Record<string, unknown>;
+    const allOf = schema.allOf as Array<{ if?: { required?: string[] }; then?: { required?: string[]; properties?: { schemaVersion?: { const?: number } } } }>;
+    const definitions = schema.definitions as {
+      EconomicsConfig?: {
+        properties?: {
+          sources?: { items?: { properties?: { authority?: { enum?: string[] } } } };
+          scopes?: { additionalProperties?: { oneOf?: Array<{ properties?: { kind?: { const?: string } } }> } };
+        };
+      };
+    };
+    const gate = allOf.find((item) => item.if?.required?.includes("economics"));
+    assert.deepEqual(gate?.then?.required, ["schemaVersion"]);
+    assert.equal(gate?.then?.properties?.schemaVersion?.const, 2);
+    assert.deepEqual(definitions.EconomicsConfig?.properties?.sources?.items?.properties?.authority?.enum, ["declared", "estimated"]);
+    assert.deepEqual(definitions.EconomicsConfig?.properties?.scopes?.additionalProperties?.oneOf?.map((item) => item.properties?.kind?.const), ["model", "provider"]);
+  });
+
   it("keeps checked-in examples parseable", () => {
     for (const path of [
       "bifrost.json",
       "examples/economical-frontier.json",
       "examples/economical-frontier-reliability.json",
       "examples/large-context.json",
+      "examples/economic-reserve-observe.json",
     ]) {
       assert.doesNotThrow(() => readJson(path), path);
     }

@@ -34,6 +34,7 @@ import {
   hasClassifierConfigErrors,
   classifierConfigErrors,
   validateTierPolicyConfig,
+  validateEconomicConfig,
   type BifrostConfig,
 } from "./config.ts";
 import {
@@ -43,6 +44,8 @@ import {
   type RoutedModelResolution,
   type SkippedCandidate,
 } from "./routing.ts";
+import { reconcileEconomicSnapshot } from "./economic-config.ts";
+import { emptyEconomicSnapshot } from "./economic-signals.ts";
 import { ReliabilityStore } from "./reliability-store.ts";
 import { loadRuntimeState, runtimeStatePath, saveRuntimeState, isPassiveModelSelection, createSelfSelectTracker } from "./runtime-state.ts";
 import { createCommandRouter, getBifrostCommandCompletions, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.ts";
@@ -105,7 +108,7 @@ function restoreRejectedPrompt(
 
 function strictInputHandled(
   ctx: ExtensionContext,
-  state: Pick<BifrostState, "enabled" | "pinned" | "classifierEnabled">,
+  state: Pick<BifrostState, "enabled" | "pinned" | "classifierEnabled" | "config" | "economicPolicyValid">,
   originalText: string,
   editorTextAtInput: string | undefined,
   message: string,
@@ -131,6 +134,39 @@ function resolveClassifierModels(
 
 function endpointClassifier(id: string, endpoint: string): ClassifierModel {
   return { kind: "endpoint", id, baseUrl: endpoint };
+}
+
+interface ReserveExclusionSummary {
+  readonly count: number;
+  readonly reasonCodes: readonly string[];
+}
+
+const SAFE_RESERVE_REASON_CODES = new Set([
+  "above_reserve", "reserve_reached", "missing_fact", "stale_fact", "invalid_fact",
+  "source_conflict", "period_conflict", "unsupported_scope", "scope.invalid", "context.invalid",
+]);
+
+function reserveExclusionSummary(resolution: RoutedModelResolution): ReserveExclusionSummary {
+  const pools = resolution.attemptedTiers?.map((attempt) => attempt.resolution)
+    ?? [resolution.primary, ...(resolution.fallback ? [resolution.fallback] : [])];
+  const candidates = new Map<string, Set<string>>();
+  for (const pool of pools) {
+    for (const { key, evaluation } of pool.economic ?? []) {
+      if (evaluation.mode !== "policy" || evaluation.disposition !== "rejected") continue;
+      const reasons = candidates.get(key) ?? new Set<string>();
+      for (const result of evaluation.results) {
+        if ((result.status === "reject" || (result.status === "unknown" && result.unknownHandling === "block"))
+          && SAFE_RESERVE_REASON_CODES.has(result.reason)) reasons.add(result.reason);
+      }
+      candidates.set(key, reasons);
+    }
+  }
+  const reasonCodes = [...new Set([...candidates.values()].flatMap((reasons) => [...reasons]))].sort();
+  return { count: candidates.size, reasonCodes };
+}
+
+function routingPolicyInvalid(state: Pick<BifrostState, "tierPolicyValid" | "economicPolicyValid">): boolean {
+  return state.tierPolicyValid === false || state.economicPolicyValid === false;
 }
 
 function activeClassifierCacheKey(config: BifrostConfig, detectionEngine: ReturnType<typeof createDetectionEngine>): string {
@@ -358,9 +394,19 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   }
 
   // Mutable state shared with command handlers.
+  const economicPolicyValid = validateEconomicConfig(config).every((issue) => issue.severity !== "error");
+  const initialEconomic = economicPolicyValid
+    ? reconcileEconomicSnapshot(undefined, undefined, config.economics)
+    : { snapshot: emptyEconomicSnapshot(), diagnostics: [], policy: undefined, historyPolicy: undefined, quarantinedSourceRevisions: new Map() };
   const state: BifrostState = {
     config,
     tierPolicyValid: validateTierPolicyConfig(config).every((issue) => issue.severity !== "error"),
+    economicSnapshot: initialEconomic.snapshot,
+    economicPolicy: initialEconomic.policy,
+    economicHistoryPolicy: initialEconomic.historyPolicy,
+    economicPolicyValid,
+    economicDiagnostics: initialEconomic.diagnostics,
+    economicQuarantinedSourceRevisions: initialEconomic.quarantinedSourceRevisions,
     enabled: runtimeState.enabled,
     classifierEnabled: runtimeState.classifierEnabled,
     pinned: runtimeState.pinned,
@@ -389,6 +435,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       state.config,
       state.reliabilityStore.getState(),
       state.config.reliability,
+      undefined,
+      state.config.economics && state.economicPolicyValid && state.economicPolicy && state.economicSnapshot
+        ? { policy: state.economicPolicy, snapshot: state.economicSnapshot }
+        : undefined,
     );
   }
 
@@ -450,7 +500,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     name: "Bifrost Auto",
     thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
     async route(request, ctx) {
-      let routeFailure: { tier: string; pool: string | string[] | undefined; reason?: RoutedModelResolution["fallbackReason"]; skipped?: readonly SkippedCandidate[]; explicitBoundary?: boolean } | undefined;
+      let routeFailure: { tier: string; pool: string | string[] | undefined; reason?: RoutedModelResolution["fallbackReason"]; skipped?: readonly SkippedCandidate[]; reserveExcluded?: ReserveExclusionSummary; explicitBoundary?: boolean; message?: string } | undefined;
       const ownership = createDispatchOwnership({
         claimTrial: (key) => state.reliabilityStore.tryClaimTrial(key),
         abandonTrial: (key) => state.reliabilityStore.abandonTrial(key),
@@ -462,8 +512,15 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         fallback: () => routeFailure?.explicitBoundary ? undefined : lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default).resolution.selected : undefined),
         sticky: () => routeFailure?.explicitBoundary ? undefined : lastDispatchedPhysical(ctx),
         select: async (prompt, forcedTier, signal) => {
-          if (state.tierPolicyValid === false) {
-            throw new Error("Bifrost routing blocked by invalid schemaVersion or tierPolicies config; fix it and run /bifrost reload");
+          if (routingPolicyInvalid(state)) {
+            const tier = state.config.default ?? "default";
+            routeFailure = {
+              tier,
+              pool: state.config.models?.[tier],
+              explicitBoundary: true,
+              message: "Bifrost Auto is blocked by invalid routing policy config; fix it and run /bifrost reload",
+            };
+            throw new Error(routeFailure.message);
           }
           if (!state.enabled || state.pinned) throw new Error("Bifrost: virtual auto is disabled or pinned; select a physical model");
           if (state.classifierEnabled && shouldRefreshRegistry(state, Date.now(), REGISTRY_REFRESH_TTL_MS)) {
@@ -483,12 +540,20 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           let classification: ClassificationResult = forcedTier
             ? { kind: "classified", tier: forcedTier, source: "inline" }
             : await getPipeline(ctx).classify(prompt, signal);
+          if (classification.kind === "unclassified" && state.economicPolicy?.mode === "policy" && state.config.default) {
+            classification = { kind: "fallback", tier: state.config.default };
+          }
           if (signal?.aborted) throw new Error("Bifrost: route aborted");
           if (!state.enabled || state.pinned) throw new Error("Bifrost: virtual auto was disabled or pinned during routing; select a physical model");
           if (!forcedTier && state.config !== classificationConfig) {
             throw new Error("Bifrost: configuration changed during routing; retry the turn");
           }
-          if (classification.kind === "unclassified") throw new Error("Bifrost: no configured tier for virtual request");
+          if (classification.kind === "unclassified") {
+            if (state.economicPolicy?.mode === "policy") {
+              routeFailure = { tier: "default", pool: state.config.models?.[state.config.default ?? "default"], explicitBoundary: true };
+            }
+            throw new Error("Bifrost: no configured tier for virtual request");
+          }
           const classifierIdentity = classification.kind === "classified" && classification.judgment
             ? { classifierBackend: classification.judgment.backend, classifierModel: classification.judgment.model }
             : {};
@@ -519,7 +584,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           const model = resolved.selected;
           if (!model) {
             state.forceRegistryRefresh = true;
-            routeFailure = { tier: classification.tier, pool: state.config.models?.[classification.tier], reason: resolved.fallbackReason, skipped: resolved.skipped, explicitBoundary: resolved.explicitBoundary };
+            routeFailure = { tier: classification.tier, pool: state.config.models?.[classification.tier], reason: resolved.fallbackReason, skipped: resolved.skipped, reserveExcluded: reserveExclusionSummary(resolved), explicitBoundary: resolved.explicitBoundary || state.economicPolicy?.mode === "policy" };
             debug("virtual", "fail", { tier: classification.tier, reason: resolved.fallbackReason, pool: routeFailure.pool, skipped: resolved.skipped });
             return undefined;
           }
@@ -545,7 +610,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           debug("virtual", "degrade", { model: modelKey(model), tier: routeFailure?.tier });
           log(ctx, `Bifrost: keeping ${modelKey(model)} (last dispatched) — ${detail}`, "warning");
         },
-        routeError: (detail) => new Error(routeFailure ? noModelError(routeFailure.tier, routeFailure.pool, routeFailure.reason, routeFailure.skipped) : `Bifrost: ${detail}`),
+        routeError: (detail) => {
+          if (routeFailure?.message) return new Error(routeFailure.message);
+          if (!routeFailure) return new Error(`Bifrost: ${detail}`);
+          const problem = noModelError(routeFailure.tier, routeFailure.pool, routeFailure.reason, routeFailure.skipped, routeFailure.reserveExcluded);
+          return new Error(problem);
+        },
       });
       return route(request);
     },
@@ -640,7 +710,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   pi.on("input", async (event, ctx) => {
     const originalText = event.text;
     const editorTextAtInput = readEditorText(ctx);
-    let strictBoundary = !state.tierPolicyValid || hasExplicitTierPolicies(state.config);
+    let strictBoundary = routingPolicyInvalid(state) || hasExplicitTierPolicies(state.config) || state.economicPolicy?.mode === "policy";
     let begunStrictModel: string | undefined;
     let claimedTrial: string | undefined;
     try {
@@ -672,14 +742,14 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       strictBoundary = false;
       return { action: "continue" };
     }
-    if (!state.tierPolicyValid) {
-      return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing is blocked by an invalid schemaVersion or tierPolicies config; fix the config and run /bifrost reload.");
+    if (routingPolicyInvalid(state)) {
+      return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing is blocked by an invalid routing or economic policy config; fix the config and run /bifrost reload.");
     }
 
     // Inline tier override: "frontier debug this" forces that tier for one prompt.
     // Pi reserves / for commands, ! for bash. Just type the tier name as first word.
     const { forcedTier, promptText } = parseInlineOverride(text, state.config.models);
-    if (forcedTier) strictBoundary = hasExplicitTierPolicy(state.config, forcedTier);
+    if (forcedTier) strictBoundary = hasExplicitTierPolicy(state.config, forcedTier) || state.economicPolicy?.mode === "policy";
     if (forcedTier) {
       debug("input", "inline_override", { tier: forcedTier });
     }
@@ -733,8 +803,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       }
 
       if (!state.enabled || state.pinned) return { action: "continue" };
-      if (!state.tierPolicyValid) {
-        return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing is blocked by an invalid schemaVersion or tierPolicies config; fix the config and run /bifrost reload.");
+      if (routingPolicyInvalid(state)) {
+        return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing is blocked by an invalid routing or economic policy config; fix the config and run /bifrost reload.");
       }
 
       setBifrostStatus(ctx, forcedTier ? `using ${forcedTier}...` : "classifying prompt...", "accent");
@@ -745,10 +815,13 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       let classification = forcedTier
         ? { kind: "classified" as const, tier: forcedTier, source: "inline" as const }
         : await getPipeline(ctx).classify(promptText, ctx.signal);
+      if (classification.kind === "unclassified" && state.economicPolicy?.mode === "policy" && state.config.default) {
+        classification = { kind: "fallback", tier: state.config.default };
+      }
 
       if (!state.enabled || state.pinned) return { action: "continue" };
-      if (!state.tierPolicyValid) {
-        return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing is blocked by an invalid schemaVersion or tierPolicies config; fix the config and run /bifrost reload.");
+      if (routingPolicyInvalid(state)) {
+        return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing is blocked by an invalid routing or economic policy config; fix the config and run /bifrost reload.");
       }
       if (!forcedTier && state.config !== classificationConfig) {
         strictBoundary = strictBoundary || hasExplicitTierPolicies(state.config);
@@ -774,6 +847,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       setBifrostWorkingMessage(ctx, undefined);
 
       if (classification.kind === "unclassified") {
+        if (state.economicPolicy?.mode === "policy") {
+          return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost reserve policy could not resolve a tier; the turn was not sent. Configure a default tier or classify the request, then resubmit.");
+        }
         strictBoundary = false;
         log(ctx, "Bifrost: no tier matched — using default model", "warning");
         debug("input", "unclassified");
@@ -783,7 +859,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       }
 
       const tier = classification.tier;
-      strictBoundary = hasExplicitTierPolicy(state.config, tier);
+      strictBoundary = hasExplicitTierPolicy(state.config, tier) || state.economicPolicy?.mode === "policy";
       const attempt = resolveForTier(ctx, tier);
       const options = attempt.options;
       const strategy = options.requestedStrategy;
@@ -823,11 +899,16 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         state.forceRegistryRefresh = true;
         debug("input", "no_model", { tier, fallbackReason: resolved.fallbackReason, skipped: resolved.skipped, cacheHit: source === "cache" });
         const why = resolved.fallbackReason ? ` (${resolved.fallbackReason})` : "";
-        log(ctx, `Bifrost: tier "${tier}" matched but no healthy model available${why}`, "warning");
+        const reserveExcluded = reserveExclusionSummary(resolved);
+        const reserveDetail = reserveExcluded.count > 0
+          ? `; reserve policy excluded ${reserveExcluded.count} candidate(s)${reserveExcluded.reasonCodes.length ? ` (reasons: ${reserveExcluded.reasonCodes.join(", ")})` : ""}`
+          : "";
+        const eligibility = resolved.fallbackReason === "requested_tier_excluded" || reserveExcluded.count > 0 ? "eligible" : "healthy";
+        log(ctx, `Bifrost: tier "${tier}" matched but no ${eligibility} model available${why}${reserveDetail}`, "warning");
         syncBifrostModeStatus(ctx, state);
         endInput();
         return strictBoundary
-          ? strictInputHandled(ctx, state, originalText, editorTextAtInput, `Bifrost strict route for tier "${tier}" has no available model; the turn was not sent. Resubmit after repair.`)
+          ? strictInputHandled(ctx, state, originalText, editorTextAtInput, `Bifrost strict route for tier "${tier}" has no ${eligibility} model; the turn was not sent. Resubmit after repair.`)
           : defaultAction;
       }
 
@@ -863,8 +944,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       uiBusy(ctx, `Bifrost routing to ${modelKey(model)}...`);
       setBifrostWorkingMessage(ctx, `Bifrost routing to ${modelKey(model)}...`);
       if (!state.enabled || state.pinned) return { action: "continue" };
-      if (!state.tierPolicyValid) {
-        return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing is blocked by an invalid schemaVersion or tierPolicies config; fix the config and run /bifrost reload.");
+      if (routingPolicyInvalid(state)) {
+        return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing is blocked by an invalid routing or economic policy config; fix the config and run /bifrost reload.");
       }
       selfSelect.claim(ctx.sessionManager, modelKey(model));
       const endSwitch = debugMeasure("input", "setModel");

@@ -2,6 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { getCircuitState, type ReliabilityConfig, type ReliabilityState } from "./reliability.ts";
 import { isVirtualModel } from "./virtual-model.ts";
+import { evaluateReserves, type EconomicSnapshot, type ReserveEvaluation, type ReservePolicy } from "./economic-signals.ts";
 
 export type RoutingStrategy =
   | "first"
@@ -142,6 +143,7 @@ function minBy<T>(items: readonly T[], score: (item: T) => number): T | undefine
 export function selectModel(
   candidates: Model<Api>[],
   strategy: RoutingStrategy,
+  random: () => number = Math.random,
 ): Model<Api> | undefined {
   if (candidates.length === 0) return undefined;
   // Single candidate — return without scoring, matching the old sort's
@@ -159,7 +161,7 @@ export function selectModel(
       // Descending sort picks the first maximum under stable tie-breaking.
       return minBy(candidates, (m) => -modelContextSize(m));
     case "random":
-      return candidates[Math.floor(Math.random() * candidates.length)];
+      return candidates[Math.floor(random() * candidates.length)];
     default:
       // "first", "fastest" — list order is assumed meaningful.
       return candidates[0];
@@ -185,6 +187,19 @@ export interface HealthyModelResolution {
   candidates: Model<Api>[];
   healthyCandidates: Model<Api>[];
   skipped: SkippedCandidate[];
+  economic?: readonly EconomicCandidateEvaluation[];
+}
+
+export interface EconomicCandidateEvaluation {
+  readonly key: string;
+  readonly evaluation: ReserveEvaluation;
+}
+
+export interface EconomicRouteContext {
+  readonly snapshot: EconomicSnapshot;
+  readonly policy: ReservePolicy;
+  readonly requestedTier: string;
+  readonly now: number;
 }
 
 export interface RoutedModelResolution {
@@ -193,7 +208,7 @@ export interface RoutedModelResolution {
   selected: Model<Api> | undefined;
   strategy: RoutingStrategy;
   skipped: SkippedCandidate[];
-  fallbackReason?: "requested_tier_unhealthy" | "requested_tier_unavailable" | "all_tiers_exhausted";
+  fallbackReason?: "requested_tier_unhealthy" | "requested_tier_unavailable" | "requested_tier_excluded" | "all_tiers_exhausted";
   primary: HealthyModelResolution;
   fallback?: HealthyModelResolution;
   /** Ordered pools attempted when an explicit tierPolicies boundary is active. */
@@ -265,12 +280,16 @@ export function resolveConfiguredTier(
   reliabilityState?: ReliabilityState,
   reliabilityConfig?: ReliabilityConfig,
   now?: number,
+  economic?: Omit<EconomicRouteContext, "now" | "requestedTier">,
+  random?: () => number,
 ): ConfiguredTierResolution {
   const options = buildTierResolutionOptions(tier, config);
+  const routeNow = now ?? Date.now();
+  const economicContext = economic ? { ...economic, requestedTier: tier, now: routeNow } : undefined;
   const policy = config.schemaVersion === 2 ? config.tierPolicies?.[tier] : undefined;
   const resolution = policy && Array.isArray(policy.fallbackTiers)
-    ? resolveWithExplicitTierBoundary(ctx, options, policy.fallbackTiers, config, reliabilityState, reliabilityConfig, now)
-    : resolveModelWithFallback(ctx, { ...options, reliabilityState, reliabilityConfig, now });
+    ? resolveWithExplicitTierBoundary(ctx, options, policy.fallbackTiers, config, reliabilityState, reliabilityConfig, routeNow, economicContext, random)
+    : resolveModelWithFallback(ctx, { ...options, reliabilityState, reliabilityConfig, now: routeNow, economic: economicContext, random });
   return { options, resolution };
 }
 
@@ -281,14 +300,40 @@ export function resolveHealthyModel(
   reliabilityState: ReliabilityState | undefined,
   reliabilityConfig: ReliabilityConfig | undefined,
   now = Date.now(),
+  economic?: EconomicRouteContext & { readonly evaluatedTier: string },
+  random: () => number = Math.random,
 ): HealthyModelResolution {
-  const candidates = findCandidates(ctx, pattern);
+  const configuredCandidates = findCandidates(ctx, pattern);
+  const economicEvaluations = economic?.policy.admission.length
+    ? configuredCandidates.map((candidate): EconomicCandidateEvaluation => {
+      const key = modelKey(candidate);
+      return {
+        key,
+        evaluation: evaluateReserves({
+          snapshot: economic.snapshot,
+          policy: economic.policy,
+          candidate: { model: key, provider: candidate.provider },
+          requestedTier: economic.requestedTier,
+          evaluatedTier: economic.evaluatedTier,
+          hostCapabilities: { accountDispatch: false },
+          now: economic.now,
+        }),
+      };
+    })
+    : undefined;
+  const rejected = new Set(economicEvaluations
+    ?.filter(({ evaluation }) => evaluation.mode === "policy" && evaluation.disposition === "rejected")
+    .map(({ key }) => key) ?? []);
+  const candidates = rejected.size > 0
+    ? configuredCandidates.filter((candidate) => !rejected.has(modelKey(candidate)))
+    : configuredCandidates;
   if (!reliabilityState || reliabilityConfig?.enabled === false) {
     return {
-      selected: selectModel(candidates, strategy),
-      candidates,
+      selected: selectModel(candidates, strategy, random),
+      candidates: configuredCandidates,
       healthyCandidates: candidates,
       skipped: [],
+      ...(economicEvaluations ? { economic: economicEvaluations } : {}),
     };
   }
 
@@ -308,10 +353,11 @@ export function resolveHealthyModel(
   }
 
   return {
-    selected: selectModel(healthyCandidates, strategy),
-    candidates,
+    selected: selectModel(healthyCandidates, strategy, random),
+    candidates: configuredCandidates,
     healthyCandidates,
     skipped,
+    ...(economicEvaluations ? { economic: economicEvaluations } : {}),
   };
 }
 
@@ -327,6 +373,8 @@ export function resolveModelWithFallback(
     reliabilityState?: ReliabilityState;
     reliabilityConfig?: ReliabilityConfig;
     now?: number;
+    economic?: EconomicRouteContext;
+    random?: () => number;
   },
 ): RoutedModelResolution {
   const now = options.now ?? Date.now();
@@ -337,6 +385,8 @@ export function resolveModelWithFallback(
     options.reliabilityState,
     options.reliabilityConfig,
     now,
+    options.economic ? { ...options.economic, evaluatedTier: options.requestedTier } : undefined,
+    options.random,
   );
   if (primary.selected) {
     return {
@@ -349,16 +399,23 @@ export function resolveModelWithFallback(
     };
   }
 
-  const requestedUnavailable = primary.candidates.length === 0;
+  const unavailable = (pool: HealthyModelResolution): boolean => pool.candidates.length === 0;
+  const reserveExcluded = (pool: HealthyModelResolution): boolean =>
+    pool.economic?.some(({ evaluation }) => evaluation.mode === "policy" && evaluation.disposition === "rejected") === true;
+  const requestedUnavailable = unavailable(primary);
+  const requestedExcluded = reserveExcluded(primary);
   let fallbackReason: RoutedModelResolution["fallbackReason"] = requestedUnavailable
     ? "requested_tier_unavailable"
-    : (primary.skipped.length > 0 ? "requested_tier_unhealthy" : undefined);
+    : requestedExcluded
+      ? "requested_tier_excluded"
+      : (primary.skipped.length > 0 ? "requested_tier_unhealthy" : undefined);
 
   // Compute final reason after evaluating fallback
   const resolveFinalReason = (fb: HealthyModelResolution): RoutedModelResolution["fallbackReason"] => {
     if (fb.selected) return fallbackReason;
-    if (requestedUnavailable && fb.candidates.length === 0) return "requested_tier_unavailable";
+    if (requestedUnavailable && unavailable(fb)) return "requested_tier_unavailable";
     if (fb.skipped.length > 0 || primary.skipped.length > 0) return "all_tiers_exhausted";
+    if (reserveExcluded(primary) || reserveExcluded(fb)) return "requested_tier_excluded";
     return fallbackReason;
   };
 
@@ -380,6 +437,8 @@ export function resolveModelWithFallback(
     options.reliabilityState,
     options.reliabilityConfig,
     now,
+    options.economic ? { ...options.economic, evaluatedTier: options.defaultTier } : undefined,
+    options.random,
   );
 
   return {
@@ -404,6 +463,8 @@ function resolveWithExplicitTierBoundary(
   reliabilityState: ReliabilityState | undefined,
   reliabilityConfig: ReliabilityConfig | undefined,
   now = Date.now(),
+  economic?: EconomicRouteContext,
+  random?: () => number,
 ): RoutedModelResolution {
   const tierOptions = [options.requestedTier, ...fallbackTiers].map((tier) => ({
     tier,
@@ -412,28 +473,36 @@ function resolveWithExplicitTierBoundary(
   }));
   const attemptedTiers: RoutedTierAttempt[] = [];
   for (const { tier, pattern, strategy } of tierOptions) {
-    const resolution = resolveHealthyModel(ctx, pattern, strategy, reliabilityState, reliabilityConfig, now);
+    const resolution = resolveHealthyModel(ctx, pattern, strategy, reliabilityState, reliabilityConfig, now,
+      economic ? { ...economic, evaluatedTier: tier } : undefined, random);
     attemptedTiers.push({ tier, strategy, pattern, resolution });
     if (resolution.selected) break;
   }
   const selectedAttempt = attemptedTiers.find(({ resolution }) => resolution.selected);
   const primary = attemptedTiers[0].resolution;
-  const allPoolsUnavailable = attemptedTiers.every(({ resolution }) => resolution.candidates.length === 0);
+  const primaryReserveExcluded = primary.economic?.some(({ evaluation }) => evaluation.mode === "policy" && evaluation.disposition === "rejected") === true;
+  const anyReserveExcluded = attemptedTiers.some(({ resolution }) =>
+    resolution.economic?.some(({ evaluation }) => evaluation.mode === "policy" && evaluation.disposition === "rejected") === true);
+  const allPoolsUnavailable = attemptedTiers.every(({ resolution }) => resolution.candidates.length === 0 && resolution.skipped.length === 0);
   const anySkipped = attemptedTiers.some(({ resolution }) => resolution.skipped.length > 0);
   const fallbackReason: RoutedModelResolution["fallbackReason"] = selectedAttempt
-    ? selectedAttempt.tier === options.requestedTier
-      ? undefined
-      : primary.candidates.length === 0
-        ? "requested_tier_unavailable"
-        : primary.skipped.length > 0
-          ? "requested_tier_unhealthy"
-          : undefined
+      ? selectedAttempt.tier === options.requestedTier
+        ? undefined
+        : primary.candidates.length === 0
+          ? "requested_tier_unavailable"
+          : primary.skipped.length > 0
+            ? "requested_tier_unhealthy"
+            : primaryReserveExcluded
+              ? "requested_tier_excluded"
+              : undefined
     : attemptedTiers.length === 1 && primary.skipped.length > 0
       ? "requested_tier_unhealthy"
       : allPoolsUnavailable
         ? "requested_tier_unavailable"
         : anySkipped
           ? "all_tiers_exhausted"
+          : anyReserveExcluded
+            ? "requested_tier_excluded"
           : undefined;
   return {
     requestedTier: options.requestedTier,

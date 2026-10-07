@@ -1831,6 +1831,56 @@ describe("diagnostics commands", () => {
     assert.deepEqual(h.counters(), { registryReads: 2, networkCalls: 0, writes: 0 });
   });
 
+  it("adds reserve freshness to inspect without exposing allowance values", async () => {
+    const h = diagnosticHarness();
+    const now = Date.now();
+    const state = h.state as unknown as {
+      config: { economics?: unknown };
+      economicPolicy: unknown;
+      economicPolicyValid: boolean;
+      economicSnapshot: unknown;
+    };
+    state.config.economics = {
+      mode: "observe",
+      scopes: { local: { kind: "provider", provider: "fixture" } },
+      sources: [{ id: "manual-estimate", scopeRef: "local", authority: "estimated" }],
+      admission: [{ id: "reserve", scopeRef: "local", windowId: "monthly", reserveRatio: 0.2, unknown: "ignore" }],
+    };
+    state.economicPolicyValid = true;
+    state.economicPolicy = {
+      mode: "observe",
+      scopes: { local: { kind: "provider", provider: "fixture" } },
+      sources: [{ id: "manual-estimate", scopeRef: "local", authority: "estimated" }],
+      admission: [{ id: "reserve", scopeRef: "local", windowId: "monthly", reserveRatio: 0.2, unknown: "ignore" }],
+    };
+    state.economicSnapshot = {
+      revision: 1,
+      signals: [{ sourceId: "manual-estimate", scopeRef: "local", billing: "metered", observedAt: now - 10, expiresAt: now + 10000, revision: 1,
+        windows: [
+          { id: "weekly", period: { id: "week-7", sequence: 7 }, unit: "ratio", remaining: 0.1, resetsAt: now - 1 },
+          { id: "monthly", period: { id: "month-2", sequence: 2 }, unit: "ratio", remaining: 0.8, resetsAt: now + 10000 },
+        ] }],
+      watermarks: [],
+    };
+    const lines = await withStubs(() => createCommandRouter(h.state as never)("inspect --json", h.context as never));
+    const report = JSON.parse(lines.find((line) => line.startsWith(BIFROST_JSON_PREFIX))!.slice(BIFROST_JSON_PREFIX.length));
+    assert.equal(report.economics.mode, "observe");
+    assert.deepEqual(report.economics.sources[0], {
+      source: "manual-estimate", scope: "local", authority: "estimated", freshness: "current",
+      observedAgeMs: report.economics.sources[0].observedAgeMs, periods: [
+        { window: "weekly", period: "week-7", unit: "ratio", applicability: "reset" },
+        { window: "monthly", period: "month-2", unit: "ratio", applicability: "current" },
+      ],
+    });
+    assert.doesNotMatch(JSON.stringify(report), /0\.1|0\.8/);
+    (h.context as unknown as { mode: string }).mode = "cli";
+    const text = (await withStubs(() => createCommandRouter(h.state as never)("inspect", h.context as never))).join("\n");
+    assert.match(text, /reserve policy: observe/);
+    assert.match(text, /source=manual-estimate scope=local authority=estimated freshness=current/);
+    assert.match(text, /weekly:week-7\(reset\), monthly:month-2\(current\)/);
+    assert.doesNotMatch(text, /0\.1|0\.8/);
+  });
+
   it("renders text labels for loaded config and local last-refresh age", async () => {
     const h = diagnosticHarness();
     (h.context as unknown as { mode: string }).mode = "cli";

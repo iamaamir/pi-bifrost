@@ -11,6 +11,8 @@ export interface BifrostModeState {
   enabled: boolean;
   pinned: boolean;
   classifierEnabled: boolean;
+  economicMode?: "observe" | "policy";
+  economicPolicyValid?: boolean;
 }
 
 export function shouldRefreshRegistry(
@@ -67,11 +69,13 @@ export function setBifrostWorkingMessage(ctx: ExtensionContext, message?: string
   ctx.ui.setWorkingMessage(message);
 }
 
-function modeLabel(state: BifrostModeState): { tone: "warning" | "success"; text: string } {
+function modeLabel(state: BifrostModeState): { tone: "warning" | "success" | "error"; text: string } {
   if (!state.enabled) return { tone: "warning", text: "off" };
   if (state.pinned) return { tone: "warning", text: "pinned" };
-  if (!state.classifierEnabled) return { tone: "warning", text: "on · classifier off" };
-  return { tone: "success", text: "on" };
+  if (state.economicPolicyValid === false) return { tone: "error", text: "routing policy invalid" };
+  const reserve = state.economicMode ? ` · reserve ${state.economicMode}` : "";
+  if (!state.classifierEnabled) return { tone: "warning", text: `on · classifier off${reserve}` };
+  return { tone: "success", text: `on${reserve}` };
 }
 
 export function setBifrostModeStatus(ctx: ExtensionContext, state: BifrostModeState): void {
