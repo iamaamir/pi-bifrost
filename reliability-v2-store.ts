@@ -16,6 +16,7 @@ import {
   type ReliabilityV2SettleRequest,
   type ReliabilityV2State,
 } from "./reliability-v2.ts";
+import { convertReliabilityV1Snapshot } from "./reliability-migration.ts";
 import { writeJsonFile } from "./storage.ts";
 
 export type ReliabilityV2StoreErrorCode =
@@ -27,6 +28,9 @@ export type ReliabilityV2StoreErrorCode =
   | "invalid_lock"
   | "lock_create_failed"
   | "lock_owner_lost"
+  | "invalid_migration"
+  | "backup_conflict"
+  | "backup_write_failed"
   | "state_write_failed";
 
 export class ReliabilityV2StoreError extends Error {
@@ -52,6 +56,11 @@ export interface ReliabilityV2StoreOptions {
   lockPollMs?: number;
   now?: () => number;
   io?: Partial<ReliabilityV2StoreIo>;
+}
+
+export interface ReliabilityV2MigrationResult {
+  status: "seeded" | "already_initialized";
+  state: ReliabilityV2State;
 }
 
 interface FileIdentity {
@@ -100,10 +109,16 @@ function ownData(record: DataRecord, key: string): unknown {
   }
 }
 
-function exactKeys(record: DataRecord, required: readonly string[]): boolean {
+function exactKeys(record: DataRecord, required: readonly string[], optional: readonly string[] = []): boolean {
   try {
     const keys = Object.keys(record);
-    return keys.length === required.length && required.every((key) => keys.includes(key));
+    const permitted = new Set([...required, ...optional]);
+    return required.every((key) => keys.includes(key))
+      && keys.every((key) => permitted.has(key))
+      && keys.every((key) => {
+        const descriptor = Object.getOwnPropertyDescriptor(record, key);
+        return !!descriptor && "value" in descriptor;
+      });
   } catch {
     return false;
   }
@@ -126,7 +141,7 @@ function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
   return left.dev === right.dev && left.ino === right.ino;
 }
 
-function readBoundedText(fd: number, maxBytes: number, kind: "state" | "lock"): string {
+function readBoundedBytes(fd: number, maxBytes: number, kind: "state" | "lock"): Buffer {
   const chunks: Buffer[] = [];
   let total = 0;
   while (total <= maxBytes) {
@@ -137,7 +152,7 @@ function readBoundedText(fd: number, maxBytes: number, kind: "state" | "lock"): 
     total += count;
   }
   if (total > maxBytes) throw new ReliabilityV2StoreError(kind === "state" ? "corrupt_state" : "invalid_lock", "Reliability v2 file exceeds its size limit");
-  return Buffer.concat(chunks, total).toString("utf8");
+  return Buffer.concat(chunks, total);
 }
 
 function targetStat(path: string, kind: "state" | "lock" = "state"): fs.Stats | undefined {
@@ -153,7 +168,7 @@ function targetStat(path: string, kind: "state" | "lock" = "state"): fs.Stats | 
   }
 }
 
-function readRegularFile(path: string, kind: "state" | "lock"): { text: string; identity: FileIdentity } | undefined {
+function readRegularFile(path: string, kind: "state" | "lock"): { text: string; bytes: Buffer; identity: FileIdentity } | undefined {
   const before = targetStat(path, kind);
   if (!before) return undefined;
   let fd: number | undefined;
@@ -168,8 +183,9 @@ function readRegularFile(path: string, kind: "state" | "lock"): { text: string; 
     if (opened.size > maxBytes) {
       throw new ReliabilityV2StoreError(kind === "state" ? "corrupt_state" : "invalid_lock", "Reliability v2 file exceeds its size limit");
     }
-    const text = readBoundedText(fd, maxBytes, kind);
-    return { text, identity: { dev: opened.dev, ino: opened.ino } };
+    const bytes = readBoundedBytes(fd, maxBytes, kind);
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return { text, bytes, identity: { dev: opened.dev, ino: opened.ino } };
   } catch (error) {
     if (error instanceof ReliabilityV2StoreError) throw error;
     if (errorCode(error) === "ENOENT") return undefined;
@@ -263,6 +279,55 @@ function unlinkCreatedLock(owner: LockOwner): void {
     if (stats.isFile() && !stats.isSymbolicLink() && sameIdentity(stats, owner)) fs.unlinkSync(owner.path);
   } catch (error) {
     if (errorCode(error) !== "ENOENT") throw error;
+  }
+}
+
+function removeCreatedBackup(path: string, identity: FileIdentity): void {
+  try {
+    const stats = fs.lstatSync(path);
+    if (stats.isFile() && !stats.isSymbolicLink() && sameIdentity(stats, identity)) fs.unlinkSync(path);
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") throw error;
+  }
+}
+
+function syncDirectory(path: string): void {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(dirname(path), constants.O_RDONLY);
+    fs.fsyncSync(fd);
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+function writeMigrationBackup(path: string, snapshot: Buffer): void {
+  let fd: number | undefined;
+  let identity: FileIdentity | undefined;
+  try {
+    fd = fs.openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, 0o600);
+    const stats = fs.fstatSync(fd);
+    identity = { dev: stats.dev, ino: stats.ino };
+    fs.writeFileSync(fd, snapshot);
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    syncDirectory(path);
+  } catch (error) {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* preserve original backup failure */ }
+    }
+    if (identity) {
+      try { removeCreatedBackup(path, identity); } catch { /* preserve original backup failure */ }
+    }
+    if (errorCode(error) === "EEXIST") {
+      try {
+        const existing = readRegularFile(path, "state");
+        if (existing?.bytes.equals(snapshot)) return;
+      } catch { /* mismatch, unsafe target, or read failure all require explicit backup repair */ }
+      throw new ReliabilityV2StoreError("backup_conflict", "Reliability migration backup exists with different or unsafe bytes");
+    }
+    throw new ReliabilityV2StoreError("backup_write_failed", "Could not create the reliability migration backup");
   }
 }
 
@@ -394,6 +459,80 @@ export class ReliabilityV2Store {
     const request = safeRequest(requestValue, ["ownerToken", "dispatchId", "outcomeId", "leaseReferences"]);
     if (!request) return { status: "invalid", reason: "invalid_abandon_request", state: emptyReliabilityV2State() };
     return this.transact((state, now) => abandonReliabilityV2Dispatch(state, { ...request, now }, this.config));
+  }
+
+  /** @internal One-purpose initializer used only by explicit v1 migration. */
+  async initializeFromV1Migration(input: { sourceSnapshot: Uint8Array; backupPath: string; sourcePath?: string }): Promise<ReliabilityV2MigrationResult> {
+    const inputRecord = plainRecord(input);
+    if (!inputRecord || !exactKeys(inputRecord, ["sourceSnapshot", "backupPath"], ["sourcePath"])) {
+      throw new ReliabilityV2StoreError("invalid_migration", "Reliability migration input is invalid");
+    }
+    const rawSnapshot = ownData(inputRecord, "sourceSnapshot");
+    const rawBackupPath = ownData(inputRecord, "backupPath");
+    const rawSourcePath = ownData(inputRecord, "sourcePath");
+    if (!(rawSnapshot instanceof Uint8Array) || rawSnapshot.byteLength > 16 * 1024 * 1024
+      || typeof rawBackupPath !== "string" || rawBackupPath.length === 0
+      || (rawSourcePath !== undefined && (typeof rawSourcePath !== "string" || rawSourcePath.length === 0))) {
+      throw new ReliabilityV2StoreError("invalid_migration", "Reliability migration input is invalid");
+    }
+    const sourceSnapshot = Buffer.from(rawSnapshot);
+    const backupPath = resolve(rawBackupPath);
+    const sourcePath = rawSourcePath === undefined ? undefined : resolve(rawSourcePath);
+    if (backupPath === this.path || backupPath === this.lockPath || backupPath === sourcePath
+      || dirname(backupPath) !== dirname(this.path)) {
+      throw new ReliabilityV2StoreError("invalid_migration", "Reliability migration backup path is unsafe");
+    }
+
+    const owner = await this.acquireLock();
+    let result: ReliabilityV2MigrationResult | undefined;
+    let failure: unknown;
+    try {
+      const existing = targetStat(this.path);
+      const current = this.loadState();
+      if (existing) {
+        result = { status: "already_initialized", state: current };
+      } else {
+        let seed: ReliabilityV2State;
+        try {
+          seed = convertReliabilityV1Snapshot(sourceSnapshot, this.config);
+        } catch (error) {
+          throw new ReliabilityV2StoreError("invalid_migration", "Reliability v1 snapshot failed strict validation", { cause: error });
+        }
+        if (!validateReliabilityV2State(seed, this.config)) {
+          throw new ReliabilityV2StoreError("invalid_migration", "Reliability v1 snapshot produced invalid v2 state");
+        }
+        if (!sameOwner(this.lockPath, owner)) {
+          throw new ReliabilityV2StoreError("lock_owner_lost", "Reliability v2 lock changed before migration backup");
+        }
+        writeMigrationBackup(backupPath, sourceSnapshot);
+        if (!sameOwner(this.lockPath, owner)) {
+          throw new ReliabilityV2StoreError("lock_owner_lost", "Reliability v2 lock changed before migration commit");
+        }
+        try {
+          this.assertSafeStateTarget();
+          this.io.writeState(this.path, seed);
+        } catch (error) {
+          if (error instanceof ReliabilityV2StoreError) throw error;
+          throw new ReliabilityV2StoreError("state_write_failed", "Reliability v2 migration seed was not committed", { cause: error });
+        }
+        if (!sameOwner(this.lockPath, owner)) {
+          throw new ReliabilityV2StoreError("lock_owner_lost", "Reliability v2 lock changed during migration commit");
+        }
+        result = { status: "seeded", state: seed };
+      }
+    } catch (error) {
+      failure = error;
+    }
+    try {
+      releaseLock(owner);
+    } catch (releaseError) {
+      if (failure === undefined) failure = releaseError;
+      else if (failure instanceof Error) {
+        try { Object.defineProperty(failure, "releaseError", { value: releaseError, enumerable: false }); } catch { /* preserve original migration failure */ }
+      }
+    }
+    if (failure !== undefined) throw failure;
+    return result!;
   }
 
   private async transact(mutate: (state: ReliabilityV2State, now: number) => ReliabilityV2Result): Promise<ReliabilityV2Result> {
