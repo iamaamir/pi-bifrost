@@ -5,6 +5,7 @@ All notable changes to pi-bifrost are documented here.
 ## [Unreleased]
 
 ### Added
+- Experimental `pi-bifrost/router` API over caller-supplied snapshots, shipped as JavaScript with TypeScript declarations. Resolution is advisory; it does not reserve or dispatch a model.
 - Optional schema-version-2 economic reserves. Static declared/estimated provider or model facts can be observed first, then explicitly applied as a pre-strategy candidate filter. No live billing adapter, account scope, or spend-cap guarantee is included.
 - `/bifrost inspect` includes reserve mode and source freshness metadata without printing remaining allowance values.
 - `/bifrost validate [--json]` checks the active loaded config and local model references; `/bifrost inspect [--json]` reports local registry, auth-presence, and circuit snapshots without routing, probing, or writing state.

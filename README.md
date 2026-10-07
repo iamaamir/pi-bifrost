@@ -113,11 +113,17 @@ Pin an exact model when your session depends on one provider's context or prompt
 
 Bifrost stores normalized prompt terms and selected tiers in its local classification cache, not model answers. Treat those terms as potentially sensitive. Reliability state persists locally across restarts. Circuits help avoid observed failures on **future** turns; they do not enforce provider quota or replay the failed turn. [Read about reliability and the local cache](docs/guide/reliability-and-cache.md).
 
+### Optional reserve observations
+
+Schema version 2 can hold user-entered reserve facts under `economics`. It is off when that namespace is absent. Start with `mode: "observe"` to record whether a reserve rule would reject a candidate while keeping legacy selection and random ordering unchanged. `mode: "policy"` filters rejected candidates before the configured strategy runs; missing or expired facts follow each rule's `unknown` setting. Only local model/provider scopes and static `declared` or `estimated` sources are supported. Bifrost does not query billing APIs, infer account identity, or guarantee a spend cap. `/bifrost inspect` reports source aliases and freshness without displaying allowance values by default. See [`economic-reserve-observe.json`](examples/economic-reserve-observe.json) and the [configuration guide](docs/guide/configuration.md#reserve-observations-schema-version-2).
+
 ## Guides
 
 [Getting started](docs/guide/getting-started.md) · [Routing controls](docs/guide/routing-controls.md) · [Configuration](docs/guide/configuration.md) · [Classifier backends](docs/guide/classifiers.md) · [Commands](docs/guide/commands.md) · [Troubleshooting](docs/guide/troubleshooting.md) · [Examples](examples/README.md)
 
 [Bifrost Patterns](https://github.com/iamaamir/bifrost-pattern) explores optional multi-agent workflows outside Bifrost's router.
+
+See the [experimental resolve-only router API](docs/router-api.md) for Node.js consumers.
 
 ## Development
 
