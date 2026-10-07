@@ -332,6 +332,24 @@ describe("validateConfig", () => {
     assert.ok(promptFields.some((issue) => issue.message.includes("PiNative classifier does not support")));
   });
 
+  it("accepts an optional total classifier timeout and rejects unsafe bounds", () => {
+    assert.equal(validateConfig({ ...baseConfig, classifier: { backend: "prompt", totalTimeoutMs: 1 } }).length, 0);
+    assert.equal(validateConfig({ ...baseConfig, classifier: {
+      backend: "pi-native", totalTimeoutMs: 60_000,
+      criteria: { frontier: "complex", economical: "normal" },
+    } }).length, 0);
+    for (const totalTimeoutMs of [0, -1, 1.5, 60_001, Number.MAX_SAFE_INTEGER + 1]) {
+      const issues = validateConfig({ ...baseConfig, classifier: { backend: "prompt", totalTimeoutMs } });
+      assert.ok(issues.some((issue) => issue.message.includes("Classifier totalTimeoutMs")), String(totalTimeoutMs));
+    }
+    const secretIssue = validateConfig({
+      ...baseConfig,
+      classifier: { backend: "prompt", totalTimeoutMs: "PRIVATE_TIMEOUT_VALUE" as never },
+    }).find((issue) => issue.code === "config.classifier_total_timeout_invalid");
+    assert.equal(secretIssue?.path, "classifier.totalTimeoutMs");
+    assert.doesNotMatch(secretIssue?.message ?? "", /PRIVATE_TIMEOUT_VALUE/);
+  });
+
   it("runs the shared direct-backend gate with the backend prefix", () => {
     const issues = validateConfig({
       ...baseConfig,

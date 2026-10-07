@@ -242,7 +242,7 @@ describe("legacy physical routing regression", { timeout: 240_000, concurrency: 
 
       assert.equal(code, 0);
       assert.match(stderr, /config reload rejected: workspace config must contain an object/);
-      assert.match(stderr, /strict route for tier "restricted" has no available model/);
+      assert.match(stderr, /strict route for tier "restricted" has no healthy model/);
       assert.match(stderr, /the turn was not sent/);
       assert.equal((after.attempts.fast ?? 0) - (before.attempts.fast ?? 0), 0,
         "a malformed project layer must not erase the last-good strict boundary and continue on Pi's active model");

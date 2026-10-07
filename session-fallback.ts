@@ -5,6 +5,44 @@ import { join } from "node:path";
 
 let runtimePromise: Promise<ModelRuntime> | undefined;
 
+interface PromptableSession {
+  prompt(prompt: string): Promise<void>;
+  abort(): Promise<void>;
+  getLastAssistantText(): string | undefined;
+  dispose(): void;
+}
+
+export async function promptSessionIfActive(
+  session: PromptableSession,
+  prompt: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  const abortSession = () => { void session.abort().catch(() => {}); };
+  signal?.addEventListener("abort", abortSession, { once: true });
+  try {
+    if (signal?.aborted) return undefined;
+    await session.prompt(prompt);
+    if (signal?.aborted) return undefined;
+    const text = session.getLastAssistantText()?.trim();
+    return text ? text : undefined;
+  } catch (error) {
+    if (signal?.aborted) return undefined;
+    throw error;
+  } finally {
+    signal?.removeEventListener("abort", abortSession);
+    session.dispose();
+  }
+}
+
+export async function createAndPromptSession(
+  createSession: () => Promise<PromptableSession>,
+  prompt: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  const session = await createSession();
+  return promptSessionIfActive(session, prompt, signal);
+}
+
 async function getRuntime(): Promise<ModelRuntime> {
   runtimePromise ??= ModelRuntime.create();
   return runtimePromise;
@@ -20,8 +58,10 @@ export async function promptWithMinimalSession(
   options: {
     cwd?: string;
     systemPrompt?: string;
+    signal?: AbortSignal;
   } = {},
 ): Promise<string | undefined> {
+  if (options.signal?.aborted) return undefined;
   const cwd = options.cwd ?? process.cwd();
   const systemPrompt = options.systemPrompt ?? "You are a helpful assistant.";
   const runtime = await getRuntime();
@@ -36,21 +76,17 @@ export async function promptWithMinimalSession(
     systemPrompt,
   });
   await loader.reload();
+  if (options.signal?.aborted) return undefined;
 
-  const { session } = await createAgentSession({
-    cwd,
-    modelRuntime: runtime,
-    model,
-    sessionManager: SessionManager.inMemory(cwd),
-    resourceLoader: loader,
-    noTools: "all",
-  });
-
-  try {
-    await session.prompt(prompt);
-    const text = session.getLastAssistantText()?.trim();
-    return text ? text : undefined;
-  } finally {
-    session.dispose();
-  }
+  return createAndPromptSession(async () => {
+    const { session } = await createAgentSession({
+      cwd,
+      modelRuntime: runtime,
+      model,
+      sessionManager: SessionManager.inMemory(cwd),
+      resourceLoader: loader,
+      noTools: "all",
+    });
+    return session;
+  }, prompt, options.signal);
 }

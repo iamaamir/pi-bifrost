@@ -26,6 +26,17 @@ describe("shipped JSON artifacts", () => {
     assert.equal(gate?.then?.properties?.schemaVersion?.const, 2);
   });
 
+  it("allows an optional bounded total classifier timeout without a default", () => {
+    const schema = readJson("schema.json") as {
+      definitions?: { ClassifierConfig?: { properties?: { totalTimeoutMs?: { type?: string; minimum?: number; maximum?: number; default?: number } } } };
+    };
+    const timeout = schema.definitions?.ClassifierConfig?.properties?.totalTimeoutMs;
+    assert.equal(timeout?.type, "integer");
+    assert.equal(timeout?.minimum, 1);
+    assert.equal(timeout?.maximum, 60_000);
+    assert.equal(timeout?.default, undefined);
+  });
+
   it("requires schemaVersion 2 for economics and only permits static non-authoritative scopes", () => {
     const schema = readJson("schema.json") as Record<string, unknown>;
     const allOf = schema.allOf as Array<{ if?: { required?: string[] }; then?: { required?: string[]; properties?: { schemaVersion?: { const?: number } } } }>;

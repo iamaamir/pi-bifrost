@@ -143,6 +143,8 @@ For a normal message with routing on and nothing pinned, routing considers:
 
 First matching step wins; later steps are skipped. A rule naming an exact model wins before the cache and classifiers; a rule naming a tier is checked after them. Reliability filtering and strategy selection happen after a tier is resolved.
 
+Set optional `classifier.totalTimeoutMs` to bound all external classifier work for one request. It accepts an integer from `1` to `60000`; when the budget expires, Bifrost stops classifier calls and continues with local regex/default routing. Caller cancellation stops routing. When omitted, existing backend timeout and retry settings remain in effect. See the [classifier guide](classifiers.md#prompt-classifier) for details.
+
 ## Complete example
 
 Full configuration file, `.pi/bifrost.json`:

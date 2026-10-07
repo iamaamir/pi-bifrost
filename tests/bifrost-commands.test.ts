@@ -1167,7 +1167,7 @@ describe("preview route trace", () => {
     state.config.models = { general: ["gpt-5.4"] };
     state.config.default = "general";
     state.getPipeline = () => ({
-      classify: async () => ({ kind: "classified" as const, tier: "general", source: "regex" as const }),
+      classify: async () => ({ kind: "classified" as const, tier: "general", source: "regex" as const, classificationOutcome: "deadline" as const }),
     }) as never;
     const dispatch = createCommandRouter(state as never);
     const [trace] = await captureJsonReports(async () => {
@@ -1177,6 +1177,7 @@ describe("preview route trace", () => {
     assert.equal(trace.version, 1);
     assert.equal(trace.kind, "route-decision");
     assert.equal(trace.outcome, "selected");
+    assert.equal(trace.classificationOutcome, "deadline");
     assert.equal(trace.selected, "openai/gpt-5.4");
     assert.deepEqual(trace.classifierDisclosure, { enabled: true, configuredClassifierMayReceivePrompt: true });
     assert.equal(JSON.stringify(trace).includes("private prompt words"), false);
@@ -1397,6 +1398,27 @@ describe("route dispatch", () => {
     assert.equal(state.tierPolicyValid, true);
     assert.equal(invalidations, 0);
     assert.ok(calls.some((call) => String(call.value).includes("reload rejected") && String(call.value).includes("missing")));
+  });
+
+  it("rejects an invalid classifier total budget reload without exposing its raw value", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    const lastGoodConfig = state.config;
+    let invalidations = 0;
+    state.invalidatePipeline = () => { invalidations++; };
+    await inTempDir(async () => {
+      writeFileSync("bifrost.json", JSON.stringify({
+        default: "general",
+        models: { general: ["fixture/model"] },
+        classifier: { backend: "prompt", totalTimeoutMs: "PRIVATE_TIMEOUT_VALUE" },
+      }));
+      await createCommandRouter(state as never)("reload", ctx as never);
+    });
+    assert.equal(state.config, lastGoodConfig);
+    assert.equal(invalidations, 0);
+    const rejection = calls.find((call) => String(call.value).includes("reload rejected"));
+    assert.ok(rejection);
+    assert.doesNotMatch(String(rejection.value), /PRIVATE_TIMEOUT_VALUE/);
   });
 
   it("retains an active strict config when a reload source is corrupt or has a non-object root", async () => {

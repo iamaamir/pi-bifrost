@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createPipeline, type PipelineDeps } from "../classification-pipeline.ts";
+import { buildRouteDecisionSummary, createPipeline, type PipelineDeps } from "../classification-pipeline.ts";
 import { debug, setupDebug } from "../debug.ts";
 import { makeClassifierModel } from "./helpers.ts";
 
@@ -20,6 +20,160 @@ function deps(overrides: Partial<PipelineDeps> = {}): PipelineDeps {
 }
 
 describe("classification-pipeline", () => {
+  it("disables external classification for an invalid total budget but keeps local fallback available", async () => {
+    let directCalls = 0;
+    let promptCalls = 0;
+    const pipeline = createPipeline(deps({
+      totalTimeoutMs: Number.NaN,
+      classifyDirect: async () => { directCalls++; return { tier: "frontier", backend: "typesafe" }; },
+      classifierModels: [makeClassifierModel("a", "one")],
+      classifyWithLLM: async () => { promptCalls++; return "frontier"; },
+      defaultTier: "economical",
+    }));
+
+    assert.deepEqual(await pipeline.classify("ordinary"), { kind: "fallback", tier: "economical" });
+    assert.equal(directCalls, 0);
+    assert.equal(promptCalls, 0);
+  });
+
+  it("shares an optional classifier deadline across attempts and falls through locally", async () => {
+    const attempts: string[] = [];
+    const pipeline = createPipeline(deps({
+      totalTimeoutMs: 15,
+      classifierModels: [makeClassifierModel("a", "one"), makeClassifierModel("b", "two")],
+      classifyWithLLM: async (model, _text, _tiers, signal) => {
+        attempts.push(model.kind === "registry" ? model.model.id : model.id);
+        await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+        return undefined;
+      },
+      regexRules: [{ pattern: "hello", model: "economical" }],
+    }));
+
+    const result = await pipeline.classify("hello");
+    assert.deepEqual(attempts, ["one"]);
+    assert.deepEqual(result, { kind: "classified", tier: "economical", source: "regex", classificationOutcome: "deadline" });
+    assert.equal(buildRouteDecisionSummary(result).classificationOutcome, "deadline");
+  });
+
+  it("uses the same deadline for the direct classifier and skips prompt fallback after expiry", async () => {
+    let directCalls = 0;
+    let promptCalls = 0;
+    const pipeline = createPipeline(deps({
+      totalTimeoutMs: 15,
+      classifyDirect: async (_text, _tiers, signal) => {
+        directCalls += 1;
+        await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+        return undefined;
+      },
+      classifierModels: [makeClassifierModel("a", "one")],
+      classifyWithLLM: async () => { promptCalls += 1; return "frontier"; },
+      defaultTier: "economical",
+    }));
+    const result = await pipeline.classify("ordinary");
+    assert.equal(directCalls, 1);
+    assert.equal(promptCalls, 0);
+    assert.deepEqual(result, { kind: "fallback", tier: "economical", classificationOutcome: "deadline" });
+  });
+
+  it("passes caller cancellation through the direct classifier even without a total budget", async () => {
+    const controller = new AbortController();
+    let directCalls = 0;
+    let promptCalls = 0;
+    const pipeline = createPipeline(deps({
+      classifyDirect: async (_text, _tiers, signal) => {
+        directCalls += 1;
+        await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+        return undefined;
+      },
+      classifierModels: [makeClassifierModel("a", "one")],
+      classifyWithLLM: async () => { promptCalls += 1; return "frontier"; },
+      defaultTier: "economical",
+    }));
+    const resultPromise = pipeline.classify("ordinary", controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    assert.deepEqual(await resultPromise, { kind: "unclassified", classificationOutcome: "aborted" });
+    assert.equal(directCalls, 1);
+    assert.equal(promptCalls, 0);
+  });
+
+  it("does not launch a classifier whose Promise turn follows caller cancellation", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const pipeline = createPipeline(deps({
+      classifierModels: [makeClassifierModel("a", "one")],
+      classifyWithLLM: async () => { calls++; return "frontier"; },
+      defaultTier: "economical",
+    }));
+    const result = pipeline.classify("ordinary", controller.signal);
+    controller.abort();
+    assert.deepEqual(await result, { kind: "unclassified", classificationOutcome: "aborted" });
+    assert.equal(calls, 0);
+  });
+
+  it("aborts prompt classification on caller cancellation and does not use local routing", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    let receivedSignal: AbortSignal | undefined;
+    const pipeline = createPipeline(deps({
+      classifierModels: [makeClassifierModel("a", "one"), makeClassifierModel("b", "two")],
+      classifyWithLLM: async (_model, _text, _tiers, signal) => {
+        calls += 1;
+        receivedSignal = signal;
+        await new Promise<void>((resolve) => signal?.addEventListener("abort", () => resolve(), { once: true }));
+        return "frontier";
+      },
+      regexRules: [{ pattern: "hello", model: "economical" }],
+      defaultTier: "frontier",
+    }));
+    const resultPromise = pipeline.classify("hello", controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    const result = await resultPromise;
+    assert.equal(calls, 1);
+    assert.equal(receivedSignal?.aborted, true);
+    assert.deepEqual(result, { kind: "unclassified", classificationOutcome: "aborted" });
+  });
+
+  it("does not accept or apply a late classifier result after deadline fallback", async () => {
+    let finishLate: ((value: string | undefined) => void) | undefined;
+    let attempts = 0;
+    const pipeline = createPipeline(deps({
+      totalTimeoutMs: 10,
+      classifierModels: [makeClassifierModel("a", "one"), makeClassifierModel("b", "two")],
+      classifyWithLLM: async () => {
+        attempts++;
+        return new Promise((resolve) => { finishLate = resolve; });
+      },
+      defaultTier: "economical",
+    }));
+    const result = await pipeline.classify("ordinary");
+    assert.equal(attempts, 1);
+    assert.deepEqual(result, { kind: "fallback", tier: "economical", classificationOutcome: "deadline" });
+    finishLate?.("frontier");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(result, { kind: "fallback", tier: "economical", classificationOutcome: "deadline" });
+    assert.equal(attempts, 1, "expiry must not start the second classifier model or reconsider the late result");
+  });
+
+  it("keeps the existing backend budget when no total deadline is configured", async () => {
+    let calls = 0;
+    let receivedSignal: AbortSignal | undefined;
+    const pipeline = createPipeline(deps({
+      classifierModels: [makeClassifierModel("a", "one")],
+      classifyWithLLM: async (_model, _text, _tiers, signal) => {
+        calls += 1;
+        receivedSignal = signal;
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        return "frontier";
+      },
+    }));
+    const result = await pipeline.classify("ordinary");
+    assert.equal(calls, 1);
+    assert.equal(receivedSignal, undefined);
+    assert.deepEqual(result, { kind: "classified", tier: "frontier", source: "classifier", judgment: { tier: "frontier", backend: "prompt", model: "one" } });
+  });
+
   it("can disable the process-global debug sink for isolated callers", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bifrost-pipeline-debug-"));
     const logPath = join(directory, "debug.jsonl");

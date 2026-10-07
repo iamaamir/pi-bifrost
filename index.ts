@@ -261,6 +261,7 @@ function buildPipeline(
 
   return createPipeline({
     classifyDirect,
+    totalTimeoutMs: config.classifier?.totalTimeoutMs,
     cacheLookup: (text) => {
       if (!cacheEnabled) return undefined;
       const entry = lookupCache(cacheEntries, text, threshold, cacheSemanticKey, cacheMaxAgeMs);
@@ -271,13 +272,13 @@ function buildPipeline(
       return undefined;
     },
     classifierModels,
-    classifyWithLLM: async (model, text, tiers) => {
+    classifyWithLLM: async (model, text, tiers, signal) => {
       const tier = await invokeClassifier(ctx, model, tiers, boundedClassifierPrompt(text), {
         systemPrompt: config.classifier?.systemPrompt,
         maxTokens: config.classifier?.maxTokens,
         temperature: config.classifier?.temperature,
         method: config.classifier?.method,
-      });
+      }, signal);
       if (!tier) return undefined;
       return {
         tier,

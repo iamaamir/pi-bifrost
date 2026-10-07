@@ -4,15 +4,17 @@ import type { RoutedModelResolution, RoutingStrategy, SkippedCandidate, TierReso
 import { debug, debugMeasure } from "./debug.ts";
 import { CLASSIFIER_BACKEND_IDS, type ClassificationJudgment, type ClassifierOutput, type ClassifierBackend } from "./classifier-backends.ts";
 import type { EconomicCandidateEvaluation } from "./routing.ts";
+import { performance } from "node:perf_hooks";
 
 // ── ADT result type ────────────────────────────────────────────
 
 export type ClassificationSource = "cache" | "classifier" | "regex" | "inline";
+export type ClassificationOutcome = "deadline" | "aborted";
 
 export type ClassificationResult =
-  | { readonly kind: "classified"; readonly tier: string; readonly source: ClassificationSource; readonly judgment?: ClassificationJudgment }
-  | { readonly kind: "fallback"; readonly tier: string }
-  | { readonly kind: "unclassified" };
+  | { readonly kind: "classified"; readonly tier: string; readonly source: ClassificationSource; readonly judgment?: ClassificationJudgment; readonly classificationOutcome?: ClassificationOutcome }
+  | { readonly kind: "fallback"; readonly tier: string; readonly classificationOutcome?: ClassificationOutcome }
+  | { readonly kind: "unclassified"; readonly classificationOutcome?: ClassificationOutcome };
 
 export interface RouteDecisionCandidate {
   readonly model: string;
@@ -55,6 +57,7 @@ export interface RouteDecisionSummary {
   readonly selected?: string;
   readonly selectedStrategy?: RoutingStrategy;
   readonly fallbackReason?: RoutedModelResolution["fallbackReason"];
+  readonly classificationOutcome?: ClassificationOutcome;
 }
 
 export interface ResolvedRouteDecisionInput {
@@ -108,6 +111,7 @@ export function buildRouteDecisionSummary(
       kind: "route-decision",
       outcome: "unclassified",
       classification: { source: "unclassified" },
+      ...(classification.classificationOutcome ? { classificationOutcome: classification.classificationOutcome } : {}),
     };
   }
 
@@ -129,6 +133,7 @@ export function buildRouteDecisionSummary(
         },
       } : {}),
     },
+    ...(classification.classificationOutcome ? { classificationOutcome: classification.classificationOutcome } : {}),
     ...(resolution && options ? {
       requested: summarizePool(
         options.requestedTier,
@@ -185,6 +190,8 @@ export function buildRouteDecisionSummary(
 export interface PipelineDeps {
   /** Disable process-global debug instrumentation for isolated resolve-only callers. */
   readonly instrumentation?: "none";
+  /** Optional total network-classification budget. Absent preserves backend budgets. */
+  readonly totalTimeoutMs?: number;
   /** Query cache. Returns tier or undefined. */
   readonly cacheLookup: (text: string) => string | undefined;
   /** Optional direct backend (typesafe or pi-native) attempted before the prompt classifier. */
@@ -196,6 +203,7 @@ export interface PipelineDeps {
     model: ClassifierModel,
     text: string,
     tiers: readonly string[],
+    signal?: AbortSignal,
   ) => Promise<ClassifierOutput | undefined>;
   /** Regex routing rules. First match wins. */
   readonly regexRules: readonly RouteRule[];
@@ -229,6 +237,10 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
     defaultTier,
     tiers,
   } = deps;
+  const totalTimeoutMs = deps.totalTimeoutMs;
+  const totalTimeoutValid = totalTimeoutMs === undefined
+    || (Number.isSafeInteger(totalTimeoutMs) && totalTimeoutMs >= 1 && totalTimeoutMs <= 60_000);
+  const disableExternalForInvalidTimeout = !totalTimeoutValid;
   const emitDebug = (
     module: string,
     event: string,
@@ -246,6 +258,93 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
   const regexRules = compileRules(rawRegexRules);
 
   async function classify(text: string, signal?: AbortSignal): Promise<ClassificationResult> {
+    const startedAt = performance.now();
+    const deadlineAt = totalTimeoutValid && totalTimeoutMs !== undefined ? startedAt + totalTimeoutMs : undefined;
+    let runController: AbortController | undefined;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let removeCallerAbort: (() => void) | undefined;
+    let classificationOutcome: ClassificationOutcome | undefined;
+    const markOutcome = (outcome: ClassificationOutcome): void => {
+      if (classificationOutcome === outcome) return;
+      classificationOutcome = outcome;
+      emitDebug("pipeline", outcome === "deadline" ? "classifier.deadline" : "classifier.aborted", {
+        elapsed_ms: Math.round(performance.now() - startedAt),
+      });
+    };
+    const stop = (outcome: ClassificationOutcome): ClassificationResult => {
+      markOutcome(outcome);
+      return { kind: "unclassified", classificationOutcome: outcome };
+    };
+    const ensureSignal = (): AbortSignal | undefined => {
+      if (runController) return runController.signal;
+      if (!signal && deadlineAt === undefined) return undefined;
+      runController = new AbortController();
+      if (signal) {
+        const abortCaller = () => runController?.abort(signal.reason ?? new DOMException("Aborted", "AbortError"));
+        if (signal.aborted) abortCaller();
+        else {
+          signal.addEventListener("abort", abortCaller, { once: true });
+          removeCallerAbort = () => signal.removeEventListener("abort", abortCaller);
+        }
+      }
+      if (deadlineAt !== undefined) {
+        const remaining = Math.max(0, deadlineAt - performance.now());
+        deadlineTimer = setTimeout(() => {
+          markOutcome("deadline");
+          runController?.abort(new DOMException("Classifier deadline exceeded", "TimeoutError"));
+        }, remaining);
+      }
+      return runController.signal;
+    };
+    const invokeExternal = async <T>(
+      operation: (attemptSignal?: AbortSignal) => Promise<T>,
+    ): Promise<{ readonly status: "completed"; readonly value: T } | { readonly status: ClassificationOutcome }> => {
+      if (signal?.aborted) return { status: "aborted" };
+      if (deadlineAt !== undefined && performance.now() >= deadlineAt) {
+        markOutcome("deadline");
+        return { status: "deadline" };
+      }
+      const attemptSignal = ensureSignal();
+      if (attemptSignal?.aborted) return { status: signal?.aborted ? "aborted" : "deadline" };
+      const result = Promise.resolve().then(() => {
+        if (attemptSignal?.aborted || signal?.aborted) return undefined as T;
+        return operation(attemptSignal);
+      });
+      if (!attemptSignal) return { status: "completed", value: await result };
+      const raced = await new Promise<
+        | { readonly status: "completed"; readonly value: T }
+        | { readonly status: "rejected"; readonly error: unknown }
+        | { readonly status: "aborted" }
+      >((resolve) => {
+        let settled = false;
+        const finish = (value: { readonly status: "completed"; readonly value: T } | { readonly status: "rejected"; readonly error: unknown } | { readonly status: "aborted" }) => {
+          if (settled) return;
+          settled = true;
+          attemptSignal.removeEventListener("abort", abort);
+          resolve(value);
+        };
+        const abort = () => finish({ status: "aborted" });
+        attemptSignal.addEventListener("abort", abort, { once: true });
+        result.then(
+          (value) => finish({ status: "completed", value }),
+          (error) => finish({ status: "rejected", error }),
+        );
+        if (attemptSignal.aborted) abort();
+      });
+      if (signal?.aborted) return { status: "aborted" };
+      if (classificationOutcome === "deadline" || (deadlineAt !== undefined && performance.now() >= deadlineAt)) {
+        markOutcome("deadline");
+        return { status: "deadline" };
+      }
+      if (raced.status === "aborted") return { status: "aborted" };
+      if (raced.status === "rejected") throw raced.error;
+      return raced;
+    };
+    const withOutcome = <T extends ClassificationResult>(result: T): T =>
+      classificationOutcome ? { ...result, classificationOutcome } as T : result;
+
+    try {
+      if (signal?.aborted) return stop("aborted");
     // Stage 1: pre-check regex for direct model references only.
     // Runs before tiers check — direct bindings work even with zero tiers.
     {
@@ -270,42 +369,72 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
     }
 
     // Stage 3: optional direct classifier (typesafe or pi-native), then prompt fallback.
-    if (classifyDirect) {
+    if (classifyDirect && classificationOutcome !== "deadline" && !disableExternalForInvalidTimeout) {
+      const endDirect = measureDebug("pipeline", "direct.attempt");
+      let directMeasured = false;
+      const finishDirect = (meta?: Record<string, unknown>): void => {
+        if (directMeasured) return;
+        directMeasured = true;
+        endDirect(meta);
+      };
       try {
-        const endDirect = measureDebug("pipeline", "direct.attempt");
-        const judgment = await classifyDirect(text, tiers, signal);
+        const attempt = await invokeExternal((attemptSignal) => classifyDirect(text, tiers, attemptSignal));
+        if (attempt.status !== "completed") finishDirect({ outcome: attempt.status });
+        if (attempt.status === "aborted") return stop("aborted");
+        if (attempt.status === "deadline") markOutcome("deadline");
+        const judgment = attempt.status === "completed" ? attempt.value : undefined;
         const tier = judgment?.tier;
-        endDirect({ tier, backend: judgment?.backend, confidence: judgment?.confidence });
+        if (attempt.status === "completed") {
+          finishDirect({ tier, backend: judgment?.backend, confidence: judgment?.confidence });
+        }
         if (judgment && tiers.includes(judgment.tier)) {
           emitDebug("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model, confidence: judgment.confidence });
           return { kind: "classified", tier: judgment.tier, source: "classifier", judgment };
         }
       } catch {
+        finishDirect({ outcome: signal?.aborted ? "aborted" : "error" });
         emitDebug("pipeline", "direct.error", { aborted: signal?.aborted ?? false });
       }
-      if (signal?.aborted) return { kind: "unclassified" };
+      if (signal?.aborted) return stop("aborted");
     }
 
     // Existing prompt classifier — try each model in priority order.
-    for (const model of classifierModels) {
+    for (const model of disableExternalForInvalidTimeout ? [] : classifierModels) {
+      if (classificationOutcome === "deadline") break;
+      const endLLM = measureDebug("pipeline", "classifier.attempt");
+      let llmMeasured = false;
+      const finishLLM = (meta?: Record<string, unknown>): void => {
+        if (llmMeasured) return;
+        llmMeasured = true;
+        endLLM(meta);
+      };
       try {
-        const endLLM = measureDebug("pipeline", "classifier.attempt");
-        const output = await classifyWithLLM(model, text, tiers);
+        const attempt = await invokeExternal((attemptSignal) => classifyWithLLM(model, text, tiers, attemptSignal));
+        if (attempt.status !== "completed") finishLLM({ outcome: attempt.status });
+        if (attempt.status === "aborted") return stop("aborted");
+        if (attempt.status === "deadline") {
+          markOutcome("deadline");
+          break;
+        }
+        if (attempt.status !== "completed") continue;
+        const output = attempt.value;
         const modelId = model.kind === "registry" ? model.model.id : model.id;
         const judgment = output === undefined ? undefined : normalizeJudgment(output, CLASSIFIER_BACKEND_IDS.prompt);
         const tier = judgment?.tier;
-        endLLM({ model: modelId, tier, backend: judgment?.backend, confidence: judgment?.confidence });
+        finishLLM({ model: modelId, tier, backend: judgment?.backend, confidence: judgment?.confidence });
         if (judgment && tiers.includes(judgment.tier)) {
           emitDebug("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model ?? modelId, confidence: judgment.confidence });
           return { kind: "classified", tier: judgment.tier, source: "classifier", judgment: { ...judgment, model: judgment.model ?? modelId } };
         }
       } catch {
+        finishLLM({ outcome: signal?.aborted ? "aborted" : "error" });
         emitDebug("pipeline", "classifier.error", { category: "classifier_failure" });
         console.error("[bifrost] classifier model failed");
       }
+      if (signal?.aborted) return stop("aborted");
     }
 
-    if (signal?.aborted) return { kind: "unclassified" };
+    if (signal?.aborted) return stop("aborted");
 
     // Stage 4: regex rules
     const endRegex = measureDebug("pipeline", "regex");
@@ -315,22 +444,26 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
       if (tiers.includes(regex)) {
         // Tier name match — route through strategy.
         emitDebug("pipeline", "result", { source: "regex", tier: regex });
-        return { kind: "classified", tier: regex, source: "regex" };
+        return withOutcome({ kind: "classified", tier: regex, source: "regex" });
       }
       if (regex.includes("/")) {
         // Direct model reference (e.g. "opencode-go/glm-5.1" in rule).
         emitDebug("pipeline", "result", { source: "regex", tier: regex, direct: true });
-        return { kind: "classified", tier: regex, source: "regex" };
+        return withOutcome({ kind: "classified", tier: regex, source: "regex" });
       }
     }
 
     // Stage 4: default fallback
     emitDebug("pipeline", "result", { source: "fallback", tier: defaultTier });
     if (defaultTier) {
-      return { kind: "fallback", tier: defaultTier };
+      return withOutcome({ kind: "fallback", tier: defaultTier });
     }
 
-    return { kind: "unclassified" };
+    return withOutcome({ kind: "unclassified" });
+    } finally {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      removeCallerAbort?.();
+    }
   }
 
   return { classify };

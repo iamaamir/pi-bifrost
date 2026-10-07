@@ -36,6 +36,16 @@ Prompt classification adds model tokens and latency on cache misses. Successful 
 
 If prompt classification fails or returns an unknown tier, Bifrost continues through configured fallback, regex rules, and default tier behavior.
 
+Set `classifier.totalTimeoutMs` to an integer from `1` to `60000` to cap all external classifier work for one classification, including direct backends, retries, and prompt fallback. When the budget expires, Bifrost stops further classifier calls and continues with local regex/default routing. Cancelling the caller stops classification and routing. If you omit this option, each backend keeps its existing timeout and retry budget.
+
+```json
+{
+  "classifier": {
+    "totalTimeoutMs": 2500
+  }
+}
+```
+
 ## TypeSafe/Jev
 
 TypeSafe/Jev is an optional hosted tier-classification backend and requires a TypeSafe credential. Set `"backend": "typesafe"` to select Bifrost's direct TypeSafe transport.

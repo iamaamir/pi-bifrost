@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "no
 import { join } from "node:path";
 import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
 import type { BifrostConfig, ClassifierConfig } from "./config.ts";
-import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, PROMPT_ONLY_FIELDS, loadConfigForReload, validateEconomicConfig, validateTierPolicyConfig } from "./config.ts";
+import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, PROMPT_ONLY_FIELDS, classifierTotalTimeoutIssue, loadConfigForReload, validateEconomicConfig, validateTierPolicyConfig } from "./config.ts";
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
 import { buildRouteDecisionSummary, type ClassificationPipeline, type ClassificationResult, type ClassificationSource, type RouteDecisionSummary } from "./classification-pipeline.ts";
@@ -72,6 +72,8 @@ function installConfigIfTierPoliciesValid(
   ctx: ExtensionContext,
 ): boolean {
   const errors = validateTierPolicyConfig(config).filter((issue) => issue.severity === "error");
+  const totalTimeoutIssue = classifierTotalTimeoutIssue(config);
+  if (totalTimeoutIssue) errors.push(totalTimeoutIssue);
   if (errors.length > 0) {
     log(ctx, `Bifrost config reload rejected: ${errors.map((issue) => issue.message).join(" ")}`, "error");
     return false;

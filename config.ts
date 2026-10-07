@@ -64,6 +64,8 @@ export interface PiNativeConfig {
 export interface ClassifierConfig {
   enabled?: boolean;
   backend?: ClassifierBackend;
+  /** Optional total external classification budget. Absent preserves backend-specific timeouts. */
+  totalTimeoutMs?: number;
   /** Existing prompt classifier model. Also used for explicit TypeSafe prompt fallback. */
   model?: string | string[];
   endpoint?: string;
@@ -196,6 +198,18 @@ export interface ConfigIssue {
   readonly code?: string;
   /** Static config path; dynamic tier and field names are replaced with placeholders. */
   readonly path?: string;
+}
+
+export function classifierTotalTimeoutIssue(config: BifrostConfig): ConfigIssue | undefined {
+  const timeout = (config.classifier as unknown as Record<string, unknown> | undefined)?.totalTimeoutMs;
+  if (timeout === undefined) return undefined;
+  if (typeof timeout === "number" && Number.isSafeInteger(timeout) && timeout >= 1 && timeout <= 60_000) return undefined;
+  return {
+    severity: "error",
+    code: "config.classifier_total_timeout_invalid",
+    path: "classifier.totalTimeoutMs",
+    message: "Classifier totalTimeoutMs must be a safe integer between 1 and 60000.",
+  };
 }
 
 export const PROMPT_ONLY_FIELDS = [
@@ -411,6 +425,8 @@ export function validateConfig(
   const issues: ConfigIssue[] = validateTierPolicyConfig(config);
   const modelKeys = Object.keys(config.models ?? {});
   const classifier = config.classifier;
+  const totalTimeoutIssue = classifierTotalTimeoutIssue(config);
+  if (totalTimeoutIssue) issues.push(totalTimeoutIssue);
   if (classifier?.backend && !Object.values(CLASSIFIER_BACKEND_IDS).includes(classifier.backend)) {
     issues.push({ severity: "error", message: `Unknown classifier backend "${classifier.backend}".` });
   }

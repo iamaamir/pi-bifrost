@@ -1,11 +1,15 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import type { ChildProcess } from "node:child_process";
 import {
   categoryLabel,
   classificationPrompt,
   classifyWithLLM,
   extractCategory,
 } from "../classifier.ts";
+import { makeModel } from "./helpers.ts";
 
 describe("classifier", () => {
   describe("categoryLabel", () => {
@@ -70,6 +74,78 @@ describe("classifier", () => {
     assert.equal(observedContext?.messages?.length, 1);
     assert.equal(observedOptions?.maxTokens, 20);
     assert.equal(observedOptions?.cacheRetention, "none");
+  });
+
+  it("propagates caller abort to registry classification and skips paid fallbacks", async () => {
+    const controller = new AbortController();
+    let registrySignal: AbortSignal | undefined;
+    let subprocessCalls = 0;
+    const classifierModel = { kind: "registry" as const, model: makeModel("fixture", "classifier") };
+    const ctx = {
+      cwd: process.cwd(),
+      modelRegistry: {
+        streamSimple: (_model: unknown, _context: unknown, options: { signal?: AbortSignal }) => {
+          registrySignal = options.signal;
+          return {
+            result: () => new Promise((resolve) => {
+              options.signal?.addEventListener("abort", () => resolve({ content: [] }), { once: true });
+            }),
+          };
+        },
+      },
+    } as never;
+    const resultPromise = classifyWithLLM(ctx, classifierModel, ["frontier"], "request", {
+      method: "auto",
+      spawnImpl: (() => { subprocessCalls += 1; throw new Error("must not spawn after abort"); }) as unknown as typeof import("node:child_process").spawn,
+    }, controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    assert.equal(await resultPromise, undefined);
+    assert.equal(registrySignal?.aborted, true);
+    assert.equal(subprocessCalls, 0);
+  });
+
+  it("propagates caller abort to prompt HTTP fetch", async () => {
+    const controller = new AbortController();
+    let requestSignal: AbortSignal | undefined;
+    const classifierModel = { kind: "endpoint" as const, id: "fixture-classifier", baseUrl: "https://example.invalid/v1" };
+    const ctx = { cwd: process.cwd() } as never;
+    const resultPromise = classifyWithLLM(ctx, classifierModel, ["frontier"], "request", {
+      method: "direct",
+      fetchImpl: async (_input, init) => {
+        requestSignal = init?.signal ?? undefined;
+        return new Promise((_resolve, reject) => {
+          requestSignal?.addEventListener("abort", () => reject(requestSignal?.reason), { once: true });
+        });
+      },
+    }, controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    assert.equal(await resultPromise, undefined);
+    assert.equal(requestSignal?.aborted, true);
+  });
+
+  it("terminates only its owned prompt subprocess when caller aborts", async () => {
+    const controller = new AbortController();
+    const child = new EventEmitter() as EventEmitter & { stdout: PassThrough; stderr: PassThrough; kill: (signal?: string) => boolean };
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    const kills: string[] = [];
+    child.kill = (signal) => {
+      kills.push(signal ?? "default");
+      queueMicrotask(() => child.emit("close", null));
+      return true;
+    };
+    const classifierModel = { kind: "registry" as const, model: makeModel("fixture", "classifier") };
+    const ctx = { cwd: process.cwd() } as never;
+    const resultPromise = classifyWithLLM(ctx, classifierModel, ["frontier"], "request", {
+      method: "subprocess",
+      spawnImpl: (() => child as unknown as ChildProcess) as unknown as typeof import("node:child_process").spawn,
+    }, controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    assert.equal(await resultPromise, undefined);
+    assert.deepEqual(kills, ["SIGTERM"]);
   });
 
   describe("extractCategory", () => {

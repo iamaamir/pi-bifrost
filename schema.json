@@ -139,6 +139,12 @@
           "enum": ["prompt", "typesafe", "pi-native"],
           "description": "Classifier backend. If omitted, Bifrost detects Pi-managed TypeSafe credentials first, TYPESAFE_API_KEY second, and otherwise uses prompt. An explicit value always wins."
         },
+        "totalTimeoutMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60000,
+          "description": "Optional total budget for external classification across direct backends, retries, and prompt fallback. When it expires, Bifrost stops external classifier attempts and continues with local regex/default routing. Caller cancellation stops routing. If omitted, backend-specific timeouts remain unchanged."
+        },
         "typesafe": {
           "type": "object",
           "additionalProperties": false,

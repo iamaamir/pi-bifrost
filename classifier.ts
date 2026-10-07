@@ -42,6 +42,14 @@ function isOpenAiCompatibleEndpoint(cm: ClassifierModel): boolean {
   );
 }
 
+function promptHttpSignal(ctx: ExtensionContext, signal?: AbortSignal): AbortSignal | undefined {
+  const activeSignal = signal ?? ctx.signal;
+  if (ctx.signal) return activeSignal;
+  if (typeof AbortSignal === "undefined" || !("timeout" in AbortSignal) || !("any" in AbortSignal)) return activeSignal;
+  const timeout = AbortSignal.timeout(30_000);
+  return activeSignal ? AbortSignal.any([activeSignal, timeout]) : timeout;
+}
+
 const DEFAULT_SYSTEM_PROMPT =
   "You are a routing classifier. Classify each request into exactly one tier." +
   " Respond with only the tier name. No explanation, no punctuation.";
@@ -51,6 +59,10 @@ export interface ClassifierOptions {
   maxTokens?: number;
   temperature?: number;
   method?: "direct" | "subprocess" | "auto";
+  /** Test seam for verifying that only the subprocess owned by this attempt is terminated. */
+  spawnImpl?: typeof spawn;
+  /** Test seam for deterministic prompt HTTP cancellation coverage. */
+  fetchImpl?: typeof fetch;
 }
 
 export function categoryLabel(category: string): string {
@@ -89,6 +101,7 @@ async function classifyWithDirectHttp(
   categories: readonly string[],
   prompt: string,
   options: ClassifierOptions = {},
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
   const systemPrompt = options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
   const maxTokens = options.maxTokens ?? 20;
@@ -105,7 +118,7 @@ async function classifyWithDirectHttp(
       {
         maxTokens,
         temperature,
-        signal: ctx.signal,
+        signal: signal ?? ctx.signal,
         cacheRetention: "none",
       },
     );
@@ -117,10 +130,11 @@ async function classifyWithDirectHttp(
       .trim();
 
     if (!content) {
+      if (signal?.aborted || ctx.signal?.aborted) return undefined;
       const fallbackText = await promptWithMinimalSession(
         classifierModel.model,
         userPrompt,
-        { cwd: ctx.cwd, systemPrompt },
+        { cwd: ctx.cwd, systemPrompt, signal: signal ?? ctx.signal },
       );
       if (!fallbackText?.trim()) {
         debug("classifier", "registry.empty_response", { model: classifierId(classifierModel) });
@@ -164,13 +178,11 @@ async function classifyWithDirectHttp(
   const url = new URL("chat/completions", baseUrl).toString();
 
   try {
-    const response = await fetch(url, {
+    const response = await (options.fetchImpl ?? fetch)(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
-      signal: ctx.signal ?? (typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
-        ? AbortSignal.timeout(30_000)
-        : void 0),
+      signal: promptHttpSignal(ctx, signal),
     });
 
     if (!response.ok) {
@@ -207,6 +219,7 @@ async function classifyWithSubprocess(
   categories: readonly string[],
   prompt: string,
   options: ClassifierOptions = {},
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
   // Subprocess only works with registry models (needs provider/id for --model).
   if (classifierModel.kind !== "registry") return undefined;
@@ -234,7 +247,11 @@ async function classifyWithSubprocess(
   ];
 
   return new Promise((resolve) => {
-    const child = spawn(command, piArgs, {
+    if (signal?.aborted) {
+      resolve(undefined);
+      return;
+    }
+    const child = (options.spawnImpl ?? spawn)(command, piArgs, {
       stdio: ["ignore", "pipe", "pipe"],
       env: process.env,
     });
@@ -245,26 +262,59 @@ async function classifyWithSubprocess(
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      if (stdout.length < MAX_CHUNK) stdout += chunk;
+      stdout += chunk.slice(0, Math.max(0, MAX_CHUNK - stdout.length));
     });
     child.stderr.on("data", (chunk: string) => {
-      if (stderr.length < MAX_CHUNK) stderr += chunk;
+      stderr += chunk.slice(0, Math.max(0, MAX_CHUNK - stderr.length));
     });
 
+    let settled = false;
+    let stopping = false;
+    let deadlineExpired = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
     const timer = setTimeout(() => {
-      child.kill("SIGTERM");
+      deadlineExpired = true;
       console.error(`[bifrost] classifier subprocess timed out`);
-      resolve(undefined);
+      stopChild();
     }, 120_000);
+    const finish = (result: string | undefined): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      if (cleanupTimer) clearTimeout(cleanupTimer);
+      signal?.removeEventListener("abort", abortChild);
+      resolve(result);
+    };
+    const stopChild = (): void => {
+      if (settled || stopping) return;
+      stopping = true;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        if (settled) return;
+        child.kill("SIGKILL");
+        cleanupTimer = setTimeout(() => finish(undefined), 250);
+      }, 250);
+    };
+    const abortChild = (): void => stopChild();
+    signal?.addEventListener("abort", abortChild, { once: true });
+    if (signal?.aborted) abortChild();
 
     child.on("error", (err: Error) => {
-      clearTimeout(timer);
+      if (stopping || signal?.aborted) {
+        finish(undefined);
+        return;
+      }
       console.error(`[bifrost] classifier subprocess error: ${err}`);
-      resolve(undefined);
+      finish(undefined);
     });
 
     child.on("close", (code: number | null) => {
-      clearTimeout(timer);
+      if (stopping || signal?.aborted || deadlineExpired) {
+        finish(undefined);
+        return;
+      }
       if (code !== 0) {
         debug("classifier", "subprocess.error", {
           model: `${model.provider}/${model.id}`,
@@ -274,7 +324,7 @@ async function classifyWithSubprocess(
         console.error(
           `[bifrost] classifier subprocess exited ${code}: ${stderr.slice(0, 500)}`,
         );
-        resolve(undefined);
+        finish(undefined);
         return;
       }
       const result = extractCategory(stdout, categories);
@@ -283,7 +333,7 @@ async function classifyWithSubprocess(
         raw: stdout.trim().slice(0, 100),
         tier: result,
       });
-      resolve(result);
+      finish(result);
     });
   });
 }
@@ -294,7 +344,10 @@ export async function classifyWithLLM(
   categories: readonly string[],
   prompt: string,
   options: ClassifierOptions = {},
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
+  const activeSignal = signal ?? ctx.signal;
+  if (activeSignal?.aborted) return undefined;
   const method = options.method ?? "auto";
 
   if (method === "direct" || method === "auto") {
@@ -304,12 +357,15 @@ export async function classifyWithLLM(
       categories,
       prompt,
       options,
+      activeSignal,
     );
+    if (activeSignal?.aborted) return undefined;
     if (direct) return direct;
   }
 
+  if (activeSignal?.aborted) return undefined;
   if (method === "subprocess" || method === "auto") {
-    return classifyWithSubprocess(ctx, classifierModel, categories, prompt, options);
+    return classifyWithSubprocess(ctx, classifierModel, categories, prompt, options, activeSignal);
   }
 
   return undefined;
