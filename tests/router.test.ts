@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import { debug, setupDebug } from "../debug.ts";
-import { createRouter, type RouterModel, type RouterSnapshot } from "../router.ts";
+import { createRouter, type RouterModel, type RouterOptions, type RouterSnapshot } from "../router.ts";
 import { emptyEconomicSnapshot, publishEconomicObservation, type EconomicSignal, type ReservePolicy } from "../economic-signals.ts";
 
 function model(provider: string, id: string, input = 0.2, output = 0.3, contextWindow = 32_000): RouterModel {
@@ -388,18 +388,22 @@ describe("experimental resolve-only router", () => {
     await assert.rejects(router.resolve({ prompt: "request", forcedTier: "fixture/a" }), /Forced tier is not configured/);
   });
 
-  it("copies input snapshots and does not expose transport-only properties", async () => {
+  it("rejects unknown transport fields and isolates accepted snapshots from later mutation", async () => {
     const transportSecret = "PRIVATE_TRANSPORT_SENTINEL";
     const inputModel = { ...model("fixture", "quick-model"), api: "secret-api", baseUrl: transportSecret } as RouterModel;
     const input = snapshot({ registry: { knownModels: [inputModel], availableModels: [inputModel] } });
-    const router = createRouter(input);
-    (input.config.models as Record<string, string[]>).quick[0] = "fixture/changed";
-    (inputModel.cost as { input: number }).input = 99;
+    assert.throws(() => createRouter(input), /Invalid router snapshot data/);
+    assert.equal(JSON.stringify(input).includes(transportSecret), true);
+
+    const accepted = snapshot();
+    const router = createRouter(accepted);
+    (accepted.config.models as Record<string, string[]>).quick[0] = "fixture/changed";
+    (accepted.registry.knownModels[0]!.cost as { input: number }).input = 99;
     const result = await router.resolve({ prompt: "request" });
     const serialized = JSON.stringify(result);
     assert.equal(result.status, "completed");
     if (result.status === "completed") assert.equal(result.decision.selected, "fixture/quick-model");
-    assert.equal(serialized.includes(transportSecret), false);
+    assert.equal(serialized.includes("PRIVATE_TRANSPORT_SENTINEL"), false);
     assert.equal(serialized.includes("baseUrl"), false);
   });
 
@@ -471,7 +475,7 @@ describe("experimental resolve-only router", () => {
       classifier: { enabled: true, criteria: { quick: {
         what: "Bounded", apiKey: "MUST_NOT_ESCAPE",
       } as unknown as { what: string } } },
-    } }), { networkClassifierGrant: true, networkClassifier: { classify: async () => undefined } }), /Invalid router classifier criterion/);
+    } }), { networkClassifierGrant: true, networkClassifier: { classify: async () => undefined } }), /Invalid router snapshot data/);
   });
 
   it("honors configured minimum confidence and fails closed when confidence is absent", async () => {
@@ -663,7 +667,7 @@ describe("experimental resolve-only router", () => {
     assert.equal(JSON.stringify(economicSnapshot), before);
   });
 
-  it("validates reliability snapshots before any classifier call and omits unused reason text", async () => {
+  it("validates reliability snapshots before any classifier call and strips known legacy reason text", async () => {
     let calls = 0;
     const classifier = { classify: async () => { calls += 1; return { tier: "quick", backend: "external" }; } };
     const invalid = snapshot({ reliabilityState: { version: 1, models: {
@@ -689,6 +693,108 @@ describe("experimental resolve-only router", () => {
       reliability: { stateVersion: 2, observations: { enabled: true } },
     } as unknown as RouterSnapshot["config"] });
     assert.throws(() => createRouter(input), /Unsupported router reliability controls/);
+  });
+
+  it("rejects accessors, symbols, unknown fields, and nonplain snapshot records without invoking getters", () => {
+    let calls = 0;
+    let getterCalls = 0;
+    const classifier = { classify: async () => { calls += 1; return { tier: "quick", backend: "external" }; } };
+    const accessorClock = snapshot() as unknown as Record<string, unknown>;
+    Object.defineProperty(accessorClock, "now", { enumerable: true, get: () => { getterCalls += 1; return 1_000; } });
+    assert.throws(() => createRouter(accessorClock as unknown as RouterSnapshot, {
+      networkClassifierGrant: true, networkClassifier: classifier,
+    }), /Invalid router snapshot data/);
+    assert.equal(getterCalls, 0);
+    assert.equal(calls, 0);
+
+    const symbolic = snapshot() as RouterSnapshot & { [secret: symbol]: string };
+    symbolic[Symbol("private")] = "PRIVATE_SYMBOL_SENTINEL";
+    assert.throws(() => createRouter(symbolic), /Invalid router snapshot data/);
+
+    const unknown = snapshot() as RouterSnapshot & { privateField: string };
+    unknown.privateField = "PRIVATE_UNKNOWN_SENTINEL";
+    assert.throws(() => createRouter(unknown), /Invalid router snapshot data/);
+
+    const nonplain = snapshot({ config: Object.assign(Object.create({ inherited: true }), snapshot().config) as RouterSnapshot["config"] });
+    assert.throws(() => createRouter(nonplain), /Invalid router snapshot data/);
+  });
+
+  it("rejects proxies before invoking their traps and rejects accessor-bearing classifier capabilities", () => {
+    let traps = 0;
+    let calls = 0;
+    const proxy = new Proxy(snapshot(), {
+      ownKeys: () => { traps += 1; return []; },
+      getPrototypeOf: () => { traps += 1; return Object.prototype; },
+      getOwnPropertyDescriptor: () => { traps += 1; return undefined; },
+    });
+    assert.throws(() => createRouter(proxy, {
+      networkClassifierGrant: true,
+      networkClassifier: { classify: async () => { calls += 1; return undefined; } },
+    }), /Invalid router snapshot data/);
+    assert.equal(traps, 0);
+    assert.equal(calls, 0);
+
+    const revoked = Proxy.revocable(snapshot(), {});
+    revoked.revoke();
+    assert.throws(() => createRouter(revoked.proxy), /Invalid router snapshot data/);
+
+    let getterCalls = 0;
+    const port = Object.defineProperty({}, "classify", {
+      enumerable: true,
+      get: () => { getterCalls += 1; return async () => undefined; },
+    });
+    assert.throws(() => createRouter(snapshot(), {
+      networkClassifierGrant: true, networkClassifier: port as unknown as RouterOptions["networkClassifier"],
+    }), /Invalid router options/);
+    assert.equal(getterCalls, 0);
+  });
+
+  it("rejects out-of-range array properties without invoking accessors or classifier ports", () => {
+    let getterCalls = 0;
+    let classifierCalls = 0;
+    const input = snapshot({ config: {
+      models: { quick: ["fixture/quick-model"] }, default: "quick", rules: [], classifier: { enabled: true },
+    } });
+    Object.defineProperty(input.registry.knownModels, "4294967295", {
+      get: () => { getterCalls += 1; return model("fixture", "unexpected"); },
+    });
+    assert.throws(() => createRouter(input, {
+      networkClassifierGrant: true,
+      networkClassifier: { classify: async () => { classifierCalls += 1; return undefined; } },
+    }), /Invalid router snapshot data/);
+    assert.equal(getterCalls, 0);
+    assert.equal(classifierCalls, 0);
+  });
+
+  it("accepts a class-based classifier port through its inherited data method", async () => {
+    class ClassifierPort {
+      calls = 0;
+      async classify() {
+        this.calls += 1;
+        return { tier: "quick", backend: "class-port" };
+      }
+    }
+    const port = new ClassifierPort();
+    const router = createRouter(snapshot({ config: {
+      models: { quick: ["fixture/quick-model"] }, default: "quick", rules: [], classifier: { enabled: true },
+    } }), { networkClassifierGrant: true, networkClassifier: port });
+    const result = await router.resolve({ prompt: "request" });
+    assert.equal(result.status, "completed");
+    assert.equal(port.calls, 1);
+    if (result.status === "completed") assert.equal(result.decision.classification.classifier?.backend, "class-port");
+  });
+
+  it("captures data descriptors once so inconsistent getters cannot change a validated route", async () => {
+    let getterCalls = 0;
+    const input = snapshot();
+    const targetConfig = input.config as unknown as Record<string, unknown>;
+    Object.defineProperty(targetConfig, "default", {
+      enumerable: true,
+      configurable: true,
+      get: () => { getterCalls += 1; return getterCalls === 1 ? "quick" : "untrusted-tier"; },
+    });
+    assert.throws(() => createRouter(input), /Invalid router snapshot data/);
+    assert.equal(getterCalls, 0);
   });
 
   it("does not append pipeline debug events while the main process logger is enabled", async () => {

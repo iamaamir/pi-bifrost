@@ -1,5 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { types as nodeTypes } from "node:util";
 import { validateConfig, type BifrostConfig } from "./config.ts";
 import { buildRouteDecisionSummary, createPipeline, type ClassificationResult, type RouteDecisionSummary } from "./classification-pipeline.ts";
 import type { ClassificationJudgment, TierCriterion } from "./classifier-backends.ts";
@@ -145,22 +146,168 @@ function internalModel(model: RouterModel): Model<Api> {
   } as Model<Api>;
 }
 
-function copyFrozen<T>(value: T): T {
-  let copy: T;
+interface DataObjectSchema { readonly [key: string]: DataSchema }
+type DataSchema = DataObjectSchema | { readonly array: DataSchema }
+  | { readonly map: DataSchema } | { readonly oneOf: readonly DataSchema[] } | null;
+
+function invalidSnapshot(): never {
+  throw new Error("Invalid router snapshot data.");
+}
+
+function ownRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object") return invalidSnapshot();
+  if (nodeTypes.isProxy(value)) return invalidSnapshot();
+  if (Array.isArray(value)) return invalidSnapshot();
   try {
-    copy = structuredClone(value);
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return invalidSnapshot();
+    const keys = Reflect.ownKeys(value);
+    const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const key of keys) {
+      if (typeof key !== "string") return invalidSnapshot();
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor) || descriptor.enumerable !== true) return invalidSnapshot();
+      result[key] = descriptor.value;
+    }
+    return result;
   } catch {
-    throw new Error("Router snapshots must contain cloneable data.");
+    return invalidSnapshot();
   }
-  const seen = new WeakSet<object>();
-  const freeze = (item: unknown): void => {
-    if (!item || typeof item !== "object" || seen.has(item)) return;
-    seen.add(item);
-    for (const child of Object.values(item as Record<string, unknown>)) freeze(child);
-    Object.freeze(item);
-  };
-  freeze(copy);
-  return copy;
+}
+
+function ownArray(value: unknown): unknown[] {
+  if (nodeTypes.isProxy(value)) return invalidSnapshot();
+  if (!Array.isArray(value)) return invalidSnapshot();
+  try {
+    if (Object.getPrototypeOf(value) !== Array.prototype) return invalidSnapshot();
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (!lengthDescriptor || !("value" in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value)
+      || lengthDescriptor.value < 0) return invalidSnapshot();
+    const length = lengthDescriptor.value as number;
+    for (const key of Reflect.ownKeys(value)) {
+      if (key === "length") continue;
+      if (typeof key !== "string" || !/^(0|[1-9][0-9]*)$/u.test(key)) return invalidSnapshot();
+      const index = Number(key);
+      if (!Number.isSafeInteger(index) || index >= length || index >= 0xffff_ffff || String(index) !== key) {
+        return invalidSnapshot();
+      }
+    }
+    const copy: unknown[] = [];
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor || !("value" in descriptor) || descriptor.enumerable !== true) return invalidSnapshot();
+      copy.push(descriptor.value);
+    }
+    return copy;
+  } catch {
+    return invalidSnapshot();
+  }
+}
+
+function normalizeData(value: unknown, schema: DataSchema): unknown {
+  if (value === undefined) return undefined;
+  if (schema === null) {
+    if (value === null || ["string", "number", "boolean"].includes(typeof value)) return value;
+    return invalidSnapshot();
+  }
+  const oneOf = (schema as { readonly oneOf?: readonly DataSchema[] }).oneOf;
+  if (Array.isArray(oneOf)) {
+    for (const option of oneOf) {
+      try { return normalizeData(value, option); } catch { /* try the next declared shape */ }
+    }
+    return invalidSnapshot();
+  }
+  if ("array" in schema) return ownArray(value).map((entry) => normalizeData(entry, schema.array));
+  if ("map" in schema) {
+    const source = ownRecord(value);
+    const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const key of Object.keys(source)) result[key] = normalizeData(source[key], schema.map);
+    return result;
+  }
+  const source = ownRecord(value);
+  const allowed = schema as Readonly<Record<string, DataSchema>>;
+  for (const key of Object.keys(source)) if (!Object.hasOwn(allowed, key)) return invalidSnapshot();
+  const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const key of Object.keys(source)) result[key] = normalizeData(source[key], allowed[key]!);
+  return result;
+}
+
+const scalar: DataSchema = null;
+const stringArray: DataSchema = { array: scalar };
+const modelTier: DataSchema = { oneOf: [scalar, stringArray] };
+const classifierModel: DataSchema = { oneOf: [scalar, stringArray] };
+const criterion: DataSchema = { oneOf: [scalar, { what: scalar, notFor: scalar, examples: stringArray }] };
+const modelSnapshotSchema: DataSchema = {
+  provider: scalar, id: scalar, cost: { input: scalar, output: scalar }, contextWindow: scalar, virtual: scalar,
+};
+const economicScopeSchema: DataSchema = {
+  kind: scalar, model: scalar, provider: scalar, accountRef: scalar, epoch: scalar,
+};
+const economicWindowSchema: DataSchema = {
+  id: scalar, period: { id: scalar, sequence: scalar }, unit: scalar, currency: scalar,
+  remaining: scalar, limit: scalar, resetsAt: scalar,
+};
+const economicSignalSchema: DataSchema = {
+  sourceId: scalar, scopeRef: scalar, billing: scalar, observedAt: scalar, expiresAt: scalar,
+  revision: scalar, windows: { array: economicWindowSchema },
+};
+const reserveRuleSchema: DataSchema = {
+  id: scalar, scopeRef: scalar, windowId: scalar, reserveRatio: scalar, unknown: scalar,
+};
+const routerSnapshotSchema: DataSchema = {
+  config: {
+    schemaVersion: scalar, tierPolicies: { map: { fallbackTiers: stringArray } }, default: scalar, strategy: scalar,
+    categoryStrategies: { map: scalar }, models: { map: modelTier },
+    rules: { array: { pattern: scalar, model: scalar } },
+    classifier: {
+      enabled: scalar, backend: scalar, totalTimeoutMs: scalar, model: classifierModel, endpoint: scalar,
+      method: scalar, systemPrompt: scalar, maxTokens: scalar, temperature: scalar, fallbackToRegex: scalar,
+      criteria: { map: criterion }, typesafe: {
+        model: scalar, endpoint: scalar, timeoutMs: scalar, maxAttempts: scalar, debug: scalar, metrics: { enabled: scalar },
+      }, piNative: { model: scalar, timeoutMs: scalar, maxAttempts: scalar, metrics: { enabled: scalar } },
+      minConfidence: scalar, fallback: scalar,
+    },
+    reliability: {
+      enabled: scalar, stateVersion: scalar, observations: { enabled: scalar }, path: scalar,
+      failureThreshold: scalar, windowMinutes: scalar, cooldownMinutes: scalar,
+    },
+    affinity: { mode: scalar, providerAdvisory: scalar },
+  },
+  registry: { knownModels: { array: modelSnapshotSchema }, availableModels: { array: modelSnapshotSchema } },
+  now: scalar,
+  reliabilityState: { version: scalar, models: { map: {
+    failures: { array: scalar }, openUntil: scalar, trialActive: scalar, cooldownMultiplier: scalar,
+    lastFailureAt: scalar, lastFailureSource: scalar, lastFailureReason: scalar,
+    lastSuccessAt: scalar, lastSuccessSource: scalar,
+  } } },
+  economic: {
+    policy: {
+      mode: scalar, scopes: { map: economicScopeSchema },
+      sources: { array: { id: scalar, scopeRef: scalar, authority: scalar } },
+      sourceOrder: { map: stringArray }, admission: { array: reserveRuleSchema },
+      preference: { billingClass: scalar }, tierOverrides: { map: { map: { reserveRatio: scalar, unknown: scalar } } },
+      observations: { array: economicSignalSchema },
+    },
+    snapshot: {
+      revision: scalar, signals: { array: economicSignalSchema },
+      watermarks: { array: { sourceId: scalar, scopeRef: scalar, windowId: scalar, periodId: scalar, periodSequence: scalar, revision: scalar } },
+    },
+  },
+  affinity: { targetOrigin: scalar, anchor: { modelKey: scalar, provider: scalar, lastSuccessfulDispatchAt: scalar } },
+};
+
+function freezeTree<T>(value: T): T {
+  if (!value || typeof value !== "object") return value;
+  for (const child of Object.values(value as Record<string, unknown>)) freezeTree(child);
+  return Object.freeze(value);
+}
+
+function normalizeSnapshot(snapshot: unknown): RouterSnapshot {
+  try {
+    return freezeTree(normalizeData(snapshot, routerSnapshotSchema)) as RouterSnapshot;
+  } catch {
+    throw new Error("Invalid router snapshot data.");
+  }
 }
 
 function buildRegistry(snapshot: RouterRegistrySnapshot): InternalRegistry {
@@ -283,7 +430,7 @@ function sanitizedReliabilityState(value: ReliabilityState | undefined, now: num
   if (!isPlain(value) || value.version !== 1 || !isPlain(value.models)) {
     throw new Error("Invalid router reliability snapshot.");
   }
-  const models: ReliabilityState["models"] = {};
+  const models: ReliabilityState["models"] = Object.create(null) as ReliabilityState["models"];
   for (const [key, raw] of Object.entries(value.models)) {
     if (!safeId(key) || !isPlain(raw) || !Array.isArray(raw.failures)
       || !raw.failures.every((time) => validEpoch(time) && time <= now)
@@ -325,6 +472,47 @@ function classifierTimeout(value: number | undefined): number {
     throw new Error("Invalid router classifier timeout.");
   }
   return timeout;
+}
+
+function classifierMethod(value: unknown): { readonly receiver: object; readonly method: RouterClassifierPort["classify"] } {
+  if (!value || typeof value !== "object" || nodeTypes.isProxy(value)) throw new Error("Invalid router options.");
+  try {
+    let current: object | null = value;
+    while (current && current !== Object.prototype) {
+      if (nodeTypes.isProxy(current)) throw new Error("Invalid router options.");
+      const descriptor = Object.getOwnPropertyDescriptor(current, "classify");
+      if (descriptor) {
+        if (!("value" in descriptor) || typeof descriptor.value !== "function") throw new Error("Invalid router options.");
+        return { receiver: value, method: descriptor.value as RouterClassifierPort["classify"] };
+      }
+      current = Object.getPrototypeOf(current) as object | null;
+    }
+  } catch {
+    throw new Error("Invalid router options.");
+  }
+  throw new Error("Invalid router options.");
+}
+
+function captureRouterOptions(value: unknown): Readonly<RouterOptions> {
+  const input = ownRecord(value);
+  const allowed = new Set(["networkClassifierGrant", "networkClassifier", "classifierTimeoutMs", "random"]);
+  if (Object.keys(input).some((key) => !allowed.has(key))) throw new Error("Invalid router options.");
+  const grant = input.networkClassifierGrant;
+  const timeout = input.classifierTimeoutMs;
+  const random = input.random;
+  if (grant !== undefined && grant !== true || timeout !== undefined && typeof timeout !== "number"
+    || random !== undefined && typeof random !== "function") throw new Error("Invalid router options.");
+  let port: RouterClassifierPort | undefined;
+  if (input.networkClassifier !== undefined) {
+    const capability = classifierMethod(input.networkClassifier);
+    port = Object.freeze({ classify: capability.method.bind(capability.receiver) });
+  }
+  return Object.freeze({
+    ...(grant === true ? { networkClassifierGrant: true as const } : {}),
+    ...(port ? { networkClassifier: port } : {}),
+    ...(timeout !== undefined ? { classifierTimeoutMs: timeout as number } : {}),
+    ...(random !== undefined ? { random: random as () => number } : {}),
+  });
 }
 
 function configuredCriteria(config: BifrostConfig, tiers: readonly string[]): Readonly<Record<string, TierCriterion>> {
@@ -461,19 +649,15 @@ function checkSnapshot(snapshot: RouterSnapshot): void {
 /** Create an experimental, resolve-only router over explicit read-only snapshots.
  * Results describe only those snapshots and never authorize a later dispatch. */
 export function createRouter(snapshot: RouterSnapshot, options: RouterOptions = {}): Router {
-  checkSnapshot(snapshot);
-  const now = snapshot.now;
-  const config = copyFrozen(snapshot.config);
-  const registry = buildRegistry(snapshot.registry);
-  const reliabilityState = copyFrozen(sanitizedReliabilityState(snapshot.reliabilityState, now));
-  const economic = snapshot.economic ? copyFrozen(snapshot.economic) : undefined;
-  const affinity = snapshot.affinity ? copyFrozen(checkedAffinitySnapshot(snapshot.affinity, now)) : undefined;
-  const capturedOptions: Readonly<RouterOptions> = Object.freeze({
-    ...(options.networkClassifierGrant === true ? { networkClassifierGrant: true as const } : {}),
-    ...(options.networkClassifier ? { networkClassifier: Object.freeze({ classify: options.networkClassifier.classify.bind(options.networkClassifier) }) } : {}),
-    ...(options.classifierTimeoutMs !== undefined ? { classifierTimeoutMs: options.classifierTimeoutMs } : {}),
-    ...(options.random ? { random: options.random } : {}),
-  });
+  const normalized = normalizeSnapshot(snapshot);
+  checkSnapshot(normalized);
+  const capturedOptions = captureRouterOptions(options);
+  const now = normalized.now;
+  const config = normalized.config;
+  const registry = buildRegistry(normalized.registry);
+  const reliabilityState = freezeTree(sanitizedReliabilityState(normalized.reliabilityState, now));
+  const economic = normalized.economic;
+  const affinity = normalized.affinity ? freezeTree(checkedAffinitySnapshot(normalized.affinity, now)) : undefined;
   const classifier = createClassifier(config, capturedOptions);
   const tiers = Object.keys(config.models ?? {});
   const pipeline = createPipeline({

@@ -44,6 +44,10 @@ Each router captures its configuration, registry, reliability state, economic fa
 
 External classification is disabled unless the caller supplies both `networkClassifierGrant: true` and an injected classifier port, and the config enables classification. The port receives at most 16,384 prompt characters, known configured tiers, and only explicitly configured criteria for those tiers. Missing criteria are passed as an empty object. The API supplies no default classifier guidance. An abort signal or bounded classifier deadline stops waiting; a late classifier response cannot produce a route.
 
+Snapshot DTOs must use plain records with own data fields and ordinary dense arrays. The factory rejects accessors, symbol keys, unknown fields, sparse or extended arrays, nonplain records, and proxies detectable by Node's runtime. It reads descriptors without invoking getters, validates the detached normalized copy, and uses that same copy for routing. Do not pass live host objects or mutable transport models as snapshot DTOs.
+
+Classifier and RNG functions are explicit capabilities, not snapshot data. The options object must itself be a plain own-data record with only the documented option fields. A classifier port may be a plain object or a class instance; its `classify` method must be a data method found on the instance or its prototype chain. Accessor methods and proxy ports are rejected without invoking getters. The RNG must be supplied directly as a function.
+
 The result contains a normalized route-decision summary, not Pi transport models or provider credentials. Unsupported config fields are rejected. Economic policy and observations must be supplied as an explicit economic snapshot. Results never dispatch or change Pi state.
 
 The resolve-only API accepts only the v1 reliability routing thresholds and `enabled` flag, plus an explicit v1 circuit snapshot. It rejects reliability v2 store and observation controls because resolution cannot reserve a lease or settle a dispatch. A v2 circuit snapshot supplied by a caller remains advisory and does not authorize dispatch.
