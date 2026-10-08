@@ -135,7 +135,7 @@ export function createRuntimeAffinityStore(): RuntimeAffinityStore {
         if (entryIndex === undefined) return false;
         const previous = anchors.get(session);
         if (previous) {
-          if (previous.branchEntryId === branchEntryId || observedAt <= previous.observedAt) return false;
+          if (previous.branchEntryId === branchEntryId || observedAt < previous.observedAt) return false;
           const previousIndex = uniqueEntryIndex(branch, previous.branchEntryId, previous.modelKey);
           if (previousIndex === undefined || entryIndex <= previousIndex) return false;
         }

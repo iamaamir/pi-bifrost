@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 2,
+  "enabled": true,
+  "default": "quick",
+  "strategy": "first",
+  "classifier": { "enabled": false },
+  "models": {
+    "quick": ["provider/model-id"]
+  },
+  "reliability": {
+    "stateVersion": 2,
+    "failureThreshold": 3,
+    "windowMinutes": 5,
+    "cooldownMinutes": 60,
+    "observations": { "enabled": false }
+  },
+  "rules": []
+}

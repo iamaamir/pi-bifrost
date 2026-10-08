@@ -1,10 +1,11 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CONFIG_DIR_NAME, ModelSelectorComponent, type ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { CONFIG_DIR_NAME, ModelSelectorComponent, getAgentDir, type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { createHash } from "node:crypto";
+import { constants, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
 import type { BifrostConfig, ClassifierConfig } from "./config.ts";
-import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, PROMPT_ONLY_FIELDS, classifierTotalTimeoutIssue, loadConfigForReload, validateEconomicConfig, validateTierPolicyConfig } from "./config.ts";
+import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, PROMPT_ONLY_FIELDS, classifierTotalTimeoutIssue, loadConfigForReload, loadConfigWithSourceOverride, validateConfig, validateEconomicConfig, validateTierPolicyConfig } from "./config.ts";
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
 import { buildRouteDecisionSummary, type ClassificationPipeline, type ClassificationResult, type ClassificationSource, type RouteDecisionSummary } from "./classification-pipeline.ts";
@@ -21,8 +22,14 @@ import {
   type HealthyModelResolution,
   type RoutedModelResolution,
   type RoutingStrategy,
+  type AffinityRoutingContext,
 } from "./routing.ts";
 import type { ReliabilityStore } from "./reliability-store.ts";
+import type { ReliabilityV2Store } from "./reliability-v2-store.ts";
+import { ReliabilityV2StoreError } from "./reliability-v2-store.ts";
+import { emptyReliabilityState } from "./reliability.ts";
+import { createReliabilityV2Store, reliabilityV2Config, reliabilityV2Path } from "./runtime-reliability-v2.ts";
+import { projectReliabilityV2ForRouting } from "./reliability-v2-routing.ts";
 import { classifierMetricsEnabled, type ClassifierMetricsState, type ClassifierMetricsStore } from "./classifier-metrics.ts";
 import type { EffectiveBackend } from "./classifier-detection.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend } from "./classifier-backends.ts";
@@ -31,6 +38,25 @@ import { resolveTypeSafeApiKey, type TypeSafeCredentialSource } from "./typesafe
 import { inspectDiagnostics, validateDiagnostics, type BifrostDiagnostic, type InspectDiagnosticsReport, type ValidateDiagnosticsReport } from "./diagnostics.ts";
 import type { EconomicDiagnostic, EconomicSnapshot, ReservePolicy } from "./economic-signals.ts";
 import { reconcileEconomicSnapshot } from "./economic-config.ts";
+import type { AffinityAnchor } from "./affinity.ts";
+import {
+  buildInitOwnershipReceipt,
+  parseReconciliationCommandArgs,
+  runReconciliationCommand,
+  type ReconciliationCommandReport,
+  type ReconciliationCommandRequest,
+  type ReconciliationConfigSource,
+  type ReconciliationRegistrySnapshot,
+  type ReconciliationSourceSnapshot,
+} from "./reconciliation-command.ts";
+import {
+  applyReconciliationTransaction,
+  recoverReconciliationTransaction,
+  ReconciliationStoreError,
+} from "./reconciliation-store.ts";
+import { projectProviderRefreshEvidence, waitForRegistryRefresh } from "./registry-refresh.ts";
+import { REGISTRY_REFRESH_TTL_MS } from "./ux-status.ts";
+import { isVirtualModel } from "./virtual-model.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
@@ -43,6 +69,8 @@ export interface BifrostState {
   /** Private compatibility provenance retained while economics is absent. */
   economicHistoryPolicy?: ReservePolicy;
   economicPolicyValid?: boolean;
+  /** Invalid/unsupported affinity namespace must not silently become legacy routing. */
+  affinityConfigValid?: boolean;
   economicDiagnostics?: readonly EconomicDiagnostic[];
   economicQuarantinedSourceRevisions?: ReadonlyMap<string, number>;
   enabled: boolean;
@@ -50,6 +78,14 @@ export interface BifrostState {
   pinned: boolean;
   cacheEntries: CacheEntry[];
   reliabilityStore: ReliabilityStore;
+  reliabilityV2Store?: ReliabilityV2Store;
+  configGeneration?: number;
+  reliabilityV2ConfigValid?: boolean;
+  reliabilityV2StateError?: string;
+  onConfigInstalled?: (config: BifrostConfig, previousConfig: BifrostConfig) => void;
+  onManualControl?: (session: object) => void;
+  /** Read-only projection of the current branch-local successful Auto anchor. */
+  getAffinityAnchor?: (ctx: ExtensionContext) => AffinityAnchor | undefined;
   classifierMetricsStore: ClassifierMetricsStore;
   extensionDir: string;
   /** Uses the extension instance's sticky detector without locking on context-free facts. */
@@ -62,6 +98,8 @@ export interface BifrostState {
   saveModeState: () => void;
   lastRegistryRefreshAt?: number;
   forceRegistryRefresh?: boolean;
+  /** Per-provider, content-free registry refresh evidence for offline reconciliation. */
+  registryInventoryEvidence?: Readonly<Record<string, { status: "complete" | "partial" | "stale"; refreshedAt: number }>>;
   /** Recorded when detection fills an absent classifier.backend; status and test report read it (fix 12). */
   classifierDetection?: { backend: ClassifierBackend; reason: string };
 }
@@ -72,12 +110,16 @@ function installConfigIfTierPoliciesValid(
   ctx: ExtensionContext,
 ): boolean {
   const errors = validateTierPolicyConfig(config).filter((issue) => issue.severity === "error");
+  errors.push(...validateEconomicConfig(config).filter((issue) => issue.severity === "error"));
+  errors.push(...validateConfig(config).filter((issue) => issue.severity === "error" && issue.code?.startsWith("config.reliability_")));
+  errors.push(...validateConfig(config).filter((issue) => issue.severity === "error" && issue.code?.startsWith("config.affinity_")));
   const totalTimeoutIssue = classifierTotalTimeoutIssue(config);
   if (totalTimeoutIssue) errors.push(totalTimeoutIssue);
   if (errors.length > 0) {
     log(ctx, `Bifrost config reload rejected: ${errors.map((issue) => issue.message).join(" ")}`, "error");
     return false;
   }
+  const previousConfig = state.config;
   const reconciled = reconcileEconomicSnapshot(
     state.economicSnapshot,
     state.economicHistoryPolicy ?? state.economicPolicy,
@@ -86,12 +128,14 @@ function installConfigIfTierPoliciesValid(
   );
   state.config = config;
   state.tierPolicyValid = true;
+  state.affinityConfigValid = true;
   state.economicSnapshot = reconciled.snapshot;
   state.economicPolicy = reconciled.policy;
   state.economicHistoryPolicy = reconciled.historyPolicy;
   state.economicPolicyValid = validateEconomicConfig(config).every((issue) => issue.severity !== "error");
   state.economicDiagnostics = reconciled.diagnostics;
   state.economicQuarantinedSourceRevisions = reconciled.quarantinedSourceRevisions;
+  state.onConfigInstalled?.(config, previousConfig);
   state.invalidatePipeline();
   return true;
 }
@@ -249,12 +293,41 @@ export type BifrostTierDisplay = {
 };
 
 type ResolvedTierDisplay = BifrostTierDisplay & { resolution: RoutedModelResolution };
+type AffinityInspectEvidence = {
+  mode: "observe" | "retain-within-tier";
+  status: "anchored" | "locality_unknown";
+  anchor?: { model: string; provider: string; lastSuccessfulAt: string; ageMs: number };
+};
+
+function inspectAffinity(state: BifrostState, ctx: ExtensionContext): AffinityInspectEvidence | undefined {
+  const mode = state.config.affinity?.mode;
+  if (mode !== "observe" && mode !== "retain-within-tier") return undefined;
+  const anchor = state.getAffinityAnchor?.(ctx);
+  if (!anchor) return { mode, status: "locality_unknown" };
+  const now = Date.now();
+  return {
+    mode,
+    status: "anchored",
+    anchor: {
+      model: anchor.modelKey,
+      provider: anchor.provider,
+      lastSuccessfulAt: formatDiagnosticTimestamp(anchor.lastSuccessfulDispatchAt),
+      ageMs: Math.max(0, now - anchor.lastSuccessfulDispatchAt),
+    },
+  };
+}
 
 function resolveTierDisplay(
   tier: string,
   state: BifrostState,
   ctx: ExtensionContext,
+  intrinsicOrigin: string = "automatic",
 ): ResolvedTierDisplay {
+  const affinityMode = state.config.affinity?.mode;
+  const anchor = affinityMode === "observe" || affinityMode === "retain-within-tier" ? state.getAffinityAnchor?.(ctx) : undefined;
+  const affinity: AffinityRoutingContext | undefined = affinityMode === "observe" || affinityMode === "retain-within-tier"
+    ? { intrinsicOrigin, ...(anchor ? { anchor } : {}) }
+    : undefined;
   const { options, resolution: resolved } = resolveConfiguredTier(
     ctx,
     tier,
@@ -265,6 +338,8 @@ function resolveTierDisplay(
     state.config.economics && state.economicPolicyValid && state.economicPolicy && state.economicSnapshot
       ? { policy: state.economicPolicy, snapshot: state.economicSnapshot }
       : undefined,
+    undefined,
+    affinity,
   );
   const explicitBoundary = resolved.explicitBoundary === true;
   const defaultTier = explicitBoundary ? undefined : options.defaultTier;
@@ -352,6 +427,229 @@ export function buildInitProposal(
 // ── Command handlers ────────────────────────────────────────
 
 const isForced = (args:string):boolean => args?.split(/\s+/).includes("-f");
+const MAX_RECONCILIATION_CONFIG_BYTES = 10_000_000;
+const MAX_RECONCILIATION_OWNERSHIP_BYTES = 5_000_000;
+
+function reconciliationPaths(source: ReconciliationConfigSource): { configPath: string; ownershipPath: string; journalPath: string } {
+  const directory = source === "project" ? join(process.cwd(), CONFIG_DIR_NAME) : getAgentDir();
+  return {
+    configPath: join(directory, "bifrost.json"),
+    ownershipPath: join(directory, "bifrost-reconcile-ownership.json"),
+    journalPath: join(directory, "bifrost-reconcile.journal"),
+  };
+}
+
+function readReconciliationSource(source: ReconciliationConfigSource): ReconciliationSourceSnapshot {
+  const paths = reconciliationPaths(source);
+  const configBytes = readBoundedRegularSnapshot(paths.configPath) ?? null;
+  const ownershipBytes = readBoundedRegularSnapshot(paths.ownershipPath) ?? null;
+  if (configBytes && configBytes.byteLength > MAX_RECONCILIATION_CONFIG_BYTES
+    || ownershipBytes && ownershipBytes.byteLength > MAX_RECONCILIATION_OWNERSHIP_BYTES) {
+    throw new Error("source exceeds reconciliation bounds");
+  }
+  return { ...paths, source, configBytes, ownershipBytes };
+}
+
+function reconciliationRegistrySnapshot(
+  ctx: ExtensionContext,
+  state: BifrostState,
+  provider: string,
+  now = Date.now(),
+): ReconciliationRegistrySnapshot {
+  let models: ReconciliationRegistrySnapshot["models"] = [];
+  let hasRegistryError = false;
+  const knownProviders = new Set<string>();
+  try {
+    const all = ctx.modelRegistry.getAll();
+    models = all.map((model) => ({ provider: model.provider, id: model.id, virtual: isVirtualModel(model) }));
+    for (const model of models) if (!model.virtual) knownProviders.add(model.provider);
+  } catch {
+    hasRegistryError = true;
+  }
+  try {
+    if (ctx.modelRegistry.getProvider(provider)) knownProviders.add(provider);
+  } catch {
+    hasRegistryError = true;
+  }
+  try {
+    hasRegistryError ||= Boolean(ctx.modelRegistry.getError());
+  } catch {
+    hasRegistryError = true;
+  }
+  let authConfigured: boolean | undefined;
+  try {
+    const status = ctx.modelRegistry.getProviderAuthStatus(provider);
+    if (status && typeof status.configured === "boolean") authConfigured = status.configured;
+  } catch {
+    authConfigured = undefined;
+  }
+  const rawEvidence = state.registryInventoryEvidence?.[provider];
+  const refreshEvidence = rawEvidence
+    && (rawEvidence.status === "complete" || rawEvidence.status === "partial" || rawEvidence.status === "stale")
+    && Number.isFinite(rawEvidence.refreshedAt)
+    ? { status: rawEvidence.status, refreshedAt: rawEvidence.refreshedAt }
+    : undefined;
+  return {
+    models,
+    knownProviders: [...knownProviders],
+    authConfigured,
+    hasRegistryError,
+    forceRefresh: state.forceRegistryRefresh === true,
+    refreshEvidence,
+    now,
+    freshnessTtlMs: REGISTRY_REFRESH_TTL_MS,
+  };
+}
+
+function setRegistryProviderEvidence(
+  state: BifrostState,
+  provider: string,
+  evidence: { readonly status: "complete" | "partial" | "stale"; readonly refreshedAt: number },
+): void {
+  state.registryInventoryEvidence = Object.freeze({
+    ...(state.registryInventoryEvidence ?? {}),
+    [provider]: Object.freeze({ status: evidence.status, refreshedAt: evidence.refreshedAt }),
+  });
+}
+
+function prospectiveConfigInstallable(source: ReconciliationConfigSource, bytes: Uint8Array, state: BifrostState): boolean {
+  const loaded = loadConfigWithSourceOverride(process.cwd(), state.extensionDir, source, bytes);
+  if (loaded.diagnostics.length > 0) return false;
+  const errors = validateTierPolicyConfig(loaded.config).filter((issue) => issue.severity === "error");
+  const validation = validateConfig(loaded.config);
+  errors.push(...validation.filter((issue) => issue.severity === "error"
+    && (issue.code?.startsWith("config.reliability_") || issue.code?.startsWith("config.affinity_"))));
+  return errors.length === 0 && classifierTotalTimeoutIssue(loaded.config) === undefined;
+}
+
+function reconciliationReportLines(report: ReconciliationCommandReport): string[] {
+  const lines = ["--- config reconcile ---", `source: ${report.source}`, `status: ${report.status}`];
+  if (report.provider) lines.push(`provider: ${report.provider}`);
+  if (report.tier) lines.push(`tier: ${report.tier}`);
+  if (report.inventoryStatus) lines.push(`inventory: ${report.inventoryStatus}`);
+  if (report.reason) lines.push(`reason: ${report.reason}`);
+  if (report.proposalDigest) lines.push(`proposal: ${report.proposalDigest}`);
+  if (report.changes.length) {
+    lines.push("changes:", ...report.changes.map((change) => `  ${change.disposition} ${change.kind} ${change.tier}: ${change.modelKey}`));
+  } else lines.push("changes: none");
+  if (report.warnings.length) lines.push(`warnings: ${report.warnings.join(", ")}`);
+  if (report.applyResult?.configBackupPath) lines.push(`config backup: ${report.applyResult.configBackupPath}`);
+  if (report.applyResult?.ownershipBackupPath) lines.push(`ownership backup: ${report.applyResult.ownershipBackupPath}`);
+  if (report.reason === "operator_repair_required") {
+    lines.push("repair: verify no Bifrost writer is active, inspect and remove only its exact stale reconciliation lock files, then retry recover.");
+  }
+  lines.push("-----------------------");
+  return lines;
+}
+
+function emitReconciliationReport(ctx: ExtensionContext, report: ReconciliationCommandReport, json: boolean): void {
+  if (json) {
+    console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify({
+      ...report,
+      ...(report.reason === "operator_repair_required"
+        ? { operatorGuidance: "verify_no_active_writer_remove_exact_stale_locks_then_retry_recover" }
+        : {}),
+    })}`);
+  } else {
+    uiOutput(ctx, reconciliationReportLines(report));
+  }
+}
+
+function blockedReconciliationReport(
+  request: ReconciliationCommandRequest,
+  reason: "source_invalid" | "store_io_failure",
+): ReconciliationCommandReport {
+  return { action: request.action, source: request.source, status: "blocked", reason, changes: [], warnings: [] };
+}
+
+async function handleReconciliationCommand(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
+  const commandArgs = args.replace(/^config\s+reconcile(?:\s+|$)/iu, "");
+  const parsed = parseReconciliationCommandArgs(commandArgs);
+  if (!parsed.ok) {
+    log(ctx, "usage: /bifrost config reconcile [--source project|user] [--tier <tier> --provider <provider>] [--refresh | --apply --proposal <digest> | --recover] [--json]", "warning");
+    return;
+  }
+  const request = parsed.request;
+  let source: ReconciliationSourceSnapshot;
+  try {
+    if (request.action === "recover") {
+      source = { ...reconciliationPaths(request.source), source: request.source, configBytes: null, ownershipBytes: null };
+    } else source = readReconciliationSource(request.source);
+  } catch {
+    emitReconciliationReport(ctx, blockedReconciliationReport(request, "source_invalid"), request.json);
+    return;
+  }
+
+  if (request.action === "preview" && request.refresh) {
+    const initial = reconciliationRegistrySnapshot(ctx, state, request.provider);
+    if (!initial.knownProviders.includes(request.provider)) {
+      const { refresh: _refresh, ...previewRequest } = request;
+      const report = runReconciliationCommand(previewRequest, { source, registry: initial }, {
+        validateMergedConfig: () => false,
+        apply: applyReconciliationTransaction,
+        recover: recoverReconciliationTransaction,
+      });
+      emitReconciliationReport(ctx, report, request.json);
+      return;
+    }
+    if (ctx.hasUI && !(await ctx.ui.confirm(
+      "Refresh provider model catalog?",
+      `Contact ${request.provider} to refresh its model catalog before previewing. This will not apply config changes.`,
+    ))) {
+      log(ctx, "catalog refresh cancelled; no config proposal was made");
+      return;
+    }
+    uiBusy(ctx, `Refreshing ${request.provider} model catalog...`);
+    try {
+      const outcome = await waitForRegistryRefresh(
+        (signal) => ctx.modelRegistry.refresh({ allowNetwork: true, force: true, providers: [request.provider], signal }),
+        ctx.signal,
+        (result) => setRegistryProviderEvidence(state, request.provider, projectProviderRefreshEvidence(
+          result,
+          request.provider,
+          initial.knownProviders,
+          Date.now(),
+        )),
+      );
+      if (outcome === "aborted") {
+        setRegistryProviderEvidence(state, request.provider, { status: "stale", refreshedAt: Date.now() });
+        emitReconciliationReport(ctx, {
+          action: "preview", source: request.source, status: "aborted", reason: "inventory_stale",
+          provider: request.provider, tier: request.tier, changes: [], warnings: [],
+        }, request.json);
+        return;
+      }
+    } catch {
+      setRegistryProviderEvidence(state, request.provider, { status: "stale", refreshedAt: Date.now() });
+    } finally {
+      uiDone(ctx);
+    }
+  }
+
+  const registry = request.action === "recover"
+    ? reconciliationRegistrySnapshot(ctx, state, "")
+    : reconciliationRegistrySnapshot(ctx, state, request.provider);
+  const dependencies = {
+    validateMergedConfig: (selected: ReconciliationConfigSource, bytes: Uint8Array) => prospectiveConfigInstallable(selected, bytes, state),
+    apply: applyReconciliationTransaction,
+    recover: recoverReconciliationTransaction,
+  };
+  const planRequest: ReconciliationCommandRequest = request.action === "preview" && request.refresh
+    ? (({ refresh: _refresh, ...previewRequest }) => previewRequest)(request)
+    : request;
+  const report = runReconciliationCommand(planRequest, { source, registry }, dependencies);
+  if (report.status === "committed") {
+    const loaded = loadConfigForReload(process.cwd(), state.extensionDir);
+    if (!installReloadedConfig(state, loaded, ctx)) {
+      emitReconciliationReport(ctx, report, request.json);
+      return;
+    }
+    syncBifrostModeStatus(ctx, state);
+    clearBifrostWidgets(ctx);
+  }
+  emitReconciliationReport(ctx, report, request.json);
+}
+
 async function handleInit(
   args: string,
   ctx: ExtensionContext,
@@ -547,7 +845,72 @@ async function handleInit(
 
   const dir = join(process.cwd(), CONFIG_DIR_NAME);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "bifrost.json"), JSON.stringify(proposal, null, 2));
+  const configPath = join(dir, "bifrost.json");
+  const ownershipPath = join(dir, "bifrost-reconcile-ownership.json");
+  const journalPath = join(dir, "bifrost-reconcile.journal");
+  if (existsSync(ownershipPath)) {
+    log(ctx, "Init will not replace a config with a reconciliation ownership receipt, because regeneration could discard managed-membership history. Use config reconcile to review membership changes; no files were changed.", "warning");
+    return;
+  }
+  let previousConfig: Buffer | undefined;
+  try { previousConfig = readBoundedRegularSnapshot(configPath); }
+  catch {
+    log(ctx, "Init could not safely snapshot the current config; no files were changed.", "error");
+    return;
+  }
+  let previouslyConfiguredModels: Record<string, string | string[]> = {};
+  if (previousConfig) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(previousConfig)); }
+    catch {
+      log(ctx, "Init could not safely read the existing config's model memberships; no files were changed.", "error");
+      return;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      log(ctx, "Init could not safely read the existing config's model memberships; no files were changed.", "error");
+      return;
+    }
+    const rawModels = (parsed as Record<string, unknown>).models;
+    if (rawModels !== undefined) {
+      if (!rawModels || typeof rawModels !== "object" || Array.isArray(rawModels)
+        || Object.values(rawModels).some((pool) => typeof pool !== "string"
+          && (!Array.isArray(pool) || pool.some((entry) => typeof entry !== "string")))) {
+        log(ctx, "Init could not safely read the existing config's model memberships; no files were changed.", "error");
+        return;
+      }
+      previouslyConfiguredModels = rawModels as Record<string, string | string[]>;
+    }
+  }
+  const ownership = buildInitOwnershipReceipt(models, previouslyConfiguredModels);
+  if (!ownership) {
+    log(ctx, "Init could not create a safe exact-membership ownership receipt; no files were changed.", "error");
+    return;
+  }
+  const configBytes = Buffer.from(`${JSON.stringify(proposal, null, 2)}\n`, "utf8");
+  const ownershipBytes = Buffer.from(`${JSON.stringify(ownership, null, 2)}\n`, "utf8");
+  if (previousConfig && previousConfig.byteLength > MAX_RECONCILIATION_CONFIG_BYTES
+    || configBytes.byteLength > MAX_RECONCILIATION_CONFIG_BYTES
+    || !prospectiveConfigInstallable("project", configBytes, state)) {
+    log(ctx, "Init's proposed config is invalid or exceeds the safe write limit; no files were changed.", "error");
+    return;
+  }
+  try {
+    applyReconciliationTransaction({
+      configPath,
+      ownershipPath,
+      journalPath,
+      expectedConfigDigest: previousConfig ? createHash("sha256").update(previousConfig).digest("hex") : null,
+      expectedOwnershipDigest: null,
+      nextConfigBytes: configBytes,
+      nextOwnershipBytes: ownershipBytes,
+    });
+  } catch (error) {
+    const locked = error instanceof ReconciliationStoreError && error.code === "locked";
+    log(ctx, locked
+      ? "Init could not acquire reconciliation locks. If a prior process crashed, verify it is stopped and repair only its exact stale lock files before retrying. No files were changed."
+      : "Init could not safely commit its config and ownership receipt; existing files were preserved.", "error");
+    return;
+  }
 
   // Auto-reload so the extension picks up the new config immediately.
   const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
@@ -910,6 +1273,15 @@ export function renderTracePreview(trace: BifrostTracePreview): string[] {
     renderPool("fallback", trace.fallback);
   }
   if (trace.fallbackReason) lines.push(`fallback reason: ${trace.fallbackReason}`);
+  if (trace.affinity) {
+    lines.push(`affinity: ${trace.affinity.mode} (${trace.affinity.status}; selection=${trace.affinity.selection})`);
+    if (trace.affinity.status !== "not_applicable" && trace.affinity.anchor) {
+      lines.push(`  anchor: ${trace.affinity.anchor.modelKey} at ${formatDiagnosticTimestamp(trace.affinity.anchor.lastSuccessfulDispatchAt)}`);
+    }
+    if (trace.affinity.strategyWinner) lines.push(`  strategy winner: ${trace.affinity.strategyWinner}`);
+    if (trace.affinity.selectedModel) lines.push(`  selected model: ${trace.affinity.selectedModel}`);
+    if (trace.affinity.selectedTier) lines.push(`  selected tier: ${trace.affinity.selectedTier}`);
+  }
   if (trace.selectedStrategy) lines.push(`selected strategy: ${trace.selectedStrategy}`);
   lines.push(`selected: ${trace.selected ? `${trace.selectedTier} → ${trace.selected}` : "none"}`);
   lines.push("----------------------");
@@ -1004,7 +1376,7 @@ async function handlePreview(
     return;
   }
 
-  const display = resolveTierDisplay(classification.tier, state, ctx);
+  const display = resolveTierDisplay(classification.tier, state, ctx, classification.kind === "classified" && classification.source === "inline" ? "explicit_tier" : "automatic");
   if (trace) {
     const options = buildTierResolutionOptions(classification.tier, state.config);
     const summary = buildRouteDecisionSummary(classification, {
@@ -1103,6 +1475,8 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "reload", description: "Reload config after editing", menu: "common" },
   { value: "validate", description: "Validate loaded config and model references", argumentHint: "[--json]", menu: "common" },
   { value: "inspect", description: "Inspect configured models and local health", argumentHint: "[--json]", menu: "common" },
+  { value: "config reconcile", description: "Preview or apply exact generated model membership", argumentHint: "[flags]" },
+  { value: "reliability migrate", description: "Prepare receipt-owned reliability v2", argumentHint: "[--fresh]" },
   // Everything else, in declaration order.
   { value: "cache stats", description: "Show classification cache" },
   // Reachable from the dashboard now that the menu is derived from the
@@ -1151,6 +1525,101 @@ function parseDiagnosticJsonFlag(args: string, command: "validate" | "inspect"):
   return undefined;
 }
 
+async function handleReliabilityCommand(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
+  const rest = args.trim().slice("reliability".length).trim();
+  if (rest !== "migrate" && rest !== "migrate --fresh") {
+    log(ctx, "usage: /bifrost reliability migrate [--fresh]", "warning");
+    return;
+  }
+  const stateVersion = state.config.reliability?.stateVersion;
+  const reliabilityConfigErrors = validateConfig(state.config).filter((issue) => issue.severity === "error" && issue.code?.startsWith("config.reliability_"));
+  if (reliabilityConfigErrors.length > 0 || !state.reliabilityV2ConfigValid
+    || (stateVersion === 2 && state.config.schemaVersion !== 2)) {
+    log(ctx, "Repair the reliability settings and validate the config before preparing the v2 sidecar.", "error");
+    return;
+  }
+  let store: ReliabilityV2Store;
+  try { store = createReliabilityV2Store(process.cwd(), state.config.reliability); }
+  catch { log(ctx, "Reliability migration could not prepare a safe sidecar location; no files were changed.", "error"); return; }
+  try {
+    store.readSnapshot();
+    if (stateVersion === 2) state.reliabilityV2Store = store;
+    log(ctx, "Reliability v2 sidecar already exists and was left unchanged.");
+    return;
+  } catch (error) {
+    if (!(error instanceof ReliabilityV2StoreError) || error.code !== "uninitialized_state") {
+      log(ctx, "An existing reliability v2 sidecar is invalid or unsafe; repair it explicitly before migration.", "error");
+      return;
+    }
+  }
+  const fresh = rest === "migrate --fresh";
+  let snapshot: Buffer | undefined;
+  try {
+    snapshot = readBoundedRegularSnapshot(state.reliabilityStore.path);
+  } catch {
+    log(ctx, "The v1 reliability source is unsafe, changing, or larger than the migration limit; no migration was performed.", "error");
+    return;
+  }
+  if (fresh) {
+    if (snapshot !== undefined) {
+      log(ctx, "--fresh is allowed only when no v1 reliability file exists; existing v1 state was left unchanged.", "error");
+      return;
+    }
+    snapshot = Buffer.from(JSON.stringify(emptyReliabilityState()) + "\n", "utf8");
+  }
+  if (snapshot === undefined) {
+    log(ctx, "No v1 reliability file exists; pass --fresh only if you intend to initialize an empty v2 sidecar.", "error");
+    return;
+  }
+  try {
+    const destination = reliabilityV2Path(process.cwd());
+    const backupPath = join(dirname(destination), "bifrost-reliability-v1.json.backup");
+    const result = await store.initializeFromV1Migration({ sourceSnapshot: snapshot, sourcePath: state.reliabilityStore.path, backupPath });
+    state.reliabilityV2Store = store;
+    log(ctx, result.status === "seeded"
+      ? "Reliability v2 sidecar initialized. Auto routing can now use receipt-owned circuit trials; model selection was not changed."
+      : "Reliability v2 sidecar already exists and was left unchanged.");
+  } catch (error) {
+    const code = error instanceof ReliabilityV2StoreError ? error.code : "migration_failed";
+    log(ctx, `Reliability migration stopped safely (${code}); existing files were preserved.`, "error");
+  }
+}
+
+const MAX_RELIABILITY_MIGRATION_SOURCE_BYTES = 16 * 1024 * 1024;
+
+function readBoundedRegularSnapshot(path: string): Buffer | undefined {
+  let pathStat;
+  try { pathStat = lstatSync(path); }
+  catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return undefined;
+    throw new Error("unsafe source");
+  }
+  if (!pathStat.isFile() || pathStat.isSymbolicLink()) throw new Error("unsafe source");
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const before = fstatSync(fd);
+    if (!before.isFile() || before.dev !== pathStat.dev || before.ino !== pathStat.ino
+      || before.size > MAX_RELIABILITY_MIGRATION_SOURCE_BYTES) throw new Error("unsafe source");
+    const bytes = Buffer.alloc(MAX_RELIABILITY_MIGRATION_SOURCE_BYTES + 1);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = readSync(fd, bytes, offset, bytes.length - offset, offset);
+      if (count === 0) break;
+      offset += count;
+    }
+    if (offset > MAX_RELIABILITY_MIGRATION_SOURCE_BYTES) throw new Error("source too large");
+    const after = fstatSync(fd);
+    if (after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size
+      || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs || offset !== before.size) {
+      throw new Error("source changed");
+    }
+    return Buffer.from(bytes.subarray(0, offset));
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
 const DIAGNOSTIC_FIELD_PATHS = new Set([
   "schemaVersion",
   "tierPolicies",
@@ -1174,6 +1643,51 @@ interface EconomicInspectEvidence {
     }[];
   }[];
   readonly diagnostics: readonly { readonly code: string; readonly severity: string; readonly source?: string; readonly scope?: string }[];
+}
+
+interface ReliabilityV2InspectEvidence {
+  readonly version: 2;
+  readonly status: "initialized" | "unavailable";
+  readonly revision?: number;
+  readonly observationsEnabled: boolean;
+  readonly scopes?: readonly { readonly model: string; readonly generation: number; readonly recentFailureCount: number; readonly openUntil?: number }[];
+  readonly observations?: readonly { readonly model: string; readonly category: string; readonly categoryEvidence: string; readonly observedAt: number; readonly retryAt?: number; readonly source: string }[];
+  readonly observationCount?: number;
+  readonly reasonCode?: string;
+}
+
+function inspectReliabilityV2(state: BifrostState): ReliabilityV2InspectEvidence | undefined {
+  if (state.config.reliability?.stateVersion !== 2) return undefined;
+  const observationsEnabled = state.config.reliability.observations?.enabled === true;
+  try {
+    if (!state.reliabilityV2Store) throw new ReliabilityV2StoreError("uninitialized_state", "unavailable");
+    const snapshot = state.reliabilityV2Store.readSnapshot();
+    const projected = Object.entries(snapshot.scopes).flatMap(([scopeKey, scope]) => {
+      const match = /^model:(\d+):(.+)$/.exec(scopeKey);
+      const model = match && Number(match[1]) === match[2]!.length ? match[2] : undefined;
+      return model ? [{ model, generation: scope.generation, recentFailureCount: scope.failures.length, ...(scope.openUntil === undefined ? {} : { openUntil: scope.openUntil }) }] : [];
+    });
+    const observations = Object.values(snapshot.settledOutcomes).flatMap((outcome) => outcome.observation ? [{
+      model: outcome.observation.modelKey,
+      category: outcome.observation.category,
+      categoryEvidence: outcome.observation.categoryEvidence,
+      observedAt: outcome.observation.observedAt,
+      ...(outcome.observation.retryAt === undefined ? {} : { retryAt: outcome.observation.retryAt }),
+      source: outcome.observation.source,
+    }] : []);
+    return {
+      version: 2,
+      status: "initialized",
+      revision: snapshot.revision,
+      observationsEnabled,
+      scopes: projected.slice(0, 200),
+      observations: observations.slice(0, 200),
+      observationCount: observations.length,
+    };
+  } catch (error) {
+    const code = error instanceof ReliabilityV2StoreError ? error.code : "state_unavailable";
+    return { version: 2, status: "unavailable", observationsEnabled, reasonCode: code };
+  }
 }
 
 function inspectEconomicEvidence(state: BifrostState, now = Date.now()): EconomicInspectEvidence {
@@ -1233,7 +1747,7 @@ function formatDiagnosticTimestamp(timestamp: number): string {
   return Number.isNaN(date.getTime()) ? "unknown" : date.toISOString();
 }
 
-function renderDiagnosticLines(report: ValidateDiagnosticsReport | (InspectDiagnosticsReport & { economics?: EconomicInspectEvidence })): string[] {
+function renderDiagnosticLines(report: ValidateDiagnosticsReport | (InspectDiagnosticsReport & { economics?: EconomicInspectEvidence; reliabilityV2?: ReliabilityV2InspectEvidence; affinity?: AffinityInspectEvidence })): string[] {
   const lines = [report.kind === "validation" ? "--- validation (loaded effective config) ---" : "--- inspection (local snapshot) ---"];
   if (report.kind === "validation") {
     lines.push("config source: loaded effective config (run /bifrost reload after editing files)");
@@ -1260,6 +1774,24 @@ function renderDiagnosticLines(report: ValidateDiagnosticsReport | (InspectDiagn
         lines.push(`  ${diagnostic.severity} ${diagnostic.code}${diagnostic.source ? ` source=${diagnostic.source}` : ""}${diagnostic.scope ? ` scope=${diagnostic.scope}` : ""}`);
       }
     }
+    if (report.reliabilityV2) {
+      const reliability = report.reliabilityV2;
+      lines.push(`reliability v2: ${reliability.status}${reliability.revision === undefined ? "" : ` revision=${reliability.revision}`} observations=${reliability.observationsEnabled ? "on" : "off"}`);
+      if (reliability.reasonCode) lines.push(`  reason=${reliability.reasonCode}`);
+      for (const scope of reliability.scopes ?? []) {
+        lines.push(`  model=${scope.model} generation=${scope.generation} recentFailures=${scope.recentFailureCount}${scope.openUntil === undefined ? "" : ` openUntil=${formatDiagnosticTimestamp(scope.openUntil)}`}`);
+      }
+      for (const observation of reliability.observations ?? []) {
+        lines.push(`  observation model=${observation.model} category=${observation.category} evidence=${observation.categoryEvidence} at=${formatDiagnosticTimestamp(observation.observedAt)}${observation.retryAt === undefined ? "" : ` retryAt=${formatDiagnosticTimestamp(observation.retryAt)}`} source=${observation.source}`);
+      }
+      if ((reliability.observationCount ?? 0) > 200) lines.push(`  ... ${reliability.observationCount! - 200} more observations`);
+    }
+    if (report.affinity) {
+      lines.push(`affinity: ${report.affinity.mode} (${report.affinity.status})`);
+      if (report.affinity.anchor) {
+        lines.push(`  last successful model=${report.affinity.anchor.model} provider=${report.affinity.anchor.provider} at=${report.affinity.anchor.lastSuccessfulAt} age=${report.affinity.anchor.ageMs}ms`);
+      }
+    }
   }
   if (report.diagnostics.length === 0) lines.push("diagnostics: none");
   else lines.push("diagnostics:", ...report.diagnostics.map(renderDiagnostic));
@@ -1278,17 +1810,27 @@ async function handleDiagnosticsCommand(
     log(ctx, `usage: /bifrost ${command} [--json]`, "warning");
     return;
   }
+  const v2Evidence = command === "inspect" ? inspectReliabilityV2(state) : undefined;
+  let reliabilityState = state.reliabilityStore.getState();
+  if (v2Evidence?.status === "initialized" && state.reliabilityV2Store && state.config.reliability) {
+    try {
+      reliabilityState = projectReliabilityV2ForRouting(state.reliabilityV2Store.readSnapshot(), reliabilityV2Config(state.config.reliability), Date.now());
+    } catch { /* unavailable evidence is reported separately; do not fabricate a health snapshot */ }
+  }
+  const affinityEvidence = command === "inspect" ? inspectAffinity(state, ctx) : undefined;
   const report = command === "validate"
     ? validateDiagnostics({ config: state.config, registry: ctx.modelRegistry })
     : {
       ...inspectDiagnostics({
       config: state.config,
       registry: ctx.modelRegistry,
-      reliabilityState: state.reliabilityStore.getState(),
+      reliabilityState,
       reliabilityConfig: state.config.reliability,
       lastRegistryRefreshAt: state.lastRegistryRefreshAt,
       }),
       economics: inspectEconomicEvidence(state),
+      ...(affinityEvidence ? { affinity: affinityEvidence } : {}),
+      ...(v2Evidence ? { reliabilityV2: v2Evidence } : {}),
     };
   if (json) {
     console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(report)}`);
@@ -1477,6 +2019,7 @@ export function createCommandRouter(
 ): (args: string, ctx: ExtensionContext) => Promise<void> {
   const routes: CommandEntry[] = [
     exact("on", (_, ctx) => {
+      state.onManualControl?.(ctx.sessionManager);
       state.enabled = true;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
@@ -1485,6 +2028,7 @@ export function createCommandRouter(
     }),
     exact("off", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
+      state.onManualControl?.(ctx.sessionManager);
       state.enabled = false;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
@@ -1493,6 +2037,7 @@ export function createCommandRouter(
     }),
     exact("pin", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
+      state.onManualControl?.(ctx.sessionManager);
       state.pinned = true;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
@@ -1500,6 +2045,7 @@ export function createCommandRouter(
       log(ctx, "Bifrost pinned");
     }),
     exact("unpin", (_, ctx) => {
+      state.onManualControl?.(ctx.sessionManager);
       state.pinned = false;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
@@ -1541,6 +2087,8 @@ export function createCommandRouter(
 
     spaced("validate", (args, ctx) => handleDiagnosticsCommand("validate", args, ctx, state)),
     spaced("inspect", (args, ctx) => handleDiagnosticsCommand("inspect", args, ctx, state)),
+    spaced("config", (args, ctx) => handleReconciliationCommand(args, ctx, state)),
+    spaced("reliability", (args, ctx) => handleReliabilityCommand(args, ctx, state)),
 
     // Providers
     exact("providers", (_, ctx) => {

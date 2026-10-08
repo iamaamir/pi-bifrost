@@ -15,6 +15,8 @@
 | `/bifrost reload` | Reload merged configuration |
 | `/bifrost validate` | Check the active loaded configuration and local registry references; run `/bifrost reload` after editing config files |
 | `/bifrost inspect` | Show configured model availability, auth presence, and local reliability circuits without routing or probing |
+| `/bifrost config reconcile` | Preview exact generated model membership for one selected config source, tier, and provider; apply only with the reviewed digest |
+| `/bifrost reliability migrate` | Prepare the configured receipt-owned reliability v2 state without changing the selected model; add `--fresh` only when no v1 state exists |
 | `/bifrost cache stats` | Inspect local classification cache |
 | `/bifrost cache clear` | Clear local classification cache |
 | `/bifrost classifier` | Choose `prompt`, `typesafe`, or `pi-native`. The Pi-native picker can select a catalog model or use the default |
@@ -26,7 +28,7 @@
 | `/bifrost providers` | List providers available through Pi |
 | `/bifrost benchmark <prompt>` | Classify a prompt and show the outcome without generating |
 
-`validate` and `inspect` accept a leading `--json` flag. Both commands are read-only: they do not classify, refresh the registry, probe providers, or write reliability state. `inspect` shows only local registry/auth/circuit snapshots. Its “Bifrost last registry refresh age” is the time since this extension last refreshed Pi's registry, not a freshness claim about provider data. JSON mode emits a version-1 `[bifrost-json] ` report line to stderr. The validation report names its source as `loaded-effective-config`; it does not read un-reloaded disk edits.
+`validate` and `inspect` accept a leading `--json` flag. Both commands are read-only: they do not classify, refresh the registry, probe providers, or write reliability state. `inspect` shows local registry/auth/circuit snapshots and, when affinity observation is enabled, the proven Auto anchor's model and age without branch or prompt data. Its “Bifrost last registry refresh age” is the time since this extension last refreshed Pi's registry, not a freshness claim about provider data. JSON mode emits a version-1 `[bifrost-json] ` report line to stderr. The validation report names its source as `loaded-effective-config`; it does not read un-reloaded disk edits.
 
 ## Common workflows
 
@@ -77,7 +79,7 @@ A failure is still one line, so a script never has to infer the outcome from a m
 
 `error` is `usage` when the prompt was missing, and `unclassified` when no tier matched and no default tier is configured. A failure report carries `prompt` and `error` only; it has no routing keys. The human `usage` and `no tier matched` messages still appear, so the same command is usable from a terminal.
 
-Add `--trace` as a leading flag to inspect a versioned, content-free route decision. You can use it alone or with `--json`, in either order. The text view shows the classification source, configured candidate pools, reliability exclusions, selected model and strategy. `--trace --json` uses the same `[bifrost-json] ` marker and emits a version-1 `route-decision` object. It contains model identity strings and configured patterns, but never the prompt or model objects. If classifier routing is enabled, Bifrost warns that the classifier may receive the preview prompt before running classification and includes that disclosure in the result. The summary describes the resolver's selection; it does not report activation success or classifier stage timings. Without `--trace`, the existing `--json` fields and output remain unchanged.
+Add `--trace` as a leading flag to inspect a versioned, content-free route decision. You can use it alone or with `--json`, in either order. The text view shows the classification source, configured candidate pools, hard reserve and circuit exclusions, selected model and strategy, and any applicable affinity observation. Under `retain-within-tier`, affinity shows both the strategy winner and selected anchor. In the structured route summary, billing-preference evidence is separate from hard exclusions; a nonpreferred candidate remains marked eligible even when it is outside the final selection pool. `--trace --json` uses the same `[bifrost-json] ` marker and emits a version-1 `route-decision` object. It contains model identity strings and configured patterns, but never the prompt or model objects. If classifier routing is enabled, Bifrost warns that the classifier may receive the preview prompt before running classification and includes that disclosure in the result. The summary describes the resolver's selection; it does not report activation success or classifier stage timings. Without `--trace`, the existing `--json` fields and output remain unchanged.
 
 ### Keep one model for a long session
 
@@ -106,6 +108,27 @@ Edit the relevant `bifrost.json`, then run:
 ```text
 /bifrost reload
 ```
+
+### Reconcile generated model membership
+
+Reconciliation changes one source and one tier at a time. The default source is the project file `.pi/bifrost.json`; `--source user` selects `getAgentDir()/bifrost.json` (normally `~/.pi/agent/bifrost.json`). It never flattens the merged config into either source. A preview reads local registry and refresh evidence only; it does not contact providers. If that evidence is stale, `--refresh` explicitly refreshes only the selected provider and still produces a preview. Apply is a separate command and requires the proposal digest from that preview:
+
+```text
+/bifrost config reconcile --tier general --provider openai
+/bifrost config reconcile --tier general --provider openai --apply --proposal <digest>
+```
+
+Use `--source user` to select the user config file. The project, workspace, and extension layers remain part of prospective validation, so a higher layer may still override a user-layer value. Add `--json` to emit one `[bifrost-json] ` report line.
+
+An explicit catalog refresh is network-enabled and can incur provider requests. It cannot be combined with `--apply`; review its proposal and run a separate apply command:
+
+```text
+/bifrost config reconcile --tier general --provider openai --refresh
+```
+
+Reconciliation updates only exact model keys owned by its sidecar. Existing manual entries are never adopted as generated membership. Incomplete, stale, or auth-unknown inventory cannot authorize removals. Apply uses a journal and keeps exact backups. `/bifrost config reconcile --recover` resumes or reports a pending journal. If a process crashed while holding a lock, recovery does not steal it: first verify that no Bifrost writer is active, inspect the exact lock files, and remove only locks proven stale before retrying recovery.
+
+`/bifrost init` retains its current probe and confirmation flow. After a confirmed generation, it writes the config and an exact-membership ownership receipt together. Once that receipt exists, init does not regenerate the config: replacing it could discard managed-membership history. Use `config reconcile` for later membership changes; it keeps the receipt and exact backups in step with the selected tier.
 
 ### Diagnose unavailable models
 

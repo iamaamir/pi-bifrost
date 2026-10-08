@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import pty
+import select
 import fcntl
 import termios
 import struct
@@ -13,6 +14,8 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -21,7 +24,9 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "screenshots" / "ui-smoke"
-PI = os.environ.get("PI_BIN") or shutil.which("pi")
+PI = os.environ.get("PI_BIN") or str(ROOT / "node_modules" / ".bin" / "pi")
+FAKE_SERVER = ROOT / "scripts" / "fake-provider-server.mjs"
+FAKE_PORT: int | None = None
 
 WIDTH = 120
 HEIGHT = 36
@@ -351,18 +356,93 @@ def set_winsize(fd: int, rows: int, cols: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, winsz)
 
 
-def spawn_pi(log_path: Path, cwd: Path) -> tuple[subprocess.Popen[bytes], int]:
-    if not PI:
-        raise SystemExit("pi not found on PATH")
+def start_fake_provider() -> tuple[subprocess.Popen[str], int]:
+    proc = subprocess.Popen(
+        ["node", str(FAKE_SERVER)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        cwd=str(ROOT),
+    )
+    assert proc.stdout is not None
+    ready, _, _ = select.select([proc.stdout], [], [], 10)
+    if not ready:
+        stop_process(proc)
+        raise TimeoutError("local fake provider did not start within 10 seconds")
+    try:
+        payload = json.loads(proc.stdout.readline())
+        port = payload.get("port")
+        if not isinstance(port, int):
+            raise ValueError("fake provider did not report a local port")
+        return proc, port
+    except Exception:
+        stop_process(proc)
+        raise
+
+
+def stop_process(proc: subprocess.Popen[object]) -> None:
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=2)
+
+
+def fake_stats(port: int) -> dict[str, object]:
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/_stats", timeout=1) as response:
+        return json.loads(response.read())
+
+
+def wait_for_model_attempts(port: int, before: dict[str, int], models: tuple[str, ...], timeout: float = 25.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            stats = fake_stats(port)
+            attempts = stats.get("attempts", {})
+            if isinstance(attempts, dict) and all(int(attempts.get(model, 0)) > before.get(model, 0) for model in models):
+                return
+        except (OSError, urllib.error.URLError, ValueError):
+            pass
+        time.sleep(0.1)
+    raise TimeoutError(f"expected bounded fake-provider requests were not observed for {', '.join(models)}")
+
+
+def write_agent_fixture(agent_dir: Path, port: int) -> None:
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "models.json").write_text(json.dumps({
+        "providers": {
+            "fake": {
+                "baseUrl": f"http://127.0.0.1:{port}/v1",
+                "api": "openai-completions",
+                "apiKey": "ui-fixture-only",
+                "models": [
+                    {"id": "healthy", "reasoning": False},
+                    {"id": "classifier", "reasoning": False},
+                ],
+            },
+        },
+    }) + "\n")
+    (agent_dir / "settings.json").write_text('{"retry":{"enabled":false}}\n')
+
+
+def spawn_pi(log_path: Path, cwd: Path, agent_dir: Path) -> tuple[subprocess.Popen[bytes], int]:
+    if not PI or not Path(PI).exists():
+        raise SystemExit(f"pinned Pi binary not found: {PI}")
 
     master, slave = pty.openpty()
     set_winsize(master, HEIGHT, WIDTH)
     env = os.environ.copy()
+    for key in ("TYPESAFE_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GOOGLE_API_KEY"):
+        env.pop(key, None)
     env.update(
         {
             "PI_TUI_WRITE_LOG": str(log_path),
             "PI_SKIP_VERSION_CHECK": "1",
-            "PI_OFFLINE": "1",
+            "HOME": str(agent_dir.parent.parent),
+            "PI_CODING_AGENT_DIR": str(agent_dir),
             "TERM": "xterm-256color",
             "COLORTERM": "truecolor",
         }
@@ -376,9 +456,9 @@ def spawn_pi(log_path: Path, cwd: Path) -> tuple[subprocess.Popen[bytes], int]:
             "--no-session",
             "--no-tools",
             "--provider",
-            "ollama",
+            "fake",
             "--model",
-            "gemma4:12b-mlx",
+            "healthy",
         ],
         stdin=slave,
         stdout=slave,
@@ -437,11 +517,21 @@ def capture(
     workspace = Path(tmp.name)
     config = json.loads((ROOT / "bifrost.json").read_text())
     config["enabled"] = enabled
+    config["default"] = "general"
+    config["models"] = {"general": ["fake/healthy"]}
+    config["classifier"] = {"enabled": False, "backend": "prompt"}
     if config_override:
         config.update(config_override)
     (workspace / "bifrost.json").write_text(json.dumps(config, indent=2) + "\n")
+    home = workspace / "isolated-home"
+    agent_dir = home / ".pi" / "agent"
+    assert FAKE_PORT is not None
+    write_agent_fixture(agent_dir, FAKE_PORT)
 
-    proc, master = spawn_pi(log_path, workspace)
+    before = fake_stats(FAKE_PORT)
+    previous_attempts = before.get("attempts", {})
+    attempts_before = previous_attempts if isinstance(previous_attempts, dict) else {}
+    proc, master = spawn_pi(log_path, workspace, agent_dir)
     stop = threading.Event()
     t = threading.Thread(target=reader, args=(master, stop), daemon=True)
     t.start()
@@ -452,6 +542,13 @@ def capture(
             time.sleep(delay)
             send(master, payload)
             time.sleep(1.5)
+
+        if name == "classify":
+            wait_for_model_attempts(
+                FAKE_PORT,
+                {key: int(value) for key, value in attempts_before.items() if isinstance(value, int)},
+                ("classifier", "healthy"),
+            )
 
         time.sleep(2.0)
         raw = log_path.read_text(errors="ignore") if log_path.exists() else ""
@@ -481,7 +578,14 @@ def capture(
 
 
 def main() -> int:
-    captures = [
+    global FAKE_PORT
+    provider, FAKE_PORT = start_fake_provider()
+    try:
+        version = subprocess.run([PI, "--version"], capture_output=True, text=True, timeout=5, check=True).stdout.strip()
+        print(f"[ui-smoke] using pinned Pi {version}")
+        if version != "1.0.1":
+            raise AssertionError(f"expected pinned Pi 1.0.1, got {version}")
+        captures = [
         ("startup", True, []),
         ("dashboard", True, [(1.0, "/bifrost\r")]),
         ("validate", True, [(0.5, "/bifrost validate\r")]),
@@ -518,39 +622,46 @@ def main() -> int:
         ),
         ("preview-dismiss", True, [(0.5, "/bifrost classifier off\r"), (0.5, "/bifrost preview hello\r"), (0.5, "\x1b")]),
         ("disabled", False, []),
-        ("classify", True, [(1.0, "hello\r")]),
+        (
+            "classify",
+            True,
+            [(1.0, "hello\r")],
+            {"classifier": {"enabled": True, "backend": "prompt", "model": "fake/classifier", "fallbackToRegex": True}},
+        ),
         ("pinned", True, [(1.0, "\x10")]),
     ]
-    results = []
-    for capture_spec in captures:
-        name, enabled, actions = capture_spec[:3]
-        config_override = capture_spec[3] if len(capture_spec) > 3 else None
-        print(f"[ui-smoke] capturing {name}…")
-        results.append(capture(name, enabled, actions, config_override))
-        if name == "preview-trace":
-            trace_text = (OUT / "preview-trace.txt").read_text(errors="ignore")
-            if "route trace v1" not in trace_text:
-                raise AssertionError("preview trace UI did not render the versioned route trace")
-        if name == "validate":
-            validate_text = (OUT / "validate.txt").read_text(errors="ignore")
-            if "validation (loaded effective config)" not in validate_text:
-                raise AssertionError("validate UI did not render the loaded-config label")
-        if name == "inspect":
-            inspect_text = (OUT / "inspect.txt").read_text(errors="ignore")
-            if "inspection (local snapshot)" not in inspect_text or "registry:" not in inspect_text:
-                raise AssertionError("inspect UI did not render its local snapshot labels")
-        if name == "inspect-reserve":
-            reserve_text = (OUT / "inspect-reserve.txt").read_text(errors="ignore")
-            if "reserve policy: observe" not in reserve_text or "source=manual-estimate scope=example-provider authority=estimated" not in reserve_text:
-                raise AssertionError("inspect UI did not render sanitized reserve policy evidence")
-        if name == "strict-no-route":
-            strict_text = (OUT / "strict-no-route.txt").read_text(errors="ignore")
-            if "restricted keep this text" not in strict_text or "turn was not sent" not in strict_text:
-                raise AssertionError("strict no-route did not show the rejection and restore the typed prompt")
-    print("[ui-smoke] done")
-    for p in results:
-        print(p)
-    return 0
+        results = []
+        for capture_spec in captures:
+            name, enabled, actions = capture_spec[:3]
+            config_override = capture_spec[3] if len(capture_spec) > 3 else None
+            print(f"[ui-smoke] capturing {name}…")
+            results.append(capture(name, enabled, actions, config_override))
+            if name == "preview-trace":
+                trace_text = (OUT / "preview-trace.txt").read_text(errors="ignore")
+                if "route trace v1" not in trace_text:
+                    raise AssertionError("preview trace UI did not render the versioned route trace")
+            if name == "validate":
+                validate_text = (OUT / "validate.txt").read_text(errors="ignore")
+                if "validation (loaded effective config)" not in validate_text:
+                    raise AssertionError("validate UI did not render the loaded-config label")
+            if name == "inspect":
+                inspect_text = (OUT / "inspect.txt").read_text(errors="ignore")
+                if "inspection (local snapshot)" not in inspect_text or "registry:" not in inspect_text:
+                    raise AssertionError("inspect UI did not render its local snapshot labels")
+            if name == "inspect-reserve":
+                reserve_text = (OUT / "inspect-reserve.txt").read_text(errors="ignore")
+                if "reserve policy: observe" not in reserve_text or "source=manual-estimate scope=example-provider authority=estimated" not in reserve_text:
+                    raise AssertionError("inspect UI did not render sanitized reserve policy evidence")
+            if name == "strict-no-route":
+                strict_text = (OUT / "strict-no-route.txt").read_text(errors="ignore")
+                if "restricted keep this text" not in strict_text or "turn was not sent" not in strict_text:
+                    raise AssertionError("strict no-route did not show the rejection and restore the typed prompt")
+        print("[ui-smoke] done")
+        for p in results:
+            print(p)
+        return 0
+    finally:
+        stop_process(provider)
 
 
 if __name__ == "__main__":

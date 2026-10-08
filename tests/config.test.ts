@@ -47,6 +47,13 @@ describe("validateConfig", () => {
     assert.ok(unsupported.some((issue) => issue.message.includes("Unsupported schemaVersion")));
   });
 
+  it("gates affinity observation behind schema version 2 and validates only advisory fields", () => {
+    assert.deepEqual(validateConfig({ ...baseConfig, schemaVersion: 2, affinity: { mode: "observe", providerAdvisory: true } }), []);
+    assert.deepEqual(validateConfig({ ...baseConfig, schemaVersion: 2, affinity: { mode: "retain-within-tier" } }), []);
+    assert.ok(validateConfig({ ...baseConfig, affinity: { mode: "observe" } }).some((issue) => issue.code === "config.affinity_requires_schema_v2"));
+    assert.ok(validateConfig({ ...baseConfig, schemaVersion: 2, affinity: { mode: "policy" } as never }).some((issue) => issue.code === "config.affinity_invalid"));
+  });
+
   it("returns stable content-free metadata for strict tier-policy validation issues", () => {
     const issues = validateTierPolicyConfig({
       ...baseConfig,
@@ -233,6 +240,20 @@ describe("validateConfig", () => {
     const errors = issues.filter((i) => i.severity === "error");
     assert.equal(errors.length, 1);
     assert.ok(errors[0].message.includes("integer"));
+  });
+
+  it("accepts an explicitly disabled v2 policy and rejects unsupported state versions", () => {
+    assert.equal(validateConfig({ ...baseConfig, reliability: { stateVersion: 1 } }).some((issue) => issue.code?.startsWith("config.reliability_")), false);
+    assert.equal(validateConfig({
+      ...baseConfig,
+      schemaVersion: 2,
+      reliability: { stateVersion: 2, enabled: false },
+    }).some((issue) => issue.code?.startsWith("config.reliability_")), false);
+    assert.ok(validateConfig({
+      ...baseConfig,
+      schemaVersion: 2,
+      reliability: { stateVersion: 3 } as never,
+    }).some((issue) => issue.code === "config.reliability_state_version_unsupported"));
   });
 
   it("errors on invalid probe concurrency", () => {

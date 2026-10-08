@@ -134,6 +134,8 @@ if (terminal) {
     ["reload", "Reload config after editing", "setup", "Configuration reloaded from disk."],
     ["validate", "Validate loaded config and model references", "setup", "Checks loaded configuration and local registry references without probing."],
     ["inspect", "Inspect configured models and local health", "debug", "Shows local registry availability, auth presence, and reliability circuits."],
+    ["config reconcile", "Review generated model membership", "setup", "Previews exact generated-model changes for one source and tier."],
+    ["reliability migrate", "Prepare reliability v2 state", "debug", "Prepares opt-in Auto reliability state without changing the selected model."],
     ["cache stats", "Show classification cache", "cache", "Shows local tier-decision cache statistics."],
     ["cache clear", "Clear classification cache", "cache", "Clears stored tier decisions, not provider responses."],
     ["classifier", "Choose classifier backend", "classifier", "Choose a tier classifier; Pi-native requires host support."],

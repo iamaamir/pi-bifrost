@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, TurnEndEvent, SessionMessageEntry, ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { fileURLToPath } from "node:url";
 import { classifyWithLLM as invokeClassifier, type ClassifierModel } from "./classifier.ts";
@@ -43,16 +43,32 @@ import {
   modelKey,
   type RoutedModelResolution,
   type SkippedCandidate,
+  type AffinityRoutingContext,
 } from "./routing.ts";
 import { reconcileEconomicSnapshot } from "./economic-config.ts";
-import { emptyEconomicSnapshot } from "./economic-signals.ts";
+import { emptyEconomicSnapshot, hasHardEconomicAdmission } from "./economic-signals.ts";
 import { ReliabilityStore } from "./reliability-store.ts";
+import { projectReliabilityV2ForRouting } from "./reliability-v2-routing.ts";
+import { normalizeFailureObservation } from "./failure-observations.ts";
+import { createRuntimeAffinityStore, type RuntimeAffinitySuccessProof, type RuntimeAffinityStore } from "./runtime-affinity.ts";
+import type { AffinityAnchor } from "./affinity.ts";
+import {
+  AutoDispatchReceiptBook,
+  createReliabilityV2Store,
+  reliabilityV2Config,
+  serializeReceiptOperation,
+  V2_LEASE_TTL_MS,
+  V2_RENEW_INTERVAL_MS,
+  V2_MAX_DISPATCH_LIFETIME_MS,
+  type AutoDispatchReceipt,
+} from "./runtime-reliability-v2.ts";
 import { loadRuntimeState, runtimeStatePath, saveRuntimeState, isPassiveModelSelection, createSelfSelectTracker } from "./runtime-state.ts";
 import { createCommandRouter, getBifrostCommandCompletions, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
 import { parseInlineOverride } from "./inline-override.ts";
 import { BIFROST_AUTO_ID, BIFROST_AUTO_PROVIDER, isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
 import { createDispatchOwnership, RuntimeReliabilityTracker } from "./runtime-reliability.ts";
+import { randomUUID } from "node:crypto";
 import { VirtualOverride } from "./virtual-override.ts";
 import { createVirtualRoute, noModelError, poolProblem } from "./virtual-routing.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV } from "./classifier-backends.ts";
@@ -66,7 +82,7 @@ import {
   setBifrostWorkingMessage,
   shouldRefreshRegistry,
 } from "./ux-status.ts";
-import { waitForRegistryRefresh } from "./registry-refresh.ts";
+import { projectProviderRefreshEvidence, waitForRegistryRefresh } from "./registry-refresh.ts";
 
 // ── Pipeline builder (composition root) ────────────────────────
 
@@ -165,8 +181,35 @@ function reserveExclusionSummary(resolution: RoutedModelResolution): ReserveExcl
   return { count: candidates.size, reasonCodes };
 }
 
-function routingPolicyInvalid(state: Pick<BifrostState, "tierPolicyValid" | "economicPolicyValid">): boolean {
-  return state.tierPolicyValid === false || state.economicPolicyValid === false;
+function routingPolicyInvalid(state: Pick<BifrostState, "tierPolicyValid" | "economicPolicyValid" | "reliabilityV2ConfigValid" | "affinityConfigValid">): boolean {
+  return state.tierPolicyValid === false || state.economicPolicyValid === false || state.reliabilityV2ConfigValid === false || state.affinityConfigValid === false;
+}
+
+function registryProviders(ctx: ExtensionContext): string[] {
+  try {
+    const registered = ctx.modelRegistry.getRegisteredProviderIds();
+    if (Array.isArray(registered)) return [...new Set(registered.filter((id): id is string => typeof id === "string" && id.length > 0))];
+  } catch { /* fall back to the current catalog snapshot */ }
+  try {
+    return [...new Set(ctx.modelRegistry.getAll().map((model) => model.provider).filter((id) => typeof id === "string" && id.length > 0))];
+  } catch { return []; }
+}
+
+function updateRegistryInventoryEvidence(
+  state: BifrostState,
+  ctx: ExtensionContext,
+  result?: Parameters<typeof projectProviderRefreshEvidence>[0],
+): void {
+  const evidence = Object.assign(Object.create(null) as Record<string, { status: "complete" | "partial" | "stale"; refreshedAt: number }>, state.registryInventoryEvidence ?? {});
+  const providers = registryProviders(ctx);
+  const refreshedAt = Date.now();
+  for (const provider of providers) {
+    const value = result
+      ? projectProviderRefreshEvidence(result, provider, providers, refreshedAt)
+      : { status: "stale" as const, refreshedAt };
+    Object.defineProperty(evidence, provider, { value, enumerable: true, configurable: true, writable: true });
+  }
+  state.registryInventoryEvidence = Object.freeze(evidence);
 }
 
 function activeClassifierCacheKey(config: BifrostConfig, detectionEngine: ReturnType<typeof createDetectionEngine>): string {
@@ -337,6 +380,99 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   // prompt handoffs or reliability outcomes.
   const overridesBySession = new WeakMap<object, VirtualOverride>();
   const trackersBySession = new WeakMap<object, RuntimeReliabilityTracker>();
+  const v2Receipts = new AutoDispatchReceiptBook();
+  interface PendingAffinityProof {
+    readonly userEntryId: string;
+    readonly userMessage: WeakRef<object>;
+    readonly modelKey: string;
+    readonly dispatchId: string;
+    outcome?: "success" | "failure" | "unknown";
+    assistantEntryId?: string;
+    successObservedAt?: number;
+  }
+  const usesRuntimeAffinity = (value: BifrostConfig): boolean =>
+    value.affinity?.mode === "observe" || value.affinity?.mode === "retain-within-tier";
+  let affinityStore: RuntimeAffinityStore | undefined = usesRuntimeAffinity(config) ? createRuntimeAffinityStore() : undefined;
+  let pendingAffinityBySession = new WeakMap<object, Map<string, PendingAffinityProof>>();
+  function pendingAffinity(session: object, create = false): Map<string, PendingAffinityProof> | undefined {
+    let pending = pendingAffinityBySession.get(session);
+    if (!pending && create) {
+      pending = new Map();
+      pendingAffinityBySession.set(session, pending);
+    }
+    return pending;
+  }
+  function affinityAnchor(ctx: ExtensionContext): AffinityAnchor | undefined {
+    const anchor = affinityStore?.read(ctx.sessionManager, ctx.sessionManager.getBranch());
+    return anchor ? { modelKey: anchor.modelKey, provider: anchor.provider, lastSuccessfulDispatchAt: anchor.observedAt } : undefined;
+  }
+  function affinityProofStillJoined(
+    userEntryId: string,
+    userMessage: object,
+    assistantEntryId: string,
+    key: string,
+    branch: readonly unknown[],
+  ): boolean {
+    const entries = branch as readonly SessionMessageEntry[];
+    const userIndexes = entries.flatMap((entry, index) => entry.type === "message" && entry.id === userEntryId && entry.message === userMessage ? [index] : []);
+    const assistantIndexes = entries.flatMap((entry, index) => entry.type === "message" && entry.id === assistantEntryId
+      && entry.message.role === "assistant" && `${entry.message.provider}/${entry.message.model}` === key ? [index] : []);
+    if (userIndexes.length !== 1 || assistantIndexes.length !== 1 || assistantIndexes[0]! <= userIndexes[0]!) return false;
+    for (let index = assistantIndexes[0]! - 1; index >= 0; index -= 1) {
+      const entry = entries[index]!;
+      if (entry.type === "message" && entry.message.role === "user") return entry.id === userEntryId && entry.message === userMessage;
+    }
+    return false;
+  }
+  function promoteAffinityProof(
+    session: object,
+    proof: Omit<RuntimeAffinitySuccessProof, "dispatchUnambiguous" | "physicalDispatch" | "outcome"> & { userEntryId: string; userMessage: object },
+    branch: readonly unknown[],
+  ): boolean {
+    if (!affinityStore || !affinityProofStillJoined(proof.userEntryId, proof.userMessage, proof.branchEntryId, proof.modelKey, branch)) return false;
+    return affinityStore.promote(session, {
+      outcome: "success",
+      modelKey: proof.modelKey,
+      branchEntryId: proof.branchEntryId,
+      dispatchId: proof.dispatchId,
+      dispatchUnambiguous: true,
+      physicalDispatch: true,
+      observedAt: proof.observedAt,
+    }, branch);
+  }
+  function promotePendingAffinity(ctx: ExtensionContext, pending: PendingAffinityProof): boolean {
+    const userMessage = pending.userMessage.deref();
+    if (!userMessage || pending.outcome !== "success" || !pending.assistantEntryId || pending.successObservedAt === undefined) return false;
+    return promoteAffinityProof(ctx.sessionManager, {
+      userEntryId: pending.userEntryId,
+      userMessage,
+      modelKey: pending.modelKey,
+      dispatchId: pending.dispatchId,
+      branchEntryId: pending.assistantEntryId,
+      observedAt: pending.successObservedAt,
+    }, ctx.sessionManager.getBranch());
+  }
+  function finalizePriorAffinityProofs(ctx: ExtensionContext, currentUserEntryId: string): void {
+    const pending = pendingAffinity(ctx.sessionManager);
+    if (!pending) return;
+    for (const [entryId, proof] of pending) {
+      if (entryId === currentUserEntryId) continue;
+      promotePendingAffinity(ctx, proof);
+      pending.delete(entryId);
+    }
+  }
+  function promoteV2ReceiptAffinity(ctx: ExtensionContext, receipt: AutoDispatchReceipt): void {
+    const userMessage = receipt.userMessage.deref();
+    if (!receipt.affinityEligible || !userMessage || !receipt.assistantEntryId || receipt.successObservedAt === undefined) return;
+    promoteAffinityProof(ctx.sessionManager, {
+      userEntryId: receipt.userEntryId,
+      userMessage,
+      modelKey: receipt.modelKey,
+      dispatchId: receipt.dispatchId,
+      branchEntryId: receipt.assistantEntryId,
+      observedAt: receipt.successObservedAt,
+    }, ctx.sessionManager.getBranch());
+  }
   function overrideFor(ctx: ExtensionContext): VirtualOverride {
     const key = ctx.sessionManager;
     let value = overridesBySession.get(key);
@@ -402,6 +538,13 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   const state: BifrostState = {
     config,
     tierPolicyValid: validateTierPolicyConfig(config).every((issue) => issue.severity !== "error"),
+    affinityConfigValid: validateConfig(config).every((issue) => issue.severity !== "error" || !issue.code?.startsWith("config.affinity_")),
+    reliabilityV2ConfigValid: validateConfig(config).every((issue) => !issue.code?.startsWith("config.reliability_")),
+    reliabilityV2Store: config.reliability?.stateVersion === 2 && config.reliability.enabled !== false
+      && validateConfig(config).every((issue) => !issue.code?.startsWith("config.reliability_"))
+      ? createReliabilityV2Store(process.cwd(), config.reliability)
+      : undefined,
+    configGeneration: 0,
     economicSnapshot: initialEconomic.snapshot,
     economicPolicy: initialEconomic.policy,
     economicHistoryPolicy: initialEconomic.historyPolicy,
@@ -415,6 +558,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     reliabilityStore,
     classifierMetricsStore,
     extensionDir,
+    getAffinityAnchor: affinityAnchor,
     effectiveClassifierBackend: (config) => effectiveBackendOf(config, detectionEngine),
     getPipeline,
     invalidatePipeline,
@@ -426,20 +570,200 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     forceRegistryRefresh: false,
   };
 
+  state.onConfigInstalled = (nextConfig, previousConfig) => {
+    const previousReliability = previousConfig.reliability;
+    const nextReliability = nextConfig.reliability;
+    const keepActiveV2Store = previousReliability?.stateVersion === 2 && previousReliability.enabled !== false
+      && nextReliability?.stateVersion === 2 && nextReliability.enabled !== false
+      && (previousReliability.failureThreshold ?? 3) === (nextReliability.failureThreshold ?? 3)
+      && (previousReliability.windowMinutes ?? 5) === (nextReliability.windowMinutes ?? 5)
+      && (previousReliability.cooldownMinutes ?? 60) === (nextReliability.cooldownMinutes ?? 60);
+    state.configGeneration = (state.configGeneration ?? 0) + 1;
+    state.affinityConfigValid = validateConfig(nextConfig).every((issue) => issue.severity !== "error" || !issue.code?.startsWith("config.affinity_"));
+    state.reliabilityV2ConfigValid = validateConfig(nextConfig).every((issue) => !issue.code?.startsWith("config.reliability_"));
+    state.reliabilityV2Store = keepActiveV2Store && state.reliabilityV2ConfigValid
+      ? state.reliabilityV2Store
+      : nextConfig.reliability?.stateVersion === 2 && nextConfig.reliability.enabled !== false && state.reliabilityV2ConfigValid
+        ? createReliabilityV2Store(process.cwd(), nextConfig.reliability)
+        : undefined;
+    // Existing receipts retain their originating store and config generation;
+    // a later route/settlement abandons those exact leases without touching a
+    // newer runtime's state.
+    if (!keepActiveV2Store || !state.reliabilityV2ConfigValid) {
+      for (const session of v2Receipts.knownSessions()) void cleanupV2Receipts(session);
+    }
+    affinityStore = usesRuntimeAffinity(nextConfig) ? createRuntimeAffinityStore() : undefined;
+    pendingAffinityBySession = new WeakMap();
+  };
+
+  state.onManualControl = (session) => {
+    v2Receipts.advanceManual(session);
+    void cleanupV2Receipts(session, "cancelled");
+    affinityStore?.reset(session);
+    pendingAffinityBySession.delete(session);
+  };
+
+  interface AutoUserBoundary {
+    readonly sessionId: string;
+    readonly entryId: string;
+    readonly message: object;
+    readonly branchEpoch: number;
+    readonly manualGeneration: number;
+    readonly configGeneration: number;
+  }
+
+  function findAutoUserBoundary(ctx: ExtensionContext, request: ModelRouteRequest): AutoUserBoundary | undefined {
+    const branch = ctx.sessionManager.getBranch();
+    const latestBranchUser = branch.filter((entry): entry is SessionMessageEntry =>
+      entry.type === "message" && entry.message.role === "user").at(-1);
+    const sessionId = ctx.sessionManager.getHeader()?.id;
+    if (!latestBranchUser || !sessionId || !request.messages.some((message) => message === latestBranchUser.message)) return undefined;
+    const matches = branch.filter((entry) => entry.type === "message" && entry.message === latestBranchUser.message);
+    if (matches.length !== 1) return undefined;
+    const owner = v2Receipts.forSession(ctx.sessionManager);
+    return {
+      sessionId,
+      entryId: latestBranchUser.id,
+      message: latestBranchUser.message,
+      branchEpoch: owner.branchEpoch,
+      manualGeneration: owner.manualGeneration,
+      configGeneration: state.configGeneration ?? 0,
+    };
+  }
+
+  function autoBoundarySessionManualBranchActive(ctx: ExtensionContext, boundary: AutoUserBoundary): boolean {
+    if (ctx.sessionManager.getHeader()?.id !== boundary.sessionId) return false;
+    const owner = v2Receipts.forSession(ctx.sessionManager);
+    if (owner.branchEpoch !== boundary.branchEpoch || owner.manualGeneration !== boundary.manualGeneration || !state.enabled || state.pinned) return false;
+    const branch = ctx.sessionManager.getBranch();
+    const matches = branch.filter((entry) =>
+      entry.type === "message" && entry.id === boundary.entryId && entry.message === boundary.message);
+    const latestUser = branch.filter((entry): entry is SessionMessageEntry =>
+      entry.type === "message" && entry.message.role === "user").at(-1);
+    return matches.length === 1 && latestUser?.id === boundary.entryId && latestUser.message === boundary.message;
+  }
+
+  function autoBoundaryStillActive(ctx: ExtensionContext, boundary: AutoUserBoundary): boolean {
+    return autoBoundarySessionManualBranchActive(ctx, boundary)
+      && (state.configGeneration ?? 0) === boundary.configGeneration;
+  }
+
+  function turnUserBoundary(ctx: ExtensionContext, event: TurnEndEvent): { entryId: string; message: object } | undefined {
+    const branch = ctx.sessionManager.getBranch();
+    const assistantIndexes = branch.flatMap((entry, index) =>
+      entry.type === "message" && entry.id === event.messageEntryId && entry.message === event.message
+        ? [index] : []);
+    if (assistantIndexes.length !== 1 || event.message.role !== "assistant") return undefined;
+    for (let index = assistantIndexes[0]! - 1; index >= 0; index -= 1) {
+      const entry = branch[index]!;
+      if (entry.type === "message" && entry.message.role === "user") return { entryId: entry.id, message: entry.message };
+    }
+    return undefined;
+  }
+
+  async function settleV2Receipt(ctx: ExtensionContext, receipt: AutoDispatchReceipt, kind: "success" | "failure" | "cancelled"): Promise<void> {
+    receipt.finalizing = true;
+    let settlementConfirmed = false;
+    try {
+      await serializeReceiptOperation(receipt, async () => {
+        if (receipt.finalized) return;
+        if (kind === "cancelled") {
+          const result = await receipt.store.abandon({ ownerToken: receipt.ownerToken, dispatchId: receipt.dispatchId, outcomeId: receipt.outcomeId, leaseReferences: receipt.leases });
+          if (result.status !== "abandoned" && result.status !== "duplicate") {
+            try { log(ctx, `Bifrost reliability v2 could not confirm receipt release (${result.status}); inspect local reliability state.`, "warning"); } catch { /* best effort */ }
+          }
+          return;
+        }
+        const result = await receipt.store.settle({ ownerToken: receipt.ownerToken, dispatchId: receipt.dispatchId, outcomeId: receipt.outcomeId,
+          settlement: kind === "success" ? { kind: "success" } : { kind: "failure", ...(receipt.failureObservation ? { observation: receipt.failureObservation } : {}) } });
+        settlementConfirmed = result.status === "settled" || result.status === "duplicate";
+        if (result.status !== "settled" && result.status !== "duplicate") {
+          try { log(ctx, `Bifrost reliability v2 could not confirm receipt settlement (${result.status}); inspect local reliability state.`, "warning"); } catch { /* best effort */ }
+        }
+      });
+      if (kind === "success" && settlementConfirmed) promoteV2ReceiptAffinity(ctx, receipt);
+    } catch {
+      try { log(ctx, "Bifrost reliability v2 could not confirm receipt settlement; inspect local reliability state.", "warning"); } catch { /* no throw from receipt cleanup */ }
+    } finally {
+      v2Receipts.remove(ctx.sessionManager, receipt);
+    }
+  }
+
+  async function cleanupV2Receipts(session: object, kind: "cancelled" = "cancelled"): Promise<void> {
+    const owner = v2Receipts.forSession(session);
+    for (const receipt of [...owner.receipts.values()]) {
+      receipt.finalizing = true;
+      try {
+        await serializeReceiptOperation(receipt, async () => {
+          if (!receipt.finalized) {
+            const result = await receipt.store.abandon({ ownerToken: receipt.ownerToken, dispatchId: receipt.dispatchId, outcomeId: receipt.outcomeId, leaseReferences: receipt.leases });
+            if (result.status !== "abandoned" && result.status !== "duplicate") {
+              console.warn(`[bifrost] reliability v2 could not confirm receipt release (${result.status}); inspect local reliability state.`);
+            }
+          }
+        });
+      } catch { /* lifecycle cleanup is best effort and never escapes Pi's hook */ }
+      v2Receipts.remove(session, receipt);
+    }
+    void kind;
+  }
+
+  async function renewV2Receipt(ctx: ExtensionContext, receipt: AutoDispatchReceipt): Promise<void> {
+    if (receipt.leases.length === 0) return;
+    try {
+      const result = await serializeReceiptOperation(receipt, async () => {
+        if (receipt.finalized || receipt.finalizing) return undefined;
+        return receipt.store.renew({ ownerToken: receipt.ownerToken, dispatchId: receipt.dispatchId, outcomeId: receipt.outcomeId,
+          leaseReferences: receipt.leases, ttlMs: V2_LEASE_TTL_MS });
+      });
+      if (!result) return;
+      if (!result || result.status !== "renewed" || !result.leases) {
+        receipt.renewalFailed = true;
+        try { log(ctx, "Bifrost reliability v2 lease renewal failed; this Auto turn will stop before another provider request.", "error"); } catch { /* best effort */ }
+        return;
+      }
+      receipt.leases = result.leases;
+    } catch {
+      receipt.renewalFailed = true;
+      try { log(ctx, "Bifrost reliability v2 lease renewal failed; this Auto turn will stop before another provider request.", "error"); } catch { /* best effort */ }
+    }
+  }
+
+  function startV2Heartbeat(ctx: ExtensionContext, receipt: AutoDispatchReceipt): void {
+    if (receipt.leases.length === 0 || receipt.timer) return;
+    receipt.timer = setInterval(() => { void renewV2Receipt(ctx, receipt).catch(() => { receipt.renewalFailed = true; }); }, V2_RENEW_INTERVAL_MS);
+    receipt.timer.unref?.();
+  }
+
+  function reliabilityV2Enabled(config: BifrostConfig = state.config): boolean {
+    return config.reliability?.stateVersion === 2 && config.reliability.enabled !== false;
+  }
+
   function resolveForTier(
     ctx: ExtensionContext,
     tier: string,
+    affinityContext?: AffinityRoutingContext,
+    bypassV2Snapshot = false,
   ) {
+    const reliabilityState = reliabilityV2Enabled() && !bypassV2Snapshot
+      ? projectReliabilityV2ForRouting(
+          state.reliabilityV2Store?.readSnapshot(),
+          reliabilityV2Config(state.config.reliability),
+          Date.now(),
+        )
+      : state.reliabilityStore.getState();
     return resolveConfiguredTier(
       ctx,
       tier,
       state.config,
-      state.reliabilityStore.getState(),
+      reliabilityState,
       state.config.reliability,
       undefined,
       state.config.economics && state.economicPolicyValid && state.economicPolicy && state.economicSnapshot
         ? { policy: state.economicPolicy, snapshot: state.economicSnapshot }
         : undefined,
+      undefined,
+      affinityContext,
     );
   }
 
@@ -460,9 +784,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   state.selectPhysicalFromVirtual = async (ctx) => {
     if (!isBifrostAuto(ctx.model)) return true;
     // Prefer the last dispatched model; otherwise resolve the default tier —
-    // the same fallback route() uses — so a fresh session can still exit Auto.
+    // without requiring v2's dispatch sidecar for this explicit manual exit.
     const physical = lastDispatchedPhysical(ctx)
-      ?? (state.config.default ? resolveForTier(ctx, state.config.default).resolution.selected : undefined);
+      ?? (state.config.default ? resolveForTier(ctx, state.config.default, undefined, true).resolution.selected : undefined);
     if (!physical) {
       log(ctx, "Bifrost: no healthy physical model to fall back to; configure a default-tier model or select one in /model", "warning");
       return false;
@@ -501,6 +825,51 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     name: "Bifrost Auto",
     thinkingLevels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
     async route(request, ctx) {
+      const v2Active = reliabilityV2Enabled();
+      let autoBoundary: AutoUserBoundary | undefined;
+      let dispatchReceipt: AutoDispatchReceipt | undefined;
+      let activeRouteTier: string | undefined;
+      let activeRouteOrigin = request.reason === "direct" ? "direct" : request.reason === "retry" ? "retry" : request.reason === "continuation" ? "continuation" : "automatic";
+      if (v2Active) {
+        if (!state.reliabilityV2ConfigValid) throw new Error("Bifrost reliability v2 config is invalid; fix it and run /bifrost reload.");
+        if (!state.reliabilityV2Store) throw new Error("Bifrost reliability v2 is unavailable; run /bifrost reliability migrate [--fresh] after reviewing the v2 config.");
+        try { state.reliabilityV2Store.readSnapshot(); }
+        catch { throw new Error("Bifrost reliability v2 state is missing or unavailable; run /bifrost reliability migrate [--fresh] or repair the sidecar before routing."); }
+        if (!state.enabled || state.pinned) throw new Error("Bifrost Auto is disabled or pinned; turn it on or select Auto again before routing.");
+        if (request.reason === "direct") throw new Error("Bifrost reliability v2 does not support direct utility requests; select Auto for a user turn or use reliability stateVersion 1.");
+        autoBoundary = findAutoUserBoundary(ctx, request);
+        if (!autoBoundary) throw new Error("Bifrost reliability v2 could not prove this Auto request belongs to one persisted user turn; the turn was not sent.");
+        const owner = v2Receipts.forSession(ctx.sessionManager);
+        if (request.reason === "user") {
+          if (v2Receipts.find(ctx.sessionManager, autoBoundary.entryId, autoBoundary.message)) {
+            throw new Error("Bifrost reliability v2 already owns this user turn; it will not create a second dispatch receipt.");
+          }
+          for (const previous of [...owner.receipts.values()]) {
+            if (previous.userEntryId === autoBoundary.entryId) continue;
+            const stale = previous.branchEpoch !== owner.branchEpoch
+              || previous.configGeneration !== (state.configGeneration ?? 0)
+              || previous.manualGeneration !== owner.manualGeneration;
+            await settleV2Receipt(ctx, previous, stale ? "cancelled" : previous.outcome ?? "cancelled");
+          }
+          if (!autoBoundaryStillActive(ctx, autoBoundary)) throw new Error("Bifrost reliability v2 routing boundary changed; resubmit the turn.");
+        } else {
+          dispatchReceipt = v2Receipts.find(ctx.sessionManager, autoBoundary.entryId, autoBoundary.message);
+          if (!dispatchReceipt) throw new Error("Bifrost reliability v2 has no owned receipt for this continuation or retry; it will not dispatch without one.");
+          if (dispatchReceipt.sessionId !== autoBoundary.sessionId
+            || dispatchReceipt.branchEpoch !== autoBoundary.branchEpoch
+            || dispatchReceipt.manualGeneration !== autoBoundary.manualGeneration
+            || Date.now() >= dispatchReceipt.proofUntil) {
+            await settleV2Receipt(ctx, dispatchReceipt, "cancelled");
+            dispatchReceipt = undefined;
+            throw new Error("Bifrost reliability v2 receipt is stale or expired; this continuation was not sent. Start a new user turn.");
+          }
+          dispatchReceipt.outcome = undefined;
+        }
+      }
+      if (!v2Active && affinityStore && request.reason === "user") {
+        autoBoundary = findAutoUserBoundary(ctx, request);
+        if (autoBoundary) finalizePriorAffinityProofs(ctx, autoBoundary.entryId);
+      }
       let routeFailure: { tier: string; pool: string | string[] | undefined; reason?: RoutedModelResolution["fallbackReason"]; skipped?: readonly SkippedCandidate[]; reserveExcluded?: ReserveExclusionSummary; explicitBoundary?: boolean; message?: string } | undefined;
       const ownership = createDispatchOwnership({
         claimTrial: (key) => state.reliabilityStore.tryClaimTrial(key),
@@ -510,9 +879,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       });
       const route = createVirtualRoute({
         overrides: overrideFor(ctx),
-        fallback: () => routeFailure?.explicitBoundary ? undefined : lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default).resolution.selected : undefined),
-        sticky: () => routeFailure?.explicitBoundary ? undefined : lastDispatchedPhysical(ctx),
+        fallback: () => routeFailure?.explicitBoundary || v2Active ? undefined : lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default).resolution.selected : undefined),
+        sticky: () => routeFailure?.explicitBoundary || v2Active ? undefined : lastDispatchedPhysical(ctx),
         select: async (prompt, forcedTier, signal) => {
+          activeRouteOrigin = forcedTier ? "explicit_tier" : "automatic";
           if (routingPolicyInvalid(state)) {
             const tier = state.config.default ?? "default";
             routeFailure = {
@@ -526,12 +896,20 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           if (!state.enabled || state.pinned) throw new Error("Bifrost: virtual auto is disabled or pinned; select a physical model");
           if (state.classifierEnabled && shouldRefreshRegistry(state, Date.now(), REGISTRY_REFRESH_TTL_MS)) {
             try {
-              const outcome = await waitForRegistryRefresh((refreshSignal) => ctx.modelRegistry.refresh(refreshSignal ? { signal: refreshSignal } : undefined), signal);
-              if (outcome === "aborted") throw new Error("Bifrost: model registry refresh aborted");
+              const outcome = await waitForRegistryRefresh(
+                (refreshSignal) => ctx.modelRegistry.refresh(refreshSignal ? { signal: refreshSignal } : undefined),
+                signal,
+                (result) => updateRegistryInventoryEvidence(state, ctx, result),
+              );
+              if (outcome === "aborted") {
+                updateRegistryInventoryEvidence(state, ctx);
+                throw new Error("Bifrost: model registry refresh aborted");
+              }
               state.lastRegistryRefreshAt = Date.now();
               state.forceRegistryRefresh = false;
               invalidatePipeline();
             } catch (error) {
+              updateRegistryInventoryEvidence(state, ctx);
               if (signal?.aborted) throw error;
               debug("virtual", "registry.refresh.error", { category: "registry_refresh_failure" });
             }
@@ -541,7 +919,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           let classification: ClassificationResult = forcedTier
             ? { kind: "classified", tier: forcedTier, source: "inline" }
             : await getPipeline(ctx).classify(prompt, signal);
-          if (classification.kind === "unclassified" && state.economicPolicy?.mode === "policy" && state.config.default) {
+          if (classification.kind === "unclassified" && hasHardEconomicAdmission(state.economicPolicy) && state.config.default) {
             classification = { kind: "fallback", tier: state.config.default };
           }
           if (signal?.aborted) throw new Error("Bifrost: route aborted");
@@ -550,7 +928,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             throw new Error("Bifrost: configuration changed during routing; retry the turn");
           }
           if (classification.kind === "unclassified") {
-            if (state.economicPolicy?.mode === "policy") {
+          if (hasHardEconomicAdmission(state.economicPolicy)) {
               routeFailure = { tier: "default", pool: state.config.models?.[state.config.default ?? "default"], explicitBoundary: true };
             }
             throw new Error("Bifrost: no configured tier for virtual request");
@@ -560,19 +938,34 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             : {};
           // Resolve from current config on every attempt. A registry refresh
           // may overlap /bifrost reload, so options cannot be captured ahead.
-          let attempt = resolveForTier(ctx, classification.tier);
+          let routeStart = performance.now();
+          const affinity: AffinityRoutingContext | undefined = affinityStore
+            ? { intrinsicOrigin: activeRouteOrigin, ...(activeRouteOrigin === "automatic" ? (() => { const anchor = affinityAnchor(ctx); return anchor ? { anchor } : {}; })() : {}) }
+            : undefined;
+          let attempt = resolveForTier(ctx, classification.tier, affinity);
+          let routingDurationMs = +(performance.now() - routeStart).toFixed(3);
           let resolved = attempt.resolution;
           if (!resolved.selected && resolved.primary.candidates.length === 0) {
             // Registry merge can lag the first request; one bounded refresh + re-resolve.
             try {
-              const outcome = await waitForRegistryRefresh((refreshSignal) => ctx.modelRegistry.refresh(refreshSignal ? { signal: refreshSignal } : undefined), signal);
-              if (outcome === "aborted") throw new Error("Bifrost: model registry refresh aborted");
+              const outcome = await waitForRegistryRefresh(
+                (refreshSignal) => ctx.modelRegistry.refresh(refreshSignal ? { signal: refreshSignal } : undefined),
+                signal,
+                (result) => updateRegistryInventoryEvidence(state, ctx, result),
+              );
+              if (outcome === "aborted") {
+                updateRegistryInventoryEvidence(state, ctx);
+                throw new Error("Bifrost: model registry refresh aborted");
+              }
               state.lastRegistryRefreshAt = Date.now();
               state.forceRegistryRefresh = false;
               invalidatePipeline();
-              attempt = resolveForTier(ctx, classification.tier);
+              routeStart = performance.now();
+              attempt = resolveForTier(ctx, classification.tier, affinity);
+              routingDurationMs += +(performance.now() - routeStart).toFixed(3);
               resolved = attempt.resolution;
             } catch (error) {
+              updateRegistryInventoryEvidence(state, ctx);
               if (signal?.aborted) throw error;
               debug("virtual", "registry.refresh.error", { category: "registry_refresh_failure" });
             }
@@ -580,29 +973,105 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           if (state.config.debug?.enabled) {
             debug("virtual", "route_decision", {
               decision: buildRouteDecisionSummary(classification, attempt),
+              routingDurationMs,
             });
           }
           const model = resolved.selected;
           if (!model) {
             state.forceRegistryRefresh = true;
-            routeFailure = { tier: classification.tier, pool: state.config.models?.[classification.tier], reason: resolved.fallbackReason, skipped: resolved.skipped, reserveExcluded: reserveExclusionSummary(resolved), explicitBoundary: resolved.explicitBoundary || state.economicPolicy?.mode === "policy" };
+            routeFailure = { tier: classification.tier, pool: state.config.models?.[classification.tier], reason: resolved.fallbackReason, skipped: resolved.skipped, reserveExcluded: reserveExclusionSummary(resolved), explicitBoundary: resolved.explicitBoundary || hasHardEconomicAdmission(state.economicPolicy) || v2Active };
             debug("virtual", "fail", { tier: classification.tier, reason: resolved.fallbackReason, pool: routeFailure.pool, skipped: resolved.skipped });
             return undefined;
           }
+          activeRouteTier = resolved.selectedTier ?? classification.tier;
           if (!state.enabled || state.pinned) throw new Error("Bifrost: virtual auto was disabled or pinned during routing; select a physical model");
-          debug("virtual", "select", { tier: classification.tier, model: modelKey(model), source: classification.kind === "classified" ? classification.source : "fallback", ...classifierIdentity, skipped: resolved.skipped });
+          debug("virtual", "select", { tier: classification.tier, model: modelKey(model), source: classification.kind === "classified" ? classification.source : "fallback", ...classifierIdentity, skipped: resolved.skipped, routingDurationMs });
           saveClassifierDecision(prompt, classification);
           log(ctx, `Bifrost auto: ${classification.tier} → ${modelKey(model)} (${classification.kind === "classified" ? classification.source : "fallback"}${resolved.fallbackReason ? `; ${resolved.fallbackReason}` : ""}${resolved.skipped.length > 0 ? `; ${resolved.skipped.length} skipped: ${resolved.skipped.map((s) => s.key).join(", ")}` : ""})`);
           return model;
         },
         onDispatch: (model, thinkingLevel, intent) => {
           const key = modelKey(model);
+          if (v2Active) {
+            debug("virtual", "dispatch", { model: key, thinkingLevel, reliabilityStateVersion: 2 });
+            return;
+          }
           ownership.claim(key, intent, (trial) => debug("virtual", "trial", { model: key, allowed: trial.allowed, claimed: trial.claimed }));
           debug("virtual", "dispatch", { model: key, thinkingLevel });
         },
-        onDispatchFailed: (model) => {
+        beforeDispatch: async (model, currentRequest, intent) => {
+          if (!v2Active) {
+            if (affinityStore && activeRouteOrigin === "automatic" && currentRequest.reason === "user" && autoBoundary && !isVirtualModel(model)) {
+              pendingAffinity(ctx.sessionManager, true)!.set(autoBoundary.entryId, {
+                userEntryId: autoBoundary.entryId,
+                userMessage: new WeakRef(autoBoundary.message),
+                modelKey: modelKey(model),
+                dispatchId: randomUUID(),
+              });
+            }
+            void intent;
+            return;
+          }
+          const boundary = autoBoundary;
+          const store = state.reliabilityV2Store;
+          if (!boundary || !store || currentRequest.reason === "direct") {
+            throw new Error("Bifrost reliability v2 requires a proven Auto user-turn receipt; direct dispatch is unsupported.");
+          }
+          if (!autoBoundaryStillActive(ctx, boundary)) throw new Error("Bifrost Auto boundary changed before admission; the turn was not sent.");
+          if (currentRequest.reason === "user") {
+            const key = modelKey(model);
+            if (!activeRouteTier) throw new Error("Bifrost reliability v2 could not bind the selected model to a configured tier.");
+            const receipt = v2Receipts.create({
+              session: ctx.sessionManager,
+              sessionId: boundary.sessionId,
+              userEntryId: boundary.entryId,
+              userMessage: boundary.message,
+              configGeneration: boundary.configGeneration,
+              modelKey: key,
+              tier: activeRouteTier,
+              affinityEligible: activeRouteOrigin === "automatic",
+              observationsEnabled: state.config.reliability?.observations?.enabled === true,
+              admittedAt: Date.now(),
+              proofUntil: Date.now() + V2_MAX_DISPATCH_LIFETIME_MS,
+              leases: [],
+              store,
+            });
+            dispatchReceipt = receipt;
+            const admission = await store.admit({ ownerToken: receipt.ownerToken, dispatchId: receipt.dispatchId, outcomeId: receipt.outcomeId, modelKeys: [key] });
+            if (admission.status !== "admitted") {
+              v2Receipts.remove(ctx.sessionManager, receipt);
+              dispatchReceipt = undefined;
+              const reason = admission.status === "blocked" ? "a circuit is open or another trial owns it" : "reliability state rejected admission";
+              throw new Error(`Bifrost reliability v2 blocked ${key}: ${reason}. No provider request was sent.`);
+            }
+            receipt.leases = admission.leases ?? [];
+            receipt.proofUntil = admission.state.dispatches[receipt.dispatchId]?.proofUntil ?? receipt.proofUntil;
+            if (!autoBoundaryStillActive(ctx, boundary) || state.reliabilityV2Store !== store) {
+              await settleV2Receipt(ctx, receipt, "cancelled");
+              dispatchReceipt = undefined;
+              throw new Error("Bifrost Auto boundary or configuration changed during admission; the turn was not sent.");
+            }
+            startV2Heartbeat(ctx, receipt);
+            return;
+          }
+          const receipt = dispatchReceipt;
+          const pool = receipt ? state.config.models?.[receipt.tier] : undefined;
+          const bindingStillConfigured = receipt && pool !== undefined && findCandidates(ctx, pool).some((candidate) => modelKey(candidate) === receipt.modelKey);
+          if (!receipt || receipt.modelKey !== modelKey(model) || receipt.renewalFailed
+            || Date.now() >= receipt.proofUntil || !autoBoundarySessionManualBranchActive(ctx, boundary) || !bindingStillConfigured) {
+            throw new Error("Bifrost reliability v2 receipt is no longer valid; the continuation was not sent.");
+          }
+          await renewV2Receipt(ctx, receipt);
+          if (receipt.renewalFailed) throw new Error("Bifrost reliability v2 could not renew this turn's lease; the continuation was not sent.");
+        },
+        onDispatchFailed: async (model) => {
           const key = modelKey(model);
           debug("virtual", "dispatch.release", { model: key });
+          if (v2Active) {
+            if (dispatchReceipt) await settleV2Receipt(ctx, dispatchReceipt, "cancelled");
+            dispatchReceipt = undefined;
+            return;
+          }
           // Release only the bookkeeping this dispatch owns.
           ownership.fail(key);
         },
@@ -634,12 +1103,91 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     overrideFor(ctx).clear();
+    affinityStore?.reset(ctx.sessionManager);
+    pendingAffinityBySession.delete(ctx.sessionManager);
+    if (reliabilityV2Enabled()) {
+      v2Receipts.advanceBranch(ctx.sessionManager);
+      await cleanupV2Receipts(ctx.sessionManager);
+    }
     syncBifrostModeStatus(ctx, state);
     clearBifrostWidgets(ctx);
   });
 
+  pi.on("session_before_tree", async (_event, ctx) => {
+    affinityStore?.reset(ctx.sessionManager);
+    pendingAffinityBySession.delete(ctx.sessionManager);
+    if (reliabilityV2Enabled()) {
+      v2Receipts.advanceBranch(ctx.sessionManager);
+      await cleanupV2Receipts(ctx.sessionManager);
+    }
+  });
+
+  pi.on("session_shutdown", async (_event, ctx) => {
+    affinityStore?.reset(ctx.sessionManager);
+    pendingAffinityBySession.delete(ctx.sessionManager);
+    if (reliabilityV2Enabled()) await cleanupV2Receipts(ctx.sessionManager);
+  });
+
   pi.on("agent_end", async (event, ctx) => {
     trackerFor(ctx).observe(event.messages);
+  });
+
+  pi.on("turn_end", async (event, ctx) => {
+    if ((!reliabilityV2Enabled() && !affinityStore) || event.message.role !== "assistant") return;
+    const boundary = turnUserBoundary(ctx, event);
+    if (!boundary) return;
+    if (!reliabilityV2Enabled()) {
+      const proof = pendingAffinity(ctx.sessionManager)?.get(boundary.entryId);
+      if (!proof || proof.userMessage.deref() !== boundary.message) return;
+      if (event.message.stopReason === "stop" || event.message.stopReason === "length") {
+        proof.outcome = "success";
+        proof.assistantEntryId = event.messageEntryId;
+        proof.successObservedAt = Date.now();
+      } else if (event.message.stopReason === "toolUse") {
+        proof.outcome = undefined;
+        proof.assistantEntryId = undefined;
+        proof.successObservedAt = undefined;
+      } else {
+        proof.outcome = event.message.stopReason === "error" ? "failure" : "unknown";
+        proof.assistantEntryId = undefined;
+        proof.successObservedAt = undefined;
+      }
+      return;
+    }
+    const receipt = v2Receipts.find(ctx.sessionManager, boundary.entryId, boundary.message);
+    if (!receipt) return;
+    if (receipt.sessionId !== ctx.sessionManager.getHeader()?.id
+      || receipt.branchEpoch !== v2Receipts.forSession(ctx.sessionManager).branchEpoch) return;
+    const assistantProvider = event.message.provider;
+    const assistantModel = event.message.model;
+    if (typeof assistantProvider !== "string" || typeof assistantModel !== "string"
+      || `${assistantProvider}/${assistantModel}` !== receipt.modelKey) return;
+    if (event.message.stopReason === "error") {
+      receipt.outcome = "failure";
+      receipt.assistantEntryId = undefined;
+      receipt.successObservedAt = undefined;
+      if (receipt.observationsEnabled) {
+        const errorText = (event.message as typeof event.message & { errorMessage?: unknown }).errorMessage;
+        receipt.failureObservation = normalizeFailureObservation({
+          outcomeId: receipt.outcomeId,
+          modelKey: receipt.modelKey,
+          source: "runtime",
+          ...(typeof errorText === "string" ? { errorText } : {}),
+        });
+      }
+    }
+    else if (event.message.stopReason === "stop" || event.message.stopReason === "length") {
+      receipt.outcome = "success";
+      receipt.assistantEntryId = event.messageEntryId;
+      receipt.successObservedAt = Date.now();
+    }
+    else if (event.message.stopReason === "toolUse") {
+      receipt.outcome = undefined;
+      receipt.assistantEntryId = undefined;
+      receipt.successObservedAt = undefined;
+      receipt.failureObservation = undefined;
+      await renewV2Receipt(ctx, receipt);
+    }
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
@@ -648,6 +1196,23 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     // whose input-prepared tiers are still pending. Queued user input drains
     // before agent_end, so anything left here was abandoned.
     overrideFor(ctx).clear();
+    if (reliabilityV2Enabled()) {
+      const owner = v2Receipts.forSession(ctx.sessionManager);
+      for (const receipt of [...owner.receipts.values()]) {
+        const stale = receipt.sessionId !== ctx.sessionManager.getHeader()?.id
+          || receipt.branchEpoch !== owner.branchEpoch
+          || receipt.manualGeneration !== owner.manualGeneration;
+        await settleV2Receipt(ctx, receipt, stale ? "cancelled" : receipt.outcome ?? "cancelled");
+      }
+      return;
+    }
+    if (affinityStore) {
+      const pending = pendingAffinity(ctx.sessionManager);
+      if (pending) {
+        for (const proof of pending.values()) promotePendingAffinity(ctx, proof);
+        pending.clear();
+      }
+    }
     if (settled.length === 0) return;
     if (!state.enabled || state.config.reliability?.enabled === false) {
       // Policy off mid-run: still resolve claimed trials so models never wedge.
@@ -682,6 +1247,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     }
     // Selecting the virtual profile is an explicit request for per-prompt routing.
     if (isBifrostAuto(ctx.model)) {
+      affinityStore?.reset(ctx.sessionManager);
+      pendingAffinityBySession.delete(ctx.sessionManager);
+      if (reliabilityV2Enabled()) {
+        v2Receipts.advanceManual(ctx.sessionManager);
+        await cleanupV2Receipts(ctx.sessionManager);
+      }
       overrideFor(ctx).clear();
       state.pinned = false;
       state.enabled = true;
@@ -705,6 +1276,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     }
     if (!state.enabled) return;
 
+    affinityStore?.reset(ctx.sessionManager);
+    pendingAffinityBySession.delete(ctx.sessionManager);
+    if (reliabilityV2Enabled()) {
+      v2Receipts.advanceManual(ctx.sessionManager);
+      await cleanupV2Receipts(ctx.sessionManager);
+    }
     state.pinned = true;
     state.saveModeState();
     debug("bifrost", "model_select", { model: modelKey(ctx.model) });
@@ -719,7 +1296,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   pi.on("input", async (event, ctx) => {
     const originalText = event.text;
     const editorTextAtInput = readEditorText(ctx);
-    let strictBoundary = routingPolicyInvalid(state) || hasExplicitTierPolicies(state.config) || state.economicPolicy?.mode === "policy";
+    let strictBoundary = routingPolicyInvalid(state) || hasExplicitTierPolicies(state.config) || hasHardEconomicAdmission(state.economicPolicy) || reliabilityV2Enabled();
     let begunStrictModel: string | undefined;
     let claimedTrial: string | undefined;
     try {
@@ -751,6 +1328,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       strictBoundary = false;
       return { action: "continue" };
     }
+    if (reliabilityV2Enabled() && !isBifrostAuto(ctx.model)) {
+      return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost reliability stateVersion 2 supports Auto turns only; select bifrost/auto or use reliability stateVersion 1. The turn was not sent.");
+    }
+    if (state.config.affinity?.mode === "retain-within-tier" && !isBifrostAuto(ctx.model)) {
+      return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost retain-within-tier is supported for Auto user turns only; select bifrost/auto, or use affinity mode observe for physical routing. The turn was not sent.");
+    }
     if (routingPolicyInvalid(state)) {
       return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing is blocked by an invalid routing or economic policy config; fix the config and run /bifrost reload.");
     }
@@ -758,7 +1341,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     // Inline tier override: "frontier debug this" forces that tier for one prompt.
     // Pi reserves / for commands, ! for bash. Just type the tier name as first word.
     const { forcedTier, promptText } = parseInlineOverride(text, state.config.models);
-    if (forcedTier) strictBoundary = hasExplicitTierPolicy(state.config, forcedTier) || state.economicPolicy?.mode === "policy";
+    if (forcedTier) strictBoundary = hasExplicitTierPolicy(state.config, forcedTier) || hasHardEconomicAdmission(state.economicPolicy);
     if (forcedTier) {
       debug("input", "inline_override", { tier: forcedTier });
     }
@@ -791,8 +1374,13 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         const endRefresh = debugMeasure("input", "registry.refresh");
         let refreshOutcome: "success" | "error" | "aborted" = "error";
         try {
-          const result = await waitForRegistryRefresh((signal) => ctx.modelRegistry.refresh(signal ? { signal } : undefined), ctx.signal);
+          const result = await waitForRegistryRefresh(
+            (signal) => ctx.modelRegistry.refresh(signal ? { signal } : undefined),
+            ctx.signal,
+            (refreshResult) => updateRegistryInventoryEvidence(state, ctx, refreshResult),
+          );
           if (result === "aborted") {
+            updateRegistryInventoryEvidence(state, ctx);
             refreshOutcome = "aborted";
             endInput({ outcome: "aborted" });
             return strictBoundary
@@ -804,6 +1392,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           state.forceRegistryRefresh = false;
           invalidatePipeline();
         } catch {
+          updateRegistryInventoryEvidence(state, ctx);
           debug("input", "registry.refresh.error", { category: "registry_refresh_failure" });
           console.error("[bifrost] model registry refresh failed");
         } finally {
@@ -824,7 +1413,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       let classification = forcedTier
         ? { kind: "classified" as const, tier: forcedTier, source: "inline" as const }
         : await getPipeline(ctx).classify(promptText, ctx.signal);
-      if (classification.kind === "unclassified" && state.economicPolicy?.mode === "policy" && state.config.default) {
+      if (classification.kind === "unclassified" && hasHardEconomicAdmission(state.economicPolicy) && state.config.default) {
         classification = { kind: "fallback", tier: state.config.default };
       }
 
@@ -856,7 +1445,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       setBifrostWorkingMessage(ctx, undefined);
 
       if (classification.kind === "unclassified") {
-        if (state.economicPolicy?.mode === "policy") {
+        if (hasHardEconomicAdmission(state.economicPolicy)) {
           return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost reserve policy could not resolve a tier; the turn was not sent. Configure a default tier or classify the request, then resubmit.");
         }
         strictBoundary = false;
@@ -868,8 +1457,13 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       }
 
       const tier = classification.tier;
-      strictBoundary = hasExplicitTierPolicy(state.config, tier) || state.economicPolicy?.mode === "policy";
-      const attempt = resolveForTier(ctx, tier);
+      strictBoundary = hasExplicitTierPolicy(state.config, tier) || hasHardEconomicAdmission(state.economicPolicy);
+      const routeStart = performance.now();
+      const physicalAffinity: AffinityRoutingContext | undefined = state.config.affinity?.mode === "observe"
+        ? { intrinsicOrigin: forcedTier ? "explicit_tier" : "automatic" }
+        : undefined;
+      const attempt = resolveForTier(ctx, tier, physicalAffinity);
+      const routingDurationMs = +(performance.now() - routeStart).toFixed(3);
       const options = attempt.options;
       const strategy = options.requestedStrategy;
       const source = classification.kind === "classified"
@@ -878,9 +1472,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       const classifierIdentity = classification.kind === "classified" && classification.judgment
         ? { classifierBackend: classification.judgment.backend, classifierModel: classification.judgment.model }
         : {};
-      const routeStart = performance.now();
       const resolved = attempt.resolution;
-      const routingDurationMs = +(performance.now() - routeStart).toFixed(3);
       if (state.config.debug?.enabled) {
         debug("input", "route_decision", {
           decision: buildRouteDecisionSummary(classification, attempt),

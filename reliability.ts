@@ -2,6 +2,10 @@ import { resolveStoragePath, readJsonFile, writeJsonFile } from "./storage.ts";
 
 export interface ReliabilityConfig {
   enabled?: boolean;
+  /** Explicitly opt into the experimental receipt-owned runtime (requires schemaVersion 2). */
+  stateVersion?: 1 | 2;
+  /** Store only allowlisted failure categories in reliability v2. Disabled by default. */
+  observations?: { enabled?: boolean };
   failureThreshold?: number;
   windowMinutes?: number;
   cooldownMinutes?: number;
@@ -33,14 +37,14 @@ export interface CircuitState {
   recentFailures: number;
 }
 
-export const DEFAULT_RELIABILITY: Required<Omit<ReliabilityConfig, "path">> = {
+export const DEFAULT_RELIABILITY: Required<Omit<ReliabilityConfig, "path" | "stateVersion" | "observations">> = {
   enabled: true,
   failureThreshold: 3,
   windowMinutes: 5,
   cooldownMinutes: 60,
 };
 
-export function resolveReliabilityConfig(config?: ReliabilityConfig): Required<Omit<ReliabilityConfig, "path">> & Pick<ReliabilityConfig, "path"> {
+export function resolveReliabilityConfig(config?: ReliabilityConfig): Required<Omit<ReliabilityConfig, "path" | "stateVersion" | "observations">> & Pick<ReliabilityConfig, "path"> {
   return {
     enabled: config?.enabled ?? DEFAULT_RELIABILITY.enabled,
     failureThreshold: config?.failureThreshold ?? DEFAULT_RELIABILITY.failureThreshold,

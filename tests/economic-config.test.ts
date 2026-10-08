@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { validateEconomicConfig, type BifrostConfig } from "../config.ts";
 import { normalizeEconomicPolicy, reconcileEconomicSnapshot } from "../economic-config.ts";
 import type { EconomicConfig } from "../config.ts";
 import type { EconomicSignal } from "../economic-signals.ts";
+import { hasHardEconomicAdmission } from "../economic-signals.ts";
 
 function observation(overrides: Partial<EconomicSignal> = {}): EconomicSignal {
   return {
@@ -53,6 +55,40 @@ describe("economic config integration", () => {
     assert.equal(Object.isFrozen(configuredScope), false, "normalization must not freeze caller-owned scope records");
     assert.equal(Object.isFrozen(configured), false, "normalization must not freeze caller-owned config records");
     assert.equal(Object.isFrozen(configured.observations?.[0]), false, "publication must not freeze caller-owned facts");
+  });
+
+  it("accepts preference-only policy with empty-window billing facts but keeps empty policy invalid without preference", () => {
+    const preferenceOnly = config({
+      mode: "policy",
+      admission: [],
+      preference: { billingClass: "subscription" },
+      observations: [observation({ windows: [] })],
+    });
+    assert.deepEqual(validateEconomicConfig({ schemaVersion: 2, economics: preferenceOnly }), []);
+    assert.equal(hasHardEconomicAdmission(normalizeEconomicPolicy(preferenceOnly)), false);
+    assert.equal(normalizeEconomicPolicy(preferenceOnly)?.preference?.billingClass, "subscription");
+
+    const emptyPolicy = validateEconomicConfig({
+      schemaVersion: 2,
+      economics: config({ mode: "policy", admission: [], observations: [] }),
+    });
+    assert.ok(emptyPolicy.some((issue) => issue.code === "config.economics_policy_empty_admission"));
+    assert.equal(hasHardEconomicAdmission(normalizeEconomicPolicy(config({ mode: "policy", admission: [] }))), false);
+  });
+
+  it("reports malformed preference with a safe field path", () => {
+    const issues = validateEconomicConfig({
+      schemaVersion: 2,
+      economics: config({ preference: { billingClass: "private-secret", extra: "never echo" } as never }),
+    });
+    assert.ok(issues.some((issue) => issue.code === "config.economics_preference_invalid"
+      && issue.path === "economics.preference.billingClass"));
+    assert.equal(issues.some((issue) => issue.message.includes("private-secret") || issue.message.includes("never echo")), false);
+  });
+
+  it("keeps the preference-only example valid against the config contract", () => {
+    const example = JSON.parse(readFileSync(new URL("../examples/economic-billing-preference.json", import.meta.url), "utf8")) as BifrostConfig;
+    assert.deepEqual(validateEconomicConfig(example), []);
   });
 
   it("copies mutable prior facts and watermarks and drops the policy when economics is removed", () => {

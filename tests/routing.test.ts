@@ -22,9 +22,157 @@ import {
 } from "../routing.ts";
 import { emptyReliabilityState, recordModelFailure, DEFAULT_RELIABILITY } from "../reliability.ts";
 import { makeCtx, makeModel, withoutCost } from "./helpers.ts";
-import { emptyEconomicSnapshot, publishEconomicObservation, type EconomicSignal, type ReservePolicy } from "../economic-signals.ts";
+import { emptyEconomicSnapshot, hasHardEconomicAdmission, publishEconomicObservation, type EconomicSignal, type ReservePolicy } from "../economic-signals.ts";
 
 describe("routing", () => {
+  describe("affinity observation", () => {
+    it("compares the unchanged random winner against the final eligible pool without another RNG call", () => {
+      const ctx = makeCtx([makeModel("fixture", "anchor"), makeModel("fixture", "other")]);
+      let randomCalls = 0;
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture/anchor", "fixture/other"] },
+        strategy: "random",
+        affinity: { mode: "observe", providerAdvisory: true },
+      }, undefined, undefined, 250, undefined, () => { randomCalls += 1; return 0.75; }, {
+        targetOrigin: "automatic",
+        anchor: { modelKey: "fixture/anchor", provider: "fixture", lastSuccessfulDispatchAt: 100 },
+      }).resolution;
+      assert.equal(modelKey(result.selected), "fixture/other");
+      assert.deepEqual(result.primary.healthyCandidates.map(modelKey), ["fixture/anchor", "fixture/other"]);
+      assert.equal(randomCalls, 1);
+      assert.deepEqual(result.affinityObservation, {
+        version: 1,
+        status: "current_eligible",
+        snapshotAsOf: 250,
+        anchor: { modelKey: "fixture/anchor", provider: "fixture", lastSuccessfulDispatchAt: 100, ageMs: 150 },
+        baseStrategyWinner: "fixture/other",
+        baseStrategyComparison: "selected_other",
+        sameProviderCandidateAvailable: true,
+        mode: "observe",
+        selection: "strategy",
+        strategyWinner: "fixture/other",
+        selectedModel: "fixture/other",
+        selectedTier: "general",
+      });
+    });
+
+    it("retains an automatic anchor only inside the selected tier's final strategy pool", () => {
+      const ctx = makeCtx([makeModel("fixture", "anchor"), makeModel("fixture", "strategy")]);
+      let randomCalls = 0;
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture/anchor", "fixture/strategy"] },
+        strategy: "random",
+        affinity: { mode: "retain-within-tier" as never },
+      }, undefined, undefined, 250, undefined, () => { randomCalls += 1; return 0.75; }, {
+        targetOrigin: "automatic",
+        anchor: { modelKey: "fixture/anchor", provider: "fixture", lastSuccessfulDispatchAt: 100 },
+      }).resolution;
+      assert.deepEqual(result.primary.selectionCandidates?.map(modelKey), ["fixture/anchor", "fixture/strategy"]);
+      assert.equal(modelKey(result.selected), "fixture/anchor");
+      assert.equal(randomCalls, 1);
+      assert.deepEqual(result.affinityObservation, {
+        version: 1,
+        status: "current_eligible",
+        snapshotAsOf: 250,
+        anchor: { modelKey: "fixture/anchor", provider: "fixture", lastSuccessfulDispatchAt: 100, ageMs: 150 },
+        baseStrategyWinner: "fixture/strategy",
+        baseStrategyComparison: "selected_other",
+        mode: "retain-within-tier",
+        selection: "retained_anchor",
+        strategyWinner: "fixture/strategy",
+        selectedModel: "fixture/anchor",
+        selectedTier: "general",
+      });
+    });
+
+    it("reports locality unknown without manufacturing an anchor and honors intrinsic explicit origins", () => {
+      const ctx = makeCtx([makeModel("fixture", "anchor")]);
+      const options = {
+        models: { general: ["fixture/anchor"] },
+        strategy: "first" as const,
+        affinity: { mode: "observe" as const },
+      };
+      const unknown = resolveConfiguredTier(ctx, "general", options, undefined, undefined, 250, undefined, undefined, {
+        targetOrigin: "automatic",
+      }).resolution;
+      assert.deepEqual(unknown.affinityObservation, {
+        version: 1, status: "locality_unknown", snapshotAsOf: 250, baseStrategyComparison: "no_anchor",
+        mode: "observe", selection: "no_anchor", strategyWinner: "fixture/anchor", selectedModel: "fixture/anchor", selectedTier: "general",
+      });
+      const explicit = resolveConfiguredTier(ctx, "general", options, undefined, undefined, 250, undefined, undefined, {
+        targetOrigin: "automatic",
+        intrinsicOrigin: "explicit_tier",
+      }).resolution;
+      assert.deepEqual(explicit.affinityObservation, {
+        version: 1, status: "not_applicable", snapshotAsOf: 250, mode: "observe", selection: "not_applicable",
+        strategyWinner: "fixture/anchor", selectedModel: "fixture/anchor", selectedTier: "general",
+      });
+    });
+
+    it("does not restore an anchor excluded by preferred-class selection or explicit intent", () => {
+      const now = 250;
+      const ctx = makeCtx([makeModel("fixture", "metered"), makeModel("fixture", "subscription")]);
+      const policy: ReservePolicy = {
+        mode: "policy",
+        scopes: {
+          metered: { kind: "model", model: "fixture/metered" },
+          subscription: { kind: "model", model: "fixture/subscription" },
+        },
+        sources: [
+          { id: "metered-fact", scopeRef: "metered", authority: "declared" },
+          { id: "subscription-fact", scopeRef: "subscription", authority: "declared" },
+        ],
+        sourceOrder: { metered: ["metered-fact"], subscription: ["subscription-fact"] },
+        admission: [],
+        preference: { billingClass: "subscription" },
+      };
+      let facts = emptyEconomicSnapshot();
+      for (const fact of [
+        { sourceId: "metered-fact", scopeRef: "metered", billing: "metered" },
+        { sourceId: "subscription-fact", scopeRef: "subscription", billing: "subscription" },
+      ]) {
+        const published = publishEconomicObservation(facts, policy, {
+          ...fact, observedAt: 100, expiresAt: 2_000, revision: 1, windows: [],
+        } as EconomicSignal);
+        assert.equal(published.accepted, true);
+        facts = published.snapshot;
+      }
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture/metered", "fixture/subscription"] },
+        strategy: "first",
+        affinity: { mode: "retain-within-tier" },
+      }, undefined, undefined, now, { policy, snapshot: facts }, undefined, {
+        targetOrigin: "automatic",
+        anchor: { modelKey: "fixture/metered", provider: "fixture", lastSuccessfulDispatchAt: 100 },
+      }).resolution;
+      assert.equal(modelKey(result.selected), "fixture/subscription");
+      assert.deepEqual(result.primary.selectionCandidates?.map(modelKey), ["fixture/subscription"]);
+      assert.equal(result.affinityObservation?.selection, "anchor_not_eligible");
+
+      const explicit = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture/metered", "fixture/subscription"] },
+        strategy: "first",
+        affinity: { mode: "retain-within-tier" },
+      }, undefined, undefined, now, undefined, undefined, {
+        targetOrigin: "automatic",
+        intrinsicOrigin: "direct",
+        anchor: { modelKey: "fixture/subscription", provider: "fixture", lastSuccessfulDispatchAt: 100 },
+      }).resolution;
+      assert.equal(modelKey(explicit.selected), "fixture/metered");
+      assert.equal(explicit.affinityObservation?.selection, "not_applicable");
+    });
+
+    it("omits affinity observation when mode is off or absent", () => {
+      const ctx = makeCtx([makeModel("fixture", "anchor")]);
+      for (const affinity of [undefined, { mode: "off" as const }, { mode: "observe" as const }]) {
+        const result = resolveConfiguredTier(ctx, "general", {
+          models: { general: ["fixture/anchor"] }, strategy: "first", ...(affinity ? { affinity } : {}),
+        }, undefined, undefined, 250, undefined, undefined, affinity?.mode === "observe" ? undefined : { targetOrigin: "automatic" }).resolution;
+        assert.equal(result.affinityObservation, undefined);
+      }
+    });
+  });
+
   describe("economic reserve filtering", () => {
     const now = 1_000;
     const policy = (mode: ReservePolicy["mode"]): ReservePolicy => ({
@@ -114,6 +262,255 @@ describe("routing", () => {
       assert.deepEqual(summary.requested?.candidates[0]?.reserve, {
         disposition: "observed", wouldReject: true, reasons: ["reserve_reached"],
       });
+    });
+  });
+
+  describe("billing preference routing", () => {
+    const now = 1_000;
+    const basePolicy = (mode: ReservePolicy["mode"], admission: ReservePolicy["admission"] = []): ReservePolicy => ({
+      mode,
+      scopes: {
+        metered: { kind: "model", model: "fixture/metered" },
+        subscription: { kind: "model", model: "fixture/subscription" },
+      },
+      sources: [
+        { id: "metered-fact", scopeRef: "metered", authority: "declared" },
+        { id: "subscription-fact", scopeRef: "subscription", authority: "declared" },
+      ],
+      admission,
+      preference: { billingClass: "subscription" },
+      sourceOrder: { metered: ["metered-fact"], subscription: ["subscription-fact"] },
+    });
+    const publish = (policy: ReservePolicy, billing: { metered?: string; subscription?: string } = {}) => {
+      let snapshot = emptyEconomicSnapshot();
+      for (const observation of [
+        { sourceId: "metered-fact", scopeRef: "metered", billing: billing.metered ?? "metered" },
+        { sourceId: "subscription-fact", scopeRef: "subscription", billing: billing.subscription ?? "subscription" },
+      ]) {
+        const result = publishEconomicObservation(snapshot, policy, {
+          ...observation,
+          observedAt: 100,
+          expiresAt: 2_000,
+          revision: 1,
+          windows: [],
+        } as EconomicSignal);
+        assert.equal(result.accepted, true);
+        snapshot = result.snapshot;
+      }
+      return snapshot;
+    };
+    const routingConfig = (overrides: Partial<Parameters<typeof resolveConfiguredTier>[2]> = {}) => ({
+      models: { general: ["fixture/metered", "fixture/subscription"] },
+      strategy: "cheapest" as const,
+      ...overrides,
+    });
+
+    it("prefers a declared class within the chosen tier, then applies the existing strategy to that pool", () => {
+      const ctx = makeCtx([
+        makeModel("fixture", "metered", 0.01, 0.01),
+        makeModel("fixture", "subscription", 0.9, 0.9),
+      ]);
+      const policy = basePolicy("policy");
+      const result = resolveConfiguredTier(ctx, "general", routingConfig(), undefined, undefined, now, {
+        policy,
+        snapshot: publish(policy),
+      }).resolution;
+      assert.equal(modelKey(result.selected), "fixture/subscription");
+      assert.deepEqual(result.primary.healthyCandidates.map(modelKey), ["fixture/metered", "fixture/subscription"]);
+      assert.deepEqual(result.primary.selectionCandidates?.map(modelKey), ["fixture/subscription"]);
+      assert.equal(result.primary.billingPreference?.preferredCount, 1);
+      assert.equal(result.primary.billingPreference?.eligibleCount, 2);
+      assert.equal(result.primary.economic, undefined);
+      assert.equal(hasHardEconomicAdmission(policy), false);
+      const summary = buildRouteDecisionSummary({ kind: "classified", tier: "general", source: "regex" }, {
+        resolution: result,
+        options: buildTierResolutionOptions("general", routingConfig()),
+      });
+      assert.deepEqual(summary.requested?.billingPreference, {
+        mode: "policy",
+        preferredClass: "subscription",
+        eligibleCount: 2,
+        preferredCount: 1,
+        selectionCount: 1,
+        candidates: [
+          { model: "fixture/metered", billingClass: "metered", sourceAliases: ["metered-fact"], authorities: ["declared"], freshness: "fresh", effect: "baseline" },
+          { model: "fixture/subscription", billingClass: "subscription", sourceAliases: ["subscription-fact"], authorities: ["declared"], freshness: "fresh", effect: "preferred" },
+        ],
+      });
+      assert.equal(JSON.stringify(summary).includes("remaining"), false);
+    });
+
+    it("keeps observe mode order and random calls unchanged while reporting wouldPrefer", () => {
+      const ctx = makeCtx([
+        makeModel("fixture", "metered", 0.01, 0.01),
+        makeModel("fixture", "subscription", 0.9, 0.9),
+      ]);
+      const policy = basePolicy("observe");
+      let randomCalls = 0;
+      const result = resolveConfiguredTier(ctx, "general", { ...routingConfig(), strategy: "random" }, undefined, undefined, now, {
+        policy,
+        snapshot: publish(policy),
+      }, () => { randomCalls += 1; return 0; }).resolution;
+      assert.equal(modelKey(result.selected), "fixture/metered");
+      assert.deepEqual(result.primary.selectionCandidates?.map(modelKey), ["fixture/metered", "fixture/subscription"]);
+      assert.equal(result.primary.billingPreference?.mode, "observe");
+      assert.equal(result.primary.billingPreference?.preferredCount, 1);
+      assert.equal(result.primary.billingPreference?.selectionCount, 2);
+      assert.equal(randomCalls, 1);
+    });
+
+    it("runs the seeded random strategy only inside the preferred eligible subset", () => {
+      const ctx = makeCtx([
+        makeModel("fixture", "metered", 0.01, 0.01),
+        makeModel("fixture", "subscription", 0.9, 0.9),
+        makeModel("fixture", "subscription-2", 0.8, 0.8),
+      ]);
+      const policy: ReservePolicy = {
+        mode: "policy",
+        scopes: {
+          metered: { kind: "model", model: "fixture/metered" },
+          subscription: { kind: "model", model: "fixture/subscription" },
+          subscription2: { kind: "model", model: "fixture/subscription-2" },
+        },
+        sources: [
+          { id: "metered-fact", scopeRef: "metered", authority: "declared" },
+          { id: "subscription-fact", scopeRef: "subscription", authority: "declared" },
+          { id: "subscription2-fact", scopeRef: "subscription2", authority: "declared" },
+        ],
+        admission: [],
+        preference: { billingClass: "subscription" },
+        sourceOrder: { metered: ["metered-fact"], subscription: ["subscription-fact"], subscription2: ["subscription2-fact"] },
+      };
+      let snapshot = emptyEconomicSnapshot();
+      for (const fact of [
+        { sourceId: "metered-fact", scopeRef: "metered", billing: "metered" },
+        { sourceId: "subscription-fact", scopeRef: "subscription", billing: "subscription" },
+        { sourceId: "subscription2-fact", scopeRef: "subscription2", billing: "subscription" },
+      ]) {
+        const result = publishEconomicObservation(snapshot, policy, { ...fact, observedAt: 100, expiresAt: 2_000, revision: 1, windows: [] } as EconomicSignal);
+        assert.equal(result.accepted, true);
+        snapshot = result.snapshot;
+      }
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture/metered", "fixture/subscription", "fixture/subscription-2"] },
+        strategy: "random",
+      }, undefined, undefined, now, { policy, snapshot }, () => 0.75).resolution;
+      assert.equal(modelKey(result.selected), "fixture/subscription-2");
+      assert.deepEqual(result.primary.selectionCandidates?.map(modelKey), ["fixture/subscription", "fixture/subscription-2"]);
+    });
+
+    it("uses the full baseline pool when no preferred class is fresh and does not turn an empty tier into a route", () => {
+      const ctx = makeCtx([makeModel("fixture", "metered", 0.01, 0.01), makeModel("fixture", "subscription", 0.9, 0.9)]);
+      const policy = basePolicy("policy");
+      const result = resolveConfiguredTier(ctx, "general", routingConfig(), undefined, undefined, now, {
+        policy,
+        snapshot: emptyEconomicSnapshot(),
+      }).resolution;
+      assert.equal(modelKey(result.selected), "fixture/metered");
+      assert.equal(result.primary.billingPreference?.preferredCount, 0);
+      assert.equal(result.primary.selectionCandidates?.length, 2);
+      assert.equal(result.fallbackReason, undefined);
+
+      const noRoute = resolveConfiguredTier(ctx, "missing", {
+        default: undefined,
+        models: { missing: ["fixture/not-available"] },
+        strategy: "first",
+      }, undefined, undefined, now, { policy, snapshot: emptyEconomicSnapshot() }).resolution;
+      assert.equal(noRoute.selected, undefined);
+      assert.equal(noRoute.fallbackReason, "requested_tier_unavailable");
+    });
+
+    it("keeps malformed registry identities eligible when preference evidence is invalid", () => {
+      const invalidKey = makeModel("fixture provider", "subscription");
+      const baseline = makeModel("fixture", "metered");
+      const ctx = makeCtx([invalidKey, baseline]);
+      const policy = basePolicy("policy");
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture provider/subscription", "fixture/metered"] }, strategy: "first",
+      }, undefined, undefined, now, { policy, snapshot: publish(policy) }).resolution;
+      assert.equal(modelKey(result.selected), "fixture provider/subscription");
+      assert.deepEqual(result.primary.selectionCandidates?.map(modelKey), ["fixture provider/subscription", "fixture/metered"]);
+      assert.equal(result.primary.billingPreference?.preferredCount, 0);
+    });
+
+    it("explicitly bypasses soft preference for direct model and utility dispatch contexts", () => {
+      const ctx = makeCtx([
+        makeModel("fixture", "metered", 0.01, 0.01),
+        makeModel("fixture", "subscription", 0.9, 0.9),
+      ]);
+      const policy = basePolicy("policy");
+      const result = resolveConfiguredTier(ctx, "general", routingConfig(), undefined, undefined, now, {
+        policy,
+        snapshot: publish(policy),
+        preferenceBypassed: true,
+      }).resolution;
+      assert.equal(modelKey(result.selected), "fixture/metered");
+      assert.equal(result.primary.billingPreference, undefined);
+    });
+
+    it("does not cross a strict tier boundary to find a preferred class", () => {
+      const ctx = makeCtx([
+        makeModel("fixture", "metered", 0.01, 0.01),
+        makeModel("fixture", "subscription", 0.9, 0.9),
+      ]);
+      const policy = basePolicy("policy");
+      const result = resolveConfiguredTier(ctx, "quick", {
+        schemaVersion: 2,
+        models: { quick: ["fixture/metered"], general: ["fixture/subscription"] },
+        tierPolicies: { quick: { fallbackTiers: [] } },
+        default: "general",
+        strategy: "first",
+      }, undefined, undefined, now, { policy, snapshot: publish(policy) }).resolution;
+      assert.equal(modelKey(result.selected), "fixture/metered");
+      assert.equal(result.selectedTier, "quick");
+      assert.equal(result.primary.billingPreference?.preferredCount, 0);
+      assert.equal(result.fallback, undefined);
+    });
+
+    it("does not restore reserve- or circuit-excluded preferred models", () => {
+      const ctx = makeCtx([
+        makeModel("fixture", "metered", 0.2, 0.2),
+        makeModel("fixture", "subscription-reserved", 0.3, 0.3),
+        makeModel("fixture", "subscription-open", 0.4, 0.4),
+      ]);
+      const policy: ReservePolicy = {
+        mode: "policy",
+        scopes: {
+          reserved: { kind: "model", model: "fixture/subscription-reserved" },
+          open: { kind: "model", model: "fixture/subscription-open" },
+          metered: { kind: "model", model: "fixture/metered" },
+        },
+        sources: [
+          { id: "reserved-fact", scopeRef: "reserved", authority: "declared" },
+          { id: "open-fact", scopeRef: "open", authority: "declared" },
+          { id: "metered-fact", scopeRef: "metered", authority: "declared" },
+        ],
+        admission: [{ id: "reserve", scopeRef: "reserved", windowId: "day", reserveRatio: 0.2, unknown: "block" }],
+        preference: { billingClass: "subscription" },
+        sourceOrder: { reserved: ["reserved-fact"], open: ["open-fact"], metered: ["metered-fact"] },
+      };
+      let snapshot = emptyEconomicSnapshot();
+      for (const fact of [
+        { model: "fixture/subscription-reserved", sourceId: "reserved-fact", scopeRef: "reserved", billing: "subscription", windows: [{ id: "day", period: { id: "p1", sequence: 1 }, unit: "ratio", remaining: 0.1 }] },
+        { model: "fixture/subscription-open", sourceId: "open-fact", scopeRef: "open", billing: "subscription", windows: [] },
+        { model: "fixture/metered", sourceId: "metered-fact", scopeRef: "metered", billing: "metered", windows: [] },
+      ]) {
+        const result = publishEconomicObservation(snapshot, policy, { ...fact, observedAt: 100, expiresAt: 2_000, revision: 1 } as EconomicSignal);
+        assert.equal(result.accepted, true);
+        snapshot = result.snapshot;
+      }
+      let reliability = emptyReliabilityState();
+      const config = { ...DEFAULT_RELIABILITY, failureThreshold: 1, cooldownMinutes: 10 };
+      reliability = recordModelFailure(reliability, "fixture/subscription-open", config, now, "dispatch", "transport");
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture/metered", "fixture/subscription-reserved", "fixture/subscription-open"] },
+        strategy: "first",
+      }, reliability, config, now, { policy, snapshot }).resolution;
+      assert.equal(modelKey(result.selected), "fixture/metered");
+      assert.deepEqual(result.primary.healthyCandidates.map(modelKey), ["fixture/metered"]);
+      assert.deepEqual(result.primary.selectionCandidates?.map(modelKey), ["fixture/metered"]);
+      assert.equal(result.primary.billingPreference?.preferredCount, 0);
+      assert.equal(result.primary.skipped.some((entry) => entry.key === "fixture/subscription-open"), true);
     });
   });
   describe("modelKey", () => {

@@ -1,8 +1,9 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cpus, totalmem } from "node:os";
-import { writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRouter } from "../router.ts";
 import { resolveConfiguredTier } from "../routing.ts";
 import { type ReliabilityState } from "../reliability.ts";
@@ -23,6 +24,25 @@ const modes = [
   "current-api-factory",
 ] as const;
 type BenchmarkMode = typeof modes[number];
+
+// Explicit production dependency allowlist for the measured resolver paths.
+// Tests, this benchmark, generated bundles, node_modules, and output reports
+// are deliberately excluded from the candidate source fingerprint.
+const ROUTING_SOURCE_FILES = [
+  "affinity.ts",
+  "classifier-backends.ts",
+  "classification-pipeline.ts",
+  "config.ts",
+  "debug.ts",
+  "economic-preferences.ts",
+  "economic-signals.ts",
+  "inline-override.ts",
+  "reliability.ts",
+  "router.ts",
+  "routing.ts",
+  "storage.ts",
+  "virtual-model.ts",
+] as const;
 
 interface Model {
   provider: string;
@@ -126,9 +146,41 @@ function fixture(count: number, tierCount: number, exhausted: boolean, mode: Ben
 async function loadBaseline(directory: string) {
   const commit = execFileSync("git", ["-C", directory, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
   if (commit !== BASELINE_SHA) throw new Error(`Pinned baseline SHA mismatch: ${commit}`);
+  const dirtyStatus = execFileSync("git", ["-C", directory, "status", "--porcelain", "--untracked-files=all"], { encoding: "utf8" }).trim();
+  if (dirtyStatus) throw new Error("Pinned baseline worktree must be clean before benchmark measurements.");
   const module = await import(pathToFileURL(join(directory, "routing.ts")).href);
   if (typeof module.resolveModelWithFallback !== "function") throw new Error("Pinned baseline does not export resolveModelWithFallback.");
-  return { commit, resolveModelWithFallback: module.resolveModelWithFallback as (...args: unknown[]) => unknown };
+  return { commit, cleanWorktree: true, resolveModelWithFallback: module.resolveModelWithFallback as (...args: unknown[]) => unknown };
+}
+
+function candidateIdentity(directory: string) {
+  const head = execFileSync("git", ["-C", directory, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  const files = ROUTING_SOURCE_FILES.map((path) => {
+    const workingBytes = readFileSync(join(directory, path));
+    const workingTreeSha256 = createHash("sha256").update(workingBytes).digest("hex");
+    let matchesHead = false;
+    try {
+      execFileSync("git", ["-C", directory, "cat-file", "-e", `${head}:${path}`], { stdio: "ignore" });
+      const headBytes = execFileSync("git", ["-C", directory, "show", `${head}:${path}`], { encoding: null, maxBuffer: 8 * 1024 * 1024 });
+      matchesHead = workingBytes.equals(headBytes);
+    } catch {
+      // New, untracked production source is part of the fingerprint and is
+      // explicitly reported as not present in HEAD.
+    }
+    return { path, workingTreeSha256, matchesHead };
+  });
+  const digestInput = files.map(({ path, workingTreeSha256 }) => `${path}\0${workingTreeSha256}\n`).join("");
+  const sourceFingerprint = createHash("sha256").update(digestInput, "utf8").digest("hex");
+  return {
+    head,
+    matchesHead: files.every(({ matchesHead }) => matchesHead),
+    sourceFingerprint: `sha256:${sourceFingerprint}`,
+    sourceFingerprintFormat: "sha256(sorted path NUL working-tree-file-sha256 LF records)",
+    sourceFingerprintScope: "SHA-256 over sorted allowlisted production routing source paths and current working-tree bytes; excludes tests, benchmark scripts, generated output, dependencies, and unrelated files.",
+    relevantProductionFiles: files.map(({ path }) => path),
+    uncommittedRelevantProductionFiles: files.filter(({ matchesHead }) => !matchesHead).map(({ path }) => path),
+    sourceFileHashes: files.map(({ path, workingTreeSha256, matchesHead }) => ({ path, workingTreeSha256, matchesHead })),
+  };
 }
 
 function createRunner(mode: BenchmarkMode, data: ReturnType<typeof fixture>, baseline: Awaited<ReturnType<typeof loadBaseline>>) {
@@ -201,7 +253,11 @@ async function measure(route: () => unknown | Promise<unknown>, work: number, ex
 
 const baselineDir = resolve(parseArg("--baseline-dir", DEFAULT_BASELINE));
 const outputPath = resolve(parseArg("--out", "/private/tmp/routing-release-benchmark.json"));
+const moduleRepoDir = realpathSync(fileURLToPath(new URL("../", import.meta.url)));
+const repoDir = realpathSync(resolve(parseArg("--repo-dir", moduleRepoDir)));
+if (repoDir !== moduleRepoDir) throw new Error("--repo-dir must identify the checkout that supplies this benchmark's imported resolver modules.");
 const baseline = await loadBaseline(baselineDir);
+const candidate = candidateIdentity(repoDir);
 const rows: Array<Record<string, unknown>> = [];
 for (const count of candidatesCounts) {
   for (const tierCount of tierCounts) {
@@ -229,11 +285,22 @@ for (const count of candidatesCounts) {
   }
 }
 
+const candidateAtEnd = candidateIdentity(repoDir);
+if (candidateAtEnd.head !== candidate.head || candidateAtEnd.sourceFingerprint !== candidate.sourceFingerprint) {
+  throw new Error("Relevant routing sources changed during the benchmark; discard this run and rerun against a stable candidate.");
+}
+const candidateVerification = {
+  sameHeadAtStartAndEnd: true,
+  sameSourceFingerprintAtStartAndEnd: true,
+};
+
 const cpu = cpus()[0];
 const report = {
   benchmark: "synthetic offline routing release evaluation",
   createdAt: new Date().toISOString(),
-  baseline: { path: baselineDir, commit: baseline.commit, method: "pinned v0.5.0 resolveModelWithFallback legacy requested/default tiers" },
+  candidate,
+  candidateVerification,
+  baseline: { path: baselineDir, commit: baseline.commit, cleanWorktree: baseline.cleanWorktree, method: "pinned v0.5.0 resolveModelWithFallback legacy requested/default tiers" },
   host: {
     node: process.version,
     platform: process.platform,
@@ -247,8 +314,9 @@ const report = {
   methodology: {
     clock: NOW,
     strategy: "first",
-    warmCold: "module imports, fixture construction, and router creation occur before timing; timed calls are warmed; cold startup is not measured",
+    warmCold: "module imports and fixture construction occur before timing; resolver rows are warmed before samples; factory rows intentionally time createRouter plus snapshot normalization on each call; cold module startup is not measured",
     timing: "per-call wall-clock with process.hrtime.bigint; nearest-rank p50/p95",
+    validation: "Each row verifies the expected selected model or no-route before timing, during every warmup, and during every timed sample. Baseline SHA and completely clean worktree are asserted before import.",
     noNetworkOrWrites: true,
     boundedSampling: "101 samples and 15 warmups at 100 candidates/20 tiers; otherwise 21/5, 9/2 above 10k, and 5/1 at or above 50k candidate-tier work units",
     comparability: "only baseline-legacy and current-legacy share legacy low-level requested/default behavior; current-api-legacy measures the public legacy path; strict/reserve/current-api-strict are current-only behavior; factory rows isolate snapshot normalization",

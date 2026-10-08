@@ -34,6 +34,10 @@
       "$ref": "#/definitions/EconomicsConfig",
       "description": "Optional local reserve signals and admission policy. Without this namespace, Bifrost keeps legacy routing behavior. Config-declared facts are declared or estimated; Pi does not query live billing or account APIs."
     },
+    "affinity": {
+      "$ref": "#/definitions/AffinityConfig",
+      "description": "Optional observation or within-tier retention using a proven successful Auto-dispatch anchor. Off by default. Retention stays inside the final selection pool and does not override hard exclusions. Requires schemaVersion 2."
+    },
     "enabled": {
       "type": "boolean",
       "description": "Enable or disable routing. When disabled, Bifrost does not switch models for new turns. Pi uses the selected physical model.",
@@ -297,6 +301,18 @@
           "description": "How long an opened circuit stays open before model becomes eligible again.",
           "default": 60
         },
+        "stateVersion": {
+          "type": "integer",
+          "enum": [1, 2],
+          "description": "Reliability state format. Omitted or 1 uses the legacy runtime; 2 opts into the experimental receipt-owned runtime and requires explicit /bifrost reliability migrate preparation. Physical routing and direct utility requests are unsupported while version 2 is enabled."
+        },
+        "observations": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false, "description": "Store allowlisted failure categories and timestamps from proven runtime failures. No provider error text is retained." }
+          }
+        },
         "path": {
           "type": "string",
           "description": "Custom path for persisted reliability state. Default: .pi/bifrost-reliability.json"
@@ -343,7 +359,16 @@
       "additionalProperties": false,
       "required": ["mode", "scopes", "sources", "admission"],
       "properties": {
-        "mode": { "type": "string", "enum": ["observe", "policy"], "description": "observe records whether a reserve would reject a candidate without changing selection. policy excludes rejected candidates before strategy selection." },
+        "mode": { "type": "string", "enum": ["observe", "policy"], "description": "observe reports reserve and billing preference effects without changing candidate membership, order, or random selection. policy excludes only candidates rejected by a configured hard reserve and may prefer an explicitly configured billing class among the remaining eligible candidates." },
+        "preference": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["billingClass"],
+          "description": "Optional preference among final eligible candidates in the already selected tier. It does not exclude candidates or override a direct model selection. Requires fresh explicit billing facts; unknown or conflicting facts remain neutral.",
+          "properties": {
+            "billingClass": { "type": "string", "enum": ["subscription", "metered", "free"] }
+          }
+        },
         "scopes": {
           "type": "object",
           "maxProperties": 64,
@@ -396,6 +421,15 @@
         }
       }
     },
+    "AffinityConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["off", "observe", "retain-within-tier"], "default": "off", "description": "observe reports affinity. retain-within-tier may keep an automatic successful-dispatch anchor only when it is in the selected tier's final selection pool; it never crosses tiers or bypasses hard exclusions." },
+        "providerAdvisory": { "type": "boolean", "default": false, "description": "Include whether any final eligible candidate shares the anchor provider. This reports candidate availability only; it does not claim cache reuse or savings." }
+      }
+    },
     "EconomicWindow": {
       "type": "object", "required": ["id", "period", "unit", "remaining"], "additionalProperties": false,
       "properties": {
@@ -421,6 +455,27 @@
       "if": { "required": ["economics"] },
       "then": {
         "properties": { "schemaVersion": { "const": 2 } },
+        "required": ["schemaVersion"]
+      }
+    },
+    {
+      "if": { "required": ["affinity"] },
+      "then": {
+        "properties": { "schemaVersion": { "const": 2 } },
+        "required": ["schemaVersion"]
+      }
+    },
+    {
+      "if": { "properties": { "reliability": { "properties": { "stateVersion": { "const": 2 } }, "required": ["stateVersion"] } }, "required": ["reliability"] },
+      "then": {
+        "properties": { "schemaVersion": { "const": 2 } },
+        "required": ["schemaVersion"]
+      }
+    },
+    {
+      "if": { "properties": { "reliability": { "required": ["observations"] } }, "required": ["reliability"] },
+      "then": {
+        "properties": { "schemaVersion": { "const": 2 }, "reliability": { "required": ["stateVersion"] } },
         "required": ["schemaVersion"]
       }
     }

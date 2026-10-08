@@ -7,13 +7,20 @@ All notable changes to pi-bifrost are documented here.
 ### Added
 - Experimental `pi-bifrost/router` API over caller-supplied snapshots, shipped as JavaScript with TypeScript declarations. Resolution is advisory; it does not reserve or dispatch a model.
 - Optional schema-version-2 economic reserves. Static declared/estimated provider or model facts can be observed first, then explicitly applied as a pre-strategy candidate filter. No live billing adapter, account scope, or spend-cap guarantee is included.
+- Optional schema-version-2 billing preference can prefer an explicitly configured class among the final eligible candidates when fresh facts support it. Unknown, stale, or conflicting facts stay neutral; the preference does not claim savings or override hard exclusions.
+- Schema-version-2 affinity supports `off` (default), `observe`, and opt-in `retain-within-tier`. Retention requires a proven successful Auto dispatch and stays inside the final eligible tier pool; it is not session-base stickiness.
+- `/bifrost config reconcile` previews exact generated model membership offline, then applies only a digest-matched proposal with a journal and exact backups. `--refresh` is a separate preview action. Init writes a matching ownership receipt only for exact newly generated memberships, and leaves config/history unchanged when a receipt already exists.
 - `/bifrost inspect` includes reserve mode and source freshness metadata without printing remaining allowance values.
 - `/bifrost validate [--json]` checks the active loaded config and local model references; `/bifrost inspect [--json]` reports local registry, auth-presence, and circuit snapshots without routing, probing, or writing state.
 - `/bifrost preview --trace [--json] <prompt>` shows a versioned, content-free route decision with configured pools, selected strategy, and reliability exclusions. The existing `--json` preview report stays unchanged.
 - Schema version 2 supports explicit per-tier `fallbackTiers` boundaries. Each policy tries only its requested tier and listed tiers in order; tiers without a policy keep the legacy default fallback.
+- Experimental receipt-owned reliability v2 is opt-in for Auto user turns with `schemaVersion: 2` and `reliability.stateVersion: 2`. Prepare its separate sidecar with `/bifrost reliability migrate`; physical and direct utility routing remain unsupported, and failed prompts are never replayed automatically.
+- With `reliability.observations.enabled`, reliability v2 stores bounded, allowlisted failure categories and model-only scope. These observations omit prompt and raw provider error text and do not change circuit policy.
+- `classifier.totalTimeoutMs` sets one bounded deadline across classification attempts; existing per-backend limits continue to apply.
 
 ### Fixed
 - Invalid schema versions or tier-policy configuration block physical and Auto routing. Reload rejects unreadable, malformed, or non-object config layers and keeps the active config; an exhausted explicit boundary also does not degrade to a previously dispatched model.
+- Managed state writes now use exclusive sibling temporary files and same-directory atomic rename, preserve existing permissions, and never unlink a valid target before replacement. New managed files are private by default; committed-directory sync failures are reported without claiming that the rename was rolled back. Interrupted journaled reconciliation requires explicit stale-lock repair; locks are never stolen automatically.
 
 ## [0.5.0] - 2026-10-05
 

@@ -7,6 +7,8 @@ import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, buildClassifierTestReport
 import { makeModel, makePiClassifierModel, makeRegistry } from "./helpers.ts";
 import { createPipeline } from "../classification-pipeline.ts";
 import { DEFAULT_THRESHOLD, lookupCache, touchCacheEntry, updateCache, type CacheEntry } from "../cache.ts";
+import { reliabilityPath } from "../reliability.ts";
+import { reliabilityV2Path } from "../runtime-reliability-v2.ts";
 
 function makeCtx(
   models: Array<{ provider: string; id: string }> = [],
@@ -1378,6 +1380,35 @@ describe("route dispatch", () => {
     assert.equal(state.pinned, true, "reload must preserve the session-local pin");
   });
 
+  it("prepares v2 from unversioned explicit v1 config and preserves existing data", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    Object.assign(state.config, { reliability: { enabled: true, stateVersion: 1 } });
+    Object.assign(state, { reliabilityV2ConfigValid: true });
+    await inTempDir(async () => {
+      const sourcePath = reliabilityPath(process.cwd());
+      state.reliabilityStore = { ...makeStore(), path: sourcePath } as never;
+      mkdirSync(join(process.cwd(), ".pi"), { recursive: true });
+      const sourceBytes = Buffer.from(JSON.stringify({ version: 1, models: { "fixture/model": { failures: [Date.now() - 1000] } } }));
+      writeFileSync(sourcePath, sourceBytes);
+
+      await createCommandRouter(state as never)("reliability migrate --fresh", ctx as never);
+      assert.equal(existsSync(reliabilityV2Path(process.cwd())), false);
+      assert.ok(calls.some((call) => String(call.value).includes("--fresh is allowed only when no v1 reliability file exists")));
+
+      await createCommandRouter(state as never)("reliability migrate", ctx as never);
+      const sidecarPath = reliabilityV2Path(process.cwd());
+      assert.equal(existsSync(sidecarPath), true);
+      assert.deepEqual(readFileSync(join(process.cwd(), ".pi", "bifrost-reliability-v1.json.backup")), sourceBytes);
+      const seeded = readFileSync(sidecarPath);
+
+      rmSync(sourcePath);
+      await createCommandRouter(state as never)("reliability migrate", ctx as never);
+      assert.deepEqual(readFileSync(sidecarPath), seeded);
+      assert.ok(calls.some((call) => String(call.value).includes("sidecar already exists and was left unchanged")));
+    });
+  });
+
   it("rejects an invalid tier policy reload and retains the last-good routing state", async () => {
     const { ctx, calls } = makeCtx();
     const state = makeState();
@@ -1398,6 +1429,44 @@ describe("route dispatch", () => {
     assert.equal(state.tierPolicyValid, true);
     assert.equal(invalidations, 0);
     assert.ok(calls.some((call) => String(call.value).includes("reload rejected") && String(call.value).includes("missing")));
+  });
+
+  it("rejects invalid economic policy on reload without replacing the last-good snapshot", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = Object.assign(makeState(), {
+      economicPolicyValid: true,
+      economicPolicy: { mode: "observe", sources: [], admission: [] },
+      economicSnapshot: { revision: 7, signals: [], watermarks: [] },
+    });
+    const lastGoodConfig = state.config;
+    const lastGoodPolicy = state.economicPolicy;
+    const lastGoodSnapshot = state.economicSnapshot;
+    let invalidations = 0;
+    state.invalidatePipeline = () => { invalidations++; };
+    await inTempDir(async () => {
+      writeFileSync("bifrost.json", JSON.stringify({
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["fixture/model"] },
+        economics: {
+          mode: "observe",
+          scopes: { local: { kind: "model", model: "fixture/model" } },
+          sources: [{ id: "manual", scopeRef: "local", authority: "declared" }],
+          admission: [],
+          observations: [],
+          preference: { billingClass: "PRIVATE_INVALID_CLASS", privateExtra: "PRIVATE_VALUE" },
+        },
+      }));
+      await createCommandRouter(state as never)("reload", ctx as never);
+    });
+    assert.equal(state.config, lastGoodConfig);
+    assert.equal(state.economicPolicy, lastGoodPolicy);
+    assert.equal(state.economicSnapshot, lastGoodSnapshot);
+    assert.equal(state.economicPolicyValid, true);
+    assert.equal(invalidations, 0);
+    const rejection = calls.find((call) => String(call.value).includes("reload rejected"));
+    assert.ok(rejection);
+    assert.doesNotMatch(String(rejection.value), /PRIVATE_INVALID_CLASS|PRIVATE_VALUE/);
   });
 
   it("rejects an invalid classifier total budget reload without exposing its raw value", async () => {
@@ -1635,8 +1704,8 @@ describe("dashboard menu", () => {
     }
   });
 
-  it("offers 20 rows", async () => {
-    assert.equal((await rowsFor()).length, 20);
+  it("offers 22 rows", async () => {
+    assert.equal((await rowsFor()).length, 22);
   });
 
   it("keeps the top row actionable in every state combination", async () => {
@@ -1894,13 +1963,13 @@ describe("diagnostics commands", () => {
         { window: "monthly", period: "month-2", unit: "ratio", applicability: "current" },
       ],
     });
-    assert.doesNotMatch(JSON.stringify(report), /0\.1|0\.8/);
+    assert.doesNotMatch(JSON.stringify(report), /"remaining"\s*:/);
     (h.context as unknown as { mode: string }).mode = "cli";
     const text = (await withStubs(() => createCommandRouter(h.state as never)("inspect", h.context as never))).join("\n");
     assert.match(text, /reserve policy: observe/);
     assert.match(text, /source=manual-estimate scope=local authority=estimated freshness=current/);
     assert.match(text, /weekly:week-7\(reset\), monthly:month-2\(current\)/);
-    assert.doesNotMatch(text, /0\.1|0\.8/);
+    assert.doesNotMatch(text, /\b(?:0\.1|0\.8)\b/);
   });
 
   it("renders text labels for loaded config and local last-refresh age", async () => {

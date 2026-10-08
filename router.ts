@@ -6,7 +6,8 @@ import type { ClassificationJudgment, TierCriterion } from "./classifier-backend
 import { parseInlineOverride } from "./inline-override.ts";
 import { emptyReliabilityState, type ReliabilityConfig, type ReliabilityState } from "./reliability.ts";
 import { resolveConfiguredTier } from "./routing.ts";
-import { validateEconomicPolicy, validateEconomicSnapshot, type EconomicSnapshot, type ReservePolicy } from "./economic-signals.ts";
+import { hasHardEconomicAdmission, validateEconomicPolicy, validateEconomicSnapshot, type EconomicSnapshot, type ReservePolicy } from "./economic-signals.ts";
+import { observeAffinity, type AffinityAnchor, type AffinityTargetOrigin } from "./affinity.ts";
 
 export interface RouterModel {
   readonly provider: string;
@@ -32,13 +33,27 @@ export interface RouterEconomicSnapshot {
   readonly snapshot: EconomicSnapshot;
 }
 
+export type RouterReliabilityConfig = Pick<ReliabilityConfig,
+  "enabled" | "failureThreshold" | "windowMinutes" | "cooldownMinutes">;
+
+type RouterConfigSnapshot = Omit<Pick<BifrostConfig,
+  "schemaVersion" | "tierPolicies" | "default" | "strategy" | "categoryStrategies" | "models" | "rules" | "classifier" | "reliability" | "affinity">,
+"reliability"> & { readonly reliability?: RouterReliabilityConfig };
+
+export interface RouterAffinitySnapshot {
+  readonly targetOrigin?: string;
+  readonly anchor?: AffinityAnchor;
+}
+
 export interface RouterSnapshot {
   /** Supported routing subset. Economic policy/state lives in `economic`. */
-  readonly config: Pick<BifrostConfig, "schemaVersion" | "tierPolicies" | "default" | "strategy" | "categoryStrategies" | "models" | "rules" | "classifier" | "reliability">;
+  readonly config: RouterConfigSnapshot;
   readonly registry: RouterRegistrySnapshot;
   readonly now: number;
   readonly reliabilityState?: ReliabilityState;
   readonly economic?: RouterEconomicSnapshot;
+  /** Optional, caller-owned anchor/origin. Required only when affinity is configured to observe. */
+  readonly affinity?: RouterAffinitySnapshot;
 }
 
 export interface RouterClassifierPort {
@@ -201,6 +216,65 @@ function validEpoch(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= MAX_EPOCH;
 }
 
+function plainOwnDataRecord(value: unknown, allowedKeys: readonly string[]): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const record = value as Record<string, unknown>;
+    for (const key of Reflect.ownKeys(record)) {
+      if (typeof key !== "string" || !allowedKeys.includes(key)) return undefined;
+      const descriptor = Object.getOwnPropertyDescriptor(record, key);
+      if (!descriptor || !("value" in descriptor)) return undefined;
+    }
+    return record;
+  } catch {
+    return undefined;
+  }
+}
+
+function checkedAffinitySnapshot(value: RouterAffinitySnapshot, now: number): RouterAffinitySnapshot {
+  const record = plainOwnDataRecord(value, ["targetOrigin", "anchor"]);
+  if (!record) throw new Error("Invalid router affinity snapshot.");
+  const targetOrigin = record.targetOrigin;
+  const origins: readonly AffinityTargetOrigin[] = [
+    "automatic", "explicit_tier", "explicit_model", "pinned", "off", "direct", "continuation", "retry",
+  ];
+  if (targetOrigin !== undefined && !origins.includes(targetOrigin as AffinityTargetOrigin)) {
+    throw new Error("Invalid router affinity snapshot.");
+  }
+  const rawAnchor = record.anchor;
+  if (rawAnchor === undefined) {
+    return { ...(targetOrigin !== undefined ? { targetOrigin: targetOrigin as string } : {}) };
+  }
+  const anchor = plainOwnDataRecord(rawAnchor, ["modelKey", "provider", "lastSuccessfulDispatchAt"]);
+  if (!anchor || typeof anchor.modelKey !== "string" || typeof anchor.provider !== "string"
+    || !validEpoch(anchor.lastSuccessfulDispatchAt)) {
+    throw new Error("Invalid router affinity snapshot.");
+  }
+  const normalizedAnchor: AffinityAnchor = {
+    modelKey: anchor.modelKey,
+    provider: anchor.provider,
+    lastSuccessfulDispatchAt: anchor.lastSuccessfulDispatchAt,
+  };
+  try {
+    // Reuse the production validator against sanitized own data before any
+    // optional classifier port can be invoked by resolve().
+    observeAffinity({
+      targetOrigin: "automatic",
+      eligibleModelKeys: [],
+      anchor: normalizedAnchor,
+      snapshotAsOf: now,
+    });
+  } catch {
+    throw new Error("Invalid router affinity snapshot.");
+  }
+  return {
+    ...(targetOrigin !== undefined ? { targetOrigin: targetOrigin as string } : {}),
+    anchor: normalizedAnchor,
+  };
+}
+
 function sanitizedReliabilityState(value: ReliabilityState | undefined, now: number): ReliabilityState {
   if (value === undefined) return emptyReliabilityState();
   const isPlain = (item: unknown): item is Record<string, unknown> => !!item
@@ -347,11 +421,20 @@ function checkSnapshot(snapshot: RouterSnapshot): void {
   let configIssues;
   const supportedConfigKeys = new Set([
     "schemaVersion", "tierPolicies", "default", "strategy", "categoryStrategies",
-    "models", "rules", "classifier", "reliability",
+    "models", "rules", "classifier", "reliability", "affinity",
   ]);
   if (!snapshot.config || typeof snapshot.config !== "object"
     || Object.keys(snapshot.config).some((key) => !supportedConfigKeys.has(key))) {
     throw new Error("Unsupported router config fields.");
+  }
+  const reliability = snapshot.config.reliability as unknown;
+  if (reliability !== undefined) {
+    const plain = !!reliability && typeof reliability === "object" && !Array.isArray(reliability)
+      && (Object.getPrototypeOf(reliability) === Object.prototype || Object.getPrototypeOf(reliability) === null);
+    const supportedReliabilityKeys = new Set(["enabled", "failureThreshold", "windowMinutes", "cooldownMinutes"]);
+    if (!plain || Object.keys(reliability).some((key) => !supportedReliabilityKeys.has(key))) {
+      throw new Error("Unsupported router reliability controls.");
+    }
   }
   const minConfidence = snapshot.config.classifier?.minConfidence;
   if (minConfidence !== undefined && (typeof minConfidence !== "number"
@@ -364,6 +447,10 @@ function checkSnapshot(snapshot: RouterSnapshot): void {
     throw new Error("Invalid router config snapshot.");
   }
   if (configIssues.some((issue) => issue.severity === "error")) throw new Error("Invalid router config snapshot.");
+  if (snapshot.affinity !== undefined && snapshot.config.affinity?.mode !== "observe" && snapshot.config.affinity?.mode !== "retain-within-tier") {
+    throw new Error("Router affinity input requires affinity observation mode.");
+  }
+  if (snapshot.affinity !== undefined) checkedAffinitySnapshot(snapshot.affinity, snapshot.now);
   if (snapshot.economic) {
     const policy = validateEconomicPolicy(snapshot.economic.policy);
     const facts = validateEconomicSnapshot(snapshot.economic.snapshot, snapshot.economic.policy, snapshot.now);
@@ -380,6 +467,7 @@ export function createRouter(snapshot: RouterSnapshot, options: RouterOptions = 
   const registry = buildRegistry(snapshot.registry);
   const reliabilityState = copyFrozen(sanitizedReliabilityState(snapshot.reliabilityState, now));
   const economic = snapshot.economic ? copyFrozen(snapshot.economic) : undefined;
+  const affinity = snapshot.affinity ? copyFrozen(checkedAffinitySnapshot(snapshot.affinity, now)) : undefined;
   const capturedOptions: Readonly<RouterOptions> = Object.freeze({
     ...(options.networkClassifierGrant === true ? { networkClassifierGrant: true as const } : {}),
     ...(options.networkClassifier ? { networkClassifier: Object.freeze({ classify: options.networkClassifier.classify.bind(options.networkClassifier) }) } : {}),
@@ -420,7 +508,7 @@ export function createRouter(snapshot: RouterSnapshot, options: RouterOptions = 
         ? { kind: "classified", tier: inline.forcedTier, source: "inline" }
         : await pipeline.classify(inline.promptText, signal);
       if (signal?.aborted) return { version: 1, status: "aborted", asOf: now };
-      if (classification.kind === "unclassified" && economic?.policy.mode === "policy" && config.default) {
+      if (classification.kind === "unclassified" && hasHardEconomicAdmission(economic?.policy) && config.default) {
         classification = { kind: "fallback", tier: config.default };
       }
       if (classification.kind === "unclassified") {
@@ -436,6 +524,11 @@ export function createRouter(snapshot: RouterSnapshot, options: RouterOptions = 
         now,
         economic,
         random ?? capturedOptions.random,
+        {
+          ...(affinity?.targetOrigin !== undefined ? { targetOrigin: affinity.targetOrigin } : {}),
+          ...((request.forcedTier !== undefined || inline.forcedTier !== undefined) ? { intrinsicOrigin: "explicit_tier" } : {}),
+          ...(affinity?.anchor ? { anchor: affinity.anchor } : {}),
+        },
       );
       if (signal?.aborted) return { version: 1, status: "aborted", asOf: now };
       const decision = buildRouteDecisionSummary(classification, resolved);

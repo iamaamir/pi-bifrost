@@ -113,6 +113,19 @@ describe("runtime affinity anchor store", () => {
     assert.equal(store.promote(session, proof("assistant-new", { modelKey: "openai/gpt-5.4-mini", observedAt: 200 }), [newerEntry, oldEntry]), false);
   });
 
+  it("accepts a later branch success with the same timestamp", () => {
+    const store = createRuntimeAffinityStore();
+    const session = {};
+    const first = assistantEntry("assistant-1");
+    const second = assistantEntry("assistant-2", "gpt-5.4-mini");
+    assert.equal(store.promote(session, proof("assistant-1", { observedAt: 100 }), [first]), true);
+    assert.equal(store.promote(session, proof("assistant-2", {
+      modelKey: "openai/gpt-5.4-mini",
+      observedAt: 100,
+    }), [first, second]), true);
+    assert.equal(store.read(session, [first, second])?.branchEntryId, "assistant-2");
+  });
+
   it("keeps anchors session-local and supports adapter-owned reset", () => {
     const store = createRuntimeAffinityStore();
     const firstSession = {};

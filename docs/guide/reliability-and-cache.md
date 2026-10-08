@@ -27,6 +27,12 @@ Reliability state persists in `.pi/bifrost-reliability.json`. After cooldown, Bi
 
 Bifrost never automatically replays the prompt that failed. Reliability affects future user turns only.
 
+## Receipt-owned reliability state (experimental)
+
+Opt in with `schemaVersion: 2` and `reliability.stateVersion: 2`. You can prepare the sidecar first while reliability remains on v1: `/bifrost reliability migrate` preserves and backs up an existing v1 state, while `/bifrost reliability migrate --fresh` is allowed only when no v1 state file exists. Migration does not change the config or selected model. V2 applies only when Bifrost Auto routes a new user turn and requires the initialized project sidecar; missing or invalid v2 state stops Auto before classification or provider generation. Physical routing and direct utility requests are unsupported while v2 is enabled; use Auto or set `stateVersion: 1`. Explicit `/bifrost pin` and `/bifrost off` remain available to leave Auto even when the sidecar is missing or invalid. They may select a configured physical model, but do not send a generation request.
+
+Set `reliability.enabled: false` to turn v2 off. With it off, Bifrost does not read the v2 sidecar for routing. Optional `reliability.observations.enabled: true` stores bounded model-level failure categories and times. Raw provider error text is never persisted.
+
 ## Reliability is not quota enforcement
 
 A circuit records observed model health. It does not know authoritative provider weekly quota unless Pi or the provider exposes that information.

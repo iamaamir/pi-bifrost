@@ -26,6 +26,7 @@ export function normalizeEconomicPolicy(config: EconomicConfig | undefined): Res
     mode: config.mode,
     scopes: Object.fromEntries(Object.entries(config.scopes).map(([key, scope]) => [key, { ...scope }])),
     sources: config.sources.map((source) => ({ ...source })),
+    ...(config.preference ? { preference: { ...config.preference } } : {}),
     ...(config.sourceOrder ? { sourceOrder: Object.fromEntries(Object.entries(config.sourceOrder).map(([key, value]) => [key, [...value]])) } : {}),
     admission: config.admission.map((rule) => ({ ...rule })),
     ...(config.tierOverrides ? { tierOverrides: cloneTierOverrides(config.tierOverrides) } : {}),

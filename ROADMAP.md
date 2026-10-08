@@ -32,11 +32,24 @@ Features that need an eval harness, persistent analytics, telemetry infra, or up
 - [x] **Default config overhaul.** Replaced the bloated research config with a 3-tier minimal default (`quick`/`general`/`frontier`), no hardcoded model IDs, `DEFAULT_RULES` is the single source of truth, `/bifrost init` and `guessTier` aligned to the new names. See [`docs/adr/0006-default-config.md`](docs/adr/0006-default-config.md).
 - [x] **Optional TypeSafe/Jev classifier.** Explicit opt-in tier judgment with strict decoding, confidence gates, safe credential handling, bounded failure recovery, local metrics, and dual-gated troubleshooting traces. See [`docs/jev-typesafe-architecture.md`](docs/jev-typesafe-architecture.md).
 
+## Current release candidate (not shipped)
+
+The current working candidate adds the following opt-in and inspectable behavior. These items are not shipped until the release candidate passes its final verification and is published; see [`RELEASE-PLAN.md`](RELEASE-PLAN.md) for checkpoint and gate evidence.
+
+- **Strict fallback boundaries:** schema v2 can give a tier an ordered `fallbackTiers` list. An empty list is terminal: an exhausted boundary does not fall through to the active or previously dispatched model. Tiers without a policy retain legacy behavior.
+- **Receipt-owned reliability v2:** explicitly enabled Auto turns use separate, durable admission receipts and controlled recovery trials. Physical routing and direct utility calls are outside this mode. Bifrost never replays a failed prompt automatically.
+- **Explicit config reconciliation:** preview is local and write-free by default; a reviewed proposal digest is required for apply. Optional provider refresh is a separate preview action. The ownership sidecar tracks exact generated memberships, and the journal keeps exact backups. Re-init leaves config and ownership history untouched once that sidecar exists.
+- **Economic snapshots and billing preference:** schema v2 accepts explicit declared/estimated facts, windows and resets, with observe or configured reserve behavior and an optional billing-class preference. Facts are snapshots; Bifrost does not fetch live quota or infer subscription/billing state, and these controls do not provide a spend-cap guarantee.
+- **Branch-local affinity:** observation is opt-in, and retain-within-tier only keeps an eligible model after a proven successful Auto dispatch. It does not cross tiers or override hard exclusions. This is not the session-base behavior proposed in ADR 0019.
+- **Experimental resolve-only API:** `pi-bifrost/router` evaluates caller-supplied snapshots without changing Pi's selected model. Results are advisory and require fresh validation before dispatch.
+
+The pinned Pi 1.0.1 host source also settles the classifier catalog question for this candidate: `ModelRegistry.getAvailable()` returns `Model<Api>[]` (`packages/coding-agent/src/core/model-registry.ts` at Pi tag `v1.0.1`, commit `a7229ddc21810d6245105978033b7df645ecc2f7`). The `pi-ai` `Models` contract documents unqualified accessors, including `getAvailable()`, as chat-only; classifier entries have a distinct `ClassifierModel` type for `classify()` (`packages/ai/src/models.ts`, `packages/ai/src/types.ts` at the same tag). Bifrost's routing, probe, and init use this available chat catalog. This is a pinned host-contract dependency, not a Bifrost predicate that can protect against a future Pi contract change.
+
 ---
 
-## In progress (v0.4 — transparency & safety)
+## Remaining ADR work
 
-Four small ADRs. Each is a building block: traces make the rest debuggable; the other three fix specific sharp edges the latest reviews uncovered.
+These earlier ADRs remain tracked independently from the current release candidate above. Some candidate behavior overlaps their scope; use each ADR for its full requirements and remaining gaps.
 
 ### [ADR 0007 — Explainable decision traces](docs/adr/0007-decision-traces.md)
 `/bifrost preview` today prints a flattened summary. Promote it to a structured, machine-readable trace: stage timings (`cache`, `classifier`, `regex`, `fallback`), inputs, route taken, candidates filtered by reliability, strategy choice, and selected model. Same data shown to the user; same data available to tests. **Effort:** Low · **Reach:** every user who debugs a misroute.
@@ -69,11 +82,11 @@ These stay parked until the listed dependency is resolved.
 ### Thinking-level routing
 **ADR candidate, not yet implemented.** When Bifrost routes to a reasoning-capable model, Pi can clamp or elevate thinking level. Need to expose effective level + clamp reason in routing feedback; any policy must be opt-in. Waiting on: nothing — ADR 0004 is documented and ready. Moved to In progress when picked up. See [`docs/adr/0004-thinking-level-routing.md`](docs/adr/0004-thinking-level-routing.md). **Effort:** Low for visibility.
 
-### Reliability v2 — safe request retry
-Re-sending a prompt after a provider failure risks duplicating work (output may have streamed, tools may have fired). Blocked on Pi extension hooks for pre-output error interception and turn replay. Until then, fail-fast + record + circuit-open. **Effort:** Research first.
+### Automatic request retry or replay
+Deferred. A failed turn may already have streamed output, called tools, or caused external side effects. Bifrost ends the failed turn and records the outcome; it never replays that prompt automatically. Any future retry proposal would need a separate approved safety design and deterministic proof of a zero-side-effect boundary. **Effort:** Deferred.
 
-### Classifier-type models must stay out of tier pools
-**Note only (2026-10-04).** A System One model is a classifier only, and it cannot serve a coding turn. Exclude by model type and not by provider name. One `type: "classifier"` predicate guards three surfaces: the candidate match in `routing.ts` (the `isVirtualModel` filter sites), the probe list in `probe.ts` (`getAvailable()`), and the config that `init` generates. The phase-5 detection engine raises this exposure, because the `auth-file` path is exactly the user who set up the TypeSafe provider. **Waiting on:** one live proof of whether `ctx.modelRegistry.getAvailable()` returns classifier-typed entries (its type surface reads `Model<Api>[]`). **Effort:** Low (one predicate).
+### Live quota allowance adapter
+Blocked on documented provider or host support that exposes the required allowance windows, reset semantics, account identity, freshness, and authorization through Pi-managed credentials. The candidate supports explicit snapshots only. Do not use private consumer endpoints or describe snapshots as automatic live tracking. **Effort:** External evidence required.
 
 ### PTY test harness evolution
 `agent-tui` POC passed startup/dashboard/preview scenarios; existing Python smoke remains the gate. Promotion blocked on pinning `agent-tui` install and deterministic Pi behavior in CI. See [`docs/agent-tui-evaluation.md`](docs/agent-tui-evaluation.md). **Effort:** Medium.

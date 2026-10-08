@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import { debug, setupDebug } from "../debug.ts";
 import { createRouter, type RouterModel, type RouterSnapshot } from "../router.ts";
+import { emptyEconomicSnapshot, publishEconomicObservation, type EconomicSignal, type ReservePolicy } from "../economic-signals.ts";
 
 function model(provider: string, id: string, input = 0.2, output = 0.3, contextWindow = 32_000): RouterModel {
   return { provider, id, cost: { input, output }, contextWindow };
@@ -38,6 +39,214 @@ describe("experimental resolve-only router", () => {
     assert.equal(result.decision.outcome, "selected");
     assert.equal(result.decision.selected, "fixture/quick-model");
     assert.equal("model" in result, false);
+  });
+
+  it("applies preference-only economic policy within the selected tier and exposes only the projection", async () => {
+    const economicPolicy: ReservePolicy = {
+      mode: "policy",
+      scopes: {
+        metered: { kind: "model", model: "fixture/metered" },
+        subscription: { kind: "model", model: "fixture/subscription" },
+      },
+      sources: [
+        { id: "metered-fact", scopeRef: "metered", authority: "declared" },
+        { id: "subscription-fact", scopeRef: "subscription", authority: "declared" },
+      ],
+      sourceOrder: { metered: ["metered-fact"], subscription: ["subscription-fact"] },
+      admission: [],
+      preference: { billingClass: "subscription" },
+    };
+    let facts = emptyEconomicSnapshot();
+    for (const observation of [
+      { sourceId: "metered-fact", scopeRef: "metered", billing: "metered" },
+      { sourceId: "subscription-fact", scopeRef: "subscription", billing: "subscription" },
+    ]) {
+      const result = publishEconomicObservation(facts, economicPolicy, {
+        ...observation, observedAt: 100, expiresAt: 2_000, revision: 1, windows: [],
+      } as EconomicSignal);
+      assert.equal(result.accepted, true);
+      facts = result.snapshot;
+    }
+    const router = createRouter(snapshot({
+      config: {
+        models: { quick: ["fixture/metered", "fixture/subscription"] },
+        default: "quick",
+        strategy: "cheapest",
+        rules: [],
+      },
+      registry: {
+        knownModels: [model("fixture", "metered", 0.01, 0.01), model("fixture", "subscription", 0.8, 0.8)],
+        availableModels: [model("fixture", "metered", 0.01, 0.01), model("fixture", "subscription", 0.8, 0.8)],
+      },
+      economic: { policy: economicPolicy, snapshot: facts },
+    }));
+    const result = await router.resolve({ prompt: "request", forcedTier: "quick" });
+    assert.equal(result.status, "completed");
+    if (result.status !== "completed") return;
+    assert.equal(result.decision.selected, "fixture/subscription");
+    const preference = result.decision.requested?.billingPreference;
+    assert.equal(preference?.mode, "policy");
+    assert.equal(preference?.eligibleCount, 2);
+    assert.equal(preference?.preferredCount, 1);
+    assert.equal(preference?.selectionCount, 1);
+    assert.equal(JSON.stringify(result.decision).includes("remaining"), false);
+  });
+
+  it("exposes caller-owned affinity as advisory evidence without changing selection or RNG", async () => {
+    let randomCalls = 0;
+    const router = createRouter(snapshot({
+      config: {
+        schemaVersion: 2,
+        models: { general: ["fixture/quick-model", "fixture/general-model"] },
+        default: "general",
+        strategy: "random",
+        rules: [],
+        affinity: { mode: "observe", providerAdvisory: true },
+      },
+      affinity: {
+        targetOrigin: "automatic",
+        anchor: { modelKey: "fixture/quick-model", provider: "fixture", lastSuccessfulDispatchAt: 500 },
+      },
+    }), { random: () => { randomCalls += 1; return 0.75; } });
+    const result = await router.resolve({ prompt: "ordinary request" });
+    assert.equal(result.status, "completed");
+    if (result.status !== "completed") return;
+    assert.equal(result.decision.selected, "fixture/general-model");
+    assert.equal(randomCalls, 1);
+    assert.equal(result.decision.affinity?.status, "current_eligible");
+    assert.equal(result.decision.affinity?.baseStrategyWinner, "fixture/general-model");
+    assert.equal(result.decision.affinity?.sameProviderCandidateAvailable, true);
+  });
+
+  it("exposes retain-within-tier as an advisory resolve result with an explicit selection source", async () => {
+    const router = createRouter(snapshot({
+      config: {
+        schemaVersion: 2,
+        models: { general: ["fixture/quick-model", "fixture/general-model"] },
+        default: "general",
+        strategy: "random",
+        rules: [],
+        affinity: { mode: "retain-within-tier" },
+      },
+      affinity: {
+        targetOrigin: "automatic",
+        anchor: { modelKey: "fixture/quick-model", provider: "fixture", lastSuccessfulDispatchAt: 500 },
+      },
+    }), { random: () => 0.75 });
+    const result = await router.resolve({ prompt: "ordinary request" });
+    assert.equal(result.status, "completed");
+    if (result.status !== "completed") return;
+    assert.equal(result.decision.selected, "fixture/quick-model");
+    assert.deepEqual(result.decision.affinity && {
+      mode: result.decision.affinity.mode,
+      strategyWinner: result.decision.affinity.strategyWinner,
+      selectedModel: result.decision.affinity.selectedModel,
+      selectedTier: result.decision.affinity.selectedTier,
+      selection: result.decision.affinity.selection,
+    }, {
+      mode: "retain-within-tier",
+      strategyWinner: "fixture/general-model",
+      selectedModel: "fixture/quick-model",
+      selectedTier: "general",
+      selection: "retained_anchor",
+    });
+  });
+
+  it("reports unknown locality without an anchor and prevents a caller auto origin from overriding a forced tier", async () => {
+    const baseConfig = {
+      schemaVersion: 2,
+      models: { quick: ["fixture/quick-model"] },
+      default: "quick",
+      rules: [],
+      affinity: { mode: "observe" as const },
+    };
+    const noAnchorRouter = createRouter(snapshot({ config: baseConfig, affinity: { targetOrigin: "automatic" } }));
+    const noAnchor = await noAnchorRouter.resolve({ prompt: "ordinary request" });
+    assert.equal(noAnchor.status === "completed" ? noAnchor.decision.affinity?.status : undefined, "locality_unknown");
+
+    const forcedRouter = createRouter(snapshot({ config: baseConfig, affinity: {
+      targetOrigin: "automatic",
+      anchor: { modelKey: "fixture/quick-model", provider: "fixture", lastSuccessfulDispatchAt: 500 },
+    } }));
+    const forced = await forcedRouter.resolve({ prompt: "ordinary request", forcedTier: "quick" });
+    assert.deepEqual(forced.status === "completed" ? forced.decision.affinity : undefined, {
+      version: 1, status: "not_applicable", snapshotAsOf: 1_000, mode: "observe", selection: "not_applicable",
+      strategyWinner: "fixture/quick-model", selectedModel: "fixture/quick-model", selectedTier: "quick",
+    });
+  });
+
+  it("rejects malformed and future affinity anchors before a granted classifier can run", () => {
+    let classifierCalls = 0;
+    const classifier = { classify: async () => {
+      classifierCalls++;
+      return { tier: "quick", backend: "fixture-classifier" };
+    } };
+    for (const anchor of [
+      { modelKey: "PRIVATE_AFFINITY_SENTINEL", provider: "fixture", lastSuccessfulDispatchAt: 500 },
+      { modelKey: "fixture/quick-model", provider: "fixture", lastSuccessfulDispatchAt: 1_001 },
+    ]) {
+      assert.throws(() => createRouter(snapshot({
+        config: {
+          schemaVersion: 2,
+          models: { quick: ["fixture/quick-model"] },
+          default: "quick",
+          rules: [],
+          classifier: { enabled: true },
+          affinity: { mode: "observe" },
+        },
+        affinity: { targetOrigin: "automatic", anchor },
+      }), { networkClassifierGrant: true, networkClassifier: classifier }), /Invalid router affinity snapshot/);
+    }
+    assert.equal(classifierCalls, 0);
+  });
+
+  it("keeps intrinsic forced-tier intent ahead of retain-within-tier advice", async () => {
+    const router = createRouter(snapshot({
+      config: {
+        schemaVersion: 2,
+        models: { quick: ["fixture/quick-model", "fixture/general-model"] },
+        default: "quick",
+        strategy: "first",
+        rules: [],
+        affinity: { mode: "retain-within-tier" },
+      },
+      affinity: {
+        targetOrigin: "automatic",
+        anchor: { modelKey: "fixture/general-model", provider: "fixture", lastSuccessfulDispatchAt: 500 },
+      },
+    }));
+    const result = await router.resolve({ prompt: "ordinary request", forcedTier: "quick" });
+    assert.equal(result.status, "completed");
+    if (result.status !== "completed") return;
+    assert.equal(result.decision.selected, "fixture/quick-model");
+    assert.equal(result.decision.affinity?.selection, "not_applicable");
+  });
+
+  it("rejects an affinity snapshot when observation mode is not enabled", () => {
+    assert.throws(() => createRouter(snapshot({
+      affinity: { targetOrigin: "automatic" },
+    })), /Router affinity input requires affinity observation mode/);
+  });
+
+  it("keeps preference-only policy advisory when a configured tier has no available route", async () => {
+    const economicPolicy: ReservePolicy = {
+      mode: "policy",
+      scopes: { offline: { kind: "model", model: "fixture/offline" } },
+      sources: [{ id: "manual", scopeRef: "offline", authority: "declared" }],
+      admission: [],
+      preference: { billingClass: "subscription" },
+    };
+    const router = createRouter(snapshot({
+      config: { models: { quick: ["fixture/offline"] }, default: "quick", strategy: "first", rules: [] },
+      registry: { knownModels: [model("fixture", "offline")], availableModels: [] },
+      economic: { policy: economicPolicy, snapshot: emptyEconomicSnapshot() },
+    }));
+    const result = await router.resolve({ prompt: "request" });
+    assert.equal(result.status, "completed");
+    if (result.status !== "completed") return;
+    assert.equal(result.decision.outcome, "unresolved");
+    assert.equal(result.decision.selected, undefined);
+    assert.deepEqual(result.knownUnavailableModels, ["fixture/offline"]);
   });
 
   it("selects only available models and reports known-but-unavailable exact bindings", async () => {
@@ -472,6 +681,14 @@ describe("experimental resolve-only router", () => {
     }));
     const result = await router.resolve({ prompt: "request" });
     assert.equal(JSON.stringify(result).includes(reason), false);
+  });
+
+  it("rejects v2 reliability lifecycle controls the resolve-only API cannot enforce", () => {
+    const input = snapshot({ config: {
+      ...snapshot().config,
+      reliability: { stateVersion: 2, observations: { enabled: true } },
+    } as unknown as RouterSnapshot["config"] });
+    assert.throws(() => createRouter(input), /Unsupported router reliability controls/);
   });
 
   it("does not append pipeline debug events while the main process logger is enabled", async () => {

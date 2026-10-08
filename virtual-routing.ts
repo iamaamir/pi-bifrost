@@ -67,8 +67,10 @@ export interface VirtualRouteDependencies {
   /** Last dispatched physical model — session fact, not routing policy. */
   sticky?: () => Model<Api> | undefined;
   onDispatch?: (model: Model<Api>, thinkingLevel: ModelRoute["thinkingLevel"], intent: DispatchIntent) => void;
+  /** Async admission fence for receipt-owned runtimes; runs before Pi can invoke a provider. */
+  beforeDispatch?: (model: Model<Api>, request: ModelRouteRequest, intent: DispatchIntent) => Promise<void>;
   /** Release dispatch bookkeeping (e.g. claimed half-open trial) when dispatch setup throws. */
-  onDispatchFailed?: (model: Model<Api>) => void;
+  onDispatchFailed?: (model: Model<Api>) => void | Promise<void>;
   /** Visible degrade: kept model when no pool resolves. */
   onDegrade?: (model: Model<Api>) => void;
   routeError?: (detail: string) => Error;
@@ -92,11 +94,12 @@ export function createVirtualRoute(deps: VirtualRouteDependencies): (request: Mo
   return async (request) => {
     const sticky = request.reason === "retry" ? (request.failed ?? request.previous) : request.previous;
     const fail = (detail: string) => deps.routeError ? deps.routeError(detail) : new Error(`Bifrost: ${detail}`);
-    const dispatch = (model: Model<Api>, thinkingLevel: ModelRoute["thinkingLevel"], intent: DispatchIntent): ModelRoute => {
+    const dispatch = async (model: Model<Api>, thinkingLevel: ModelRoute["thinkingLevel"], intent: DispatchIntent): Promise<ModelRoute> => {
       try {
+        await deps.beforeDispatch?.(model, request, intent);
         deps.onDispatch?.(model, thinkingLevel, intent);
       } catch (error) {
-        deps.onDispatchFailed?.(model);
+        try { await deps.onDispatchFailed?.(model); } catch { /* retain the dispatch failure */ }
         throw error;
       }
       return { model, thinkingLevel };

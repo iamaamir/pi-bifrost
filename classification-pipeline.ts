@@ -4,6 +4,8 @@ import type { RoutedModelResolution, RoutingStrategy, SkippedCandidate, TierReso
 import { debug, debugMeasure } from "./debug.ts";
 import { CLASSIFIER_BACKEND_IDS, type ClassificationJudgment, type ClassifierOutput, type ClassifierBackend } from "./classifier-backends.ts";
 import type { EconomicCandidateEvaluation } from "./routing.ts";
+import type { BillingPreferenceProjection } from "./economic-preferences.ts";
+import type { AffinityRouteObservation } from "./affinity.ts";
 import { performance } from "node:perf_hooks";
 
 // ── ADT result type ────────────────────────────────────────────
@@ -32,6 +34,14 @@ export interface RouteDecisionPool {
   readonly strategy: RoutingStrategy;
   readonly patterns: readonly string[];
   readonly candidates: readonly RouteDecisionCandidate[];
+  readonly billingPreference?: {
+    readonly mode: "observe" | "policy";
+    readonly preferredClass: string;
+    readonly eligibleCount: number;
+    readonly preferredCount: number;
+    readonly selectionCount: number;
+    readonly candidates: BillingPreferenceProjection["traces"];
+  };
 }
 
 /** Content-free summary shared by runtime observation and preview output. */
@@ -58,6 +68,7 @@ export interface RouteDecisionSummary {
   readonly selectedStrategy?: RoutingStrategy;
   readonly fallbackReason?: RoutedModelResolution["fallbackReason"];
   readonly classificationOutcome?: ClassificationOutcome;
+  readonly affinity?: AffinityRouteObservation;
 }
 
 export interface ResolvedRouteDecisionInput {
@@ -72,6 +83,7 @@ function summarizePool(
   candidates: RoutedModelResolution["primary"]["candidates"],
   skipped: readonly SkippedCandidate[],
   economic?: readonly EconomicCandidateEvaluation[],
+  billingPreference?: BillingPreferenceProjection,
 ): RouteDecisionPool {
   const exclusions = new Map(skipped.map((candidate) => [candidate.key, candidate.reason]));
   const reserveEvaluations = new Map((economic ?? []).map(({ key, evaluation }) => [key, evaluation]));
@@ -97,6 +109,23 @@ function summarizePool(
         } : {}),
       };
     }),
+    ...(billingPreference ? {
+      billingPreference: {
+        mode: billingPreference.mode,
+        preferredClass: billingPreference.preferredClass ?? "unknown",
+        eligibleCount: billingPreference.eligibleCount,
+        preferredCount: billingPreference.preferredCount,
+        selectionCount: billingPreference.selectionCount,
+        candidates: billingPreference.traces.map((trace) => ({
+          model: trace.model,
+          billingClass: trace.billingClass,
+          sourceAliases: [...trace.sourceAliases],
+          authorities: [...trace.authorities],
+          freshness: trace.freshness,
+          effect: trace.effect,
+        })),
+      },
+    } : {}),
   };
 }
 
@@ -134,6 +163,7 @@ export function buildRouteDecisionSummary(
       } : {}),
     },
     ...(classification.classificationOutcome ? { classificationOutcome: classification.classificationOutcome } : {}),
+    ...(resolution?.affinityObservation ? { affinity: resolution.affinityObservation } : {}),
     ...(resolution && options ? {
       requested: summarizePool(
         options.requestedTier,
@@ -142,6 +172,7 @@ export function buildRouteDecisionSummary(
         resolution.primary.candidates,
         resolution.primary.skipped,
         resolution.primary.economic,
+        resolution.primary.billingPreference,
       ),
       ...(resolution.fallback ? {
         fallback: summarizePool(
@@ -151,6 +182,7 @@ export function buildRouteDecisionSummary(
           resolution.fallback.candidates,
           resolution.fallback.skipped,
           resolution.fallback.economic,
+          resolution.fallback.billingPreference,
         ),
       } : {}),
       ...(resolution.selectedTier !== undefined ? { selectedTier: resolution.selectedTier } : {}),
@@ -167,6 +199,7 @@ export function buildRouteDecisionSummary(
       attempt.resolution.candidates,
       attempt.resolution.skipped,
       attempt.resolution.economic,
+      attempt.resolution.billingPreference,
     ));
     return {
       ...summary,

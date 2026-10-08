@@ -37,6 +37,12 @@ export interface EconomicConfig extends ReservePolicy {
   observations?: readonly EconomicSignal[];
 }
 
+export interface AffinityConfig {
+  mode: "off" | "observe" | "retain-within-tier";
+  /** Report same-provider candidate availability as advisory evidence. */
+  providerAdvisory?: boolean;
+}
+
 export interface TypeSafeConfig {
   model?: string;
   endpoint?: string;
@@ -85,6 +91,7 @@ export interface BifrostConfig {
   schemaVersion?: number;
   tierPolicies?: Record<string, TierPolicy>;
   economics?: EconomicConfig;
+  affinity?: AffinityConfig;
   enabled?: boolean;
   default?: string;
   strategy?: RoutingStrategy;
@@ -347,7 +354,7 @@ export function validateEconomicConfig(config: BifrostConfig): ConfigIssue[] {
     add("config.economics_invalid", "economics", "economics must be an object.");
     return issues;
   }
-  const allowedFields = new Set(["mode", "scopes", "sources", "sourceOrder", "admission", "tierOverrides", "observations"]);
+  const allowedFields = new Set(["mode", "scopes", "sources", "sourceOrder", "admission", "preference", "tierOverrides", "observations"]);
   for (const key of Object.keys(raw)) {
     if (!allowedFields.has(key)) add("config.economics_unknown_field", "economics.*", "economics contains an unsupported field.");
   }
@@ -377,6 +384,13 @@ export function validateEconomicConfig(config: BifrostConfig): ConfigIssue[] {
       checkUnknownFields(rule, ["id", "scopeRef", "windowId", "reserveRatio", "unknown"], "economics.admission[]");
     }
   }
+  if (policyValue.preference !== undefined) {
+    checkUnknownFields(policyValue.preference, ["billingClass"], "economics.preference");
+    if (!criterionObject(policyValue.preference)
+      || !["subscription", "metered", "free"].includes(String(policyValue.preference.billingClass))) {
+      add("config.economics_preference_invalid", "economics.preference.billingClass", "economics.preference.billingClass must name an explicit billing class.");
+    }
+  }
   if (criterionObject(policyValue.tierOverrides)) {
     for (const overrides of Object.values(policyValue.tierOverrides)) {
       if (!criterionObject(overrides)) continue;
@@ -387,8 +401,11 @@ export function validateEconomicConfig(config: BifrostConfig): ConfigIssue[] {
   }
   const validation = validateEconomicPolicy(policyValue as unknown as ReservePolicy, { accountDispatch: false });
   for (const issue of validation.diagnostics) {
+    if (issue.code === "policy.invalid_preference") continue;
     const code = issue.code === "policy.unsupported_account_scope" ? "config.economics_account_scope_unsupported" : `config.economics_${issue.code.replaceAll(".", "_")}`;
-    const path = issue.scopeRef ? "economics.scopes.*" : issue.sourceId ? "economics.sources[]" : issue.ruleId ? "economics.admission[]" : "economics";
+    const path = issue.code === "policy.empty_admission" && policyValue.preference !== undefined
+      ? "economics.admission"
+      : issue.scopeRef ? "economics.scopes.*" : issue.sourceId ? "economics.sources[]" : issue.ruleId ? "economics.admission[]" : "economics";
     add(code, path, "The configured economic policy is invalid or unsupported.");
   }
   if (observations !== undefined && !Array.isArray(observations)) {
@@ -539,25 +556,69 @@ export function validateConfig(
   }
 
   const reliability = config.reliability;
+  const affinityRaw = (config as unknown as Record<string, unknown>).affinity;
+  if (affinityRaw !== undefined) {
+    if (!criterionObject(affinityRaw)
+      || Object.keys(affinityRaw).some((key) => key !== "mode" && key !== "providerAdvisory")
+      || (affinityRaw.mode !== "off" && affinityRaw.mode !== "observe" && affinityRaw.mode !== "retain-within-tier")
+      || (affinityRaw.providerAdvisory !== undefined && typeof affinityRaw.providerAdvisory !== "boolean")) {
+      issues.push({ severity: "error", code: "config.affinity_invalid", path: "affinity", message: "affinity must contain a supported mode and optional boolean providerAdvisory." });
+    }
+    if (config.schemaVersion !== 2) {
+      issues.push({ severity: "error", code: "config.affinity_requires_schema_v2", path: "affinity", message: "affinity requires schemaVersion 2." });
+    }
+  }
+  const reliabilityProblem = (code: string, path: string, message: string): void => {
+    issues.push({ severity: "error", code, path, message });
+  };
+  const reliabilityRaw = (config as unknown as Record<string, unknown>).reliability;
+  const reliabilityRecord = criterionObject(reliabilityRaw) ? reliabilityRaw : undefined;
+  if (reliabilityRaw !== undefined && !reliabilityRecord) {
+    issues.push({ severity: "error", code: "config.reliability_invalid", path: "reliability", message: "reliability must be an object." });
+  }
+  if (reliabilityRecord) {
+    const stateVersion = reliabilityRecord.stateVersion;
+    if (stateVersion !== undefined && stateVersion !== 1 && stateVersion !== 2) {
+      issues.push({ severity: "error", code: "config.reliability_state_version_unsupported", path: "reliability.stateVersion", message: "reliability.stateVersion must be 1 or 2." });
+    }
+    if (stateVersion === 2 && config.schemaVersion !== 2) {
+      issues.push({ severity: "error", code: "config.reliability_state_v2_requires_schema_v2", path: "reliability.stateVersion", message: "reliability.stateVersion 2 requires schemaVersion 2." });
+    }
+    const observations = reliabilityRecord.observations;
+    if (observations !== undefined) {
+      if (stateVersion !== 2 || !criterionObject(observations)) {
+        issues.push({ severity: "error", code: "config.reliability_observations_invalid", path: "reliability.observations", message: "reliability.observations requires stateVersion 2 and must be an object." });
+      } else if (Object.keys(observations).some((key) => key !== "enabled") || (observations.enabled !== undefined && typeof observations.enabled !== "boolean")) {
+        issues.push({ severity: "error", code: "config.reliability_observations_invalid", path: "reliability.observations", message: "reliability.observations supports only a boolean enabled field." });
+      }
+    }
+    const known = new Set(["enabled", "failureThreshold", "windowMinutes", "cooldownMinutes", "path", "stateVersion", "observations"]);
+    if (Object.keys(reliabilityRecord).some((key) => !known.has(key))) {
+      issues.push({ severity: "error", code: "config.reliability_unknown_field", path: "reliability", message: "reliability contains an unsupported field." });
+    }
+  }
   if (reliability?.failureThreshold !== undefined && (!Number.isInteger(reliability.failureThreshold) || reliability.failureThreshold < 1)) {
-    issues.push({
-      severity: "error",
-      message: `Reliability failureThreshold must be an integer >= 1, got ${reliability.failureThreshold}.`,
-    });
+    reliabilityProblem("config.reliability_threshold_invalid", "reliability.failureThreshold", "Reliability failureThreshold must be an integer >= 1.");
   }
 
   if (reliability?.windowMinutes !== undefined && (!Number.isInteger(reliability.windowMinutes) || reliability.windowMinutes < 1)) {
-    issues.push({
-      severity: "error",
-      message: `Reliability windowMinutes must be an integer >= 1, got ${reliability.windowMinutes}.`,
-    });
+    reliabilityProblem("config.reliability_window_invalid", "reliability.windowMinutes", "Reliability windowMinutes must be an integer >= 1.");
   }
 
   if (reliability?.cooldownMinutes !== undefined && (!Number.isInteger(reliability.cooldownMinutes) || reliability.cooldownMinutes < 1)) {
-    issues.push({
-      severity: "error",
-      message: `Reliability cooldownMinutes must be an integer >= 1, got ${reliability.cooldownMinutes}.`,
-    });
+    reliabilityProblem("config.reliability_cooldown_invalid", "reliability.cooldownMinutes", "Reliability cooldownMinutes must be an integer >= 1.");
+  }
+  if (reliability?.stateVersion === 2) {
+    const threshold = reliability.failureThreshold ?? 3;
+    const windowMinutes = reliability.windowMinutes ?? 5;
+    const cooldownMinutes = reliability.cooldownMinutes ?? 60;
+    if (!Number.isSafeInteger(threshold) || threshold > 10_000) {
+      reliabilityProblem("config.reliability_v2_bounds_invalid", "reliability.failureThreshold", "Reliability v2 failureThreshold must be a safe integer from 1 to 10000.");
+    }
+    if (!Number.isSafeInteger(windowMinutes) || windowMinutes > 1_000_000
+      || !Number.isSafeInteger(cooldownMinutes) || cooldownMinutes > 1_000_000) {
+      reliabilityProblem("config.reliability_v2_bounds_invalid", "reliability", "Reliability v2 window and cooldown must be safe whole-minute values no greater than 1000000.");
+    }
   }
 
   const probe = config.probe;
@@ -735,6 +796,61 @@ export function loadConfigForReload(cwd: string, extensionDir: string): ConfigLo
     } catch {
       diagnostics.push({ layer, message: `${layer} config could not be read.` });
       continue;
+    }
+    if (text === undefined) continue;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      diagnostics.push({ layer, message: `${layer} config is not valid JSON.` });
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      diagnostics.push({ layer, message: `${layer} config must contain an object.` });
+      continue;
+    }
+    merged = mergeConfig(merged, parsed as BifrostConfig);
+  }
+  return { config: merged, diagnostics };
+}
+
+/**
+ * Compose the existing config layers while substituting exact bytes for one
+ * selected source. This is for prospective validation only; diagnostics make
+ * the result ineligible for apply until every layer parses as an object.
+ */
+export function loadConfigWithSourceOverride(
+  cwd: string,
+  extensionDir: string,
+  source: "project" | "user",
+  replacementBytes: Uint8Array,
+): ConfigLoadResult {
+  const diagnostics: ConfigLoadDiagnostic[] = [];
+  if (source !== "project" && source !== "user") {
+    return {
+      config: defaultConfig(),
+      diagnostics: [{ layer: "project", message: "Selected config source is invalid." }],
+    };
+  }
+  const selectedLayer: ConfigLoadDiagnostic["layer"] = source === "project" ? "project" : "global";
+  let merged = defaultConfig();
+  for (const [layer, path] of configLayerPaths(cwd, extensionDir)) {
+    let text: string | undefined;
+    if (layer === selectedLayer) {
+      try {
+        text = new TextDecoder("utf-8", { fatal: true }).decode(replacementBytes);
+      } catch {
+        diagnostics.push({ layer, message: `${layer} config is not valid UTF-8.` });
+        continue;
+      }
+    } else {
+      try {
+        if (existsSync(path)) text = readFileSync(path, "utf8");
+      } catch {
+        diagnostics.push({ layer, message: `${layer} config could not be read.` });
+        continue;
+      }
     }
     if (text === undefined) continue;
 

@@ -6,7 +6,12 @@ export type EconomicScope =
 export type AllowanceUnit = "requests" | "tokens" | "credits" | "ratio" | "currency";
 export type EconomicAuthority = "authoritative" | "declared" | "estimated";
 export type BillingMode = "subscription" | "metered" | "free" | "unknown";
+export type PreferredBillingClass = Exclude<BillingMode, "unknown">;
 export type UnknownHandling = "block" | "ignore";
+
+export interface EconomicPreference {
+  readonly billingClass: PreferredBillingClass;
+}
 
 export interface EconomicSource {
   readonly id: string;
@@ -71,6 +76,7 @@ export interface ReservePolicy {
   /** Explicit source precedence, keyed only by the local scope alias. */
   readonly sourceOrder?: Readonly<Record<string, readonly string[]>>;
   readonly admission: readonly ReserveRule[];
+  readonly preference?: EconomicPreference;
   readonly tierOverrides?: Readonly<Record<string, Readonly<Record<string, Partial<Pick<ReserveRule, "reserveRatio" | "unknown">>>>>>;
 }
 
@@ -156,6 +162,18 @@ const authorityRank: Record<EconomicAuthority, number> = {
   declared: 2,
   estimated: 1,
 };
+
+export function hasHardEconomicAdmission(policy: ReservePolicy | undefined): boolean {
+  return policy?.mode === "policy" && Array.isArray(policy.admission) && policy.admission.length > 0;
+}
+
+function validEconomicPreference(value: unknown): value is EconomicPreference {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const preference = value as Record<string, unknown>;
+  return Object.keys(preference).length === 1
+    && Object.hasOwn(preference, "billingClass")
+    && ["subscription", "metered", "free"].includes(String(preference.billingClass));
+}
 
 export function emptyEconomicSnapshot(): EconomicSnapshot {
   return { revision: 0, signals: [], watermarks: [] };
@@ -306,7 +324,10 @@ export function validateEconomicPolicy(
     }
     rulesById.set(rule.id, rule);
   }
-  if (policy.mode === "policy" && (policy.admission?.length ?? 0) === 0) {
+  if (policy.preference !== undefined && !validEconomicPreference(policy.preference)) {
+    diagnostics.push(diagnostic("policy.invalid_preference"));
+  }
+  if (policy.mode === "policy" && (policy.admission?.length ?? 0) === 0 && !validEconomicPreference(policy.preference)) {
     diagnostics.push(diagnostic("policy.empty_admission"));
   }
   const sourceOrder = policy.sourceOrder && typeof policy.sourceOrder === "object" && !Array.isArray(policy.sourceOrder) ? policy.sourceOrder : {};

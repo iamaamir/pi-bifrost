@@ -8,6 +8,9 @@ export type AffinityTargetOrigin =
   | "continuation"
   | "retry";
 
+export type AffinityMode = "off" | "observe" | "retain-within-tier";
+export type AffinitySelection = "strategy" | "retained_anchor" | "no_anchor" | "anchor_not_eligible" | "not_applicable";
+
 export interface AffinityAnchor {
   readonly modelKey: string;
   readonly provider: string;
@@ -48,6 +51,14 @@ export type AffinityObservation =
     /** Same-provider candidate evidence only; it does not claim cache reuse or savings. */
     readonly sameProviderCandidateAvailable?: boolean;
   };
+
+export type AffinityRouteObservation = AffinityObservation & {
+  readonly mode: Exclude<AffinityMode, "off">;
+  readonly selection: AffinitySelection;
+  readonly strategyWinner?: string;
+  readonly selectedModel?: string;
+  readonly selectedTier?: string;
+};
 
 const MAX_MODEL_KEY_LENGTH = 512;
 const MAX_PROVIDER_LENGTH = 128;

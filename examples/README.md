@@ -33,6 +33,8 @@ Adds model health tracking and automatic fallback. Models with repeated failures
 
 See full example: `economical-frontier-reliability.json`
 
+The experimental receipt-owned Auto flow is shown in `reliability-v2-auto.json`. It requires `schemaVersion: 2`, `reliability.stateVersion: 2`, and an explicit `/bifrost reliability migrate` preparation before Auto can route. Use `/bifrost reliability migrate --fresh` only when no v1 state file exists. This mode supports Auto user turns; physical routing and direct utility requests remain unavailable while v2 is enabled. The shipped defaults remain on v1.
+
 Try:
 
 ```text
@@ -55,6 +57,17 @@ Copy a recipe to `.pi/bifrost.json`, then reload:
 /bifrost reload
 ```
 
+## Reconcile generated model membership
+
+Preview and apply are separate steps. Preview is offline by default; `--refresh` explicitly contacts one provider and still only creates a proposal.
+
+```text
+/bifrost config reconcile --source project --tier general --provider openai --json
+/bifrost config reconcile --source project --tier general --provider openai --apply --proposal <digest> --json
+```
+
+Use `--source user` for the user config layer. Reconciliation edits one source and tier at a time, preserves higher layer overrides, and tracks only exact membership it generated. Handwritten entries stay unowned. See the [command guide](../docs/guide/commands.md#reconcile-generated-model-membership) for freshness, backup, and stale-lock recovery details.
+
 Preview before sending:
 
 ```text
@@ -72,6 +85,10 @@ Try:
 ```text
 /bifrost inspect
 ```
+
+### `economic-billing-preference.json`
+
+Shows an explicit subscription preference between two models with different declared billing classes. The preference-only policy has `admission: []`: it changes strategy ordering only when a fresh preferred-class fact exists among final eligible candidates in the selected tier. It does not restore reserve- or circuit-excluded candidates, cross a tier boundary, or guarantee savings. The example uses static facts only; no adapter or account binding is configured.
 
 The command shows the source alias, period, and freshness without printing quota values.
 

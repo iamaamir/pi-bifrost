@@ -3,6 +3,8 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { getCircuitState, type ReliabilityConfig, type ReliabilityState } from "./reliability.ts";
 import { isVirtualModel } from "./virtual-model.ts";
 import { evaluateReserves, type EconomicSnapshot, type ReserveEvaluation, type ReservePolicy } from "./economic-signals.ts";
+import { projectBillingPreference, type BillingPreferenceProjection } from "./economic-preferences.ts";
+import { observeAffinity, type AffinityAnchor, type AffinityMode, type AffinityRouteObservation } from "./affinity.ts";
 
 export type RoutingStrategy =
   | "first"
@@ -186,6 +188,9 @@ export interface HealthyModelResolution {
   selected: Model<Api> | undefined;
   candidates: Model<Api>[];
   healthyCandidates: Model<Api>[];
+  /** Strategy pool after advisory/opt-in billing preference; never an exclusion list. */
+  selectionCandidates?: Model<Api>[];
+  billingPreference?: BillingPreferenceProjection;
   skipped: SkippedCandidate[];
   economic?: readonly EconomicCandidateEvaluation[];
 }
@@ -200,6 +205,37 @@ export interface EconomicRouteContext {
   readonly policy: ReservePolicy;
   readonly requestedTier: string;
   readonly now: number;
+  /** Direct model/utility requests retain host semantics and bypass soft preference. */
+  readonly preferenceBypassed?: boolean;
+}
+
+function selectFromHealthyPool(
+  healthyCandidates: Model<Api>[],
+  strategy: RoutingStrategy,
+  random: () => number,
+  economic: (EconomicRouteContext & { readonly evaluatedTier: string }) | undefined,
+): Pick<HealthyModelResolution, "selected" | "selectionCandidates" | "billingPreference"> {
+  if (!economic?.policy.preference || economic.preferenceBypassed) {
+    return { selected: selectModel(healthyCandidates, strategy, random), selectionCandidates: healthyCandidates };
+  }
+  const projection = projectBillingPreference({
+    candidates: healthyCandidates.map((candidate) => ({ model: modelKey(candidate), provider: candidate.provider })),
+    preferredClass: economic.policy.preference.billingClass,
+    snapshot: economic.snapshot,
+    policy: economic.policy,
+    now: economic.now,
+    hostCapabilities: { accountDispatch: false },
+  });
+  const usePreferredPool = projection.mode === "policy" && projection.preferredCount > 0;
+  const selectionKeys = new Set(projection.selectionModelKeys);
+  const selectionCandidates = usePreferredPool
+    ? healthyCandidates.filter((candidate) => selectionKeys.has(modelKey(candidate)))
+    : healthyCandidates;
+  return {
+    selected: selectModel(selectionCandidates, strategy, random),
+    selectionCandidates,
+    billingPreference: projection,
+  };
 }
 
 export interface RoutedModelResolution {
@@ -214,6 +250,7 @@ export interface RoutedModelResolution {
   /** Ordered pools attempted when an explicit tierPolicies boundary is active. */
   attemptedTiers?: readonly RoutedTierAttempt[];
   explicitBoundary?: boolean;
+  affinityObservation?: AffinityRouteObservation;
 }
 
 export interface RoutedTierAttempt {
@@ -232,6 +269,13 @@ export interface TierResolutionOptions {
   defaultStrategy?: RoutingStrategy;
 }
 
+export interface AffinityRoutingContext {
+  /** Caller-supplied origin; intrinsic route origins take precedence. */
+  readonly targetOrigin?: string;
+  readonly intrinsicOrigin?: string;
+  readonly anchor?: AffinityAnchor;
+}
+
 export interface TierResolutionConfig {
   schemaVersion?: number;
   tierPolicies?: Record<string, { fallbackTiers?: string[] }>;
@@ -239,6 +283,7 @@ export interface TierResolutionConfig {
   default?: string;
   strategy?: RoutingStrategy;
   categoryStrategies?: Record<string, RoutingStrategy>;
+  affinity?: { mode: AffinityMode; providerAdvisory?: boolean };
 }
 
 export interface ConfiguredTierResolution {
@@ -282,6 +327,7 @@ export function resolveConfiguredTier(
   now?: number,
   economic?: Omit<EconomicRouteContext, "now" | "requestedTier">,
   random?: () => number,
+  affinity?: AffinityRoutingContext,
 ): ConfiguredTierResolution {
   const options = buildTierResolutionOptions(tier, config);
   const routeNow = now ?? Date.now();
@@ -290,6 +336,45 @@ export function resolveConfiguredTier(
   const resolution = policy && Array.isArray(policy.fallbackTiers)
     ? resolveWithExplicitTierBoundary(ctx, options, policy.fallbackTiers, config, reliabilityState, reliabilityConfig, routeNow, economicContext, random)
     : resolveModelWithFallback(ctx, { ...options, reliabilityState, reliabilityConfig, now: routeNow, economic: economicContext, random });
+  if (config.affinity?.mode !== undefined && config.affinity.mode !== "off" && affinity !== undefined) {
+    const attemptedTarget = resolution.attemptedTiers?.find((attempt) => attempt.resolution.selected)
+      ?? resolution.attemptedTiers?.at(-1);
+    const targetPool = attemptedTarget?.resolution
+      ?? (resolution.selected && resolution.selectedTier === resolution.requestedTier
+        ? resolution.primary
+        : resolution.fallback ?? resolution.primary);
+    const targetOrigin = affinity?.intrinsicOrigin ?? affinity?.targetOrigin ?? "automatic";
+    const selectionCandidates = targetPool.selectionCandidates ?? targetPool.healthyCandidates;
+    const strategyWinner = resolution.selected ? modelKey(resolution.selected) : undefined;
+    const observation = observeAffinity({
+      targetOrigin,
+      eligibleModelKeys: selectionCandidates.map(modelKey),
+      ...(strategyWinner ? { baseStrategyWinner: strategyWinner } : {}),
+      ...(affinity?.anchor ? { anchor: affinity.anchor } : {}),
+      snapshotAsOf: routeNow,
+      ...(config.affinity.providerAdvisory ? { includeSameProviderAdvisory: true } : {}),
+    });
+    let selection: AffinityRouteObservation["selection"] = observation.status === "not_applicable" ? "not_applicable"
+      : !affinity.anchor ? "no_anchor" as const : "strategy" as const;
+    if (config.affinity.mode === "retain-within-tier" && observation.status !== "not_applicable" && affinity.anchor) {
+      const retainedModel = selectionCandidates.find((candidate) => modelKey(candidate) === affinity.anchor!.modelKey);
+      if (!retainedModel) {
+        selection = "anchor_not_eligible";
+      } else if (resolution.selected && strategyWinner !== affinity.anchor.modelKey) {
+        resolution.selected = retainedModel;
+        targetPool.selected = retainedModel;
+        selection = "retained_anchor";
+      }
+    }
+    resolution.affinityObservation = Object.freeze({
+      ...observation,
+      mode: config.affinity.mode,
+      selection,
+      ...(strategyWinner ? { strategyWinner } : {}),
+      ...(resolution.selected ? { selectedModel: modelKey(resolution.selected) } : {}),
+      ...(resolution.selectedTier ? { selectedTier: resolution.selectedTier } : {}),
+    });
+  }
   return { options, resolution };
 }
 
@@ -328,8 +413,9 @@ export function resolveHealthyModel(
     ? configuredCandidates.filter((candidate) => !rejected.has(modelKey(candidate)))
     : configuredCandidates;
   if (!reliabilityState || reliabilityConfig?.enabled === false) {
+    const selection = selectFromHealthyPool(candidates, strategy, random, economic);
     return {
-      selected: selectModel(candidates, strategy, random),
+      ...selection,
       candidates: configuredCandidates,
       healthyCandidates: candidates,
       skipped: [],
@@ -352,8 +438,9 @@ export function resolveHealthyModel(
     healthyCandidates.push(candidate);
   }
 
+  const selection = selectFromHealthyPool(healthyCandidates, strategy, random, economic);
   return {
-    selected: selectModel(healthyCandidates, strategy, random),
+    ...selection,
     candidates: configuredCandidates,
     healthyCandidates,
     skipped,
