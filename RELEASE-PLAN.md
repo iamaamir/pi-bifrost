@@ -22,7 +22,7 @@ Reliability policy for this release: v1 remains the default and the migration pa
 
 The primary agent owns architecture, scope, source review, acceptance and release coordination. The affordable implementation subagent (`gpt-6-luna`) writes code and tests. Changes remain small and sequential in the shared checkout. No implementation is accepted solely on the writer's report: review the diff and run relevant checks. No image routing, arbitrary prompt replay, orchestration, hidden provider preferences or weakened manual control.
 
-Local branch: `codex/routing-release`. Accepted checkpoints are recorded below; the final integration checkpoint is `553fdc2`. No package publishing, remote push, PR creation or version/tag change has occurred. Release candidate/version selection follows final accepted scope and verification. Never describe quota snapshots as automatic live tracking without a verified adapter.
+Release branch: `feat/routing-reliability`. Accepted checkpoints are recorded below; the latest runtime checkpoint is `4ffaf97`, with documentation consolidation in `f39b2b2`. Branch publication and PR creation were authorized on 9 October. Package publishing and version/tag changes remain pending. Release candidate/version selection follows final accepted scope and verification. Never describe quota snapshots as automatic live tracking without a verified adapter.
 
 ## Prior candidate acceptance (historical snapshot at HEAD `0fa0f79`)
 
