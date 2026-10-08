@@ -1553,35 +1553,33 @@ async function handleReliabilityCommand(args: string, ctx: ExtensionContext, sta
     }
   }
   const fresh = rest === "migrate --fresh";
-  let snapshot: Buffer | undefined;
-  try {
-    snapshot = readBoundedRegularSnapshot(state.reliabilityStore.path);
-  } catch {
-    log(ctx, "The v1 reliability source is unsafe, changing, or larger than the migration limit; no migration was performed.", "error");
-    return;
-  }
-  if (fresh) {
-    if (snapshot !== undefined) {
-      log(ctx, "--fresh is allowed only when no v1 reliability file exists; existing v1 state was left unchanged.", "error");
-      return;
-    }
-    snapshot = Buffer.from(JSON.stringify(emptyReliabilityState()) + "\n", "utf8");
-  }
-  if (snapshot === undefined) {
-    log(ctx, "No v1 reliability file exists; pass --fresh only if you intend to initialize an empty v2 sidecar.", "error");
-    return;
-  }
+  // The store treats this as a detached placeholder when sourcePath is provided and reads the
+  // authoritative bounded source only after it owns the cooperative v1 source fence.
+  const snapshot = Buffer.from(JSON.stringify(emptyReliabilityState()) + "\n", "utf8");
   try {
     const destination = reliabilityV2Path(process.cwd());
     const backupPath = join(dirname(destination), "bifrost-reliability-v1.json.backup");
-    const result = await store.initializeFromV1Migration({ sourceSnapshot: snapshot, sourcePath: state.reliabilityStore.path, backupPath });
+    const result = await store.initializeFromV1Migration({
+      sourceSnapshot: snapshot,
+      sourcePath: state.reliabilityStore.path,
+      backupPath,
+      requireSourceAbsent: fresh,
+    });
     state.reliabilityV2Store = store;
     log(ctx, result.status === "seeded"
       ? "Reliability v2 sidecar initialized. Auto routing can now use receipt-owned circuit trials; model selection was not changed."
       : "Reliability v2 sidecar already exists and was left unchanged.");
   } catch (error) {
     const code = error instanceof ReliabilityV2StoreError ? error.code : "migration_failed";
-    log(ctx, `Reliability migration stopped safely (${code}); existing files were preserved.`, "error");
+    log(ctx, code === "source_lock_contended"
+      ? "Reliability migration stopped safely because its v1 source lock is busy. Stop other Pi sessions that may write the source and ensure this session has no active or queued generation. If the lock remains, inspect the exact default `.pi/bifrost-reliability.json.migration.lock` or custom `reliability.path` plus `.migration.lock`; remove only a proven stale lock, never based on age or PID alone. V1 state and backup were left untouched; no v2 state was committed."
+      : code === "source_missing"
+        ? "No v1 reliability file exists; pass --fresh only if you intend to initialize an empty v2 sidecar."
+        : code === "source_exists"
+          ? "--fresh is allowed only when no v1 reliability file exists; existing v1 state was left unchanged."
+      : code === "source_changed"
+        ? "Reliability migration stopped because the v1 source changed during migration. No v2 state was committed; review the source and retry."
+        : `Reliability migration stopped safely (${code}); existing files were preserved.`, "error");
   }
 }
 

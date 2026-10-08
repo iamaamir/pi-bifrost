@@ -6,6 +6,9 @@ import { after, describe, it } from "node:test";
 import { convertReliabilityV1Snapshot } from "../reliability-migration.ts";
 import { modelScopeKey, validateReliabilityV2State, type ReliabilityV2Config } from "../reliability-v2.ts";
 import { ReliabilityV2Store, ReliabilityV2StoreError } from "../reliability-v2-store.ts";
+import { acquireReliabilitySourceFenceSync, reliabilitySourceFencePath, releaseReliabilitySourceFence } from "../reliability-v1-fence.ts";
+import { saveReliability, type ReliabilityState } from "../reliability.ts";
+import { writeJsonFile } from "../storage.ts";
 
 const config: ReliabilityV2Config = {
   failureThreshold: 2,
@@ -152,27 +155,166 @@ describe("reliability v1 migration foundation", () => {
     const store = new ReliabilityV2Store({ path: statePath, config });
 
     await migrationError(store.initializeFromV1Migration({ sourceSnapshot: snapshot, backupPath: sourcePath, sourcePath }), "invalid_migration");
+    fs.linkSync(sourcePath, backupPath);
+    await migrationError(store.initializeFromV1Migration({ sourceSnapshot: snapshot, backupPath, sourcePath }), "invalid_migration");
+    fs.unlinkSync(backupPath);
     fs.symlinkSync(sourcePath, backupPath);
     await migrationError(store.initializeFromV1Migration({ sourceSnapshot: snapshot, backupPath }), "backup_conflict");
     assert.equal(fs.lstatSync(backupPath).isSymbolicLink(), true);
     assert.equal(fs.existsSync(statePath), false);
   });
 
-  it("captures source bytes before waiting for the v2 owner lock", async () => {
+  it("waits for the cooperative v1 source fence and seeds the latest source, not caller bytes", async () => {
     const directory = tempDirectory();
     const statePath = join(directory, "reliability-v2.json");
+    const sourcePath = join(directory, "reliability-v1.json");
     const backupPath = join(directory, "reliability-v1.backup.json");
-    const snapshot = v1Snapshot();
-    const original = Buffer.from(snapshot);
-    fs.writeFileSync(`${statePath}.lock`, JSON.stringify({ ownerToken: "live-owner", pid: process.pid, createdAt: Date.now() }));
-    setTimeout(() => fs.unlinkSync(`${statePath}.lock`), 40);
-    const store = new ReliabilityV2Store({ path: statePath, config, lockTimeoutMs: 1000, lockPollMs: 5 });
-    const pending = store.initializeFromV1Migration({ sourceSnapshot: snapshot, backupPath });
-    snapshot[0] = 0;
+    const callerSnapshot = v1Snapshot();
+    fs.writeFileSync(sourcePath, callerSnapshot);
+    const newerState: ReliabilityState = { version: 1, models: { "provider/model": { failures: [777, 778], openUntil: 5_000 } } };
+    // Hold the source fence as a v1 writer, start migration behind it, then commit the writer's atomic file replacement.
+    const writerOwner = acquireReliabilitySourceFenceSync(sourcePath);
+    const store = new ReliabilityV2Store({ path: statePath, config, now: () => 1_000, lockTimeoutMs: 1000, lockPollMs: 5 });
+    const pending = store.initializeFromV1Migration({ sourceSnapshot: callerSnapshot, sourcePath, backupPath });
+    writeJsonFile(sourcePath, newerState);
+    const latest = fs.readFileSync(sourcePath);
+    releaseReliabilitySourceFence(writerOwner);
 
     const result = await pending;
     assert.equal(result.status, "seeded");
+    assert.deepEqual(fs.readFileSync(backupPath), latest);
+    assert.deepEqual(result.state.scopes[modelScopeKey("provider/model")]?.failures, [777, 778]);
+    assert.equal(result.state.scopes[modelScopeKey("provider/model")]?.openUntil, 5_000);
+    assert.deepEqual(fs.readFileSync(sourcePath), latest);
+    const admission = await store.admit({
+      ownerToken: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      dispatchId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      outcomeId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      modelKeys: ["provider/model"],
+    });
+    assert.equal(admission.status, "blocked", "latest persisted open circuit remains blocked after migration");
+  });
+
+  it("does not let a v1 writer overwrite the source while migration owns its fence", () => {
+    const directory = tempDirectory();
+    const sourcePath = join(directory, "reliability-v1.json");
+    const original = v1Snapshot();
+    fs.writeFileSync(sourcePath, original);
+    const owner = acquireReliabilitySourceFenceSync(sourcePath);
+    saveReliability(sourcePath, { version: 1, models: { "provider/model": { failures: [888] } } });
+    assert.deepEqual(fs.readFileSync(sourcePath), original);
+    releaseReliabilitySourceFence(owner);
+    saveReliability(sourcePath, { version: 1, models: { "provider/model": { failures: [888] } } });
+    assert.deepEqual(JSON.parse(fs.readFileSync(sourcePath, "utf8")), {
+      version: 1,
+      models: { "provider/model": { failures: [888] } },
+    });
+  });
+
+  it("fails fresh initialization if a v1 source appears while waiting for the fence", async () => {
+    const directory = tempDirectory();
+    const statePath = join(directory, "reliability-v2.json");
+    const sourcePath = join(directory, "reliability-v1.json");
+    const backupPath = join(directory, "reliability-v1.backup.json");
+    const owner = acquireReliabilitySourceFenceSync(sourcePath);
+    const store = new ReliabilityV2Store({ path: statePath, config, lockTimeoutMs: 1000, lockPollMs: 5 });
+    const pending = store.initializeFromV1Migration({
+      sourceSnapshot: Buffer.from('{"version":1,"models":{}}'),
+      sourcePath,
+      backupPath,
+      requireSourceAbsent: true,
+    });
+    await new Promise((resolveSleep) => setTimeout(resolveSleep, 20));
+    fs.writeFileSync(sourcePath, v1Snapshot());
+    releaseReliabilitySourceFence(owner);
+    await migrationError(pending, "source_exists");
+    assert.equal(fs.existsSync(statePath), false);
+    assert.equal(fs.existsSync(backupPath), false);
+  });
+
+  it("fresh initialization seeds empty state even if caller bytes contain legacy records", async () => {
+    const directory = tempDirectory();
+    const statePath = join(directory, "reliability-v2.json");
+    const sourcePath = join(directory, "reliability-v1.json");
+    const backupPath = join(directory, "reliability-v1.backup.json");
+    const store = new ReliabilityV2Store({ path: statePath, config });
+    const result = await store.initializeFromV1Migration({
+      sourceSnapshot: v1Snapshot(),
+      sourcePath,
+      backupPath,
+      requireSourceAbsent: true,
+    });
+    assert.equal(result.status, "seeded");
+    assert.deepEqual(JSON.parse(JSON.stringify(result.state)), { version: 2, revision: 0, scopes: {}, dispatches: {}, settledOutcomes: {} });
+    assert.deepEqual(fs.readFileSync(backupPath), Buffer.from('{"version":1,"models":{}}\n'));
+    assert.equal(fs.existsSync(sourcePath), false);
+  });
+
+  it("leaves a replaced source lock untouched and does not create backup or v2 state", async () => {
+    const directory = tempDirectory();
+    const statePath = join(directory, "reliability-v2.json");
+    const sourcePath = join(directory, "reliability-v1.json");
+    const sourceLockPath = reliabilitySourceFencePath(sourcePath);
+    const backupPath = join(directory, "reliability-v1.backup.json");
+    fs.writeFileSync(sourcePath, v1Snapshot());
+    let replacedLock = "";
+    const store = new ReliabilityV2Store({
+      path: statePath,
+      config,
+      io: {
+        writeLock(fd, contents) {
+          fs.unlinkSync(sourceLockPath);
+          replacedLock = JSON.stringify({ ownerToken: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", pid: process.pid, createdAt: Date.now() });
+          fs.writeFileSync(sourceLockPath, replacedLock, { mode: 0o600 });
+          fs.writeFileSync(fd, contents, "utf8");
+          fs.fsyncSync(fd);
+        },
+      },
+    });
+    await migrationError(store.initializeFromV1Migration({ sourceSnapshot: v1Snapshot(), sourcePath, backupPath }), "source_lock_failed");
+    assert.equal(fs.readFileSync(sourceLockPath, "utf8"), replacedLock);
+    assert.equal(fs.existsSync(backupPath), false);
+    assert.equal(fs.existsSync(statePath), false);
+  });
+
+  it("detects an uncooperative source replacement after backup and before v2 commit", async () => {
+    const directory = tempDirectory();
+    const statePath = join(directory, "reliability-v2.json");
+    const sourcePath = join(directory, "reliability-v1.json");
+    const backupPath = join(directory, "reliability-v1.backup.json");
+    const original = v1Snapshot();
+    const replacement = Buffer.from('{"version":1,"models":{"provider/model":{"failures":[900]}}}');
+    fs.writeFileSync(sourcePath, original);
+    const store = new ReliabilityV2Store({
+      path: statePath,
+      config,
+      io: {
+        writeMigrationBackup(path, bytes) {
+          fs.writeFileSync(path, bytes, { flag: "wx", mode: 0o600 });
+          fs.writeFileSync(sourcePath, replacement);
+        },
+      },
+    });
+    await migrationError(store.initializeFromV1Migration({ sourceSnapshot: original, sourcePath, backupPath }), "source_changed");
     assert.deepEqual(fs.readFileSync(backupPath), original);
+    assert.deepEqual(fs.readFileSync(sourcePath), replacement);
+    assert.equal(fs.existsSync(statePath), false);
+  });
+
+  it("times out on an existing source fence without stealing or changing files", async () => {
+    const directory = tempDirectory();
+    const statePath = join(directory, "reliability-v2.json");
+    const sourcePath = join(directory, "reliability-v1.json");
+    const sourceLockPath = reliabilitySourceFencePath(sourcePath);
+    const backupPath = join(directory, "reliability-v1.backup.json");
+    const lockBytes = Buffer.from("operator-owned lock\n");
+    fs.writeFileSync(sourcePath, v1Snapshot());
+    fs.writeFileSync(sourceLockPath, lockBytes);
+    const store = new ReliabilityV2Store({ path: statePath, config, lockTimeoutMs: 10, lockPollMs: 1 });
+    await migrationError(store.initializeFromV1Migration({ sourceSnapshot: v1Snapshot(), sourcePath, backupPath }), "source_lock_contended");
+    assert.deepEqual(fs.readFileSync(sourceLockPath), lockBytes);
+    assert.equal(fs.existsSync(backupPath), false);
+    assert.equal(fs.existsSync(statePath), false);
   });
 
   it("allows retry after backup creation when the v2 atomic write fails", async () => {

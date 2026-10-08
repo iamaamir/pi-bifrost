@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -39,7 +39,7 @@ describe("packed experimental router consumer", () => {
       const rootSources = readdirSync(process.cwd()).filter((path) => path.endsWith(".ts"));
       const routerGraph = [
         "cache", "classification-pipeline", "classifier-backends", "classifier", "config", "debug",
-        "affinity", "economic-preferences", "economic-signals", "inline-override", "reliability", "router", "routing", "session-fallback",
+        "affinity", "economic-preferences", "economic-signals", "inline-override", "reliability", "reliability-v1-fence", "router", "routing", "session-fallback",
         "storage", "virtual-model",
       ].flatMap((name) => [`dist/router/${name}.js`, `dist/router/${name}.d.ts`]);
       const archivePaths = packed.files.map((file) => file.path);
@@ -93,11 +93,12 @@ describe("packed experimental router consumer", () => {
 
       const consumerSource = `
         import assert from "node:assert/strict";
+        import { existsSync } from "node:fs";
         import { createRouter } from "pi-bifrost/router";
         import { createJiti } from "jiti";
         const piExtension = await createJiti(import.meta.url).import("pi-bifrost/index.ts");
         assert.equal(typeof piExtension.default, "function");
-        const model = { provider: "fixture", id: "small", cost: { input: 0.1, output: 0.2 }, contextWindow: 32000, api: "private-api" };
+        const model = { provider: "fixture", id: "small", cost: { input: 0.1, output: 0.2 }, contextWindow: 32000 };
         const router = createRouter({
           config: { models: { quick: ["fixture/small"] }, default: "quick", strategy: "first", rules: [] },
           registry: { knownModels: [model], availableModels: [model] }, now: 1000,
@@ -106,7 +107,7 @@ describe("packed experimental router consumer", () => {
         assert.equal(result.status, "completed");
         assert.equal(result.decision.selected, "fixture/small");
         assert.equal(result.asOf, 1000);
-        assert.equal(JSON.stringify(result).includes("private-api"), false);
+        assert.equal(existsSync(".pi/bifrost-reliability.json"), false, "resolve-only import and route do not write reliability state");
         assert.equal(import.meta.resolve("pi-bifrost/inline-override.ts").endsWith("/inline-override.ts"), true);
 
         let classifyStarted = false;

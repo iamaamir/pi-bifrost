@@ -1,4 +1,5 @@
 import { resolveStoragePath, readJsonFile, writeJsonFile } from "./storage.ts";
+import { acquireReliabilitySourceFenceSync, releaseReliabilitySourceFence, reliabilitySourceFenceOwned, ReliabilitySourceFenceError } from "./reliability-v1-fence.ts";
 
 export interface ReliabilityConfig {
   enabled?: boolean;
@@ -258,9 +259,22 @@ export function loadReliability(path: string): ReliabilityState {
 }
 
 export function saveReliability(path: string, state: ReliabilityState): void {
+  let owner: ReturnType<typeof acquireReliabilitySourceFenceSync> | undefined;
   try {
+    owner = acquireReliabilitySourceFenceSync(path);
+    if (!reliabilitySourceFenceOwned(owner)) {
+      console.error("[bifrost] reliability source lock ownership changed before save; no state was written, and the lock was left untouched.");
+      return;
+    }
     writeJsonFile(path, state);
-  } catch (err) {
-    console.error(`[bifrost] failed to save reliability state: ${err}`);
+  } catch (error) {
+    console.error(error instanceof ReliabilitySourceFenceError && error.code === "contended"
+      ? "[bifrost] reliability state write skipped because a source lock exists. Stop other writers; if the lock remains, follow the reliability lock recovery guide. Do not remove it based only on age or PID."
+      : "[bifrost] reliability state could not be saved; check the state file and retry.");
+  } finally {
+    if (owner) {
+      try { releaseReliabilitySourceFence(owner); }
+      catch { console.error("[bifrost] reliability source lock ownership changed; the lock was left untouched."); }
+    }
   }
 }

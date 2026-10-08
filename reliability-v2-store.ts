@@ -18,6 +18,18 @@ import {
 } from "./reliability-v2.ts";
 import { convertReliabilityV1Snapshot } from "./reliability-migration.ts";
 import { writeJsonFile } from "./storage.ts";
+import {
+  acquireReliabilitySourceFence,
+  readReliabilitySourceSnapshot,
+  reliabilitySourceFencePath,
+  reliabilitySourceSnapshotStillCurrent,
+  reliabilitySourceStillAbsent,
+  reliabilitySourceFenceOwned,
+  releaseReliabilitySourceFence,
+  type ReliabilitySourceFenceOwner,
+  type ReliabilitySourceSnapshot,
+  ReliabilitySourceFenceError,
+} from "./reliability-v1-fence.ts";
 
 export type ReliabilityV2StoreErrorCode =
   | "invalid_options"
@@ -32,7 +44,12 @@ export type ReliabilityV2StoreErrorCode =
   | "invalid_migration"
   | "backup_conflict"
   | "backup_write_failed"
-  | "state_write_failed";
+  | "state_write_failed"
+  | "source_lock_contended"
+  | "source_lock_failed"
+  | "source_changed"
+  | "source_missing"
+  | "source_exists";
 
 export class ReliabilityV2StoreError extends Error {
   readonly code: ReliabilityV2StoreErrorCode;
@@ -47,6 +64,7 @@ export class ReliabilityV2StoreError extends Error {
 export interface ReliabilityV2StoreIo {
   readState(path: string): unknown;
   writeState(path: string, state: ReliabilityV2State): void;
+  writeMigrationBackup(path: string, snapshot: Buffer): void;
   writeLock(fd: number, contents: string): void;
 }
 
@@ -215,6 +233,7 @@ function defaultReadState(path: string): unknown {
 const DEFAULT_IO: ReliabilityV2StoreIo = {
   readState: defaultReadState,
   writeState: writeJsonFile,
+  writeMigrationBackup,
   writeLock(fd, contents) {
     fs.writeFileSync(fd, contents, "utf8");
     fs.fsyncSync(fd);
@@ -518,37 +537,79 @@ export class ReliabilityV2Store {
     return this.transact((state, now) => abandonReliabilityV2Dispatch(state, { ...request, now }, this.config));
   }
 
-  /** @internal One-purpose initializer used only by explicit v1 migration. */
-  async initializeFromV1Migration(input: { sourceSnapshot: Uint8Array; backupPath: string; sourcePath?: string }): Promise<ReliabilityV2MigrationResult> {
+  /**
+   * @internal One-purpose initializer used only by explicit v1 migration.
+   * With sourcePath, caller bytes are placeholders only and the store reads under the source fence.
+   * Source-free snapshots are detached internal/test inputs, not the registered migration path.
+   */
+  async initializeFromV1Migration(input: { sourceSnapshot: Uint8Array; backupPath: string; sourcePath?: string; requireSourceAbsent?: boolean }): Promise<ReliabilityV2MigrationResult> {
     const inputRecord = plainRecord(input);
-    if (!inputRecord || !exactKeys(inputRecord, ["sourceSnapshot", "backupPath"], ["sourcePath"])) {
+    if (!inputRecord || !exactKeys(inputRecord, ["sourceSnapshot", "backupPath"], ["sourcePath", "requireSourceAbsent"])) {
       throw new ReliabilityV2StoreError("invalid_migration", "Reliability migration input is invalid");
     }
     const rawSnapshot = ownData(inputRecord, "sourceSnapshot");
     const rawBackupPath = ownData(inputRecord, "backupPath");
     const rawSourcePath = ownData(inputRecord, "sourcePath");
+    const rawRequireSourceAbsent = ownData(inputRecord, "requireSourceAbsent");
     if (!(rawSnapshot instanceof Uint8Array) || rawSnapshot.byteLength > 16 * 1024 * 1024
       || typeof rawBackupPath !== "string" || rawBackupPath.length === 0
-      || (rawSourcePath !== undefined && (typeof rawSourcePath !== "string" || rawSourcePath.length === 0))) {
+      || (rawSourcePath !== undefined && (typeof rawSourcePath !== "string" || rawSourcePath.length === 0))
+      || (rawRequireSourceAbsent !== undefined && typeof rawRequireSourceAbsent !== "boolean")
+      || (rawRequireSourceAbsent === true && rawSourcePath === undefined)) {
       throw new ReliabilityV2StoreError("invalid_migration", "Reliability migration input is invalid");
     }
-    const sourceSnapshot = Buffer.from(rawSnapshot);
+    const callerSnapshot = Buffer.from(rawSnapshot);
     const backupPath = resolve(rawBackupPath);
     const sourcePath = rawSourcePath === undefined ? undefined : resolve(rawSourcePath);
+    const sourceLockPath = sourcePath === undefined ? undefined : reliabilitySourceFencePath(sourcePath);
     if (backupPath === this.path || backupPath === this.lockPath || backupPath === sourcePath
+      || backupPath === sourceLockPath || sourcePath === this.path || sourcePath === this.lockPath
+      || sourceLockPath === this.path || sourceLockPath === this.lockPath
       || dirname(backupPath) !== dirname(this.path)) {
       throw new ReliabilityV2StoreError("invalid_migration", "Reliability migration backup path is unsafe");
     }
 
-    const owner = await this.acquireLock();
+    // Preserve idempotence and reject corrupt v2 targets before touching source or backup files.
+    if (targetStat(this.path)) {
+      return { status: "already_initialized", state: this.readSnapshot() };
+    }
+
+    let sourceOwner: ReliabilitySourceFenceOwner | undefined;
+    if (sourcePath !== undefined) {
+      try {
+        sourceOwner = await acquireReliabilitySourceFence(sourcePath, { timeoutMs: this.lockTimeoutMs, pollMs: this.lockPollMs });
+      } catch (error) {
+        throw sourceFenceStoreError(error);
+      }
+    }
+
+    let owner: LockOwner | undefined;
     let result: ReliabilityV2MigrationResult | undefined;
     let failure: unknown;
     try {
+      owner = await this.acquireLock();
       const existing = targetStat(this.path);
       const current = this.loadState(true);
       if (existing) {
         result = { status: "already_initialized", state: current };
       } else {
+        let sourceSnapshot = callerSnapshot;
+        let sourceProof: ReliabilitySourceSnapshot | undefined;
+        if (sourcePath !== undefined) {
+          try {
+            sourceProof = readReliabilitySourceSnapshot(sourcePath);
+          } catch (error) {
+            throw sourceFenceStoreError(error);
+          }
+          if (rawRequireSourceAbsent === true) {
+            if (sourceProof !== undefined) throw new ReliabilityV2StoreError("source_exists", "A v1 reliability source exists; fresh initialization was not performed.");
+            sourceSnapshot = Buffer.from('{"version":1,"models":{}}\n', "utf8");
+          } else {
+            if (sourceProof === undefined) throw new ReliabilityV2StoreError("source_missing", "The v1 reliability source is missing; no migration was performed.");
+            // The bounded read under the shared source fence is authoritative, not the caller's pre-lock snapshot.
+            sourceSnapshot = Buffer.from(sourceProof.bytes);
+          }
+        }
         let seed: ReliabilityV2State;
         try {
           seed = convertReliabilityV1Snapshot(sourceSnapshot, this.config);
@@ -558,12 +619,39 @@ export class ReliabilityV2Store {
         if (!validateReliabilityV2State(seed, this.config)) {
           throw new ReliabilityV2StoreError("invalid_migration", "Reliability v1 snapshot produced invalid v2 state");
         }
+        if (sourceOwner && !reliabilitySourceFenceOwned(sourceOwner)) {
+          throw new ReliabilityV2StoreError("source_lock_failed", "Reliability v1 source lock ownership changed before backup.");
+        }
         if (!sameOwner(this.lockPath, owner)) {
           throw new ReliabilityV2StoreError("lock_owner_lost", "Reliability v2 lock changed before migration backup");
         }
-        writeMigrationBackup(backupPath, sourceSnapshot);
+        let existingBackup: fs.Stats | undefined;
+        try { existingBackup = targetStat(backupPath); }
+        catch { throw new ReliabilityV2StoreError("backup_conflict", "Reliability migration backup path is unsafe or unavailable."); }
+        const aliasesSource = !!existingBackup && !!sourceProof && sameIdentity(existingBackup, sourceProof);
+        const aliasesSourceLock = !!existingBackup && !!sourceOwner && sameIdentity(existingBackup, sourceOwner);
+        const currentV2Lock = targetStat(this.lockPath, "lock");
+        const aliasesV2Lock = !!existingBackup && !!currentV2Lock && sameIdentity(existingBackup, currentV2Lock);
+        if (aliasesSource || aliasesSourceLock || aliasesV2Lock) {
+          throw new ReliabilityV2StoreError("invalid_migration", "Reliability migration paths must refer to separate files.");
+        }
+        this.io.writeMigrationBackup(backupPath, sourceSnapshot);
         if (!sameOwner(this.lockPath, owner)) {
           throw new ReliabilityV2StoreError("lock_owner_lost", "Reliability v2 lock changed before migration commit");
+        }
+        if (sourceOwner && !reliabilitySourceFenceOwned(sourceOwner)) {
+          throw new ReliabilityV2StoreError("source_lock_failed", "Reliability v1 source lock ownership changed before seed commit.");
+        }
+        if (sourcePath !== undefined) {
+          let sourceStillValid: boolean;
+          try {
+            sourceStillValid = sourceProof === undefined
+              ? reliabilitySourceStillAbsent(sourcePath)
+              : reliabilitySourceSnapshotStillCurrent(sourceProof);
+          } catch (error) {
+            throw sourceFenceStoreError(error);
+          }
+          if (!sourceStillValid) throw new ReliabilityV2StoreError("source_changed", "The v1 reliability source changed before migration commit; no v2 state was written.");
         }
         try {
           this.assertSafeStateTarget();
@@ -580,12 +668,25 @@ export class ReliabilityV2Store {
     } catch (error) {
       failure = error;
     }
-    try {
-      releaseLock(owner);
-    } catch (releaseError) {
-      if (failure === undefined) failure = releaseError;
-      else if (failure instanceof Error) {
-        try { Object.defineProperty(failure, "releaseError", { value: releaseError, enumerable: false }); } catch { /* preserve original migration failure */ }
+    if (owner) {
+      try {
+        releaseLock(owner);
+      } catch (releaseError) {
+        if (failure === undefined) failure = releaseError;
+        else if (failure instanceof Error) {
+          try { Object.defineProperty(failure, "releaseError", { value: releaseError, enumerable: false }); } catch { /* preserve original migration failure */ }
+        }
+      }
+    }
+    if (sourceOwner) {
+      try {
+        releaseReliabilitySourceFence(sourceOwner);
+      } catch (releaseError) {
+        const safeError = sourceFenceStoreError(releaseError);
+        if (failure === undefined) failure = safeError;
+        else if (failure instanceof Error) {
+          try { Object.defineProperty(failure, "sourceReleaseError", { value: safeError, enumerable: false }); } catch { /* preserve original migration failure */ }
+        }
       }
     }
     if (failure !== undefined) throw failure;
@@ -691,4 +792,17 @@ export class ReliabilityV2Store {
       }
     }
   }
+}
+
+function sourceFenceStoreError(error: unknown): ReliabilityV2StoreError {
+  if (error instanceof ReliabilitySourceFenceError) {
+    if (error.code === "contended" || error.code === "timeout") {
+      return new ReliabilityV2StoreError("source_lock_contended", "Reliability v1 source is busy; stop other Pi sessions and retry migration.");
+    }
+    if (error.code === "source_changed") {
+      return new ReliabilityV2StoreError("source_changed", "Reliability v1 source changed during migration; no v2 state was committed.");
+    }
+    return new ReliabilityV2StoreError("source_lock_failed", "Reliability v1 source is unsafe or its lock could not be verified; no migration was performed.");
+  }
+  return new ReliabilityV2StoreError("source_lock_failed", "Reliability v1 source lock failed; no migration was performed.");
 }
