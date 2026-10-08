@@ -184,6 +184,14 @@ function statusCategory(value: unknown): FailureCategory | undefined {
   return undefined;
 }
 
+function semanticErrorCodeCategory(input: DataRecord): FailureCategory | undefined {
+  const error = asDataRecord(ownValue(input, "error"));
+  const code = error ? ownValue(error, "code") : undefined;
+  if (code === "usage_limit_reached" || code === "insufficient_quota") return "allowance_exhausted";
+  if (code === "rate_limit_exceeded") return "rate_limit";
+  return undefined;
+}
+
 function textFromRawFields(input: DataRecord): string {
   const chunks: string[] = [];
   let length = 0;
@@ -214,7 +222,7 @@ function textFromRawFields(input: DataRecord): string {
 }
 
 function textCategory(text: string): FailureCategory | undefined {
-  if (/quota\s+(?:is\s+)?exhaust|allowance\s+(?:is\s+)?exhaust|usage\s+limit\s+reached/.test(text)) return "allowance_exhausted";
+  if (/quota\s+(?:is\s+)?exhaust|allowance\s+(?:is\s+)?exhaust|usage\s+limit\s+(?:has\s+been\s+)?reached/.test(text)) return "allowance_exhausted";
   if (/authentication|unauthori[sz]ed|invalid\s+api\s+key|credential/.test(text)) return "authentication";
   if (/billing\s+(?:denied|issue|failure)|payment\s+required/.test(text)) return "billing_denied";
   if (/context\s+(?:length|window|limit)|too\s+many\s+tokens/.test(text)) return "context_limit";
@@ -270,7 +278,8 @@ export function normalizeFailureObservation(
   if (observedAt > now) return undefined;
 
   const structured = asDataRecord(ownValue(input, "structured"));
-  const structuredCategory = structured ? categoryValue(ownValue(structured, "category")) : undefined;
+  const structuredCategory = (structured ? categoryValue(ownValue(structured, "category")) : undefined)
+    ?? semanticErrorCodeCategory(input);
   const structuredStatus = structured ? statusCategory(ownValue(structured, "httpStatus")) : undefined;
   const categoryFromText = textCategory(textFromRawFields(input));
   const category = structuredCategory ?? structuredStatus ?? categoryFromText ?? "unknown";

@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { inspectDiagnostics, validateDiagnostics, type DiagnosticRegistry } from "../diagnostics.ts";
 import { emptyReliabilityState, recordModelFailure, type ReliabilityConfig } from "../reliability.ts";
+import { normalizeFailureObservation } from "../failure-observations.ts";
 import { makeModel } from "./helpers.ts";
 
 function config(overrides: Record<string, unknown> = {}) {
@@ -106,6 +107,42 @@ describe("offline diagnostics", () => {
     } finally {
       Math.random = originalRandom;
     }
+  });
+
+  it("projects only allowlisted allowance evidence and the effective cooldown policy", () => {
+    const candidate = makeModel("fixture", "allowed");
+    const now = 5_000;
+    const observation = normalizeFailureObservation({
+      outcomeId: "inspect-allowance", modelKey: "fixture/allowed", source: "runtime", observedAt: now,
+      structured: { category: "allowance_exhausted" },
+      errorText: "PRIVATE_PROVIDER_ERROR /private/path",
+    }, { now })!;
+    const reliabilityState = recordModelFailure(emptyReliabilityState(), "fixture/allowed", {
+      failureThreshold: 3, cooldownMinutes: 60,
+    }, now, "agent_settled", "PRIVATE_PROVIDER_ERROR", observation);
+    const report = inspectDiagnostics({
+      config: config({ reliability: { cooldownOnAllowanceExhausted: true } }),
+      registry: registry({ all: [candidate] }),
+      reliabilityState,
+      reliabilityConfig: { failureThreshold: 3, cooldownMinutes: 60 },
+      now,
+    });
+    const projection = report.tiers[0]?.candidates[0];
+    assert.deepEqual(report.reliabilityPolicy, { enabled: true, cooldownOnAllowanceExhausted: true });
+    assert.equal(projection?.circuit, "open");
+    assert.deepEqual(projection?.failureEvidence, {
+      category: "allowance_exhausted", evidence: "structured", scope: "model-only",
+    });
+    assert.equal(JSON.stringify(report).includes("PRIVATE_PROVIDER_ERROR"), false);
+    assert.equal(JSON.stringify(report).includes("/private/path"), false);
+
+    const disabled = inspectDiagnostics({
+      config: config({ reliability: { cooldownOnAllowanceExhausted: false } }),
+      registry: registry({ all: [candidate] }),
+      reliabilityState: emptyReliabilityState(),
+      now,
+    });
+    assert.equal(disabled.reliabilityPolicy.cooldownOnAllowanceExhausted, false);
   });
 
   it("reports auth observability as unknown when the host status read throws", () => {

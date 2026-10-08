@@ -367,4 +367,27 @@ describe("experimental reliability v2 file transactions", () => {
     assert.equal(result.state.settledOutcomes["outcome-observation"]?.observation?.category, "transport");
     assert.equal(result.state.settledOutcomes["outcome-observation"]?.observation?.modelKey, "provider/model");
   });
+
+  it("accepts transient allowance evidence without persisting an observation summary", async () => {
+    const directory = tempDirectory();
+    const path = join(directory, "state.json");
+    const store = new ReliabilityV2Store({ path, config });
+    const admitted = await store.admit({
+      ownerToken: "owner-allowance", dispatchId: "dispatch-allowance", outcomeId: "outcome-allowance",
+      modelKeys: ["provider/model"],
+    });
+    assert.equal(admitted.status, "admitted");
+    const observedAt = Date.now();
+    const evidence = normalizeFailureObservation({
+      outcomeId: "outcome-allowance", modelKey: "provider/model", source: "runtime", observedAt,
+      errorText: "The usage limit has been reached.",
+    }, { now: observedAt })!;
+    const settled = await store.settle({
+      ownerToken: "owner-allowance", dispatchId: "dispatch-allowance", outcomeId: "outcome-allowance",
+      settlement: { kind: "failure", allowanceExhaustion: evidence },
+    });
+    assert.equal(settled.status, "settled");
+    assert.ok(settled.state.scopes[modelScopeKey("provider/model")]?.openUntil);
+    assert.equal(settled.state.settledOutcomes["outcome-allowance"]?.observation, undefined);
+  });
 });

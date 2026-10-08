@@ -1913,6 +1913,7 @@ describe("diagnostics commands", () => {
     assert.equal(report.registry.knownModelCount, 1);
     assert.equal(report.registry.availableModelCount, 1);
     assert.equal(report.registry.bifrostLastRefreshAgeMs >= 0, true);
+    assert.deepEqual(report.reliabilityPolicy, { enabled: true, cooldownOnAllowanceExhausted: true });
     assert.deepEqual(report.tiers[0].candidates[0], {
       model: "fixture/known", available: true, auth: "configured", circuit: "open", openUntil: h.reliability.models["fixture/known"].openUntil,
     });
@@ -1982,6 +1983,7 @@ describe("diagnostics commands", () => {
     })).join("\n");
     assert.match(output, /loaded effective config \(run \/bifrost reload after editing files\)/);
     assert.match(output, /Bifrost last registry refresh age:/);
+    assert.match(output, /allowance cooldown=on \(model-only\)/);
     assert.doesNotMatch(output, /provider data freshness/i);
     assert.doesNotMatch(output, /PRIVATE_(?:AUTH|LABEL)_SENTINEL/);
   });

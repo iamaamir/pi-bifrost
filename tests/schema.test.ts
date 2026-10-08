@@ -91,6 +91,17 @@ describe("shipped JSON artifacts", () => {
       && item.then?.properties?.schemaVersion?.const === 2));
   });
 
+  it("documents the default-on, model-only allowance cooldown and explicit opt-out", () => {
+    const schema = readJson("schema.json") as {
+      definitions?: { ReliabilityConfig?: { properties?: { cooldownOnAllowanceExhausted?: { type?: string; default?: unknown; description?: string } } } };
+    };
+    const property = schema.definitions?.ReliabilityConfig?.properties?.cooldownOnAllowanceExhausted;
+    assert.equal(property?.type, "boolean");
+    assert.equal(property?.default, true);
+    assert.match(String(property?.description), /model-only/);
+    assert.match(String(property?.description), /Generic HTTP 429/);
+  });
+
   it("keeps checked-in examples parseable", () => {
     for (const path of [
       "bifrost.json",

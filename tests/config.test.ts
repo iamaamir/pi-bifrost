@@ -242,6 +242,15 @@ describe("validateConfig", () => {
     assert.ok(errors[0].message.includes("integer"));
   });
 
+  it("accepts the default-on model-only allowance cooldown and rejects non-boolean overrides", () => {
+    assert.equal(validateConfig({ ...baseConfig, reliability: {} }).some((issue) => issue.code === "config.reliability_allowance_cooldown_invalid"), false);
+    assert.equal(validateConfig({ ...baseConfig, reliability: { cooldownOnAllowanceExhausted: false } }).some((issue) => issue.code === "config.reliability_allowance_cooldown_invalid"), false);
+    assert.ok(validateConfig({
+      ...baseConfig,
+      reliability: { cooldownOnAllowanceExhausted: "yes" } as never,
+    }).some((issue) => issue.code === "config.reliability_allowance_cooldown_invalid"));
+  });
+
   it("accepts an explicitly disabled v2 policy and rejects unsupported state versions", () => {
     assert.equal(validateConfig({ ...baseConfig, reliability: { stateVersion: 1 } }).some((issue) => issue.code?.startsWith("config.reliability_")), false);
     assert.equal(validateConfig({

@@ -47,6 +47,11 @@ export interface InspectedCandidate {
   readonly auth: AuthObservability;
   readonly circuit: CandidateCircuit;
   readonly openUntil?: number;
+  readonly failureEvidence?: {
+    readonly category: "allowance_exhausted";
+    readonly evidence: "structured" | "text_heuristic";
+    readonly scope: "model-only";
+  };
 }
 
 export interface InspectedTier {
@@ -75,6 +80,10 @@ export interface InspectDiagnosticsReport {
     readonly bifrostLastRefreshAgeMs?: number;
   };
   readonly tiers: readonly InspectedTier[];
+  readonly reliabilityPolicy: {
+    readonly enabled: boolean;
+    readonly cooldownOnAllowanceExhausted: boolean;
+  };
   readonly diagnostics: readonly BifrostDiagnostic[];
 }
 
@@ -234,6 +243,16 @@ function circuitStatus(
   }
 }
 
+function allowanceFailureEvidence(reason: unknown): InspectedCandidate["failureEvidence"] {
+  if (reason === "allowance_exhausted:structured:model-only") {
+    return { category: "allowance_exhausted", evidence: "structured", scope: "model-only" };
+  }
+  if (reason === "allowance_exhausted:text_heuristic:model-only") {
+    return { category: "allowance_exhausted", evidence: "text_heuristic", scope: "model-only" };
+  }
+  return undefined;
+}
+
 /** Build an offline snapshot without route selection, random ranking, or reservation. */
 export function inspectDiagnostics(input: InspectDiagnosticsInput): InspectDiagnosticsReport {
   const now = input.now ?? Date.now();
@@ -260,6 +279,7 @@ export function inspectDiagnostics(input: InspectDiagnosticsInput): InspectDiagn
     const inspected: InspectedCandidate[] = candidates.map((model) => {
       const key = modelKey(model);
       const circuit = circuitStatus(input.reliabilityState, input.reliabilityConfig, key, now);
+      const failureEvidence = allowanceFailureEvidence(input.reliabilityState.models[key]?.lastFailureReason);
       let auth = authByProvider.get(model.provider);
       if (auth === undefined) {
         auth = authStatus(input.registry, model.provider);
@@ -271,6 +291,7 @@ export function inspectDiagnostics(input: InspectDiagnosticsInput): InspectDiagn
         auth,
         circuit: circuit.status,
         ...(circuit.openUntil !== undefined ? { openUntil: circuit.openUntil } : {}),
+        ...(failureEvidence ? { failureEvidence } : {}),
       };
     });
     tiers.push({ tier, configuredEntryCount: modelPoolEntries(input.config, tier).length, candidates: inspected });
@@ -287,6 +308,10 @@ export function inspectDiagnostics(input: InspectDiagnosticsInput): InspectDiagn
         : {}),
     },
     tiers,
+    reliabilityPolicy: {
+      enabled: input.config.reliability?.enabled !== false,
+      cooldownOnAllowanceExhausted: input.config.reliability?.cooldownOnAllowanceExhausted ?? true,
+    },
     diagnostics,
   };
 }

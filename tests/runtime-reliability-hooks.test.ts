@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -156,6 +156,8 @@ describe("reliability settlement through registered Pi hooks", () => {
       assert.equal(record.failures.length, 2);
       assert.ok((record.openUntil ?? 0) > Date.now());
       assert.equal(record.lastFailureReason, "provider request failed");
+      assert.equal(existsSync(join(harness.ctx.cwd, ".pi", "bifrost-debug.jsonl")), false,
+        "debug-disabled routing does not create a log file");
     } finally {
       harness.cleanup();
     }

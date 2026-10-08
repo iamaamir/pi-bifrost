@@ -270,6 +270,7 @@ const routerSnapshotSchema: DataSchema = {
     reliability: {
       enabled: scalar, stateVersion: scalar, observations: { enabled: scalar }, path: scalar,
       failureThreshold: scalar, windowMinutes: scalar, cooldownMinutes: scalar,
+      cooldownOnAllowanceExhausted: scalar,
     },
     affinity: { mode: scalar, providerAdvisory: scalar },
   },

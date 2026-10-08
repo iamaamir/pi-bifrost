@@ -1,5 +1,6 @@
 import { resolveStoragePath, readJsonFile, writeJsonFile } from "./storage.ts";
 import { acquireReliabilitySourceFenceSync, releaseReliabilitySourceFence, reliabilitySourceFenceOwned, ReliabilitySourceFenceError } from "./reliability-v1-fence.ts";
+import { isNormalizedFailureObservation, type FailureObservation } from "./failure-observations.ts";
 
 export interface ReliabilityConfig {
   enabled?: boolean;
@@ -7,6 +8,8 @@ export interface ReliabilityConfig {
   stateVersion?: 1 | 2;
   /** Store only allowlisted failure categories in reliability v2. Disabled by default. */
   observations?: { enabled?: boolean };
+  /** Open a model-only cooldown immediately for a normalized allowance-exhaustion failure. */
+  cooldownOnAllowanceExhausted?: boolean;
   failureThreshold?: number;
   windowMinutes?: number;
   cooldownMinutes?: number;
@@ -40,6 +43,7 @@ export interface CircuitState {
 
 export const DEFAULT_RELIABILITY: Required<Omit<ReliabilityConfig, "path" | "stateVersion" | "observations">> = {
   enabled: true,
+  cooldownOnAllowanceExhausted: true,
   failureThreshold: 3,
   windowMinutes: 5,
   cooldownMinutes: 60,
@@ -48,11 +52,21 @@ export const DEFAULT_RELIABILITY: Required<Omit<ReliabilityConfig, "path" | "sta
 export function resolveReliabilityConfig(config?: ReliabilityConfig): Required<Omit<ReliabilityConfig, "path" | "stateVersion" | "observations">> & Pick<ReliabilityConfig, "path"> {
   return {
     enabled: config?.enabled ?? DEFAULT_RELIABILITY.enabled,
+    cooldownOnAllowanceExhausted: config?.cooldownOnAllowanceExhausted ?? DEFAULT_RELIABILITY.cooldownOnAllowanceExhausted,
     failureThreshold: config?.failureThreshold ?? DEFAULT_RELIABILITY.failureThreshold,
     windowMinutes: config?.windowMinutes ?? DEFAULT_RELIABILITY.windowMinutes,
     cooldownMinutes: config?.cooldownMinutes ?? DEFAULT_RELIABILITY.cooldownMinutes,
     path: config?.path,
   };
+}
+
+/** Exact persisted, content-free marker for a still-active runtime allowance cooldown. */
+export function hasActiveAllowanceCooldown(state: ReliabilityState, model: string, now: number): boolean {
+  const record = state.models[model];
+  return !!record
+    && typeof record.openUntil === "number" && Number.isFinite(record.openUntil) && record.openUntil > now
+    && (record.lastFailureReason === "allowance_exhausted:structured:model-only"
+      || record.lastFailureReason === "allowance_exhausted:text_heuristic:model-only");
 }
 
 export function emptyReliabilityState(): ReliabilityState {
@@ -118,18 +132,38 @@ export function recordModelFailure(
   now: number,
   source: string,
   reason: string,
+  observation?: FailureObservation,
 ): ReliabilityState {
   const resolved = resolveReliabilityConfig(config);
   if (!resolved.enabled) return state;
 
   const current = state.models[model] ?? { failures: [] };
+  const normalizedObservation = observation && isNormalizedFailureObservation(observation, { now })
+    ? observation : undefined;
+  const boundAllowanceObservation = normalizedObservation
+    && normalizedObservation.category === "allowance_exhausted"
+    && normalizedObservation.source === "runtime"
+    && normalizedObservation.modelKey === model
+    && normalizedObservation.scope.kind === "model"
+    && normalizedObservation.scope.modelKey === model
+    ? normalizedObservation : undefined;
   const wasTrial = current.trialActive;
   const multiplier = wasTrial ? (current.cooldownMultiplier ?? 1) * 2 : (current.cooldownMultiplier ?? 1);
   const cooldownMs = resolved.cooldownMinutes * 60_000 * multiplier;
   const failures = [...pruneFailures(current.failures, now, resolved.windowMinutes), now];
-  const openUntil = wasTrial || failures.length >= resolved.failureThreshold
-    ? now + cooldownMs
-    : current.openUntil;
+  const preserveActiveAllowanceMarker = !boundAllowanceObservation
+    && hasActiveAllowanceCooldown(state, model, now);
+  const allowanceCooldownUntil = boundAllowanceObservation && resolved.cooldownOnAllowanceExhausted
+    ? Math.max(current.openUntil ?? 0, now + cooldownMs, trustedAllowanceRetryAt(boundAllowanceObservation, now) ?? 0)
+    : undefined;
+  const openUntil = allowanceCooldownUntil !== undefined
+    ? allowanceCooldownUntil
+    : wasTrial || failures.length >= resolved.failureThreshold
+      ? preserveActiveAllowanceMarker ? Math.max(current.openUntil ?? 0, now + cooldownMs) : now + cooldownMs
+      : current.openUntil;
+  const storedReason = boundAllowanceObservation
+    ? `allowance_exhausted:${boundAllowanceObservation.categoryEvidence}:model-only`
+    : preserveActiveAllowanceMarker ? current.lastFailureReason! : reason;
 
   return {
     ...state,
@@ -143,10 +177,19 @@ export function recordModelFailure(
         cooldownMultiplier: wasTrial ? multiplier : current.cooldownMultiplier,
         lastFailureAt: now,
         lastFailureSource: source,
-        lastFailureReason: reason,
+        lastFailureReason: storedReason,
       },
     },
   };
+}
+
+const MAX_ALLOWANCE_RETRY_HINT_MS = 24 * 60 * 60 * 1000;
+
+function trustedAllowanceRetryAt(observation: FailureObservation, now: number): number | undefined {
+  const retryAt = observation.retryAt;
+  if (retryAt === undefined || !Number.isSafeInteger(retryAt) || retryAt <= now
+    || retryAt - now > MAX_ALLOWANCE_RETRY_HINT_MS) return undefined;
+  return retryAt;
 }
 
 export function recordModelSuccess(

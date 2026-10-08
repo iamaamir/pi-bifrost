@@ -693,6 +693,18 @@ describe("experimental resolve-only router", () => {
       reliability: { stateVersion: 2, observations: { enabled: true } },
     } as unknown as RouterSnapshot["config"] });
     assert.throws(() => createRouter(input), /Unsupported router reliability controls/);
+
+    let calls = 0;
+    const allowanceConfig = {
+      models: { quick: ["fixture/quick-model"] }, default: "quick", rules: [],
+      classifier: { enabled: true },
+      reliability: { cooldownOnAllowanceExhausted: false },
+    } as unknown as RouterSnapshot["config"];
+    assert.throws(() => createRouter(snapshot({ config: allowanceConfig }), {
+      networkClassifierGrant: true,
+      networkClassifier: { classify: async () => { calls += 1; return { tier: "quick", backend: "external" }; } },
+    }), /Unsupported router reliability controls/);
+    assert.equal(calls, 0);
   });
 
   it("rejects accessors, symbols, unknown fields, and nonplain snapshot records without invoking getters", () => {

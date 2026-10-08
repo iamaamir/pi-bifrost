@@ -19,6 +19,7 @@ export function reliabilityV2Config(config?: ReliabilityConfig): ReliabilityV2Co
     failureThreshold: config?.failureThreshold ?? 3,
     windowMs: (config?.windowMinutes ?? 5) * 60_000,
     cooldownMs: (config?.cooldownMinutes ?? 60) * 60_000,
+    cooldownOnAllowanceExhausted: config?.cooldownOnAllowanceExhausted ?? true,
     leaseTtlMs: V2_LEASE_TTL_MS,
     maxDispatchLifetimeMs: V2_MAX_DISPATCH_LIFETIME_MS,
     dedupRetentionMs: V2_MAX_DISPATCH_LIFETIME_MS,

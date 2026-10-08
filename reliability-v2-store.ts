@@ -397,12 +397,14 @@ function safeRequest(value: unknown, required: readonly string[], optional: read
         });
       } else if (key === "settlement") {
         const settlement = plainRecord(item);
-        if (!settlement || !exactKeys(settlement, ["kind"], ["observation"])) return undefined;
+        if (!settlement || !exactKeys(settlement, ["kind"], ["observation", "allowanceExhaustion"])) return undefined;
         const copied: DataRecord = Object.assign(Object.create(null) as DataRecord, { kind: ownData(settlement, "kind") });
-        if (Object.prototype.hasOwnProperty.call(settlement, "observation")) {
-          const observation = safeObservation(ownData(settlement, "observation"));
-          if (!observation) return undefined;
-          copied.observation = observation;
+        for (const key of ["observation", "allowanceExhaustion"] as const) {
+          if (Object.prototype.hasOwnProperty.call(settlement, key)) {
+            const observation = safeObservation(ownData(settlement, key));
+            if (!observation) return undefined;
+            copied[key] = observation;
+          }
         }
         result[key] = copied;
       } else if (item === null || ["string", "number", "boolean", "undefined"].includes(typeof item)) {

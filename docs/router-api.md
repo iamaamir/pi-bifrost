@@ -50,7 +50,7 @@ Classifier and RNG functions are explicit capabilities, not snapshot data. The o
 
 The result contains a normalized route-decision summary, not Pi transport models or provider credentials. Unsupported config fields are rejected. Economic policy and observations must be supplied as an explicit economic snapshot. Results never dispatch or change Pi state.
 
-The resolve-only API accepts only the v1 reliability routing thresholds and `enabled` flag, plus an explicit v1 circuit snapshot. It rejects reliability v2 store and observation controls because resolution cannot reserve a lease or settle a dispatch. A v2 circuit snapshot supplied by a caller remains advisory and does not authorize dispatch.
+The resolve-only API accepts only the v1 reliability routing thresholds and `enabled` flag, plus an explicit v1 circuit snapshot. It rejects reliability v2 store and observation controls, and lifecycle-only policies such as `cooldownOnAllowanceExhausted`, because resolution cannot reserve a lease or settle a dispatch. A v2 circuit snapshot supplied by a caller remains advisory and does not authorize dispatch.
 
 Affinity is off unless schema-v2 config explicitly sets `affinity.mode` to `observe` or `retain-within-tier`. The caller may pass a successful-dispatch anchor and target origin in the router snapshot; the API never invents an anchor. The anchor must be a valid model/provider pair with a timestamp no later than the captured snapshot clock. Malformed or future anchors are rejected when the router is created, before an optional classifier port can run. Forced tiers override a caller's automatic origin.
 

@@ -16,6 +16,7 @@ After configured repeated failures inside a time window, Bifrost opens that mode
 {
   "reliability": {
     "enabled": true,
+    "cooldownOnAllowanceExhausted": true,
     "failureThreshold": 3,
     "windowMinutes": 5,
     "cooldownMinutes": 60
@@ -24,6 +25,10 @@ After configured repeated failures inside a time window, Bifrost opens that mode
 ```
 
 Reliability state persists in `.pi/bifrost-reliability.json`. After cooldown, Bifrost may try that model once. Success restores it; failure keeps it excluded longer.
+
+A normalized runtime `allowance_exhausted` result opens that model's circuit immediately by default, even before `failureThreshold` is reached. `cooldownMinutes` is the minimum cooldown and defaults to 60 minutes; a valid future retry hint may extend it, never shorten it. Set `cooldownOnAllowanceExhausted: false` to keep the ordinary repeated-failure threshold instead. Generic HTTP 429 and `rate_limit` results still use `failureThreshold`.
+
+This signal is model-scoped. Bifrost does not know whether another model shares the same provider account, so it excludes only the reported model and warns that shared scope is unknown. `/bifrost inspect --json` shows the effective setting and allowlisted evidence when available. The warning and debug JSONL event identify the category, evidence kind, and model-only scope; they do not include the provider error text.
 
 Bifrost never automatically replays the prompt that failed. Reliability affects future user turns only.
 
@@ -116,6 +121,12 @@ Default file:
 .pi/bifrost-debug.jsonl
 ```
 
-Normal Bifrost debug events record routing reason, selected tier/model, and timing—not raw prompt bodies.
+When debug is enabled, lifecycle events include a random run ID, a per-session ID, and—when Pi exposes the exact user-message object—a per-turn ID. These IDs are only for log correlation; they are not Pi session/entry IDs or reliability receipt IDs. Auto retry and continuation events reuse the turn ID. V1 settlement is model-scoped, so its event says `model_only` instead of claiming an exact turn match.
+
+The event stream can show request reason, selection or no-route, reliability admission, known outcome, settlement/release result, renewal failure, and manual/config changes. It is best-effort diagnostic evidence, not a provider request ledger: compare it with the Pi session transcript and provider/tool evidence to determine whether Pi retried or side effects occurred. Abrupt process termination can still lose buffered events.
+
+The default file is `.pi/bifrost-debug.jsonl` under the current working directory. A configured relative path is also resolved from that directory; an absolute path is used as given. Bifrost rotates a file larger than 10 MiB to `.old.jsonl`; inspect both files when the session crosses a rotation. On session shutdown Bifrost requests a bounded flush. Lifecycle fields added for this trace contain only static categories, routing reason, model/tier, and random correlation IDs. Review the full file before sharing it, since other enabled diagnostics may have different detail.
+
+For a useful capture, enable debug before starting a fresh Pi process, note the Pi version and start time, reproduce one issue, then close the session normally so the bounded flush runs. Keep the matching Pi transcript and relevant provider/tool outcome separately; do not include prompts, responses, credentials, or raw provider errors when sharing logs.
 
 Direct TypeSafe and Pi-native classifiers have separate reliability circuits. See [Classifier backends](classifiers.md).

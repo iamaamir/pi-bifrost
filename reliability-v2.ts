@@ -6,6 +6,7 @@ export interface ReliabilityV2Config {
   failureThreshold: number;
   windowMs: number;
   cooldownMs: number;
+  cooldownOnAllowanceExhausted?: boolean;
   leaseTtlMs: number;
   maxDispatchLifetimeMs: number;
   dedupRetentionMs: number;
@@ -117,7 +118,7 @@ export interface ReliabilityV2LeaseOperation {
 export type ReliabilityV2Settlement =
   | { kind: "success" }
   | { kind: "cancelled" }
-  | { kind: "failure"; observation?: FailureObservation };
+  | { kind: "failure"; observation?: FailureObservation; allowanceExhaustion?: FailureObservation };
 
 export interface ReliabilityV2SettleRequest {
   ownerToken: string;
@@ -255,7 +256,8 @@ function isConfig(value: unknown): value is ReliabilityV2Config {
     "failureThreshold", "windowMs", "cooldownMs", "leaseTtlMs",
     "maxDispatchLifetimeMs", "dedupRetentionMs",
     "maxDedupEntries", "maxDispatchReceipts",
-  ])) return false;
+  ], ["cooldownOnAllowanceExhausted"])) return false;
+  const allowanceCooldown = ownValue(config, "cooldownOnAllowanceExhausted");
   const threshold = ownValue(config, "failureThreshold");
   const window = ownValue(config, "windowMs");
   const cooldown = ownValue(config, "cooldownMs");
@@ -271,7 +273,8 @@ function isConfig(value: unknown): value is ReliabilityV2Config {
     && safeInteger(lifetime, leaseTtl) && lifetime <= MAX_TIMESTAMP
     && safeInteger(retention, lifetime) && retention <= MAX_TIMESTAMP
     && safeInteger(dedupCapacity, 1) && dedupCapacity <= 1_000_000
-    && safeInteger(receiptCapacity, 1) && receiptCapacity <= 1_000_000;
+    && safeInteger(receiptCapacity, 1) && receiptCapacity <= 1_000_000
+    && (allowanceCooldown === undefined || typeof allowanceCooldown === "boolean");
 }
 
 function nullMap<T>(): Record<string, T> {
@@ -766,9 +769,13 @@ function validSettlement(value: unknown): value is ReliabilityV2Settlement {
   if (!settlement) return false;
   const kind = ownValue(settlement, "kind");
   if (kind === "success" || kind === "cancelled") return hasOnlyKeys(settlement, ["kind"]);
-  return kind === "failure" && hasOnlyKeys(settlement, ["kind"], ["observation"])
-    && (ownValue(settlement, "observation") === undefined
-      || !!normalizeObservationFields(ownValue(settlement, "observation"), MAX_TIMESTAMP));
+  if (kind !== "failure" || !hasOnlyKeys(settlement, ["kind"], ["observation", "allowanceExhaustion"])) return false;
+  const observation = ownValue(settlement, "observation");
+  const allowanceExhaustion = ownValue(settlement, "allowanceExhaustion");
+  const validObservation = observation === undefined || !!normalizeObservationFields(observation, MAX_TIMESTAMP);
+  if (!validObservation || allowanceExhaustion === undefined) return validObservation;
+  const allowance = normalizeObservationFields(allowanceExhaustion, MAX_TIMESTAMP);
+  return !!allowance && allowance.category === "allowance_exhausted" && allowance.source === "runtime";
 }
 
 function observationSummaryForReceipt(
@@ -789,9 +796,19 @@ function observationSummaryForReceipt(
     category: observation.category,
     categoryEvidence: observation.categoryEvidence,
     observedAt: observation.observedAt,
-    ...(observation.retryAt === undefined ? {} : { retryAt: observation.retryAt }),
+    ...(observation.retryAt === undefined || !trustedAllowanceRetryAt(observation, now) && observation.category === "allowance_exhausted"
+      ? {} : { retryAt: observation.retryAt }),
     source: observation.source,
   };
+}
+
+const MAX_ALLOWANCE_RETRY_HINT_MS = 24 * 60 * 60 * 1000;
+
+function trustedAllowanceRetryAt(observation: { retryAt?: number }, now: number): number | undefined {
+  const retryAt = observation.retryAt;
+  if (retryAt === undefined || !timestamp(retryAt) || retryAt <= now
+    || retryAt - now > MAX_ALLOWANCE_RETRY_HINT_MS) return undefined;
+  return retryAt;
 }
 
 function settleDedupExpiry(receipt: ReliabilityV2DispatchReceipt, now: number, retention: number): number | undefined {
@@ -851,6 +868,14 @@ export function settleReliabilityV2Dispatch(
   if (suppliedObservation !== undefined && (!observation || settlement.kind !== "failure")) {
     return noChange("invalid", "invalid_failure_observation_binding", checked.state);
   }
+  const suppliedAllowanceExhaustion = ownValue(plainRecord(settlement)!, "allowanceExhaustion");
+  const allowanceEvidence = observationSummaryForReceipt(suppliedAllowanceExhaustion, receipt, checked.now);
+  if (suppliedAllowanceExhaustion !== undefined && (!allowanceEvidence
+    || allowanceEvidence.category !== "allowance_exhausted"
+    || allowanceEvidence.source !== "runtime"
+    || settlement.kind !== "failure")) {
+    return noChange("invalid", "invalid_allowance_exhaustion_binding", checked.state);
+  }
   const priorOutcome = mapValue(checked.state.settledOutcomes, outcomeId);
   if (priorOutcome && priorOutcome.expiresAt >= checked.now) {
     if (!sameObservationSummary(priorOutcome.observation, observation)) {
@@ -907,12 +932,22 @@ export function settleReliabilityV2Dispatch(
         && previous.lease.expiresAt > checked.now;
       let openUntil = previous.openUntil;
       let cooldownMultiplier = previous.cooldownMultiplier;
+      const allowanceTrigger = allowanceEvidence?.category === "allowance_exhausted" ? allowanceEvidence : observation;
+      const allowanceExhausted = checked.config.cooldownOnAllowanceExhausted !== false
+        && allowanceTrigger?.category === "allowance_exhausted"
+        && allowanceTrigger.source === "runtime"
+        && allowanceTrigger.modelKey === scopeReceipt.modelKey;
       if (admittedTrial) {
         cooldownMultiplier = Math.min((cooldownMultiplier ?? 1) * 2, 1_000_000);
         const delay = checked.config.cooldownMs * cooldownMultiplier;
         const until = safeAdd(checked.now, delay);
         if (until === undefined) return noChange("overflow", "cooldown_time_overflow", checked.state);
-        openUntil = until;
+        openUntil = Math.max(previous.openUntil ?? 0, until,
+          allowanceExhausted ? trustedAllowanceRetryAt(allowanceTrigger!, checked.now) ?? 0 : 0);
+      } else if (allowanceExhausted) {
+        const until = safeAdd(checked.now, checked.config.cooldownMs);
+        if (until === undefined) return noChange("overflow", "cooldown_time_overflow", checked.state);
+        openUntil = Math.max(previous.openUntil ?? 0, until, trustedAllowanceRetryAt(allowanceTrigger!, checked.now) ?? 0);
       } else if (failures.length >= checked.config.failureThreshold
         || previous.openUntil !== undefined && previous.openUntil <= checked.now) {
         const until = safeAdd(checked.now, checked.config.cooldownMs);

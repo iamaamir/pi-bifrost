@@ -12,6 +12,7 @@ import {
   type ReliabilityRecord,
   type ReliabilityState,
 } from "./reliability.ts";
+import type { FailureObservation } from "./failure-observations.ts";
 
 // ── Types ────────────────────────────────────────────────────
 
@@ -82,9 +83,9 @@ export class ReliabilityStore {
 
   // ── Intent-only writes (config read from store internally) ──
 
-  recordFailure(model: string, source: ReliabilitySource, reason: string, now?: number): void {
+  recordFailure(model: string, source: ReliabilitySource, reason: string, now?: number, observation?: FailureObservation): void {
     if (this.configValue?.enabled === false) return;
-    this.stateValue = recordModelFailure(this.stateValue, model, this.configValue, now ?? this.nowFn(), source, reason);
+    this.stateValue = recordModelFailure(this.stateValue, model, this.configValue, now ?? this.nowFn(), source, reason, observation);
     this.persist();
   }
 

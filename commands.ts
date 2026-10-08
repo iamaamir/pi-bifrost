@@ -83,7 +83,7 @@ export interface BifrostState {
   reliabilityV2ConfigValid?: boolean;
   reliabilityV2StateError?: string;
   onConfigInstalled?: (config: BifrostConfig, previousConfig: BifrostConfig) => void;
-  onManualControl?: (session: object) => void;
+  onManualControl?: (session: object, action?: "on" | "off" | "pin" | "unpin") => void;
   /** Read-only projection of the current branch-local successful Auto anchor. */
   getAffinityAnchor?: (ctx: ExtensionContext) => AffinityAnchor | undefined;
   classifierMetricsStore: ClassifierMetricsStore;
@@ -116,6 +116,7 @@ function installConfigIfTierPoliciesValid(
   const totalTimeoutIssue = classifierTotalTimeoutIssue(config);
   if (totalTimeoutIssue) errors.push(totalTimeoutIssue);
   if (errors.length > 0) {
+    debug("config", "reload_rejected", { category: "validation_failed", issueCount: errors.length });
     log(ctx, `Bifrost config reload rejected: ${errors.map((issue) => issue.message).join(" ")}`, "error");
     return false;
   }
@@ -146,6 +147,7 @@ function installReloadedConfig(
   ctx: ExtensionContext,
 ): boolean {
   if (loaded.diagnostics.length > 0) {
+    debug("config", "reload_rejected", { category: "source_invalid", issueCount: loaded.diagnostics.length });
     log(ctx, `Bifrost config reload rejected: ${loaded.diagnostics.map(({ message }) => message).join(" ")}`, "error");
     return false;
   }
@@ -1648,6 +1650,7 @@ interface ReliabilityV2InspectEvidence {
   readonly status: "initialized" | "unavailable";
   readonly revision?: number;
   readonly observationsEnabled: boolean;
+  readonly cooldownOnAllowanceExhausted: boolean;
   readonly scopes?: readonly { readonly model: string; readonly generation: number; readonly recentFailureCount: number; readonly openUntil?: number }[];
   readonly observations?: readonly { readonly model: string; readonly category: string; readonly categoryEvidence: string; readonly observedAt: number; readonly retryAt?: number; readonly source: string }[];
   readonly observationCount?: number;
@@ -1678,13 +1681,20 @@ function inspectReliabilityV2(state: BifrostState): ReliabilityV2InspectEvidence
       status: "initialized",
       revision: snapshot.revision,
       observationsEnabled,
+      cooldownOnAllowanceExhausted: state.config.reliability?.cooldownOnAllowanceExhausted ?? true,
       scopes: projected.slice(0, 200),
       observations: observations.slice(0, 200),
       observationCount: observations.length,
     };
   } catch (error) {
     const code = error instanceof ReliabilityV2StoreError ? error.code : "state_unavailable";
-    return { version: 2, status: "unavailable", observationsEnabled, reasonCode: code };
+    return {
+      version: 2,
+      status: "unavailable",
+      observationsEnabled,
+      cooldownOnAllowanceExhausted: state.config.reliability?.cooldownOnAllowanceExhausted ?? true,
+      reasonCode: code,
+    };
   }
 }
 
@@ -1752,13 +1762,16 @@ function renderDiagnosticLines(report: ValidateDiagnosticsReport | (InspectDiagn
   } else {
     lines.push(`observed: ${formatDiagnosticTimestamp(report.observedAt)}`);
     lines.push(`registry: ${report.registry.knownModelCount} known, ${report.registry.availableModelCount} available`);
+    lines.push(`reliability policy: ${report.reliabilityPolicy.enabled ? "enabled" : "disabled"}; allowance cooldown=${report.reliabilityPolicy.cooldownOnAllowanceExhausted ? "on" : "off"} (model-only)`);
     if (report.registry.bifrostLastRefreshAgeMs !== undefined) {
       lines.push(`Bifrost last registry refresh age: ${report.registry.bifrostLastRefreshAgeMs} ms`);
     }
     for (const tier of report.tiers) {
       lines.push(`${tier.tier}: ${tier.configuredEntryCount} configured entries`);
       for (const candidate of tier.candidates) {
-        lines.push(`  ${candidate.model}: available=${candidate.available}, auth=${candidate.auth}, circuit=${candidate.circuit}${candidate.openUntil === undefined ? "" : ` until ${formatDiagnosticTimestamp(candidate.openUntil)}`}`);
+        const failure = candidate.failureEvidence
+          ? `, lastFailure=${candidate.failureEvidence.category}, evidence=${candidate.failureEvidence.evidence}, scope=${candidate.failureEvidence.scope}` : "";
+        lines.push(`  ${candidate.model}: available=${candidate.available}, auth=${candidate.auth}, circuit=${candidate.circuit}${candidate.openUntil === undefined ? "" : ` until ${formatDiagnosticTimestamp(candidate.openUntil)}`}${failure}`);
       }
     }
     if (report.economics) {
@@ -1774,7 +1787,7 @@ function renderDiagnosticLines(report: ValidateDiagnosticsReport | (InspectDiagn
     }
     if (report.reliabilityV2) {
       const reliability = report.reliabilityV2;
-      lines.push(`reliability v2: ${reliability.status}${reliability.revision === undefined ? "" : ` revision=${reliability.revision}`} observations=${reliability.observationsEnabled ? "on" : "off"}`);
+      lines.push(`reliability v2: ${reliability.status}${reliability.revision === undefined ? "" : ` revision=${reliability.revision}`} observations=${reliability.observationsEnabled ? "on" : "off"} allowanceCooldown=${reliability.cooldownOnAllowanceExhausted ? "on" : "off"}`);
       if (reliability.reasonCode) lines.push(`  reason=${reliability.reasonCode}`);
       for (const scope of reliability.scopes ?? []) {
         lines.push(`  model=${scope.model} generation=${scope.generation} recentFailures=${scope.recentFailureCount}${scope.openUntil === undefined ? "" : ` openUntil=${formatDiagnosticTimestamp(scope.openUntil)}`}`);
@@ -2017,7 +2030,7 @@ export function createCommandRouter(
 ): (args: string, ctx: ExtensionContext) => Promise<void> {
   const routes: CommandEntry[] = [
     exact("on", (_, ctx) => {
-      state.onManualControl?.(ctx.sessionManager);
+      state.onManualControl?.(ctx.sessionManager, "on");
       state.enabled = true;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
@@ -2026,7 +2039,7 @@ export function createCommandRouter(
     }),
     exact("off", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
-      state.onManualControl?.(ctx.sessionManager);
+      state.onManualControl?.(ctx.sessionManager, "off");
       state.enabled = false;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
@@ -2035,7 +2048,7 @@ export function createCommandRouter(
     }),
     exact("pin", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
-      state.onManualControl?.(ctx.sessionManager);
+      state.onManualControl?.(ctx.sessionManager, "pin");
       state.pinned = true;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
@@ -2043,7 +2056,7 @@ export function createCommandRouter(
       log(ctx, "Bifrost pinned");
     }),
     exact("unpin", (_, ctx) => {
-      state.onManualControl?.(ctx.sessionManager);
+      state.onManualControl?.(ctx.sessionManager, "unpin");
       state.pinned = false;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);

@@ -301,6 +301,11 @@
           "description": "How long an opened circuit stays open before model becomes eligible again.",
           "default": 60
         },
+        "cooldownOnAllowanceExhausted": {
+          "type": "boolean",
+          "description": "Immediately open a model-only circuit for a normalized explicit usage-allowance exhaustion. Generic HTTP 429/rate-limit failures keep using failureThreshold. Set false to disable this immediate cooldown.",
+          "default": true
+        },
         "stateVersion": {
           "type": "integer",
           "enum": [1, 2],

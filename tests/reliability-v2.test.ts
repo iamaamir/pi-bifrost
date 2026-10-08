@@ -363,6 +363,95 @@ describe("experimental reliability v2 transitions", () => {
     assert.equal(Object.hasOwn(settled.state.settledOutcomes["outcome-observe"]!.observation!, "outcomeId"), false);
   });
 
+  it("opens immediately for runtime allowance exhaustion, keeps generic 429 at threshold, and honors opt-out", () => {
+    const policy = { ...config, failureThreshold: 3, cooldownMs: 60_000 };
+    const admitted = admit(emptyReliabilityV2State(), "dispatch-allowance", "outcome-allowance", "owner-allowance", [modelA], 1, policy);
+    const allowance = normalizeFailureObservation({
+      outcomeId: "outcome-allowance", modelKey: modelA, source: "runtime", observedAt: 2,
+      structured: { category: "allowance_exhausted", retryAt: 3 },
+      errorText: "private usage-limit response",
+    }, { now: 2 })!;
+    const settled = settleReliabilityV2Dispatch(admitted.state, {
+      ownerToken: "owner-allowance", dispatchId: "dispatch-allowance", outcomeId: "outcome-allowance",
+      settlement: { kind: "failure", observation: allowance }, now: 3,
+    }, policy);
+    assert.equal(settled.status, "settled");
+    assert.equal(scope(settled.state).openUntil, 60_003,
+      "a short retry hint cannot shorten the configured minimum cooldown");
+    assert.equal(settled.state.settledOutcomes["outcome-allowance"]?.observation?.category, "allowance_exhausted");
+    assert.equal(JSON.stringify(settled.state).includes("private usage-limit response"), false);
+
+    const rateLimitConfig = { ...policy, failureThreshold: 2 };
+    const rateAdmitted = admit(emptyReliabilityV2State(), "dispatch-429", "outcome-429", "owner-429", [modelA], 1, rateLimitConfig);
+    const rateLimit = normalizeFailureObservation({
+      outcomeId: "outcome-429", modelKey: modelA, source: "runtime", observedAt: 2,
+      structured: { httpStatus: 429 },
+    }, { now: 2 })!;
+    assert.equal(rateLimit.category, "rate_limit");
+    const rateSettled = settleReliabilityV2Dispatch(rateAdmitted.state, {
+      ownerToken: "owner-429", dispatchId: "dispatch-429", outcomeId: "outcome-429",
+      settlement: { kind: "failure", observation: rateLimit }, now: 3,
+    }, rateLimitConfig);
+    assert.equal(scope(rateSettled.state).openUntil, undefined,
+      "generic HTTP 429 remains subject to failureThreshold");
+
+    const optOutConfig = { ...policy, cooldownOnAllowanceExhausted: false };
+    const optedAdmitted = admit(emptyReliabilityV2State(), "dispatch-opt-out", "outcome-opt-out", "owner-opt-out", [modelA], 1, optOutConfig);
+    const optedObservation = normalizeFailureObservation({
+      outcomeId: "outcome-opt-out", modelKey: modelA, source: "runtime", observedAt: 2,
+      structured: { category: "allowance_exhausted" },
+    }, { now: 2 })!;
+    const optedSettled = settleReliabilityV2Dispatch(optedAdmitted.state, {
+      ownerToken: "owner-opt-out", dispatchId: "dispatch-opt-out", outcomeId: "outcome-opt-out",
+      settlement: { kind: "failure", observation: optedObservation }, now: 3,
+    }, optOutConfig);
+    assert.equal(scope(optedSettled.state).openUntil, undefined);
+
+    const probeConfig = { ...policy, failureThreshold: 2 };
+    const probeAdmitted = admit(emptyReliabilityV2State(), "dispatch-probe", "outcome-probe", "owner-probe", [modelA], 1, probeConfig);
+    const probeObservation = normalizeFailureObservation({
+      outcomeId: "outcome-probe", modelKey: modelA, source: "probe", observedAt: 2,
+      structured: { category: "allowance_exhausted" },
+    }, { now: 2 })!;
+    const probeSettled = settleReliabilityV2Dispatch(probeAdmitted.state, {
+      ownerToken: "owner-probe", dispatchId: "dispatch-probe", outcomeId: "outcome-probe",
+      settlement: { kind: "failure", observation: probeObservation }, now: 3,
+    }, probeConfig);
+    assert.equal(scope(probeSettled.state).openUntil, undefined,
+      "non-runtime observations cannot promote quota-like probe errors into hard cooldowns");
+  });
+
+  it("consumes default-on allowance evidence without persisting optional observation summaries", () => {
+    const policy = { ...config, failureThreshold: 3, cooldownMs: 60_000 };
+    const admitted = admit(emptyReliabilityV2State(), "dispatch-enforce-only", "outcome-enforce-only", "owner-enforce-only", [modelA], 1, policy);
+    const evidence = normalizeFailureObservation({
+      outcomeId: "outcome-enforce-only", modelKey: modelA, source: "runtime", observedAt: 2,
+      errorText: "The usage limit has been reached.",
+    }, { now: 2 })!;
+    assert.equal(evidence.category, "allowance_exhausted");
+    const settled = settleReliabilityV2Dispatch(admitted.state, {
+      ownerToken: "owner-enforce-only", dispatchId: "dispatch-enforce-only", outcomeId: "outcome-enforce-only",
+      settlement: { kind: "failure", allowanceExhaustion: evidence }, now: 3,
+    }, policy);
+    assert.equal(settled.status, "settled");
+    assert.equal(scope(settled.state).openUntil, 60_003);
+    assert.equal(settled.state.settledOutcomes["outcome-enforce-only"]?.observation, undefined,
+      "policy evidence is used for enforcement but is not stored when observation recording is off");
+    assert.equal(JSON.stringify(settled.state).includes("usage limit"), false);
+
+    const probeAdmitted = admit(emptyReliabilityV2State(), "dispatch-untrusted", "outcome-untrusted", "owner-untrusted", [modelA], 1, policy);
+    const probeEvidence = normalizeFailureObservation({
+      outcomeId: "outcome-untrusted", modelKey: modelA, source: "probe", observedAt: 2,
+      structured: { category: "allowance_exhausted" },
+    }, { now: 2 })!;
+    const rejected = settleReliabilityV2Dispatch(probeAdmitted.state, {
+      ownerToken: "owner-untrusted", dispatchId: "dispatch-untrusted", outcomeId: "outcome-untrusted",
+      settlement: { kind: "failure", allowanceExhaustion: probeEvidence }, now: 3,
+    }, policy);
+    assert.equal(rejected.status, "invalid", "only a runtime-bound provider outcome may request hard allowance handling");
+    assert.deepEqual(rejected.state, probeAdmitted.state);
+  });
+
   it("accepts actual normalized unknown and text evidence with retry timing", () => {
     const cases = [
       {

@@ -1,4 +1,5 @@
 import { dispatchTrialPolicy, type DispatchIntent } from "./virtual-routing.ts";
+import type { FailureObservation } from "./failure-observations.ts";
 
 interface AssistantOutcome {
   role?: unknown;
@@ -18,6 +19,7 @@ export interface RuntimeFailure {
   model: string;
   outcome: "success" | "failure" | "abandoned";
   reason?: string;
+  failureObservation?: FailureObservation;
 }
 
 const SUCCESS_STOP_REASONS = new Set(["stop", "length", "toolUse"]);
@@ -91,7 +93,10 @@ export class RuntimeReliabilityTracker {
     this.pending.delete(selectedModel);
   }
 
-  observe(messages: readonly AssistantOutcome[]): void {
+  observe(
+    messages: readonly AssistantOutcome[],
+    classifyFailure?: (model: string, message: AssistantOutcome) => FailureObservation | undefined,
+  ): void {
     for (const model of this.pending.keys()) {
       let last: AssistantOutcome | undefined;
       for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -104,10 +109,18 @@ export class RuntimeReliabilityTracker {
       if (!last) continue;
       if (last.stopReason === "error") {
         const rawReason = typeof last.errorMessage === "string" ? last.errorMessage : "";
+        let failureObservation: FailureObservation | undefined;
+        try {
+          const candidate = classifyFailure?.(model, last);
+          if (candidate?.modelKey === model && candidate.category === "allowance_exhausted"
+            && candidate.source === "runtime" && candidate.scope.kind === "model"
+            && candidate.scope.modelKey === model) failureObservation = candidate;
+        } catch { /* failure classification cannot change host settlement */ }
         this.pending.set(model, {
           model,
           outcome: "failure",
           reason: rawReason.trim() ? rawReason : "provider request failed",
+          ...(failureObservation ? { failureObservation } : {}),
         });
       } else if (typeof last.stopReason === "string" && SUCCESS_STOP_REASONS.has(last.stopReason)) {
         this.pending.set(model, { model, outcome: "success" });

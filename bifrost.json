@@ -26,6 +26,7 @@
 
   "reliability": {
     "enabled": true,
+    "cooldownOnAllowanceExhausted": true,
     "failureThreshold": 3,
     "windowMinutes": 5,
     "cooldownMinutes": 60

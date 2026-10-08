@@ -39,8 +39,7 @@ describe("packed experimental router consumer", () => {
       const rootSources = readdirSync(process.cwd()).filter((path) => path.endsWith(".ts"));
       const routerGraph = [
         "cache", "classification-pipeline", "classifier-backends", "classifier", "config", "debug",
-        "affinity", "economic-preferences", "economic-signals", "inline-override", "reliability", "reliability-v1-fence", "router", "routing", "session-fallback",
-        "storage", "virtual-model",
+        "affinity", "economic-preferences", "economic-signals", "failure-observations", "inline-override", "reliability", "reliability-v1-fence", "router", "routing", "session-fallback", "storage", "virtual-model",
       ].flatMap((name) => [`dist/router/${name}.js`, `dist/router/${name}.d.ts`]);
       const archivePaths = packed.files.map((file) => file.path);
       for (const required of [

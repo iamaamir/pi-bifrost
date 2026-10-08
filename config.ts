@@ -592,7 +592,11 @@ export function validateConfig(
         issues.push({ severity: "error", code: "config.reliability_observations_invalid", path: "reliability.observations", message: "reliability.observations supports only a boolean enabled field." });
       }
     }
-    const known = new Set(["enabled", "failureThreshold", "windowMinutes", "cooldownMinutes", "path", "stateVersion", "observations"]);
+    if (reliabilityRecord.cooldownOnAllowanceExhausted !== undefined
+      && typeof reliabilityRecord.cooldownOnAllowanceExhausted !== "boolean") {
+      reliabilityProblem("config.reliability_allowance_cooldown_invalid", "reliability.cooldownOnAllowanceExhausted", "reliability.cooldownOnAllowanceExhausted must be a boolean.");
+    }
+    const known = new Set(["enabled", "failureThreshold", "windowMinutes", "cooldownMinutes", "path", "stateVersion", "observations", "cooldownOnAllowanceExhausted"]);
     if (Object.keys(reliabilityRecord).some((key) => !known.has(key))) {
       issues.push({ severity: "error", code: "config.reliability_unknown_field", path: "reliability", message: "reliability contains an unsupported field." });
     }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -14,7 +14,178 @@ import { TYPE_SAFE_API_KEY_ENV } from "../classifier-backends.ts";
 import { CLASSIFIER_BACKEND_IDS } from "../classifier-backends.ts";
 import { makeModel, makePiClassifierModel } from "./helpers.ts";
 
+async function runAllowanceRuntime({ reloadOptOut = false }: { reloadOptOut?: boolean } = {}) {
+  const previousCwd = process.cwd();
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const cwd = mkdtempSync(join(tmpdir(), "bifrost-v2-allowance-runtime-"));
+  const agentDir = join(cwd, "agent");
+  const configDir = join(cwd, ".pi");
+  mkdirSync(agentDir, { recursive: true });
+  mkdirSync(configDir, { recursive: true });
+  const config = {
+    schemaVersion: 2,
+    enabled: true,
+    default: "quick",
+    strategy: "first",
+    classifier: { enabled: false },
+    models: { quick: ["fixture/allowed"] },
+    reliability: { stateVersion: 2, failureThreshold: 3, windowMinutes: 10, cooldownMinutes: 1 },
+    rules: [],
+  } as const;
+  const configPath = join(configDir, "bifrost.json");
+  writeFileSync(configPath, JSON.stringify(config));
+  const user = { role: "user", content: [{ type: "text", text: "fresh user turn" }] } as const;
+  const branch: SessionMessageEntry[] = [{ type: "message", id: "user-allowance", parentId: "root", timestamp: new Date().toISOString(), message: user as never }];
+  const model = makeModel("fixture", "allowed");
+  const handlers = new Map<string, (event: never, ctx: ExtensionContext) => Promise<unknown>>();
+  let routeDefinition: VirtualModelDefinition | undefined;
+  let commandHandler: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
+  const ctx = {
+    cwd, mode: "rpc", hasUI: false,
+    model: { ...makeModel(BIFROST_AUTO_PROVIDER, BIFROST_AUTO_ID), api: "pi-virtual" },
+    modelRegistry: {
+      getAvailable: () => [model],
+      find: (provider: string, id: string) => provider === model.provider && id === model.id ? model : undefined,
+      getAvailableOfType: async () => [],
+      getModelOfType: () => undefined,
+      getProviderAuthStatus: () => ({ configured: false }),
+      refresh: async () => ({ refreshed: [], errors: [] }),
+    },
+    sessionManager: { getHeader: () => ({ id: "session-allowance" }), getBranch: () => branch },
+    ui: { notify: () => {}, setStatus: () => {}, setWorkingMessage: () => {}, setWorkingVisible: () => {} },
+  } as unknown as ExtensionContext;
+  const pi = {
+    registerVirtualModel: (definition: VirtualModelDefinition) => { routeDefinition = definition; },
+    registerCommand: (_name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => { commandHandler = options.handler; },
+    on: (event: string, handler: (event: never, ctx: ExtensionContext) => Promise<unknown>) => { handlers.set(event, handler); return () => {}; },
+    setModel: async () => true,
+  } as unknown as ExtensionAPI;
+  try {
+    process.chdir(cwd);
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    bifrostExtension(pi);
+    assert.ok(routeDefinition?.route && commandHandler);
+    await commandHandler("reliability migrate --fresh", ctx);
+    if (reloadOptOut) {
+      writeFileSync(configPath, JSON.stringify({ ...config, reliability: { ...config.reliability, cooldownOnAllowanceExhausted: false } }));
+      await commandHandler("reload", ctx);
+    }
+    const route = routeDefinition.route as (request: ModelRouteRequest, ctx: ExtensionContext) => Promise<{ model: unknown }>;
+    const request = { model: ctx.model, reason: "user", thinkingLevel: "low", messages: [user] } as unknown as ModelRouteRequest;
+    assert.equal((await route(request, ctx)).model, model);
+    const assistant = {
+      role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id,
+      stopReason: "error", errorMessage: "The usage limit has been reached.", timestamp: Date.now(),
+    } as const;
+    branch.push({ type: "message", id: "assistant-allowance", parentId: "user-allowance", timestamp: new Date().toISOString(), message: assistant as never });
+    await handlers.get("turn_end")?.({ messageEntryId: "assistant-allowance", message: assistant } as never, ctx);
+    await handlers.get("agent_settled")?.({} as never, ctx);
+    const state = new ReliabilityV2Store({ path: reliabilityV2Path(cwd), config: reliabilityV2Config(reloadOptOut
+      ? { ...config.reliability, cooldownOnAllowanceExhausted: false }
+      : config.reliability), requireInitialized: true }).readSnapshot();
+    return state;
+  } finally {
+    process.chdir(previousCwd);
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}
+
 describe("reliability v2 registered Auto runtime", () => {
+  it("fails closed before a registered prompt-classifier call if the v2 snapshot becomes unreadable after preflight", async () => {
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-v2-classifier-state-race-"));
+    const agentDir = join(cwd, "agent");
+    const configDir = join(cwd, ".pi");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(configDir, { recursive: true });
+    const config = {
+      schemaVersion: 2,
+      enabled: true,
+      default: "quick",
+      strategy: "first",
+      classifier: { enabled: true, backend: "prompt", model: "fixture/classifier" },
+      models: { quick: ["fixture/healthy"] },
+      reliability: { stateVersion: 2, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 1 },
+      rules: [],
+    } as const;
+    writeFileSync(join(configDir, "bifrost.json"), JSON.stringify(config));
+    const user = { role: "user", content: [{ type: "text", text: "route without an unavailable classifier" }] } as const;
+    const branch: SessionMessageEntry[] = [{ type: "message", id: "race-user", parentId: "root", timestamp: new Date().toISOString(), message: user as never }];
+    const classifier = makeModel("fixture", "classifier");
+    const healthy = makeModel("fixture", "healthy");
+    const v2Path = reliabilityV2Path(cwd);
+    const handlers = new Map<string, (event: never, ctx: ExtensionContext) => Promise<unknown>>();
+    let routeDefinition: VirtualModelDefinition | undefined;
+    let commandHandler: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
+    let classifierCalls = 0;
+    let refreshCalls = 0;
+    const ctx = {
+      cwd, mode: "rpc", hasUI: false,
+      model: { ...makeModel(BIFROST_AUTO_PROVIDER, BIFROST_AUTO_ID), api: "pi-virtual" },
+      modelRegistry: {
+        getAvailable: () => [classifier, healthy],
+        find: (provider: string, id: string) => [classifier, healthy].find((model) => model.provider === provider && model.id === id),
+        getAvailableOfType: async () => [],
+        getModelOfType: () => undefined,
+        getProviderAuthStatus: () => ({ configured: false }),
+        streamSimple: () => {
+          classifierCalls += 1;
+          return { result: async () => ({ content: [{ type: "text", text: "quick" }] }) };
+        },
+        refresh: async () => {
+          refreshCalls += 1;
+          writeFileSync(v2Path, "{invalid sidecar");
+          return { refreshed: [], errors: new Map() };
+        },
+      },
+      sessionManager: { getHeader: () => ({ id: "session-classifier-state-race" }), getBranch: () => branch },
+      ui: { notify: () => {}, setStatus: () => {}, setWorkingMessage: () => {}, setWorkingVisible: () => {} },
+    } as unknown as ExtensionContext;
+    const pi = {
+      registerVirtualModel: (definition: VirtualModelDefinition) => { routeDefinition = definition; },
+      registerCommand: (_name: string, options: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => { commandHandler = options.handler; },
+      on: (event: string, handler: (event: never, ctx: ExtensionContext) => Promise<unknown>) => { handlers.set(event, handler); return () => {}; },
+      setModel: async () => true,
+    } as unknown as ExtensionAPI;
+
+    try {
+      process.chdir(cwd);
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      bifrostExtension(pi);
+      assert.ok(routeDefinition?.route && commandHandler);
+      await commandHandler("reliability migrate --fresh", ctx);
+      const request = { model: ctx.model, reason: "user", thinkingLevel: "low", messages: [user] } as unknown as ModelRouteRequest;
+      const route = routeDefinition.route as (request: ModelRouteRequest, ctx: ExtensionContext) => Promise<unknown>;
+      await assert.rejects(route(request, ctx));
+      assert.equal(refreshCalls, 1, "the test invalidates state only after the route preflight read");
+      assert.equal(classifierCalls, 0, "an unreadable required v2 snapshot must suppress the registered classifier request");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("enforces allowance cooldown with observations off, and honors a reload opt-out", async () => {
+    const enforced = await runAllowanceRuntime();
+    const enforcedScope = enforced.scopes[modelScopeKey("fixture/allowed")];
+    assert.ok(enforcedScope?.openUntil && enforcedScope.openUntil > Date.now(),
+      "a runtime-bound allowance observation should immediately cool down the selected model");
+    assert.equal(enforcedScope?.failures.length, 1);
+    assert.equal(Object.values(enforced.settledOutcomes).some((outcome) => outcome.observation !== undefined), false,
+      "enforcement evidence must not silently enable optional observation persistence");
+
+    const optedOut = await runAllowanceRuntime({ reloadOptOut: true });
+    const optedOutScope = optedOut.scopes[modelScopeKey("fixture/allowed")];
+    assert.equal(optedOutScope?.openUntil, undefined,
+      "a valid reload with cooldownOnAllowanceExhausted=false restores threshold behavior");
+    assert.equal(optedOutScope?.failures.length, 1);
+  });
+
   it("binds the latest real branch user despite a trailing synthetic user message and stores only normalized failure evidence", async () => {
     const previousCwd = process.cwd();
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -33,6 +204,7 @@ describe("reliability v2 registered Auto runtime", () => {
       models: { quick: ["fixture/allowed"] },
       affinity: { mode: "observe" },
       reliability: { stateVersion: 2, observations: { enabled: true }, failureThreshold: 2 },
+      debug: { enabled: true, path: "trace.jsonl" },
       rules: [],
     } as const;
     writeFileSync(join(configDir, "bifrost.json"), JSON.stringify(config));
@@ -234,6 +406,33 @@ describe("reliability v2 registered Auto runtime", () => {
       assert.equal(inspection.affinity?.status, "anchored");
       assert.equal(inspection.affinity?.anchor?.model, "fixture/allowed");
       assert.equal(JSON.stringify(inspection).includes("user-entry"), false);
+      const noRouteUser = { role: "user", content: [{ type: "text", text: "no route fixture prompt" }] } as const;
+      branch.push({ type: "message", id: "user-entry-no-route", parentId: "assistant-entry-2-success", timestamp: new Date().toISOString(), message: noRouteUser as never });
+      writeFileSync(join(configDir, "bifrost.json"), JSON.stringify({ ...config, models: { quick: ["fixture/missing"] } }));
+      await commandHandler("reload", ctx);
+      await assert.rejects(route({ ...request, messages: [noRouteUser] } as unknown as ModelRouteRequest, ctx), /no healthy physical model for tier quick/);
+      await handlers.get("session_shutdown")?.({} as never, ctx);
+      const traceText = readFileSync(join(cwd, "trace.jsonl"), "utf8");
+      const trace = traceText.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+      const lifecycle = trace.filter((row) => ["request", "selected", "admitted", "outcome_observed", "receipt_settled", "route_rejected", "no_route"].includes(String(row.event)));
+      const retryEvent = lifecycle.find((row) => row.event === "request" && row.reason === "retry");
+      assert.ok(retryEvent?.turn_correlation_id, "Pi retry receives a log-only turn correlation ID");
+      assert.equal(retryEvent?.session_correlation_id !== undefined, true);
+      assert.equal(retryEvent?.run_correlation_id !== undefined, true);
+      assert.ok(lifecycle.some((row) => row.event === "request" && row.reason === "user" && row.turn_correlation_id === retryEvent.turn_correlation_id),
+        "the retry shares its original fresh user turn correlation");
+      assert.ok(lifecycle.some((row) => row.event === "outcome_observed" && row.outcome === "failure" && row.turn_correlation_id === retryEvent.turn_correlation_id));
+      assert.ok(lifecycle.some((row) => row.event === "outcome_observed" && row.outcome === "success" && row.turn_correlation_id === retryEvent.turn_correlation_id));
+      assert.ok(lifecycle.some((row) => row.event === "receipt_settled" && row.status === "confirmed" && row.turn_correlation_id === retryEvent.turn_correlation_id));
+      assert.ok(lifecycle.some((row) => row.event === "route_rejected" && row.category === "reliability_state_unavailable"));
+      assert.ok(lifecycle.some((row) => row.event === "route_rejected" && row.category === "boundary_changed"),
+        "a branch race is logged as a static cancellation category");
+      assert.ok(lifecycle.some((row) => row.event === "no_route" && row.category === "requested_tier_unavailable"),
+        "strict no-route is distinguishable from provider dispatch failure");
+      assert.ok(lifecycle.some((row) => row.event === "route_rejected" && row.category === "policy_no_route"));
+      for (const receiptId of secondReceiptIds) assert.equal(traceText.includes(receiptId), false, "internal receipt IDs are not logged");
+      assert.equal(traceText.includes("secret-user-request-token"), false);
+      assert.equal(traceText.includes("do the task"), false);
     } finally {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;

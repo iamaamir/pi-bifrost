@@ -61,6 +61,55 @@ describe("failure observation normalization", () => {
     assert.equal(heuristic?.categoryEvidence, "text_heuristic");
   });
 
+  it("recognizes the reported exhausted-usage wording without retaining its text", () => {
+    const errorText = "Error: Codex error: The usage limit has been reached";
+    const observation = normalizeFailureObservation({ ...base, errorText }, { now: 1000 });
+    assert.equal(observation?.category, "allowance_exhausted");
+    assert.equal(observation?.categoryEvidence, "text_heuristic");
+    assert.equal(JSON.stringify(observation).includes(errorText), false);
+  });
+
+  it("does not treat Pi's ambiguous friendly usage-limit message as hard exhaustion", () => {
+    const observation = normalizeFailureObservation({
+      ...base,
+      errorText: "You have hit your ChatGPT usage limit",
+    }, { now: 1000 });
+    assert.equal(observation?.category, "unknown");
+    assert.equal(observation?.categoryEvidence, "unknown");
+  });
+
+  it("treats specific usage quota codes as allowance exhaustion but generic rate limits as rate limits", () => {
+    for (const code of ["usage_limit_reached", "insufficient_quota"]) {
+      const observation = normalizeFailureObservation({ ...base, error: { code } }, { now: 1000 });
+      assert.equal(observation?.category, "allowance_exhausted", code);
+      assert.equal(observation?.categoryEvidence, "structured", code);
+      assert.equal(JSON.stringify(observation).includes(code), false);
+    }
+
+    const rateLimitCode = normalizeFailureObservation({ ...base, error: { code: "rate_limit_exceeded" } }, { now: 1000 });
+    assert.equal(rateLimitCode?.category, "rate_limit");
+    assert.equal(rateLimitCode?.categoryEvidence, "structured");
+
+    const friendlyRateLimit = normalizeFailureObservation({
+      ...base,
+      error: { code: "rate_limit_exceeded", message: "You have hit your ChatGPT usage limit" },
+    }, { now: 1000 });
+    assert.equal(friendlyRateLimit?.category, "rate_limit");
+    assert.equal(friendlyRateLimit?.categoryEvidence, "structured");
+
+    const explicitRateLimit = normalizeFailureObservation({
+      ...base,
+      structured: { httpStatus: 429 },
+      errorText: "The usage limit has been reached",
+    }, { now: 1000 });
+    assert.equal(explicitRateLimit?.category, "rate_limit");
+    assert.equal(explicitRateLimit?.categoryEvidence, "http_status");
+
+    const status = normalizeFailureObservation({ ...base, structured: { httpStatus: 429 } }, { now: 1000 });
+    assert.equal(status?.category, "rate_limit");
+    assert.equal(status?.categoryEvidence, "http_status");
+  });
+
   it("keeps HTTP 429 and 503 model-scoped and ignores supplied broader scopes", () => {
     for (const [httpStatus, category] of [[429, "rate_limit"], [503, "overload"]] as const) {
       const observation = normalizeFailureObservation({
