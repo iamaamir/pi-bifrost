@@ -6,17 +6,63 @@ import { CLASSIFIER_BACKEND_IDS, type ClassificationJudgment, type ClassifierOut
 import type { EconomicCandidateEvaluation } from "./routing.ts";
 import type { BillingPreferenceProjection } from "./economic-preferences.ts";
 import type { AffinityRouteObservation } from "./affinity.ts";
+import type { TypeSafeOutcome } from "./classifier-metrics.ts";
 import { performance } from "node:perf_hooks";
 
 // ── ADT result type ────────────────────────────────────────────
 
 export type ClassificationSource = "cache" | "classifier" | "regex" | "inline";
 export type ClassificationOutcome = "deadline" | "aborted";
+export type ClassifierFallbackKind = "none" | "prompt" | "regex" | "default";
+
+export interface DirectClassifierObservation {
+  readonly backend: "typesafe" | "pi-native";
+  readonly outcome: TypeSafeOutcome;
+  readonly model?: string;
+  readonly circuitOpenUntil?: number;
+}
+
+export interface DirectClassifierAttempt {
+  readonly kind: "direct-classifier-attempt";
+  readonly judgment?: ClassificationJudgment;
+  readonly observation?: DirectClassifierObservation;
+}
+
+export interface ClassifierAttemptSummary extends DirectClassifierObservation {
+  readonly fallbackKind: ClassifierFallbackKind;
+  readonly fallbackModel?: string;
+}
+
+export type DirectClassifierOutput = ClassificationJudgment | DirectClassifierAttempt | undefined;
+
+const DIRECT_CLASSIFIER_OUTCOMES = new Set<TypeSafeOutcome>([
+  "success", "missing_key", "missing_catalog", "unsupported", "circuit_open", "aborted", "timeout",
+  "network", "auth", "rate_limited", "http", "invalid_response", "low_confidence",
+]);
+
+function safeModelId(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value)
+    ? value
+    : undefined;
+}
+
+function safeDirectObservation(value: DirectClassifierObservation | undefined): DirectClassifierObservation | undefined {
+  if (!value || (value.backend !== "typesafe" && value.backend !== "pi-native") || !DIRECT_CLASSIFIER_OUTCOMES.has(value.outcome)) return undefined;
+  const model = safeModelId(value.model);
+  const circuitOpenUntil = Number.isSafeInteger(value.circuitOpenUntil) && (value.circuitOpenUntil ?? 0) > 0
+    && (value.circuitOpenUntil ?? 0) <= 8_640_000_000_000_000 ? value.circuitOpenUntil : undefined;
+  return {
+    backend: value.backend,
+    outcome: value.outcome,
+    ...(model ? { model } : {}),
+    ...(circuitOpenUntil ? { circuitOpenUntil } : {}),
+  };
+}
 
 export type ClassificationResult =
-  | { readonly kind: "classified"; readonly tier: string; readonly source: ClassificationSource; readonly judgment?: ClassificationJudgment; readonly classificationOutcome?: ClassificationOutcome }
-  | { readonly kind: "fallback"; readonly tier: string; readonly classificationOutcome?: ClassificationOutcome }
-  | { readonly kind: "unclassified"; readonly classificationOutcome?: ClassificationOutcome };
+  | { readonly kind: "classified"; readonly tier: string; readonly source: ClassificationSource; readonly judgment?: ClassificationJudgment; readonly classificationOutcome?: ClassificationOutcome; readonly classifierAttempt?: ClassifierAttemptSummary }
+  | { readonly kind: "fallback"; readonly tier: string; readonly classificationOutcome?: ClassificationOutcome; readonly classifierAttempt?: ClassifierAttemptSummary }
+  | { readonly kind: "unclassified"; readonly classificationOutcome?: ClassificationOutcome; readonly classifierAttempt?: ClassifierAttemptSummary };
 
 export interface RouteDecisionCandidate {
   readonly model: string;
@@ -68,6 +114,7 @@ export interface RouteDecisionSummary {
   readonly selectedStrategy?: RoutingStrategy;
   readonly fallbackReason?: RoutedModelResolution["fallbackReason"];
   readonly classificationOutcome?: ClassificationOutcome;
+  readonly classifierAttempt?: ClassifierAttemptSummary;
   readonly affinity?: AffinityRouteObservation;
 }
 
@@ -141,6 +188,7 @@ export function buildRouteDecisionSummary(
       outcome: "unclassified",
       classification: { source: "unclassified" },
       ...(classification.classificationOutcome ? { classificationOutcome: classification.classificationOutcome } : {}),
+      ...(classification.classifierAttempt ? { classifierAttempt: classification.classifierAttempt } : {}),
     };
   }
 
@@ -163,6 +211,7 @@ export function buildRouteDecisionSummary(
       } : {}),
     },
     ...(classification.classificationOutcome ? { classificationOutcome: classification.classificationOutcome } : {}),
+    ...(classification.classifierAttempt ? { classifierAttempt: classification.classifierAttempt } : {}),
     ...(resolution?.affinityObservation ? { affinity: resolution.affinityObservation } : {}),
     ...(resolution && options ? {
       requested: summarizePool(
@@ -228,7 +277,7 @@ export interface PipelineDeps {
   /** Query cache. Returns tier or undefined. */
   readonly cacheLookup: (text: string) => string | undefined;
   /** Optional direct backend (typesafe or pi-native) attempted before the prompt classifier. */
-  readonly classifyDirect?: (text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<ClassificationJudgment | undefined>;
+  readonly classifyDirect?: (text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<DirectClassifierOutput>;
   /** Classifier models in priority order. Empty array = skip LLM. */
   readonly classifierModels: readonly ClassifierModel[];
   /** Invoke the LLM classifier for a single model. Returns tier or undefined. */
@@ -297,6 +346,7 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     let removeCallerAbort: (() => void) | undefined;
     let classificationOutcome: ClassificationOutcome | undefined;
+    let directObservation: DirectClassifierObservation | undefined;
     const markOutcome = (outcome: ClassificationOutcome): void => {
       if (classificationOutcome === outcome) return;
       classificationOutcome = outcome;
@@ -373,8 +423,16 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
       if (raced.status === "rejected") throw raced.error;
       return raced;
     };
-    const withOutcome = <T extends ClassificationResult>(result: T): T =>
-      classificationOutcome ? { ...result, classificationOutcome } as T : result;
+    const withOutcome = <T extends ClassificationResult>(result: T, fallbackKind?: ClassifierFallbackKind, fallbackModel?: string): T => {
+      const classifierAttempt = directObservation && directObservation.outcome !== "aborted"
+        ? { ...directObservation, fallbackKind: fallbackKind ?? "none", ...(safeModelId(fallbackModel) ? { fallbackModel: safeModelId(fallbackModel) } : {}) }
+        : undefined;
+      return {
+        ...result,
+        ...(classificationOutcome ? { classificationOutcome } : {}),
+        ...(classifierAttempt ? { classifierAttempt } : {}),
+      } as T;
+    };
 
     try {
       if (signal?.aborted) return stop("aborted");
@@ -415,14 +473,19 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
         if (attempt.status !== "completed") finishDirect({ outcome: attempt.status });
         if (attempt.status === "aborted") return stop("aborted");
         if (attempt.status === "deadline") markOutcome("deadline");
-        const judgment = attempt.status === "completed" ? attempt.value : undefined;
+        const directOutput = attempt.status === "completed" ? attempt.value : undefined;
+        const directAttempt = directOutput && "kind" in directOutput && directOutput.kind === "direct-classifier-attempt"
+          ? directOutput
+          : undefined;
+        const judgment = directAttempt?.judgment ?? (directOutput && !directAttempt ? directOutput as ClassificationJudgment : undefined);
+        directObservation = safeDirectObservation(directAttempt?.observation);
         const tier = judgment?.tier;
         if (attempt.status === "completed") {
           finishDirect({ tier, backend: judgment?.backend, confidence: judgment?.confidence });
         }
         if (judgment && tiers.includes(judgment.tier)) {
           emitDebug("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model, confidence: judgment.confidence });
-          return { kind: "classified", tier: judgment.tier, source: "classifier", judgment };
+          return withOutcome({ kind: "classified", tier: judgment.tier, source: "classifier", judgment }, "none");
         }
       } catch {
         finishDirect({ outcome: signal?.aborted ? "aborted" : "error" });
@@ -457,7 +520,7 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
         finishLLM({ model: modelId, tier, backend: judgment?.backend, confidence: judgment?.confidence });
         if (judgment && tiers.includes(judgment.tier)) {
           emitDebug("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model ?? modelId, confidence: judgment.confidence });
-          return { kind: "classified", tier: judgment.tier, source: "classifier", judgment: { ...judgment, model: judgment.model ?? modelId } };
+          return withOutcome({ kind: "classified", tier: judgment.tier, source: "classifier", judgment: { ...judgment, model: judgment.model ?? modelId } }, "prompt", judgment.model ?? modelId);
         }
       } catch {
         finishLLM({ outcome: signal?.aborted ? "aborted" : "error" });
@@ -477,22 +540,22 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
       if (tiers.includes(regex)) {
         // Tier name match — route through strategy.
         emitDebug("pipeline", "result", { source: "regex", tier: regex });
-        return withOutcome({ kind: "classified", tier: regex, source: "regex" });
+        return withOutcome({ kind: "classified", tier: regex, source: "regex" }, "regex");
       }
       if (regex.includes("/")) {
         // Direct model reference (e.g. "opencode-go/glm-5.1" in rule).
         emitDebug("pipeline", "result", { source: "regex", tier: regex, direct: true });
-        return withOutcome({ kind: "classified", tier: regex, source: "regex" });
+        return withOutcome({ kind: "classified", tier: regex, source: "regex" }, "regex");
       }
     }
 
     // Stage 4: default fallback
     emitDebug("pipeline", "result", { source: "fallback", tier: defaultTier });
     if (defaultTier) {
-      return withOutcome({ kind: "fallback", tier: defaultTier });
+      return withOutcome({ kind: "fallback", tier: defaultTier }, "default");
     }
 
-    return withOutcome({ kind: "unclassified" });
+    return withOutcome({ kind: "unclassified" }, "none");
     } finally {
       if (deadlineTimer) clearTimeout(deadlineTimer);
       removeCallerAbort?.();

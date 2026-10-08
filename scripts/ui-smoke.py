@@ -549,6 +549,12 @@ def capture(
                 {key: int(value) for key, value in attempts_before.items() if isinstance(value, int)},
                 ("classifier", "healthy"),
             )
+        if name == "classifier-degradation":
+            wait_for_model_attempts(
+                FAKE_PORT,
+                {key: int(value) for key, value in attempts_before.items() if isinstance(value, int)},
+                ("classifier", "healthy"),
+            )
 
         time.sleep(2.0)
         raw = log_path.read_text(errors="ignore") if log_path.exists() else ""
@@ -628,6 +634,18 @@ def main() -> int:
             [(1.0, "hello\r")],
             {"classifier": {"enabled": True, "backend": "prompt", "model": "fake/classifier", "fallbackToRegex": True}},
         ),
+        (
+            "classifier-degradation",
+            True,
+            [(1.0, "hello\r")],
+            {"classifier": {
+                "enabled": True,
+                "backend": "pi-native",
+                "piNative": {"model": "fake/not-a-classifier"},
+                "fallback": "prompt",
+                "model": "fake/classifier",
+            }},
+        ),
         ("pinned", True, [(1.0, "\x10")]),
     ]
         results = []
@@ -652,6 +670,10 @@ def main() -> int:
                 reserve_text = (OUT / "inspect-reserve.txt").read_text(errors="ignore")
                 if "reserve policy: observe" not in reserve_text or "source=manual-estimate scope=example-provider authority=estimated" not in reserve_text:
                     raise AssertionError("inspect UI did not render sanitized reserve policy evidence")
+            if name == "classifier-degradation":
+                degradation_text = (OUT / "classifier-degradation.txt").read_text(errors="ignore").lower()
+                if "pi-native classifier" not in degradation_text or "prompt classifier" not in degradation_text:
+                    raise AssertionError("classifier degradation UI did not show the primary failure and actual prompt fallback")
             if name == "strict-no-route":
                 strict_text = (OUT / "strict-no-route.txt").read_text(errors="ignore")
                 if "restricted keep this text" not in strict_text or "turn was not sent" not in strict_text:

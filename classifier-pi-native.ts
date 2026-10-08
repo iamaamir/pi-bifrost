@@ -4,7 +4,7 @@ import type { AuthOperationOptions, ClassifierApi, ClassifierContext, Classifier
 import type { ReliabilityStore } from "./reliability-store.ts";
 import { debug as bifrostDebug } from "./debug.ts";
 import type { TypeSafeObservation, TypeSafeOutcome } from "./classifier-metrics.ts";
-import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, type ClassificationJudgment, type ClassifierRequest, type ClassifierTransport } from "./classifier-backends.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, type ClassificationJudgment, type ClassifierRequest } from "./classifier-backends.ts";
 import { abortableDelay, criterionText, finite, sleep } from "./classifier-semantics.ts";
 import { TYPESAFE_MIN_CONFIDENCE } from "./typesafe-classifier.ts";
 
@@ -157,13 +157,17 @@ export function decodePiNativeJudgment(result: ClassifierResult, tiers: readonly
   };
 }
 
-export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTransport {
+export function createPiNativeClassifier(options: PiNativeOptions) {
   const timeoutMs = Math.min(MAX_PI_NATIVE_TIMEOUT_MS, Math.max(100, Math.floor(options.timeoutMs ?? DEFAULT_PI_NATIVE_TIMEOUT_MS)));
   const maxAttempts = Math.min(MAX_PI_NATIVE_ATTEMPTS, Math.max(1, Math.floor(options.maxAttempts ?? DEFAULT_PI_NATIVE_MAX_ATTEMPTS)));
   const sleepImpl = options.sleepImpl ?? sleep;
   let warnedMissingModel = false;
 
-  return async function classifyWithPi(request: ClassifierRequest, signal?: AbortSignal): Promise<PiNativeJudgment | undefined> {
+  return async function classifyWithPi(
+    request: ClassifierRequest,
+    signal?: AbortSignal,
+    onObservation?: (observation: TypeSafeObservation) => void,
+  ): Promise<PiNativeJudgment | undefined> {
     const startedAt = performance.now();
     const deadline = startedAt + timeoutMs;
     const controller = new AbortController();
@@ -196,17 +200,23 @@ export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTr
       });
       if (!observed) {
         observed = true;
+        const observation: TypeSafeObservation = Object.freeze({
+          outcome,
+          latencyMs: performance.now() - startedAt,
+          attempts,
+          model: judgment?.model ?? resolvedModelId,
+          tier: judgment?.tier,
+          confidence: judgment?.confidence,
+        });
         try {
-          options.observe?.({
-            outcome,
-            latencyMs: performance.now() - startedAt,
-            attempts,
-            model: judgment?.model ?? resolvedModelId,
-            tier: judgment?.tier,
-            confidence: judgment?.confidence,
-          });
+          options.observe?.(observation);
         } catch {
           console.error("[bifrost] pi-native observation failed");
+        }
+        try {
+          onObservation?.(observation);
+        } catch {
+          // Per-call observers are advisory and must not change classification.
         }
       }
       return judgment;

@@ -153,13 +153,15 @@ Repository config cannot redirect TypeSafe credentials to arbitrary origins. Typ
 
 Low confidence, missing credentials, network failure, timeout, invalid response, rate limit, or open classifier circuit follows configured fallback. User prompts are never replayed.
 
+When a direct classifier misses during normal routing, Bifrost warns once for that classifier state and names the fallback that actually produced the tier. If its model-only circuit opens, the warning includes the local cooldown expiry. Repeated requests during the same open circuit do not repeat the warning; a successful classifier call after recovery clears the notice and reports recovery. If no tier is selected, the warning says so instead of implying routing continued. These notices do not change routing or make extra classifier calls.
+
 ## Privacy and preview behavior
 
 The active classifier receives the current prompt and tier instructions. It does not receive conversation history, prior messages, source files, or tool output by default.
 
 `/bifrost preview <prompt>` uses the same steps Bifrost uses to pick a tier for a normal message (local classification cache → optional classifier → rules → default). It does not treat a leading tier name as an override. When no local cache entry resolves first, an enabled prompt, TypeSafe/Jev, or Pi-native classifier can receive the preview prompt and incur classifier usage. Preview does not submit a generation turn or activate the selected provider model.
 
-Direct-classifier metrics are content-free and local. Detailed direct TypeSafe troubleshooting requires both global debug and TypeSafe debug. In `.pi/bifrost.json`:
+Direct-classifier metrics are content-free and local. With global debug enabled, the JSONL log records typed direct-classifier outcomes and the actual fallback used, even when detailed TypeSafe debug is off. Detailed direct TypeSafe traces still require both global debug and TypeSafe debug. In `.pi/bifrost.json`:
 
 ```json
 {

@@ -239,6 +239,22 @@ describe("classification-pipeline", () => {
       // Falls through to default
       assert.notEqual(r.kind, "classified");
     });
+
+    it("keeps a valid cache hit ahead of the direct classifier observation seam", async () => {
+      let directCalls = 0;
+      const p = createPipeline(deps({
+        cacheLookup: () => "frontier",
+        classifyDirect: async () => {
+          directCalls++;
+          return { kind: "direct-classifier-attempt", observation: { backend: "typesafe", outcome: "timeout" } };
+        },
+      }));
+      const result = await p.classify("cached");
+      assert.equal(result.kind, "classified");
+      if (result.kind === "classified") assert.equal(result.source, "cache");
+      assert.equal(result.classifierAttempt, undefined);
+      assert.equal(directCalls, 0);
+    });
   });
 
   describe("classifier", () => {
@@ -299,6 +315,32 @@ describe("classification-pipeline", () => {
       }));
       const r = await p.classify("hello");
       assert.equal(r.kind, "fallback");
+    });
+
+    it("keeps direct classifier degradation and the actual local fallback in content-free route summaries", async () => {
+      const directFailure = {
+        kind: "direct-classifier-attempt" as const,
+        observation: {
+          backend: "typesafe" as const,
+          outcome: "timeout" as const,
+          model: "jev-1.13.0",
+          circuitOpenUntil: 1_900_000_000_000,
+        },
+      };
+      const regexPipeline = createPipeline(deps({
+        classifyDirect: async () => directFailure,
+        regexRules: [{ pattern: "route-regex", model: "frontier" }],
+        defaultTier: "economical",
+      }));
+      const regexResult = await regexPipeline.classify("route-regex with PRIVATE_PROMPT");
+      assert.deepEqual(regexResult.classifierAttempt, { ...directFailure.observation, fallbackKind: "regex" });
+      assert.deepEqual(buildRouteDecisionSummary(regexResult).classifierAttempt, regexResult.classifierAttempt);
+
+      const defaultPipeline = createPipeline(deps({ classifyDirect: async () => directFailure, defaultTier: "economical" }));
+      const defaultResult = await defaultPipeline.classify("unmatched PRIVATE_PROMPT");
+      assert.equal(defaultResult.kind, "fallback");
+      assert.equal(defaultResult.classifierAttempt?.fallbackKind, "default");
+      assert.equal(JSON.stringify(buildRouteDecisionSummary(defaultResult)).includes("PRIVATE_PROMPT"), false);
     });
 
     it("retains prompt backend and model metadata", async () => {

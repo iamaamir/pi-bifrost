@@ -12,6 +12,7 @@ import {
 } from "../typesafe-classifier.ts";
 import { ReliabilityStore } from "../reliability-store.ts";
 import { emptyReliabilityState } from "../reliability.ts";
+import type { TypeSafeObservation } from "../classifier-metrics.ts";
 
 const criteria = {
   quick: "bounded work",
@@ -61,6 +62,130 @@ describe("TypeSafe classifier", () => {
       outcome: "success", attempts: 1, model: TYPESAFE_MODEL, tier: "frontier", confidence: 0.92, latencyMs: 0,
     });
     assert.doesNotMatch(JSON.stringify(observations), /sensitive|probabilit|authorization|api.?key/i);
+  });
+
+  it("emits isolated per-call observations for overlapping success and timeout calls", async () => {
+    let calls = 0;
+    const shared: unknown[] = [];
+    const classifier = createTypeSafeClassifier({
+      apiKey: "key",
+      maxAttempts: 1,
+      timeoutMs: 100,
+      observe: (observation) => shared.push(observation),
+      fetchImpl: async (_url, init) => {
+        calls++;
+        const body = JSON.parse(String(init?.body)) as { state: string };
+        if (body.state === "slow prompt") {
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          });
+        }
+        return new Response(JSON.stringify(payload()), { status: 200 });
+      },
+    });
+    const slow: TypeSafeObservation[] = [];
+    const fast: TypeSafeObservation[] = [];
+    const [slowResult, fastResult] = await Promise.all([
+      classifier({ prompt: "slow prompt", tiers: ["quick", "general", "frontier"], criteria }, undefined, (value) => slow.push(value)),
+      classifier({ prompt: "fast prompt", tiers: ["quick", "general", "frontier"], criteria }, undefined, (value) => fast.push(value)),
+    ]);
+    assert.equal(slowResult, undefined);
+    assert.equal(fastResult?.tier, "general");
+    assert.equal(calls, 2);
+    assert.equal(slow.length, 1);
+    assert.equal(slow[0]?.outcome, "timeout");
+    assert.equal(fast.length, 1);
+    assert.equal(fast[0]?.outcome, "success");
+    assert.deepEqual(shared.map((value) => (value as TypeSafeObservation).outcome).sort(), ["success", "timeout"]);
+    assert.doesNotMatch(JSON.stringify([...slow, ...fast, ...shared]), /slow prompt|fast prompt/);
+  });
+
+  it("reports circuit-open evidence per call without issuing a request", async () => {
+    const key = `classifier/typesafe/${TYPESAFE_MODEL}`;
+    const now = Date.now();
+    const reliability = new ReliabilityStore({
+      cwd: "/tmp",
+      config: { enabled: true, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 1 },
+      initialState: { version: 1, models: { [key]: { failures: [now], openUntil: now + 60_000 } } },
+      io: { load: emptyReliabilityState, save: () => {} },
+    });
+    let calls = 0;
+    const metrics: TypeSafeObservation[] = [];
+    const perCall: TypeSafeObservation[] = [];
+    const classify = createTypeSafeClassifier({
+      apiKey: "key",
+      reliability,
+      observe: (observation) => metrics.push(observation),
+      fetchImpl: async () => { calls++; return new Response(JSON.stringify(payload()), { status: 200 }); },
+    });
+    assert.equal(await classify({ prompt: "hello", tiers: ["general"], criteria: { general: "normal" } }, undefined, (observation) => perCall.push(observation)), undefined);
+    assert.equal(calls, 0);
+    assert.equal(metrics.length, 1);
+    assert.equal(perCall.length, 1);
+    assert.equal(perCall[0]?.outcome, "circuit_open");
+    assert.strictEqual(perCall[0], metrics[0]);
+  });
+
+  it("isolates throwing metrics and per-call observers from each other and the result", async () => {
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      const metrics: TypeSafeObservation[] = [];
+      const metricsThrowing = createTypeSafeClassifier({
+        apiKey: "key",
+        observe: () => { throw new Error("metrics failure"); },
+        fetchImpl: async () => new Response(JSON.stringify(payload()), { status: 200 }),
+      });
+      assert.equal((await metricsThrowing({ prompt: "x", tiers: ["quick", "general", "frontier"], criteria }, undefined, (value) => metrics.push(value)))?.tier, "general");
+      assert.equal(metrics[0]?.outcome, "success");
+
+      const metricsOnly = createTypeSafeClassifier({
+        apiKey: "key",
+        observe: (value) => metrics.push(value),
+        fetchImpl: async () => new Response(JSON.stringify(payload()), { status: 200 }),
+      });
+      assert.equal((await metricsOnly({ prompt: "x", tiers: ["quick", "general", "frontier"], criteria }, undefined, () => { throw new Error("request observer failure"); }))?.tier, "general");
+      assert.equal(metrics.length, 2);
+      assert.deepEqual(metrics.map((value) => value.outcome), ["success", "success"]);
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  it("freezes the shared observation before either observer can alter it", async () => {
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      let metricsCalls = 0;
+      let requestCalls = 0;
+      let fetchCalls = 0;
+      const observations: TypeSafeObservation[] = [];
+      const classifier = createTypeSafeClassifier({
+        apiKey: "key",
+        observe: (observation) => {
+          metricsCalls++;
+          Object.assign(observation, { outcome: "network", model: "altered/model" });
+        },
+        fetchImpl: async () => {
+          fetchCalls++;
+          return new Response(JSON.stringify(payload()), { status: 200 });
+        },
+      });
+      const result = await classifier(
+        { prompt: "x", tiers: ["quick", "general", "frontier"], criteria },
+        undefined,
+        (observation) => { requestCalls++; observations.push(observation); },
+      );
+      assert.equal(result?.tier, "general");
+      assert.equal(fetchCalls, 1);
+      assert.equal(metricsCalls, 1);
+      assert.equal(requestCalls, 1);
+      assert.equal(observations[0]?.outcome, "success");
+      assert.equal(observations[0]?.model, TYPESAFE_MODEL);
+      assert.equal(Object.isFrozen(observations[0]), true);
+    } finally {
+      console.error = originalError;
+    }
   });
 
   it("returns miss without API key", async () => {

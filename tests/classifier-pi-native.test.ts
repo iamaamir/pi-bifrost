@@ -88,8 +88,9 @@ describe("pi-native classifier transport", () => {
   it("maps a choice answer to a judgment with the resolved catalog model id", async () => {
     const h = harness({ listed: [model()], results: [answer("general", 0.8)] });
     const observations: TypeSafeObservation[] = [];
+    const perCall: TypeSafeObservation[] = [];
     const classify = createPiNativeClassifier({ registry: h.registry, observe: (o) => observations.push(o) });
-    const judgment = await classify(request);
+    const judgment = await classify(request, undefined, (o) => perCall.push(o));
     assert.deepEqual(judgment, {
       tier: "general",
       confidence: 0.8,
@@ -99,7 +100,40 @@ describe("pi-native classifier transport", () => {
     });
     assert.equal(observations[0]?.outcome, "success");
     assert.equal(observations[0]?.model, "typesafe/jev-latest");
+    assert.strictEqual(perCall[0], observations[0]);
     assert.equal(h.listCalls(), 1);
+  });
+
+  it("keeps per-call outcomes isolated across overlapping Pi-native requests", async () => {
+    let classifyCalls = 0;
+    let discoveryCalls = 0;
+    const registry: PiClassifierRegistry = {
+      getModelOfType: () => model(),
+      getAvailableOfType: async () => { discoveryCalls++; return [model()]; },
+      classify: async (_model, context, options) => {
+        classifyCalls++;
+        const state = context.state as { prompt: string };
+        if (state.prompt === "slow prompt") {
+          return new Promise((resolve) => options?.signal?.addEventListener("abort", () => resolve({ ...answer(), stopReason: "aborted" } as ClassifierResult), { once: true }));
+        }
+        return answer();
+      },
+    };
+    const classifier = createPiNativeClassifier({ registry, timeoutMs: 100 });
+    const slow: TypeSafeObservation[] = [];
+    const fast: TypeSafeObservation[] = [];
+    const [slowResult, fastResult] = await Promise.all([
+      classifier({ ...request, prompt: "slow prompt" }, undefined, (value) => slow.push(value)),
+      classifier({ ...request, prompt: "fast prompt" }, undefined, (value) => fast.push(value)),
+    ]);
+    assert.equal(slowResult, undefined);
+    assert.equal(fastResult?.tier, "general");
+    assert.equal(discoveryCalls, 2);
+    assert.equal(classifyCalls, 2);
+    assert.equal(slow.length, 1);
+    assert.equal(slow[0]?.outcome, "timeout");
+    assert.equal(fast.length, 1);
+    assert.equal(fast[0]?.outcome, "success");
   });
 
   it("records resolved model id in the finish trace", async () => {
@@ -149,11 +183,38 @@ describe("pi-native classifier transport", () => {
       },
     };
     const observations: TypeSafeObservation[] = [];
+    const perCall: TypeSafeObservation[] = [];
     const classify = createPiNativeClassifier({ registry, timeoutMs: 100, observe: (o) => observations.push(o) });
     assert.equal(await classify(request), undefined);
     assert.equal(lookupSignal?.aborted, true);
     assert.equal(observations[0]?.outcome, "timeout");
     assert.equal(h.calls(), 0);
+    // A direct per-invocation callback reports the terminal reason even when debug is off.
+    const second = createPiNativeClassifier({ registry, timeoutMs: 100, observe: (o) => observations.push(o) });
+    assert.equal(await second(request, undefined, (o) => perCall.push(o)), undefined);
+    assert.equal(perCall[0]?.outcome, "timeout");
+    assert.strictEqual(perCall[0], observations[1]);
+  });
+
+  it("isolates throwing metrics and per-call observers from each other and the result", async () => {
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      const h = harness({ listed: [model()], results: [answer()] });
+      const perCall: TypeSafeObservation[] = [];
+      const metricsThrowing = createPiNativeClassifier({ registry: h.registry, observe: () => { throw new Error("metrics failure"); } });
+      assert.equal((await metricsThrowing(request, undefined, (o) => perCall.push(o)))?.tier, "general");
+      assert.equal(perCall[0]?.outcome, "success");
+
+      const h2 = harness({ listed: [model()], results: [answer()] });
+      const metrics: TypeSafeObservation[] = [];
+      const requestObserverThrowing = createPiNativeClassifier({ registry: h2.registry, observe: (o) => metrics.push(o) });
+      assert.equal((await requestObserverThrowing(request, undefined, () => { throw new Error("request observer failure"); }))?.tier, "general");
+      assert.equal(metrics.length, 1);
+      assert.equal(metrics[0]?.outcome, "success");
+    } finally {
+      console.error = originalError;
+    }
   });
 
   it("reports rejected catalog discovery as a measured miss", async () => {

@@ -38,7 +38,7 @@ describe("packed experimental router consumer", () => {
       ], { cwd: process.cwd(), encoding: "utf8", timeout: 60_000 }))[0];
       const rootSources = readdirSync(process.cwd()).filter((path) => path.endsWith(".ts"));
       const routerGraph = [
-        "cache", "classification-pipeline", "classifier-backends", "classifier", "config", "debug",
+        "cache", "classification-pipeline", "classifier-backends", "classifier-metrics", "classifier", "config", "debug",
         "affinity", "economic-preferences", "economic-signals", "failure-observations", "inline-override", "reliability", "reliability-v1-fence", "router", "routing", "session-fallback", "storage", "virtual-model",
       ].flatMap((name) => [`dist/router/${name}.js`, `dist/router/${name}.d.ts`]);
       const archivePaths = packed.files.map((file) => file.path);

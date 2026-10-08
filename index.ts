@@ -8,9 +8,12 @@ import {
   buildRouteDecisionSummary,
   createPipeline,
   type ClassificationPipeline,
+  type DirectClassifierAttempt,
+  type DirectClassifierObservation,
   type ClassificationResult,
 } from "./classification-pipeline.ts";
 import type { ClassificationJudgment } from "./classifier-backends.ts";
+import type { TypeSafeObservation } from "./classifier-metrics.ts";
 import {
   cachePath,
   lookupCache,
@@ -92,6 +95,136 @@ interface DebugCorrelationState {
 
 let debugRunCorrelationId: string | undefined;
 let debugSessionCorrelations: WeakMap<object, DebugCorrelationState> | undefined;
+const classifierNoticeStates = new WeakMap<object, Map<string, { readonly binding: string; readonly stateKey: string }>>();
+const MAX_LOGGABLE_CIRCUIT_EPOCH = 8_640_000_000_000_000;
+
+function classifierOutcomeLabel(outcome: TypeSafeObservation["outcome"]): string {
+  switch (outcome) {
+    case "timeout": return "timed out";
+    case "network": return "could not connect";
+    case "auth": return "was rejected by authentication";
+    case "rate_limited": return "was rate limited";
+    case "http": return "returned an HTTP error";
+    case "invalid_response": return "returned an invalid response";
+    case "low_confidence": return "did not meet its confidence threshold";
+    case "missing_key": return "has no configured credential";
+    case "missing_catalog": return "has no available classifier model";
+    case "unsupported": return "is unsupported in this environment";
+    case "circuit_open": return "is temporarily disabled by its circuit breaker";
+    case "aborted": return "was cancelled";
+    case "success": return "completed successfully";
+  }
+}
+
+function classifierFallbackLabel(result: ClassificationResult): string {
+  const attempt = result.classifierAttempt;
+  switch (attempt?.fallbackKind) {
+    case "prompt": return `the prompt classifier${attempt.fallbackModel ? ` (${attempt.fallbackModel})` : ""}`;
+    case "regex": return "regex routing";
+    case "default": return "the configured default tier";
+    default: return "no configured tier matched";
+  }
+}
+
+function reportClassifierAttempt(
+  ctx: ExtensionContext,
+  result: ClassificationResult,
+  turn?: object,
+  requestCorrelationId?: string,
+): void {
+  try {
+    const attempt = result.classifierAttempt;
+    if (!attempt) {
+      if (result.kind === "classified" && result.source === "classifier" && result.judgment?.backend === "prompt") {
+        const recovered = classifierNoticeStates.get(ctx.sessionManager)?.delete("pipeline") ?? false;
+        if (recovered) {
+          debugLifecycle("classifier", "budget_recovered", ctx.sessionManager, turn, {
+            request_correlation_id: requestCorrelationId ?? null,
+            backend: "prompt",
+          });
+        }
+      }
+      if (result.classificationOutcome !== "deadline") return;
+      let states = classifierNoticeStates.get(ctx.sessionManager);
+      if (!states) {
+        states = new Map();
+        classifierNoticeStates.set(ctx.sessionManager, states);
+      }
+      debugLifecycle("classifier", "budget_expired", ctx.sessionManager, turn, {
+        request_correlation_id: requestCorrelationId ?? null,
+        fallback: result.kind === "unclassified" ? "none" : result.kind === "fallback" ? "default" : result.source === "regex" ? "regex" : "none",
+      });
+      if (states.get("pipeline")?.stateKey === "deadline") return;
+      states.set("pipeline", { binding: "pipeline", stateKey: "deadline" });
+      const routeMessage = result.kind === "unclassified"
+        ? "No tier was selected; select a tier/model or adjust routing rules."
+        : `Using ${result.kind === "fallback" ? "the configured default tier" : "local routing"}. Routing is still active.`;
+      log(ctx, `Bifrost classifier time budget expired. ${routeMessage}`, "warning");
+      return;
+    }
+    const meta = {
+      request_correlation_id: requestCorrelationId ?? null,
+      backend: attempt.backend,
+      outcome: attempt.outcome,
+      ...(attempt.model ? { model: attempt.model } : {}),
+      fallback: attempt.fallbackKind,
+      ...(attempt.fallbackModel ? { fallback_model: attempt.fallbackModel } : {}),
+      ...(attempt.circuitOpenUntil ? { circuit_open_until: attempt.circuitOpenUntil } : {}),
+      ...(result.classificationOutcome === "deadline" ? { classification_outcome: "deadline" } : {}),
+    };
+    debugLifecycle("classifier", "attempt_outcome", ctx.sessionManager, turn, meta);
+    if (result.classificationOutcome === "deadline") {
+      debugLifecycle("classifier", "budget_expired", ctx.sessionManager, turn, {
+        ...meta,
+        budget_scope: "total_classifier",
+      });
+    }
+
+    let states = classifierNoticeStates.get(ctx.sessionManager);
+    if (!states) {
+      states = new Map();
+      classifierNoticeStates.set(ctx.sessionManager, states);
+    }
+    const binding = `${attempt.backend}:${attempt.model ?? "unknown"}`;
+    if (attempt.outcome === "success") {
+      const recoveredBackend = states.delete(attempt.backend);
+      const recoveredPipeline = states.delete("pipeline");
+      const recovered = recoveredBackend || recoveredPipeline;
+      if (recovered) {
+        debugLifecycle("classifier", "recovered", ctx.sessionManager, turn, {
+          request_correlation_id: requestCorrelationId ?? null,
+          backend: attempt.backend,
+          ...(attempt.model ? { model: attempt.model } : {}),
+        });
+        log(ctx, `Bifrost: ${attempt.backend} classifier recovered${attempt.model ? ` (${attempt.model})` : ""}.`);
+      }
+      return;
+    }
+
+    if (attempt.outcome === "aborted") return;
+    const openUntil = attempt.circuitOpenUntil;
+    const validOpenUntil = Number.isSafeInteger(openUntil) && (openUntil ?? 0) <= MAX_LOGGABLE_CIRCUIT_EPOCH && (openUntil ?? 0) > Date.now();
+    const stateKey = validOpenUntil
+      ? `open:${openUntil}`
+      : `outcome:${attempt.outcome}`;
+    const noticeStateKey = `${stateKey}${result.classificationOutcome === "deadline" ? ":deadline" : ""}`;
+    const previous = states.get(attempt.backend);
+    if (previous?.binding === binding && previous.stateKey === noticeStateKey) return;
+    states.set(attempt.backend, { binding, stateKey: noticeStateKey });
+
+    const circuitMessage = validOpenUntil
+      ? ` Its model-only circuit is open until ${new Date(openUntil!).toISOString()}.`
+      : "";
+    debugLifecycle("classifier", "degraded", ctx.sessionManager, turn, meta);
+    const routeMessage = attempt.fallbackKind === "none"
+      ? `No tier was selected; ${classifierFallbackLabel(result)}. Select a tier/model or adjust routing rules.`
+      : `Using ${classifierFallbackLabel(result)}. Routing is still active.`;
+    const budgetMessage = result.classificationOutcome === "deadline" ? " The total classifier time budget expired." : "";
+    log(ctx, `Bifrost: ${attempt.backend} classifier ${classifierOutcomeLabel(attempt.outcome)}${attempt.model ? ` (${attempt.model})` : ""}. ${routeMessage}${budgetMessage}${circuitMessage}`, "warning");
+  } catch {
+    // Warning and telemetry failures must never affect a route or input action.
+  }
+}
 
 function debugCorrelation(session?: object, turn?: object): Record<string, string> | undefined {
   if (!isDebugEnabled()) return undefined;
@@ -266,6 +399,42 @@ function activeClassifierCacheKey(config: BifrostConfig, detectionEngine: Return
   });
 }
 
+function boundedClassifierModel(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value)
+    ? value
+    : undefined;
+}
+
+function directClassifierAttempt(
+  backend: DirectClassifierObservation["backend"],
+  observation: TypeSafeObservation | undefined,
+  judgment?: ClassificationJudgment,
+  reliabilityStore?: ReliabilityStore,
+  config?: BifrostConfig,
+): DirectClassifierAttempt {
+  const model = boundedClassifierModel(observation?.model);
+  const circuitKey = model ? `classifier/${backend}/${model}` : undefined;
+  const circuit = circuitKey && reliabilityStore && config?.reliability?.enabled !== false
+    ? getCircuitState(reliabilityStore.getState(), circuitKey, Date.now(), config?.reliability)
+    : undefined;
+  const circuitOpenUntil = circuit?.open && Number.isSafeInteger(circuit.openUntil)
+    && (circuit.openUntil ?? 0) <= MAX_LOGGABLE_CIRCUIT_EPOCH && (circuit.openUntil ?? 0) > Date.now()
+    ? circuit.openUntil
+    : undefined;
+  return {
+    kind: "direct-classifier-attempt",
+    ...(judgment ? { judgment } : {}),
+    ...(observation ? {
+      observation: {
+        backend,
+        outcome: observation.outcome,
+        ...(model ? { model } : {}),
+        ...(circuitOpenUntil !== undefined ? { circuitOpenUntil } : {}),
+      },
+    } : {}),
+  };
+}
+
 function buildPipeline(
   ctx: ExtensionContext,
   config: BifrostConfig,
@@ -286,7 +455,7 @@ function buildPipeline(
   // Resolve classifier models once at pipeline construction.
   // If classifier is disabled, pass empty array — pipeline skips LLM stage.
   let classifierModels: ClassifierModel[] = [];
-  let classifyDirect: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<ClassificationJudgment | undefined>) | undefined;
+  let classifyDirect: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<DirectClassifierAttempt>) | undefined;
   const directConfigOk = !hasClassifierConfigErrors(config, effective.backend);
   const plan = directStagePlan({
     backend: effective.backend,
@@ -313,8 +482,13 @@ function buildPipeline(
       observe: (observation) => classifierMetricsStore.record(observation),
     });
     classifyDirect = async (text, availableTiers, signal) => {
-      const judgment = await classify({ prompt: boundedClassifierPrompt(text), tiers: availableTiers, criteria: classifierConfig.criteria ?? DEFAULT_CLASSIFIER_CRITERIA }, signal);
-      return judgment;
+      let observation: TypeSafeObservation | undefined;
+      const judgment = await classify(
+        { prompt: boundedClassifierPrompt(text), tiers: availableTiers, criteria: classifierConfig.criteria ?? DEFAULT_CLASSIFIER_CRITERIA },
+        signal,
+        (value) => { observation = value; },
+      );
+      return directClassifierAttempt("typesafe", observation, judgment, reliabilityStore, config);
     };
   }
   if (plan.useDirect && effective.backend === CLASSIFIER_BACKEND_IDS.piNative) {
@@ -333,8 +507,13 @@ function buildPipeline(
       observe: (observation) => classifierMetricsStore.record(observation),
     });
     classifyDirect = async (text, availableTiers, signal) => {
-      const judgment = await classify({ prompt: boundedClassifierPrompt(text), tiers: availableTiers, criteria: config.classifier?.criteria ?? DEFAULT_CLASSIFIER_CRITERIA }, signal);
-      return judgment;
+      let observation: TypeSafeObservation | undefined;
+      const judgment = await classify(
+        { prompt: boundedClassifierPrompt(text), tiers: availableTiers, criteria: config.classifier?.criteria ?? DEFAULT_CLASSIFIER_CRITERIA },
+        signal,
+        (value) => { observation = value; },
+      );
+      return directClassifierAttempt("pi-native", observation, judgment, reliabilityStore, config);
     };
   }
   const usePromptClassifier = plan.usePromptFallback;
@@ -1157,8 +1336,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           let classification: ClassificationResult = forcedTier
             ? { kind: "classified", tier: forcedTier, source: "inline" }
             : await getPipeline(ctx).classify(prompt, signal);
+          if (!signal?.aborted) reportClassifierAttempt(ctx, classification, correlationTurn, requestCorrelationId);
           if (classification.kind === "unclassified" && hasHardEconomicAdmission(state.economicPolicy) && state.config.default) {
-            classification = { kind: "fallback", tier: state.config.default };
+            classification = { kind: "fallback", tier: state.config.default, ...(classification.classifierAttempt ? { classifierAttempt: classification.classifierAttempt } : {}) };
           }
           if (signal?.aborted) {
             terminalRouteCategory = "request_cancelled";
@@ -1428,6 +1608,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     debugLifecycle("bifrost", "session_start", ctx.sessionManager, undefined, { reliabilityMode: reliabilityV2Enabled() ? "reliability_v2" : "reliability_v1" });
+    classifierNoticeStates.delete(ctx.sessionManager);
     overrideFor(ctx).clear();
     affinityStore?.reset(ctx.sessionManager);
     pendingAffinityBySession.delete(ctx.sessionManager);
@@ -1450,6 +1631,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async (_event, ctx) => {
     debugLifecycle("bifrost", "session_shutdown", ctx.sessionManager, undefined, { category: "session_cleanup" });
+    classifierNoticeStates.delete(ctx.sessionManager);
     affinityStore?.reset(ctx.sessionManager);
     pendingAffinityBySession.delete(ctx.sessionManager);
     if (reliabilityV2Enabled()) await cleanupV2Receipts(ctx.sessionManager);
@@ -1800,8 +1982,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       let classification = forcedTier
         ? { kind: "classified" as const, tier: forcedTier, source: "inline" as const }
         : await getPipeline(ctx).classify(promptText, ctx.signal);
+      if (!ctx.signal?.aborted) reportClassifierAttempt(ctx, classification);
       if (classification.kind === "unclassified" && hasHardEconomicAdmission(state.economicPolicy) && state.config.default) {
-        classification = { kind: "fallback", tier: state.config.default };
+        classification = { kind: "fallback", tier: state.config.default, ...(classification.classifierAttempt ? { classifierAttempt: classification.classifierAttempt } : {}) };
       }
 
       if (!state.enabled || state.pinned) return { action: "continue" };
