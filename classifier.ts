@@ -143,7 +143,7 @@ async function classifyWithDirectHttp(
       const fallbackResult = extractCategory(fallbackText, categories);
       debug("classifier", "registry.session_done", {
         model: classifierId(classifierModel),
-        raw: fallbackText.slice(0, 100),
+        outputChars: fallbackText.length,
         tier: fallbackResult,
       });
       return fallbackResult;
@@ -152,7 +152,7 @@ async function classifyWithDirectHttp(
     const result = extractCategory(content, categories);
     debug("classifier", "registry.done", {
       model: classifierId(classifierModel),
-      raw: content.slice(0, 100),
+      outputChars: content.length,
       tier: result,
     });
     return result;
@@ -186,9 +186,8 @@ async function classifyWithDirectHttp(
     });
 
     if (!response.ok) {
-      console.error(
-        `[bifrost] classifier HTTP ${response.status} from ${classifierBaseUrl(classifierModel)}`,
-      );
+      debug("classifier", "http.error", { status: response.status });
+      console.error(`[bifrost] classifier HTTP request failed (status ${response.status})`);
       return undefined;
     }
 
@@ -197,14 +196,14 @@ async function classifyWithDirectHttp(
     };
     const content = data.choices?.[0]?.message?.content?.trim();
     if (!content) {
-      debug("classifier", "http.empty_response", { url: classifierBaseUrl(classifierModel) });
+      debug("classifier", "http.empty_response", { outputPresent: false });
       return undefined;
     }
 
     const result = extractCategory(content, categories);
     debug("classifier", "http.done", {
       model: classifierId(classifierModel),
-      raw: content.slice(0, 100),
+      outputChars: content.length,
       tier: result,
     });
     return result;
@@ -257,7 +256,7 @@ async function classifyWithSubprocess(
     });
 
     let stdout = "";
-    let stderr = "";
+    let stderrChars = 0;
     const MAX_CHUNK = 2000;
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -265,7 +264,7 @@ async function classifyWithSubprocess(
       stdout += chunk.slice(0, Math.max(0, MAX_CHUNK - stdout.length));
     });
     child.stderr.on("data", (chunk: string) => {
-      stderr += chunk.slice(0, Math.max(0, MAX_CHUNK - stderr.length));
+      stderrChars = Math.min(MAX_CHUNK, stderrChars + chunk.length);
     });
 
     let settled = false;
@@ -301,12 +300,16 @@ async function classifyWithSubprocess(
     signal?.addEventListener("abort", abortChild, { once: true });
     if (signal?.aborted) abortChild();
 
-    child.on("error", (err: Error) => {
+    child.on("error", () => {
       if (stopping || signal?.aborted) {
         finish(undefined);
         return;
       }
-      console.error(`[bifrost] classifier subprocess error: ${err}`);
+      debug("classifier", "subprocess.error", {
+        model: `${model.provider}/${model.id}`,
+        errorCategory: "process_error",
+      });
+      console.error("[bifrost] classifier subprocess failed");
       finish(undefined);
     });
 
@@ -319,18 +322,17 @@ async function classifyWithSubprocess(
         debug("classifier", "subprocess.error", {
           model: `${model.provider}/${model.id}`,
           exitCode: code,
-          stderr: stderr.slice(0, 200),
+          stderrPresent: stderrChars > 0,
+          stderrChars,
         });
-        console.error(
-          `[bifrost] classifier subprocess exited ${code}: ${stderr.slice(0, 500)}`,
-        );
+        console.error(`[bifrost] classifier subprocess exited with code ${code}`);
         finish(undefined);
         return;
       }
       const result = extractCategory(stdout, categories);
       debug("classifier", "subprocess.done", {
         model: `${model.provider}/${model.id}`,
-        raw: stdout.trim().slice(0, 100),
+        outputChars: stdout.trim().length,
         tier: result,
       });
       finish(result);
