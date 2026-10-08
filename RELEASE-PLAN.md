@@ -2,13 +2,21 @@
 
 Status: implementation authorized by the user on 7 October 2026. Scope is PRD.md and IMPLEMENTATION.md with image support excluded. This ledger records actual acceptance evidence; planned milestones are not completed features.
 
+## Current follow-up status (8 October)
+
+Axiom final review: **APPROVED**. The original P1 migration source fence, P2 router snapshot boundary, and two residual P2 findings are closed. The primary independently ran 799 unit tests, typecheck, and 36 pinned-Pi fake-provider integrations against the frozen runtime source. The implementation owner ran six reliability UI scenarios against that same runtime source. The 799-test gate includes package verification and the strict-array API gate. The 12 general UI captures remain prior unchanged-rendering evidence; they were not rerun for this follow-up. Checkpoints: `d5a4945` closes the API own-data snapshot issue; `f93a0b7` closes the migration source fence. Later changes are static guidance and release-policy documentation.
+
+The earlier 788-test/36-integration acceptance record below belongs to HEAD `0fa0f79`; those counts do not describe the follow-up fixes. Do not combine the two test snapshots or attribute the old counts to the frozen runtime source.
+
+Reliability policy for this release: v1 remains the default and the migration path remains available, but v1 is deprecated. Recommend v2 only for supported Auto user turns; physical and direct utility workflows still require v1. Stop other sessions that can write v1 state and ensure the current session has no active or queued generation before migration. The cooperative source fence covers current-version writers only; manually repair an inspected stale source lock when required. It cannot fence older or uncooperative binaries. There is no live cutover and no automatic prompt replay. No v1 removal is planned in this release. Any future removal must be announced at least one published release ahead and wait until intended v1-dependent workflows are covered. No removal version or date is set.
+
 ## Ownership and gates
 
 The primary agent owns architecture, scope, source review, acceptance and release coordination. The affordable implementation subagent (`gpt-6-luna`) writes code and tests. Changes remain small and sequential in the shared checkout. No implementation is accepted solely on the writer's report: review the diff and run relevant checks. No image routing, automatic replay, orchestration, hidden provider preferences or weakened manual control.
 
 Local branch: `codex/routing-release`. Accepted checkpoints are recorded below; the final integration checkpoint is `553fdc2`. No package publishing, remote push, PR creation or version/tag change has occurred. Release candidate/version selection follows final accepted scope and verification. Never describe quota snapshots as automatic live tracking without a verified adapter.
 
-## Current candidate
+## Prior candidate acceptance (historical snapshot at HEAD `0fa0f79`)
 
 The combined implementation passed final local acceptance on 8 October. The primary independently ran 788 unit tests, typecheck, all 36 pinned-Pi fake-provider integrations, and whitespace checks after production code froze. The implementation owner completed 12 general UI captures and six reliability UI scenarios with the pinned host and isolated local fake provider; the primary visually reviewed strict rejection/editor restoration and route trace captures. Installed-consumer packaging is included in the unit gate.
 

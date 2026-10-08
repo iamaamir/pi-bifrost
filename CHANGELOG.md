@@ -22,6 +22,9 @@ All notable changes to pi-bifrost are documented here.
 - Invalid schema versions or tier-policy configuration block physical and Auto routing. Reload rejects unreadable, malformed, or non-object config layers and keeps the active config; an exhausted explicit boundary also does not degrade to a previously dispatched model.
 - Managed state writes now use exclusive sibling temporary files and same-directory atomic rename, preserve existing permissions, and never unlink a valid target before replacement. New managed files are private by default; committed-directory sync failures are reported without claiming that the rename was rolled back. Interrupted journaled reconciliation requires explicit stale-lock repair; locks are never stolen automatically.
 
+### Deprecated
+- Reliability v1 remains the default and available during this release, and its migration command remains available, but v1 is deprecated. Receipt-owned v2 is recommended only for supported Auto user turns; physical and direct utility workflows still require v1. Before migration, stop other Pi sessions that may write v1 state and ensure the current session has no active or queued generation. The cooperative lock cannot fence older/uncooperative binaries or a stale v1 writer after migration. Any future v1 removal will be announced at least one published release ahead and wait until intended v1-dependent workflows are covered; no removal version or date is set.
+
 ## [0.5.0] - 2026-10-05
 
 ### Added
