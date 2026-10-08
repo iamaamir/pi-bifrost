@@ -55,7 +55,7 @@ import { getCircuitState, hasActiveAllowanceCooldown } from "./reliability.ts";
 import { projectReliabilityV2ForRouting } from "./reliability-v2-routing.ts";
 import { normalizeFailureObservation } from "./failure-observations.ts";
 import { createRuntimeAffinityStore, type RuntimeAffinitySuccessProof, type RuntimeAffinityStore } from "./runtime-affinity.ts";
-import type { AffinityAnchor } from "./affinity.ts";
+import { resolvePiAffinityMode, type AffinityAnchor } from "./affinity.ts";
 import {
   AutoDispatchReceiptBook,
   createReliabilityV2Store,
@@ -1259,7 +1259,13 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           dispatchReceipt.outcome = undefined;
         }
       }
-      if (!v2Active && affinityStore && request.reason === "user") {
+      const canProveAffinityBoundary = typeof ctx.sessionManager?.getHeader === "function"
+        && typeof ctx.sessionManager?.getBranch === "function";
+      if (request.reason === "user" && canProveAffinityBoundary
+        && state.enabled && !state.pinned
+        && resolvePiAffinityMode(state.config.affinity?.mode, "auto").mode !== "off"
+        && !affinityStore) affinityStore = createRuntimeAffinityStore();
+      if (!v2Active && affinityStore && canProveAffinityBoundary && request.reason === "user") {
         autoBoundary = findAutoUserBoundary(ctx, request);
         if (autoBoundary) {
           correlationTurn = autoBoundary.message;
@@ -1365,9 +1371,16 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           // Resolve from current config on every attempt. A registry refresh
           // may overlap /bifrost reload, so options cannot be captured ahead.
           let routeStart = performance.now();
-          const affinity: AffinityRoutingContext | undefined = affinityStore
-            ? { intrinsicOrigin: activeRouteOrigin, ...(activeRouteOrigin === "automatic" ? (() => { const anchor = affinityAnchor(ctx); return anchor ? { anchor } : {}; })() : {}) }
-            : undefined;
+          const affinityMode = resolvePiAffinityMode(
+            state.config.affinity?.mode,
+            state.enabled && !state.pinned ? "auto" : "physical",
+          );
+          const affinity: AffinityRoutingContext = {
+            intrinsicOrigin: activeRouteOrigin,
+            effectiveMode: affinityMode.mode,
+            modeSource: affinityMode.source,
+            ...(activeRouteOrigin === "automatic" && affinityStore ? (() => { const anchor = affinityAnchor(ctx); return anchor ? { anchor } : {}; })() : {}),
+          };
           let attempt = resolveForTier(ctx, classification.tier, affinity);
           let routingDurationMs = +(performance.now() - routeStart).toFixed(3);
           let resolved = attempt.resolution;
@@ -1467,7 +1480,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         },
         beforeDispatch: async (model, currentRequest, intent) => {
           if (!v2Active) {
-            if (affinityStore && activeRouteOrigin === "automatic" && currentRequest.reason === "user" && autoBoundary && !isVirtualModel(model)) {
+            if (affinityStore && state.enabled && !state.pinned && activeRouteOrigin === "automatic" && currentRequest.reason === "user" && autoBoundary && !isVirtualModel(model)) {
               pendingAffinity(ctx.sessionManager, true)!.set(autoBoundary.entryId, {
                 userEntryId: autoBoundary.entryId,
                 userMessage: new WeakRef(autoBoundary.message),
@@ -1499,7 +1512,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               configGeneration: boundary.configGeneration,
               modelKey: key,
               tier: activeRouteTier,
-              affinityEligible: activeRouteOrigin === "automatic",
+              affinityEligible: state.enabled && !state.pinned && activeRouteOrigin === "automatic",
               observationsEnabled: state.config.reliability?.observations?.enabled === true,
               admittedAt: Date.now(),
               proofUntil: Date.now() + V2_MAX_DISPATCH_LIFETIME_MS,
@@ -2029,9 +2042,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       const tier = classification.tier;
       strictBoundary = hasExplicitTierPolicy(state.config, tier) || hasHardEconomicAdmission(state.economicPolicy);
       const routeStart = performance.now();
-      const physicalAffinity: AffinityRoutingContext | undefined = state.config.affinity?.mode === "observe"
-        ? { intrinsicOrigin: forcedTier ? "explicit_tier" : "automatic" }
-        : undefined;
+      const physicalAffinityMode = resolvePiAffinityMode(state.config.affinity?.mode, "physical");
+      const physicalAffinity: AffinityRoutingContext = {
+        intrinsicOrigin: forcedTier ? "explicit_tier" : "automatic",
+        effectiveMode: physicalAffinityMode.mode,
+        modeSource: physicalAffinityMode.source,
+      };
       const attempt = resolveForTier(ctx, tier, physicalAffinity);
       const routingDurationMs = +(performance.now() - routeStart).toFixed(3);
       const options = attempt.options;

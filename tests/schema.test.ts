@@ -69,7 +69,7 @@ describe("shipped JSON artifacts", () => {
     assert.deepEqual(definitions.EconomicsConfig?.properties?.preference?.properties?.billingClass?.enum, ["subscription", "metered", "free"]);
   });
 
-  it("gates the optional advisory affinity config behind schemaVersion 2", () => {
+  it("gates explicit affinity overrides behind schemaVersion 2 without claiming one surface default", () => {
     const schema = readJson("schema.json") as Record<string, unknown>;
     const allOf = schema.allOf as Array<{ if?: { required?: string[] }; then?: { required?: string[]; properties?: { schemaVersion?: { const?: number } } } }>;
     const affinity = schema.definitions as { AffinityConfig?: { additionalProperties?: boolean; required?: string[]; properties?: { mode?: { enum?: string[]; default?: string }; providerAdvisory?: { type?: string } } } };
@@ -78,7 +78,7 @@ describe("shipped JSON artifacts", () => {
     assert.equal(gate?.then?.properties?.schemaVersion?.const, 2);
     assert.equal(affinity.AffinityConfig?.additionalProperties, false);
     assert.deepEqual(affinity.AffinityConfig?.properties?.mode?.enum, ["off", "observe", "retain-within-tier"]);
-    assert.equal(affinity.AffinityConfig?.properties?.mode?.default, "off");
+    assert.equal(affinity.AffinityConfig?.properties?.mode?.default, undefined);
     assert.equal(affinity.AffinityConfig?.properties?.providerAdvisory?.type, "boolean");
   });
 

@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { observeAffinity } from "../affinity.ts";
+import { observeAffinity, resolvePiAffinityMode } from "../affinity.ts";
 
 describe("affinity observation", () => {
+  it("uses the Auto-only host default while leaving physical and public defaults off", () => {
+    assert.deepEqual(resolvePiAffinityMode(undefined, "auto"), { mode: "retain-within-tier", source: "auto_default" });
+    assert.deepEqual(resolvePiAffinityMode(undefined, "physical"), { mode: "off", source: "physical_default" });
+    assert.deepEqual(resolvePiAffinityMode("off", "auto"), { mode: "off", source: "config" });
+    assert.deepEqual(resolvePiAffinityMode("observe", "physical"), { mode: "observe", source: "config" });
+    assert.deepEqual(resolvePiAffinityMode("retain-within-tier", "physical"), { mode: "retain-within-tier", source: "config" });
+  });
+
   it("reports eligible-current evidence and compares the unchanged strategy winner", () => {
     const result = observeAffinity({
       targetOrigin: "automatic",

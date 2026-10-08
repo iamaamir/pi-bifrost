@@ -38,7 +38,7 @@ import { resolveTypeSafeApiKey, type TypeSafeCredentialSource } from "./typesafe
 import { inspectDiagnostics, validateDiagnostics, type BifrostDiagnostic, type InspectDiagnosticsReport, type ValidateDiagnosticsReport } from "./diagnostics.ts";
 import type { EconomicDiagnostic, EconomicSnapshot, ReservePolicy } from "./economic-signals.ts";
 import { reconcileEconomicSnapshot } from "./economic-config.ts";
-import type { AffinityAnchor } from "./affinity.ts";
+import { resolvePiAffinityMode, type AffinityAnchor } from "./affinity.ts";
 import {
   buildInitOwnershipReceipt,
   parseReconciliationCommandArgs,
@@ -56,7 +56,7 @@ import {
 } from "./reconciliation-store.ts";
 import { projectProviderRefreshEvidence, waitForRegistryRefresh } from "./registry-refresh.ts";
 import { REGISTRY_REFRESH_TTL_MS } from "./ux-status.ts";
-import { isVirtualModel } from "./virtual-model.ts";
+import { isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
@@ -296,19 +296,22 @@ export type BifrostTierDisplay = {
 
 type ResolvedTierDisplay = BifrostTierDisplay & { resolution: RoutedModelResolution };
 type AffinityInspectEvidence = {
-  mode: "observe" | "retain-within-tier";
-  status: "anchored" | "locality_unknown";
+  mode: "off" | "observe" | "retain-within-tier";
+  source: "config" | "auto_default" | "physical_default";
+  status: "anchored" | "locality_unknown" | "disabled";
   anchor?: { model: string; provider: string; lastSuccessfulAt: string; ageMs: number };
 };
 
 function inspectAffinity(state: BifrostState, ctx: ExtensionContext): AffinityInspectEvidence | undefined {
-  const mode = state.config.affinity?.mode;
-  if (mode !== "observe" && mode !== "retain-within-tier") return undefined;
+  const surface = isBifrostAuto(ctx.model) && state.enabled && !state.pinned ? "auto" : "physical";
+  const { mode, source } = resolvePiAffinityMode(state.config.affinity?.mode, surface);
+  if (mode === "off") return { mode, source, status: "disabled" };
   const anchor = state.getAffinityAnchor?.(ctx);
-  if (!anchor) return { mode, status: "locality_unknown" };
+  if (!anchor) return { mode, source, status: "locality_unknown" };
   const now = Date.now();
   return {
     mode,
+    source,
     status: "anchored",
     anchor: {
       model: anchor.modelKey,
@@ -325,11 +328,15 @@ function resolveTierDisplay(
   ctx: ExtensionContext,
   intrinsicOrigin: string = "automatic",
 ): ResolvedTierDisplay {
-  const affinityMode = state.config.affinity?.mode;
-  const anchor = affinityMode === "observe" || affinityMode === "retain-within-tier" ? state.getAffinityAnchor?.(ctx) : undefined;
-  const affinity: AffinityRoutingContext | undefined = affinityMode === "observe" || affinityMode === "retain-within-tier"
-    ? { intrinsicOrigin, ...(anchor ? { anchor } : {}) }
-    : undefined;
+  const surface = isBifrostAuto(ctx.model) && state.enabled && !state.pinned ? "auto" : "physical";
+  const affinityMode = resolvePiAffinityMode(state.config.affinity?.mode, surface);
+  const anchor = affinityMode.mode !== "off" ? state.getAffinityAnchor?.(ctx) : undefined;
+  const affinity: AffinityRoutingContext = {
+    intrinsicOrigin,
+    effectiveMode: affinityMode.mode,
+    modeSource: affinityMode.source,
+    ...(anchor ? { anchor } : {}),
+  };
   const { options, resolution: resolved } = resolveConfiguredTier(
     ctx,
     tier,
@@ -1276,7 +1283,7 @@ export function renderTracePreview(trace: BifrostTracePreview): string[] {
   }
   if (trace.fallbackReason) lines.push(`fallback reason: ${trace.fallbackReason}`);
   if (trace.affinity) {
-    lines.push(`affinity: ${trace.affinity.mode} (${trace.affinity.status}; selection=${trace.affinity.selection})`);
+    lines.push(`affinity: ${trace.affinity.mode} (${trace.affinity.status}; source=${trace.affinity.modeSource ?? "config"}; selection=${trace.affinity.selection})`);
     if (trace.affinity.status !== "not_applicable" && trace.affinity.anchor) {
       lines.push(`  anchor: ${trace.affinity.anchor.modelKey} at ${formatDiagnosticTimestamp(trace.affinity.anchor.lastSuccessfulDispatchAt)}`);
     }
@@ -1798,7 +1805,7 @@ function renderDiagnosticLines(report: ValidateDiagnosticsReport | (InspectDiagn
       if ((reliability.observationCount ?? 0) > 200) lines.push(`  ... ${reliability.observationCount! - 200} more observations`);
     }
     if (report.affinity) {
-      lines.push(`affinity: ${report.affinity.mode} (${report.affinity.status})`);
+      lines.push(`affinity: ${report.affinity.mode} (${report.affinity.status}; source=${report.affinity.source})`);
       if (report.affinity.anchor) {
         lines.push(`  last successful model=${report.affinity.anchor.model} provider=${report.affinity.anchor.provider} at=${report.affinity.anchor.lastSuccessfulAt} age=${report.affinity.anchor.ageMs}ms`);
       }

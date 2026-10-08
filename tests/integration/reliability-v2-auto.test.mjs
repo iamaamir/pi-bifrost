@@ -66,11 +66,12 @@ function writeFixture({ home, work, port, models, bifrost, retry = { enabled: fa
   writeFileSync(join(work, ".pi", "bifrost.json"), JSON.stringify(bifrost));
 }
 
-function runPi({ home, work, model = "bifrost/auto", messages }) {
+function runPi({ home, work, model = "bifrost/auto", messages, extraExtensions = [] }) {
   return new Promise((resolve, reject) => {
     const env = { ...process.env };
     delete env.TYPESAFE_API_KEY;
-    const child = spawn(PI, ["-e", EXTENSION, "--approve", "--no-session", "--no-tools", "--model", model, "-p", ...messages], {
+    const extensionArgs = extraExtensions.flatMap((extension) => ["-e", extension]);
+    const child = spawn(PI, ["-e", EXTENSION, ...extensionArgs, "--approve", "--no-session", "--no-tools", "--model", model, "-p", ...messages], {
       stdio: ["ignore", "pipe", "pipe"],
       cwd: work,
       env: { ...env, HOME: home, PI_CODING_AGENT_DIR: join(home, ".pi", "agent"), PI_SKIP_VERSION_CHECK: "1" },
@@ -138,6 +139,128 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
   let server;
   before(async () => { server = await startFakeServer(); });
   after(async () => { if (server?.child) await stopChild(server.child); });
+
+  it("retains the successful Auto model across native turns while prefixes use the random strategy", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-affinity-auto-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-affinity-auto-work-"));
+    const baselineHome = mkdtempSync(join(tmpdir(), "bifrost-affinity-baseline-home-"));
+    const baselineWork = mkdtempSync(join(tmpdir(), "bifrost-affinity-baseline-work-"));
+    try {
+      writeFixture({
+        home, work, port: server.port,
+        models: [{ id: "allowed", reasoning: false }, { id: "alternate", reasoning: false }],
+        bifrost: {
+          enabled: true, default: "quick", strategy: "random", classifier: { enabled: false },
+          models: { quick: ["fake/allowed", "fake/alternate"] },
+          reliability: { stateVersion: 1 },
+          debug: { enabled: true },
+        },
+      });
+      const rngExtension = join(work, "affinity-rng-extension.mjs");
+      writeFileSync(rngExtension, `
+        import { writeFileSync } from "node:fs";
+        let inputIndex = 0;
+        let active = false;
+        let draws = 0;
+        const records = [];
+        const values = [0.05, 0.95, 0.95];
+        Math.random = () => {
+          if (active) draws += 1;
+          return values[Math.min(inputIndex - 1, values.length - 1)] ?? 0.5;
+        };
+        export default function(pi) {
+          pi.on("before_agent_start", () => {
+            inputIndex += 1;
+            draws = 0;
+            active = true;
+          });
+          pi.on("turn_end", () => {
+            if (active) {
+              records.push({ input: inputIndex, draws });
+              active = false;
+            }
+          });
+          pi.on("session_shutdown", () => {
+            if (active) records.push({ input: inputIndex, draws });
+            writeFileSync("affinity-rng-records.json", JSON.stringify(records));
+          });
+        }
+      `);
+
+      const before = await fakeStats(server.port);
+      const result = await runPi({
+        home,
+        work,
+        extraExtensions: [rngExtension],
+        messages: ["first same-tier turn", "second same-tier turn", "quick explicit tier turn"],
+      });
+      const after = await fakeStats(server.port);
+      assert.equal(result.timedOut, false, "pinned Pi must finish within the bounded test window");
+      assert.equal(result.code, 0, result.stderr);
+
+      const attempts = Object.fromEntries(Object.entries(after.attempts).map(([model, count]) => [model, count - (before.attempts[model] ?? 0)]));
+      assert.deepEqual(attempts, { allowed: 2, alternate: 1 }, "three user turns generate exactly three fake-provider requests, with no classifier calls");
+      assert.match(result.stderr, /Bifrost auto: quick → fake\/allowed/);
+      assert.match(result.stderr, /Bifrost auto: quick → fake\/alternate/);
+
+      const debug = readFileSync(join(work, ".pi", "bifrost-debug.jsonl"), "utf8")
+        .split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      const decisions = debug.filter((entry) => entry.event === "route_decision").map((entry) => entry.decision);
+      assert.equal(decisions.length, 3, "one route decision per native user turn");
+      assert.deepEqual(decisions.slice(0, 2).map((decision) => decision.affinity.strategyWinner), ["fake/allowed", "fake/alternate"],
+        "the controlled random strategy alternates its base winner across the automatic turns");
+      assert.deepEqual(decisions.map((decision) => decision.selected), ["fake/allowed", "fake/allowed", "fake/alternate"],
+        "the second automatic turn retains its proven anchor; the explicit prefix uses the strategy winner");
+      assert.equal(decisions[1].affinity.selection, "retained_anchor");
+      assert.equal(decisions[2].selectedStrategy, "random");
+      assert.equal(decisions[2].affinity.selection, "not_applicable", "an explicit prefix bypasses retention policy");
+
+      const rngRecords = JSON.parse(readFileSync(join(work, "affinity-rng-records.json"), "utf8"));
+      assert.equal(rngRecords.length, 3);
+
+      writeFixture({
+        home: baselineHome, work: baselineWork, port: server.port,
+        models: [{ id: "allowed", reasoning: false }, { id: "alternate", reasoning: false }],
+        bifrost: {
+          schemaVersion: 2,
+          enabled: true, default: "quick", strategy: "random", classifier: { enabled: false },
+          models: { quick: ["fake/allowed", "fake/alternate"] },
+          affinity: { mode: "off" },
+          reliability: { stateVersion: 1 },
+          debug: { enabled: true },
+        },
+      });
+      const baselineRngExtension = join(baselineWork, "affinity-rng-extension.mjs");
+      writeFileSync(baselineRngExtension, readFileSync(rngExtension, "utf8"));
+      const baselineBefore = await fakeStats(server.port);
+      const baseline = await runPi({
+        home: baselineHome,
+        work: baselineWork,
+        extraExtensions: [baselineRngExtension],
+        messages: ["first same-tier turn", "second same-tier turn", "quick explicit tier turn"],
+      });
+      const baselineAfter = await fakeStats(server.port);
+      assert.equal(baseline.timedOut, false, "baseline Pi must finish within the bounded test window");
+      assert.equal(baseline.code, 0, baseline.stderr);
+      assert.deepEqual(
+        Object.fromEntries(Object.entries(baselineAfter.attempts).map(([model, count]) => [model, count - (baselineBefore.attempts[model] ?? 0)])),
+        { allowed: 1, alternate: 2 },
+        "the explicit-off baseline also makes exactly one provider request per turn",
+      );
+      const baselineDebug = readFileSync(join(baselineWork, ".pi", "bifrost-debug.jsonl"), "utf8")
+        .split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      const baselineDecisions = baselineDebug.filter((entry) => entry.event === "route_decision").map((entry) => entry.decision);
+      assert.deepEqual(baselineDecisions.map((decision) => decision.selected), ["fake/allowed", "fake/alternate", "fake/alternate"]);
+      const baselineRngRecords = JSON.parse(readFileSync(join(baselineWork, "affinity-rng-records.json"), "utf8"));
+      assert.deepEqual(rngRecords.map((record) => record.draws), baselineRngRecords.map((record) => record.draws),
+        "Auto retention performs zero extra random draws compared with the configured off baseline");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+      rmSync(baselineHome, { recursive: true, force: true });
+      rmSync(baselineWork, { recursive: true, force: true });
+    }
+  });
 
   for (const mode of ["v1", "v2"]) {
     it(`cools only an explicitly exhausted model before the next fresh ${mode} Auto turn`, async () => {

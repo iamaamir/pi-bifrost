@@ -9,7 +9,20 @@ export type AffinityTargetOrigin =
   | "retry";
 
 export type AffinityMode = "off" | "observe" | "retain-within-tier";
+export type PiAffinitySurface = "auto" | "physical";
+export type PiAffinityModeSource = "config" | "auto_default" | "physical_default";
 export type AffinitySelection = "strategy" | "retained_anchor" | "no_anchor" | "anchor_not_eligible" | "not_applicable";
+
+/** Pi-host defaults are surface-specific; resolve-only consumers keep their existing config semantics. */
+export function resolvePiAffinityMode(
+  configuredMode: AffinityMode | undefined,
+  surface: PiAffinitySurface,
+): { readonly mode: AffinityMode; readonly source: PiAffinityModeSource } {
+  if (configuredMode !== undefined) return { mode: configuredMode, source: "config" };
+  return surface === "auto"
+    ? { mode: "retain-within-tier", source: "auto_default" }
+    : { mode: "off", source: "physical_default" };
+}
 
 export interface AffinityAnchor {
   readonly modelKey: string;
@@ -53,7 +66,8 @@ export type AffinityObservation =
   };
 
 export type AffinityRouteObservation = AffinityObservation & {
-  readonly mode: Exclude<AffinityMode, "off">;
+  readonly mode: AffinityMode;
+  readonly modeSource?: PiAffinityModeSource;
   readonly selection: AffinitySelection;
   readonly strategyWinner?: string;
   readonly selectedModel?: string;

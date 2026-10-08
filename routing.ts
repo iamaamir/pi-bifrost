@@ -4,7 +4,7 @@ import { getCircuitState, type ReliabilityConfig, type ReliabilityState } from "
 import { isVirtualModel } from "./virtual-model.ts";
 import { evaluateReserves, type EconomicSnapshot, type ReserveEvaluation, type ReservePolicy } from "./economic-signals.ts";
 import { projectBillingPreference, type BillingPreferenceProjection } from "./economic-preferences.ts";
-import { observeAffinity, type AffinityAnchor, type AffinityMode, type AffinityRouteObservation } from "./affinity.ts";
+import { observeAffinity, type AffinityAnchor, type AffinityMode, type AffinityRouteObservation, type PiAffinityModeSource } from "./affinity.ts";
 
 export type RoutingStrategy =
   | "first"
@@ -274,6 +274,9 @@ export interface AffinityRoutingContext {
   readonly targetOrigin?: string;
   readonly intrinsicOrigin?: string;
   readonly anchor?: AffinityAnchor;
+  /** Pi adapter effective mode. Pure resolver callers continue to use config.affinity only. */
+  readonly effectiveMode?: AffinityMode;
+  readonly modeSource?: PiAffinityModeSource;
 }
 
 export interface TierResolutionConfig {
@@ -336,7 +339,20 @@ export function resolveConfiguredTier(
   const resolution = policy && Array.isArray(policy.fallbackTiers)
     ? resolveWithExplicitTierBoundary(ctx, options, policy.fallbackTiers, config, reliabilityState, reliabilityConfig, routeNow, economicContext, random)
     : resolveModelWithFallback(ctx, { ...options, reliabilityState, reliabilityConfig, now: routeNow, economic: economicContext, random });
-  if (config.affinity?.mode !== undefined && config.affinity.mode !== "off" && affinity !== undefined) {
+  const affinityMode = config.affinity?.mode ?? affinity?.effectiveMode;
+  if (affinityMode !== undefined && affinity !== undefined) {
+    if (affinityMode === "off") {
+      if (!affinity.modeSource) return { options, resolution };
+      resolution.affinityObservation = Object.freeze({
+        version: 1,
+        status: "not_applicable",
+        snapshotAsOf: routeNow,
+        mode: "off",
+        ...(affinity.modeSource ? { modeSource: affinity.modeSource } : {}),
+        selection: "not_applicable",
+      });
+      return { options, resolution };
+    }
     const attemptedTarget = resolution.attemptedTiers?.find((attempt) => attempt.resolution.selected)
       ?? resolution.attemptedTiers?.at(-1);
     const targetPool = attemptedTarget?.resolution
@@ -352,11 +368,11 @@ export function resolveConfiguredTier(
       ...(strategyWinner ? { baseStrategyWinner: strategyWinner } : {}),
       ...(affinity?.anchor ? { anchor: affinity.anchor } : {}),
       snapshotAsOf: routeNow,
-      ...(config.affinity.providerAdvisory ? { includeSameProviderAdvisory: true } : {}),
+      ...(config.affinity?.providerAdvisory ? { includeSameProviderAdvisory: true } : {}),
     });
     let selection: AffinityRouteObservation["selection"] = observation.status === "not_applicable" ? "not_applicable"
       : !affinity.anchor ? "no_anchor" as const : "strategy" as const;
-    if (config.affinity.mode === "retain-within-tier" && observation.status !== "not_applicable" && affinity.anchor) {
+    if (affinityMode === "retain-within-tier" && observation.status !== "not_applicable" && affinity.anchor) {
       const retainedModel = selectionCandidates.find((candidate) => modelKey(candidate) === affinity.anchor!.modelKey);
       if (!retainedModel) {
         selection = "anchor_not_eligible";
@@ -368,7 +384,8 @@ export function resolveConfiguredTier(
     }
     resolution.affinityObservation = Object.freeze({
       ...observation,
-      mode: config.affinity.mode,
+      mode: affinityMode,
+      ...(affinity.modeSource ? { modeSource: affinity.modeSource } : {}),
       selection,
       ...(strategyWinner ? { strategyWinner } : {}),
       ...(resolution.selected ? { selectedModel: modelKey(resolution.selected) } : {}),

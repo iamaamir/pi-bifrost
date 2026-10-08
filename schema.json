@@ -36,7 +36,7 @@
     },
     "affinity": {
       "$ref": "#/definitions/AffinityConfig",
-      "description": "Optional observation or within-tier retention using a proven successful Auto-dispatch anchor. Off by default. Retention stays inside the final selection pool and does not override hard exclusions. Requires schemaVersion 2."
+      "description": "Optional explicit affinity override. When absent, the Pi extension retains a proven successful Auto-dispatch anchor within the selected tier; physical selection and the resolve-only API remain off by default. Retention stays inside the final selection pool and does not override hard exclusions. This namespace requires schemaVersion 2."
     },
     "enabled": {
       "type": "boolean",
@@ -431,7 +431,7 @@
       "additionalProperties": false,
       "required": ["mode"],
       "properties": {
-        "mode": { "type": "string", "enum": ["off", "observe", "retain-within-tier"], "default": "off", "description": "observe reports affinity. retain-within-tier may keep an automatic successful-dispatch anchor only when it is in the selected tier's final selection pool; it never crosses tiers or bypasses hard exclusions." },
+        "mode": { "type": "string", "enum": ["off", "observe", "retain-within-tier"], "description": "Explicit Pi extension override: off disables affinity, observe reports the proven Auto anchor without changing selection, and retain-within-tier may keep an automatic successful-dispatch anchor only when it is in the selected tier's final selection pool. It never crosses tiers or bypasses hard exclusions." },
         "providerAdvisory": { "type": "boolean", "default": false, "description": "Include whether any final eligible candidate shares the anchor provider. This reports candidate availability only; it does not claim cache reuse or savings." }
       }
     },
