@@ -80,6 +80,16 @@ function assertResultState(result: ReturnType<typeof admitReliabilityV2Dispatch>
 }
 
 describe("experimental reliability v2 transitions", () => {
+  it("keeps persisted failure history valid when the configured threshold is lowered", () => {
+    const historyConfig = { ...config, failureThreshold: 3 };
+    const history = emptyReliabilityV2State();
+    history.scopes[modelScopeKey(modelA)] = { generation: 3, failures: [1, 2, 3] };
+    assert.equal(validateReliabilityV2State(history, historyConfig), true);
+    assert.equal(validateReliabilityV2State(JSON.parse(JSON.stringify(history)), config), true);
+    assert.equal(validateReliabilityV2State(history, { ...config, failureThreshold: 10_000 }), true);
+    assert.equal(validateReliabilityV2State(history, { ...config, failureThreshold: 10_001 }), false);
+  });
+
   it("creates model-only admission receipts and generation-bearing lease references", () => {
     const result = admit(halfOpenState(modelA), "dispatch-a", "outcome-a", "owner-a", [modelA], 10);
     assert.equal(result.status, "admitted");
@@ -130,6 +140,40 @@ describe("experimental reliability v2 transitions", () => {
     assert.equal(staleSuccess.status, "stale");
     assert.equal(scope(staleSuccess.state).generation, 2);
     assert.equal(scope(staleSuccess.state).openUntil, 22);
+  });
+
+  it("preserves trial backoff and reopens after an aged-out half-open failure", () => {
+    const oldClosed = admit(emptyReliabilityV2State(), "dispatch-old-closed", "outcome-old-closed", "owner-old", [modelA], 0);
+    const trigger = admit(oldClosed.state, "dispatch-trigger", "outcome-trigger", "owner-trigger", [modelA], 0);
+    const initialBlock = settle(trigger.state, "dispatch-trigger", "outcome-trigger", "owner-trigger", "failure", 1);
+    assert.equal(scope(initialBlock.state).openUntil, 11);
+    const trial = admit(initialBlock.state, "dispatch-trial-backoff", "outcome-trial-backoff", "owner-trial", [modelA], 11);
+    const backedOff = settle(trial.state, "dispatch-trial-backoff", "outcome-trial-backoff", "owner-trial", "failure", 12);
+    assert.equal(scope(backedOff.state).openUntil, 32);
+    assert.equal(scope(backedOff.state).cooldownMultiplier, 2);
+
+    const lateWhileBlocked = settle(backedOff.state, "dispatch-old-closed", "outcome-old-closed", "owner-old", "failure", 13);
+    assert.equal(scope(lateWhileBlocked.state).openUntil, 32);
+    assert.equal(scope(lateWhileBlocked.state).cooldownMultiplier, 2);
+
+    const twoFailures = { ...config, failureThreshold: 2, windowMs: 5 };
+    const first = admit(emptyReliabilityV2State(), "dispatch-aged-one", "outcome-aged-one", "owner-aged-one", [modelA], 0, twoFailures);
+    const second = admit(first.state, "dispatch-aged-two", "outcome-aged-two", "owner-aged-two", [modelA], 0, twoFailures);
+    const lateReceipt = admit(second.state, "dispatch-aged-late", "outcome-aged-late", "owner-aged-late", [modelA], 0, twoFailures);
+    const oneFailure = settle(lateReceipt.state, "dispatch-aged-one", "outcome-aged-one", "owner-aged-one", "failure", 1, twoFailures);
+    const opened = settle(oneFailure.state, "dispatch-aged-two", "outcome-aged-two", "owner-aged-two", "failure", 2, twoFailures);
+    assert.equal(scope(opened.state).openUntil, 12);
+    const recoveryTrial = admit(opened.state, "dispatch-aged-trial", "outcome-aged-trial", "owner-aged-trial", [modelA], 12, twoFailures);
+    const trialFailure = settle(recoveryTrial.state, "dispatch-aged-trial", "outcome-aged-trial", "owner-aged-trial", "failure", 13, twoFailures);
+    assert.equal(scope(trialFailure.state).openUntil, 33);
+    assert.equal(scope(trialFailure.state).cooldownMultiplier, 2);
+    const lateFailure = settle(trialFailure.state, "dispatch-aged-late", "outcome-aged-late", "owner-aged-late", "failure", 34, twoFailures);
+    assert.equal(lateFailure.status, "settled");
+    assert.equal(scope(lateFailure.state).openUntil, 44);
+    assert.equal(scope(lateFailure.state).cooldownMultiplier, 2);
+    assert.equal(scope(lateFailure.state).generation, scope(trialFailure.state).generation + 1);
+    assert.equal(validateReliabilityV2State(lateFailure.state, twoFailures), true);
+    assert.equal(validateReliabilityV2State(JSON.parse(JSON.stringify(lateFailure.state)), twoFailures), true);
   });
 
   it("rejects a reclaimed lease owner and allows the new owner to close the circuit", () => {

@@ -264,7 +264,7 @@ function isConfig(value: unknown): value is ReliabilityV2Config {
   const retention = ownValue(config, "dedupRetentionMs");
   const dedupCapacity = ownValue(config, "maxDedupEntries");
   const receiptCapacity = ownValue(config, "maxDispatchReceipts");
-  return safeInteger(threshold, 1) && threshold <= 100_000
+  return safeInteger(threshold, 1) && threshold <= MAX_FAILURE_TIMESTAMPS
     && safeInteger(window, 1) && window <= MAX_TIMESTAMP
     && safeInteger(cooldown, 1) && cooldown <= MAX_TIMESTAMP
     && safeInteger(leaseTtl, 1) && leaseTtl <= MAX_TIMESTAMP
@@ -310,7 +310,7 @@ function validLease(value: unknown): value is ReliabilityV2Lease {
     && expiresAt <= maxExpiresAt;
 }
 
-function validScope(value: unknown, failureThreshold: number): value is ReliabilityV2Scope {
+function validScope(value: unknown): value is ReliabilityV2Scope {
   const scope = plainRecord(value);
   if (!scope || !hasOnlyKeys(scope, ["generation", "failures"], ["openUntil", "cooldownMultiplier", "lease"])) return false;
   const failures = safeArray(ownValue(scope, "failures"));
@@ -319,7 +319,7 @@ function validScope(value: unknown, failureThreshold: number): value is Reliabil
   const lease = ownValue(scope, "lease");
   return safeInteger(ownValue(scope, "generation"))
     && !!failures
-    && failures.length <= Math.min(MAX_FAILURE_TIMESTAMPS, failureThreshold)
+    && failures.length <= MAX_FAILURE_TIMESTAMPS
     && failures.every(timestamp)
     && (openUntil === undefined || timestamp(openUntil))
     && (multiplier === undefined || safeInteger(multiplier, 1) && multiplier <= 1_000_000)
@@ -380,7 +380,7 @@ function validState(value: unknown, config: ReliabilityV2Config): value is Relia
   for (const key of scopeKeys) {
     const record = ownValue(scopes, key);
     const encodedModel = key.match(/^model:(\d+):(.+)$/);
-    if (!encodedModel || Number(encodedModel[1]) !== encodedModel[2]!.length || !modelKey(encodedModel[2]) || !validScope(record, config.failureThreshold)) return false;
+    if (!encodedModel || Number(encodedModel[1]) !== encodedModel[2]!.length || !modelKey(encodedModel[2]) || !validScope(record)) return false;
   }
   const receiptOutcomes = new Set<string>();
   for (const id of dispatchKeys) {
@@ -394,7 +394,7 @@ function validState(value: unknown, config: ReliabilityV2Config): value is Relia
     for (const scopeReceipt of receipt.scopes) {
       const scopeRecord = ownValue(scopes, scopeReceipt.scopeKey);
       if (!scopeKeys.includes(scopeReceipt.scopeKey)
-        || !validScope(scopeRecord, config.failureThreshold)
+        || !validScope(scopeRecord)
         || scopeReceipt.generation > scopeRecord.generation) return false;
       if (scopeReceipt.maxExpiresAt !== undefined && scopeReceipt.maxExpiresAt > receipt.proofUntil) return false;
     }
@@ -913,10 +913,11 @@ export function settleReliabilityV2Dispatch(
         const until = safeAdd(checked.now, delay);
         if (until === undefined) return noChange("overflow", "cooldown_time_overflow", checked.state);
         openUntil = until;
-      } else if (failures.length >= checked.config.failureThreshold) {
+      } else if (failures.length >= checked.config.failureThreshold
+        || previous.openUntil !== undefined && previous.openUntil <= checked.now) {
         const until = safeAdd(checked.now, checked.config.cooldownMs);
         if (until === undefined) return noChange("overflow", "cooldown_time_overflow", checked.state);
-        openUntil = until;
+        openUntil = Math.max(previous.openUntil ?? 0, until);
       }
       next.scopes[scopeReceipt.scopeKey] = {
         generation,
