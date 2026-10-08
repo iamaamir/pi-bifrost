@@ -51,6 +51,96 @@ The pool limits which models qualify. The strategy selects a healthy candidate b
 
 Legacy configurations may fall back to the configured default tier when a requested tier has no eligible model. Schema version 2 can set an explicit ordered `tierPolicies.<tier>.fallbackTiers` list; an empty list makes that tier a singleton boundary. Version 2 alone preserves legacy fallback behavior. See the [configuration guide](docs/guide/configuration.md#explicit-fallback-boundaries-schema-version-2).
 
+### Routing a fresh prompt
+
+These diagrams assume that Bifrost routing is enabled, no model is pinned, and each prompt starts a fresh user turn. Affinity retention and reliability v2 apply only to Auto. Retries and continuations stay on the model that started the turn.
+
+An explicit tier prefix chooses a tier before classification. A direct model rule also skips tier selection. Otherwise, Bifrost checks its local classification cache, then uses configured classifiers, regex rules, or the default tier.
+
+```mermaid
+flowchart TD
+    A["Fresh prompt"] --> B{"Reliability v2 active?"}
+    B -- Yes --> C{"Config, state, and Auto turn boundary valid?"}
+    C -- No --> D["Stop before classification"]
+    C -- Yes --> E{"Tier prefix at start?"}
+    B -- No --> E
+    E -- Yes --> F["Use that tier<br/>Remove prefix<br/>Skip classification and affinity retention"]
+    E -- No --> G{"Direct model rule matches?"}
+    G -- Yes --> H["Resolve bound model<br/>Skip tier selection and affinity retention"]
+    G -- No --> I{"Local cache has a valid tier?"}
+    I -- Yes --> J["Use cached tier"]
+    I -- No --> K{"Optional direct classifier returns a tier?"}
+    K -- Yes --> L["Use classifier tier"]
+    K -- No --> M{"Optional prompt classifier returns a tier?"}
+    M -- Yes --> L
+    M -- No --> N{"Regex rule matches?"}
+    N -- Tier --> O["Use matched tier"]
+    N -- Direct model --> H
+    N -- No --> P{"Default tier configured?"}
+    P -- Yes --> Q["Use default tier"]
+    P -- No --> R["No route"]
+```
+
+The direct classifier and prompt classifier stages run only when configured. If a classifier does not return a valid tier, Bifrost continues to the next stage. A cache miss continues classification. It does not change a tier by itself. When reliability v2 is enabled, Bifrost checks its configuration, state, and Auto turn boundary before classification. It admits the selected model later, before the provider request.
+
+### Selecting and dispatching a model
+
+The anchor is the model from the last provably successful automatic Auto turn on this branch. Bifrost filters the configured pool before it applies the tier strategy. If that tier has no eligible model, its configured fallback tiers can be checked. Auto keeps the anchor only when retention is active and the anchor remains in the final selection pool.
+
+```mermaid
+flowchart TD
+    A["Resolved tier"] --> B["Load configured model pool"]
+    B --> C["Filter unavailable models"]
+    C --> D["Apply reserve policy and reliability exclusions"]
+    D --> E["Apply configured billing preference, if active"]
+    E --> F{"Eligible models remain?"}
+    F -- No --> G{"Fallback tier available?"}
+    G -- Yes --> B
+    G -- No --> H["No model selected"]
+    F -- Yes --> I["Apply tier strategy"]
+    I --> J{"Automatic Auto route, retain-within-tier active,<br/>and anchor eligible?"}
+    J -- Yes --> K["Keep anchor"]
+    J -- No --> L["Use strategy winner"]
+    K --> M{"Reliability v2 enabled?"}
+    L --> M
+    M -- Yes --> N["Admit turn before provider request"]
+    M -- No --> O["Dispatch physical model"]
+    N -- Rejected --> P["Do not send turn"]
+    N -- Admitted --> O
+    O --> Q{"Automatic Auto user turn proven successful?"}
+    Q -- Yes --> R["Remember model for this branch"]
+    Q -- No --> S["Keep current anchor"]
+```
+
+Reliability v2 is active when schema version 2 sets `reliability.stateVersion: 2` and reliability is enabled. It requires valid state and a proven Auto turn before classification. It admits the selected model before Auto sends the provider request. Rejection stops the turn. Bifrost never replays a failed prompt automatically.
+
+Auto affinity keeps a model within the selected tier. It does not keep related prompts in the same tier. A tier change can select a different model. Physical routing has affinity off by default. Schema version 2 can set `affinity.mode` to `off`, `observe`, or `retain-within-tier`.
+
+```mermaid
+sequenceDiagram
+    participant You
+    participant Bifrost
+    participant Models
+
+    You->>Bifrost: First ordinary prompt
+    Note over Bifrost: Tier general<br/>Strategy selects A
+    Bifrost->>Models: Dispatch A
+    Models-->>Bifrost: Successful automatic Auto turn proven
+    Note over Bifrost: Remember A for this branch
+
+    You->>Bifrost: Follow-up prompt
+    Note over Bifrost: Same tier; A and B eligible<br/>Keep A even if strategy selects B
+    Bifrost->>Models: Dispatch A
+
+    You->>Bifrost: Prompt with the quick prefix
+    Note over Bifrost: Prefix selects quick<br/>Use its strategy; do not promote anchor
+    Bifrost->>Models: Dispatch quick-tier winner
+
+    You->>Bifrost: Later ordinary prompt for frontier
+    Note over Bifrost: Tier changes to frontier<br/>Select from its eligible pool
+    Bifrost->>Models: Dispatch frontier-tier winner
+```
+
 Start a message with a configured tier name to choose it for one turn:
 
 ```text
