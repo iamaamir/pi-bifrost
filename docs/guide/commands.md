@@ -16,7 +16,7 @@
 | `/bifrost validate` | Check the active loaded configuration and local registry references; run `/bifrost reload` after editing config files |
 | `/bifrost inspect` | Show configured model availability, auth presence, and local reliability circuits without routing or probing |
 | `/bifrost config reconcile` | Preview exact generated model membership for one selected config source, tier, and provider; apply only with the reviewed digest |
-| `/bifrost reliability migrate` | Prepare the configured receipt-owned reliability v2 state without changing the selected model; add `--fresh` only when no v1 state exists |
+| `/bifrost reliability migrate` | Prepare migrated reliability state; see the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state) |
 | `/bifrost cache stats` | Inspect local classification cache |
 | `/bifrost cache clear` | Clear local classification cache |
 | `/bifrost classifier` | Choose `prompt`, `typesafe`, or `pi-native`. The Pi-native picker can select a catalog model or use the default |
@@ -30,7 +30,7 @@
 
 `validate` and `inspect` accept a leading `--json` flag. Both commands are read-only: they do not classify, refresh the registry, probe providers, or write reliability state. `inspect` shows local registry/auth/circuit snapshots and the effective affinity mode: Auto defaults to within-tier retention, while physical routing defaults off. It reports the mode source and, when active, the proven Auto anchor's model and age without branch or prompt data. Its “Bifrost last registry refresh age” is the time since this extension last refreshed Pi's registry, not a freshness claim about provider data. JSON mode emits a version-1 `[bifrost-json] ` report line to stderr. The validation report names its source as `loaded-effective-config`; it does not read un-reloaded disk edits.
 
-Before `/bifrost reliability migrate`, stop all other Pi sessions that may write the project's v1 reliability file and ensure the current session has no active or queued generation. The command runs in the current session. Current Bifrost v1 saves and migration share a source lock, and migration re-reads the latest source while holding it through backup and v2 seed. Older or uncooperative processes and stale v1 stores that write after migration cannot be fenced, so this is not a live-cutover guarantee. If a lock remains after a crash, see [reliability lock recovery](reliability-and-cache.md#receipt-owned-reliability-state-experimental) for exact-path checks; do not remove it based only on age or PID.
+For safe migration, follow the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state).
 
 ## Common workflows
 

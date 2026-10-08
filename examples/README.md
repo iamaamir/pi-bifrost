@@ -33,7 +33,7 @@ Adds model health tracking and automatic fallback. Models with repeated failures
 
 See full example: `economical-frontier-reliability.json`
 
-The experimental receipt-owned Auto flow is shown in `reliability-v2-auto.json`. It requires `schemaVersion: 2`, `reliability.stateVersion: 2`, and an explicit `/bifrost reliability migrate` preparation before Auto can route. Use `/bifrost reliability migrate --fresh` only when no v1 state file exists. This mode supports Auto user turns; physical routing and direct utility requests remain unavailable while v2 is enabled. The shipped defaults remain on v1.
+The experimental Auto reliability configuration is shown in `reliability-v2-auto.json`. Follow the [setup and migration steps](../docs/guide/reliability-and-cache.md#existing-users-migrate-reliability-state) and prepare the state file before you use this configuration.
 
 Try:
 

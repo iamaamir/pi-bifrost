@@ -37,7 +37,7 @@ After init, run `/bifrost classifier` to choose how Bifrost judges tiers. Use `/
 
 **Bifrost Auto is opt-in.** Select `bifrost/auto` in Pi's `/model` picker. Pi then dispatches the physical model for each request using the same tiers, reliability state, and selection strategies. The footer shows `bifrost/auto → provider/model`, and assistant messages record the physical model that answered. Pi-owned tool continuations stay on the model that started the turn. Pi may first make its own bounded retry; Bifrost's separate allowance recovery is described below. Auto requires Pi `1.0.1` or newer.
 
-With legacy reliability settings, both modes use the same tier policy. Experimental `schemaVersion: 2` plus `reliability.stateVersion: 2` enables receipt-owned reliability for Auto user turns only. It requires a prepared v2 sidecar and fails closed before classification or generation when that state is missing or invalid. Physical routing and direct utility requests are unsupported while v2 is enabled; use `stateVersion: 1` for physical routing. `/bifrost pin` and `/bifrost off` remain available to leave Auto without sending a turn. Neither mode asks a model to follow routing instructions. [Read the routing controls](docs/guide/routing-controls.md) and [reliability guide](docs/guide/reliability-and-cache.md).
+Both modes use the same tier policy. Reliability filters unhealthy models and records recovery trials. Auto checks its reliability state before it sends a turn. Existing users who need to migrate reliability state can follow the [migration guide](docs/guide/reliability-and-cache.md#existing-users-migrate-reliability-state). Neither mode asks a model to follow routing instructions. [Read the routing controls](docs/guide/routing-controls.md) and [reliability guide](docs/guide/reliability-and-cache.md).
 
 ## How a route is chosen
 
@@ -94,13 +94,13 @@ Legacy configurations may fall back to the configured default tier when a reques
 
 ### Routing a fresh prompt
 
-These diagrams assume that Bifrost routing is enabled, no model is pinned, and each prompt starts a fresh user turn. Affinity retention and reliability v2 apply only to Auto. Retries and continuations stay on the model that started the turn.
+These diagrams assume that Bifrost routing is enabled, no model is pinned, and each prompt starts a fresh user turn. Affinity retention applies only to Auto. Retries and continuations stay on the model that started the turn.
 
 An explicit tier prefix chooses a tier before classification. A direct model rule also skips tier selection. Otherwise, Bifrost checks its local classification cache, then uses configured classifiers, regex rules, or the default tier.
 
 ```mermaid
 flowchart TD
-    A["Fresh prompt"] --> B{"Reliability v2 active?"}
+    A["Fresh prompt"] --> B{"Reliability pre-route check required?"}
     B -- Yes --> C{"Config, state, and Auto turn boundary valid?"}
     C -- No --> D["Stop before classification"]
     C -- Yes --> E{"Tier prefix at start?"}
@@ -122,7 +122,7 @@ flowchart TD
     P -- No --> R["No route"]
 ```
 
-The direct classifier and prompt classifier stages run only when configured. If a classifier does not return a valid tier, Bifrost continues to the next stage. A cache miss continues classification. It does not change a tier by itself. When reliability v2 is enabled, Bifrost checks its configuration, state, and Auto turn boundary before classification. It admits the selected model later, before the provider request.
+The direct classifier and prompt classifier stages run only when configured. If a classifier does not return a valid tier, Bifrost continues to the next stage. A cache miss continues classification. It does not change a tier by itself. When the active reliability mode requires an Auto turn proof, Bifrost checks its configuration and state before classification. It admits the selected model later, before the provider request.
 
 ### Selecting and dispatching a model
 
@@ -142,10 +142,10 @@ flowchart TD
     I --> J{"Automatic Auto route, retain-within-tier active,<br/>and anchor eligible?"}
     J -- Yes --> K["Keep anchor"]
     J -- No --> L["Use strategy winner"]
-    K --> M{"Reliability v2 enabled?"}
+    K --> M{"Reliability admission required?"}
     L --> M
     M -- Yes --> N["Admit turn before provider request"]
-    M -- No --> O["Dispatch physical model"]
+    M -- No --> O["Dispatch selected model"]
     N -- Rejected --> P["Do not send turn"]
     N -- Admitted --> O
     O --> Q{"Automatic Auto user turn proven successful?"}
@@ -153,7 +153,7 @@ flowchart TD
     Q -- No --> S["Keep current anchor"]
 ```
 
-Reliability v2 is active when schema version 2 sets `reliability.stateVersion: 2` and reliability is enabled. It requires valid state and a proven Auto turn before classification. It admits the selected model before Auto sends the provider request. Rejection stops the turn. The same one-attempt allowance-recovery exception applies after confirmed receipt settlement.
+When reliability admission applies, Bifrost requires valid state and a proven Auto turn before classification. It admits the selected model before Auto sends the provider request. Rejection stops the turn. The same one-attempt allowance-recovery rule applies after Bifrost confirms the failed attempt.
 
 Auto affinity keeps a model within the selected tier. It does not keep related prompts in the same tier. A tier change can select a different model. Physical routing has affinity off by default. Schema version 2 can set `affinity.mode` to `off`, `observe`, or `retain-within-tier`.
 
