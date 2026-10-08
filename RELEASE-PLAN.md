@@ -1,0 +1,83 @@
+# Release execution ledger
+
+Status: implementation authorized by the user on 7 October 2026. Scope is PRD.md and IMPLEMENTATION.md with image support excluded. This ledger records actual acceptance evidence; planned milestones are not completed features.
+
+## Ownership and gates
+
+The primary agent owns architecture, scope, source review, acceptance and release coordination. The affordable implementation subagent (`gpt-6-luna`) writes code and tests. Changes remain small and sequential in the shared checkout. No implementation is accepted solely on the writer's report: review the diff and run relevant checks. No image routing, automatic replay, orchestration, hidden provider preferences or weakened manual control.
+
+Local branch: `codex/routing-release`. Accepted checkpoints are recorded below; the final integration checkpoint is `553fdc2`. No package publishing, remote push, PR creation or version/tag change has occurred. Release candidate/version selection follows final accepted scope and verification. Never describe quota snapshots as automatic live tracking without a verified adapter.
+
+## Current candidate
+
+The combined implementation passed final local acceptance on 8 October. The primary independently ran 788 unit tests, typecheck, all 36 pinned-Pi fake-provider integrations, and whitespace checks after production code froze. The implementation owner completed 12 general UI captures and six reliability UI scenarios with the pinned host and isolated local fake provider; the primary visually reviewed strict rejection/editor restoration and route trace captures. Installed-consumer packaging is included in the unit gate.
+
+Accepted integrations: Auto-only v2 runtime/migration and bounded failure observations; successful branch-local affinity observation and opt-in retention; declared billing preferences; explicit owned-membership reconciliation commands and journaled init receipts. Review added exact assistant-model settlement fencing, missing-state manual exit, invalid-economics last-good reload, cross-tier ownership rejection, and byte-preserving ownership-only updates. Defaults remain legacy unless explicitly opted in, and image routing is excluded.
+
+Quota support is snapshot-based. Automatic live allowance tracking is blocked by the documented external evidence gate. Shared reliability transactions and reconciliation journals require explicit operator repair of orphan locks; they do not promise automatic lock reclamation or protection against every uncooperative external editor. V2 runtime supports proven Auto user turns, not physical/direct utility requests or shared account/provider circuits. Detailed classifier phase timings remain deferred; total deadline enforcement is delivered.
+
+Synthetic evaluation uses actual production resolution: 19 routing cases and ten multi-turn affinity scenarios. The affinity corpus records 12 baseline switches versus nine with retention, two anchor overrides, and zero invariant violations. The benchmark binds its source fingerprint, checks start/end stability, and verifies a clean pinned baseline. Representative 100-candidate/20-tier reserve resolution p95 was about 2.68 ms on exhausted pools. These results establish local invariant and timing evidence, not generation quality, cache reuse, dollar savings or production latency.
+
+No package publish, tag, version bump, remote push, or PR creation is part of this local acceptance checkpoint. The package remains 0.5.0 with changes under Unreleased.
+
+## Accepted slices
+
+M0a (7 October 2026): test-only patch reviewed by primary agent. Added stable metric tie/order checks, deterministic random boundaries, direct-rule first-match precedence, physical legacy no-model continuation and fake-provider attempt-count no-replay assertion. Changed four existing test files; no production behavior changes. Writer evidence: 440 unit tests, typecheck, 22 fake-provider integrations passed. Primary independently reran unit tests (440 passed) and typecheck (passed), reviewed all four diffs, and checked whitespace. Integration run used authorized local loopback access; no live providers. No commit made.
+
+M0b accepted (7 October 2026): shared content-free selection summary, exact tier-option composition, explicit trace preview with existing JSON preserved, debug-only runtime summary allocation. Primary independently passed 448 unit tests and final typecheck, reviewed source/compatibility/privacy and visually inspected fresh isolated Pi 1.0.1 trace screenshot. Writer evidence: 22 integrations, six reliability UI scenarios and eight isolated smoke captures passed. Initial global-Pi smoke was noisy and not accepted; isolated pinned-Pi rerun supplied clean evidence. Independent review caught stale options across refresh/reload; corrected, with actual extension-registered Auto route and reload regression authored by the second affordable subagent and reviewed by primary. Full classifier phase timing remains deferred. No commit made.
+
+M1a accepted and checkpointed in `574ac31`: exclusive unique sibling temp, file fsync, atomic rename with no destination unlink, restrictive new-file mode, existing mode preservation, symlink/non-file rejection, own-temp cleanup and content-free durability/cleanup warnings. Primary independently passed targeted storage tests after fixing error masking; writer added bounded-worker/deadline and committed-directory-sync tests (11 storage cases). Included in primary's final 505-test/typecheck pass. This prevents torn files, not cross-process lost updates; portability beyond the current host remains a verification limit.
+
+Strict vertical slice accepted: schemaVersion 2 alone stays legacy; explicit fallback lists bound ordered attempts, including singleton []. Physical no-route/activation failure returns handled, Auto cannot escape to last dispatch, and manual pin/off beats awaited routing. Invalid namespaces/versions block new strict routing; malformed/non-object reload layers preserve last-good configuration; session-local pin survives valid reload. Source reviewed and independent combined snapshot passed 505 unit tests/typecheck/whitespace. Writer verified 25 fake-provider integrations, six reliability UI scenarios, and isolated pinned-Pi 1.0.1 TUI smoke including actual strict rejection and original editor-text restoration. Registered-hook tests independently exposed and resolved pin/abort/UI-error races. ADR 0021 is narrowed to generic tier boundaries, not direct model-rule arrays. Checkpointed in `996d3d3`.
+
+Offline diagnostics accepted and checkpointed in `996d3d3`: validate/inspect use loaded immutable local observations without classifier, refresh, probe, credentials, model selection, RNG or writes. Primary reviewed privacy and command effects; deterministic command tests and isolated Pi 1.0.1 inspection screenshot passed.
+
+Half-open recovery correction accepted and checkpointed in `b909695`: a failed admitted trial reopens with doubled cooldown even after the original failure window expires. Primary reviewed the minimal transition and independently passed all 12 reliability tests, including cancellation without failure. This does not add cross-process ownership protection.
+
+Snapshot reserves accepted and checkpointed in `a8b343d`: schema-v2 observe/policy modes, pre-strategy filtering in every attempted pool, no physical/Auto escape on hard no-route, private immutable facts and reload binding quarantine, source freshness separate from reset-window applicability. Primary reviewed source and independently passed 199 targeted economic/command/routing/schema/status tests, typecheck and whitespace; preceding combined snapshot passed 559 tests. Writer supplied seven fake-provider Auto scenarios, six reliability UI scenarios and 12 isolated pinned-Pi captures. Only static declared/estimated facts, model/provider scopes: no live adapter, account dispatch, billing ranking or spend cap.
+
+Failure observation foundation accepted and checkpointed in `6cbb34a`: pure normalization of the specified category taxonomy, structured/status/advisory evidence precedence, model-only scope, allowlisted sources, bounded opaque identities and clock/retry hints. Raw error text and arbitrary metadata are absent from results. Primary reviewed source, requested future-clock/input-bound fixes, and independently passed 11 tests. Not yet wired, persisted or used for routing. Experimental v2 pure lease transitions are being developed separately; no transactional shared store is delivered.
+
+Pure experimental lease transitions accepted and checkpointed in `7dd72c5`: atomic model-scope admission receipts, owner/outcome/generation/expiry fencing, finite dispatch proof horizons, bounded dedup capacity, cancellation distinction and Policy A. Primary found and corrected orphan-lease and stale-settlement validity bugs, then independently passed 18 cases with returned-state and JSON-roundtrip validity checks. No filesystem transaction, migration, config opt-in or runtime dispatch integration is delivered yet. Conservative local transaction storage is the next slice; orphan locks initially fail closed pending explicit repair.
+
+Classifier total budget accepted and checkpointed in `4ef251b`: optional `classifier.totalTimeoutMs` preserves absent-budget defaults, propagates caller cancellation to direct/prompt HTTP/registry/owned subprocess and minimal-session transports, stops later or late classifier attempts, and allows local regex/default fallback only for deadline exhaustion. Invalid startup budget disables external classification with static guidance; reload retains last-good config. Primary reviewed transport races and independently passed 193 targeted cases, updated 33 pipeline cases and typecheck; writer passed 627 combined tests, 26 fake-provider integrations, six reliability UI scenarios and 12 isolated pinned-Pi captures. No new retry or prompt replay is added.
+
+Experimental API accepted and checkpointed in `84bf8a2`: caller-owned immutable snapshots, explicit classifier grant, availability-only resolution, safe summary output and independent budget/cancellation, real JavaScript/declaration package build. Primary independently passed combined 603 tests including the installed consumer before subsequent slices; writer verified Node 24.14 and 26.9, declaration consumer and actual Pi extension load via its expected loader. Offline consumer peers use workspace-installed dependencies, not a fresh registry install. Declaration consumer uses skipLibCheck for existing Pi peer JSON-import declaration errors; its public request contract is still checked.
+
+Pure affinity observations accepted and checkpointed in `cd01352`: root independently passed eight cases and reviewed final-pool eligibility, no-route versus switch advice, explicit/manual bypass and content-free frozen DTOs. No runtime anchor, affinity config or retention behavior is delivered yet.
+
+Experimental transaction store accepted and checkpointed in `8575802`: strict reload-under-owned-lock, synchronous pure mutation, atomic managed write, bounded lock wait/reads and immutable entry DTOs. Primary independently passed 11 tests including separate-process lost-update and one-trial contention, fault persistence and replaced-lock protection, plus typecheck. The child harness now has explicit deadlines, owned-process termination and output caps. Orphan locks fail closed for explicit repair; no automatic crash-lock reclamation is promised. No runtime opt-in, migration or v1 mutation is integrated yet.
+
+Explicit settlement correction accepted and checkpointed in `47acecf`: only known successful assistant stop reasons close trials; cancellation, absent/unknown responses abandon; blank error text remains explicit failure. Primary reviewed source, found and corrected the empty-error truthiness bug, and independently passed 15 tracker/hook cases on resume. Writer previously passed 637 combined tests, typecheck, 26 integrations and six reliability UI scenarios. Model-keyed overlap is still a limitation pending dispatch ownership.
+
+Explicit migration foundation accepted and checkpointed in `4b88a62`: strict byte-bound v1 conversion, exact non-overwriting backup and lock-scoped sidecar initialization; existing v2 unchanged, corruption fails closed, unowned legacy trial flag and raw reasons discarded. Primary independently passed 23 migration/store cases and typecheck. No CLI/config/runtime switch is exposed yet.
+
+Branch-local anchor helper accepted and checkpointed in `3d6d13f`: ephemeral session WeakMap, explicit successful physical/unambiguous proof, exactly one matching successful branch entry, monotonic and branch-order guards, no payload retention, pure reads. Primary independently passed nine cases after rejecting slash-provider ambiguity and mixed duplicate entry IDs. No runtime observe mode or retention is enabled yet.
+
+## Additional accepted foundations (8 October)
+
+- `bf4fd32`: initialized v2 runtime state required; missing state does not silently create healthy state.
+- `310b785`: bounded, content-free failure observations persisted with exact receipt ownership.
+- `9f2230f`: pure owned-membership reconciliation proposals preserve manual entries and removal tombstones.
+- `30ca6d4`: two-file reconciliation journal, private exact backups, digest checks and cooperative ownership fences. Primary independently passed 23 journal tests, including killed-writer recovery behavior. Operator removal of inspected stale locks remains required.
+- `dff185e`: actual pinned-Pi dispatch identity proof. Primary independently passed three host tests; physical input occurs before a persisted user entry and cannot establish equivalent ownership.
+- `fc8a0d2`: late failures preserve existing recovery blocks and bounded history. Primary independently passed the relevant observation and core evaluation gates.
+- `2341919`: 19 deterministic offline routing scenarios and a separate local benchmark. Synthetic results do not establish answer quality, cache savings, dollar savings or production latency. Final candidate measurements remain pending.
+
+The combined runtime/config/command integration is accepted in `553fdc2` with the final evidence recorded above.
+
+## Sequence
+
+1. M0a regression baseline; M0b shared decision envelope and privacy-safe trace, preserving legacy routing/JSON.
+2. Independent strict fallback slice: minimal schema-v2 reader/validation plus M2b/M2c complete physical/Auto behavior. No partially enforced public boundary.
+3. Host-neutral snapshot seam, offline inspection/validation and generation type safety.
+4. Atomic storage and last-good reload; classifier accounting; failure observations, transactional recovery and evidence-backed scopes.
+5. Experimental resolve-only API/packaging and explicit reconciliation.
+6. Economic observations, verified live-adapter investigation, then opt-in reserves/preferences. Live adapter availability remains an external evidence gate.
+7. Affinity observations, evaluated opt-in within-tier retention; final compatibility, UI, integration and package verification.
+
+Per-slice acceptance records must include changed behavior, source review findings, deterministic tests, typecheck, applicable host UI/integration evidence and residual limitations. Experimental/gated features remain identified as such. Implementation must not invent host/account/quota API capabilities to close a milestone.
+
+## External evidence gates
+
+M5b live quota adapter: currently unverified/blocked on a supported data/auth boundary, not on routing logic. Read-only investigation of pinned Pi 1.0.1 shows generation/context usage but no allowance snapshot API. Pi Copilot provider auth exposes the proxy token, not the GitHub token expected by the documented Copilot SDK quota RPC. [Copilot SDK usage/billing](https://docs.github.com/en/copilot/how-tos/copilot-sdk/features/usage-and-billing) exposes account quota but is a separate runtime/auth integration. [OpenAI organization usage](https://platform.openai.com/docs/api-reference/usage) is historical admin-key reporting, not a subscription remaining-allowance snapshot. No credentials or live quota calls were used. Continue snapshot-based mechanisms and deterministic adapter seams; do not bundle private consumer endpoints or mark automatic tracking delivered. Revisit only with documented host/provider support.
