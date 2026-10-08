@@ -29,6 +29,12 @@ describe("reliability store", () => {
     assert.equal(calls.length, 1);
   });
 
+  it("reports when the failure write cannot be confirmed", () => {
+    const io: ReliabilityIo = { load: () => emptyReliabilityState(), save: () => false };
+    const store = new ReliabilityStore({ cwd: "/tmp", config: cfg, io });
+    assert.equal(store.recordFailure(key, "agent_settled", "allowance_exhausted", 1000), false);
+  });
+
   it("recordSuccess clears failures and saves", () => {
     const { io, calls } = makeIo();
     const store = new ReliabilityStore({ cwd: "/tmp", config: cfg, io });

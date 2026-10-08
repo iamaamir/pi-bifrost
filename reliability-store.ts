@@ -24,7 +24,7 @@ export type ReliabilityOutcome =
 
 export interface ReliabilityIo {
   load(path: string): ReliabilityState;
-  save(path: string, state: ReliabilityState): void;
+  save(path: string, state: ReliabilityState): void | boolean;
 }
 
 const DEFAULT_IO: ReliabilityIo = {
@@ -83,10 +83,10 @@ export class ReliabilityStore {
 
   // ── Intent-only writes (config read from store internally) ──
 
-  recordFailure(model: string, source: ReliabilitySource, reason: string, now?: number, observation?: FailureObservation): void {
-    if (this.configValue?.enabled === false) return;
+  recordFailure(model: string, source: ReliabilitySource, reason: string, now?: number, observation?: FailureObservation): boolean {
+    if (this.configValue?.enabled === false) return false;
     this.stateValue = recordModelFailure(this.stateValue, model, this.configValue, now ?? this.nowFn(), source, reason, observation);
-    this.persist();
+    return this.persist();
   }
 
   recordSuccess(model: string, source: ReliabilitySource, now?: number): void {
@@ -168,8 +168,8 @@ export class ReliabilityStore {
 
   // ── Private ─────────────────────────────────────────────────
 
-  private persist(): void {
-    this.io.save(this.pathValue, this.stateValue);
+  private persist(): boolean {
+    return this.io.save(this.pathValue, this.stateValue) !== false;
   }
 
   private pruneStaleTrials(state: ReliabilityState): ReliabilityState {

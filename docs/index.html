@@ -131,7 +131,7 @@
               <p class="eyebrow">02 / Persistent failure circuit</p>
               <h2 id="circuit-title">Failed model? Skip it on the next turn.</h2>
               <p>After repeated failures within your configured window, Bifrost opens that model's circuit. It excludes the model from new routing decisions and can choose another healthy model from your list.</p>
-              <p>The circuit survives a restart. After cooldown, one controlled trial checks recovery. Set thresholds under <code>reliability</code> in <code>.pi/bifrost.json</code>. Bifrost never replays the failed user prompt.</p>
+              <p>The circuit survives a restart. After cooldown, one controlled trial checks recovery. With reliability and allowance cooldowns enabled, Auto can make one alternate attempt after Pi proves allowance failures were empty and omitted, with no tool activity. Set <code>reliability.retryOnAllowanceExhausted: false</code> to turn it off.</p>
               <p class="story-fact">This scene shows the third failure with the default threshold, then a separate new user turn. <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/reliability-and-cache.md#reliability-circuits">See reliability rules</a>.</p>
             </section>
             <section id="classifier" data-demo-scene="classifier" aria-labelledby="classifier-title">
@@ -402,8 +402,9 @@
             <p>
               Bifrost records the failure, opens a circuit after the configured
               threshold, and excludes that model from future routes until a
-              controlled recovery trial. It never automatically replays the
-              failed prompt.
+              controlled recovery trial. Auto can make one attempt on another
+              configured model after an explicit allowance failure only when Pi
+              proves failed responses were empty and omitted, with no tool activity.
             </p>
           </div>
         </details>

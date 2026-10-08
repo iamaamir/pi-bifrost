@@ -32,6 +32,12 @@ describe("validateConfig", () => {
     assert.equal(issues.length, 0);
   });
 
+  it("defaults allowance recovery on and validates its explicit opt-out", () => {
+    assert.deepEqual(validateConfig({ ...baseConfig, reliability: { retryOnAllowanceExhausted: false } }), []);
+    assert.ok(validateConfig({ ...baseConfig, reliability: { retryOnAllowanceExhausted: "yes" } as never })
+      .some((issue) => issue.code === "config.reliability_allowance_retry_invalid"));
+  });
+
   it("keeps version 2 legacy when no explicit tier policy exists", () => {
     assert.equal(validateConfig({ ...baseConfig, schemaVersion: 2 }).length, 0);
     assert.equal(validateConfig({ ...baseConfig, legacyUnknown: true } as BifrostConfig).length, 0);

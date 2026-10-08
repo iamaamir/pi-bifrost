@@ -14,7 +14,16 @@ import { TYPE_SAFE_API_KEY_ENV } from "../classifier-backends.ts";
 import { CLASSIFIER_BACKEND_IDS } from "../classifier-backends.ts";
 import { makeModel, makePiClassifierModel } from "./helpers.ts";
 
-async function runAllowanceRuntime({ reloadOptOut = false }: { reloadOptOut?: boolean } = {}) {
+async function runAllowanceRuntime({ reloadOptOut = false, failedContent = [], toolResults = [], priorToolHistory = false, rejectSettlement = false, interveneDuringSettlement = false, routeAfterPrepare = false, reloadAfterPrepare = false }: {
+  reloadOptOut?: boolean;
+  failedContent?: unknown[];
+  toolResults?: unknown[];
+  priorToolHistory?: boolean;
+  rejectSettlement?: boolean;
+  interveneDuringSettlement?: boolean;
+  routeAfterPrepare?: boolean;
+  reloadAfterPrepare?: boolean;
+} = {}) {
   const previousCwd = process.cwd();
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   const cwd = mkdtempSync(join(tmpdir(), "bifrost-v2-allowance-runtime-"));
@@ -28,7 +37,7 @@ async function runAllowanceRuntime({ reloadOptOut = false }: { reloadOptOut?: bo
     default: "quick",
     strategy: "first",
     classifier: { enabled: false },
-    models: { quick: ["fixture/allowed"] },
+    models: { quick: routeAfterPrepare || reloadAfterPrepare ? ["fixture/allowed", "fixture/alternate"] : ["fixture/allowed"] },
     reliability: { stateVersion: 2, failureThreshold: 3, windowMinutes: 10, cooldownMinutes: 1 },
     rules: [],
   } as const;
@@ -37,6 +46,8 @@ async function runAllowanceRuntime({ reloadOptOut = false }: { reloadOptOut?: bo
   const user = { role: "user", content: [{ type: "text", text: "fresh user turn" }] } as const;
   const branch: SessionMessageEntry[] = [{ type: "message", id: "user-allowance", parentId: "root", timestamp: new Date().toISOString(), message: user as never }];
   const model = makeModel("fixture", "allowed");
+  const alternate = makeModel("fixture", "alternate");
+  const availableModels = [model];
   const handlers = new Map<string, (event: never, ctx: ExtensionContext) => Promise<unknown>>();
   let routeDefinition: VirtualModelDefinition | undefined;
   let commandHandler: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
@@ -44,8 +55,8 @@ async function runAllowanceRuntime({ reloadOptOut = false }: { reloadOptOut?: bo
     cwd, mode: "rpc", hasUI: false,
     model: { ...makeModel(BIFROST_AUTO_PROVIDER, BIFROST_AUTO_ID), api: "pi-virtual" },
     modelRegistry: {
-      getAvailable: () => [model],
-      find: (provider: string, id: string) => provider === model.provider && id === model.id ? model : undefined,
+      getAvailable: () => availableModels,
+      find: (provider: string, id: string) => availableModels.find((item) => provider === item.provider && id === item.id),
       getAvailableOfType: async () => [],
       getModelOfType: () => undefined,
       getProviderAuthStatus: () => ({ configured: false }),
@@ -73,17 +84,43 @@ async function runAllowanceRuntime({ reloadOptOut = false }: { reloadOptOut?: bo
     const route = routeDefinition.route as (request: ModelRouteRequest, ctx: ExtensionContext) => Promise<{ model: unknown }>;
     const request = { model: ctx.model, reason: "user", thinkingLevel: "low", messages: [user] } as unknown as ModelRouteRequest;
     assert.equal((await route(request, ctx)).model, model);
+    if (routeAfterPrepare || reloadAfterPrepare) availableModels.push(alternate);
+    if (priorToolHistory) {
+      const earlierToolCall = {
+        role: "assistant", content: [{ type: "toolCall", id: "tool-call", name: "edit_file", arguments: {} }],
+        api: model.api, provider: model.provider, model: model.id, stopReason: "toolUse", timestamp: Date.now(),
+      } as const;
+      branch.push({ type: "message", id: "assistant-tool-call", parentId: "user-allowance", timestamp: new Date().toISOString(), message: earlierToolCall as never });
+      branch.push({ type: "toolResult", id: "tool-result", parentId: "assistant-tool-call", timestamp: new Date().toISOString(), message: { role: "toolResult", content: [] } } as never);
+    }
     const assistant = {
-      role: "assistant", content: [], api: model.api, provider: model.provider, model: model.id,
+      role: "assistant", content: failedContent, api: model.api, provider: model.provider, model: model.id,
       stopReason: "error", errorMessage: "The usage limit has been reached.", timestamp: Date.now(),
     } as const;
     branch.push({ type: "message", id: "assistant-allowance", parentId: "user-allowance", timestamp: new Date().toISOString(), message: assistant as never });
-    await handlers.get("turn_end")?.({ messageEntryId: "assistant-allowance", message: assistant } as never, ctx);
+    if (rejectSettlement) writeFileSync(`${reliabilityV2Path(cwd)}.lock`, "malformed held lock");
+    await handlers.get("turn_end")?.({ messageEntryId: "assistant-allowance", message: assistant, toolResults, toolResultEntryIds: toolResults.map((_, index) => `tool-${index}`) } as never, ctx);
+    const beforeSettleOperation = handlers.get("agent_before_settle")?.({ context: { pendingMessages: [] } } as never, ctx);
+    if (interveneDuringSettlement) branch.push({ type: "custom" } as never);
+    const beforeSettle = await beforeSettleOperation;
+    let routeError: unknown;
+    if ((routeAfterPrepare || reloadAfterPrepare) && beforeSettle) {
+      branch.push({ type: "context_edit", targetId: "assistant-allowance", replacement: null } as never);
+      if (routeAfterPrepare) branch.push({ type: "custom" } as never);
+      if (reloadAfterPrepare) {
+        writeFileSync(configPath, JSON.stringify({ ...config, reliability: { ...config.reliability, retryOnAllowanceExhausted: false } }));
+        await commandHandler("reload", ctx);
+      }
+      try {
+        const route = routeDefinition!.route as (request: ModelRouteRequest, ctx: ExtensionContext) => Promise<{ model: unknown }>;
+        await route({ model: ctx.model, reason: "user", thinkingLevel: "low", messages: [user] } as unknown as ModelRouteRequest, ctx);
+      } catch (error) { routeError = error; }
+    }
     await handlers.get("agent_settled")?.({} as never, ctx);
     const state = new ReliabilityV2Store({ path: reliabilityV2Path(cwd), config: reliabilityV2Config(reloadOptOut
       ? { ...config.reliability, cooldownOnAllowanceExhausted: false }
       : config.reliability), requireInitialized: true }).readSnapshot();
-    return state;
+    return { state, beforeSettle, routeError };
   } finally {
     process.chdir(previousCwd);
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -171,7 +208,7 @@ describe("reliability v2 registered Auto runtime", () => {
   });
 
   it("enforces allowance cooldown with observations off, and honors a reload opt-out", async () => {
-    const enforced = await runAllowanceRuntime();
+    const { state: enforced } = await runAllowanceRuntime();
     const enforcedScope = enforced.scopes[modelScopeKey("fixture/allowed")];
     assert.ok(enforcedScope?.openUntil && enforcedScope.openUntil > Date.now(),
       "a runtime-bound allowance observation should immediately cool down the selected model");
@@ -179,11 +216,53 @@ describe("reliability v2 registered Auto runtime", () => {
     assert.equal(Object.values(enforced.settledOutcomes).some((outcome) => outcome.observation !== undefined), false,
       "enforcement evidence must not silently enable optional observation persistence");
 
-    const optedOut = await runAllowanceRuntime({ reloadOptOut: true });
+    const { state: optedOut } = await runAllowanceRuntime({ reloadOptOut: true });
     const optedOutScope = optedOut.scopes[modelScopeKey("fixture/allowed")];
     assert.equal(optedOutScope?.openUntil, undefined,
       "a valid reload with cooldownOnAllowanceExhausted=false restores threshold behavior");
     assert.equal(optedOutScope?.failures.length, 1);
+  });
+
+  it("does not request allowance recovery after output or tool results", async () => {
+    const withOutput = await runAllowanceRuntime({ failedContent: [{ type: "text", text: "partial output" }] });
+    const withTools = await runAllowanceRuntime({ toolResults: [{ content: [{ type: "text", text: "tool ran" }] }] });
+    const withPriorTools = await runAllowanceRuntime({ priorToolHistory: true });
+    assert.equal(withOutput.beforeSettle, undefined, "partial assistant output cannot enter the retry boundary");
+    assert.equal(withTools.beforeSettle, undefined, "tool results cannot enter the retry boundary");
+    assert.equal(withPriorTools.beforeSettle, undefined, "earlier tool calls and results cannot enter the retry boundary");
+    for (const { state } of [withOutput, withTools, withPriorTools]) {
+      assert.ok(state.scopes[modelScopeKey("fixture/allowed")]?.openUntil,
+        "unsafe failures still settle and apply the model-only cooldown");
+    }
+  });
+
+  it("does not continue the failed turn when v2 receipt settlement is unconfirmed", async () => {
+    const { state, beforeSettle } = await runAllowanceRuntime({ rejectSettlement: true });
+    assert.equal(beforeSettle, undefined, "the real registered before-settle hook must not omit the failure or continue");
+    const dispatch = Object.values(state.dispatches)[0];
+    assert.ok(dispatch);
+    assert.equal(dispatch.settledAt, undefined, "the receipt remains visibly unsettled for inspection");
+  });
+
+  it("rechecks the raw branch after awaited settlement before preparing an alternate", async () => {
+    const { state, beforeSettle } = await runAllowanceRuntime({ interveneDuringSettlement: true });
+    assert.equal(beforeSettle, undefined, "a branch entry appended during settlement must cancel the retry");
+    const dispatch = Object.values(state.dispatches)[0];
+    assert.ok(dispatch?.settledAt, "the original allowance failure remains settled");
+  });
+
+  it("stops a prepared retry after new branch activity instead of routing normally", async () => {
+    const { state, beforeSettle, routeError } = await runAllowanceRuntime({ routeAfterPrepare: true });
+    assert.ok(beforeSettle, "the original safe boundary prepares the alternate");
+    assert.match(String(routeError), /prepared usage-limit retry was cancelled/);
+    assert.equal(Object.keys(state.dispatches).length, 1, "the stale continuation does not admit a second model");
+  });
+
+  it("stops a prepared retry after reload disables recovery instead of routing normally", async () => {
+    const { state, beforeSettle, routeError } = await runAllowanceRuntime({ reloadAfterPrepare: true });
+    assert.ok(beforeSettle, "the original safe boundary prepares the alternate");
+    assert.match(String(routeError), /prepared usage-limit retry was cancelled/);
+    assert.equal(Object.keys(state.dispatches).length, 1, "the reloaded route does not admit another model");
   });
 
   it("binds the latest real branch user despite a trailing synthetic user message and stores only normalized failure evidence", async () => {

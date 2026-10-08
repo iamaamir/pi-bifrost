@@ -17,6 +17,7 @@ After configured repeated failures inside a time window, Bifrost opens that mode
   "reliability": {
     "enabled": true,
     "cooldownOnAllowanceExhausted": true,
+    "retryOnAllowanceExhausted": true,
     "failureThreshold": 3,
     "windowMinutes": 5,
     "cooldownMinutes": 60
@@ -30,7 +31,7 @@ A normalized runtime `allowance_exhausted` result opens that model's circuit imm
 
 This signal is model-scoped. Bifrost does not know whether another model shares the same provider account, so it excludes only the reported model and warns that shared scope is unknown. `/bifrost inspect --json` shows the effective setting and allowlisted evidence when available. The warning and debug JSONL event identify the category, evidence kind, and model-only scope; they do not include the provider error text.
 
-Bifrost never automatically replays the prompt that failed. Reliability affects future user turns only.
+In Pi Auto, an explicit usage-limit rejection can trigger one attempt on another configured eligible model when reliability and `cooldownOnAllowanceExhausted` are enabled. Bifrost must save the failed model's cooldown before it can safely choose an alternate. Pi must prove every failed response was empty, from the same model, and that its own earlier failures were omitted by exact null context edits. The turn must have no tools, tool results, queued work, or other intervening activity. Bifrost settles the failed model before it selects and admits the alternate. The retry uses the same user turn; empty failures are omitted from the next model request but remain visible in the transcript. Physical routing, direct model bindings, explicit tier prefixes, exhausted explicit fallback boundaries, tool continuations, unsafe turns, and turns with no eligible alternate do not retry. Pi's own bounded retry may run first. Bifrost does not infer provider-wide quota state or run an extra classifier or probe. Set `retryOnAllowanceExhausted: false` to stop after every failure. See [ADR 0023](../adr/0023-bounded-allowance-recovery.md).
 
 ## Receipt-owned reliability state (experimental)
 

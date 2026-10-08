@@ -29,7 +29,7 @@ const server = http.createServer((request, response) => {
     const attempt = (attempts.get(model) ?? 0) + 1;
     attempts.set(model, attempt);
     stats.push({ model, attempt });
-    if (model === "usage-exhausted") return json(response, 429, { error: { message: "The usage limit has been reached. Please try again later." } });
+    if (model === "usage-exhausted" || model === "usage-exhausted-alternate") return json(response, 429, { error: { message: "The usage limit has been reached. Please try again later." } });
     if (model === "quota") return json(response, 429, { error: { message: "quota exhausted" } }, { "retry-after": "1" });
     if (model === "fail") return json(response, 500, { error: { message: "simulated provider failure" } });
     if (model === "fail-then-ok" && attempt === 1) return json(response, 500, { error: { message: "simulated transient failure" } });

@@ -271,6 +271,7 @@ const routerSnapshotSchema: DataSchema = {
       enabled: scalar, stateVersion: scalar, observations: { enabled: scalar }, path: scalar,
       failureThreshold: scalar, windowMinutes: scalar, cooldownMinutes: scalar,
       cooldownOnAllowanceExhausted: scalar,
+      retryOnAllowanceExhausted: scalar,
     },
     affinity: { mode: scalar, providerAdvisory: scalar },
   },

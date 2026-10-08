@@ -299,6 +299,8 @@ export interface PipelineDeps {
 
 export interface ClassificationPipeline {
   readonly classify: (text: string, signal?: AbortSignal) => Promise<ClassificationResult>;
+  /** Cheap local check used to preserve explicit rule ownership before recovery routing. */
+  readonly matchRule: (text: string) => string | undefined;
 }
 
 function normalizeJudgment(output: ClassifierOutput, backend: ClassifierBackend): ClassificationJudgment {
@@ -562,5 +564,5 @@ export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
     }
   }
 
-  return { classify };
+  return { classify, matchRule: (text) => classifyCompiled(text, regexRules) };
 }

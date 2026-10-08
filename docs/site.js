@@ -625,7 +625,7 @@ function setupAutoAnimation(canvas) {
     },
     {
       label: "04 · Continue on the same model",
-      detail: "Tool continuations and retries keep the turn's model. Bifrost never replays a failed prompt.",
+      detail: "Tool continuations stay on the turn's model. Auto can make one alternate attempt after Pi proves all allowance failures were empty and omitted.",
     },
   ];
   const colors = {

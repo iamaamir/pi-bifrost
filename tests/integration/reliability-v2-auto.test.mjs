@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { reliabilitySourceFencePath } from "../../reliability-v1-fence.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..", "..");
@@ -64,6 +65,29 @@ function writeFixture({ home, work, port, models, bifrost, retry = { enabled: fa
   }));
   writeFileSync(join(agent, "settings.json"), JSON.stringify({ retry }));
   writeFileSync(join(work, ".pi", "bifrost.json"), JSON.stringify(bifrost));
+}
+
+function writeOutcomeObserver(work) {
+  const extension = join(work, "allowance-outcome-observer.mjs");
+  const output = join(work, "allowance-outcome-observer.json");
+  writeFileSync(extension, `import { writeFileSync } from "node:fs";
+export default function(pi) {
+  pi.on("session_shutdown", (_event, ctx) => {
+    const branch = ctx.sessionManager.getBranch();
+    const messages = branch.filter((entry) => entry.type === "message");
+    const users = messages.filter((entry) => entry.message.role === "user");
+    const assistants = messages.filter((entry) => entry.message.role === "assistant").map((entry) => ({
+      id: entry.id, provider: entry.message.provider, model: entry.message.model,
+      stopReason: entry.message.stopReason,
+      contentLength: Array.isArray(entry.message.content) ? entry.message.content.length : -1,
+    }));
+    const contextEdits = branch.filter((entry) => entry.type === "context_edit").map((entry) => ({
+      targetId: entry.targetId, isNull: entry.replacement === null,
+    }));
+    writeFileSync(${JSON.stringify(output)}, JSON.stringify({ userCount: users.length, assistants, contextEdits }));
+  });
+}`);
+  return { extension, output };
 }
 
 function runPi({ home, work, model = "bifrost/auto", messages, extraExtensions = [] }) {
@@ -263,6 +287,199 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
   });
 
   for (const mode of ["v1", "v2"]) {
+    it(`retries one zero-effect allowance failure with a configured alternate in ${mode} Auto`, async () => {
+      const home = mkdtempSync(join(tmpdir(), `bifrost-allowance-retry-${mode}-home-`));
+      const work = mkdtempSync(join(tmpdir(), `bifrost-allowance-retry-${mode}-work-`));
+      try {
+        const bifrost = {
+          ...(mode === "v2" ? { schemaVersion: 2 } : {}),
+          enabled: true, default: "quick", strategy: "first", categoryStrategies: { quick: "first" }, classifier: { enabled: false },
+          models: { quick: ["fake/usage-exhausted", "fake/healthy"] },
+          reliability: {
+            enabled: true, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60,
+            ...(mode === "v2" ? { stateVersion: 2 } : {}),
+          },
+          debug: { enabled: true },
+        };
+        writeFixture({
+          home, work, port: server.port,
+          models: [{ id: "usage-exhausted", reasoning: false }, { id: "healthy", reasoning: false }],
+          bifrost,
+        });
+        const before = await fakeStats(server.port);
+        const userPrompt = "respond with one word";
+        const observer = writeOutcomeObserver(work);
+        const result = await runPi({ home, work, extraExtensions: [observer.extension], messages: [...(mode === "v2" ? ["/bifrost reliability migrate --fresh"] : []), userPrompt] });
+        const after = await fakeStats(server.port);
+        assert.equal(result.timedOut, false, result.stderr);
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal((after.attempts["usage-exhausted"] ?? 0) - (before.attempts["usage-exhausted"] ?? 0), 1, result.stderr);
+        assert.equal((after.attempts.healthy ?? 0) - (before.attempts.healthy ?? 0), 1,
+          `${result.stderr}\n${readFileSync(join(work, ".pi", "bifrost-debug.jsonl"), "utf8")}`);
+        assert.match(result.stderr, /usage limit reached for fake\/usage-exhausted; retrying once with fake\/healthy/);
+        assert.match(result.stderr, /Bifrost auto: quick → fake\/healthy \(allowance recovery/);
+        const trace = readFileSync(join(work, ".pi", "bifrost-debug.jsonl"), "utf8");
+        assert.match(trace, /"event":"allowance_retry_prepared"/);
+        assert.match(trace, /"event":"allowance_retry_consumed"/);
+        assert.equal(trace.includes("respond with one word"), false, "debug trace must not retain prompt text");
+        const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
+        assert.equal(outcome.userCount, 1, "the failed user request is never re-enqueued");
+        const failed = outcome.assistants.filter((entry) => entry.provider === "fake" && entry.model === "usage-exhausted");
+        const succeeded = outcome.assistants.filter((entry) => entry.provider === "fake" && entry.model === "healthy" && entry.stopReason === "stop");
+        assert.equal(failed.length, 1, "the empty failed assistant remains in the raw transcript");
+        assert.equal(failed[0].contentLength, 0);
+        assert.equal(succeeded.length, 1, "the alternate result is attached to the same user turn");
+        assert.ok(outcome.contextEdits.some((entry) => entry.targetId === failed[0].id && entry.isNull),
+          "Pi records the exact null omission for the failed response projection");
+        if (mode === "v2") {
+          const state = JSON.parse(readFileSync(join(work, ".pi", "bifrost-reliability-v2.json"), "utf8"));
+          const receipts = Object.values(state.dispatches);
+          assert.equal(receipts.length, 2, "failed and alternate generations own distinct receipts");
+          assert.equal(new Set(receipts.map((receipt) => receipt.dispatchId)).size, 2);
+          assert.deepEqual(receipts.map((receipt) => receipt.settledKind).sort(), ["failure", "success"]);
+          assert.ok(receipts.every((receipt) => receipt.settledAt && receipt.scopes.every((scope) => !scope.leaseId)),
+            "both receipts settle and release all owned leases");
+          assert.ok(state.scopes["model:20:fake/usage-exhausted"]?.openUntil, "the failed model remains cooled");
+          assert.equal(state.scopes["model:12:fake/healthy"]?.failures.length, 0,
+            "the successful alternate has no failure evidence");
+          assert.ok(Object.values(state.scopes).every((scope) => scope.lease === undefined), "no circuit lease remains wedged");
+        }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(work, { recursive: true, force: true });
+      }
+    });
+
+    it(`does not retry an allowance failure when ${mode} Auto recovery is disabled`, async () => {
+      const home = mkdtempSync(join(tmpdir(), `bifrost-allowance-off-${mode}-home-`));
+      const work = mkdtempSync(join(tmpdir(), `bifrost-allowance-off-${mode}-work-`));
+      try {
+      const bifrost = {
+          ...(mode === "v2" ? { schemaVersion: 2 } : {}),
+          enabled: true, default: "quick", strategy: "first", categoryStrategies: { quick: "first" }, classifier: { enabled: false },
+          models: { quick: ["fake/usage-exhausted", "fake/healthy"] },
+          reliability: {
+            enabled: true, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60,
+            retryOnAllowanceExhausted: false,
+            ...(mode === "v2" ? { stateVersion: 2 } : {}),
+          },
+        };
+        writeFixture({ home, work, port: server.port,
+          models: [{ id: "usage-exhausted", reasoning: false }, { id: "healthy", reasoning: false }], bifrost });
+        const before = await fakeStats(server.port);
+        const observer = writeOutcomeObserver(work);
+        const result = await runPi({ home, work, extraExtensions: [observer.extension], messages: [...(mode === "v2" ? ["/bifrost reliability migrate --fresh"] : []), "respond with one word"] });
+        const after = await fakeStats(server.port);
+        assert.notEqual(result.code, 0, "the usage-limited provider ends the turn when automatic recovery is disabled");
+        assert.equal((after.attempts["usage-exhausted"] ?? 0) - (before.attempts["usage-exhausted"] ?? 0), 1);
+        assert.equal((after.attempts.healthy ?? 0) - (before.attempts.healthy ?? 0), 0);
+        assert.match(result.stderr, /Automatic retry is off/);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(work, { recursive: true, force: true });
+      }
+    });
+
+    it(`explains when ${mode} Auto has no configured allowance alternative`, async () => {
+      const home = mkdtempSync(join(tmpdir(), `bifrost-allowance-noalt-${mode}-home-`));
+      const work = mkdtempSync(join(tmpdir(), `bifrost-allowance-noalt-${mode}-work-`));
+      try {
+        const bifrost = {
+          ...(mode === "v2" ? { schemaVersion: 2 } : {}),
+          enabled: true, default: "quick", strategy: "first", categoryStrategies: { quick: "first" }, classifier: { enabled: false },
+          models: { quick: ["fake/usage-exhausted"] },
+          reliability: {
+            enabled: true, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60,
+            ...(mode === "v2" ? { stateVersion: 2 } : {}),
+          },
+        };
+        writeFixture({ home, work, port: server.port,
+          models: [{ id: "usage-exhausted", reasoning: false }], bifrost });
+        const before = await fakeStats(server.port);
+        const result = await runPi({ home, work, messages: [...(mode === "v2" ? ["/bifrost reliability migrate --fresh"] : []), "respond with one word"] });
+        const after = await fakeStats(server.port);
+        assert.notEqual(result.code, 0, "the usage-limited provider ends the turn when no alternative is configured");
+        assert.equal((after.attempts["usage-exhausted"] ?? 0) - (before.attempts["usage-exhausted"] ?? 0), 1);
+        assert.match(result.stderr, /No eligible configured alternative/);
+        assert.match(result.stderr, /no retry was sent/);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(work, { recursive: true, force: true });
+      }
+    });
+
+    it(`stops after the single alternate allowance attempt in ${mode} Auto`, async () => {
+      const home = mkdtempSync(join(tmpdir(), `bifrost-allowance-once-${mode}-home-`));
+      const work = mkdtempSync(join(tmpdir(), `bifrost-allowance-once-${mode}-work-`));
+      try {
+        const bifrost = {
+          ...(mode === "v2" ? { schemaVersion: 2 } : {}),
+          enabled: true, default: "quick", strategy: "first", categoryStrategies: { quick: "first" }, classifier: { enabled: false },
+          models: { quick: ["fake/usage-exhausted", "fake/usage-exhausted-alternate", "fake/healthy"] },
+          reliability: {
+            enabled: true, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60,
+            ...(mode === "v2" ? { stateVersion: 2 } : {}),
+          },
+        };
+        writeFixture({ home, work, port: server.port,
+          models: ["usage-exhausted", "usage-exhausted-alternate", "healthy"].map((id) => ({ id, reasoning: false })), bifrost });
+        const before = await fakeStats(server.port);
+        const result = await runPi({ home, work, messages: [...(mode === "v2" ? ["/bifrost reliability migrate --fresh"] : []), "respond with one word"] });
+        const after = await fakeStats(server.port);
+        assert.equal(result.timedOut, false);
+        assert.notEqual(result.code, 0, "the alternate also returns an explicit usage limit");
+        assert.equal((after.attempts["usage-exhausted"] ?? 0) - (before.attempts["usage-exhausted"] ?? 0), 1);
+        assert.equal((after.attempts["usage-exhausted-alternate"] ?? 0) - (before.attempts["usage-exhausted-alternate"] ?? 0), 1);
+        assert.equal((after.attempts.healthy ?? 0) - (before.attempts.healthy ?? 0), 0,
+          "Bifrost must stop after one alternate, without trying a third model");
+        assert.match(result.stderr, /retrying once with fake\/usage-exhausted-alternate/);
+        assert.doesNotMatch(result.stderr, /retrying once with fake\/healthy/);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(work, { recursive: true, force: true });
+      }
+    });
+
+    it(`allows one Bifrost alternate after Pi's empty native retry in ${mode} Auto`, async () => {
+      const home = mkdtempSync(join(tmpdir(), `bifrost-allowance-host-retry-${mode}-home-`));
+      const work = mkdtempSync(join(tmpdir(), `bifrost-allowance-host-retry-${mode}-work-`));
+      try {
+        const bifrost = {
+          ...(mode === "v2" ? { schemaVersion: 2 } : {}),
+          enabled: true, default: "quick", strategy: "first", categoryStrategies: { quick: "first" }, classifier: { enabled: false },
+          models: { quick: ["fake/usage-exhausted", "fake/healthy"] },
+          reliability: {
+            enabled: true, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60,
+            ...(mode === "v2" ? { stateVersion: 2 } : {}),
+          },
+        };
+        writeFixture({ home, work, port: server.port,
+          models: [{ id: "usage-exhausted", reasoning: false }, { id: "healthy", reasoning: false }], bifrost,
+          retry: { enabled: true, maxRetries: 1, baseDelayMs: 1, provider: { maxRetries: 0 } } });
+        const before = await fakeStats(server.port);
+        const observer = writeOutcomeObserver(work);
+        const result = await runPi({ home, work, extraExtensions: [observer.extension], messages: [...(mode === "v2" ? ["/bifrost reliability migrate --fresh"] : []), "respond with one word"] });
+        const after = await fakeStats(server.port);
+        assert.equal(result.timedOut, false);
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal((after.attempts["usage-exhausted"] ?? 0) - (before.attempts["usage-exhausted"] ?? 0), 2,
+          "Pi makes its one host-owned retry before Bifrost considers the boundary");
+        assert.equal((after.attempts.healthy ?? 0) - (before.attempts.healthy ?? 0), 1,
+          "Bifrost may make one alternate attempt after two proven empty errors from the same model");
+        assert.match(result.stderr, /retrying once with fake\/healthy/);
+        const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
+        assert.equal(outcome.userCount, 1, "Pi's two native retries and Bifrost recovery stay inside one original user boundary");
+        const failed = outcome.assistants.filter((entry) => entry.provider === "fake" && entry.model === "usage-exhausted");
+        assert.equal(failed.length, 2);
+        assert.ok(failed.every((entry) => entry.contentLength === 0 && entry.stopReason === "error"));
+        assert.ok(failed.every((entry) => outcome.contextEdits.some((edit) => edit.targetId === entry.id && edit.isNull)),
+          "Pi's exact null context edits omit both empty native failures");
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(work, { recursive: true, force: true });
+      }
+    });
+
     it(`cools only an explicitly exhausted model before the next fresh ${mode} Auto turn`, async () => {
       const home = mkdtempSync(join(tmpdir(), `bifrost-allowance-${mode}-home-`));
       const work = mkdtempSync(join(tmpdir(), `bifrost-allowance-${mode}-work-`));
@@ -274,6 +491,7 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
           models: { quick: ["fake/usage-exhausted", "fake/healthy"] },
           reliability: {
             enabled: true, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60,
+            retryOnAllowanceExhausted: false,
             ...(mode === "v2" ? { stateVersion: 2 } : {}),
           },
           debug: { enabled: true },
@@ -294,9 +512,9 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
         assert.equal((after.attempts.healthy ?? 0) - (before.attempts.healthy ?? 0), 1,
           "the next fresh user turn selects the other configured eligible model");
         assert.match(result.stderr, /Bifrost auto: quick → fake\/usage-exhausted/);
-        assert.match(result.stderr, /reported allowance exhaustion \(text_heuristic\); a model-only cooldown applies/);
+        assert.match(result.stderr, /reached a usage limit; paused until/);
+        assert.match(result.stderr, /Automatic retry is off/);
         assert.match(result.stderr, /Bifrost auto: quick → fake\/healthy/);
-        assert.match(result.stderr, /Shared provider\/account scope is unknown; other models were not blocked/);
 
         const statePath = mode === "v2" ? ".pi/bifrost-reliability-v2.json" : ".pi/bifrost-reliability.json";
         const state = JSON.parse(readFileSync(join(work, statePath), "utf8"));
@@ -320,6 +538,91 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
       }
     });
   }
+
+  it("does not dispatch the alternate when a v1 reliability source lock blocks cooldown persistence", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-allowance-save-fail-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-allowance-save-fail-work-"));
+    try {
+      writeFixture({
+        home, work, port: server.port,
+        models: [{ id: "usage-exhausted", reasoning: false }, { id: "healthy", reasoning: false }],
+        bifrost: {
+          enabled: true, default: "quick", strategy: "first", categoryStrategies: { quick: "first" }, classifier: { enabled: false },
+          models: { quick: ["fake/usage-exhausted", "fake/healthy"] },
+          reliability: { enabled: true, failureThreshold: 3, cooldownMinutes: 60 },
+        },
+      });
+      const lockPath = reliabilitySourceFencePath(join(work, ".pi", "bifrost-reliability.json"));
+      writeFileSync(lockPath, "held by deterministic test");
+      const before = await fakeStats(server.port);
+      const result = await runPi({ home, work, messages: ["respond with one word"] });
+      const after = await fakeStats(server.port);
+      assert.notEqual(result.code, 0);
+      assert.equal((after.attempts["usage-exhausted"] ?? 0) - (before.attempts["usage-exhausted"] ?? 0), 1);
+      assert.equal((after.attempts.healthy ?? 0) - (before.attempts.healthy ?? 0), 0);
+      assert.match(result.stderr, /cooldown could not be confirmed as saved, so no retry was sent/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+
+  it("honors an exhausted explicit v2 fallback boundary during allowance recovery", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-allowance-strict-fallback-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-allowance-strict-fallback-work-"));
+    try {
+      writeFixture({
+        home, work, port: server.port,
+        models: [{ id: "usage-exhausted", reasoning: false }, { id: "healthy", reasoning: false }],
+        bifrost: {
+          schemaVersion: 2, enabled: true, default: "quick", strategy: "first", categoryStrategies: { quick: "first" }, classifier: { enabled: false },
+          models: { quick: ["fake/usage-exhausted"], general: ["fake/healthy"] }, tierPolicies: { quick: { fallbackTiers: [] } },
+          reliability: { enabled: true, stateVersion: 2, failureThreshold: 3, cooldownMinutes: 60 },
+        },
+      });
+      const before = await fakeStats(server.port);
+      const result = await runPi({ home, work, messages: ["/bifrost reliability migrate --fresh", "respond with one word"] });
+      const after = await fakeStats(server.port);
+      assert.notEqual(result.code, 0);
+      assert.equal((after.attempts["usage-exhausted"] ?? 0) - (before.attempts["usage-exhausted"] ?? 0), 1);
+      assert.equal((after.attempts.healthy ?? 0) - (before.attempts.healthy ?? 0), 0,
+        "an explicit empty fallback list prevents searching another configured tier");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the default configured tier after a legacy general-tier allowance failure", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-allowance-legacy-tier-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-allowance-legacy-tier-work-"));
+    try {
+      writeFixture({
+        home, work, port: server.port,
+        models: [{ id: "usage-exhausted", reasoning: false }, { id: "healthy", reasoning: false }, { id: "classifier", reasoning: false }],
+        bifrost: {
+          enabled: true, default: "quick", strategy: "first", categoryStrategies: { quick: "first", general: "first" },
+          classifier: { enabled: true, backend: "prompt", model: "fake/classifier" },
+          models: { quick: ["fake/healthy"], general: ["fake/usage-exhausted"] },
+          reliability: { enabled: true, failureThreshold: 3, cooldownMinutes: 60 },
+        },
+      });
+      const before = await fakeStats(server.port);
+      const result = await runPi({ home, work, messages: ["implement a normal feature"] });
+      const after = await fakeStats(server.port);
+      assert.equal(result.timedOut, false, result.stderr);
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal((after.attempts.classifier ?? 0) - (before.attempts.classifier ?? 0), 1,
+        "classification selects general once for the original user boundary");
+      assert.equal((after.attempts["usage-exhausted"] ?? 0) - (before.attempts["usage-exhausted"] ?? 0), 1);
+      assert.equal((after.attempts.healthy ?? 0) - (before.attempts.healthy ?? 0), 1,
+        "without explicit fallback policy, recovery searches the configured default tier");
+      assert.match(result.stderr, /allowance recovery/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
 
   it("does not degrade a fresh v1 Auto turn to a singleton model on allowance cooldown", async () => {
     const home = mkdtempSync(join(tmpdir(), "bifrost-allowance-single-home-"));

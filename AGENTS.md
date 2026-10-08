@@ -28,7 +28,7 @@ Use the feature gate in [`docs/product-philosophy.md`](docs/product-philosophy.m
 ## Non-negotiable behavior
 
 - Select Pi's actual active model before generation. Physical selection is the default. The explicitly selected `bifrost/auto` virtual model may dispatch physical models per request when selection and dispatch both stay visible.
-- Never automatically replay a failed user prompt, including behind config opt-in. A prior turn may have edited files, called tools, or caused external side effects. Any future retry design requires explicit per-incident user confirmation, host-proven zero-side-effect boundary, deterministic E2E coverage, and an approved ADR.
+- Never automatically replay arbitrary failed user work. The narrow allowance-recovery exception in [ADR 0023](docs/adr/0023-bounded-allowance-recovery.md) may retry once on another configured model only in Auto when pinned Pi proves every failed attempt from the original user boundary was empty, from the same model, and exactly omitted from projection, with no tools, tool results, queued work, or other activity. Keep it configurable and tested; every other failed turn ends without Bifrost failover.
 - Persist reliability state. Circuits must survive restart and use controlled half-open recovery.
 - Keep defaults model-agnostic. Do not ship maintainer-specific provider/model IDs in default routing policy.
 - Keep routing inspectable: selected model, source, exclusions, fallback, and user override must be explainable.

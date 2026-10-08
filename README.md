@@ -2,7 +2,7 @@
 
 ![Pi-Bifrost social card](docs/social-card.png)
 
-**Route Pi turns through models you choose.** Pi-Bifrost is a model-routing extension for [Pi](https://pi.dev). You put models in named tiers and choose how each tier selects a model. Bifrost resolves a tier for each turn, skips models with open reliability circuits, and sends the turn to a configured model. No proxy, hidden model pool, or automatic prompt replay.
+**Route Pi turns through models you choose.** Pi-Bifrost is a model-routing extension for [Pi](https://pi.dev). You put models in named tiers and choose how each tier selects a model. Bifrost resolves a tier for each turn, skips models with open reliability circuits, and sends the turn to a configured model. It can make one visible allowance-recovery attempt in Auto when Pi proves the failed generation had no side effects. No proxy or hidden model pool.
 
 ```text
 You:   quick fix the flaky test
@@ -35,9 +35,9 @@ After init, run `/bifrost classifier` to choose how Bifrost judges tiers. Use `/
 
 **Physical selection is the default.** Bifrost selects Pi's active provider/model before generation. Pi shows the actual model for the turn. You can also select a physical model yourself to pin it for the session.
 
-**Bifrost Auto is opt-in.** Select `bifrost/auto` in Pi's `/model` picker. Pi then dispatches the physical model for each request using the same tiers, reliability state, and selection strategies. The footer shows `bifrost/auto → provider/model`, and assistant messages record the physical model that answered. Tool continuations and retries stay on the model that started the turn. Auto requires Pi `1.0.1` or newer.
+**Bifrost Auto is opt-in.** Select `bifrost/auto` in Pi's `/model` picker. Pi then dispatches the physical model for each request using the same tiers, reliability state, and selection strategies. The footer shows `bifrost/auto → provider/model`, and assistant messages record the physical model that answered. Pi-owned tool continuations stay on the model that started the turn. Pi may first make its own bounded retry; Bifrost's separate allowance recovery is described below. Auto requires Pi `1.0.1` or newer.
 
-With legacy reliability settings, both modes use the same tier policy. Experimental `schemaVersion: 2` plus `reliability.stateVersion: 2` enables receipt-owned reliability for Auto user turns only. It requires a prepared v2 sidecar and fails closed before classification or generation when that state is missing or invalid. Physical routing and direct utility requests are unsupported while v2 is enabled; use `stateVersion: 1` for physical routing. `/bifrost pin` and `/bifrost off` remain available to leave Auto without sending a turn. Neither mode asks a model to follow routing instructions or replays a failed user prompt. [Read the routing controls](docs/guide/routing-controls.md) and [reliability guide](docs/guide/reliability-and-cache.md).
+With legacy reliability settings, both modes use the same tier policy. Experimental `schemaVersion: 2` plus `reliability.stateVersion: 2` enables receipt-owned reliability for Auto user turns only. It requires a prepared v2 sidecar and fails closed before classification or generation when that state is missing or invalid. Physical routing and direct utility requests are unsupported while v2 is enabled; use `stateVersion: 1` for physical routing. `/bifrost pin` and `/bifrost off` remain available to leave Auto without sending a turn. Neither mode asks a model to follow routing instructions. [Read the routing controls](docs/guide/routing-controls.md) and [reliability guide](docs/guide/reliability-and-cache.md).
 
 ## How a route is chosen
 
@@ -47,7 +47,48 @@ prompt → tier → your model pool → reliability filter → your strategy →
 
 A tier is a named group such as `quick`, `general`, or `frontier`. Bifrost finds one through a tier name at the start of the message, a rule, its local classification cache, an optional classifier, or your default tier. A rule can also name an exact `provider/id` instead of a tier.
 
-The pool limits which models qualify. The strategy selects a healthy candidate by list order, price, context window, probe-sorted speed, or random choice. Repeated failures open a persistent circuit so later turns avoid that model until a controlled recovery trial. A failed turn is **never sent again automatically**.
+The pool limits which models qualify. The strategy selects a healthy candidate by list order, price, context window, probe-sorted speed, or random choice. Repeated failures open a persistent circuit so later turns avoid that model until a controlled recovery trial. A usage-allowance failure may trigger the bounded Auto recovery below.
+
+### Allowance recovery in Auto
+
+By default, Bifrost can retry once on a different model from your configured pools when a provider reports an explicit usage limit. Pi must prove the failed initial Auto response had no assistant content, tool calls, tool results, queued work, or intervening activity. The failed response is omitted from the next model request, while the original transcript remains visible. Bifrost settles the failed model before selecting and admitting the alternate. The selection and retry are shown in the terminal.
+
+This recovery requires reliability to be enabled and `cooldownOnAllowanceExhausted` to remain enabled. Bifrost must save the failed model's cooldown before it can safely choose an alternate. Setting `retryOnAllowanceExhausted: false` turns off only this automatic retry.
+
+The retry does not run for physical selection, direct model bindings, explicit tier prefixes, exhausted explicit fallback boundaries, tool continuations, unsafe/unknown turns, or when no configured model passes normal eligibility checks. A Pi-owned retry may precede Bifrost recovery only when each prior attempt was an empty error from the same model and Pi recorded its exact null context omission. If the selected tier has no eligible alternate and has no explicit fallback policy, Bifrost checks the configured default and remaining configured tiers in stable config order. Bifrost never infers provider-wide quota health. It sends no extra classifier or probe request and does not resubmit the user's prompt through `sendUserMessage`.
+
+Disable the behavior in `.pi/bifrost.json` when you want every failed turn to stop:
+
+```json
+{
+  "reliability": {
+    "retryOnAllowanceExhausted": false
+  }
+}
+```
+
+See [ADR 0023](docs/adr/0023-bounded-allowance-recovery.md) for the exact boundary and tests.
+
+```mermaid
+sequenceDiagram
+    participant Pi
+    participant Bifrost
+    participant Failed as Failed model
+    participant Alternate as Configured alternate
+
+    Pi->>Bifrost: Initial Auto generation
+    Bifrost->>Failed: Send user turn
+    Failed-->>Pi: Explicit usage limit, empty response
+    Pi->>Bifrost: Before-settle boundary
+    Bifrost->>Bifrost: Prove no output, tools, queue, or intervening activity
+    alt Proof fails or no eligible configured alternate
+        Bifrost-->>Pi: Explain why no retry was sent
+    else Proof passes and alternate is admitted
+        Bifrost->>Bifrost: Settle failed model, revalidate route
+        Bifrost->>Alternate: One bounded retry
+        Alternate-->>Pi: Response
+    end
+```
 
 Legacy configurations may fall back to the configured default tier when a requested tier has no eligible model. Schema version 2 can set an explicit ordered `tierPolicies.<tier>.fallbackTiers` list; an empty list makes that tier a singleton boundary. Version 2 alone preserves legacy fallback behavior. See the [configuration guide](docs/guide/configuration.md#explicit-fallback-boundaries-schema-version-2).
 
@@ -112,7 +153,7 @@ flowchart TD
     Q -- No --> S["Keep current anchor"]
 ```
 
-Reliability v2 is active when schema version 2 sets `reliability.stateVersion: 2` and reliability is enabled. It requires valid state and a proven Auto turn before classification. It admits the selected model before Auto sends the provider request. Rejection stops the turn. Bifrost never replays a failed prompt automatically.
+Reliability v2 is active when schema version 2 sets `reliability.stateVersion: 2` and reliability is enabled. It requires valid state and a proven Auto turn before classification. It admits the selected model before Auto sends the provider request. Rejection stops the turn. The same one-attempt allowance-recovery exception applies after confirmed receipt settlement.
 
 Auto affinity keeps a model within the selected tier. It does not keep related prompts in the same tier. A tier change can select a different model. Physical routing has affinity off by default. Schema version 2 can set `affinity.mode` to `off`, `observe`, or `retain-within-tier`.
 

@@ -151,7 +151,7 @@ Repository config cannot redirect TypeSafe credentials to arbitrary origins. Typ
 
 `test` makes a fresh request. `status` shows the active backend, model, fallback, and safe metrics without exposing keys. The direct TypeSafe backend also shows the credential source. Pi-native shows the catalog model or the configured `classifier.piNative.model`.
 
-Low confidence, missing credentials, network failure, timeout, invalid response, rate limit, or open classifier circuit follows configured fallback. User prompts are never replayed.
+Low confidence, missing credentials, network failure, timeout, invalid response, rate limit, or open classifier circuit follows configured fallback. Classifier fallback does not replay a user prompt; the separate bounded generation recovery for explicit allowance failures is documented in [reliability](reliability-and-cache.md#reliability-circuits).
 
 When a direct classifier misses during normal routing, Bifrost warns once for that classifier state and names the fallback that actually produced the tier. If its model-only circuit opens, the warning includes the local cooldown expiry. Repeated requests during the same open circuit do not repeat the warning; a successful classifier call after recovery clears the notice and reports recovery. If no tier is selected, the warning says so instead of implying routing continued. These notices do not change routing or make extra classifier calls.
 

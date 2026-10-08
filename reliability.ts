@@ -10,6 +10,8 @@ export interface ReliabilityConfig {
   observations?: { enabled?: boolean };
   /** Open a model-only cooldown immediately for a normalized allowance-exhaustion failure. */
   cooldownOnAllowanceExhausted?: boolean;
+  /** Retry one proven side-effect-free Auto generation on a different configured model after allowance exhaustion. */
+  retryOnAllowanceExhausted?: boolean;
   failureThreshold?: number;
   windowMinutes?: number;
   cooldownMinutes?: number;
@@ -44,6 +46,7 @@ export interface CircuitState {
 export const DEFAULT_RELIABILITY: Required<Omit<ReliabilityConfig, "path" | "stateVersion" | "observations">> = {
   enabled: true,
   cooldownOnAllowanceExhausted: true,
+  retryOnAllowanceExhausted: true,
   failureThreshold: 3,
   windowMinutes: 5,
   cooldownMinutes: 60,
@@ -53,6 +56,7 @@ export function resolveReliabilityConfig(config?: ReliabilityConfig): Required<O
   return {
     enabled: config?.enabled ?? DEFAULT_RELIABILITY.enabled,
     cooldownOnAllowanceExhausted: config?.cooldownOnAllowanceExhausted ?? DEFAULT_RELIABILITY.cooldownOnAllowanceExhausted,
+    retryOnAllowanceExhausted: config?.retryOnAllowanceExhausted ?? DEFAULT_RELIABILITY.retryOnAllowanceExhausted,
     failureThreshold: config?.failureThreshold ?? DEFAULT_RELIABILITY.failureThreshold,
     windowMinutes: config?.windowMinutes ?? DEFAULT_RELIABILITY.windowMinutes,
     cooldownMinutes: config?.cooldownMinutes ?? DEFAULT_RELIABILITY.cooldownMinutes,
@@ -301,19 +305,21 @@ export function loadReliability(path: string): ReliabilityState {
   }
 }
 
-export function saveReliability(path: string, state: ReliabilityState): void {
+export function saveReliability(path: string, state: ReliabilityState): boolean {
   let owner: ReturnType<typeof acquireReliabilitySourceFenceSync> | undefined;
   try {
     owner = acquireReliabilitySourceFenceSync(path);
     if (!reliabilitySourceFenceOwned(owner)) {
       console.error("[bifrost] reliability source lock ownership changed before save; no state was written, and the lock was left untouched.");
-      return;
+      return false;
     }
     writeJsonFile(path, state);
+    return true;
   } catch (error) {
     console.error(error instanceof ReliabilitySourceFenceError && error.code === "contended"
       ? "[bifrost] reliability state write skipped because a source lock exists. Stop other writers; if the lock remains, follow the reliability lock recovery guide. Do not remove it based only on age or PID."
       : "[bifrost] reliability state could not be saved; check the state file and retry.");
+    return false;
   } finally {
     if (owner) {
       try { releaseReliabilitySourceFence(owner); }

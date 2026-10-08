@@ -419,6 +419,7 @@ def write_agent_fixture(agent_dir: Path, port: int) -> None:
                 "api": "openai-completions",
                 "apiKey": "ui-fixture-only",
                 "models": [
+                    {"id": "usage-exhausted", "reasoning": False},
                     {"id": "healthy", "reasoning": False},
                     {"id": "classifier", "reasoning": False},
                 ],
@@ -428,7 +429,7 @@ def write_agent_fixture(agent_dir: Path, port: int) -> None:
     (agent_dir / "settings.json").write_text('{"retry":{"enabled":false}}\n')
 
 
-def spawn_pi(log_path: Path, cwd: Path, agent_dir: Path) -> tuple[subprocess.Popen[bytes], int]:
+def spawn_pi(log_path: Path, cwd: Path, agent_dir: Path, provider: str = "fake", model: str = "healthy") -> tuple[subprocess.Popen[bytes], int]:
     if not PI or not Path(PI).exists():
         raise SystemExit(f"pinned Pi binary not found: {PI}")
 
@@ -456,9 +457,9 @@ def spawn_pi(log_path: Path, cwd: Path, agent_dir: Path) -> tuple[subprocess.Pop
             "--no-session",
             "--no-tools",
             "--provider",
-            "fake",
+            provider,
             "--model",
-            "healthy",
+            model,
         ],
         stdin=slave,
         stdout=slave,
@@ -531,7 +532,8 @@ def capture(
     before = fake_stats(FAKE_PORT)
     previous_attempts = before.get("attempts", {})
     attempts_before = previous_attempts if isinstance(previous_attempts, dict) else {}
-    proc, master = spawn_pi(log_path, workspace, agent_dir)
+    provider, model = ("bifrost", "auto") if name == "allowance-recovery" else ("fake", "healthy")
+    proc, master = spawn_pi(log_path, workspace, agent_dir, provider, model)
     stop = threading.Event()
     t = threading.Thread(target=reader, args=(master, stop), daemon=True)
     t.start()
@@ -554,6 +556,12 @@ def capture(
                 FAKE_PORT,
                 {key: int(value) for key, value in attempts_before.items() if isinstance(value, int)},
                 ("classifier", "healthy"),
+            )
+        if name == "allowance-recovery":
+            wait_for_model_attempts(
+                FAKE_PORT,
+                {key: int(value) for key, value in attempts_before.items() if isinstance(value, int)},
+                ("usage-exhausted", "healthy"),
             )
 
         time.sleep(2.0)
@@ -593,6 +601,17 @@ def main() -> int:
             raise AssertionError(f"expected pinned Pi 1.0.1, got {version}")
         captures = [
         ("startup", True, []),
+        (
+            "allowance-recovery",
+            True,
+            [(1.0, "switch to a healthy model after the usage limit\r")],
+            {
+                "strategy": "first",
+                "categoryStrategies": {"general": "first"},
+                "classifier": {"enabled": False},
+                "models": {"general": ["fake/usage-exhausted", "fake/healthy"]},
+            },
+        ),
         ("dashboard", True, [(1.0, "/bifrost\r")]),
         ("validate", True, [(0.5, "/bifrost validate\r")]),
         ("inspect", True, [(0.5, "/bifrost inspect\r")]),
@@ -674,6 +693,14 @@ def main() -> int:
                 degradation_text = (OUT / "classifier-degradation.txt").read_text(errors="ignore").lower()
                 if "pi-native classifier" not in degradation_text or "prompt classifier" not in degradation_text:
                     raise AssertionError("classifier degradation UI did not show the primary failure and actual prompt fallback")
+            if name == "allowance-recovery":
+                recovery_text = (OUT / "allowance-recovery.txt").read_text(errors="ignore").lower()
+                if "retrying once with fake/healthy" not in recovery_text:
+                    raise AssertionError("allowance recovery UI did not show the alternate model action")
+                if "fake/healthy" not in recovery_text or "healthy" not in recovery_text:
+                    raise AssertionError("allowance recovery UI did not show the resulting model response or active model")
+                if "(bifrost) auto" not in recovery_text or "→ healthy" not in recovery_text:
+                    raise AssertionError("allowance recovery UI did not restore the Auto footer to the successful alternate model")
             if name == "strict-no-route":
                 strict_text = (OUT / "strict-no-route.txt").read_text(errors="ignore")
                 if "restricted keep this text" not in strict_text or "turn was not sent" not in strict_text:

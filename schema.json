@@ -306,6 +306,11 @@
           "description": "Immediately open a model-only circuit for a normalized explicit usage-allowance exhaustion. Generic HTTP 429/rate-limit failures keep using failureThreshold. Set false to disable this immediate cooldown.",
           "default": true
         },
+        "retryOnAllowanceExhausted": {
+          "type": "boolean",
+          "description": "Retry at most once on a different configured model only when reliability and cooldownOnAllowanceExhausted are enabled and Pi proves the failed Auto generation had no assistant content, tool calls, tool results, or other activity. The failed response is omitted from the next model context; the raw transcript remains visible.",
+          "default": true
+        },
         "stateVersion": {
           "type": "integer",
           "enum": [1, 2],

@@ -49,6 +49,7 @@ export interface AutoDispatchReceipt {
   readonly tier: string;
   readonly observationsEnabled: boolean;
   readonly affinityEligible: boolean;
+  readonly retryEligible: boolean;
   readonly admittedAt: number;
   proofUntil: number;
   leases: ReliabilityV2LeaseReference[];
@@ -103,6 +104,7 @@ export class AutoDispatchReceiptBook {
     tier: string;
     observationsEnabled: boolean;
     affinityEligible: boolean;
+    retryEligible: boolean;
     admittedAt: number;
     proofUntil: number;
     leases: ReliabilityV2LeaseReference[];
@@ -124,6 +126,7 @@ export class AutoDispatchReceiptBook {
       tier: input.tier,
       observationsEnabled: input.observationsEnabled,
       affinityEligible: input.affinityEligible,
+      retryEligible: input.retryEligible,
       admittedAt: input.admittedAt,
       proofUntil: input.proofUntil,
       leases: input.leases,

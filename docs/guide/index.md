@@ -56,7 +56,7 @@ Optional classifiers, including TypeSafe/Jev and Pi-native, choose a tier. They 
 ## Product boundaries
 
 - Bifrost uses Pi's real provider/model. In Auto, Pi shows the virtual selection and dispatched physical model together.
-- Bifrost never automatically replays a failed user prompt.
+- Automatic retries are limited to one explicit allowance failure after Pi proves the initial Auto generation had no output or tool activity; see [the recovery boundary](reliability-and-cache.md#reliability-circuits).
 - Reliability circuits protect future turns; they are not provider quota guards.
 - Provider prompt caches remain controlled by Pi's provider integration and each provider.
 - Adaptive routing may trade prompt-cache locality for per-turn task fit. It cannot guarantee better results, lower cost, lower latency, or cache savings.

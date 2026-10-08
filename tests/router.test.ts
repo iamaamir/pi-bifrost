@@ -693,6 +693,10 @@ describe("experimental resolve-only router", () => {
       reliability: { stateVersion: 2, observations: { enabled: true } },
     } as unknown as RouterSnapshot["config"] });
     assert.throws(() => createRouter(input), /Unsupported router reliability controls/);
+    assert.throws(() => createRouter(snapshot({ config: {
+      ...snapshot().config,
+      reliability: { retryOnAllowanceExhausted: true },
+    } as unknown as RouterSnapshot["config"] })), /Unsupported router reliability controls/);
 
     let calls = 0;
     const allowanceConfig = {
