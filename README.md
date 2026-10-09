@@ -8,13 +8,6 @@
 
 Pi-Bifrost chooses a suitable model for each message from the models you allow. You spend less time selecting and switching models by hand.
 
-<p align="center">
-  <picture>
-    <source media="(max-width: 480px)" srcset="docs/routing-overview-mobile.svg">
-    <img src="docs/routing-overview.svg" width="720" alt="Example Pi session: Bifrost selects openai-codex/gpt-5.6-luna before Pi shows an answer.">
-  </picture>
-</p>
-
 A tier is a named model group, such as `quick` or `general`. A classifier is an extra AI call that chooses a tier. It cannot choose a model outside your lists.
 
 ## Install
