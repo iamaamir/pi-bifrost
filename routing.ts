@@ -241,6 +241,7 @@ function selectFromHealthyPool(
 export interface RoutedModelResolution {
   requestedTier: string;
   selectedTier?: string;
+  fallbackTier?: string;
   selected: Model<Api> | undefined;
   strategy: RoutingStrategy;
   skipped: SkippedCandidate[];
@@ -524,7 +525,9 @@ export function resolveModelWithFallback(
   // Compute final reason after evaluating fallback
   const resolveFinalReason = (fb: HealthyModelResolution): RoutedModelResolution["fallbackReason"] => {
     if (fb.selected) return fallbackReason;
-    if (requestedUnavailable && unavailable(fb)) return "requested_tier_unavailable";
+    if (requestedUnavailable && primary.skipped.length === 0 && !requestedExcluded && unavailable(fb)) {
+      return "requested_tier_unavailable";
+    }
     if (fb.skipped.length > 0 || primary.skipped.length > 0) return "all_tiers_exhausted";
     if (reserveExcluded(primary) || reserveExcluded(fb)) return "requested_tier_excluded";
     return fallbackReason;
@@ -555,6 +558,7 @@ export function resolveModelWithFallback(
   return {
     requestedTier: options.requestedTier,
     selectedTier: fallback.selected ? options.defaultTier : undefined,
+    ...(options.defaultTier ? { fallbackTier: options.defaultTier } : {}),
     selected: fallback.selected,
     strategy: fallback.selected
       ? (options.defaultStrategy ?? options.requestedStrategy)
@@ -608,12 +612,12 @@ function resolveWithExplicitTierBoundary(
               : undefined
     : attemptedTiers.length === 1 && primary.skipped.length > 0
       ? "requested_tier_unhealthy"
-      : allPoolsUnavailable
-        ? "requested_tier_unavailable"
-        : anySkipped
-          ? "all_tiers_exhausted"
-          : anyReserveExcluded
-            ? "requested_tier_excluded"
+    : allPoolsUnavailable
+      ? "requested_tier_unavailable"
+      : anySkipped
+        ? "all_tiers_exhausted"
+        : anyReserveExcluded
+          ? "requested_tier_excluded"
           : undefined;
   return {
     requestedTier: options.requestedTier,

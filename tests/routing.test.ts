@@ -19,6 +19,7 @@ import {
   classify,
   classifyCompiled,
   compileRules,
+  type TierResolutionConfig,
 } from "../routing.ts";
 import { emptyReliabilityState, recordModelFailure, DEFAULT_RELIABILITY } from "../reliability.ts";
 import { makeCtx, makeModel, withoutCost } from "./helpers.ts";
@@ -259,7 +260,7 @@ describe("routing", () => {
       assert.equal(result.explicitBoundary, true);
     });
 
-    it("reports a reserve-excluded legacy default pool as excluded, not unavailable", () => {
+    it("attributes a reserve-excluded legacy fallback when the requested tier is empty", () => {
       const ctx = makeCtx([makeModel("fixture", "a")]);
       const reservePolicy = policy("policy");
       const snapshot = publishEconomicObservation(emptyEconomicSnapshot(), reservePolicy, observation).snapshot;
@@ -271,6 +272,7 @@ describe("routing", () => {
       assert.equal(result.selected, undefined);
       assert.equal(result.fallback?.economic?.[0]?.evaluation.disposition, "rejected");
       assert.equal(result.fallbackReason, "requested_tier_excluded");
+      assert.equal(result.fallbackTier, "general");
     });
 
     it("does not report all-excluded explicit pools as unavailable", () => {
@@ -305,6 +307,36 @@ describe("routing", () => {
         { key: "fixture/b", reason: "open_circuit" },
       ]);
       assert.equal(result.fallbackReason, "requested_tier_unhealthy");
+    });
+
+    it("attributes a reserve-blocked default to fallback when the requested tier is empty", () => {
+      const ctx = makeCtx([makeModel("fixture", "a")]);
+      const reservePolicy = policy("policy");
+      const snapshot = publishEconomicObservation(emptyEconomicSnapshot(), reservePolicy, observation).snapshot;
+      const cases: Array<{ label: string; config: TierResolutionConfig }> = [
+        {
+          label: "legacy default",
+          config: { default: "general", models: { quick: [], general: ["fixture/a"] }, strategy: "first" },
+        },
+        {
+          label: "strict fallback boundary",
+          config: {
+            schemaVersion: 2,
+            models: { quick: [], general: ["fixture/a"] },
+            tierPolicies: { quick: { fallbackTiers: ["general"] } },
+            strategy: "first",
+          },
+        },
+      ];
+      for (const { label, config } of cases) {
+        const result = resolveConfiguredTier(ctx, "quick", config, undefined, undefined, now,
+          { policy: reservePolicy, snapshot }).resolution;
+        assert.equal(result.selected, undefined, label);
+        assert.equal(result.fallbackReason, "requested_tier_excluded", label);
+        assert.equal(result.fallback?.economic?.[0]?.evaluation.disposition, "rejected", label);
+        assert.equal(result.fallbackTier, label === "legacy default" ? "general" : undefined, label);
+        assert.equal(result.attemptedTiers?.[1]?.tier, label === "strict fallback boundary" ? "general" : undefined, label);
+      }
     });
 
     it("observe mode records would-reject evidence without changing candidates or random calls", () => {
@@ -959,6 +991,27 @@ describe("routing", () => {
         requestedStrategy: "first",
         defaultTier: "economical",
         defaultPattern: ["openai/gpt-4.1-mini"],
+        defaultStrategy: "first",
+        reliabilityState: state,
+        reliabilityConfig: cfg,
+        now,
+      });
+      assert.equal(result.selected, undefined);
+      assert.equal(result.fallbackReason, "all_tiers_exhausted");
+    });
+
+    it("keeps a primary circuit failure when the fallback pool is empty", () => {
+      const broken = makeModel("anthropic", "claude-opus", 15);
+      const ctx = makeCtx([broken]);
+      const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 60 };
+      const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+      const state = recordModelFailure(emptyReliabilityState(), modelKey(broken), cfg, now, "probe", "timeout");
+      const result = resolveModelWithFallback(ctx, {
+        requestedTier: "frontier",
+        requestedPattern: ["anthropic/claude-opus"],
+        requestedStrategy: "first",
+        defaultTier: "economical",
+        defaultPattern: [],
         defaultStrategy: "first",
         reliabilityState: state,
         reliabilityConfig: cfg,

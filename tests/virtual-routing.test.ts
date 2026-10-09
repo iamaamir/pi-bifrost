@@ -69,6 +69,27 @@ describe("virtual fail-closed errors", () => {
     }
   });
 
+  it("attributes reserve fallback exclusions to the default tier when the request is empty", () => {
+    const message = noModelError("quick", [], "requested_tier_excluded", [], {
+      count: 1,
+      reasonCodes: ["reserve_reached"],
+      tiers: ["general"],
+    });
+    assert.match(message, /requested tier quick had no resolved models/u);
+    assert.match(message, /no eligible physical model for tier quick \(reserve policy exclusion\)/u);
+    assert.match(message, /reserve policy excluded 1 configured candidate\(s\) in fallback tier general/u);
+  });
+
+  it("names every tier when reserve exclusions include request and fallback", () => {
+    const message = noModelError("quick", ["fixture/quick", "fixture/general"], "requested_tier_excluded", [], {
+      count: 2,
+      reasonCodes: ["reserve_reached"],
+      tiers: ["general", "quick"],
+    });
+    assert.match(message, /reserve policy excluded 2 configured candidate\(s\) across tiers general, quick/u);
+    assert.doesNotMatch(message, /in fallback tier/u);
+  });
+
   it("delegates dispatch thinking level to pi-ai clampThinkingLevel", async () => {
     const nonReasoning = Object.assign(makeModel("fixture", "plain"), { reasoning: false });
     const limited = Object.assign(makeModel("fixture", "limited"), {

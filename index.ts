@@ -337,6 +337,7 @@ function endpointClassifier(id: string, endpoint: string): ClassifierModel {
 interface ReserveExclusionSummary {
   readonly count: number;
   readonly reasonCodes: readonly string[];
+  readonly tiers: readonly string[];
 }
 
 const SAFE_RESERVE_REASON_CODES = new Set([
@@ -345,12 +346,17 @@ const SAFE_RESERVE_REASON_CODES = new Set([
 ]);
 
 function reserveExclusionSummary(resolution: RoutedModelResolution): ReserveExclusionSummary {
-  const pools = resolution.attemptedTiers?.map((attempt) => attempt.resolution)
-    ?? [resolution.primary, ...(resolution.fallback ? [resolution.fallback] : [])];
+  const pools = resolution.attemptedTiers?.map((attempt) => ({ tier: attempt.tier, resolution: attempt.resolution }))
+    ?? [
+      { tier: resolution.requestedTier, resolution: resolution.primary },
+      ...(resolution.fallback ? [{ tier: resolution.fallbackTier ?? resolution.requestedTier, resolution: resolution.fallback }] : []),
+    ];
   const candidates = new Map<string, Set<string>>();
-  for (const pool of pools) {
+  const tiers = new Set<string>();
+  for (const { tier, resolution: pool } of pools) {
     for (const { key, evaluation } of pool.economic ?? []) {
       if (evaluation.mode !== "policy" || evaluation.disposition !== "rejected") continue;
+      tiers.add(tier);
       const reasons = candidates.get(key) ?? new Set<string>();
       for (const result of evaluation.results) {
         if ((result.status === "reject" || (result.status === "unknown" && result.unknownHandling === "block"))
@@ -360,7 +366,7 @@ function reserveExclusionSummary(resolution: RoutedModelResolution): ReserveExcl
     }
   }
   const reasonCodes = [...new Set([...candidates.values()].flatMap((reasons) => [...reasons]))].sort();
-  return { count: candidates.size, reasonCodes };
+  return { count: candidates.size, reasonCodes, tiers: [...tiers].sort() };
 }
 
 function routingPolicyInvalid(state: Pick<BifrostState, "tierPolicyValid" | "economicPolicyValid" | "reliabilityV2ConfigValid" | "affinityConfigValid">): boolean {

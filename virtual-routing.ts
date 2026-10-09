@@ -45,21 +45,37 @@ export function noModelError(
   pool: string | string[] | undefined,
   reason?: RouteReasonCode,
   skipped?: readonly SkippedCandidate[],
-  reserveExcluded?: { readonly count: number; readonly reasonCodes: readonly string[] },
+  reserveExcluded?: { readonly count: number; readonly reasonCodes: readonly string[]; readonly tiers?: readonly string[] },
 ): string {
   const suffix = reason ? ` (${reasonLabel(reason)})` : "";
   const reserveCount = reserveExcluded?.count ?? 0;
   const reasonCodes = reserveExcluded?.reasonCodes ?? [];
   const reserveFiltered = reserveCount > 0;
+  const reserveTiers = reserveExcluded?.tiers ?? [];
+  const fallbackOnly = reserveTiers.length > 0 && reserveTiers.every((reserveTier) => reserveTier !== tier);
+  const hasFallbackTier = reserveTiers.some((reserveTier) => reserveTier !== tier);
+  const reserveAttribution = fallbackOnly
+    ? ` in fallback tier${reserveTiers.length === 1 ? "" : "s"} ${reserveTiers.join(", ")}`
+    : hasFallbackTier
+      ? ` across tiers ${reserveTiers.join(", ")}`
+      : "";
+  const configuredPatterns = pool === undefined ? [] : Array.isArray(pool) ? pool : [pool];
+  const requestedUnavailableDetail = fallbackOnly && configuredPatterns.length === 0
+    ? `; requested tier ${tier} had no resolved models`
+    : "";
   const reliabilityDetail = skipped?.length
     ? `; reliability blocked ${skipped.map((entry) => `${entry.key} (${reasonLabel(entry.reason)})`).join(", ")}`
     : "";
   const problem = reason === "requested_tier_excluded" || reserveFiltered
     ? (reserveFiltered
-      ? `reserve policy excluded ${reserveCount} configured candidate(s)${reasonCodes.length ? ` (reasons: ${reasonCodes.join(", ")})` : ""}${reliabilityDetail}`
+      ? `reserve policy excluded ${reserveCount} configured candidate(s)${reserveAttribution}${reasonCodes.length ? ` (reasons: ${reasonCodes.join(", ")})` : ""}${requestedUnavailableDetail}${reliabilityDetail}`
       : "configured candidates excluded by reserve policy")
     : poolProblem(tier, pool, skipped);
-  const availability = reason === "requested_tier_excluded" || reserveFiltered ? "no eligible physical model" : "no healthy physical model";
+  const availability = reason === "requested_tier_unavailable" && fallbackOnly
+    ? "no available physical model"
+    : reason === "requested_tier_excluded" || reserveFiltered
+      ? "no eligible physical model"
+      : "no healthy physical model";
   return `Bifrost: ${availability} for tier ${tier}${suffix}: ${problem}`;
 }
 

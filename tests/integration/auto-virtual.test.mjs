@@ -414,7 +414,7 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
       assert.equal((after.attempts.reserved ?? 0) - (before.attempts.reserved ?? 0), 0,
         "a reserve-excluded candidate must never reach the fake provider");
       assert.match(stderr, /no eligible physical model for tier restricted \(reserve policy exclusion\)/);
-      assert.match(stderr, /reserve policy excluded 1 configured candidate\(s\) \(reasons: reserve_reached\)/);
+      assert.match(stderr, /reserve policy excluded 1 configured candidate\(s\) in fallback tier reserve \(reasons: reserve_reached\)/);
       assert.doesNotMatch(stderr, /resolved 0 available models|check provider credentials/);
       assert.doesNotMatch(stderr, /reserve-task|0\.1/);
       assert.doesNotMatch(stderr, /Bifrost: keeping fake\/healthy/);
