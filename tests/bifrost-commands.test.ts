@@ -1469,6 +1469,31 @@ describe("route dispatch", () => {
     assert.doesNotMatch(String(rejection.value), /PRIVATE_INVALID_CLASS|PRIVATE_VALUE/);
   });
 
+  it("reports each economic validation error once and retains the last-good config on reload", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    const lastGoodConfig = state.config;
+    await inTempDir(async () => {
+      writeFileSync("bifrost.json", JSON.stringify({
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["fixture/model"] },
+        economics: {
+          mode: "policy",
+          scopes: { local: { kind: "model", model: "fixture/model" } },
+          sources: [{ id: "manual", scopeRef: "local", authority: "declared" }],
+          admission: [],
+        },
+      }));
+      await createCommandRouter(state as never)("reload", ctx as never);
+    });
+    assert.equal(state.config, lastGoodConfig);
+    const rejection = calls.find((call) => String(call.value).includes("reload rejected"));
+    assert.ok(rejection);
+    const message = String(rejection.value);
+    assert.equal(message.split("The configured economic policy is invalid or unsupported.").length - 1, 1);
+  });
+
   it("rejects an invalid classifier total budget reload without exposing its raw value", async () => {
     const { ctx, calls } = makeCtx();
     const state = makeState();

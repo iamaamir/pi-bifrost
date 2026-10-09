@@ -110,9 +110,8 @@ function installConfigIfTierPoliciesValid(
   ctx: ExtensionContext,
 ): boolean {
   const errors = validateTierPolicyConfig(config).filter((issue) => issue.severity === "error");
-  errors.push(...validateEconomicConfig(config).filter((issue) => issue.severity === "error"));
-  errors.push(...validateConfig(config).filter((issue) => issue.severity === "error" && issue.code?.startsWith("config.reliability_")));
-  errors.push(...validateConfig(config).filter((issue) => issue.severity === "error" && issue.code?.startsWith("config.affinity_")));
+  errors.push(...validateConfig(config).filter((issue) => issue.severity === "error"
+    && (issue.code?.startsWith("config.reliability_") || issue.code?.startsWith("config.affinity_"))));
   const totalTimeoutIssue = classifierTotalTimeoutIssue(config);
   if (totalTimeoutIssue) errors.push(totalTimeoutIssue);
   if (errors.length > 0) {
