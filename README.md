@@ -4,7 +4,12 @@
 
 Pi-Bifrost routes [Pi](https://pi.dev) turns through models you choose. A tier is a named group of models. You set its model pool and selection strategy. For tier-based routes, Bifrost picks a tier, checks model eligibility, then selects a model.
 
-![A prompt is matched to a tier, checked against its configured AI pool, and sent to one eligible AI.](docs/routing-overview.svg)
+<p align="center">
+  <picture>
+    <source media="(max-width: 480px)" srcset="docs/routing-overview-mobile.svg">
+    <img src="docs/routing-overview.svg" width="720" alt="A prompt matches a tier and configured model pool. AI A is selected, AI B is excluded by cooldown, and the selected path leads to Pi’s answer.">
+  </picture>
+</p>
 
 ```mermaid
 flowchart LR

@@ -1,100 +1,92 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="320" height="832" viewBox="0 0 320 832" role="img" aria-labelledby="route-title route-desc" style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif">
-  <title id="route-title">Example route through Pi-Bifrost</title>
-  <desc id="route-desc">An example prompt matches a tier and its configured AI pool. A configured strategy selects AI A, while AI B is excluded because it is on cooldown. Pi sends the prompt to AI A and shows the answer.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="560" viewBox="0 0 720 560" role="img" aria-labelledby="title desc" style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif">
+  <title id="title">Example route through Pi-Bifrost</title>
+  <desc id="desc">A prompt matches a tier and its configured model pool. AI A is selected by the configured strategy. AI B is excluded for cooldown. The selected route carries the prompt to Pi, which shows the answer.</desc>
   <style>
-    :root{color-scheme:light dark;--backdrop:#0d151d;--text:#e2e6e9;--muted:#a6b0b8;--surface:#15212c;--surface-raised:#1c2b37;--line:#647783;--accent:#70acd0;--selected-bg:#193244;--warning:#d6ad72;--stop:#cf8e8e}
-    @media(prefers-color-scheme:light){:root{--backdrop:#fff;--text:#17232c;--muted:#475762;--surface:#f4f7f9;--surface-raised:#e7eef3;--line:#71818b;--accent:#176b99;--selected-bg:#dcecf5;--warning:#855212;--stop:#982d2d}}
-    .prompt-shape{fill:var(--surface-raised);stroke:var(--line);stroke-width:1.5}
-    .tier-shape{fill:var(--surface);stroke:var(--accent);stroke-width:2}
-    .pool-frame{fill:var(--surface);stroke:var(--line);stroke-width:1.5}
-    .candidate{fill:var(--surface-raised);stroke:var(--line);stroke-width:1.5}
-    .selected{fill:var(--selected-bg);stroke:var(--accent);stroke-width:2.5}
-    .excluded{fill:var(--surface);stroke:var(--line);stroke-width:1.5;opacity:.75}
-    .answer-frame{fill:var(--surface-raised);stroke:var(--accent);stroke-width:2}
-    .label{fill:var(--text);font-size:20px;font-weight:650}
-    .answer-text{font-size:18px}
-    .body{fill:var(--text);font-size:18px}
-    .muted{fill:var(--muted);font-size:18px}
-    .selected-text{fill:var(--accent);font-size:18px;font-weight:650}
-    .cooldown-text{fill:var(--warning);font-size:18px;font-weight:650}
-    .stop-mark{fill:var(--stop);font-size:22px;font-weight:700}
-    .spine{fill:none;stroke:var(--line);stroke-width:2;stroke-linecap:round}
-    .route{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
-    .selected-route{fill:none;stroke:var(--accent);stroke-width:4;stroke-linecap:round;stroke-linejoin:round}
-    .branch{fill:none;stroke:var(--line);stroke-width:2;stroke-linecap:round}
-    .reveal{animation:arrive .55s cubic-bezier(.2,.75,.25,1) both}
-    .step-1{animation-delay:0s}.step-2{animation-delay:.7s}.step-3{animation-delay:1.4s}.step-4{animation-delay:2.15s}.step-5{animation-delay:2.95s}
-    .packet{fill:var(--accent);opacity:0;animation:travel .42s ease-out both}
-    .packet-1{animation-delay:.75s}.packet-2{animation-delay:1.45s}.packet-3{animation-delay:2.2s}.packet-4{animation-delay:3.05s}
-    @keyframes arrive{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-    @keyframes travel{0%{opacity:0;transform:translateY(0) scale(.7)}20%{opacity:1}80%{opacity:1;transform:translateY(22px) scale(1)}100%{opacity:0;transform:translateY(32px) scale(.7)}}
-    @media(prefers-reduced-motion:reduce){.reveal{animation:none!important;opacity:1!important;transform:none!important}.packet{animation:none!important;opacity:0!important;transform:none!important}}
+    :root{color-scheme:light dark;--backdrop:#0d151d;--text:#e2e6e9;--muted:#a6b0b8;--surface:#15212c;--surface-raised:#1c2b37;--line:#647783;--accent:#70acd0;--teal:#64d6c3;--selected-bg:#193244;--warning:#d6ad72;--stop:#cf8e8e}
+    @media(prefers-color-scheme:light){:root{--backdrop:#f5f8fa;--text:#17232c;--muted:#475762;--surface:#fff;--surface-raised:#e7eef3;--line:#71818b;--accent:#176b99;--teal:#0a7c76;--selected-bg:#dcecf5;--warning:#855212;--stop:#982d2d}}
+    .backdrop{fill:var(--backdrop)}.speech{fill:var(--surface-raised);stroke:var(--line);stroke-width:2}.tier{fill:var(--surface);stroke:var(--accent);stroke-width:2.5}.pool{fill:var(--surface);stroke:var(--line);stroke-width:2}.candidate{fill:var(--surface-raised);stroke:var(--line);stroke-width:2}.chosen{fill:var(--selected-bg);stroke:var(--accent);stroke-width:3}.excluded{fill:var(--surface);stroke:var(--line);stroke-width:2}.terminal{fill:var(--surface-raised);stroke:var(--accent);stroke-width:2.5}
+    .title{fill:var(--text);font-size:23px;font-weight:650}.body{fill:var(--text);font-size:20px}.muted{fill:var(--muted);font-size:18px}.selected-text{fill:var(--accent);font-size:20px;font-weight:700}.cooldown{fill:var(--warning);font-size:20px;font-weight:700}.step{fill:var(--muted);font-size:18px;font-weight:650;letter-spacing:.06em}
+    .wire{fill:none;stroke:var(--line);stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}.wire-selected{fill:none;stroke:var(--accent);stroke-width:4;stroke-linecap:round;stroke-linejoin:round}.route-halo{fill:none;stroke:var(--accent);stroke-width:12;stroke-linecap:round;stroke-linejoin:round;opacity:.2;stroke-dasharray:1;stroke-dashoffset:0;animation:trace-route 20s linear infinite}.route-flow{fill:none;stroke:url(#selected-flow);stroke-width:4;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1;stroke-dashoffset:0;animation:trace-route 20s linear infinite}.packet-ring{fill:var(--backdrop);fill-opacity:.55;stroke:var(--accent);stroke-width:2;opacity:0}.wire-excluded{fill:none;stroke:var(--line);stroke-width:2.5;stroke-dasharray:5 6;stroke-linecap:round;stroke-linejoin:round}.packet{fill:var(--accent);opacity:0}
+    .scene{animation-duration:20s;animation-iteration-count:infinite;animation-timing-function:linear;animation-fill-mode:both}
+    .step-1{animation-name:stage-1}.step-2{animation-name:stage-2}.step-3{animation-name:stage-3}.step-4{animation-name:stage-4}.step-5{animation-name:stage-5}
+    @keyframes stage-1{0%{opacity:0;transform:translateY(10px)}4%{opacity:1;transform:translateY(0)}95%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-8px)}}
+    @keyframes stage-2{0%,10%{opacity:0;transform:translateY(10px)}14%,95%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-8px)}}
+    @keyframes stage-3{0%,20%{opacity:0;transform:translateY(10px)}24%,95%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-8px)}}
+    @keyframes stage-4{0%,30%{opacity:0;transform:translateY(10px)}34%,95%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-8px)}}
+    @keyframes stage-5{0%,40%{opacity:0;transform:translateY(10px)}44%,95%{opacity:1;transform:translateY(0)}100%{opacity:0;transform:translateY(-8px)}}
+    #packet-first{animation:packet-first 20s linear infinite}#packet-next{animation:packet-next 20s linear infinite}#packet-route,.packet-ring{animation:packet-route 20s linear infinite}
+    @keyframes packet-first{0%,14.5%{opacity:0;transform:translateX(0)}15%{opacity:1}18.5%{opacity:1;transform:translateX(31px)}19%{opacity:0;transform:translateX(40px)}100%{opacity:0;transform:translateX(40px)}}
+    @keyframes packet-next{0%,24.5%{opacity:0;transform:translateX(0)}25%{opacity:1}28.5%{opacity:1;transform:translateX(45px)}29%{opacity:0;transform:translateX(54px)}100%{opacity:0;transform:translateX(54px)}}
+    @keyframes trace-route{0%,44.5%{stroke-dashoffset:1}45%{stroke-dashoffset:1}50%,95%{stroke-dashoffset:0}100%{stroke-dashoffset:1}}
+    @keyframes packet-route{0%,44.5%{opacity:0;transform:translate(0,0)}45%{opacity:1}47%{opacity:1;transform:translate(0,28px)}48%{opacity:1;transform:translate(32px,60px)}49.5%{opacity:1;transform:translate(212px,60px)}50%,100%{opacity:0;transform:translate(212px,60px)}}
+    @media(prefers-reduced-motion:reduce){.scene,#packet-first,#packet-next,#packet-route,.packet-ring,.route-halo,.route-flow{animation:none!important}.scene{opacity:1!important;transform:none!important}.packet,.packet-ring{display:none!important}.route-halo,.route-flow{stroke-dashoffset:0!important}}
   </style>
+  <defs><linearGradient id="selected-flow" x1="0" y1="0" x2="1" y2="0" gradientUnits="objectBoundingBox"><stop stop-color="var(--accent)"/><stop offset="1" stop-color="var(--teal)"/></linearGradient></defs>
+  <rect class="backdrop" width="720" height="560" rx="18"/>
+  <text class="step" x="28" y="34">EXAMPLE ROUTE</text>
 
-  <rect id="backdrop" x="0" y="0" width="320" height="832" rx="12" fill="var(--backdrop)"/>
-  <text class="muted" x="16" y="20">Example route</text>
-  <g id="prompt" class="reveal step-1">
-    <path class="prompt-shape" d="M30 30H290a14 14 0 0 1 14 14v28a14 14 0 0 1-14 14H174l-14 14-14-14H30a14 14 0 0 1-14-14V44a14 14 0 0 1 14-14Z"/>
-    <text class="label" x="160" y="57" text-anchor="middle">01 · Your prompt</text>
-    <text class="body" x="160" y="82" text-anchor="middle">“Fix this bug”</text>
-  </g>
-
-  <g id="to-tier" class="reveal step-2">
-    <path class="route" d="M160 100V116m-5-7 5 7 5-7"/>
-    <circle class="packet packet-1" cx="160" cy="101" r="5"/>
-  </g>
-  <g id="tier" class="reveal step-2">
-    <rect class="tier-shape" x="24" y="120" width="272" height="64" rx="32"/>
-    <text class="label" x="160" y="147" text-anchor="middle">02 · Matched tier</text>
-    <text class="muted" x="160" y="173" text-anchor="middle">a group for this kind of task</text>
+  <g id="prompt" class="scene step-1">
+    <path class="speech" d="M42 66H174a14 14 0 0 1 14 14v65a14 14 0 0 1-14 14H106l-18 18-4-18H42a14 14 0 0 1-14-14V80a14 14 0 0 1 14-14Z"/>
+    <text class="step" x="48" y="96">01 · PROMPT</text>
+    <text class="title" x="48" y="130">Fix this bug</text>
   </g>
 
-  <g id="to-pool" class="reveal step-3">
-    <path class="route" d="M160 184V218m-5-8 5 8 5-8"/>
-    <circle class="packet packet-2" cx="160" cy="188" r="5"/>
+  <g id="prompt-to-tier" class="scene step-2">
+    <path class="wire" d="M188 117H229m-9-6 9 6-9 6"/>
+    <circle id="packet-first" class="packet" cx="193" cy="117" r="6"/>
   </g>
-  <g id="pool" class="reveal step-3">
-    <rect class="pool-frame" x="16" y="222" width="288" height="132" rx="12"/>
-    <text class="label" x="32" y="249">03 · Configured pool</text>
-    <text class="muted" x="32" y="273">models allowed for this tier</text>
-    <path class="branch" d="M160 278V286M160 286H88V294M160 286H232V294"/>
-    <rect class="candidate" x="25" y="296" width="126" height="46" rx="10"/>
-    <text class="label" x="88" y="326" text-anchor="middle">AI A</text>
-    <rect class="candidate" x="169" y="296" width="126" height="46" rx="10"/>
-    <text class="label" x="232" y="326" text-anchor="middle">AI B</text>
+  <g id="tier" class="scene step-2">
+    <rect class="tier" x="232" y="76" width="170" height="82" rx="41"/>
+    <text class="step" x="317" y="106" text-anchor="middle">02 · TIER</text>
+    <text class="title" x="317" y="136" text-anchor="middle">Task group</text>
   </g>
 
-  <g id="to-check" class="reveal step-4">
-    <path class="route" d="M160 354V404m-5-8 5 8 5-8"/>
-    <circle class="packet packet-3" cx="160" cy="360" r="5"/>
+  <g id="tier-to-pool" class="scene step-3">
+    <path class="wire" d="M402 117H461m-9-6 9 6-9 6"/>
+    <circle id="packet-next" class="packet" cx="407" cy="117" r="6"/>
   </g>
-  <g id="selection" class="reveal step-4">
-    <rect class="pool-frame" x="16" y="408" width="288" height="180" rx="12"/>
-    <text class="label" x="160" y="436" text-anchor="middle">04 · Check eligibility</text>
-    <text class="muted" x="160" y="461" text-anchor="middle">Configured strategy picks</text>
-    <text class="muted" x="160" y="483" text-anchor="middle">from eligible AIs</text>
-    <rect class="selected" x="25" y="496" width="126" height="72" rx="10"/>
-    <text class="label" x="88" y="526" text-anchor="middle">AI A</text>
-    <text class="selected-text" x="88" y="551" text-anchor="middle">Selected</text>
-    <rect class="excluded" x="169" y="496" width="126" height="72" rx="10"/>
-    <text class="label" x="232" y="526" text-anchor="middle">AI B</text>
-    <text class="cooldown-text" x="232" y="551" text-anchor="middle">× Cooldown</text>
+  <g id="model-pool" class="scene step-3">
+    <rect class="pool" x="466" y="34" width="226" height="166" rx="14"/>
+    <text class="step" x="480" y="64">03 · MODEL POOL</text>
+    <text class="muted" x="480" y="91">Configured models</text>
+    <rect class="candidate" x="480" y="108" width="96" height="68" rx="11"/>
+    <text class="title" x="528" y="150" text-anchor="middle">AI A</text>
+    <rect class="candidate" x="586" y="108" width="92" height="68" rx="11"/>
+    <text class="title" x="632" y="150" text-anchor="middle">AI B</text>
   </g>
 
-  <g id="selected-route" class="reveal step-5">
-    <path class="selected-route" d="M88 568V602Q88 620 106 620H142Q160 620 160 638V654m-6-8 6 8 6-8"/>
-    <circle class="packet packet-4" cx="88" cy="572" r="5"/>
+  <g id="candidate-branches" class="scene step-4">
+    <path class="wire" d="M579 200V222"/>
+    <path class="wire-selected" d="M579 222H240V269m-7-10 7 10 7-10"/>
+    <path class="wire-excluded" d="M579 222H500V269m-7-10 7 10 7-10"/>
   </g>
-  <g id="answer" class="reveal step-5">
-    <rect class="answer-frame" x="16" y="658" width="288" height="68" rx="8"/>
-    <path class="spine" d="M16 680H304"/>
-    <text class="muted" x="32" y="675">PI · RESPONSE</text>
-    <text class="label answer-text" x="32" y="711">Pi shows the answer from AI A</text>
+  <g id="selection" class="scene step-4">
+    <text class="step" x="28" y="255">04 · ELIGIBILITY</text>
+    <rect class="chosen" x="142" y="273" width="196" height="86" rx="13"/>
+    <text class="title" x="164" y="307">AI A</text>
+    <text class="selected-text" x="164" y="338">✓ SELECTED</text>
+    <rect class="excluded" x="402" y="273" width="196" height="86" rx="13"/>
+    <text class="title" x="424" y="307">AI B</text>
+    <text class="cooldown" x="424" y="338">× COOLDOWN</text>
+    <text class="muted" x="28" y="382">Strategy picks</text>
+    <text class="muted" x="28" y="406">an eligible AI.</text>
   </g>
 
-  <g id="routing-notes" class="reveal step-5">
-    <text class="muted" x="160" y="756" text-anchor="middle">Cache remembers tier choices.</text>
-    <text class="muted" x="160" y="782" text-anchor="middle">Auto can keep a successful AI</text>
-    <text class="muted" x="160" y="805" text-anchor="middle">in this tier while it remains eligible.</text>
+  <g id="selected-route" class="scene step-5">
+    <path class="route-halo" pathLength="1" d="M240 359V388Q240 420 272 420H452m-10-7 10 7-10 7"/>
+    <path class="route-flow" pathLength="1" d="M240 359V388Q240 420 272 420H452m-10-7 10 7-10 7"/>
+    <circle class="packet-ring" cx="240" cy="360" r="12"/>
+    <circle id="packet-route" class="packet" cx="240" cy="360" r="7"/>
+  </g>
+  <g id="answer" class="scene step-5">
+    <rect class="terminal" x="464" y="382" width="228" height="102" rx="10"/>
+    <path class="wire" d="M464 413H692"/>
+    <text class="step" x="482" y="405">05 · PI ANSWER</text>
+    <text class="title" x="482" y="448">Pi shows the</text>
+    <text class="title" x="482" y="474">answer from AI A</text>
+  </g>
+  <g id="notes" class="scene step-5">
+    <text class="muted" x="30" y="520">Cache remembers tier choices.</text>
+    <text class="muted" x="30" y="544">Auto can keep a successful AI in its tier while it remains eligible.</text>
   </g>
 </svg>
