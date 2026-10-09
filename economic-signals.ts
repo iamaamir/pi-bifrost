@@ -472,12 +472,15 @@ function validateSnapshotShape(snapshot: EconomicSnapshot, policy: ReservePolicy
     if (watermarkKeys.has(key)) diagnostics.push(diagnostic("snapshot.duplicate_watermark", "error", { sourceId: watermark.sourceId, scopeRef: watermark.scopeRef, windowId: watermark.windowId }));
     watermarkKeys.add(key);
   }
+  const watermarkList = Array.isArray(snapshot?.watermarks) ? snapshot.watermarks : [];
   for (const signal of Array.isArray(snapshot?.signals) ? snapshot.signals : []) {
     if (!signal || typeof signal !== "object" || !Array.isArray(signal.windows)) continue;
     for (const window of signal.windows) {
       if (!window || typeof window !== "object" || !boundedId(window.id)) continue;
-      const watermark = (snapshot.watermarks ?? []).find((item) => watermarkKey(item) === watermarkKey({ sourceId: signal.sourceId, scopeRef: signal.scopeRef, windowId: window.id }));
-      if (!watermark || watermark.periodId !== window.period.id || watermark.periodSequence !== window.period.sequence || watermark.revision < signal.revision) {
+      const watermark = watermarkList.find((item) => item && typeof item === "object" && !Array.isArray(item)
+        && watermarkKey(item) === watermarkKey({ sourceId: signal.sourceId, scopeRef: signal.scopeRef, windowId: window.id }));
+      if (!watermark || !window.period || watermark.periodId !== window.period.id
+        || watermark.periodSequence !== window.period.sequence || watermark.revision < signal.revision) {
         diagnostics.push(diagnostic("snapshot.watermark_missing", "error", { sourceId: signal.sourceId, scopeRef: signal.scopeRef, windowId: window.id }));
       }
     }

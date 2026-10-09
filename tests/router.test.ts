@@ -41,6 +41,27 @@ describe("experimental resolve-only router", () => {
     assert.equal("model" in result, false);
   });
 
+  it("rejects malformed economic windows through the router snapshot boundary", () => {
+    const economicPolicy: ReservePolicy = {
+      mode: "policy",
+      scopes: { selected: { kind: "model", model: "fixture/quick-model" } },
+      sources: [{ id: "manual", scopeRef: "selected", authority: "declared" }],
+      admission: [{ id: "daily", scopeRef: "selected", windowId: "daily", reserveRatio: 0.2, unknown: "block" }],
+    };
+    const malformed = {
+      revision: 1,
+      signals: [{
+        sourceId: "manual", scopeRef: "selected", billing: "subscription", observedAt: 100, expiresAt: 2_000, revision: 1,
+        windows: [{ id: "daily" }],
+      }],
+      watermarks: [{ sourceId: "manual", scopeRef: "selected", windowId: "daily", periodId: "period", periodSequence: 1, revision: 1 }],
+    } as unknown as ReturnType<typeof emptyEconomicSnapshot>;
+
+    assert.throws(() => createRouter(snapshot({
+      economic: { policy: economicPolicy, snapshot: malformed },
+    })), /Invalid router economic snapshot/);
+  });
+
   it("applies preference-only economic policy within the selected tier and exposes only the projection", async () => {
     const economicPolicy: ReservePolicy = {
       mode: "policy",

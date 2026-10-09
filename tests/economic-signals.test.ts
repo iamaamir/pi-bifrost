@@ -320,6 +320,28 @@ describe("economic signal snapshots", () => {
     assert.equal(evaluate(policy(), malformedSnapshot).wouldReject, true);
   });
 
+  it("returns controlled failures for malformed watermark and window details", () => {
+    const validSignal = signal();
+    const malformedSnapshots = [
+      {
+        revision: 1,
+        signals: [signal({ windows: [{ id: "daily" } as unknown as AllowanceWindow] })],
+        watermarks: [{ sourceId: "api", scopeRef: "selected", windowId: "daily", periodId: "2026-10-07", periodSequence: 7, revision: 1 }],
+      },
+      { revision: 1, signals: [validSignal], watermarks: {} },
+      { revision: 1, signals: [validSignal], watermarks: [null] },
+    ] as unknown as ReturnType<typeof emptyEconomicSnapshot>[];
+
+    for (const malformed of malformedSnapshots) {
+      assert.doesNotThrow(() => validateEconomicSnapshot(malformed, policy(), 200));
+      assert.equal(validateEconomicSnapshot(malformed, policy(), 200).valid, false);
+      assert.doesNotThrow(() => evaluate(policy(), malformed));
+      assert.equal(evaluate(policy(), malformed).wouldReject, true);
+      assert.doesNotThrow(() => publish(malformed, policy(), signal()));
+      assert.equal(publish(malformed, policy(), signal()).accepted, false);
+    }
+  });
+
   it("drops malformed diagnostic identifiers instead of serializing private objects", () => {
     const secret = { apiKey: "PRIVATE_SENTINEL_DO_NOT_EMIT" };
     const malformedPolicy = policy({ sources: [{ id: secret, scopeRef: "selected", authority: "authoritative" } as unknown as ReservePolicy["sources"][number]] });

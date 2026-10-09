@@ -68,6 +68,27 @@ describe("economic billing preference projection", () => {
     assert.equal(result.traces[0]?.effect, "would_prefer");
   });
 
+  it("returns a neutral invalid-context projection for malformed economic windows", () => {
+    const p = policy();
+    const malformed = {
+      revision: 1,
+      signals: [signal({ windows: [{ id: "monthly" } as unknown as EconomicSignal["windows"][number]] })],
+      watermarks: [{ sourceId: "live", scopeRef: "selected", windowId: "monthly", periodId: "period", periodSequence: 1, revision: 1 }],
+    } as unknown as ReturnType<typeof emptyEconomicSnapshot>;
+
+    const result = projectBillingPreference({
+      candidates: [candidate("same-provider/a")],
+      preferredClass: "subscription",
+      snapshot: malformed,
+      policy: p,
+      now,
+    });
+
+    assert.equal(result.selectionCount, 1);
+    assert.equal(result.traces[0]?.freshness, "invalid_context");
+    assert.deepEqual(result.preferredModelKeys, []);
+  });
+
   it("prefers only fresh preferred-class candidates and keeps their input order for downstream strategy", () => {
     const p = policy({
       scopes: {
