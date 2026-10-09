@@ -4,6 +4,8 @@
 **Baseline:** v0.5.0 upstream `236622dbc40789e8ca82226337a26cdd1eb26d2f`, inspected 7 October 2026.
 **Product/acceptance contract:** [PRD.md](PRD.md), requirements R01–R17. All new names and shapes below are proposed APIs/configuration, not current capabilities.
 
+**Approved amendment:** [ADR 0023](docs/adr/0023-bounded-allowance-recovery.md) defines the implemented, bounded Auto allowance-recovery exception. General no-replay statements below continue to prohibit arbitrary failed-work replay; Pi-owned retry and tool-continuation rules remain unchanged.
+
 ## 1. Architectural decisions
 
 1. Keep one npm package and root-level module style. Extract only the host-facing dependency in resolution; do not immediately introduce a monorepo, event bus, dependency container or proxy.
@@ -208,7 +210,7 @@ For `user`, resolve/admit as above and return physical model plus clamped thinki
 
 For `continuation`, use previous physical pair; for `retry`, failed/previous physical pair. No classification, budget preference, affinity ranking or replay. Preserve owned in-flight lease instead of acquiring another at each tool continuation. A revoked binding or new actual hard capability mismatch stops with error; a newly recorded open circuit does not retroactively migrate the transcript. `direct` uses last/default identity with direct payload requirements, no affinity write, no user-target classification. No virtual-to-virtual dispatch.
 
-Keep `createDispatchOwnership` semantics: only owner releases a claimed lease; setup failure never abandons someone else's trial. Associate every actual physical request with request/turn binding so overlapping direct calls cannot overwrite main-turn attribution. A host retry routed after a failure remains a host retry; Bifrost does not create it or claim transparent recovery.
+Keep `createDispatchOwnership` semantics: only owner releases a claimed lease; setup failure never abandons someone else's trial. Associate every actual physical request with request/turn binding so overlapping direct calls cannot overwrite main-turn attribution. A host retry routed after a failure remains a host retry; Bifrost does not create that host retry. Its separate activity-free Auto allowance recovery follows ADR 0023.
 
 ### 4.4 Settlement
 

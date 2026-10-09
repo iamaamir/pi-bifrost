@@ -23,9 +23,11 @@ The requested expansion is a direction, not a commitment to implement all mechan
 4. Users can experiment with subscription preference and session continuity without inheriting provider or task semantics.
 5. Extensions can request a decision without switching the user's model or changing session affinity.
 
+**Approved amendment:** [ADR 0023](docs/adr/0023-bounded-allowance-recovery.md) permits one configurable Auto allowance-recovery attempt at a host-proven activity-free boundary. It supersedes the original blanket retry prohibition; arbitrary failed-work replay remains excluded.
+
 ### Non-goals
 
-- Automatic prompt replay, including behind a config toggle. A future independent design would need per-incident human confirmation, a host-proven zero-side-effect boundary, deterministic E2E coverage, and an approved ADR.
+- Arbitrary failed-work replay, including after output or tool activity. The only automatic exception is the bounded, configurable Auto allowance recovery approved in [ADR 0023](docs/adr/0023-bounded-allowance-recovery.md).
 - Subagent creation, workflow execution, ACP servers, proxies, network RPC listeners, credential rotation, or account switching.
 - Built-in opinions that coding belongs on a particular provider, frontier is planning-only, expensive means competent, or subscriptions always outrank metered access.
 - Image-input detection, steering, enforcement, attachment previews, or image-specific tests in this evolution. Pi may retain its existing attachment behavior; Bifrost makes no image-suitability guarantee.
@@ -98,7 +100,7 @@ Additional operational lessons: fork storage changes default state locality from
 | Developer investigating unexpected selection | Preview explains classification source, requested/selected tier, resolved candidates, exclusions, strategy and fallback; inspect shows freshness and config provenance without prompt content |
 | Developer with specialized tier | Explicitly empty fallback list blocks before generation when pool is unavailable; last dispatched model cannot escape boundary |
 | Developer using a custom restricted tier | No eligible candidate means an actionable no-route result; current/last model cannot bypass the declared boundary |
-| Developer hitting account quota | Known account-bound candidates excluded, siblings on another account remain eligible; no prompt is replayed and manual pin is not cleared |
+| Developer hitting account quota | Known account-bound candidates excluded, siblings on another account remain eligible; no arbitrary failed work is replayed and manual pin is not cleared; only ADR 0023 permits an activity-free Auto recovery |
 | Subscription user | Can inspect allowance windows, reserve and staleness, then opt into an economic strategy; unavailable data is not treated as free or exhausted |
 | Long-session user | Can compare ordinary routing against within-tier continuity, see why it stays/switches, pin manually, reset affinity; no heuristic locks them to an inappropriate tier |
 | Extension author | Resolve returns decision/no-route/cancelled with trace and revisions; active Pi selection, pin, history and affinity unchanged |
@@ -111,7 +113,7 @@ Additional operational lessons: fork storage changes default state locality from
 |---|---|---|
 | R01 | P0 / Partially exists | One structured decision contract drives runtime, preview and API; each rejection has a stable code and evidence source; semantic parity fixtures cover baseline paths |
 | R02 | P0 / Already exists | Physical selection remains default; Auto remains explicit; Pi footer intact and Bifrost uses `setStatus("bifrost-state", ...)`; manual model/pin/off semantics retained |
-| R03 | P0 / Already exists | Never initiate replay or unpin on failure; settled failure updates reliability exactly once; continuation and host retry stay on their physical route |
+| R03 | P0 / Already exists | Never replay arbitrary failed work or unpin on failure; only ADR 0023 permits bounded activity-free Auto allowance recovery; settled failure updates reliability exactly once; continuation and Pi-owned retry stay on their physical route |
 | R04 | P1 / Partially exists | Exclude virtual/classifier-only entries from generation pools, probes and init with host-type proof; retain a general capability observation seam, with modality enforcement deferred |
 | R05 | P1 / Missing | Configured fallback boundaries terminate in no-route; capability requirements persist across fallbacks; no stale-model escape in physical or Auto paths |
 | R06 | P1 / Should be refactored | Strict-mode no-route and activation failure stop before inference; no selection side effects in resolve; cancellation cannot dispatch late results |
@@ -168,7 +170,7 @@ Manual tier prefix and classifier tier receive identical fallback boundaries. Re
 
 ### 5.4 Continuations, host retries, direct calls
 
-Tool continuations remain on the physical model/level that owns the tool transcript. Host-originated retries remain on failed/previous physical identity; Bifrost neither initiates nor migrates a failed turn. These are protocol continuity, not soft affinity. Newly opened reliability circuits govern the next routed user turn; they do not force a mid-tool switch. Enforced incompatibility or revoked credentials may terminate a continuation, but never select a replacement mid-turn. A provider outage can therefore end a turn rather than transparently recover it.
+Tool continuations remain on the physical model/level that owns the tool transcript. Host-originated retries remain on failed/previous physical identity; Bifrost does not migrate tool work or replay arbitrary failed turns. [ADR 0023](docs/adr/0023-bounded-allowance-recovery.md) separately permits one activity-free Auto allowance-recovery attempt after confirmed failure settlement. These are protocol continuity, not soft affinity. Newly opened reliability circuits govern the next routed user turn; they do not force a mid-tool switch. Enforced incompatibility or revoked credentials may terminate a continuation, but never select a replacement mid-turn. A provider outage can therefore end a turn rather than transparently recover it.
 
 Direct requests such as compaction stay on prior/default physical identity without task reclassification or affinity changes. Enforced requirements apply to the actual direct payload, not blindly to the entire user history. Explain its intent separately from a routed user turn. Queued steering/follow-ups carry request-specific overrides; no global forced-tier slot.
 
@@ -264,7 +266,7 @@ Classifier orchestration preserves legacy budgets initially, adds an opt-in tota
 
 Deterministic strategies preserve list tie order. Snapshots freeze now/config/registry/health/signal revisions; random injects a seed for replay while legacy live random behavior stays unchanged. Explanations identify changing snapshots and random selection. Concurrency is isolated by request/session/branch; state writers serialize with owner-token leases, not global last-prompt state.
 
-Release acceptance: all R01–R09/R12/R14/R16/R17 safety invariants tested as applicable; every selected candidate eligible; zero strict-boundary escapes in generated scenarios; zero Bifrost replay calls; no sensitive trace fixture leaks; no Pi footer takeover. Benchmark cost/switch improvements are reported only against a named baseline, corpus and measured or explicitly estimated usage. Fewer switches alone does not establish higher answer quality.
+Release acceptance: all R01–R09/R12/R14/R16/R17 safety invariants tested as applicable; every selected candidate eligible; zero strict-boundary escapes in generated scenarios; zero user-prompt re-enqueue calls; automatic recovery restricted to the ADR 0023 boundary; no sensitive trace fixture leaks; no Pi footer takeover. Benchmark cost/switch improvements are reported only against a named baseline, corpus and measured or explicitly estimated usage. Fewer switches alone does not establish higher answer quality.
 
 ## 13. Compatibility and delivery policy
 
