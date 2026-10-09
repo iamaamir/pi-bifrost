@@ -147,6 +147,21 @@ describe("reliability settlement through registered Pi hooks", () => {
     }
   });
 
+  it("never persists provider error or prompt text in legacy reliability state", async () => {
+    const harness = startTrialHarness();
+    const privateText = "private prompt: secret-token-123 provider returned internal detail";
+    const message = { role: "assistant", provider: "fixture", model: "trial", stopReason: "error", errorMessage: privateText };
+    try {
+      await harness.run([message]);
+      const record = harness.state();
+      assert.equal(record.lastFailureReason, "provider request failed");
+      assert.doesNotMatch(JSON.stringify(record), /private prompt|secret-token-123|internal detail/u);
+      assert.equal(message.errorMessage, privateText, "Pi's transcript keeps its original error text");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("does not treat an empty provider error string as successful settlement", async () => {
     const harness = startTrialHarness();
     try {

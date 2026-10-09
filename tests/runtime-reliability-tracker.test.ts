@@ -12,11 +12,11 @@ const failed = (reason = "Streaming response failed") => ({
 const succeeded = { role: "assistant", provider: "openai", model: "gpt-5.4", stopReason: "stop" };
 
 describe("runtime reliability tracker", () => {
-  it("reports final stream failure for selected model only after settlement", () => {
+  it("reports a content-free final stream failure for the selected model", () => {
     const tracker = new RuntimeReliabilityTracker();
     tracker.begin("openai/gpt-5.4");
-    tracker.observe([failed()]);
-    assert.deepEqual(tracker.settle(), [{ model: "openai/gpt-5.4", outcome: "failure", reason: "Streaming response failed" }]);
+    tracker.observe([failed("private prompt text: Streaming response failed")]);
+    assert.deepEqual(tracker.settle(), [{ model: "openai/gpt-5.4", outcome: "failure", reason: "provider request failed" }]);
   });
 
   it("uses a safe failure reason when the host error text is blank", () => {

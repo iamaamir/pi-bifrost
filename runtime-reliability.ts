@@ -108,7 +108,6 @@ export class RuntimeReliabilityTracker {
       }
       if (!last) continue;
       if (last.stopReason === "error") {
-        const rawReason = typeof last.errorMessage === "string" ? last.errorMessage : "";
         let failureObservation: FailureObservation | undefined;
         try {
           const candidate = classifyFailure?.(model, last);
@@ -119,7 +118,7 @@ export class RuntimeReliabilityTracker {
         this.pending.set(model, {
           model,
           outcome: "failure",
-          reason: rawReason.trim() ? rawReason : "provider request failed",
+          reason: "provider request failed",
           ...(failureObservation ? { failureObservation } : {}),
         });
       } else if (typeof last.stopReason === "string" && SUCCESS_STOP_REASONS.has(last.stopReason)) {

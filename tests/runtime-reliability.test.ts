@@ -106,7 +106,7 @@ describe("RuntimeReliabilityTracker ledger", () => {
       { role: "assistant", provider: "b", model: "two", stopReason: "stop" },
     ]);
     assert.deepEqual(tracker.settle(), [
-      { model: "a/one", outcome: "failure", reason: "boom" },
+      { model: "a/one", outcome: "failure", reason: "provider request failed" },
       { model: "b/two", outcome: "success" },
     ]);
   });
