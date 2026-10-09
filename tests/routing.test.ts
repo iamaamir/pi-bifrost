@@ -287,6 +287,26 @@ describe("routing", () => {
       assert.equal(result.fallbackReason, "requested_tier_excluded");
     });
 
+    it("reports reliability blockers when reserve rejection also removed a candidate", () => {
+      const ctx = makeCtx([makeModel("fixture", "a"), makeModel("fixture", "b")]);
+      const reservePolicy = policy("policy");
+      const snapshot = publishEconomicObservation(emptyEconomicSnapshot(), reservePolicy, observation).snapshot;
+      const reliabilityConfig = { ...DEFAULT_RELIABILITY, failureThreshold: 1, cooldownMinutes: 10 };
+      const reliability = recordModelFailure(
+        emptyReliabilityState(), "fixture/b", reliabilityConfig, now, "dispatch", "timeout",
+      );
+      const result = resolveConfiguredTier(ctx, "restricted", {
+        models: { restricted: ["fixture/a", "fixture/b"] }, strategy: "first",
+      }, reliability, reliabilityConfig, now, { policy: reservePolicy, snapshot }).resolution;
+
+      assert.equal(result.selected, undefined);
+      assert.equal(result.primary.economic?.[0]?.evaluation.disposition, "rejected");
+      assert.deepEqual(result.primary.skipped.map(({ key, reason }) => ({ key, reason })), [
+        { key: "fixture/b", reason: "open_circuit" },
+      ]);
+      assert.equal(result.fallbackReason, "requested_tier_unhealthy");
+    });
+
     it("observe mode records would-reject evidence without changing candidates or random calls", () => {
       const ctx = makeCtx([makeModel("fixture", "a"), makeModel("fixture", "b")]);
       const reservePolicy = policy("observe");

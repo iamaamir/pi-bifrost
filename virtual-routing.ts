@@ -51,9 +51,12 @@ export function noModelError(
   const reserveCount = reserveExcluded?.count ?? 0;
   const reasonCodes = reserveExcluded?.reasonCodes ?? [];
   const reserveFiltered = reserveCount > 0;
+  const reliabilityDetail = skipped?.length
+    ? `; reliability blocked ${skipped.map((entry) => `${entry.key} (${reasonLabel(entry.reason)})`).join(", ")}`
+    : "";
   const problem = reason === "requested_tier_excluded" || reserveFiltered
     ? (reserveFiltered
-      ? `reserve policy excluded ${reserveCount} configured candidate(s)${reasonCodes.length ? ` (reasons: ${reasonCodes.join(", ")})` : ""}`
+      ? `reserve policy excluded ${reserveCount} configured candidate(s)${reasonCodes.length ? ` (reasons: ${reasonCodes.join(", ")})` : ""}${reliabilityDetail}`
       : "configured candidates excluded by reserve policy")
     : poolProblem(tier, pool, skipped);
   const availability = reason === "requested_tier_excluded" || reserveFiltered ? "no eligible physical model" : "no healthy physical model";

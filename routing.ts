@@ -515,9 +515,11 @@ export function resolveModelWithFallback(
   const requestedExcluded = reserveExcluded(primary);
   let fallbackReason: RoutedModelResolution["fallbackReason"] = requestedUnavailable
     ? "requested_tier_unavailable"
-    : requestedExcluded
-      ? "requested_tier_excluded"
-      : (primary.skipped.length > 0 ? "requested_tier_unhealthy" : undefined);
+    : primary.skipped.length > 0
+      ? "requested_tier_unhealthy"
+      : requestedExcluded
+        ? "requested_tier_excluded"
+        : undefined;
 
   // Compute final reason after evaluating fallback
   const resolveFinalReason = (fb: HealthyModelResolution): RoutedModelResolution["fallbackReason"] => {
