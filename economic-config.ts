@@ -68,9 +68,10 @@ export function reconcileEconomicSnapshot(
   for (const source of policy.sources) {
     const oldSource = previousPolicy?.sources.find((candidate) => candidate.id === source.id);
     if (oldSource && !compatibleSource(source)) {
-      const oldRevision = Math.max(0, ...prior.signals.filter((signal) => signal.sourceId === source.id).map((signal) => signal.revision));
-      if (oldRevision > (quarantinedSourceRevisions.get(source.id) ?? -1)) quarantinedSourceRevisions.set(source.id, oldRevision);
-      if (prior.signals.some((signal) => signal.sourceId === source.id)) {
+      const priorRevisions = prior.signals.filter((signal) => signal.sourceId === source.id).map((signal) => signal.revision);
+      if (priorRevisions.length > 0) {
+        const oldRevision = Math.max(...priorRevisions);
+        if (oldRevision > (quarantinedSourceRevisions.get(source.id) ?? -1)) quarantinedSourceRevisions.set(source.id, oldRevision);
         diagnostics.push({ code: "observation.binding_invalidated", severity: "warning", sourceId: source.id, scopeRef: source.scopeRef, repair: "Provide a fresh observation for the changed source or scope binding." });
       }
     }

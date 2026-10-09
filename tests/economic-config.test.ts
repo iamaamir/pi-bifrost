@@ -129,6 +129,26 @@ describe("economic config integration", () => {
     assert.deepEqual(accepted.quarantinedSourceRevisions, new Map());
   });
 
+  it("accepts revision-zero facts for a changed binding when the source had no prior fact", () => {
+    const initial = reconcileEconomicSnapshot(undefined, undefined, config({ observations: [] }));
+    assert.equal(initial.snapshot.signals.length, 0);
+    const changed = config({
+      scopes: { selected: { kind: "model", model: "fixture/b" } },
+      observations: [observation({ revision: 0, observedAt: 100, expiresAt: 2_000, windows: [] })],
+    });
+
+    const reconciled = reconcileEconomicSnapshot(
+      initial.snapshot,
+      initial.policy,
+      changed,
+      initial.quarantinedSourceRevisions,
+    );
+
+    assert.equal(reconciled.snapshot.signals.length, 1);
+    assert.equal(reconciled.snapshot.signals[0]?.revision, 0);
+    assert.equal(reconciled.quarantinedSourceRevisions.has("manual"), false);
+  });
+
   it("quarantines changed bindings for prototype-collision source IDs until a higher revision", () => {
     for (const sourceId of ["__proto__", "constructor"]) {
       const sourceConfig = (model: string, revision = 1) => config({
