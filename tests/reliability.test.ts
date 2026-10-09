@@ -69,6 +69,15 @@ describe("reliability", () => {
     const laterGenericFailure = recordModelFailure(opened, key, config, now + 1, "agent_settled", "generic retry failure");
     assert.equal(hasActiveAllowanceCooldown(laterGenericFailure, key, now + 1), true,
       "a later generic Pi retry failure preserves the active typed cooldown marker");
+    const disabledDuringCooldownObservation = normalizeFailureObservation({
+      outcomeId: "allowance-while-disabled", modelKey: key, source: "runtime", observedAt: now + 1,
+      structured: { category: "allowance_exhausted" },
+    }, { now: now + 1 })!;
+    const disabledDuringCooldown = recordModelFailure(opened, key, {
+      ...config, cooldownOnAllowanceExhausted: false,
+    }, now + 1, "agent_settled", "new allowance failure", disabledDuringCooldownObservation);
+    assert.equal(hasActiveAllowanceCooldown(disabledDuringCooldown, key, now + 1), true,
+      "turning the policy off does not erase an already active allowance cooldown marker");
 
     const longHint = normalizeFailureObservation({
       outcomeId: "allowance-long-hint", modelKey: key, source: "runtime", observedAt: now,
@@ -87,7 +96,21 @@ describe("reliability", () => {
       ...config, cooldownOnAllowanceExhausted: false,
     }, now, "agent_settled", "provider request failed", observation);
     assert.equal(optedOut.models[key]?.openUntil, undefined);
-    assert.equal(optedOut.models[key]?.lastFailureReason, "allowance_exhausted:structured:model-only");
+    assert.equal(optedOut.models[key]?.lastFailureReason, "provider request failed");
+
+    const ordinaryCircuit = {
+      ...emptyReliabilityState(),
+      models: { [key]: { failures: [], openUntil: now + 30_000, lastFailureReason: "timeout" } },
+    };
+    const allowanceWhileOptedOut = recordModelFailure(ordinaryCircuit, key, {
+      ...config, cooldownOnAllowanceExhausted: false,
+    }, now, "agent_settled", "allowance failure", observation);
+    assert.equal(allowanceWhileOptedOut.models[key]?.openUntil, now + 30_000,
+      "the existing ordinary circuit remains active");
+    assert.equal(allowanceWhileOptedOut.models[key]?.lastFailureReason, "allowance failure",
+      "an allowance failure does not relabel an ordinary circuit while the allowance cooldown is off");
+    assert.equal(hasActiveAllowanceCooldown(allowanceWhileOptedOut, key, now), false,
+      "enabling the policy later must not mistake this ordinary circuit for an allowance cooldown");
 
     const recoveredAt = opened.models[key]!.openUntil! + 1;
     assert.equal(getCircuitState(opened, key, recoveredAt, config).halfOpen, true);
