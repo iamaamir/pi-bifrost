@@ -831,17 +831,18 @@ export function loadConfigForReload(cwd: string, extensionDir: string): ConfigLo
 export function loadConfigWithSourceOverride(
   cwd: string,
   extensionDir: string,
-  source: "project" | "user",
+  source: "project" | "workspace" | "user",
   replacementBytes: Uint8Array,
 ): ConfigLoadResult {
   const diagnostics: ConfigLoadDiagnostic[] = [];
-  if (source !== "project" && source !== "user") {
+  if (source !== "project" && source !== "workspace" && source !== "user") {
     return {
       config: defaultConfig(),
       diagnostics: [{ layer: "project", message: "Selected config source is invalid." }],
     };
   }
-  const selectedLayer: ConfigLoadDiagnostic["layer"] = source === "project" ? "project" : "global";
+  const selectedLayer: ConfigLoadDiagnostic["layer"] = source === "project" ? "project"
+    : source === "workspace" ? "workspace" : "global";
   let merged = defaultConfig();
   for (const [layer, path] of configLayerPaths(cwd, extensionDir)) {
     let text: string | undefined;

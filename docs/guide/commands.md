@@ -5,7 +5,7 @@
 | Command | Behavior |
 |---------|----------|
 | `/bifrost` | Open dashboard and quick actions |
-| `/bifrost init` | Reuse fresh probe results or probe registry models, then propose configuration and guide you to `/bifrost classifier`; pass `-f` to skip probe reuse and re-probe |
+| `/bifrost init` | Refresh Pi's model catalog and save detected model pools after one confirmation; pass `-f` to run paid model probes |
 | `/bifrost probe` | Send a tiny request to each registry model and report availability; usage may apply |
 | `/bifrost preview <prompt>` | Show the route without generating; leading `--json` keeps the existing report, while leading `--trace` adds a content-free decision summary; an enabled classifier may receive the prompt, and a tier name in the prompt is not applied |
 | `/bifrost on` | Enable routing policy |
@@ -113,14 +113,14 @@ Edit the relevant `bifrost.json`, then run:
 
 ### Reconcile generated model membership
 
-Reconciliation changes one source and one tier at a time. The default source is the project file `.pi/bifrost.json`; `--source user` selects `getAgentDir()/bifrost.json` (normally `~/.pi/agent/bifrost.json`). It never flattens the merged config into either source. A preview reads local registry and refresh evidence only; it does not contact providers. If that evidence is stale, `--refresh` explicitly refreshes only the selected provider and still produces a preview. Apply is a separate command and requires the proposal digest from that preview:
+Reconciliation changes one source and one tier at a time. The default source is the project file `.pi/bifrost.json`; `--source workspace` selects `bifrost.json` in the current directory; `--source user` selects `getAgentDir()/bifrost.json` (normally `~/.pi/agent/bifrost.json`). Workspace membership ownership is stored separately under `.pi/` so it cannot be confused with project ownership. It never flattens the merged config into either source. A preview reads local registry and refresh evidence only; it does not contact providers. If that evidence is stale, `--refresh` explicitly refreshes only the selected provider and still produces a preview. Apply is a separate command and requires the proposal digest from that preview:
 
 ```text
 /bifrost config reconcile --tier general --provider openai
 /bifrost config reconcile --tier general --provider openai --apply --proposal <digest>
 ```
 
-Use `--source user` to select the user config file. The project, workspace, and extension layers remain part of prospective validation, so a higher layer may still override a user-layer value. Add `--json` to emit one `[bifrost-json] ` report line.
+Use `--source workspace` or `--source user` to select those config files. The other project, workspace, user, and extension layers remain part of prospective validation, so a higher layer may still override the selected source. Add `--json` to emit one `[bifrost-json] ` report line.
 
 An explicit catalog refresh is network-enabled and can incur provider requests. It cannot be combined with `--apply`; review its proposal and run a separate apply command:
 
@@ -130,7 +130,7 @@ An explicit catalog refresh is network-enabled and can incur provider requests. 
 
 Reconciliation updates only exact model keys owned by its sidecar. Existing manual entries are never adopted as generated membership. Incomplete, stale, or auth-unknown inventory cannot authorize removals. Apply uses a journal and keeps exact backups. `/bifrost config reconcile --recover` resumes or reports a pending journal. If a process crashed while holding a lock, recovery does not steal it: first verify that no Bifrost writer is active, inspect the exact lock files, and remove only locks proven stale before retrying recovery.
 
-`/bifrost init` retains its current probe and confirmation flow. After a confirmed generation, it writes the config and an exact-membership ownership receipt together. Once that receipt exists, init does not regenerate the config: replacing it could discard managed-membership history. Use `config reconcile` for later membership changes; it keeps the receipt and exact backups in step with the selected tier.
+On a fresh install, Bifrost builds model pools in memory from Pi's available chat-model catalog. It does this when the first prompt arrives. It does not write configuration or probe models. `/bifrost init` refreshes the catalog and asks once before it saves. It reconciles generated model memberships through the ownership receipt and keeps manual entries and other configuration fields. Use `-f` only when you want to probe models.
 
 ### Diagnose unavailable models
 

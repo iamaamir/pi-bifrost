@@ -1,6 +1,8 @@
 import type { ExtensionAPI, ExtensionContext, TurnEndEvent, AgentBeforeSettleEvent, SessionMessageEntry, ModelRouteRequest } from "@earendil-works/pi-coding-agent";
+import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { classifyWithLLM as invokeClassifier, type ClassifierModel } from "./classifier.ts";
 import { classifierCacheEnabled, classifierCacheKey, boundedClassifierPrompt, directStagePlan } from "./classifier-semantics.ts";
 import { ClassifierMetricsStore, classifierMetricsEnabled } from "./classifier-metrics.ts";
@@ -87,6 +89,7 @@ import {
   shouldRefreshRegistry,
 } from "./ux-status.ts";
 import { projectProviderRefreshEvidence, waitForRegistryRefresh } from "./registry-refresh.ts";
+import { buildBootstrapPools, canBootstrapModels, hasBlockingRuntimePreferences, hasExplicitExtensionRoutingFile, hasUserBootstrapFiles } from "./auto-setup.ts";
 
 interface DebugCorrelationState {
   readonly id: string;
@@ -622,7 +625,6 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   // Programmatic activation keys, scoped per session: two sessions selecting
   // the same model concurrently must never swallow each other's event (#17).
   const selfSelect = createSelfSelectTracker();
-  let offeredSetup = false;
   // One extension runtime can host several sessions: scope mutable routing
   // state per session so concurrent sessions cannot consume each other's
   // prompt handoffs or reliability outcomes.
@@ -634,6 +636,16 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   const allowanceRetryStopReasonBySession = new WeakMap<object, string>();
   const pendingAllowanceFailureBySession = new WeakMap<object, PendingAllowanceFailure>();
   const autoRouteProofsBySession = new WeakMap<object, AutoRouteProof[]>();
+  interface AutoBootstrapRecord {
+    promise: Promise<boolean>;
+    readonly config: BifrostConfig;
+    readonly configGeneration: number;
+    readonly branchLength: number;
+    readonly branchHeadId: string | undefined;
+    readonly deadlineAt: number;
+    cancelled: boolean;
+  }
+  const autoBootstrapBySession = new WeakMap<object, AutoBootstrapRecord>();
   const allowanceRetrySessions = new Set<WeakRef<object>>();
   const allowanceRetrySessionRefs = new WeakMap<object, WeakRef<object>>();
   const v2Receipts = new AutoDispatchReceiptBook();
@@ -751,16 +763,21 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   let pipeline: ClassificationPipeline | undefined;
   const shouldNotifyDetection = createDetectionNoticeGate();
 
-  function getPipeline(ctx: ExtensionContext): ClassificationPipeline {
+  function effectiveClassifierFor(ctx: ExtensionContext, targetConfig: BifrostConfig): EffectiveBackend {
     const detected = detectionEngine.detect(() => collectDetectionFacts({
       readStoredCredential,
       getProviderAuthStatus: (providerId) => ctx.modelRegistry.getProviderAuthStatus(providerId),
       env: process.env,
       nativeSupported: piClassificationSupported(ctx.modelRegistry),
     }));
-    const effective = selectEffectiveBackend(state.config.classifier?.backend, detected);
+    const effective = selectEffectiveBackend(targetConfig.classifier?.backend, detected);
+    if (effective.auto) state.classifierDetection = { backend: effective.backend, reason: effective.reason };
+    return effective;
+  }
+
+  function getPipeline(ctx: ExtensionContext): ClassificationPipeline {
+    const effective = effectiveClassifierFor(ctx, state.config);
     if (effective.auto) {
-      state.classifierDetection = { backend: effective.backend, reason: effective.reason };
       if (shouldNotifyDetection(ctx.sessionManager)) {
         debug("classifier", "backend.detected", { backend: effective.backend, reason: effective.reason });
         console.warn(`Bifrost: classifier backend auto: ${effective.backend} (${effective.reason}). Run /bifrost classifier to change.`);
@@ -832,18 +849,21 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     classifierMetricsStore,
     extensionDir,
     getAffinityAnchor: affinityAnchor,
-    effectiveClassifierBackend: (config) => effectiveBackendOf(config, detectionEngine),
+    effectiveClassifierBackend: (targetConfig, ctx) => ctx
+      ? effectiveClassifierFor(ctx, targetConfig)
+      : effectiveBackendOf(targetConfig, detectionEngine),
     getPipeline,
     invalidatePipeline,
-    saveModeState: () => saveRuntimeState(runtimeStateFile, {
-      enabled: state.enabled,
-      classifierEnabled: state.classifierEnabled,
-    }),
+    saveModeState: () => {
+      const next = { enabled: state.enabled, classifierEnabled: state.classifierEnabled };
+      return saveRuntimeState(runtimeStateFile, next);
+    },
     lastRegistryRefreshAt: undefined,
     forceRegistryRefresh: false,
   };
 
   state.onConfigInstalled = (nextConfig, previousConfig) => {
+    state.bootstrapModelsInMemory = false;
     const previousReliability = previousConfig.reliability;
     const nextReliability = nextConfig.reliability;
     const keepActiveV2Store = previousReliability?.stateVersion === 2 && previousReliability.enabled !== false
@@ -883,6 +903,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   };
 
   state.onManualControl = (session, action) => {
+    cancelAutoBootstrap(session);
     clearAllowanceRetry(session, "manual_control");
     debugLifecycle("bifrost", "manual_control", session, undefined, {
       action: action ?? "model_select",
@@ -893,6 +914,122 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     affinityStore?.reset(session);
     pendingAffinityBySession.delete(session);
   };
+
+  function cancelAutoBootstrap(session: object): void {
+    const pending = autoBootstrapBySession.get(session);
+    if (pending) pending.cancelled = true;
+    autoBootstrapBySession.delete(session);
+  }
+
+  function bootstrapStillEligible(): boolean {
+    const userFiles = hasUserBootstrapFiles(process.cwd(), getAgentDir(), CONFIG_DIR_NAME);
+    const runtimePreferencesChanged = hasBlockingRuntimePreferences(runtimeStateFile);
+    return state.enabled && !state.pinned && configHasNoPools(state.config)
+      && !validateConfig(state.config).some((issue) => issue.severity === "error")
+      && canBootstrapModels({
+        ...userFiles,
+        runtimePreferences: runtimePreferencesChanged,
+        extensionRoutingOverride: hasExplicitExtensionRoutingFile(join(extensionDir, "bifrost.json")),
+      });
+  }
+
+  function startAutoBootstrap(ctx: ExtensionContext): AutoBootstrapRecord | undefined {
+    const session = ctx.sessionManager;
+    const existing = autoBootstrapBySession.get(session);
+    if (existing && !existing.cancelled) return existing;
+    if (!bootstrapStillEligible()) return undefined;
+    const config = state.config;
+    const configGeneration = state.configGeneration ?? 0;
+    const branch = ctx.sessionManager.getBranch();
+    const branchLength = branch.length;
+    const branchHeadId = branch.at(-1)?.id;
+    const record: AutoBootstrapRecord = {
+      config,
+      configGeneration,
+      branchLength,
+      branchHeadId,
+      deadlineAt: Date.now() + 500,
+      cancelled: false,
+      promise: Promise.resolve(false),
+    };
+    const currentBranch = (): boolean => {
+      const now = ctx.sessionManager.getBranch();
+      return now.length === branchLength && now.at(-1)?.id === branchHeadId;
+    };
+    const stillOwned = (): boolean => !record.cancelled
+      && !ctx.signal?.aborted
+      && Date.now() < record.deadlineAt
+      && state.config === config
+      && (state.configGeneration ?? 0) === configGeneration
+      && currentBranch()
+      && bootstrapStillEligible();
+    record.promise = Promise.resolve().then(() => {
+      if (!stillOwned()) return false;
+      let available: readonly Model<Api>[];
+      try { available = ctx.modelRegistry.getAvailable(); }
+      catch { available = []; }
+      const pools = buildBootstrapPools(available);
+      if (!pools) {
+        log(ctx, "Bifrost: Pi has no available chat models. Sign in to a provider or refresh Pi's catalog; /bifrost init can refresh the model list.", "warning");
+        return false;
+      }
+      if (!stillOwned()) return false;
+      const effective = state.effectiveClassifierBackend(state.config, ctx);
+      const classifier = state.config.classifier;
+      const classifierModel = state.enabled && state.classifierEnabled && classifier?.enabled !== false
+        && effective.backend === CLASSIFIER_BACKEND_IDS.prompt && classifier?.model === undefined
+        ? [...available]
+          .filter((model) => !isVirtualModel(model))
+          .sort((a, b) => modelKey(a).localeCompare(modelKey(b)))
+          .find((model) => {
+            const key = modelKey(model);
+            const circuit = getCircuitState(state.reliabilityStore.getState(), key, Date.now(), state.config.reliability);
+            return !circuit.open && !hasActiveAllowanceCooldown(state.reliabilityStore.getState(), key, Date.now());
+          })
+        : undefined;
+      const nextConfig: BifrostConfig = {
+        ...state.config,
+        default: pools.default,
+        models: pools.models,
+        ...(classifierModel ? { classifier: { ...classifier, model: modelKey(classifierModel), method: classifier?.method ?? "auto" } } : {}),
+      };
+      if (!stillOwned()) return false;
+      state.config = nextConfig;
+      state.onConfigInstalled?.(nextConfig, config);
+      state.invalidatePipeline();
+      state.bootstrapModelsInMemory = true;
+      log(ctx, `Bifrost loaded ${Object.values(pools.models).reduce((count, pool) => count + pool.length, 0)} listed chat model(s) into in-memory pools. Catalog membership is not a health check; /bifrost init can refresh and save configuration.`);
+      return true;
+    }).catch(() => false).then((ready) => {
+      if (!ready && autoBootstrapBySession.get(session) === record) autoBootstrapBySession.delete(session);
+      return ready;
+    });
+    autoBootstrapBySession.set(session, record);
+    return record;
+  }
+
+  async function joinAutoBootstrap(ctx: ExtensionContext): Promise<boolean> {
+    if (ctx.signal?.aborted) return false;
+    const record = startAutoBootstrap(ctx);
+    if (!record) return false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    setBifrostWorkingMessage(ctx, "Bifrost checking models...");
+    try {
+      const ready = await Promise.race([
+        record.promise,
+        new Promise<boolean>((resolve) => { timer = setTimeout(() => { timedOut = true; resolve(false); }, 500); }),
+      ]);
+      if (timedOut || ctx.signal?.aborted) {
+        cancelAutoBootstrap(ctx.sessionManager);
+        return false;
+      }
+      return ready;
+    } finally {
+      if (timer) clearTimeout(timer);
+      setBifrostWorkingMessage(ctx, undefined);
+    }
+  }
 
   interface AutoUserBoundary {
     readonly sessionId: string;
@@ -1574,6 +1711,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       let terminalRouteCategory: string | undefined;
       let activeRouteOrigin = request.reason === "direct" ? "direct" : request.reason === "retry" ? "retry" : request.reason === "continuation" ? "continuation" : "automatic";
       try {
+      if (requestReason === "user" && state.enabled && !state.pinned) await joinAutoBootstrap(ctx);
       if (v2Active) {
         if (!state.reliabilityV2ConfigValid) {
           rejectionCategory = "reliability_config_invalid";
@@ -2118,9 +2256,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     }
     syncBifrostModeStatus(ctx, state);
     clearBifrostWidgets(ctx);
+    startAutoBootstrap(ctx);
   });
 
   pi.on("session_before_tree", async (_event, ctx) => {
+    cancelAutoBootstrap(ctx.sessionManager);
     clearAllowanceRetry(ctx.sessionManager, "branch_changed");
     affinityStore?.reset(ctx.sessionManager);
     pendingAffinityBySession.delete(ctx.sessionManager);
@@ -2131,6 +2271,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    cancelAutoBootstrap(ctx.sessionManager);
     clearAllowanceRetry(ctx.sessionManager, "session_shutdown");
     debugLifecycle("bifrost", "session_shutdown", ctx.sessionManager, undefined, { category: "session_cleanup" });
     classifierNoticeStates.delete(ctx.sessionManager);
@@ -2403,23 +2544,13 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       overrideFor(ctx).clear();
       state.pinned = false;
       state.enabled = true;
+      startAutoBootstrap(ctx);
       state.saveModeState();
       debugLifecycle("bifrost", "manual_selection", ctx.sessionManager, undefined, { target: "auto", category: "user_selected_auto" });
       debug("bifrost", "model_select.virtual_auto");
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost Auto selected; routing each prompt to a physical model");
-      // Nothing to route: offer setup once instead of letting requests fail later.
-      if (!offeredSetup && configHasNoPools(state.config)) {
-        offeredSetup = true;
-        if (ctx.mode === "tui" && ctx.hasUI) {
-          const setup = await ctx.ui.confirm(
-            "Bifrost has no models configured for this project. Run /bifrost init now?",
-            "Init probes every available model; provider usage may apply.",
-          );
-          if (setup) await runBifrostCommand("init", ctx, handleCommand);
-        }
-      }
       return;
     }
     if (!state.enabled) return;
@@ -2431,6 +2562,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       await cleanupV2Receipts(ctx.sessionManager);
     }
     state.pinned = true;
+    cancelAutoBootstrap(ctx.sessionManager);
     state.saveModeState();
     debugLifecycle("bifrost", "manual_selection", ctx.sessionManager, undefined, { target: modelKey(ctx.model), category: "physical_model_pinned" });
     debug("bifrost", "model_select", { model: modelKey(ctx.model) });
@@ -2477,6 +2609,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       strictBoundary = false;
       return { action: "continue" };
     }
+    await joinAutoBootstrap(ctx);
     if (reliabilityV2Enabled() && !isBifrostAuto(ctx.model)) {
       return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost reliability stateVersion 2 supports Auto turns only; select bifrost/auto or use reliability stateVersion 1. The turn was not sent.");
     }

@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "screenshots" / "ui-smoke"
 PI = os.environ.get("PI_BIN") or str(ROOT / "node_modules" / ".bin" / "pi")
 FAKE_SERVER = ROOT / "scripts" / "fake-provider-server.mjs"
+OUTBOUND_GUARD = ROOT / "scripts" / "test-outbound-guard.cjs"
 FAKE_PORT: int | None = None
 
 WIDTH = 120
@@ -410,14 +411,15 @@ def wait_for_model_attempts(port: int, before: dict[str, int], models: tuple[str
     raise TimeoutError(f"expected bounded fake-provider requests were not observed for {', '.join(models)}")
 
 
-def write_agent_fixture(agent_dir: Path, port: int, model_inventory: Iterable[str] = ()) -> None:
+def write_agent_fixture(
+    agent_dir: Path,
+    port: int,
+    model_inventory: Iterable[str] = (),
+    only_models: Iterable[str] | None = None,
+) -> None:
     agent_dir.mkdir(parents=True, exist_ok=True)
-    models = [
-        {"id": "usage-exhausted", "reasoning": False},
-        {"id": "healthy", "reasoning": False},
-        {"id": "classifier", "reasoning": False},
-        *({"id": model_id, "reasoning": False} for model_id in model_inventory),
-    ]
+    available = list(only_models) if only_models is not None else ["usage-exhausted", "healthy", "classifier", *model_inventory]
+    models = [{"id": model_id, "reasoning": False} for model_id in available]
     (agent_dir / "models.json").write_text(json.dumps({
         "providers": {
             "fake": {
@@ -431,25 +433,54 @@ def write_agent_fixture(agent_dir: Path, port: int, model_inventory: Iterable[st
     (agent_dir / "settings.json").write_text('{"retry":{"enabled":false}}\n')
 
 
+def pi_test_environment(home: Path, agent_dir: Path, port: int) -> dict[str, str]:
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(home),
+        "PI_CODING_AGENT_DIR": str(agent_dir),
+        "PI_SKIP_VERSION_CHECK": "1",
+        "PI_OFFLINE": "1",
+        "NODE_OPTIONS": f"--require={OUTBOUND_GUARD}",
+        "BIFROST_TEST_ALLOWED_ORIGIN": f"http://127.0.0.1:{port}",
+        "BIFROST_TEST_NETWORK_VIOLATIONS": str(home / "test-network-violations.log"),
+    }
+
+
+def assert_no_network_violations(home: Path) -> None:
+    path = home / "test-network-violations.log"
+    if path.exists() and path.read_text(errors="ignore"):
+        raise AssertionError("test network guard recorded a blocked external request")
+
+
+def assert_fake_only_inventory(home: Path, cwd: Path, agent_dir: Path, port: int) -> None:
+    result = subprocess.run(
+        [PI, "-e", str(ROOT), "--list-models"],
+        cwd=str(cwd),
+        env=pi_test_environment(home, agent_dir, port),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    rows = [line.strip().split() for line in result.stdout.splitlines()[1:] if line.strip()]
+    providers = {row[0] for row in rows}
+    assert providers - {"bifrost"} == {"fake"}, result.stdout
+    assert [row[1] for row in rows if row[0] == "bifrost"] == ["auto"], result.stdout
+    assert_no_network_violations(home)
+
+
 def spawn_pi(log_path: Path, cwd: Path, agent_dir: Path, provider: str = "fake", model: str = "healthy") -> tuple[subprocess.Popen[bytes], int]:
     if not PI or not Path(PI).exists():
         raise SystemExit(f"pinned Pi binary not found: {PI}")
 
     master, slave = pty.openpty()
     set_winsize(master, HEIGHT, WIDTH)
-    env = os.environ.copy()
-    for key in ("TYPESAFE_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GOOGLE_API_KEY"):
-        env.pop(key, None)
-    env.update(
-        {
-            "PI_TUI_WRITE_LOG": str(log_path),
-            "PI_SKIP_VERSION_CHECK": "1",
-            "HOME": str(agent_dir.parent.parent),
-            "PI_CODING_AGENT_DIR": str(agent_dir),
-            "TERM": "xterm-256color",
-            "COLORTERM": "truecolor",
-        }
-    )
+    env = pi_test_environment(agent_dir.parent.parent, agent_dir, int(FAKE_PORT))
+    env.update({
+        "PI_TUI_WRITE_LOG": str(log_path),
+        "TERM": "xterm-256color",
+        "COLORTERM": "truecolor",
+    })
     proc = subprocess.Popen(
         [
             PI,
@@ -510,6 +541,9 @@ def capture(
     config_override: dict[str, object] | None = None,
     model_inventory: Iterable[str] = (),
     reload_invalid_economics: bool = False,
+    fresh_install: bool = False,
+    launch_auto: bool = False,
+    only_models: Iterable[str] | None = None,
 ) -> Path:
     OUT.mkdir(parents=True, exist_ok=True)
     log_path = OUT / f"{name}.ansi.log"
@@ -520,23 +554,26 @@ def capture(
 
     tmp = tempfile.TemporaryDirectory()
     workspace = Path(tmp.name)
-    config = json.loads((ROOT / "bifrost.json").read_text())
-    config["enabled"] = enabled
-    config["default"] = "general"
-    config["models"] = {"general": ["fake/healthy"]}
-    config["classifier"] = {"enabled": False, "backend": "prompt"}
-    if config_override:
-        config.update(config_override)
-    (workspace / "bifrost.json").write_text(json.dumps(config, indent=2) + "\n")
+    if not fresh_install:
+        config = json.loads((ROOT / "bifrost.json").read_text())
+        config["enabled"] = enabled
+        config["default"] = "general"
+        config["models"] = {"general": ["fake/healthy"]}
+        config["classifier"] = {"enabled": False, "backend": "prompt"}
+        if config_override:
+            config.update(config_override)
+        (workspace / "bifrost.json").write_text(json.dumps(config, indent=2) + "\n")
     home = workspace / "isolated-home"
     agent_dir = home / ".pi" / "agent"
     assert FAKE_PORT is not None
-    write_agent_fixture(agent_dir, FAKE_PORT, model_inventory)
+    write_agent_fixture(agent_dir, FAKE_PORT, model_inventory, only_models)
+    if name in ("fresh-physical", "fresh-auto"):
+        assert_fake_only_inventory(home, workspace, agent_dir, FAKE_PORT)
 
     before = fake_stats(FAKE_PORT)
     previous_attempts = before.get("attempts", {})
     attempts_before = previous_attempts if isinstance(previous_attempts, dict) else {}
-    provider, model = ("bifrost", "auto") if name in ("allowance-recovery", "auto-large-pool") else ("fake", "healthy")
+    provider, model = ("bifrost", "auto") if launch_auto or name in ("allowance-recovery", "auto-large-pool") else ("fake", "healthy")
     proc, master = spawn_pi(log_path, workspace, agent_dir, provider, model)
     stop = threading.Event()
     t = threading.Thread(target=reader, args=(master, stop), daemon=True)
@@ -588,8 +625,44 @@ def capture(
                 raise AssertionError("large-pool Auto routing generated with a model other than the configured first model")
         if name == "reload-invalid-economics":
             wait_for_model_attempts(FAKE_PORT, attempts_before, ("healthy",))
+        if name in ("fresh-physical", "fresh-auto"):
+            wait_for_model_attempts(FAKE_PORT, attempts_before, ("healthy",))
+            if (workspace / "bifrost.json").exists() or (workspace / ".pi" / "bifrost.json").exists():
+                raise AssertionError("fresh background setup must stay in memory until the user saves")
+            first_run = " ".join((log_path.read_text(errors="ignore") if log_path.exists() else "").split()).lower()
+            if "save bifrost setup?" in first_run or "choose classifier" in first_run or "select classifier" in first_run:
+                raise AssertionError("fresh first prompt unexpectedly opened an init or classifier picker")
+            if "in-memory pools" not in first_run:
+                raise AssertionError("fresh setup did not expose the metadata-derived in-memory pools")
+            if name == "fresh-auto" and "bifrost auto:" not in first_run:
+                raise AssertionError("direct Auto first prompt did not visibly route through the discovered pool")
+        if name == "init-refresh":
+            config_path = workspace / "bifrost.json"
+            if not config_path.exists():
+                raise AssertionError("manual init did not save refreshed membership")
+            saved = json.loads(config_path.read_text())
+            memberships = [model for values in saved.get("models", {}).values() for model in values]
+            if "manual/keep" not in memberships or "fake/healthy" not in memberships:
+                raise AssertionError("manual init did not preserve manual membership and add catalog membership")
+            if saved.get("customSetting") != {"preserve": True}:
+                raise AssertionError("manual init changed an unrelated config field")
+            if saved.get("classifier") != {
+                "enabled": False,
+                "backend": "prompt",
+                "model": "fake/classifier",
+                "criteria": {"general": "keep this criterion"},
+            }:
+                raise AssertionError("manual init changed explicit classifier settings")
+            init_screen = " ".join((log_path.read_text(errors="ignore") if log_path.exists() else "").split()).lower()
+            if init_screen.count("save bifrost setup?") != 1:
+                raise AssertionError("manual init must ask exactly once to save the refreshed setup")
+            if "choose classifier" in init_screen or "select classifier" in init_screen:
+                raise AssertionError("manual init opened a classifier picker after save")
+            if "save memberships: +3 / -0" not in init_screen or "to workspace (bifrost.json)" not in init_screen:
+                raise AssertionError("manual init did not preview the exact workspace membership changes")
 
         time.sleep(2.0)
+        assert_no_network_violations(home)
         raw = log_path.read_text(errors="ignore") if log_path.exists() else ""
         screen = Screen(WIDTH, HEIGHT)
         screen.parse(raw)
@@ -626,6 +699,29 @@ def main() -> int:
             raise AssertionError(f"expected pinned Pi 1.0.1, got {version}")
         captures = [
         ("startup", True, []),
+        ("fresh-physical", True, [(1.0, "quick show fresh setup works\r"), (1.0, "/bifrost inspect\r")], None, [], False, True, False, ["healthy"]),
+        ("fresh-auto", True, [(1.0, "quick show fresh setup works\r")], None, [], False, True, True, ["healthy"]),
+        (
+            "init-refresh",
+            True,
+            [(0.5, "/bifrost init\r"), (2.0, "\r")],
+            {
+                "schemaVersion": 2,
+                "strategy": "first",
+                "models": {"general": ["manual/keep"]},
+                "rules": [{"pattern": "retain rule", "model": "general"}],
+                "tierPolicies": {"general": {"fallbackTiers": []}},
+                "classifier": {
+                    "enabled": False,
+                    "backend": "prompt",
+                    "model": "fake/classifier",
+                    "criteria": {"general": "keep this criterion"},
+                },
+                "customSetting": {"preserve": True},
+            },
+            [],
+            False,
+        ),
         (
             "allowance-recovery",
             True,
@@ -719,8 +815,21 @@ def main() -> int:
             config_override = capture_spec[3] if len(capture_spec) > 3 else None
             model_inventory = capture_spec[4] if len(capture_spec) > 4 else []
             reload_invalid_economics = capture_spec[5] if len(capture_spec) > 5 else False
+            fresh_install = capture_spec[6] if len(capture_spec) > 6 else False
+            launch_auto = capture_spec[7] if len(capture_spec) > 7 else False
+            only_models = capture_spec[8] if len(capture_spec) > 8 else None
             print(f"[ui-smoke] capturing {name}…")
-            results.append(capture(name, enabled, actions, config_override, model_inventory, reload_invalid_economics))
+            results.append(capture(
+                name,
+                enabled,
+                actions,
+                config_override,
+                model_inventory,
+                reload_invalid_economics,
+                fresh_install,
+                launch_auto,
+                only_models,
+            ))
             if name == "preview-trace":
                 trace_text = (OUT / "preview-trace.txt").read_text(errors="ignore")
                 if "route trace v1" not in trace_text:

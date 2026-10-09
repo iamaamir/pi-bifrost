@@ -203,7 +203,7 @@ export function assertPlainJsonObject(bytes: Uint8Array): Record<string, unknown
   return object;
 }
 
-function assertOwnershipPayload(bytes: Uint8Array): void {
+export function assertOwnershipPayload(bytes: Uint8Array): void {
   const value = assertPlainJsonObject(bytes);
   if (!hasExactKeys(value, ["version", "sources"]) || value.version !== 1
     || !isPlainRecord(value.sources) || Object.keys(value.sources).length > MAX_RECORDS) {

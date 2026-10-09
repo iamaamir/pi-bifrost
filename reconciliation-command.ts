@@ -9,6 +9,7 @@ import {
 } from "./reconciliation.ts";
 import {
   ReconciliationStoreError,
+  assertOwnershipPayload,
   assertPlainJsonObject,
   type ApplyReconciliationTransactionInput,
   type ApplyResult,
@@ -16,7 +17,7 @@ import {
   type ReconciliationStorePaths,
 } from "./reconciliation-store.ts";
 
-export type ReconciliationConfigSource = "project" | "user";
+export type ReconciliationConfigSource = "project" | "workspace" | "user";
 
 export type ReconciliationCommandRequest =
   | {
@@ -87,6 +88,20 @@ export interface ReconciliationCommandDependencies {
   ) => boolean;
   readonly apply: (input: ApplyReconciliationTransactionInput) => ApplyResult;
   readonly recover: (paths: ReconciliationStorePaths) => RecoveryResult;
+}
+
+export interface InitMembershipInventory {
+  readonly provider: string;
+  readonly status: ReconciliationInput["inventory"]["status"];
+  readonly modelsByTier: Readonly<Record<string, readonly string[]>>;
+}
+
+export interface InitMembershipPlan {
+  readonly status: "ready" | "advisory" | "blocked";
+  readonly reason?: "source_missing" | "source_invalid" | "prospective_config_invalid" | "no_changes";
+  readonly changes: readonly ReconciliationChange[];
+  readonly warnings: readonly ReconciliationWarningCode[];
+  readonly transaction?: ApplyReconciliationTransactionInput;
 }
 
 export type ReconciliationCommandReason =
@@ -184,7 +199,7 @@ export function parseReconciliationCommandArgs(args: string): ParsedReconciliati
     const value = tokens[++index];
     if (!value || value.startsWith("--")) return failUsage();
     if (token === "--source") {
-      if (value !== "project" && value !== "user") return failUsage();
+      if (value !== "project" && value !== "workspace" && value !== "user") return failUsage();
       source = value;
     } else if (token === "--tier") tier = value;
     else if (token === "--provider") provider = value;
@@ -299,6 +314,133 @@ function modelKeysForProvider(snapshot: ReconciliationRegistrySnapshot, provider
   return [...new Set(snapshot.models
     .filter((model) => !model.virtual && model.provider === provider && typeof model.id === "string" && model.id.length > 0)
     .map((model) => `${model.provider}/${model.id}`))].sort();
+}
+
+/** Builds one ownership-aware membership update for every provider and tier. */
+export function buildInitMembershipPlan(
+  source: ReconciliationSourceSnapshot,
+  inventories: readonly InitMembershipInventory[],
+  validateMergedConfig: ReconciliationCommandDependencies["validateMergedConfig"],
+  inheritedModels?: Readonly<Record<string, string | readonly string[]>>,
+): InitMembershipPlan {
+  if (!source.configBytes) return { status: "blocked", reason: "source_missing", changes: [], warnings: [] };
+  if (source.configBytes.byteLength > MAX_CONFIG_BYTES) return { status: "blocked", reason: "source_invalid", changes: [], warnings: [] };
+  let sourceConfig: Record<string, unknown>;
+  try { sourceConfig = assertPlainJsonObject(source.configBytes); }
+  catch { return { status: "blocked", reason: "source_invalid", changes: [], warnings: [] }; }
+  if (!sourceConfig || source.ownershipBytes && source.ownershipBytes.byteLength > MAX_OWNERSHIP_BYTES) {
+    return { status: "blocked", reason: "source_invalid", changes: [], warnings: [] };
+  }
+  const rawModels = sourceConfig.models;
+  if (rawModels !== undefined && !isPlainRecord(rawModels)) return { status: "blocked", reason: "source_invalid", changes: [], warnings: [] };
+  const models: Record<string, unknown> = isPlainRecord(rawModels) ? { ...rawModels } : {};
+  if (inheritedModels) {
+    if (!isPlainRecord(inheritedModels)) return { status: "blocked", reason: "source_invalid", changes: [], warnings: [] };
+    for (const [tier, pool] of Object.entries(inheritedModels)) {
+      if (!validTier(tier) || !(typeof pool === "string" || Array.isArray(pool) && pool.every((entry) => typeof entry === "string"))) {
+        return { status: "blocked", reason: "source_invalid", changes: [], warnings: [] };
+      }
+      if (!Object.hasOwn(models, tier)) setOwn(models, tier, pool);
+    }
+  }
+  const ownership = ownershipFromBytes(source.ownershipBytes);
+  if (ownership === null) return { status: "blocked", reason: "source_invalid", changes: [], warnings: [] };
+  const configDigest = sha256(source.configBytes);
+  const ownershipDigest = source.ownershipBytes ? sha256(source.ownershipBytes) : null;
+  const changes: ReconciliationChange[] = [];
+  const warnings = new Set<ReconciliationWarningCode>();
+  const ownershipChangesBySource = new Map<string, ReconciliationProposal["ownershipChanges"]>();
+  let advisory = false;
+  const allTiers = new Set(Object.keys(models));
+  for (const inventory of inventories) for (const tier of Object.keys(inventory.modelsByTier)) allTiers.add(tier);
+  if (ownership) for (const value of Object.values(ownership.sources)) {
+    for (const tier of [...Object.keys(value.generated), ...Object.keys(value.tombstones)]) allTiers.add(tier);
+  }
+  for (const inventory of inventories) {
+    if (!validProvider(inventory.provider)) return { status: "blocked", reason: "source_invalid", changes: [], warnings: [] };
+    for (const tier of allTiers) {
+      const pool = models[tier] ?? [];
+      if (!(typeof pool === "string" || Array.isArray(pool) && pool.every((entry) => typeof entry === "string"))) {
+        return { status: "blocked", reason: "source_invalid", changes: [], warnings: [] };
+      }
+      const sourceId = canonicalSourceId(inventory.provider, tier);
+      if (!ownershipMatchesProviderTier(ownership, sourceId, inventory.provider, tier)) {
+        return { status: "blocked", reason: "source_invalid", changes: [], warnings: [] };
+      }
+      const modelsByTier = Object.hasOwn(inventory.modelsByTier, tier) ? { [tier]: inventory.modelsByTier[tier]! } : {};
+      const revision = sha256(Buffer.from(JSON.stringify([inventory.provider, modelsByTier]), "utf8"));
+      const proposal = proposeReconciliation({
+        configDigest,
+        ownershipRevision: ownershipDigest,
+        ...(ownership ? { ownership } : {}),
+        configuredModels: { [tier]: pool },
+        inventory: { sourceId, revision, status: inventory.status, enabled: true, modelsByTier },
+      });
+      if (proposal.status === "invalid") return { status: "blocked", reason: "source_invalid", changes: [], warnings: [] };
+      advisory ||= proposal.status !== "ready";
+      for (const warning of proposal.warnings) warnings.add(warning);
+      changes.push(...proposal.changes.filter((change) => change.disposition === "apply"));
+      if (proposal.ownershipChanges.length) {
+        ownershipChangesBySource.set(sourceId, [
+          ...(ownershipChangesBySource.get(sourceId) ?? []),
+          ...proposal.ownershipChanges,
+        ]);
+      }
+    }
+  }
+  for (const tier of new Set(changes.map((change) => change.tier))) {
+    if (!Object.hasOwn(models, tier)) setOwn(models, tier, []);
+  }
+  const inheritedTierAdded = inheritedModels !== undefined
+    && Object.keys(inheritedModels).some((tier) => !isPlainRecord(rawModels) || !Object.hasOwn(rawModels, tier));
+  let candidateConfig = inheritedTierAdded
+    ? { ...sourceConfig, models }
+    : sourceConfig;
+  for (const tier of new Set(changes.map((change) => change.tier))) {
+    const candidate = applyModelChanges({ ...candidateConfig, models }, tier, changes.filter((change) => change.tier === tier));
+    if (!candidate) return { status: "blocked", reason: "source_invalid", changes: [], warnings: [] };
+    candidateConfig = candidate;
+    Object.assign(models, candidate.models);
+  }
+  const nextConfigBytes = changes.length ? serialize(candidateConfig) : Buffer.from(source.configBytes);
+  if (changes.length && !validateMergedConfig(source.source, nextConfigBytes)) {
+    return { status: "blocked", reason: "prospective_config_invalid", changes: [], warnings: [] };
+  }
+  let nextOwnership = ownership;
+  for (const [sourceId, sourceChanges] of ownershipChangesBySource) {
+    const updated = applyOwnershipChanges(nextOwnership, sourceId, sourceChanges);
+    if (!updated) return { status: "blocked", reason: "source_invalid", changes: [], warnings: [...warnings] };
+    nextOwnership = updated;
+  }
+  const ownershipChanged = ownershipChangesBySource.size > 0;
+  if (!changes.length && !ownershipChanged) {
+    return { status: advisory ? "advisory" : "blocked", reason: "no_changes", changes: [], warnings: [...warnings] };
+  }
+  const nextOwnershipBytes = nextOwnership ? serialize(nextOwnership) : null;
+  if (!nextOwnershipBytes) return { status: "blocked", reason: "source_invalid", changes: [], warnings: [...warnings] };
+  if (nextConfigBytes.byteLength > MAX_CONFIG_BYTES || nextOwnershipBytes.byteLength > MAX_OWNERSHIP_BYTES) {
+    return { status: "blocked", reason: "source_invalid", changes: [], warnings: [...warnings] };
+  }
+  try {
+    assertPlainJsonObject(nextConfigBytes);
+    assertOwnershipPayload(nextOwnershipBytes);
+  } catch {
+    return { status: "blocked", reason: "source_invalid", changes: [], warnings: [...warnings] };
+  }
+  return {
+    status: advisory ? "advisory" : "ready",
+    changes: Object.freeze(changes),
+    warnings: Object.freeze([...warnings].sort()),
+    transaction: {
+      configPath: source.configPath,
+      ownershipPath: source.ownershipPath,
+      journalPath: source.journalPath,
+      expectedConfigDigest: configDigest,
+      expectedOwnershipDigest: ownershipDigest,
+      nextConfigBytes,
+      nextOwnershipBytes,
+    },
+  };
 }
 
 function ownershipFromBytes(bytes: Uint8Array | null): ReconciliationOwnershipSnapshot | undefined | null {

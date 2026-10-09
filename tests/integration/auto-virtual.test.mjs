@@ -1,7 +1,7 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..", "..");
 const EXTENSION_PATH = join(ROOT, "index.ts");
 const FAKE_SERVER = join(ROOT, "scripts", "fake-provider-server.mjs");
+const OUTBOUND_GUARD = join(ROOT, "scripts", "test-outbound-guard.cjs");
+let fakePort;
 
 function startFakeServer() {
   const child = spawn("node", [FAKE_SERVER], { stdio: ["ignore", "pipe", "ignore"] });
@@ -37,6 +39,11 @@ function startFakeServer() {
 }
 
 function writeFixture({ home, work, port, models, bifrost }) {
+  writePiModels({ home, port, models });
+  writeFileSync(join(work, "bifrost.json"), JSON.stringify(bifrost));
+}
+
+function writePiModels({ home, port, models }) {
   mkdirSync(join(home, ".pi", "agent"), { recursive: true });
   writeFileSync(
     join(home, ".pi", "agent", "models.json"),
@@ -46,8 +53,48 @@ function writeFixture({ home, work, port, models, bifrost }) {
       },
     }),
   );
-  writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ retry: { enabled: false } }));
-  writeFileSync(join(work, "bifrost.json"), JSON.stringify(bifrost));
+  writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ retry: { enabled: false }, enabledModels: ["fake/*"] }));
+}
+
+function piTestEnv(home) {
+  const agentDir = join(home, ".pi", "agent");
+  return {
+    PATH: process.env.PATH,
+    HOME: home,
+    PI_CODING_AGENT_DIR: agentDir,
+    PI_SKIP_VERSION_CHECK: "1",
+    PI_OFFLINE: "1",
+    NODE_OPTIONS: `--require=${OUTBOUND_GUARD}`,
+    BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${fakePort}`,
+    BIFROST_TEST_NETWORK_VIOLATIONS: join(home, "test-network-violations.log"),
+  };
+}
+
+function assertNoNetworkViolations(home) {
+  const path = join(home, "test-network-violations.log");
+  if (!existsSync(path)) return;
+  assert.equal(readFileSync(path, "utf8"), "", "test network guard recorded a blocked external request");
+}
+
+function listAvailableProviders({ home, work }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("pi", ["-e", EXTENSION_PATH, "--list-models"], {
+      stdio: ["ignore", "pipe", "pipe"],
+      env: piTestEnv(home),
+      cwd: work,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      assertNoNetworkViolations(home);
+      resolve({ code, stdout, stderr });
+    });
+  });
 }
 
 async function fakeStats(port) {
@@ -56,14 +103,16 @@ async function fakeStats(port) {
   return response.json();
 }
 
-function runAuto({ home, work, messages }) {
+function runAuto({ home, work, messages, model = "bifrost/auto" }) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       "pi",
-      ["-e", EXTENSION_PATH, "--approve", "--no-session", "--no-tools", "--model", "bifrost/auto", "-p", ...messages],
+      ["-e", EXTENSION_PATH, "--approve", "--no-session", "--no-tools", "--model", model, "-p", ...messages],
       {
         stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, PI_CODING_AGENT_DIR: join(home, ".pi", "agent"), PI_SKIP_VERSION_CHECK: "1" },
+        // Keep real provider credentials from the developer shell out of the
+        // subprocess. The fixture registry should contain only fake providers.
+        env: piTestEnv(home),
         cwd: work,
       },
     );
@@ -93,9 +142,79 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
   let server;
   before(async () => {
     server = await startFakeServer();
+    fakePort = server.port;
   });
   after(() => {
     server?.child.kill();
+  });
+
+  it("bootstraps a fresh install on the first physical and direct Auto prompt", async () => {
+    for (const model of ["fake/healthy", "bifrost/auto"]) {
+      const home = mkdtempSync(join(tmpdir(), "bifrost-fresh-home-"));
+      const work = mkdtempSync(join(tmpdir(), "bifrost-fresh-work-"));
+      try {
+        writePiModels({ home, port: server.port, models: [{ id: "healthy", reasoning: false }] });
+        const beforeInventory = await fakeStats(server.port);
+        const inventory = await listAvailableProviders({ home, work });
+        const afterInventory = await fakeStats(server.port);
+        assertNoNetworkViolations(home);
+        assert.deepEqual(afterInventory.attempts, beforeInventory.attempts, "startup/model inventory must issue zero provider POSTs");
+        assert.deepEqual(afterInventory.stats, beforeInventory.stats, "startup/model inventory must issue zero provider POSTs");
+        const before = afterInventory;
+        assert.equal(inventory.code, 0, inventory.stderr);
+        const rows = inventory.stdout
+          .split("\n")
+          .slice(1)
+          .filter((line) => line.trim())
+          .map((line) => line.trim().split(/\s+/u));
+        assert.ok(rows.length > 0, inventory.stdout);
+        assert.deepEqual(
+          [...new Set(rows.filter(([provider]) => provider !== "bifrost").map(([provider]) => provider))],
+          ["fake"],
+          inventory.stdout,
+        );
+        assert.deepEqual(rows.filter(([provider]) => provider === "bifrost").map(([, model]) => model), ["auto"]);
+        for (const [index, prompt] of ["Review this module and suggest one useful improvement", "Explain one design choice in this module"].entries()) {
+          if (model === "bifrost/auto" && index === 1) {
+            mkdirSync(join(work, ".pi"), { recursive: true });
+            // The registered model_select hook persists this owned, routing-neutral
+            // mode file; the CLI's --model flag does not emit model_select.
+            writeFileSync(join(work, ".pi", "bifrost-state.json"), JSON.stringify({ enabled: true, classifierEnabled: true }));
+          }
+          const beforePrompt = await fakeStats(server.port);
+          const result = await runAuto({ home, work, model, messages: [prompt] });
+          const afterPrompt = await fakeStats(server.port);
+          const promptStats = afterPrompt.stats.slice(beforePrompt.stats.length);
+          assert.equal(result.code, 0, result.stderr);
+          assert.match(result.stdout, /healthy/u);
+          assert.match(result.stderr, /Bifrost loaded 1 listed chat model\(s\) into in-memory pools/u);
+          assert.match(result.stderr, /Bifrost(?: auto)?: quick → fake\/healthy/u);
+          assert.deepEqual(
+            promptStats.reduce((counts, item) => ({ ...counts, [item.kind]: (counts[item.kind] ?? 0) + 1 }), {}),
+            { classifier: 2, generation: 1 },
+            `ordinary ${model} prompt ${index + 1} must make exactly two classification and one generation requests`,
+          );
+        }
+        const after = await fakeStats(server.port);
+        const newStats = after.stats.slice(before.stats.length);
+        assert.deepEqual(
+          newStats.reduce((counts, item) => ({ ...counts, [item.kind]: (counts[item.kind] ?? 0) + 1 }), {}),
+          { classifier: 4, generation: 2 },
+          `the two ordinary ${model} sessions must make exact bounded request counts`,
+        );
+        assert.equal(existsSync(join(work, "bifrost.json")), false);
+        assert.equal(existsSync(join(work, ".pi", "bifrost.json")), false);
+        if (model === "bifrost/auto") {
+          assert.deepEqual(JSON.parse(readFileSync(join(work, ".pi", "bifrost-state.json"), "utf8")), {
+            enabled: true,
+            classifierEnabled: true,
+          });
+        }
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+        rmSync(work, { recursive: true, force: true });
+      }
+    }
   });
 
   it("fails fresh sessions actionably when no pools are configured", async () => {
@@ -131,7 +250,7 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
         },
       });
       const { code, stderr } = await runAuto({ home, work, messages: ["frontier hello", "hello"] });
-      assert.equal(code, 0);
+      assert.equal(code, 0, stderr);
       assert.match(stderr, /Bifrost auto: frontier → fake\/strong/);
       assert.match(stderr, /Bifrost auto: quick → fake\/fast/);
     } finally {

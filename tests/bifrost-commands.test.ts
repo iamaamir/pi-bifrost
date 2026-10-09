@@ -9,6 +9,7 @@ import { createPipeline } from "../classification-pipeline.ts";
 import { DEFAULT_THRESHOLD, lookupCache, touchCacheEntry, updateCache, type CacheEntry } from "../cache.ts";
 import { reliabilityPath } from "../reliability.ts";
 import { reliabilityV2Path } from "../runtime-reliability-v2.ts";
+import { buildInitOwnershipReceipt } from "../reconciliation-command.ts";
 
 function makeCtx(
   models: Array<{ provider: string; id: string }> = [],
@@ -393,9 +394,12 @@ describe("bifrost command ui", () => {
     assert(lines.includes("outcome: low_confidence"));
   });
 
-  it("prints classifier guidance after --write init without opening picker", async () => {
+  it("uses detected classifier defaults after init without opening the picker", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-guidance-"));
     const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
+    mkdirSync(process.env.PI_CODING_AGENT_DIR);
     process.chdir(tempDir);
     try {
       mkdirSync(join(tempDir, ".pi"));
@@ -406,10 +410,371 @@ describe("bifrost command ui", () => {
       const state = makeState();
       await createCommandRouter(state as never)("init --write", ctx as never);
       assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), true);
-      assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("Next: run /bifrost classifier")));
+      assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("Classifier: prompt (detected default)")));
+      assert.equal(calls.some((call) => call.kind === "select"), false);
+      const saved = JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8"));
+      assert.equal(saved.classifier.backend, undefined);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("saves in-memory starter pools and their default atomically with a manual classifier choice", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-classifier-save-bootstrap-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = join(tempDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    mkdirSync(agentDir);
+    process.chdir(tempDir);
+    try {
+      const { ctx } = makeCtx([{ provider: "fixture", id: "chat" }], (title, options) =>
+        title === "Classifier backend" ? options.find((option) => option.startsWith("typesafe")) : undefined,
+      );
+      const state = makeState() as any;
+      state.bootstrapModelsInMemory = true;
+      state.config.default = "quick";
+      state.config.models = { quick: ["fixture/chat"] };
+
+      await createCommandRouter(state)("classifier", ctx);
+
+      const configPath = join(tempDir, ".pi", "bifrost.json");
+      const saved = JSON.parse(readFileSync(configPath, "utf8"));
+      assert.equal(saved.default, "quick");
+      assert.deepEqual(saved.models, { quick: ["fixture/chat"] });
+      assert.equal(saved.classifier.backend, "typesafe");
+      assert.ok(existsSync(join(tempDir, ".pi", "bifrost-reconcile-ownership.json")));
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("disables the classifier in memory when saving its preference fails", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-classifier-off-bootstrap-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
+    mkdirSync(process.env.PI_CODING_AGENT_DIR);
+    process.chdir(tempDir);
+    try {
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      const state = makeState(() => false) as any;
+      state.bootstrapModelsInMemory = true;
+      state.config.default = "quick";
+      state.config.models = { quick: ["fixture/chat"] };
+
+      await createCommandRouter(state)("classifier off", ctx);
+      await createCommandRouter(state)("classifier test", ctx);
+
+      assert.equal(state.classifierEnabled, false);
+      assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
+      assert.ok(calls.some((call) => call.kind === "notify"
+        && String(call.value).includes("disabled for this session; its preference could not be saved")));
+      assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("Classifier is disabled")));
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a user config created while the classifier picker is open", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-classifier-picker-race-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
+    mkdirSync(process.env.PI_CODING_AGENT_DIR);
+    process.chdir(tempDir);
+    try {
+      const configPath = join(tempDir, ".pi", "bifrost.json");
+      const manualConfig = {
+        default: "general",
+        models: { general: ["manual/only"] },
+        rules: [{ pattern: "keep this", model: "general" }],
+        strictSetting: { keep: true },
+      };
+      const { ctx } = makeCtx([{ provider: "fixture", id: "chat" }], (title, options) => {
+        if (title === "Classifier backend") {
+          mkdirSync(join(tempDir, ".pi"), { recursive: true });
+          writeFileSync(configPath, JSON.stringify(manualConfig));
+          return options.find((option) => option.startsWith("typesafe"));
+        }
+        return undefined;
+      });
+      const state = makeState() as any;
+      state.bootstrapModelsInMemory = true;
+      state.config.default = "quick";
+      state.config.models = { quick: ["fixture/chat"] };
+
+      await createCommandRouter(state)("classifier", ctx);
+
+      const saved = JSON.parse(readFileSync(configPath, "utf8"));
+      assert.equal(saved.default, "general");
+      assert.deepEqual(saved.models, { general: ["manual/only"] });
+      assert.deepEqual(saved.rules, manualConfig.rules);
+      assert.deepEqual(saved.strictSetting, manualConfig.strictSetting);
+      assert.equal(saved.classifier.backend, "typesafe");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("asks once to save during normal init, then reports the detected classifier without another prompt", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-normal-flow-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
+    mkdirSync(process.env.PI_CODING_AGENT_DIR);
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      writeFileSync(join(tempDir, ".pi", "bifrost-probe.json"), JSON.stringify([
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]));
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      let confirmCalls = 0;
+      (ctx as any).ui.confirm = async () => { confirmCalls += 1; return true; };
+      const state = makeState();
+      await createCommandRouter(state as never)("init", ctx as never);
+      assert.equal(confirmCalls, 1);
+      assert.equal(calls.some((call) => call.kind === "select"), false);
+      assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("Classifier: prompt (detected default)")));
+      const saved = JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8"));
+      assert.equal(saved.classifier.backend, undefined);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves explicit classifier backend, disabled state, model, and criteria during normal init", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-classifier-preserve-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
+    mkdirSync(process.env.PI_CODING_AGENT_DIR);
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      writeFileSync(join(tempDir, ".pi", "bifrost-probe.json"), JSON.stringify([
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]));
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      let confirmCalls = 0;
+      (ctx as any).ui.confirm = async () => { confirmCalls += 1; return true; };
+      const state = makeState();
+      (state.config as any).classifier = {
+        backend: "typesafe",
+        enabled: false,
+        model: "fixture/custom-fallback",
+        criteria: { general: "Keep this user criterion." },
+        typesafe: { model: "typesafe/custom-classifier" },
+      };
+      await createCommandRouter(state as never)("init", ctx as never);
+      assert.equal(confirmCalls, 1);
+      const saved = JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8"));
+      assert.equal(saved.classifier.backend, "typesafe");
+      assert.equal(saved.classifier.enabled, false);
+      assert.equal(saved.classifier.model, "fixture/custom-fallback");
+      assert.deepEqual(saved.classifier.criteria, { general: "Keep this user criterion." });
+      assert.equal(saved.classifier.typesafe.model, "typesafe/custom-classifier");
+      assert.equal(calls.some((call) => call.kind === "select"), false);
+      assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("No working models found for classifier")), false);
+      assert(calls.some((call) => call.kind === "widget" && call.lines?.some((line) => line.includes("classifier: off"))));
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not restore a reliability-excluded probe model as the prompt classifier", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-classifier-cooldown-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
+    mkdirSync(process.env.PI_CODING_AGENT_DIR);
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      writeFileSync(join(tempDir, ".pi", "bifrost-probe.json"), JSON.stringify([
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]));
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      let confirmCalls = 0;
+      (ctx as any).ui.confirm = async () => { confirmCalls += 1; return true; };
+      const state = makeState() as any;
+      state.config.classifier = { backend: "prompt", enabled: true };
+      state.reliabilityStore = makeStore({
+        "fixture/chat": { failures: [Date.now()], openUntil: Date.now() + 60 * 60_000 },
+      });
+
+      await createCommandRouter(state)("init", ctx);
+
+      assert.equal(confirmCalls, 1);
+      assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("No working models found for classifier")), true);
+      assert(calls.some((call) => call.kind === "widget" && call.lines?.some((line) => line.includes("prompt (no eligible model; regex fallback)"))));
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes generated memberships atomically, keeps manual config, and does not probe", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-refresh-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const piDir = join(tempDir, ".pi");
+      mkdirSync(piDir);
+      writeFileSync(join(piDir, "bifrost.json"), JSON.stringify({
+        enabled: true,
+        models: { quick: ["fixture/old", "manual/keep"] },
+        classifier: { backend: "prompt", enabled: false, model: "fixture/manual-classifier" },
+        customSetting: { preserve: true },
+      }, null, 2));
+      writeFileSync(join(piDir, "bifrost-reconcile-ownership.json"), JSON.stringify(
+        buildInitOwnershipReceipt({ quick: ["fixture/old"] }),
+      ));
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      let refreshCalls = 0;
+      const registry = (ctx as any).modelRegistry;
+      registry.getAll = () => [{ provider: "fixture", id: "chat", api: "openai-completions", cost: { input: 0.2, output: 0.2 } }];
+      registry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+      registry.refresh = async () => { refreshCalls += 1; return { aborted: false, errors: new Map() }; };
+      let confirmCalls = 0;
+      (ctx as any).ui.confirm = async () => { confirmCalls += 1; return true; };
+      await createCommandRouter(makeState() as never)("init", ctx as never);
+      const saved = JSON.parse(readFileSync(join(piDir, "bifrost.json"), "utf8"));
+      assert.equal(confirmCalls, 1);
+      assert.equal(refreshCalls, 1);
+      assert.deepEqual(saved.models.quick, ["manual/keep", "fixture/chat"]);
+      assert.deepEqual(saved.customSetting, { preserve: true });
+      assert.deepEqual(saved.classifier, { backend: "prompt", enabled: false, model: "fixture/manual-classifier" });
+      assert.equal(existsSync(join(piDir, "bifrost-probe.json")), false);
       assert.equal(calls.some((call) => call.kind === "select"), false);
     } finally {
       process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips the save question when refreshed inventory is incomplete", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-incomplete-inventory-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const piDir = join(tempDir, ".pi");
+      mkdirSync(piDir);
+      writeFileSync(join(piDir, "bifrost.json"), JSON.stringify({ models: { quick: ["fixture/old"] } }));
+      writeFileSync(join(piDir, "bifrost-reconcile-ownership.json"), JSON.stringify(
+        buildInitOwnershipReceipt({ quick: ["fixture/old"] }),
+      ));
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      const registry = (ctx as any).modelRegistry;
+      registry.getAll = () => [makeModel("fixture", "chat", 0.2, 0.2)];
+      registry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+      registry.refresh = async () => ({ aborted: false, errors: new Map([["fixture", new Error("partial")]]) });
+      let confirmCalls = 0;
+      (ctx as any).ui.confirm = async () => { confirmCalls += 1; return true; };
+
+      await createCommandRouter(makeState() as never)("init", ctx as never);
+
+      assert.equal(confirmCalls, 0);
+      assert.equal(readFileSync(join(piDir, "bifrost.json"), "utf8"), JSON.stringify({ models: { quick: ["fixture/old"] } }));
+      assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("inventory is incomplete or stale")));
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes the workspace source without shadowing user config or replacing manual hard policy", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-workspace-source-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = join(tempDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    mkdirSync(agentDir, { recursive: true });
+    process.chdir(tempDir);
+    try {
+      const globalConfigPath = join(agentDir, "bifrost.json");
+      const globalBytes = Buffer.from(JSON.stringify({
+        models: { general: ["global/manual"], frontier: ["global/frontier"] },
+        userSetting: { preserve: true },
+      }, null, 2) + "\n");
+      const workspacePath = join(tempDir, "bifrost.json");
+      const workspaceBytes = Buffer.from(JSON.stringify({
+        schemaVersion: 2,
+        enabled: false,
+        default: "frontier",
+        strategy: "first",
+        models: { general: ["workspace/manual"] },
+        rules: [{ pattern: "workspace strict", model: "frontier" }],
+        tierPolicies: { frontier: { fallbackTiers: [] } },
+        classifier: { enabled: false, backend: "prompt", model: "manual/classifier", criteria: { frontier: "retain" } },
+      }, null, 2) + "\n");
+      writeFileSync(globalConfigPath, globalBytes);
+      writeFileSync(workspacePath, workspaceBytes);
+
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      const registry = (ctx as any).modelRegistry;
+      registry.getAll = () => [makeModel("fixture", "chat", 0.2, 0.2)];
+      registry.getAvailable = registry.getAll;
+      registry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+      registry.refresh = async () => ({ aborted: false, errors: new Map() });
+      let confirmArgs: string[] = [];
+      (ctx as any).ui.confirm = async (title: string, body: string) => {
+        confirmArgs = [title, body];
+        return true;
+      };
+      const state = makeState();
+      (state.config as any) = {
+        ...state.config,
+        schemaVersion: 2,
+        enabled: false,
+        default: "frontier",
+        models: { general: ["workspace/manual"], frontier: ["global/frontier"] },
+        classifier: { enabled: false, backend: "prompt", model: "manual/classifier", criteria: { frontier: "retain" } },
+        rules: [{ pattern: "workspace strict", model: "frontier" }],
+        tierPolicies: { frontier: { fallbackTiers: [] } },
+      };
+      await createCommandRouter(state as never)("init", ctx as never);
+
+      assert.deepEqual(confirmArgs, ["Save Bifrost setup?", "Save memberships: +1 / -0 (quick: +1/-0) to workspace (bifrost.json)?"]);
+      assert.equal(calls.some((call) => call.kind === "select"), false);
+      assert.ok(calls.some((call) => call.kind === "widget" && call.lines?.includes("save target: workspace (bifrost.json)")));
+      assert.deepEqual(readFileSync(globalConfigPath), globalBytes);
+      const savedWorkspace = JSON.parse(readFileSync(workspacePath, "utf8"));
+      assert.equal(savedWorkspace.enabled, false);
+      assert.deepEqual(savedWorkspace.rules, [{ pattern: "workspace strict", model: "frontier" }]);
+      assert.deepEqual(savedWorkspace.tierPolicies, { frontier: { fallbackTiers: [] } });
+      assert.deepEqual(savedWorkspace.classifier, { enabled: false, backend: "prompt", model: "manual/classifier", criteria: { frontier: "retain" } });
+      assert.deepEqual(savedWorkspace.models.general, ["workspace/manual"]);
+      assert.deepEqual(savedWorkspace.models.quick, ["fixture/chat"]);
+      assert.deepEqual(savedWorkspace.models.frontier, ["global/frontier"]);
+      assert.deepEqual(savedWorkspace.userSetting, undefined);
+      assert.ok(existsSync(join(tempDir, ".pi", "bifrost-reconcile-workspace-ownership.json")));
+      assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -1601,13 +1966,12 @@ describe("route dispatch", () => {
     const { ctx, calls } = makeCtx();
     const state = makeState();
     state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} } as never;
-    // Empty temp dir means no cached probe, so handleInit probes inline. Its
-    // wording ("to find working ones") is distinct from the probe route's
-    // ("model(s) with"), so this cannot be satisfied by that route.
+    // A normal init refreshes only Pi's model catalog. Paid probes require -f.
     await inTempDir(async () => {
       await createCommandRouter(state as never)("init", ctx as never);
+      assert.equal(existsSync(join(process.cwd(), ".pi", "bifrost-probe.json")), false);
     });
-    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("Probing 0 models to find working ones")));
+    assert.equal(calls.some((c) => c.kind === "notify" && String(c.value).includes("Probing")), false);
   });
 
   it("opens the picker for initialize rather than running init", async () => {
@@ -1802,7 +2166,7 @@ describe("dashboard menu", () => {
       "/bifrost benchmark <prompt> — Classify a benchmark prompt",
       "/bifrost providers — List available providers",
       "/bifrost probe — Probe working models",
-      "/bifrost init — Probe models and generate config (pass -f to force re-probe)",
+      "/bifrost init — Refresh model catalog and save setup (pass -f to probe)",
       "/bifrost classifier status — Show classifier state",
       "/bifrost reload — Reload config after editing",
     ]);
@@ -1931,10 +2295,12 @@ describe("diagnostics commands", () => {
 
   it("emits a local inspect snapshot without refreshing, classifying, randomness, or writes", async () => {
     const h = diagnosticHarness();
+    (h.state as any).bootstrapModelsInMemory = true;
     const before = JSON.stringify(h.reliability);
     const lines = await withStubs(() => createCommandRouter(h.state as never)("inspect --json", h.context as never));
     const report = JSON.parse(lines.find((line) => line.startsWith(BIFROST_JSON_PREFIX))!.slice(BIFROST_JSON_PREFIX.length));
     assert.equal(report.kind, "inspection");
+    assert.equal(report.modelPoolSource, "session_catalog_in_memory");
     assert.equal(report.registry.knownModelCount, 1);
     assert.equal(report.registry.availableModelCount, 1);
     assert.equal(report.registry.bifrostLastRefreshAgeMs >= 0, true);

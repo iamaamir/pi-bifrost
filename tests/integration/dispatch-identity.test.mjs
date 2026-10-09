@@ -12,6 +12,8 @@ const PI = join(ROOT, "node_modules", ".bin", "pi");
 const OBSERVER = join(__dirname, "dispatch-identity-observer.mjs");
 const LATER_HANDLER = join(__dirname, "dispatch-identity-later-handler.mjs");
 const FAKE_SERVER = join(ROOT, "scripts", "fake-provider-server.mjs");
+const OUTBOUND_GUARD = join(ROOT, "scripts", "test-outbound-guard.cjs");
+let fakePort;
 const MAX_CAPTURE_CHARS = 64 * 1024;
 
 function appendBounded(current, chunk) {
@@ -96,7 +98,11 @@ function runPi({ home, work, report, model, negative = false, generateExtensionT
         HOME: home,
         PI_CODING_AGENT_DIR: join(home, ".pi", "agent"),
         PI_SKIP_VERSION_CHECK: "1",
+        PI_OFFLINE: "1",
         BIFROST_DISPATCH_IDENTITY_REPORT: report,
+        NODE_OPTIONS: `--require=${OUTBOUND_GUARD}`,
+        BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${fakePort}`,
+        BIFROST_TEST_NETWORK_VIOLATIONS: join(home, "test-network-violations.log"),
         ...(negative ? { BIFROST_DISPATCH_IDENTITY_NEGATIVE: "1" } : {}),
         ...(generateExtensionTurn ? { BIFROST_DISPATCH_IDENTITY_GENERATE: "1" } : {}),
       },
@@ -126,6 +132,12 @@ function runPi({ home, work, report, model, negative = false, generateExtensionT
       if (timedOut) {
         reject(new Error(`pinned Pi timed out and exited after termination (stdout=${stdout.length}, stderr=${stderr.length})`));
         return;
+      }
+      try {
+        const violations = readFileSync(join(home, "test-network-violations.log"), "utf8");
+        assert.equal(violations, "", "test network guard recorded a blocked external request");
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
       }
       resolve({ code, stdout, stderr });
     });
@@ -181,6 +193,7 @@ describe("pinned Pi dispatch identity evidence", { timeout: 180_000, concurrency
   let server;
   before(async () => {
     server = await startFakeServer();
+    fakePort = server.port;
   });
   after(async () => {
     if (server) await stopChild(server.child);

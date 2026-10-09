@@ -23,15 +23,17 @@ Requires Pi `1.0.1` or newer and an authenticated provider model in Pi.
 pi install npm:pi-bifrost
 ```
 
-In Pi, run:
+On a fresh install, Bifrost reads Pi's available model catalog in the background when the first prompt arrives. It builds in-memory model pools when no user configuration exists. This does not send a model prompt, and you do not need to run init.
+
+Run this command when you want to refresh the model list or save it to a configuration file:
 
 ```text
 /bifrost init
 ```
 
-Init proposes model pools and shows the configuration before it writes `.pi/bifrost.json`. It can send small probe requests to available models. Those requests can use provider credits or hit rate limits. Review the [init steps and probe limits](docs/guide/getting-started.md) before you confirm.
+`/bifrost init` refreshes Pi's model catalog and proposes model pools. It shows a short summary and asks once before it saves. It does not send model prompts. Pass `-f` only when you want to probe models. Probes can use provider credits or hit rate limits. Read the [init steps and probe limits](docs/guide/getting-started.md) before you run `-f`.
 
-After init, run `/bifrost classifier` to choose a classifier. Run `/bifrost classifier off` to use rules and the default tier without a classifier call.
+Bifrost detects a classifier backend and chooses an available chat model when prompt classification needs one. Run `/bifrost classifier` only when you want to change that choice. Run `/bifrost classifier off` to use rules and the default tier without a classifier call.
 
 ## Routing modes
 

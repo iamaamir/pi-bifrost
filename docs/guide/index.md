@@ -2,7 +2,7 @@
 
 Pi-Bifrost is a configuration-first model router for [Pi](https://pi.dev). It resolves a configured tier for a user prompt, filters unhealthy candidates, and applies that tier's model-selection strategy. Physical selection before generation is the default. If you select `bifrost/auto`, Pi dispatches the physical model per request instead.
 
-New to Bifrost? Start with [Install and initialize](getting-started.md). It explains prerequisites, probe usage, generated classifier behavior, preview privacy, and the first routed prompt.
+New to Bifrost? Start with [Install and initialize](getting-started.md). It explains prerequisites, background first-run setup, optional probe usage, classifier defaults, preview privacy, and the first routed prompt.
 
 ## Start here
 

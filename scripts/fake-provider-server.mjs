@@ -28,7 +28,9 @@ const server = http.createServer((request, response) => {
     const model = payload.model ?? "unknown";
     const attempt = (attempts.get(model) ?? 0) + 1;
     attempts.set(model, attempt);
-    stats.push({ model, attempt });
+    const classifierRequest = JSON.stringify(payload.messages ?? [])
+      .includes("Classify the request into exactly one category.");
+    stats.push({ model, attempt, kind: classifierRequest ? "classifier" : "generation" });
     if (model === "usage-exhausted" || model === "usage-exhausted-alternate") return json(response, 429, { error: { message: "The usage limit has been reached. Please try again later." } });
     if (model === "quota") return json(response, 429, { error: { message: "quota exhausted" } }, { "retry-after": "1" });
     if (model === "fail") return json(response, 500, { error: { message: "simulated provider failure" } });

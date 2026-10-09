@@ -14,6 +14,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..", "..");
 const EXTENSION_PATH = join(ROOT, "index.ts");
 const FAKE_SERVER = join(ROOT, "scripts", "fake-provider-server.mjs");
+const OUTBOUND_GUARD = join(ROOT, "scripts", "test-outbound-guard.cjs");
+let fakePort;
 
 function startFakeServer() {
   const child = spawn("node", [FAKE_SERVER], { stdio: ["ignore", "pipe", "ignore"] });
@@ -56,9 +58,20 @@ function writeFixture({ home, work, port, models, bifrost }) {
 
 function runPi({ home, work, args }) {
   return new Promise((resolve, reject) => {
+    const env = { ...process.env };
+    delete env.TYPESAFE_API_KEY;
     const child = spawn("pi", ["-e", EXTENSION_PATH, "--approve", "--no-tools", ...args], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, PI_CODING_AGENT_DIR: join(home, ".pi", "agent"), PI_SKIP_VERSION_CHECK: "1" },
+      env: {
+        ...env,
+        HOME: home,
+        PI_CODING_AGENT_DIR: join(home, ".pi", "agent"),
+        PI_SKIP_VERSION_CHECK: "1",
+        PI_OFFLINE: "1",
+        NODE_OPTIONS: `--require=${OUTBOUND_GUARD}`,
+        BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${fakePort}`,
+        BIFROST_TEST_NETWORK_VIOLATIONS: join(home, "test-network-violations.log"),
+      },
       cwd: work,
     });
     let stdout = "";
@@ -72,7 +85,16 @@ function runPi({ home, work, args }) {
       reject(new Error(`pi timed out: ${args.join(" ")}`));
     }, 120_000);
     child.on("error", (err) => { clearTimeout(timer); reject(err); });
-    child.on("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      try {
+        const violations = readFileSync(join(home, "test-network-violations.log"), "utf8");
+        assert.equal(violations, "", "test network guard recorded a blocked external request");
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+      resolve({ code, stdout, stderr });
+    });
   });
 }
 
@@ -94,6 +116,7 @@ describe("legacy physical routing regression", { timeout: 240_000, concurrency: 
   let server;
   before(async () => {
     server = await startFakeServer();
+    fakePort = server.port;
   });
   after(() => {
     server?.child.kill();

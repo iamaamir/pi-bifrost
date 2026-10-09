@@ -27,7 +27,7 @@ import {
 import type { ReliabilityStore } from "./reliability-store.ts";
 import type { ReliabilityV2Store } from "./reliability-v2-store.ts";
 import { ReliabilityV2StoreError } from "./reliability-v2-store.ts";
-import { emptyReliabilityState } from "./reliability.ts";
+import { emptyReliabilityState, getCircuitState, hasActiveAllowanceCooldown } from "./reliability.ts";
 import { createReliabilityV2Store, reliabilityV2Config, reliabilityV2Path } from "./runtime-reliability-v2.ts";
 import { projectReliabilityV2ForRouting } from "./reliability-v2-routing.ts";
 import { classifierMetricsEnabled, type ClassifierMetricsState, type ClassifierMetricsStore } from "./classifier-metrics.ts";
@@ -41,6 +41,7 @@ import { reconcileEconomicSnapshot } from "./economic-config.ts";
 import { resolvePiAffinityMode, type AffinityAnchor } from "./affinity.ts";
 import {
   buildInitOwnershipReceipt,
+  buildInitMembershipPlan,
   parseReconciliationCommandArgs,
   runReconciliationCommand,
   type ReconciliationCommandReport,
@@ -57,6 +58,7 @@ import {
 import { projectProviderRefreshEvidence, waitForRegistryRefresh } from "./registry-refresh.ts";
 import { REGISTRY_REFRESH_TTL_MS } from "./ux-status.ts";
 import { isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
+import { hasExplicitExtensionRoutingFile, hasUserBootstrapFiles } from "./auto-setup.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
@@ -80,6 +82,8 @@ export interface BifrostState {
   reliabilityStore: ReliabilityStore;
   reliabilityV2Store?: ReliabilityV2Store;
   configGeneration?: number;
+  /** True when this session generated model memberships from Pi's startup catalog without writing config. */
+  bootstrapModelsInMemory?: boolean;
   reliabilityV2ConfigValid?: boolean;
   reliabilityV2StateError?: string;
   onConfigInstalled?: (config: BifrostConfig, previousConfig: BifrostConfig) => void;
@@ -89,13 +93,13 @@ export interface BifrostState {
   classifierMetricsStore: ClassifierMetricsStore;
   extensionDir: string;
   /** Uses the extension instance's sticky detector without locking on context-free facts. */
-  effectiveClassifierBackend: (config: BifrostConfig) => EffectiveBackend;
+  effectiveClassifierBackend: (config: BifrostConfig, ctx?: ExtensionContext) => EffectiveBackend;
   getPipeline: (ctx: ExtensionContext) => ClassificationPipeline;
   invalidatePipeline: () => void;
   /** Leave Bifrost's virtual selection for its last dispatched physical model. */
   selectPhysicalFromVirtual?: (ctx: ExtensionContext) => Promise<boolean>;
   /** Persist runtime mode toggles (enabled/pinned/classifierEnabled) to disk. */
-  saveModeState: () => void;
+  saveModeState: () => boolean | void;
   lastRegistryRefreshAt?: number;
   forceRegistryRefresh?: boolean;
   /** Per-provider, content-free registry refresh evidence for offline reconciliation. */
@@ -403,7 +407,7 @@ export function buildInitProposal(
   models: Record<string, string[]>,
   classifierModel: string | undefined,
   extensionDir: string,
-  classifierBackend: ClassifierBackend = CLASSIFIER_BACKEND_IDS.prompt,
+  classifierBackend?: ClassifierBackend,
 ): Record<string, unknown> {
   const tierKeys = Object.keys(models);
   const firstPopulatedTier = Object.entries(models).find(([, candidates]) => candidates.length > 0)?.[0];
@@ -423,8 +427,8 @@ export function buildInitProposal(
     categoryStrategies,
     classifier: {
       enabled: true,
-      backend: classifierBackend,
-      ...(classifierBackend === CLASSIFIER_BACKEND_IDS.prompt && classifierModel ? { model: classifierModel, method: "auto" as const } : {}),
+      ...(classifierBackend ? { backend: classifierBackend } : {}),
+      ...(classifierBackend !== CLASSIFIER_BACKEND_IDS.typesafe && classifierModel ? { model: classifierModel, method: "auto" as const } : {}),
       ...(classifierBackend === CLASSIFIER_BACKEND_IDS.typesafe ? { typesafe: { model: TYPE_SAFE_MODEL }, criteria: DEFAULT_CLASSIFIER_CRITERIA } : {}),
     },
     models,
@@ -439,7 +443,16 @@ const MAX_RECONCILIATION_CONFIG_BYTES = 10_000_000;
 const MAX_RECONCILIATION_OWNERSHIP_BYTES = 5_000_000;
 
 function reconciliationPaths(source: ReconciliationConfigSource): { configPath: string; ownershipPath: string; journalPath: string } {
-  const directory = source === "project" ? join(process.cwd(), CONFIG_DIR_NAME) : getAgentDir();
+  const cwd = process.cwd();
+  if (source === "workspace") {
+    const metadataDirectory = join(cwd, CONFIG_DIR_NAME);
+    return {
+      configPath: join(cwd, "bifrost.json"),
+      ownershipPath: join(metadataDirectory, "bifrost-reconcile-workspace-ownership.json"),
+      journalPath: join(metadataDirectory, "bifrost-reconcile-workspace.journal"),
+    };
+  }
+  const directory = source === "project" ? join(cwd, CONFIG_DIR_NAME) : getAgentDir();
   return {
     configPath: join(directory, "bifrost.json"),
     ownershipPath: join(directory, "bifrost-reconcile-ownership.json"),
@@ -456,6 +469,21 @@ function readReconciliationSource(source: ReconciliationConfigSource): Reconcili
     throw new Error("source exceeds reconciliation bounds");
   }
   return { ...paths, source, configBytes, ownershipBytes };
+}
+
+function selectInitSource(): ReconciliationSourceSnapshot {
+  const project = readReconciliationSource("project");
+  if (project.configBytes !== null || project.ownershipBytes !== null) return project;
+  const workspace = readReconciliationSource("workspace");
+  if (workspace.configBytes !== null || workspace.ownershipBytes !== null) return workspace;
+  const user = readReconciliationSource("user");
+  return user.configBytes !== null || user.ownershipBytes !== null ? user : project;
+}
+
+function initSourceLabel(source: ReconciliationSourceSnapshot): string {
+  return source.source === "workspace" ? "workspace (bifrost.json)"
+    : source.source === "user" ? `user (${source.configPath})`
+      : "project (.pi/bifrost.json)";
 }
 
 function reconciliationRegistrySnapshot(
@@ -664,7 +692,36 @@ async function handleInit(
   state: BifrostState,
 ): Promise<void> {
   clearBifrostWidgets(ctx);
-  // Try to load cached probe results. If stale or missing, run probe inline.
+  const forceProbe = isForced(args);
+  if (!forceProbe && typeof ctx.modelRegistry.refresh === "function") {
+    uiBusy(ctx, "Refreshing Pi's model catalog...");
+    try {
+      const outcome = await waitForRegistryRefresh(
+        (signal) => ctx.modelRegistry.refresh({ allowNetwork: true, force: true, ...(signal ? { signal } : {}) }),
+        ctx.signal,
+        (result) => {
+          let knownProviders: string[] = [];
+          try { knownProviders = [...new Set(ctx.modelRegistry.getAll().filter((model) => !isBifrostAuto(model)).map((model) => model.provider))]; }
+          catch { /* failed catalog snapshots stay stale */ }
+          const refreshedAt = Date.now();
+          for (const provider of knownProviders) {
+            const evidence = projectProviderRefreshEvidence(result, provider, knownProviders, refreshedAt);
+            state.registryInventoryEvidence = Object.freeze({
+              ...(state.registryInventoryEvidence ?? {}),
+              [provider]: Object.freeze(evidence),
+            });
+          }
+        },
+      );
+      if (outcome === "aborted") {
+        log(ctx, "Model catalog refresh was cancelled; no configuration was changed.", "warning");
+        return;
+      }
+    } catch {
+      log(ctx, "Pi's model catalog could not be refreshed; using the available catalog snapshot.", "warning");
+    } finally { uiDone(ctx); }
+  }
+  // Reuse valid probe data when present. A paid probe runs only for explicit -f.
   const probePath = join(process.cwd(), ".pi", "bifrost-probe.json");
   let workingModels: { provider: string; model: string; cost: { input: number; output: number }; duration_ms: number }[] = [];
   let probeLoaded = false;
@@ -694,8 +751,8 @@ async function handleInit(
     }
   }
 
-  // If no fresh probe data, run probe inline.
-  if (!probeLoaded) {
+  // If requested, run the existing explicit paid probe flow.
+  if (!probeLoaded && forceProbe) {
     const available = ctx.modelRegistry.getAvailable();
     const availableCount = available.length;
     log(ctx, `Probing ${availableCount} models to find working ones...`);
@@ -792,44 +849,153 @@ async function handleInit(
     }
   }
 
-  // Pick a classifier default: fastest cheap working model.
+  const detectedClassifier = state.effectiveClassifierBackend(state.config, ctx);
+  const classifierEnabled = state.classifierEnabled && state.config.classifier?.enabled !== false;
+  const needsDetectedPromptModel = classifierEnabled
+    && detectedClassifier.backend === CLASSIFIER_BACKEND_IDS.prompt
+    && state.config.classifier?.model === undefined;
   let classifierModel: string | undefined;
-  if (probeLoaded && workingModels.length > 0) {
-    const cheapWorking = workingModels
-      .filter((w) => (w.cost.input + w.cost.output) < 2)
-      .sort((a, b) => a.duration_ms - b.duration_ms);
-    if (cheapWorking.length > 0) {
-      classifierModel = `${cheapWorking[0].provider}/${cheapWorking[0].model}`;
-    }
-  }
-  if (!classifierModel) {
-    // Fallback: any working model, or a sensible default.
-    if (workingModels.length > 0) {
-      classifierModel = `${workingModels[0].provider}/${workingModels[0].model}`;
-    } else {
+  if (needsDetectedPromptModel) {
+    const reliability = state.reliabilityStore.getState();
+    const eligible = [...available]
+      .filter((model) => !isBifrostAuto(model))
+      .sort((left, right) => modelKey(left).localeCompare(modelKey(right)))
+      .filter((model) => {
+        const key = modelKey(model);
+        const circuit = getCircuitState(reliability, key, Date.now(), state.config.reliability);
+        return !circuit.open && !hasActiveAllowanceCooldown(reliability, key, Date.now());
+      });
+    const eligibleKeys = new Set(eligible.map(modelKey));
+    const probeChoices = probeLoaded
+      ? workingModels
+        .filter((model) => eligibleKeys.has(`${model.provider}/${model.model}`)
+          && (model.cost.input + model.cost.output) < 2)
+        .sort((left, right) => left.duration_ms - right.duration_ms)
+      : [];
+    classifierModel = probeChoices[0]
+      ? `${probeChoices[0].provider}/${probeChoices[0].model}`
+      : eligible[0] ? modelKey(eligible[0]) : undefined;
+    if (!classifierModel) {
       log(ctx, "No working models found for classifier. Init will omit classifier.model; regex fallback remains available.", "warning");
     }
   }
+  const effectiveClassifierSummary = !classifierEnabled ? "off"
+    : detectedClassifier.backend !== CLASSIFIER_BACKEND_IDS.prompt
+      ? `${detectedClassifier.backend} (${detectedClassifier.auto ? "detected default" : "configured"})`
+      : state.config.classifier?.model
+        ? `prompt (${state.config.classifier.model}, configured)`
+        : classifierModel
+          ? `prompt (${classifierModel}, detected default)`
+          : "prompt (no eligible model; regex fallback)";
 
   const proposal = buildInitProposal(
     models,
     classifierModel,
     state.extensionDir,
-    state.config.classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt,
-  );
+    state.config.classifier?.backend,
+  ) as Record<string, unknown> & { classifier: Record<string, unknown> };
+  proposal.classifier = {
+    ...proposal.classifier,
+    ...state.config.classifier,
+    enabled: state.config.classifier?.enabled ?? true,
+  };
 
-  const totalAssigned = Object.values(models).reduce((s, v) => s + v.length, 0);
+  let source: ReconciliationSourceSnapshot;
+  try { source = selectInitSource(); }
+  catch {
+    log(ctx, "Init could not safely snapshot the current config; no files were changed.", "error");
+    return;
+  }
+  let transaction: Parameters<typeof applyReconciliationTransaction>[0];
+  let changes: readonly { kind: "add" | "remove"; tier: string; modelKey: string }[];
+  if (source.configBytes !== null) {
+    const byProvider = new Map<string, Record<string, string[]>>();
+    for (const model of available) {
+      if (isBifrostAuto(model)) continue;
+      const tier = guessTier(model);
+      if (!tier) continue;
+      const byTier = byProvider.get(model.provider) ?? {};
+      byTier[tier] = [...(byTier[tier] ?? []), modelKey(model)];
+      byProvider.set(model.provider, byTier);
+    }
+    const inventories = [...byProvider.entries()].map(([provider, modelsByTier]) => {
+      const evidence = state.registryInventoryEvidence?.[provider];
+      let authConfigured: boolean | undefined;
+      try { authConfigured = ctx.modelRegistry.getProviderAuthStatus(provider)?.configured; }
+      catch { authConfigured = undefined; }
+      const now = Date.now();
+      const fresh = evidence?.status === "complete" && now >= evidence.refreshedAt
+        && now - evidence.refreshedAt < REGISTRY_REFRESH_TTL_MS;
+      const status = state.forceRegistryRefresh ? "stale" as const
+        : authConfigured === false ? "auth_failed" as const
+          : fresh && authConfigured === true ? "complete" as const : "stale" as const;
+      return { provider, status, modelsByTier };
+    });
+    const plan = buildInitMembershipPlan(
+      source,
+      inventories,
+      (selected, bytes) => prospectiveConfigInstallable(selected, bytes, state),
+      source.source === "workspace" ? state.config.models : undefined,
+    );
+    if (plan.status !== "ready" || !plan.transaction) {
+      log(ctx, plan.status === "advisory"
+        ? "Pi's model inventory is incomplete or stale, so Init cannot safely change memberships. Refresh the catalog and retry; no files were changed."
+        : plan.reason === "no_changes"
+          ? "The refreshed catalog has no safe membership changes; no files were changed."
+          : "Init could not safely prepare a membership update (" + (plan.reason ?? "unknown source state") + "); no files were changed.",
+      plan.reason === "no_changes" ? undefined : "warning");
+      return;
+    }
+    transaction = plan.transaction;
+    changes = plan.changes;
+  } else {
+    if (source.ownershipBytes !== null) {
+      log(ctx, "Init found an ownership receipt without its config and cannot safely replace it.", "error");
+      return;
+    }
+    const ownership = buildInitOwnershipReceipt(models);
+    if (!ownership) {
+      log(ctx, "Init could not create a safe exact-membership ownership receipt; no files were changed.", "error");
+      return;
+    }
+    const configBytes = Buffer.from(JSON.stringify(proposal, null, 2) + "\n", "utf8");
+    const ownershipBytes = Buffer.from(JSON.stringify(ownership, null, 2) + "\n", "utf8");
+    if (configBytes.byteLength > MAX_RECONCILIATION_CONFIG_BYTES
+      || ownershipBytes.byteLength > 5_000_000
+      || !prospectiveConfigInstallable(source.source, configBytes, state)) {
+      log(ctx, "Init's proposed config is invalid or exceeds the safe write limit; no files were changed.", "error");
+      return;
+    }
+    transaction = {
+      configPath: source.configPath,
+      ownershipPath: source.ownershipPath,
+      journalPath: source.journalPath,
+      expectedConfigDigest: null,
+      expectedOwnershipDigest: null,
+      nextConfigBytes: configBytes,
+      nextOwnershipBytes: ownershipBytes,
+    };
+    changes = Object.entries(models).flatMap(([tier, keys]) => keys.map((key) => ({ kind: "add" as const, tier, modelKey: key })));
+  }
+  const added = changes.filter((change) => change.kind === "add");
+  const removed = changes.filter((change) => change.kind === "remove");
+  const tierSummary = [...new Set(changes.map((change) => change.tier))].sort()
+    .map((tier) => tier + ": +" + added.filter((change) => change.tier === tier).length
+      + "/-" + removed.filter((change) => change.tier === tier).length)
+    .slice(0, 5);
+  const deltaSummary = "memberships: +" + added.length + " / -" + removed.length
+    + (tierSummary.length ? " (" + tierSummary.join(", ") + ")" : "");
   uiOutput(ctx, [
     "--- init ---",
     `source: ${probeLoaded ? `probe (${workingModels.length} working)` : `registry (${available.length} listed)`}`,
-    `assigned: ${totalAssigned} models`,
-    `classifier: ${classifierModel}`,
+    `save target: ${initSourceLabel(source)}`,
+    deltaSummary,
+    `classifier: ${effectiveClassifierSummary}`,
     `uncategorized: ${uncategorized.length}`,
-    "proposed config:",
-    JSON.stringify(proposal, null, 2),
+    "proposed config: classifier and routing defaults detected from Pi's available models",
     "----------------",
-    probeLoaded ? "" : "⚠ Run /bifrost probe first to filter unreachable models.",
-    "Assign uncategorized models manually in the generated config.",
+    probeLoaded ? "" : "Catalog entries are listed models, not a health check.",
+    uncategorized.length ? "Uncategorized models stay out of generated pools." : "",
   ].filter(Boolean));
 
   if (uncategorized.length > 0) {
@@ -843,80 +1009,44 @@ async function handleInit(
   }
 
   const ok = writeWithoutPrompt || await ctx.ui.confirm(
-    "Write config?",
-    "Write proposed config to .pi/bifrost.json?",
+    "Save Bifrost setup?",
+    `Save ${deltaSummary} to ${initSourceLabel(source)}?`,
   );
   if (!ok) {
     log(ctx, "config not written");
     return;
   }
 
-  const dir = join(process.cwd(), CONFIG_DIR_NAME);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  const configPath = join(dir, "bifrost.json");
-  const ownershipPath = join(dir, "bifrost-reconcile-ownership.json");
-  const journalPath = join(dir, "bifrost-reconcile.journal");
-  if (existsSync(ownershipPath)) {
-    log(ctx, "Init will not replace a config with a reconciliation ownership receipt, because regeneration could discard managed-membership history. Use config reconcile to review membership changes; no files were changed.", "warning");
+  if (ctx.signal?.aborted) {
+    log(ctx, "Init was cancelled before the reviewed update could be saved.", "warning");
     return;
   }
-  let previousConfig: Buffer | undefined;
-  try { previousConfig = readBoundedRegularSnapshot(configPath); }
+  const currentKeys = ctx.modelRegistry.getAvailable().filter((model) => !isBifrostAuto(model)).map(modelKey).sort();
+  const plannedKeys = available.filter((model) => !isBifrostAuto(model)).map(modelKey).sort();
+  if (currentKeys.length !== plannedKeys.length || currentKeys.some((key, index) => key !== plannedKeys[index])) {
+    log(ctx, "Pi's model inventory changed while Init was awaiting confirmation; no files were changed. Retry to review the new memberships.", "warning");
+    return;
+  }
+  let currentSource: ReconciliationSourceSnapshot;
+  try { currentSource = selectInitSource(); }
   catch {
-    log(ctx, "Init could not safely snapshot the current config; no files were changed.", "error");
+    log(ctx, "The config destination changed while Init was awaiting confirmation; no files were changed.", "warning");
     return;
   }
-  let previouslyConfiguredModels: Record<string, string | string[]> = {};
-  if (previousConfig) {
-    let parsed: unknown;
-    try { parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(previousConfig)); }
-    catch {
-      log(ctx, "Init could not safely read the existing config's model memberships; no files were changed.", "error");
-      return;
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      log(ctx, "Init could not safely read the existing config's model memberships; no files were changed.", "error");
-      return;
-    }
-    const rawModels = (parsed as Record<string, unknown>).models;
-    if (rawModels !== undefined) {
-      if (!rawModels || typeof rawModels !== "object" || Array.isArray(rawModels)
-        || Object.values(rawModels).some((pool) => typeof pool !== "string"
-          && (!Array.isArray(pool) || pool.some((entry) => typeof entry !== "string")))) {
-        log(ctx, "Init could not safely read the existing config's model memberships; no files were changed.", "error");
-        return;
-      }
-      previouslyConfiguredModels = rawModels as Record<string, string | string[]>;
-    }
-  }
-  const ownership = buildInitOwnershipReceipt(models, previouslyConfiguredModels);
-  if (!ownership) {
-    log(ctx, "Init could not create a safe exact-membership ownership receipt; no files were changed.", "error");
+  if (currentSource.source !== source.source || currentSource.configPath !== source.configPath) {
+    log(ctx, "The config destination changed while Init was awaiting confirmation; no files were changed.", "warning");
     return;
   }
-  const configBytes = Buffer.from(`${JSON.stringify(proposal, null, 2)}\n`, "utf8");
-  const ownershipBytes = Buffer.from(`${JSON.stringify(ownership, null, 2)}\n`, "utf8");
-  if (previousConfig && previousConfig.byteLength > MAX_RECONCILIATION_CONFIG_BYTES
-    || configBytes.byteLength > MAX_RECONCILIATION_CONFIG_BYTES
-    || !prospectiveConfigInstallable("project", configBytes, state)) {
-    log(ctx, "Init's proposed config is invalid or exceeds the safe write limit; no files were changed.", "error");
-    return;
-  }
-  try {
-    applyReconciliationTransaction({
-      configPath,
-      ownershipPath,
-      journalPath,
-      expectedConfigDigest: previousConfig ? createHash("sha256").update(previousConfig).digest("hex") : null,
-      expectedOwnershipDigest: null,
-      nextConfigBytes: configBytes,
-      nextOwnershipBytes: ownershipBytes,
-    });
-  } catch (error) {
+  const targetDirectory = dirname(source.configPath);
+  if (!existsSync(targetDirectory)) mkdirSync(targetDirectory, { recursive: true });
+  const ownershipDirectory = dirname(source.ownershipPath);
+  if (!existsSync(ownershipDirectory)) mkdirSync(ownershipDirectory, { recursive: true });
+  try { applyReconciliationTransaction(transaction); }
+  catch (error) {
     const locked = error instanceof ReconciliationStoreError && error.code === "locked";
     log(ctx, locked
-      ? "Init could not acquire reconciliation locks. If a prior process crashed, verify it is stopped and repair only its exact stale lock files before retrying. No files were changed."
-      : "Init could not safely commit its config and ownership receipt; existing files were preserved.", "error");
+      ? "Init could not acquire reconciliation locks. Verify no Bifrost writer is active and repair only exact stale lock files before retrying."
+      : "Init could not safely commit the reviewed membership update; existing files were preserved.", "error");
     return;
   }
 
@@ -935,15 +1065,10 @@ async function handleInit(
     cwd: process.cwd(),
     enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
   });
-  log(ctx, "wrote .pi/bifrost.json and reloaded config");
+  log(ctx, `updated ${initSourceLabel(source)} and reloaded config`);
   log(ctx, `Bifrost active with ${Object.keys(state.config.models ?? {}).length} tier(s). Try a prompt.`);
-  log(ctx, "Next: run /bifrost classifier to choose the routing backend.");
-  if (ctx.mode === "tui" && ctx.hasUI && !writeWithoutPrompt && await ctx.ui.confirm(
-    "Choose classifier backend?",
-    "Open /bifrost classifier now?",
-  )) {
-    await handleClassifierChoose(ctx, state);
-  }
+  const classifier = state.effectiveClassifierBackend(state.config, ctx);
+  log(ctx, `Classifier: ${classifier.backend} (${classifier.auto ? "detected default" : "configured"}). Use /bifrost classifier to change it.`);
 
   // Clear the init widget so it doesn't persist in the TUI.
   if (ctx.hasUI) {
@@ -1478,7 +1603,7 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "benchmark", description: "Classify a benchmark prompt", argumentHint: "<prompt>", menu: "common" },
   { value: "providers", description: "List available providers", menu: "common" },
   { value: "probe", description: "Probe working models", menu: "common" },
-  { value: "init", description: "Probe models and generate config (pass -f to force re-probe)", aliases: ["init -f"], menu: "common" },
+  { value: "init", description: "Refresh model catalog and save setup (pass -f to probe)", aliases: ["init -f"], menu: "common" },
   { value: "classifier status", description: "Show classifier state", menu: "common" },
   { value: "reload", description: "Reload config after editing", menu: "common" },
   { value: "validate", description: "Validate loaded config and model references", argumentHint: "[--json]", menu: "common" },
@@ -1848,12 +1973,15 @@ async function handleDiagnosticsCommand(
       economics: inspectEconomicEvidence(state),
       ...(affinityEvidence ? { affinity: affinityEvidence } : {}),
       ...(v2Evidence ? { reliabilityV2: v2Evidence } : {}),
+      modelPoolSource: state.bootstrapModelsInMemory ? "session_catalog_in_memory" : "configured",
     };
   if (json) {
     console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(report)}`);
     return;
   }
-  await uiResult(ctx, `Bifrost ${command}`, renderDiagnosticLines(report));
+  const lines = renderDiagnosticLines(report);
+  if (command === "inspect") lines.splice(-1, 0, `model pool source: ${state.bootstrapModelsInMemory ? "Pi catalog (in memory; run /bifrost init to refresh and save)" : "configuration"}`);
+  await uiResult(ctx, `Bifrost ${command}`, lines);
 }
 
 // The registry is a string-valued array, so a renamed command compiles fine
@@ -1952,10 +2080,129 @@ export function nextClassifierConfig(
   return next;
 }
 
+function persistBootstrapConfig(
+  ctx: ExtensionContext,
+  state: BifrostState,
+  sourceAtStart: ReconciliationSourceSnapshot,
+  classifierChoice?: { backend: ClassifierBackend; promptModel?: string | null; piNativeModel?: string | null },
+  configGenerationAtStart = state.configGeneration ?? 0,
+): boolean {
+  if (!state.bootstrapModelsInMemory) return true;
+  let source: ReconciliationSourceSnapshot;
+  try { source = selectInitSource(); }
+  catch {
+    log(ctx, "Cannot safely save Bifrost's in-memory model setup because a config source is invalid.", "error");
+    return false;
+  }
+  const userFiles = hasUserBootstrapFiles(process.cwd(), getAgentDir(), CONFIG_DIR_NAME);
+  const stillFresh = sourceAtStart.configBytes === null && sourceAtStart.ownershipBytes === null
+    && source.configBytes === null && source.ownershipBytes === null
+    && sourceAtStart.source === source.source && state.bootstrapModelsInMemory
+    && (state.configGeneration ?? 0) === configGenerationAtStart
+    && !userFiles.userConfig && !userFiles.routeFile
+    && !hasExplicitExtensionRoutingFile(join(state.extensionDir, "bifrost.json"));
+  if (!stillFresh && !classifierChoice) {
+    state.bootstrapModelsInMemory = false;
+    return true;
+  }
+  let current: Record<string, unknown> = {};
+  if (source.configBytes !== null) {
+    try {
+      const parsed: unknown = JSON.parse(Buffer.from(source.configBytes).toString("utf8"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+        || Object.getPrototypeOf(parsed) !== Object.prototype) throw new Error("invalid config object");
+      current = parsed as Record<string, unknown>;
+    } catch {
+      log(ctx, "Cannot safely update the classifier because the selected config is invalid JSON.", "error");
+      return false;
+    }
+  } else if (source.ownershipBytes !== null) {
+    log(ctx, "Cannot save Bifrost's starter setup because an ownership receipt exists without its config.", "error");
+    return false;
+  }
+  const currentClassifier = current.classifier && typeof current.classifier === "object" && !Array.isArray(current.classifier)
+    ? current.classifier as Record<string, unknown>
+    : source.configBytes === null && state.config.classifier
+      ? state.config.classifier as unknown as Record<string, unknown> : {};
+  if (classifierChoice) current.classifier = nextClassifierConfig(currentClassifier, classifierChoice);
+  const generatedModels = Object.fromEntries(Object.entries(state.config.models ?? {})
+    .map(([tier, pool]) => [tier, typeof pool === "string" ? [pool] : pool])) as Record<string, readonly string[]>;
+  if (stillFresh) {
+    const generatedDefault = state.config.default;
+    if (!generatedDefault || Object.keys(generatedModels).length === 0) {
+      if (!classifierChoice) {
+        state.bootstrapModelsInMemory = false;
+        return true;
+      }
+    } else {
+      const receipt = buildInitOwnershipReceipt(generatedModels);
+      if (!receipt) {
+        log(ctx, "Cannot safely save Bifrost's generated model pools and default; no files were changed.", "error");
+        return false;
+      }
+      current.models = generatedModels;
+      current.default = generatedDefault;
+    }
+  }
+  if (!stillFresh && source.configBytes === null && !classifierChoice) {
+    state.bootstrapModelsInMemory = false;
+    return true;
+  }
+  const configBytes = Buffer.from(JSON.stringify(current, null, 2) + "\n", "utf8");
+  const ownership = stillFresh
+    ? buildInitOwnershipReceipt(generatedModels)
+    : source.ownershipBytes
+      ? undefined
+      : buildInitOwnershipReceipt({});
+  const ownershipBytes = ownership
+    ? Buffer.from(JSON.stringify(ownership, null, 2) + "\n", "utf8")
+    : source.ownershipBytes ? Buffer.from(source.ownershipBytes) : undefined;
+  if (!ownershipBytes || configBytes.byteLength > MAX_RECONCILIATION_CONFIG_BYTES
+    || ownershipBytes.byteLength > MAX_RECONCILIATION_OWNERSHIP_BYTES
+    || !prospectiveConfigInstallable(source.source, configBytes, state)) {
+    log(ctx, "The requested classifier config is invalid or exceeds a safe write limit; no files were changed.", "error");
+    return false;
+  }
+  const expectedConfigDigest = source.configBytes
+    ? createHash("sha256").update(source.configBytes).digest("hex") : null;
+  const expectedOwnershipDigest = source.ownershipBytes
+    ? createHash("sha256").update(source.ownershipBytes).digest("hex") : null;
+  const targetDirectory = dirname(source.configPath);
+  if (!existsSync(targetDirectory)) mkdirSync(targetDirectory, { recursive: true });
+  const ownershipDirectory = dirname(source.ownershipPath);
+  if (!existsSync(ownershipDirectory)) mkdirSync(ownershipDirectory, { recursive: true });
+  try {
+    applyReconciliationTransaction({
+      configPath: source.configPath,
+      ownershipPath: source.ownershipPath,
+      journalPath: source.journalPath,
+      expectedConfigDigest,
+      expectedOwnershipDigest,
+      nextConfigBytes: configBytes,
+      nextOwnershipBytes: ownershipBytes,
+    });
+  } catch {
+    log(ctx, "Could not safely save the classifier and starter model setup; existing files were preserved.", "error");
+    return false;
+  }
+  state.bootstrapModelsInMemory = false;
+  if (stillFresh) log(ctx, "Saving Bifrost's detected starter model pools with your classifier choice.");
+  return true;
+}
+
 async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState): Promise<void> {
   if (!ctx.hasUI) {
     log(ctx, "Choose classifier backend in Pi UI: prompt, typesafe, or pi-native", "warning");
     return;
+  }
+  let bootstrapSourceAtStart: ReconciliationSourceSnapshot | undefined;
+  const configGenerationAtStart = state.configGeneration ?? 0;
+  if (state.bootstrapModelsInMemory) {
+    try { bootstrapSourceAtStart = selectInitSource(); }
+    catch {
+      log(ctx, "Cannot safely change the classifier because a config source is invalid.", "error");
+      return;
+    }
   }
   const backendOptions = [
     "prompt — choose a Pi model",
@@ -2009,12 +2256,27 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
   }
   const classifier = current.classifier && typeof current.classifier === "object" && !Array.isArray(current.classifier)
     ? current.classifier as Record<string, unknown> : {};
-  current.classifier = nextClassifierConfig(classifier, {
+  const choice = {
     backend,
     promptModel: backend === CLASSIFIER_BACKEND_IDS.prompt
       ? selectedPromptModel ?? (needsPromptModel ? null : undefined) : undefined,
     piNativeModel: selectedPiNativeModel,
-  });
+  };
+  if (bootstrapSourceAtStart) {
+    if (!persistBootstrapConfig(ctx, state, bootstrapSourceAtStart, choice, configGenerationAtStart)) return;
+    const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
+    if (!installReloadedConfig(state, loadedConfig, ctx)) return;
+    state.classifierMetricsStore.reload({
+      cwd: process.cwd(),
+      enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
+    });
+    log(ctx, `classifier backend set to ${backend}; config reloaded`);
+    if (backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
+      log(ctx, `TypeSafe credential missing; use ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`, "warning");
+    }
+    return;
+  }
+  current.classifier = nextClassifierConfig(classifier, choice);
   mkdirSync(join(process.cwd(), CONFIG_DIR_NAME), { recursive: true });
   writeFileSync(path, JSON.stringify(current, null, 2) + "\n");
   const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
@@ -2223,19 +2485,24 @@ export function createCommandRouter(
     exact("classifier", (_, ctx) => handleClassifierChoose(ctx, state)),
     exact("classifier on", (_, ctx) => {
       state.classifierEnabled = true;
-      state.saveModeState();
       state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
       debug("command", "classifier_toggle", { enabled: true });
-      log(ctx, "LLM classifier enabled");
+      let saved = true;
+      try { saved = state.saveModeState() !== false; } catch { saved = false; }
+      log(ctx, saved ? "LLM classifier enabled" : "LLM classifier enabled for this session; its preference could not be saved.", saved ? undefined : "error");
     }),
     exact("classifier off", (_, ctx) => {
       state.classifierEnabled = false;
-      state.saveModeState();
       state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
       debug("command", "classifier_toggle", { enabled: false });
-      log(ctx, "LLM classifier disabled; regex fallback active");
+      let saved = true;
+      try { saved = state.saveModeState() !== false; } catch { saved = false; }
+      log(ctx, saved
+        ? "LLM classifier disabled; regex fallback active"
+        : "LLM classifier disabled for this session; its preference could not be saved.",
+      saved ? undefined : "error");
     }),
     exact("classifier status", (_, ctx) => {
       const rawModel = state.config.classifier?.model;

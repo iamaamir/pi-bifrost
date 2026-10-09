@@ -19,7 +19,7 @@ export AGENT_TUI_SOCKET="$tmp/a.sock" AGENT_TUI_SESSION_STORE="$tmp/s.jsonl" AGE
 cleanup(){ "$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true; kill "$server" 2>/dev/null||true; [[ "${KEEP:-}" == 1 ]] || rm -rf "$tmp"; }; trap cleanup EXIT
 
 poll_until(){ local path="$1" needle="$2" max="${3:-60}"; for _ in $(seq 1 "$max"); do [[ -f "$path" ]] && grep -q "$needle" "$path" && return 0; sleep 1; done; echo "timed out" >&2; return 1; }
-start_pi(){ "$A" --json daemon start >/dev/null; local run; run=$($A --json run --cwd "$work" --cols 120 --rows 36 --env "PI_CODING_AGENT_DIR=$home/.pi/agent" --env "PI_SKIP_VERSION_CHECK=1" -- "$PI" -e "$ROOT" --approve --no-session --no-tools --provider fake --model healthy); node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>console.log(JSON.parse(s).session_id))' <<<"$run"; }
+start_pi(){ "$A" --json daemon start >/dev/null; local run; run=$($A --json run --cwd "$work" --cols 120 --rows 36 --env "HOME=$home" --env "PI_CODING_AGENT_DIR=$home/.pi/agent" --env "PI_SKIP_VERSION_CHECK=1" --env "PI_OFFLINE=1" --env "NODE_OPTIONS=--require=$ROOT/scripts/test-outbound-guard.cjs" --env "BIFROST_TEST_ALLOWED_ORIGIN=http://127.0.0.1:$port" --env "BIFROST_TEST_NETWORK_VIOLATIONS=$tmp/test-network-violations.log" -- "$PI" -e "$ROOT" --approve --no-session --no-tools --provider fake --model healthy); node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>console.log(JSON.parse(s).session_id))' <<<"$run"; }
 prompt(){ "$A" --session "$1" type "$2" >/dev/null; "$A" --session "$1" press Escape Enter >/dev/null; }
 
 wait_mode_state(){
@@ -182,4 +182,9 @@ fi
 echo 'scenario 6: pass'
 "$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true
 
+if [[ -s "$tmp/test-network-violations.log" ]]; then
+  echo 'FAIL: test network guard recorded a blocked external request' >&2
+  cat "$tmp/test-network-violations.log" >&2
+  exit 1
+fi
 echo 'all reliability E2E scenarios: pass'

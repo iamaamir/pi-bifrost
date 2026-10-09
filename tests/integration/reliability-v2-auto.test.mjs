@@ -12,7 +12,9 @@ const ROOT = join(__dirname, "..", "..");
 const PI = join(ROOT, "node_modules", ".bin", "pi");
 const EXTENSION = join(ROOT, "index.ts");
 const FAKE_SERVER = join(ROOT, "scripts", "fake-provider-server.mjs");
+const OUTBOUND_GUARD = join(ROOT, "scripts", "test-outbound-guard.cjs");
 const MAX_CAPTURE_CHARS = 64 * 1024;
+let fakePort;
 
 function appendBounded(current, chunk) {
   return current.length >= MAX_CAPTURE_CHARS ? current : current + chunk.slice(0, MAX_CAPTURE_CHARS - current.length);
@@ -98,7 +100,16 @@ function runPi({ home, work, model = "bifrost/auto", messages, extraExtensions =
     const child = spawn(PI, ["-e", EXTENSION, ...extensionArgs, "--approve", "--no-session", "--no-tools", "--model", model, "-p", ...messages], {
       stdio: ["ignore", "pipe", "pipe"],
       cwd: work,
-      env: { ...env, HOME: home, PI_CODING_AGENT_DIR: join(home, ".pi", "agent"), PI_SKIP_VERSION_CHECK: "1" },
+      env: {
+        ...env,
+        HOME: home,
+        PI_CODING_AGENT_DIR: join(home, ".pi", "agent"),
+        PI_SKIP_VERSION_CHECK: "1",
+        PI_OFFLINE: "1",
+        NODE_OPTIONS: `--require=${OUTBOUND_GUARD}`,
+        BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${fakePort}`,
+        BIFROST_TEST_NETWORK_VIOLATIONS: join(home, "test-network-violations.log"),
+      },
     });
     let stdout = "";
     let stderr = "";
@@ -122,6 +133,12 @@ function runPi({ home, work, model = "bifrost/auto", messages, extraExtensions =
     child.on("close", (code) => {
       clearTimeout(timer);
       clearTimeout(forceKill);
+      try {
+        const violations = readFileSync(join(home, "test-network-violations.log"), "utf8");
+        assert.equal(violations, "", "test network guard recorded a blocked external request");
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
       resolve({ code, stdout, stderr, timedOut });
     });
   });
@@ -161,7 +178,7 @@ async function prepareV2AndRun({ home, work, port, models, config = v2Config(), 
 
 describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 1 }, () => {
   let server;
-  before(async () => { server = await startFakeServer(); });
+  before(async () => { server = await startFakeServer(); fakePort = server.port; });
   after(async () => { if (server?.child) await stopChild(server.child); });
 
   it("retains the successful Auto model across native turns while prefixes use the random strategy", async () => {

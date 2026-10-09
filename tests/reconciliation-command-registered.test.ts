@@ -166,7 +166,7 @@ describe("registered config reconciliation command", () => {
     });
   });
 
-  it("writes an exact ownership receipt only after confirmed cached init and does not adopt old manual entries", async () => {
+  it("keeps existing entries manual when init refresh finds no new memberships", async () => {
     await withCwd(async (cwd) => {
       const configDir = join(cwd, ".pi");
       fs.mkdirSync(configDir, { recursive: true });
@@ -177,15 +177,13 @@ describe("registered config reconciliation command", () => {
       const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
       await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
       const config = JSON.parse(fs.readFileSync(join(configDir, "bifrost.json"), "utf8")) as { models: Record<string, string[]> };
-      const receipt = JSON.parse(fs.readFileSync(join(configDir, "bifrost-reconcile-ownership.json"), "utf8")) as { sources: Record<string, { generated: Record<string, string[]> }> };
-      const owned = Object.values(receipt.sources).flatMap((source) => Object.values(source.generated).flat());
+      assert.equal(fs.existsSync(join(configDir, "bifrost-reconcile-ownership.json")), false);
       assert.equal(config.models.general.includes("openai/cached-model"), true);
-      assert.equal(owned.includes("manual/legacy"), false);
-      assert.equal(owned.includes("openai/cached-model"), false);
+      assert.equal(config.models.general.includes("manual/legacy"), true);
     });
   });
 
-  it("does not let repeated init overwrite config or managed-membership history", async () => {
+  it("refreshes owned memberships and preserves the rest of config and ownership history", async () => {
     await withCwd(async (cwd) => {
       const configDir = join(cwd, ".pi");
       fs.mkdirSync(configDir, { recursive: true });
@@ -199,11 +197,12 @@ describe("registered config reconciliation command", () => {
         { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
       ]));
       const h = makeHarness({ models: [makeModel("openai", "new-model", 1, 1)] });
-      const output = await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
-      assert.deepEqual(fs.readFileSync(configPath), originalConfig);
-      assert.deepEqual(fs.readFileSync(ownershipPath), originalOwnership);
-      assert.match(output.join("\n"), /will not replace a config with a reconciliation ownership receipt/u);
-      assert.equal(fs.existsSync(join(configDir, "bifrost-reconcile.journal")), false);
+      await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
+      const updated = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models: Record<string, string[]>; manual: boolean };
+      const updatedOwnership = JSON.parse(fs.readFileSync(ownershipPath, "utf8")) as { sources: Record<string, { generated: Record<string, string[]> }> };
+      assert.deepEqual(updated.models.general, ["openai/new-model"]);
+      assert.equal(updated.manual, true);
+      assert.equal(Object.values(updatedOwnership.sources).flatMap((source) => source.generated.general ?? []).includes("openai/new-model"), true);
     });
   });
 });
