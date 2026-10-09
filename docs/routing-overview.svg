@@ -1,0 +1,100 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 832" role="img" aria-labelledby="route-title route-desc" style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif">
+  <title id="route-title">Example route through Pi-Bifrost</title>
+  <desc id="route-desc">An example prompt matches a tier and its configured AI pool. A configured strategy selects AI A, while AI B is excluded because it is on cooldown. Pi sends the prompt to AI A and shows the answer.</desc>
+  <style>
+    :root{color-scheme:light dark;--backdrop:#0d151d;--text:#e2e6e9;--muted:#a6b0b8;--surface:#15212c;--surface-raised:#1c2b37;--line:#647783;--accent:#70acd0;--selected-bg:#193244;--warning:#d6ad72;--stop:#cf8e8e}
+    @media(prefers-color-scheme:light){:root{--backdrop:#fff;--text:#17232c;--muted:#475762;--surface:#f4f7f9;--surface-raised:#e7eef3;--line:#71818b;--accent:#176b99;--selected-bg:#dcecf5;--warning:#855212;--stop:#982d2d}}
+    .prompt-shape{fill:var(--surface-raised);stroke:var(--line);stroke-width:1.5}
+    .tier-shape{fill:var(--surface);stroke:var(--accent);stroke-width:2}
+    .pool-frame{fill:var(--surface);stroke:var(--line);stroke-width:1.5}
+    .candidate{fill:var(--surface-raised);stroke:var(--line);stroke-width:1.5}
+    .selected{fill:var(--selected-bg);stroke:var(--accent);stroke-width:2.5}
+    .excluded{fill:var(--surface);stroke:var(--line);stroke-width:1.5;opacity:.75}
+    .answer-frame{fill:var(--surface-raised);stroke:var(--accent);stroke-width:2}
+    .label{fill:var(--text);font-size:20px;font-weight:650}
+    .answer-text{font-size:18px}
+    .body{fill:var(--text);font-size:18px}
+    .muted{fill:var(--muted);font-size:18px}
+    .selected-text{fill:var(--accent);font-size:18px;font-weight:650}
+    .cooldown-text{fill:var(--warning);font-size:18px;font-weight:650}
+    .stop-mark{fill:var(--stop);font-size:22px;font-weight:700}
+    .spine{fill:none;stroke:var(--line);stroke-width:2;stroke-linecap:round}
+    .route{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;stroke-linejoin:round}
+    .selected-route{fill:none;stroke:var(--accent);stroke-width:4;stroke-linecap:round;stroke-linejoin:round}
+    .branch{fill:none;stroke:var(--line);stroke-width:2;stroke-linecap:round}
+    .reveal{animation:arrive .55s cubic-bezier(.2,.75,.25,1) both}
+    .step-1{animation-delay:0s}.step-2{animation-delay:.7s}.step-3{animation-delay:1.4s}.step-4{animation-delay:2.15s}.step-5{animation-delay:2.95s}
+    .packet{fill:var(--accent);opacity:0;animation:travel .42s ease-out both}
+    .packet-1{animation-delay:.75s}.packet-2{animation-delay:1.45s}.packet-3{animation-delay:2.2s}.packet-4{animation-delay:3.05s}
+    @keyframes arrive{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes travel{0%{opacity:0;transform:translateY(0) scale(.7)}20%{opacity:1}80%{opacity:1;transform:translateY(22px) scale(1)}100%{opacity:0;transform:translateY(32px) scale(.7)}}
+    @media(prefers-reduced-motion:reduce){.reveal{animation:none!important;opacity:1!important;transform:none!important}.packet{animation:none!important;opacity:0!important;transform:none!important}}
+  </style>
+
+  <rect id="backdrop" x="0" y="0" width="320" height="832" rx="12" fill="var(--backdrop)"/>
+  <text class="muted" x="16" y="20">Example route</text>
+  <g id="prompt" class="reveal step-1">
+    <path class="prompt-shape" d="M30 30H290a14 14 0 0 1 14 14v28a14 14 0 0 1-14 14H174l-14 14-14-14H30a14 14 0 0 1-14-14V44a14 14 0 0 1 14-14Z"/>
+    <text class="label" x="160" y="57" text-anchor="middle">01 · Your prompt</text>
+    <text class="body" x="160" y="82" text-anchor="middle">“Fix this bug”</text>
+  </g>
+
+  <g id="to-tier" class="reveal step-2">
+    <path class="route" d="M160 100V116m-5-7 5 7 5-7"/>
+    <circle class="packet packet-1" cx="160" cy="101" r="5"/>
+  </g>
+  <g id="tier" class="reveal step-2">
+    <rect class="tier-shape" x="24" y="120" width="272" height="64" rx="32"/>
+    <text class="label" x="160" y="147" text-anchor="middle">02 · Matched tier</text>
+    <text class="muted" x="160" y="173" text-anchor="middle">a group for this kind of task</text>
+  </g>
+
+  <g id="to-pool" class="reveal step-3">
+    <path class="route" d="M160 184V218m-5-8 5 8 5-8"/>
+    <circle class="packet packet-2" cx="160" cy="188" r="5"/>
+  </g>
+  <g id="pool" class="reveal step-3">
+    <rect class="pool-frame" x="16" y="222" width="288" height="132" rx="12"/>
+    <text class="label" x="32" y="249">03 · Configured pool</text>
+    <text class="muted" x="32" y="273">models allowed for this tier</text>
+    <path class="branch" d="M160 278V286M160 286H88V294M160 286H232V294"/>
+    <rect class="candidate" x="25" y="296" width="126" height="46" rx="10"/>
+    <text class="label" x="88" y="326" text-anchor="middle">AI A</text>
+    <rect class="candidate" x="169" y="296" width="126" height="46" rx="10"/>
+    <text class="label" x="232" y="326" text-anchor="middle">AI B</text>
+  </g>
+
+  <g id="to-check" class="reveal step-4">
+    <path class="route" d="M160 354V404m-5-8 5 8 5-8"/>
+    <circle class="packet packet-3" cx="160" cy="360" r="5"/>
+  </g>
+  <g id="selection" class="reveal step-4">
+    <rect class="pool-frame" x="16" y="408" width="288" height="180" rx="12"/>
+    <text class="label" x="160" y="436" text-anchor="middle">04 · Check eligibility</text>
+    <text class="muted" x="160" y="461" text-anchor="middle">Configured strategy picks</text>
+    <text class="muted" x="160" y="483" text-anchor="middle">from eligible AIs</text>
+    <rect class="selected" x="25" y="496" width="126" height="72" rx="10"/>
+    <text class="label" x="88" y="526" text-anchor="middle">AI A</text>
+    <text class="selected-text" x="88" y="551" text-anchor="middle">Selected</text>
+    <rect class="excluded" x="169" y="496" width="126" height="72" rx="10"/>
+    <text class="label" x="232" y="526" text-anchor="middle">AI B</text>
+    <text class="cooldown-text" x="232" y="551" text-anchor="middle">× Cooldown</text>
+  </g>
+
+  <g id="selected-route" class="reveal step-5">
+    <path class="selected-route" d="M88 568V602Q88 620 106 620H142Q160 620 160 638V654m-6-8 6 8 6-8"/>
+    <circle class="packet packet-4" cx="88" cy="572" r="5"/>
+  </g>
+  <g id="answer" class="reveal step-5">
+    <rect class="answer-frame" x="16" y="658" width="288" height="68" rx="8"/>
+    <path class="spine" d="M16 680H304"/>
+    <text class="muted" x="32" y="675">PI · RESPONSE</text>
+    <text class="label answer-text" x="32" y="711">Pi shows the answer from AI A</text>
+  </g>
+
+  <g id="routing-notes" class="reveal step-5">
+    <text class="muted" x="160" y="756" text-anchor="middle">Cache remembers tier choices.</text>
+    <text class="muted" x="160" y="782" text-anchor="middle">Auto can keep a successful AI</text>
+    <text class="muted" x="160" y="805" text-anchor="middle">in this tier while it remains eligible.</text>
+  </g>
+</svg>
