@@ -7,13 +7,14 @@ New to Bifrost? Start with [Install and initialize](getting-started.md). It expl
 ## Start here
 
 1. [Install and initialize](getting-started.md)
-2. [Choose adaptive, explicit-tier, or pinned control](routing-controls.md)
-3. [Configure tiers, model pools, strategies, and rules](configuration.md)
-4. [Understand provider prompt caching across model switches](prompt-caching.md)
-5. [Configure optional prompt, TypeSafe/Jev, or Pi-native classifiers](classifiers.md)
-6. [Troubleshoot setup and routing](troubleshooting.md)
-7. [Use the command reference](commands.md)
-8. [Understand reliability and Bifrost's local cache](reliability-and-cache.md)
+2. [Select and dispatch a model with Auto](auto-routing.md)
+3. [Choose adaptive, explicit-tier, or pinned control](routing-controls.md)
+4. [Configure tiers, model pools, strategies, and rules](configuration.md)
+5. [Understand provider prompt caching across model switches](prompt-caching.md)
+6. [Configure optional prompt, TypeSafe/Jev, or Pi-native classifiers](classifiers.md)
+7. [Troubleshoot setup and routing](troubleshooting.md)
+8. [Use the command reference](commands.md)
+9. [Understand reliability and Bifrost's local cache](reliability-and-cache.md)
 
 ## Four terms first
 

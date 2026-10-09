@@ -35,9 +35,9 @@ After init, run `/bifrost classifier` to choose a classifier. Run `/bifrost clas
 
 ## Routing modes
 
-Physical selection is the default. Bifrost selects Pi's active provider/model before generation. Select a physical model yourself to keep it active for the session.
+Auto is opt-in. Select `bifrost/auto` in Pi's `/model` picker to dispatch a physical model for each request. Pi's footer shows the Auto selection and the physical model for the request. Bifrost keeps a proven successful model for later turns in the same tier if it remains eligible. A tier change can select another model. Read the [Auto routing and model selection guide](docs/guide/auto-routing.md) for the selection steps and recovery rules.
 
-Auto is opt-in. Select `bifrost/auto` in Pi's `/model` picker to dispatch a physical model for each request. The footer shows the selected model. Tool continuations stay on the model that started the turn. In Auto, Bifrost keeps a proven successful model for later turns in the same tier if it remains eligible. A tier change can select another model.
+Physical selection before generation remains the default. Bifrost selects Pi's active provider/model before generation. Select a physical model yourself to keep it active for the session.
 
 ```mermaid
 sequenceDiagram
