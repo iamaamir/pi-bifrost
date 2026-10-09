@@ -12,6 +12,7 @@ import {
   classifyWithLLM,
   extractCategory,
 } from "../classifier.ts";
+import { createPipeline } from "../classification-pipeline.ts";
 import { flushDebug, setupDebug } from "../debug.ts";
 import { makeModel } from "./helpers.ts";
 
@@ -265,6 +266,50 @@ describe("classifier", () => {
     controller.abort();
     assert.equal(await resultPromise, undefined);
     assert.equal(requestSignal?.aborted, true);
+  });
+
+  it("cancels registry classification from the active context when the pipeline supplies its own signal", async () => {
+    const contextController = new AbortController();
+    let registrySignal: AbortSignal | undefined;
+    let subprocessCalls = 0;
+    const classifierModel = { kind: "registry" as const, model: makeModel("fixture", "classifier") };
+    const ctx = {
+      cwd: process.cwd(),
+      signal: contextController.signal,
+      modelRegistry: {
+        streamSimple: (_model: unknown, _context: unknown, options: { signal?: AbortSignal }) => {
+          registrySignal = options.signal;
+          return {
+            result: () => new Promise((resolve) => {
+              options.signal?.addEventListener("abort", () => resolve({ content: [] }), { once: true });
+            }),
+          };
+        },
+      },
+    } as never;
+    const pipeline = createPipeline({
+      totalTimeoutMs: 150,
+      cacheLookup: () => undefined,
+      classifierModels: [classifierModel],
+      classifyWithLLM: (model, text, tiers, signal) => classifyWithLLM(ctx, model, tiers, text, {
+        method: "auto",
+        spawnImpl: (() => { subprocessCalls += 1; throw new Error("must not spawn after context abort"); }) as unknown as typeof import("node:child_process").spawn,
+      }, signal),
+      regexRules: [],
+      defaultTier: "general",
+      tiers: ["general"],
+    });
+
+    const resultPromise = pipeline.classify("ordinary prompt");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    contextController.abort();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(registrySignal?.aborted, true);
+    const result = await resultPromise;
+
+    assert.equal(subprocessCalls, 0);
+    assert.equal(result.kind, "fallback");
+    if (result.kind === "fallback") assert.equal(result.tier, "general");
   });
 
   it("terminates only its owned prompt subprocess when caller aborts", async () => {

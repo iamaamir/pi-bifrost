@@ -42,6 +42,13 @@ function isOpenAiCompatibleEndpoint(cm: ClassifierModel): boolean {
   );
 }
 
+function classifierSignal(ctx: ExtensionContext, signal?: AbortSignal): AbortSignal | undefined {
+  const contextSignal = ctx.signal;
+  if (!signal || !contextSignal || signal === contextSignal) return signal ?? contextSignal;
+  if (typeof AbortSignal === "undefined" || !("any" in AbortSignal)) return signal;
+  return AbortSignal.any([signal, contextSignal]);
+}
+
 function promptHttpSignal(ctx: ExtensionContext, signal?: AbortSignal): AbortSignal | undefined {
   const activeSignal = signal ?? ctx.signal;
   if (ctx.signal) return activeSignal;
@@ -348,7 +355,7 @@ export async function classifyWithLLM(
   options: ClassifierOptions = {},
   signal?: AbortSignal,
 ): Promise<string | undefined> {
-  const activeSignal = signal ?? ctx.signal;
+  const activeSignal = classifierSignal(ctx, signal);
   if (activeSignal?.aborted) return undefined;
   const method = options.method ?? "auto";
 
