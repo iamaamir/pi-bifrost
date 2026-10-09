@@ -222,7 +222,7 @@ function textFromRawFields(input: DataRecord): string {
 }
 
 function textCategory(text: string): FailureCategory | undefined {
-  if (/quota\s+(?:is\s+)?exhaust|allowance\s+(?:is\s+)?exhaust|usage\s+limit\s+(?:has\s+been\s+)?reached/.test(text)) return "allowance_exhausted";
+  if (/quota\s+(?:is\s+)?exhaust|allowance\s+(?:is\s+)?exhaust|usage\s+limit\s+(?:has\s+been\s+)?reached|no\s+remaining\s+credits/.test(text)) return "allowance_exhausted";
   if (/authentication|unauthori[sz]ed|invalid\s+api\s+key|credential/.test(text)) return "authentication";
   if (/billing\s+(?:denied|issue|failure)|payment\s+required/.test(text)) return "billing_denied";
   if (/context\s+(?:length|window|limit)|too\s+many\s+tokens/.test(text)) return "context_limit";

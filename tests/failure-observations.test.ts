@@ -69,6 +69,26 @@ describe("failure observation normalization", () => {
     assert.equal(JSON.stringify(observation).includes(errorText), false);
   });
 
+  it("recognizes explicit exhausted-credit wording while ignoring generic 402 and incidental credit mentions", () => {
+    const errorText = 'Error: 402 "You have no remaining credits. Purchase pre-paid credits to continue using Inference Providers. Alternatively, subscribe to PRO to get monthly included credits."';
+    const observation = normalizeFailureObservation({ ...base, errorText }, { now: 1000 });
+    assert.equal(observation?.category, "allowance_exhausted");
+    assert.equal(observation?.categoryEvidence, "text_heuristic");
+    assert.deepEqual(observation?.scope, { kind: "model", modelKey: base.modelKey });
+    assert.equal(observation?.scopeEvidence, "model-only");
+    assert.equal(JSON.stringify(observation).includes(errorText), false);
+
+    const generic402 = normalizeFailureObservation({ ...base, structured: { httpStatus: 402 } }, { now: 1000 });
+    assert.equal(generic402?.category, "unknown");
+    assert.equal(generic402?.categoryEvidence, "unknown");
+    const incidentalCredits = normalizeFailureObservation({
+      ...base,
+      errorText: "This feature requires credits to use with the selected model",
+    }, { now: 1000 });
+    assert.equal(incidentalCredits?.category, "unknown");
+    assert.equal(incidentalCredits?.categoryEvidence, "unknown");
+  });
+
   it("does not treat Pi's ambiguous friendly usage-limit message as hard exhaustion", () => {
     const observation = normalizeFailureObservation({
       ...base,

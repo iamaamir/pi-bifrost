@@ -10,7 +10,7 @@ import { makeModel } from "./helpers.ts";
 
 type Hook = (event: unknown, ctx: ExtensionContext) => Promise<unknown>;
 
-function startTrialHarness() {
+function startTrialHarness(freshAllowance = false) {
   const previousCwd = process.cwd();
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   const cwd = mkdtempSync(join(tmpdir(), "bifrost-settlement-hook-"));
@@ -21,7 +21,7 @@ function startTrialHarness() {
   const now = Date.now();
   const openUntil = now - 1;
   const reliabilityPath = join(cwd, ".pi", "bifrost-reliability.json");
-  writeFileSync(reliabilityPath, JSON.stringify({
+  if (!freshAllowance) writeFileSync(reliabilityPath, JSON.stringify({
     version: 1,
     models: { [modelKey]: { failures: [now - 1000], openUntil, cooldownMultiplier: 1 } },
   }));
@@ -30,8 +30,8 @@ function startTrialHarness() {
     default: "restricted",
     strategy: "first",
     classifier: { enabled: false, backend: "prompt" },
-    reliability: { enabled: true, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 1 },
-    models: { restricted: [modelKey] },
+    reliability: { enabled: true, failureThreshold: freshAllowance ? 3 : 1, windowMinutes: 5, cooldownMinutes: 1 },
+    models: { restricted: freshAllowance ? [modelKey, "fixture/alternative"] : [modelKey] },
     rules: [{ pattern: "hello", model: "restricted" }],
   }));
   process.chdir(cwd);
@@ -39,7 +39,8 @@ function startTrialHarness() {
 
   const active = makeModel("fixture", "active");
   const trial = makeModel("fixture", "trial");
-  const available: Model<Api>[] = [active, trial];
+  const alternative = makeModel("fixture", "alternative");
+  const available: Model<Api>[] = [active, trial, alternative];
   const handlers = new Map<string, Hook>();
   let selected: string | undefined;
   const ctx = {
@@ -142,6 +143,24 @@ describe("reliability settlement through registered Pi hooks", () => {
       assert.equal(record.trialActive, false);
       assert.equal(record.failures.length, 2);
       assert.ok((record.openUntil ?? 0) > Date.now());
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("cools a model immediately on explicit exhausted credits and routes the next physical turn around it", async () => {
+    const harness = startTrialHarness(true);
+    const errorMessage = 'Error: 402 "You have no remaining credits. Purchase pre-paid credits to continue using Inference Providers. Alternatively, subscribe to PRO to get monthly included credits."';
+    try {
+      await harness.run([{ role: "assistant", provider: "fixture", model: "trial", stopReason: "error", errorMessage }]);
+      const record = harness.state();
+      assert.equal(record.failures.length, 1, "allowance exhaustion opens before the ordinary three-failure threshold");
+      assert.ok((record.openUntil ?? 0) > Date.now());
+      assert.equal(record.lastFailureReason, "allowance_exhausted:text_heuristic:model-only");
+
+      const next = await harness.handlers.get("input")!({ text: "hello", source: "interactive", streamingBehavior: "steer" }, harness.ctx);
+      assert.deepEqual(next, { action: "continue" });
+      assert.equal(harness.selected(), "fixture/alternative");
     } finally {
       harness.cleanup();
     }
