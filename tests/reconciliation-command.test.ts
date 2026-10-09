@@ -113,6 +113,21 @@ describe("config reconciliation command boundary", () => {
     assert.equal(JSON.stringify(report).includes("transactionInput"), false);
   });
 
+  it("blocks preview when an unrelated source tier violates the store config shape", () => {
+    const invalidConfig = Buffer.from(JSON.stringify({
+      models: { general: ["manual/model"], frontier: ["openai/old", "openai/old"] },
+    }));
+    let applied = false;
+    const report = preview({
+      snapshot: { source: { ...snapshot().source, configBytes: invalidConfig } },
+      dependencies: { apply: () => { applied = true; return { status: "committed", transactionId: "not-used" }; } },
+    });
+
+    assert.equal(report.status, "blocked");
+    assert.equal(report.reason, "source_invalid");
+    assert.equal(applied, false);
+  });
+
   it("binds apply to the exact reviewed proposal and passes only selected-source bytes to the journal store", () => {
     const proposal = preview();
     assert.equal(proposal.status, "ready");
@@ -134,6 +149,19 @@ describe("config reconciliation command boundary", () => {
     assert.equal(transaction?.journalPath, "/project/.pi/bifrost-reconcile.journal");
     assert.ok(transaction?.nextOwnershipBytes.byteLength);
     assert.equal(Buffer.from(transaction!.nextConfigBytes).toString("utf8").includes("manual/model"), true);
+  });
+
+  it("reports store rejection of invalid config input as a source error", () => {
+    const proposal = preview();
+    const result = runReconciliationCommand({
+      action: "apply", source: "project", tier: "general", provider: "openai",
+      proposalDigest: proposal.proposalDigest!, json: true,
+    }, snapshot(), dependencies({
+      apply: () => { throw new ReconciliationStoreError("invalid_input"); },
+    }));
+
+    assert.equal(result.status, "blocked");
+    assert.equal(result.reason, "source_invalid");
   });
 
   it("keeps exact config bytes when only a user removal needs an ownership tombstone", () => {

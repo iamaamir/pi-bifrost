@@ -9,6 +9,7 @@ import {
 } from "./reconciliation.ts";
 import {
   ReconciliationStoreError,
+  assertPlainJsonObject,
   type ApplyReconciliationTransactionInput,
   type ApplyResult,
   type RecoveryResult,
@@ -427,9 +428,14 @@ function buildPlan(
   const { source, registry } = snapshot;
   if (source.source !== request.source || source.configBytes === null) return blocked(request, "source_missing");
   if (source.configBytes.byteLength > MAX_CONFIG_BYTES) return blocked(request, "source_invalid");
-  const sourceConfig = parseJsonObject(source.configBytes, MAX_CONFIG_BYTES);
-  if (!sourceConfig || !isPlainRecord(sourceConfig.models) || !Object.hasOwn(sourceConfig.models, request.tier)) {
-    return blocked(request, sourceConfig ? "tier_not_explicit" : "source_invalid");
+  let sourceConfig: Record<string, unknown>;
+  try {
+    sourceConfig = assertPlainJsonObject(source.configBytes);
+  } catch {
+    return blocked(request, "source_invalid");
+  }
+  if (!isPlainRecord(sourceConfig.models) || !Object.hasOwn(sourceConfig.models, request.tier)) {
+    return blocked(request, "tier_not_explicit");
   }
   const pool = sourceConfig.models[request.tier];
   if (!(typeof pool === "string" || Array.isArray(pool) && pool.every((value) => typeof value === "string"))) {
@@ -538,6 +544,7 @@ function inventoryReason(
 function storeErrorReason(error: unknown): ReconciliationCommandReason {
   if (error instanceof ReconciliationStoreError && error.code === "locked") return "operator_repair_required";
   if (error instanceof ReconciliationStoreError && error.code === "conflict") return "store_conflict";
+  if (error instanceof ReconciliationStoreError && error.code === "invalid_input") return "source_invalid";
   return "store_io_failure";
 }
 

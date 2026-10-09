@@ -174,7 +174,7 @@ function errorCode(error: unknown): string | undefined {
   return typeof code === "string" ? code : undefined;
 }
 
-function assertPlainJsonObject(bytes: Uint8Array): Record<string, unknown> {
+export function assertPlainJsonObject(bytes: Uint8Array): Record<string, unknown> {
   let decoded: string;
   try {
     decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
