@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 832" role="img" aria-labelledby="route-title route-desc" style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="832" viewBox="0 0 320 832" role="img" aria-labelledby="route-title route-desc" style="font-family:system-ui,-apple-system,'Segoe UI',sans-serif">
   <title id="route-title">Example route through Pi-Bifrost</title>
   <desc id="route-desc">An example prompt matches a tier and its configured AI pool. A configured strategy selects AI A, while AI B is excluded because it is on cooldown. Pi sends the prompt to AI A and shows the answer.</desc>
   <style>
