@@ -20,7 +20,7 @@ pi install npm:pi-bifrost
 
 Fresh installs route by default. Before Pi sends your message, Bifrost chooses the active model in Pi.
 
-If no user configuration or project route file exists, Bifrost builds temporary model lists from Pi's list for your first prompt. You can send a message without `/bifrost init`. A partial user configuration blocks this setup. Saved settings can change routing. See [Getting started](docs/guide/getting-started.md).
+If no user configuration or project route file exists, Bifrost builds temporary model lists from Pi's list for your first prompt. You can send a message without `/bifrost init`. A nonempty partial user configuration blocks this setup. An empty `{}` configuration file does not. Saved settings can change routing. See [Getting started](docs/guide/getting-started.md).
 
 Select `bifrost/auto` in Pi's `/model` picker to let Bifrost choose which model answers each message. The footer shows Auto and the selected model. Use `/bifrost inspect` or `/bifrost debug` to see model lists and status without a classifier call. Pi's list does not prove a model will work.
 

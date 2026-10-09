@@ -154,7 +154,7 @@
             </div>
             <section id="physical" class="story-secondary" data-demo-scene="physical" aria-labelledby="physical-title">
               <p class="eyebrow">04 / Default route</p><h2 id="physical-title">Pi switches models before the prompt.</h2>
-              <p>On a fresh install, routing is on by default. When no user config or route file exists, Bifrost builds in-memory pools from Pi's available catalog on the first prompt. Even a partial config with one setting blocks automatic pools. Physical selection is the default; <code>bifrost/auto</code> is opt-in. Use <code>/bifrost inspect</code> or <code>/bifrost debug</code> to review pools and status without classification or probes.</p>
+              <p>On a fresh install, routing is on by default. When no user config or route file exists, Bifrost builds in-memory pools from Pi's available catalog on the first prompt. A nonempty partial config blocks automatic pools, even if it has one setting. An empty <code>{}</code> config file does not. Physical selection is the default; <code>bifrost/auto</code> is opt-in. Use <code>/bifrost inspect</code> or <code>/bifrost debug</code> to review pools and status without classification or probes.</p>
               <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/routing-controls.md#what-happens-when-you-send-a-message">See the default route</a>.</p>
             </section>
             <section id="setup" class="story-secondary" data-demo-scene="setup" aria-labelledby="setup-title">

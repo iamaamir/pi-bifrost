@@ -22,7 +22,7 @@ Requires Pi 1.0.1 or newer and at least one authenticated provider model availab
 pi install npm:pi-bifrost
 ```
 
-On a fresh install, routing is on and physical selection is the default. A saved config or runtime preference can change the routing state. Use `/bifrost debug` to check it. With no user config or route file, Bifrost builds model pools in memory when the first prompt arrives. Even a partial user config with one setting blocks automatic pools. It does not probe models or write a file.
+On a fresh install, routing is on and physical selection is the default. A saved config or runtime preference can change the routing state. Use `/bifrost debug` to check it. With no user config or route file, Bifrost builds model pools in memory when the first prompt arrives. A nonempty partial user config blocks automatic pools, even if it has one setting. An empty `{}` config file does not. It does not probe models or write a file.
 
 Init is optional. Run `/bifrost init` inside Pi when you want to refresh the catalog and save or reconcile pools. It shows a short summary and asks once before saving. The summary does not show every model ID or strategy. Use the displayed save target. Pass `-f` or run `/bifrost probe` only when you want provider probes; usage or rate limits may apply.
 

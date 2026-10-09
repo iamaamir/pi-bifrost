@@ -2094,7 +2094,7 @@ function persistBootstrapConfig(
     log(ctx, "Cannot safely save Bifrost's in-memory model setup because a config source is invalid.", "error");
     return false;
   }
-  const userFiles = hasUserBootstrapFiles(process.cwd(), getAgentDir(), CONFIG_DIR_NAME);
+  const userFiles = hasUserBootstrapFiles(process.cwd(), getAgentDir(), CONFIG_DIR_NAME, join(state.extensionDir, "bifrost.json"));
   const stillFresh = sourceAtStart.configBytes === null && sourceAtStart.ownershipBytes === null
     && source.configBytes === null && source.ownershipBytes === null
     && sourceAtStart.source === source.source && state.bootstrapModelsInMemory

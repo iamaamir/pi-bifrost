@@ -55,9 +55,9 @@ flowchart TD
 
 ## Initialize
 
-On a fresh install, routing is on and physical model selection is the default. Bifrost reads Pi's available chat-model catalog in the background when your first prompt arrives. It builds model pools in memory if no user configuration exists. It does not probe models or write a file.
+On a fresh install, routing is on and physical model selection is the default. Bifrost reads Pi's available chat-model catalog in the background when your first prompt arrives. It builds model pools in memory when no user configuration exists or the config file contains only `{}`. It does not probe models or write a file.
 
-You can send a first prompt without running init. A saved config or runtime preference can change the routing state; use `/bifrost debug` to check it. Selecting `bifrost/auto` in Pi's model picker is a separate opt-in. A user Bifrost config or project route file blocks automatic pool setup, even if the config contains only one setting.
+You can send a first prompt without running init. A saved config or runtime preference can change the routing state; use `/bifrost debug` to check it. Selecting `bifrost/auto` in Pi's model picker is a separate opt-in. A nonempty user Bifrost config or project route file blocks automatic pool setup. Even one setting is enough. An empty `{}` configuration file does not block setup.
 
 To inspect the active pools and local status before sending a prompt, run `/bifrost inspect` or `/bifrost debug`. These commands do not classify or probe. Catalog availability does not confirm that a model is healthy.
 

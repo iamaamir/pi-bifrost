@@ -928,7 +928,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   }
 
   function bootstrapStillEligible(): boolean {
-    const userFiles = hasUserBootstrapFiles(process.cwd(), getAgentDir(), CONFIG_DIR_NAME);
+    const userFiles = hasUserBootstrapFiles(process.cwd(), getAgentDir(), CONFIG_DIR_NAME, join(extensionDir, "bifrost.json"));
     const runtimePreferencesChanged = hasBlockingRuntimePreferences(runtimeStateFile);
     return state.enabled && !state.pinned && configHasNoPools(state.config)
       && !validateConfig(state.config).some((issue) => issue.severity === "error")

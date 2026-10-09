@@ -109,7 +109,7 @@ describe("automatic first-run setup", () => {
     }), true);
   });
 
-  it("treats any existing user config or route file as intentional, even when it has no pools", () => {
+  it("ignores empty config objects but keeps meaningful, unsafe, and malformed files blocking", () => {
     const root = mkdtempSync(join(tmpdir(), "bifrost-auto-setup-"));
     const cwd = join(root, "project");
     const globalDir = join(root, "global");
@@ -118,6 +118,15 @@ describe("automatic first-run setup", () => {
     try {
       assert.deepEqual(hasUserBootstrapFiles(cwd, globalDir, ".pi"), { userConfig: false, routeFile: false });
       mkdirSync(join(cwd, ".pi"));
+      for (const path of [join(globalDir, "bifrost.json"), join(cwd, "bifrost.json"), join(cwd, ".pi", "bifrost.json")]) {
+        writeFileSync(path, "{}\n");
+      }
+      assert.deepEqual(hasUserBootstrapFiles(cwd, globalDir, ".pi"), { userConfig: false, routeFile: false });
+      rmSync(join(globalDir, "bifrost.json"));
+      rmSync(join(cwd, ".pi", "bifrost.json"));
+      writeFileSync(join(cwd, "bifrost.json"), JSON.stringify({ models: { quick: [] } }));
+      assert.deepEqual(hasUserBootstrapFiles(cwd, globalDir, ".pi"), { userConfig: true, routeFile: false });
+      rmSync(join(cwd, "bifrost.json"));
       writeFileSync(join(cwd, ".pi", "bifrost.json"), JSON.stringify({ models: {} }));
       assert.deepEqual(hasUserBootstrapFiles(cwd, globalDir, ".pi"), { userConfig: true, routeFile: false });
       rmSync(join(cwd, ".pi", "bifrost.json"));
@@ -126,9 +135,35 @@ describe("automatic first-run setup", () => {
       rmSync(join(cwd, ".pi", "bifrost-routes.json"));
       symlinkSync(join(root, "missing-config-target"), join(cwd, "bifrost.json"));
       assert.deepEqual(hasUserBootstrapFiles(cwd, globalDir, ".pi"), { userConfig: true, routeFile: false });
-      const extensionConfig = join(root, "extension-bifrost.json");
-      symlinkSync(join(root, "missing-extension-target"), extensionConfig);
+      rmSync(join(cwd, "bifrost.json"));
+      writeFileSync(join(cwd, "bifrost.json"), "{invalid");
+      assert.deepEqual(hasUserBootstrapFiles(cwd, globalDir, ".pi"), { userConfig: true, routeFile: false });
+      rmSync(join(cwd, "bifrost.json"));
+
+      const extensionConfig = join(cwd, "bifrost.json");
+      writeFileSync(extensionConfig, JSON.stringify({
+        enabled: true,
+        default: "general",
+        strategy: "first",
+        categoryStrategies: { quick: "random", general: "first", frontier: "first" },
+        models: { quick: [], general: [], frontier: [] },
+      }));
+      assert.equal(hasExplicitExtensionRoutingFile(extensionConfig), false);
+      assert.deepEqual(hasUserBootstrapFiles(cwd, globalDir, ".pi", extensionConfig), { userConfig: false, routeFile: false });
+      writeFileSync(extensionConfig, JSON.stringify({ enabled: true, models: { general: ["manual/model"] } }));
       assert.equal(hasExplicitExtensionRoutingFile(extensionConfig), true);
+      assert.deepEqual(hasUserBootstrapFiles(cwd, globalDir, ".pi", extensionConfig), { userConfig: true, routeFile: false });
+
+      const unsafeExtensionConfig = join(root, "extension-bifrost.json");
+      symlinkSync(join(root, "missing-extension-target"), unsafeExtensionConfig);
+      assert.equal(hasExplicitExtensionRoutingFile(unsafeExtensionConfig), true);
+      const safeTarget = join(root, "safe-target.json");
+      writeFileSync(safeTarget, "{}");
+      const safeLookingSymlink = join(cwd, "bifrost.json");
+      rmSync(safeLookingSymlink);
+      symlinkSync(safeTarget, safeLookingSymlink);
+      assert.deepEqual(hasUserBootstrapFiles(cwd, globalDir, ".pi", safeLookingSymlink), { userConfig: true, routeFile: false });
+      rmSync(safeLookingSymlink);
       const invalidExtensionConfig = join(root, "invalid-extension-bifrost.json");
       writeFileSync(invalidExtensionConfig, "{invalid");
       assert.equal(hasExplicitExtensionRoutingFile(invalidExtensionConfig), true);

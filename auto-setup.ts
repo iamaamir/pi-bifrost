@@ -1,6 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { lstatSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { DEFAULT_RULES } from "./config.ts";
 import { guessTier } from "./routing.ts";
 import { isVirtualModel } from "./virtual-model.ts";
@@ -83,7 +83,7 @@ export function hasBlockingRuntimePreferences(path: string): boolean {
   }
 }
 
-export function hasUserBootstrapFiles(cwd: string, globalAgentDir: string, configDirName: string): { userConfig: boolean; routeFile: boolean } {
+export function hasUserBootstrapFiles(cwd: string, globalAgentDir: string, configDirName: string, extensionConfigPath?: string): { userConfig: boolean; routeFile: boolean } {
   const configFiles = [
     join(globalAgentDir, "bifrost.json"),
     join(cwd, "bifrost.json"),
@@ -93,8 +93,21 @@ export function hasUserBootstrapFiles(cwd: string, globalAgentDir: string, confi
     join(cwd, "bifrost-routes.json"),
     join(cwd, configDirName, "bifrost-routes.json"),
   ];
+  const userConfig = configFiles.some((path) => {
+    if (!pathPresentOrUnsafe(path)) return false;
+    try {
+      const stat = lstatSync(path);
+      if (!stat.isFile() || stat.size > 65_536) return true;
+      const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || Object.getPrototypeOf(parsed) !== Object.prototype) return true;
+      if (extensionConfigPath && resolve(path) === resolve(extensionConfigPath) && !hasExplicitExtensionRoutingOverride(parsed)) return false;
+      return Object.keys(parsed).length > 0;
+    } catch {
+      return true;
+    }
+  });
   return {
-    userConfig: configFiles.some(pathPresentOrUnsafe),
+    userConfig,
     routeFile: routeFiles.some(pathPresentOrUnsafe),
   };
 }

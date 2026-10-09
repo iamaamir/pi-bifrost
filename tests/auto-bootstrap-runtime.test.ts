@@ -116,6 +116,21 @@ describe("automatic setup through registered Pi hooks", () => {
     } finally { harness.cleanup(); }
   });
 
+  it("still bootstraps when the global config is an empty object", async () => {
+    const harness = freshHarness();
+    try {
+      writeFileSync(join(process.env.PI_CODING_AGENT_DIR!, "bifrost.json"), "{}\n");
+      const result = await harness.handlers.get("input")!({
+        text: "quick do a small task",
+        source: "interactive",
+        streamingBehavior: "steer",
+      }, harness.ctx);
+      assert.deepEqual(result, { action: "transform", text: "do a small task" });
+      assert.equal(harness.selected(), "fixture/quick");
+      assert.match(harness.notices.join("\n"), /in-memory pools/);
+    } finally { harness.cleanup(); }
+  });
+
   it("lets direct Auto selection persist its own runtime mode while fresh setup is pending", async () => {
     const harness = freshHarness(true);
     try {
