@@ -410,19 +410,21 @@ def wait_for_model_attempts(port: int, before: dict[str, int], models: tuple[str
     raise TimeoutError(f"expected bounded fake-provider requests were not observed for {', '.join(models)}")
 
 
-def write_agent_fixture(agent_dir: Path, port: int) -> None:
+def write_agent_fixture(agent_dir: Path, port: int, model_inventory: Iterable[str] = ()) -> None:
     agent_dir.mkdir(parents=True, exist_ok=True)
+    models = [
+        {"id": "usage-exhausted", "reasoning": False},
+        {"id": "healthy", "reasoning": False},
+        {"id": "classifier", "reasoning": False},
+        *({"id": model_id, "reasoning": False} for model_id in model_inventory),
+    ]
     (agent_dir / "models.json").write_text(json.dumps({
         "providers": {
             "fake": {
                 "baseUrl": f"http://127.0.0.1:{port}/v1",
                 "api": "openai-completions",
                 "apiKey": "ui-fixture-only",
-                "models": [
-                    {"id": "usage-exhausted", "reasoning": False},
-                    {"id": "healthy", "reasoning": False},
-                    {"id": "classifier", "reasoning": False},
-                ],
+                "models": models,
             },
         },
     }) + "\n")
@@ -506,6 +508,8 @@ def capture(
     enabled: bool,
     actions: Iterable[tuple[float, str]] = (),
     config_override: dict[str, object] | None = None,
+    model_inventory: Iterable[str] = (),
+    reload_invalid_economics: bool = False,
 ) -> Path:
     OUT.mkdir(parents=True, exist_ok=True)
     log_path = OUT / f"{name}.ansi.log"
@@ -527,12 +531,12 @@ def capture(
     home = workspace / "isolated-home"
     agent_dir = home / ".pi" / "agent"
     assert FAKE_PORT is not None
-    write_agent_fixture(agent_dir, FAKE_PORT)
+    write_agent_fixture(agent_dir, FAKE_PORT, model_inventory)
 
     before = fake_stats(FAKE_PORT)
     previous_attempts = before.get("attempts", {})
     attempts_before = previous_attempts if isinstance(previous_attempts, dict) else {}
-    provider, model = ("bifrost", "auto") if name == "allowance-recovery" else ("fake", "healthy")
+    provider, model = ("bifrost", "auto") if name in ("allowance-recovery", "auto-large-pool") else ("fake", "healthy")
     proc, master = spawn_pi(log_path, workspace, agent_dir, provider, model)
     stop = threading.Event()
     t = threading.Thread(target=reader, args=(master, stop), daemon=True)
@@ -540,6 +544,17 @@ def capture(
 
     try:
         time.sleep(2.5)
+        if reload_invalid_economics:
+            fixture_config_path = workspace / "bifrost.json"
+            fixture_config = json.loads(fixture_config_path.read_text())
+            fixture_config["schemaVersion"] = 2
+            fixture_config["economics"] = {
+                "mode": "policy",
+                "scopes": {"selected": {"kind": "model", "model": "fake/healthy"}},
+                "sources": [{"id": "manual", "scopeRef": "selected", "authority": "declared"}],
+                "admission": [],
+            }
+            fixture_config_path.write_text(json.dumps(fixture_config, indent=2) + "\n")
         for delay, payload in actions:
             time.sleep(delay)
             send(master, payload)
@@ -563,6 +578,16 @@ def capture(
                 {key: int(value) for key, value in attempts_before.items() if isinstance(value, int)},
                 ("usage-exhausted", "healthy"),
             )
+        if name == "auto-large-pool":
+            wait_for_model_attempts(FAKE_PORT, attempts_before, ("pool-000",))
+            stats = fake_stats(FAKE_PORT)
+            attempts = stats.get("attempts", {})
+            if not isinstance(attempts, dict) or int(attempts.get("pool-000", 0)) <= int(attempts_before.get("pool-000", 0)):
+                raise AssertionError("large-pool Auto routing did not generate with the first configured model")
+            if any(int(attempts.get(f"pool-{index:03d}", 0)) > int(attempts_before.get(f"pool-{index:03d}", 0)) for index in range(1, 513)):
+                raise AssertionError("large-pool Auto routing generated with a model other than the configured first model")
+        if name == "reload-invalid-economics":
+            wait_for_model_attempts(FAKE_PORT, attempts_before, ("healthy",))
 
         time.sleep(2.0)
         raw = log_path.read_text(errors="ignore") if log_path.exists() else ""
@@ -666,13 +691,36 @@ def main() -> int:
             }},
         ),
         ("pinned", True, [(1.0, "\x10")]),
+        (
+            "auto-large-pool",
+            True,
+            [(1.0, "route through the large model pool\r")],
+            {
+                "strategy": "first",
+                "categoryStrategies": {"general": "first"},
+                "classifier": {"enabled": False},
+                "models": {"general": [f"fake/pool-{index:03d}" for index in range(513)]},
+                "debug": {"enabled": True},
+            },
+            [f"pool-{index:03d}" for index in range(513)],
+        ),
+        (
+            "reload-invalid-economics",
+            True,
+            [(0.5, "/bifrost reload\r"), (0.5, "hello after rejected reload\r")],
+            {"classifier": {"enabled": False}, "debug": {"enabled": True}},
+            [],
+            True,
+        ),
     ]
         results = []
         for capture_spec in captures:
             name, enabled, actions = capture_spec[:3]
             config_override = capture_spec[3] if len(capture_spec) > 3 else None
+            model_inventory = capture_spec[4] if len(capture_spec) > 4 else []
+            reload_invalid_economics = capture_spec[5] if len(capture_spec) > 5 else False
             print(f"[ui-smoke] capturing {name}…")
-            results.append(capture(name, enabled, actions, config_override))
+            results.append(capture(name, enabled, actions, config_override, model_inventory, reload_invalid_economics))
             if name == "preview-trace":
                 trace_text = (OUT / "preview-trace.txt").read_text(errors="ignore")
                 if "route trace v1" not in trace_text:
@@ -705,6 +753,18 @@ def main() -> int:
                 strict_text = (OUT / "strict-no-route.txt").read_text(errors="ignore")
                 if "restricted keep this text" not in strict_text or "turn was not sent" not in strict_text:
                     raise AssertionError("strict no-route did not show the rejection and restore the typed prompt")
+            if name == "auto-large-pool":
+                large_pool_text = (OUT / "auto-large-pool.txt").read_text(errors="ignore").lower()
+                if "(bifrost) auto" not in large_pool_text:
+                    raise AssertionError("large-pool Auto routing did not restore the Auto status in the footer")
+            if name == "reload-invalid-economics":
+                reload_text = " ".join((OUT / "reload-invalid-economics.txt").read_text(errors="ignore").split())
+                prefix = "Bifrost config reload rejected:"
+                body = "The configured economic policy is invalid or unsupported."
+                if reload_text.count(prefix) != 1 or reload_text.count(body) != 1:
+                    raise AssertionError("invalid economics reload should report the rejection once in the current UI")
+                if "hello after rejected reload" not in reload_text or "healthy" not in reload_text:
+                    raise AssertionError("last-good routing config did not remain active after the rejected reload")
         print("[ui-smoke] done")
         for p in results:
             print(p)
