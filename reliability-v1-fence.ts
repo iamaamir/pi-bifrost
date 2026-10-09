@@ -7,6 +7,7 @@ const MAX_SOURCE_BYTES = 16 * 1024 * 1024;
 const MAX_LOCK_WAIT_MS = 30_000;
 const MAX_LOCK_POLL_MS = 250;
 const OWNER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DIRECTORY_SYNC_UNSUPPORTED_CODES = new Set(["EBADF", "EISDIR", "EINVAL", "ENOTSUP", "EOPNOTSUPP"]);
 
 export type ReliabilitySourceFenceErrorCode = "contended" | "timeout" | "unsafe_source" | "source_changed" | "owner_lost" | "lock_create_failed";
 
@@ -230,9 +231,24 @@ function syncDirectory(path: string): void {
   try {
     fd = fs.openSync(dirname(path), constants.O_RDONLY);
     fs.fsyncSync(fd);
+  } catch (error) {
+    reportDirectorySyncFailure(error);
   } finally {
-    if (fd !== undefined) fs.closeSync(fd);
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); }
+      catch (error) { reportDirectorySyncFailure(error); }
+    }
   }
+}
+
+function reportDirectorySyncFailure(error: unknown): void {
+  const code = errorCode(error);
+  if (DIRECTORY_SYNC_UNSUPPORTED_CODES.has(String(code ?? ""))) return;
+  if (process.platform === "win32" && code === "EPERM") return;
+  process.emitWarning(
+    "Bifrost: reliability source lock was created, but its directory could not be synced",
+    { code: "BIFROST_RELIABILITY_DIRSYNC" },
+  );
 }
 
 function errorCode(error: unknown): unknown {

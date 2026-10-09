@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import fsDefault from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -45,6 +47,80 @@ function migrationError(promise: Promise<unknown>, code: string): Promise<void> 
 }
 
 describe("reliability v1 migration foundation", () => {
+  it("persists v1 state when directory sync is unsupported but fails closed on lock-file fsync errors", () => {
+    const directory = tempDirectory();
+    const statePath = join(directory, "reliability-v1.json");
+    const lockPath = reliabilitySourceFencePath(statePath);
+    const syncDirectoryPath = join(directory, "");
+    const state: ReliabilityState = { version: 1, models: { "provider/model": { failures: [123] } } };
+    const faultCases = ["open", "fsync", "close"] as const;
+
+    for (const fault of faultCases) {
+      const originalOpen = fsDefault.openSync;
+      const originalFsync = fsDefault.fsyncSync;
+      const originalClose = fsDefault.closeSync;
+      try {
+        if (fault === "open") {
+          fsDefault.openSync = ((path: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
+            if (path === syncDirectoryPath && flags === fs.constants.O_RDONLY) {
+              const error = Object.assign(new Error("injected directory open failure"), { code: "EINVAL" });
+              throw error;
+            }
+            return originalOpen(path, flags, mode);
+          }) as typeof fsDefault.openSync;
+        }
+        if (fault === "fsync") {
+          fsDefault.fsyncSync = ((fd: number) => {
+            if (fsDefault.fstatSync(fd).isDirectory()) {
+              const error = Object.assign(new Error("injected directory fsync failure"), { code: "EINVAL" });
+              throw error;
+            }
+            return originalFsync(fd);
+          }) as typeof fsDefault.fsyncSync;
+        }
+        if (fault === "close") {
+          fsDefault.closeSync = ((fd: number) => {
+            const isDirectory = fsDefault.fstatSync(fd).isDirectory();
+            const result = originalClose(fd);
+            if (isDirectory) {
+              const error = Object.assign(new Error("injected directory close failure"), { code: "EINVAL" });
+              throw error;
+            }
+            return result;
+          }) as typeof fsDefault.closeSync;
+        }
+        syncBuiltinESMExports();
+        assert.equal(saveReliability(statePath, state), true, `${fault} failure must not block v1 persistence`);
+      } finally {
+        fsDefault.openSync = originalOpen;
+        fsDefault.fsyncSync = originalFsync;
+        fsDefault.closeSync = originalClose;
+        syncBuiltinESMExports();
+      }
+      assert.equal(fs.existsSync(lockPath), false, `${fault} failure must not leak the source lock`);
+      assert.deepEqual(JSON.parse(fs.readFileSync(statePath, "utf8")), state);
+      fs.unlinkSync(statePath);
+    }
+
+    const originalFsync = fsDefault.fsyncSync;
+    try {
+      fsDefault.fsyncSync = ((fd: number) => {
+        if (fsDefault.fstatSync(fd).isFile()) {
+          const error = Object.assign(new Error("injected lock-file fsync failure"), { code: "EIO" });
+          throw error;
+        }
+        return originalFsync(fd);
+      }) as typeof fsDefault.fsyncSync;
+      syncBuiltinESMExports();
+      assert.equal(saveReliability(statePath, state), false, "failure to sync lock-file contents must fail closed");
+    } finally {
+      fsDefault.fsyncSync = originalFsync;
+      syncBuiltinESMExports();
+    }
+    assert.equal(fs.existsSync(statePath), false, "failed lock creation must not write reliability state");
+    assert.equal(fs.existsSync(lockPath), false, "failed lock creation must remove only its owned lock");
+  });
+
   it("converts model-only health facts and drops raw text and unowned trial flags", () => {
     const state = convertReliabilityV1Snapshot(v1Snapshot(), config);
     const record = state.scopes[modelScopeKey("provider/model")];
