@@ -42,6 +42,17 @@ Restart Pi if the extension is not loaded in the current session.
 - **Strategy:** rule that chooses one healthy model from a tier pool.
 - **Classifier:** optional backend that judges the tier. It never chooses the exact provider model.
 
+For a tier-based route, Bifrost follows these steps:
+
+```mermaid
+flowchart TD
+    A[Prompt] --> B[Resolve a tier]
+    B --> C[Load its configured model pool]
+    C --> D[Check which models can be used]
+    D --> E[Choose one allowed model]
+    E --> F[Pi sends the prompt]
+```
+
 ## Initialize
 
 On a fresh install, routing is on and physical model selection is the default. Bifrost reads Pi's available chat-model catalog in the background when your first prompt arrives. It builds model pools in memory if no user configuration exists. It does not probe models or write a file.
