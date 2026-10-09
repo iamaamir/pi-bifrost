@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canBootstrapModels, buildBootstrapPools, hasBlockingRuntimePreferences, hasExplicitExtensionRoutingFile, hasExplicitExtensionRoutingOverride, hasUserBootstrapFiles, pathPresentOrUnsafe } from "../auto-setup.ts";
 import { makeModel } from "./helpers.ts";
+import { DEFAULT_RULES } from "../config.ts";
 
 describe("automatic first-run setup", () => {
   it("only starts when no user config, route file, runtime preferences, or extension routing override exists", () => {
@@ -89,6 +90,23 @@ describe("automatic first-run setup", () => {
     assert.equal(hasExplicitExtensionRoutingOverride({ enabled: true, categoryStrategies: "bad" }), true);
     assert.equal(hasExplicitExtensionRoutingOverride({ enabled: true, models: { general: [""] } }), true);
     assert.equal(hasExplicitExtensionRoutingOverride({ enabled: true, models: { other: [] } }), true);
+  });
+
+  it("compares shipped strategies and rules structurally while preserving rule order", () => {
+    const reorderedDefaults = {
+      enabled: true,
+      categoryStrategies: { frontier: "first", general: "first", quick: "random" },
+      rules: DEFAULT_RULES.map(({ pattern, model }) => ({ model, pattern })),
+    };
+    assert.equal(hasExplicitExtensionRoutingOverride(reorderedDefaults), false);
+    assert.equal(hasExplicitExtensionRoutingOverride({
+      ...reorderedDefaults,
+      categoryStrategies: { ...reorderedDefaults.categoryStrategies, quick: "first" },
+    }), true);
+    assert.equal(hasExplicitExtensionRoutingOverride({
+      ...reorderedDefaults,
+      rules: [...reorderedDefaults.rules].reverse(),
+    }), true);
   });
 
   it("treats any existing user config or route file as intentional, even when it has no pools", () => {

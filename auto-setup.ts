@@ -21,6 +21,20 @@ export function canBootstrapModels(facts: AutoBootstrapFacts): boolean {
   return !facts.userConfig && !facts.routeFile && !facts.runtimePreferences && !facts.extensionRoutingOverride;
 }
 
+function sameJsonValue(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return Array.isArray(left) && Array.isArray(right) && left.length === right.length
+      && left.every((entry, index) => sameJsonValue(entry, right[index]));
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const keys = Object.keys(leftRecord);
+  return keys.length === Object.keys(rightRecord).length
+    && keys.every((key) => Object.hasOwn(rightRecord, key) && sameJsonValue(leftRecord[key], rightRecord[key]));
+}
+
 export function hasExplicitExtensionRoutingOverride(config: unknown): boolean {
   if (!config || typeof config !== "object" || Array.isArray(config)) return true;
   const value = config as Record<string, unknown>;
@@ -43,8 +57,8 @@ export function hasExplicitExtensionRoutingOverride(config: unknown): boolean {
   const strategies = value.categoryStrategies;
   if (strategies !== undefined && (!strategies || typeof strategies !== "object" || Array.isArray(strategies)
     || Object.values(strategies).some((strategy) => typeof strategy !== "string")
-    || JSON.stringify(strategies) !== JSON.stringify({ quick: "random", general: "first", frontier: "first" }))) return true;
-  return value.rules !== undefined && JSON.stringify(value.rules) !== JSON.stringify(DEFAULT_RULES);
+    || !sameJsonValue(strategies, { quick: "random", general: "first", frontier: "first" }))) return true;
+  return value.rules !== undefined && !sameJsonValue(value.rules, DEFAULT_RULES);
 }
 
 export function pathPresentOrUnsafe(path: string): boolean {
