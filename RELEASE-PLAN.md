@@ -2,7 +2,11 @@
 
 Status: implementation authorized by the user on 7 October 2026. Scope is PRD.md and IMPLEMENTATION.md with image support excluded. This ledger records actual acceptance evidence; planned milestones are not completed features.
 
-## Current follow-up status (9 October)
+## Current runtime checkpoint (9 October)
+
+The primary independently passed 893 unit tests and typecheck. The implementation owner passed 58 pinned-Pi fake-provider integrations and six reliability UI scenarios on `3534ba6`. The 19 general UI captures were run on the automatic-setup candidate `eefc306`, before the later runtime review fixes. Axiom approved the final runtime code review with one report-only P2 diagnostic gap. These results describe runtime checkpoints, not this documentation-only change.
+
+## Earlier follow-up snapshots (historical)
 
 PR #26 review follow-up: verified all eleven CodeRabbit comments; fixed eight runtime defects and reconciled the retry documentation. The reported event dates remain 9 October in the user timezone; the older status heading was corrected. Each runtime fix has a failing-before/passing-after regression. Root independently passed 854 tests, typecheck, and 57 pinned-Pi fake-provider integrations. The implementation owner passed 16 UI captures and six reliability UI scenarios. Root visually reviewed the new 513-model Auto route and invalid-economic-reload captures; the reload assertion detects a duplicated error body even across terminal line wrapping. Axiom approved the frozen fixes with no issues found. Evidence: `/private/tmp/bifrost-pr26-root-unit-final.log`, `/private/tmp/bifrost-pr26-root-typecheck-final.log`, `/private/tmp/bifrost-pr26-root-integration-final.log`, the per-fix red/green logs under `/private/tmp/bifrost-pr26-*.log`, and `screenshots/ui-smoke/auto-large-pool.png` / `reload-invalid-economics.png`.
 
@@ -24,7 +28,7 @@ Reliability policy for this release: v1 remains the default and the migration pa
 
 The primary agent owns architecture, scope, source review, acceptance and release coordination. The affordable implementation subagent (`gpt-6-luna`) writes code and tests. Changes remain small and sequential in the shared checkout. No implementation is accepted solely on the writer's report: review the diff and run relevant checks. No image routing, arbitrary prompt replay, orchestration, hidden provider preferences or weakened manual control.
 
-Release branch: `feat/routing-reliability`. Accepted checkpoints are recorded below; the latest runtime checkpoint is `4ffaf97`, with documentation consolidation in `f39b2b2`. Branch publication and PR creation were authorized on 9 October. Package publishing and version/tag changes remain pending. Release candidate/version selection follows final accepted scope and verification. Never describe quota snapshots as automatic live tracking without a verified adapter.
+Release branch: `feat/routing-reliability`. Accepted checkpoints are recorded below; the latest runtime checkpoint is `3534ba6`, with documentation consolidation in `f39b2b2`. Branch publication and PR creation were authorized on 9 October. Package publishing and version/tag changes remain pending. Release candidate/version selection follows final accepted scope and verification. Never describe quota snapshots as automatic live tracking without a verified adapter.
 
 ## Prior candidate acceptance (historical snapshot at HEAD `0fa0f79`)
 

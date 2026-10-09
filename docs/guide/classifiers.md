@@ -2,9 +2,9 @@
 
 [Guide index](index.md) · [Getting started](getting-started.md) · [Troubleshooting](troubleshooting.md)
 
-A classifier is optional. Regex rules and the configured default tier can route without another model call.
+A classifier is optional and enabled by default. Regex rules and the configured default tier can route without an extra classification call. On a local-cache miss, the active classifier can receive the current prompt.
 
-`/bifrost init` detects a classifier backend. If the prompt backend needs a model, Bifrost selects an available chat model as the default. Run `/bifrost classifier` when you want to change the backend or model. Run `/bifrost classifier off` or set `classifier.enabled` to `false` for rules/default-only routing.
+`/bifrost init` detects a classifier backend. If the prompt backend needs a model, Bifrost selects an available chat model as the default. Run `/bifrost classifier` when you want to change the backend or model. Run `/bifrost classifier off` to disable the extra call without editing a Bifrost JSON file, or set `classifier.enabled` to `false` in config for rules/default-only routing.
 
 Classifiers resolve **tiers**, not exact provider models. Model pools, reliability filtering, and strategies remain Bifrost policy.
 
@@ -175,4 +175,4 @@ Direct-classifier metrics are content-free and local. With global debug enabled,
 
 Detailed traces contain bounded operational metadata. They do not persist raw prompts, request/response bodies, provider payloads, credentials, authorization headers, or external error text.
 
-Bifrost's separate fuzzy classification cache may persist normalized prompt words. Disable that cache independently for sensitive work.
+Bifrost's separate classification cache may store normalized prompt words and selected tiers. Treat those terms as potentially sensitive. Set `cache.enabled` to `false` to disable cache use. This does not remove saved entries; `/bifrost cache clear` empties them. Disabling the classifier does not clear the cache. The selected generation provider still receives the prompt.

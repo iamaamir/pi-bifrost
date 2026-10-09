@@ -22,7 +22,13 @@ Requires Pi 1.0.1 or newer and at least one authenticated provider model availab
 pi install npm:pi-bifrost
 ```
 
-Inside Pi, run `/bifrost init`. Init reuses recent probe results or sends small requests to available models, which can incur usage or rate limits. It proposes a configuration and writes it after confirmation. Then run `/bifrost classifier` to select a classifier backend, or `/bifrost classifier off` to use rules and the default tier without a classifier call.
+On a fresh install, routing is on and physical selection is the default. A saved config or runtime preference can change the routing state. Use `/bifrost debug` to check it. With no user config or route file, Bifrost builds model pools in memory when the first prompt arrives. Even a partial user config with one setting blocks automatic pools. It does not probe models or write a file.
+
+Init is optional. Run `/bifrost init` inside Pi when you want to refresh the catalog and save or reconcile pools. It shows a short summary and asks once before saving. The summary does not show every model ID or strategy. Use the displayed save target. Pass `-f` or run `/bifrost probe` only when you want provider probes; usage or rate limits may apply.
+
+Selecting `bifrost/auto` in Pi's model picker is a separate opt-in. Classification is enabled by default, and the active classifier can receive the current prompt on a cache miss. Run `/bifrost classifier off` to use rules and the default tier without the extra classification call. This command works without a Bifrost JSON config file.
+
+The separate classification cache can store normalized prompt terms. Disabling cache use does not clear saved entries. `/bifrost cache clear` empties them. If no config exists and you want cache use off, run `/bifrost init` without `-f` to save starter pools. Add `cache.enabled: false` to that config, keep its pools, and run `/bifrost reload`. Neither setting makes generation local. The selected generation provider still receives the prompt.
 
 ## Route
 

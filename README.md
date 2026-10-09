@@ -23,7 +23,9 @@ Requires Pi `1.0.1` or newer and an authenticated provider model in Pi.
 pi install npm:pi-bifrost
 ```
 
-On a fresh install, Bifrost reads Pi's available model catalog in the background when the first prompt arrives. It builds in-memory model pools when no user configuration exists. This does not send a model prompt, and you do not need to run init.
+On a fresh install, routing is on and physical model selection is the default. Bifrost reads Pi's available model catalog in the background when the first prompt arrives. It builds in-memory model pools when no user configuration exists. This does not send a model prompt, and you do not need to run init.
+
+If a user Bifrost config or project route file already exists, it blocks this automatic pool setup, even when the config contains only one setting. Use `/bifrost inspect` or `/bifrost debug` to review the active pools and status without classifying a prompt. Catalog availability is not a health check. A saved config or runtime preference can change the default routing state. Selecting `bifrost/auto` is a separate opt-in.
 
 Run this command when you want to refresh the model list or save it to a configuration file:
 
@@ -31,9 +33,9 @@ Run this command when you want to refresh the model list or save it to a configu
 /bifrost init
 ```
 
-`/bifrost init` refreshes Pi's model catalog and proposes model pools. It shows a short summary and asks once before it saves. It does not send model prompts. Pass `-f` only when you want to probe models. Probes can use provider credits or hit rate limits. Read the [init steps and probe limits](docs/guide/getting-started.md) before you run `-f`.
+`/bifrost init` refreshes Pi's model catalog, shows a short summary, and asks once before saving. The summary does not show every model ID or strategy. After saving, inspect or edit the config before generation as needed. Init does not send model prompts. Pass `-f` only when you want to probe models. Probes can use provider credits or hit rate limits.
 
-Bifrost detects a classifier backend and chooses an available chat model when prompt classification needs one. Run `/bifrost classifier` only when you want to change that choice. Run `/bifrost classifier off` to use rules and the default tier without a classifier call.
+Classification is enabled by default. Run `/bifrost classifier off` to use rules and the default tier without the extra classification call. The command works without a Bifrost JSON config file. Read the [classifier guide](docs/guide/classifiers.md) to choose a backend or model.
 
 ## Routing modes
 
@@ -93,19 +95,17 @@ Use these commands in Pi:
 | `/bifrost unpin` | Resume per-message routing. |
 | `/bifrost off` and `/bifrost on` | Stop or resume routing. |
 | `/bifrost classifier off` | Route with rules and the default tier. |
-| `/bifrost cache stats` and `/bifrost cache clear` | Inspect or clear Bifrost's local classification cache. |
+| `/bifrost cache stats` and `/bifrost cache clear` | Inspect or empty Bifrost's saved classification-cache entries. |
 
 See [all commands](docs/guide/commands.md) and [routing controls](docs/guide/routing-controls.md).
 
 ## Privacy and reliability
 
-An enabled classifier receives the current prompt and tier criteria. The local classification cache stores normalized prompt terms and selected tiers. Treat these terms as potentially sensitive. Bifrost does not cache model answers. You can disable the cache in `.pi/bifrost.json`:
+An enabled classifier can receive the current prompt and tier criteria. The local classification cache stores normalized prompt terms and selected tiers. Treat these terms as potentially sensitive. Bifrost does not cache model answers.
 
-```json
-{
-  "cache": { "enabled": false }
-}
-```
+To disable cache use, add `"cache": { "enabled": false }` inside your existing config. Keep its model pools and other settings. This leaves saved entries in place; `/bifrost cache clear` empties them. If you have no config, run `/bifrost init` to save starter pools, inspect or edit the saved config, then add this setting.
+
+`/bifrost classifier off` disables the extra classification call and works without a Bifrost JSON config file. It does not make generation local. The selected generation provider still receives the prompt.
 
 Reliability state persists locally. Circuits affect model eligibility on later turns. Auto allowance recovery follows the limited rule above. Circuits do not enforce provider-wide quota. See [reliability and local cache](docs/guide/reliability-and-cache.md).
 

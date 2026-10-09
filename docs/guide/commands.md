@@ -5,7 +5,7 @@
 | Command | Behavior |
 |---------|----------|
 | `/bifrost` | Open dashboard and quick actions |
-| `/bifrost init` | Refresh Pi's model catalog and save detected model pools after one confirmation; pass `-f` to run paid model probes |
+| `/bifrost init` | Refresh Pi's model catalog, show a short summary, and ask once before saving or reconciling model pools; pass `-f` to run provider probes |
 | `/bifrost probe` | Send a tiny request to each registry model and report availability; usage may apply |
 | `/bifrost preview <prompt>` | Show the route without generating; leading `--json` keeps the existing report, while leading `--trace` adds a content-free decision summary; an enabled classifier may receive the prompt, and a tier name in the prompt is not applied |
 | `/bifrost on` | Enable routing policy |
@@ -14,11 +14,11 @@
 | `/bifrost unpin` | Resume per-message routing |
 | `/bifrost reload` | Reload merged configuration |
 | `/bifrost validate` | Check the active loaded configuration and local registry references; run `/bifrost reload` after editing config files |
-| `/bifrost inspect` | Show configured model availability, auth presence, and local reliability circuits without routing or probing |
+| `/bifrost inspect` | Show configured model availability, auth presence, and local reliability circuits without routing, classifying, or probing |
 | `/bifrost config reconcile` | Preview exact generated model membership for one selected config source, tier, and provider; apply only with the reviewed digest |
 | `/bifrost reliability migrate` | Prepare migrated reliability state; see the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state) |
 | `/bifrost cache stats` | Inspect local classification cache |
-| `/bifrost cache clear` | Clear local classification cache |
+| `/bifrost cache clear` | Empty saved local classification-cache entries |
 | `/bifrost classifier` | Choose `prompt`, `typesafe`, or `pi-native`. The Pi-native picker can select a catalog model or use the default |
 | `/bifrost classifier on` | Enable configured classifier |
 | `/bifrost classifier off` | Disable classifier while retaining routing |
@@ -29,6 +29,10 @@
 | `/bifrost benchmark <prompt>` | Classify a prompt and show the outcome without generating |
 
 `validate` and `inspect` accept a leading `--json` flag. Both commands are read-only: they do not classify, refresh the registry, probe providers, or write reliability state. `inspect` shows local registry/auth/circuit snapshots and the effective affinity mode: Auto defaults to within-tier retention, while physical routing defaults off. It reports the mode source and, when active, the proven Auto anchor's model and age without branch or prompt data. Its “Bifrost last registry refresh age” is the time since this extension last refreshed Pi's registry, not a freshness claim about provider data. JSON mode emits a version-1 `[bifrost-json] ` report line to stderr. The validation report names its source as `loaded-effective-config`; it does not read un-reloaded disk edits.
+
+On a fresh install with no user config or route file, Bifrost can build model pools in memory when the first prompt arrives. Init is optional. Its summary does not show every model ID, strategy, or default tier. After saving, inspect the pools and status. Edit the saved config before generation if needed.
+
+Init displays its save target. It updates an existing project `.pi/bifrost.json`, workspace `bifrost.json`, or user `~/.pi/agent/bifrost.json` in that order. When none exists, it creates project `.pi/bifrost.json`.
 
 For safe migration, follow the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state).
 

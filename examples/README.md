@@ -13,14 +13,16 @@ After any edit, run `/bifrost reload` in Pi.
 
 ## Reliability: circuit breaker for flaky models
 
-Adds model health tracking and automatic fallback. Models with repeated failures are skipped temporarily (circuit open). Probes close circuits on success. Add to `.pi/bifrost.json`:
+Adds model health tracking and automatic fallback. Models with repeated failures are skipped temporarily (circuit open). Probes close circuits on success. Merge this valid JSON object into your existing `.pi/bifrost.json`. Keep its current `default` and `models` values. Do not replace the full config with this fragment.
 
 ```json
-"reliability": {
-  "enabled": true,
-  "failureThreshold": 3,
-  "windowMinutes": 5,
-  "cooldownMinutes": 60
+{
+  "reliability": {
+    "enabled": true,
+    "failureThreshold": 3,
+    "windowMinutes": 5,
+    "cooldownMinutes": 60
+  }
 }
 ```
 
@@ -94,12 +96,14 @@ The command shows the source alias, period, and freshness without printing quota
 
 ### `rules-only-local.json`
 
-Use when prompts must stay local or routing should never make an extra classifier call.
+Use when routing should follow explicit patterns and skip the extra classifier call.
 
 - Disables the LLM classifier.
 - Uses ordered regex rules.
 - Routes complex work to a local frontier tier.
 - Falls back to `economical` when no rule matches.
+
+This setting disables the extra classification call. It does not change which provider receives the generation prompt.
 
 Try:
 
@@ -108,7 +112,7 @@ Try:
 /bifrost preview fix this race condition
 ```
 
-Tradeoff: deterministic and private, but rules only understand patterns you define.
+Tradeoff: routing follows only the patterns you define.
 
 ### `economical-frontier.json`
 

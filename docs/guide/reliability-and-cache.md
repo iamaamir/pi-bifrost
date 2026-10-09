@@ -87,7 +87,7 @@ Entries contain:
 - hit count;
 - classifier-semantics fingerprint.
 
-Normalized prompt text can still contain sensitive terms. Disable caching for sensitive projects in `.pi/bifrost.json`:
+Normalized prompt text can still contain sensitive terms. Add this setting to your existing `.pi/bifrost.json` to disable classification-cache use:
 
 ```json
 {
@@ -97,12 +97,16 @@ Normalized prompt text can still contain sensitive terms. Disable caching for se
 }
 ```
 
+Keep the model pools and other settings in that file. Disabling cache use does not remove saved entries. Run `/bifrost cache clear` to empty them. If you have no config, save starter pools with `/bifrost init` before you add this setting.
+
 Inspect or clear it:
 
 ```text
 /bifrost cache stats
 /bifrost cache clear
 ```
+
+`cache clear` empties the stored entries. It does not delete the cache file.
 
 Bifrost does not cache assistant responses, tool output, source files, or failed prompts for replay.
 

@@ -137,7 +137,7 @@
             <section id="classifier" data-demo-scene="classifier" aria-labelledby="classifier-title">
               <p class="eyebrow">03 / Classifier choice</p>
               <h2 id="classifier-title">Choose who decides the group.</h2>
-              <p>Run <code>/bifrost classifier</code> to choose a Pi chat model, TypeSafe/Jev, or Pi's native classifier API. Pi-native appears only on hosts that support classification. Run <code>/bifrost classifier off</code> to use rules and the default group without a classifier.</p>
+              <p>Classification is enabled by default. Run <code>/bifrost classifier</code> to choose a Pi chat model, TypeSafe/Jev, or Pi's native classifier API. On a local-cache miss, the active classifier can receive the current prompt. Pi-native appears only on hosts that support classification. Run <code>/bifrost classifier off</code> to use rules and the default group without the extra classification call.</p>
               <p>A classifier chooses a group such as quick or frontier. It does not choose your provider model. Your pools, reliability circuit, and selection strategy make that decision.</p>
               <p class="story-fact">An omitted backend can be detected from credentials; an explicit backend overrides detection. Classifier requests can incur usage. <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/classifiers.md">Compare backends</a>.</p>
             </section>
@@ -146,7 +146,7 @@
               <h2>Everyday tools, each with its own terminal scene.</h2>
               <p>Scroll through them, or jump to one. Nothing is tucked away.</p>
               <nav class="story-index" aria-label="More Bifrost capabilities">
-                <a href="#physical">Physical routing</a><a href="#setup">Probe-first setup</a>
+                <a href="#physical">Physical routing</a><a href="#setup">Optional pool setup</a>
                 <a href="#rules">Explicit routes</a><a href="#strategies">Selection strategies</a>
                 <a href="#preview">Preview</a><a href="#control">Pin and off</a>
                 <a href="#cache">Local cache</a><a href="#debug">Diagnostics</a>
@@ -154,12 +154,12 @@
             </div>
             <section id="physical" class="story-secondary" data-demo-scene="physical" aria-labelledby="physical-title">
               <p class="eyebrow">04 / Default route</p><h2 id="physical-title">Pi switches models before the prompt.</h2>
-              <p>After <code>/bifrost init</code>, send a normal message with routing on and no pin. Bifrost selects a tier, skips unhealthy candidates, and sets Pi's active provider/model before generation. You do not need to select Auto.</p>
+              <p>On a fresh install, routing is on by default. When no user config or route file exists, Bifrost builds in-memory pools from Pi's available catalog on the first prompt. Even a partial config with one setting blocks automatic pools. Physical selection is the default; <code>bifrost/auto</code> is opt-in. Use <code>/bifrost inspect</code> or <code>/bifrost debug</code> to review pools and status without classification or probes.</p>
               <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/routing-controls.md#what-happens-when-you-send-a-message">See the default route</a>.</p>
             </section>
             <section id="setup" class="story-secondary" data-demo-scene="setup" aria-labelledby="setup-title">
-              <p class="eyebrow">05 / Setup</p><h2 id="setup-title">Probe, propose, then review.</h2>
-              <p>Run <code>/bifrost init</code> inside Pi. It reuses recent probe results or tests available models, then proposes groups. Review the model IDs before you confirm writing <code>.pi/bifrost.json</code>, especially if the file already exists. Probes can incur provider usage or rate limits.</p>
+              <p class="eyebrow">05 / Setup</p><h2 id="setup-title">Save model pools when you need a file.</h2>
+              <p>Init is optional. Run <code>/bifrost init</code> inside Pi to refresh the catalog and save or reconcile model pools. It shows a short summary and asks once before saving, but does not show every model ID or strategy. Inspect and edit the saved config before generation when needed. Pass <code>-f</code> to probe models, which can incur provider usage or rate limits.</p>
               <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/getting-started.md#initialize">Read the init steps and probe limits</a>.</p>
             </section>
             <section id="rules" class="story-secondary" data-demo-scene="rules" aria-labelledby="rules-title">
@@ -200,7 +200,7 @@
             </section>
             <section id="cache" class="story-secondary" data-demo-scene="cache" aria-labelledby="cache-title">
               <p class="eyebrow">10 / Local classification cache</p><h2 id="cache-title">Reuse a tier decision, not an answer.</h2>
-              <p>Run <code>/bifrost cache stats</code> to inspect stored tier decisions or <code>/bifrost cache clear</code> to remove them. To disable this cache, set <code>"cache": { "enabled": false }</code> in <code>.pi/bifrost.json</code> and run <code>/bifrost reload</code>. Normalized prompt words can contain sensitive text. Bifrost never caches generated answers.</p>
+              <p>Run <code>/bifrost cache stats</code> to inspect stored tier decisions or <code>/bifrost cache clear</code> to empty them. Set <code>cache.enabled</code> to <code>false</code> in your existing config, then run <code>/bifrost reload</code> to disable classification-cache use. If no config exists, save starter pools with <code>/bifrost init</code> first and keep those pools when editing. This does not clear saved entries. Normalized prompt words can contain sensitive text. Bifrost never caches generated answers.</p>
               <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/reliability-and-cache.md#local-classification-cache">Read cache storage and privacy details</a>.</p>
             </section>
             <section id="debug" class="story-secondary" data-demo-scene="debug" aria-labelledby="debug-title">
@@ -324,6 +324,7 @@
               <div>
                 <h3>Install Bifrost</h3>
                 <p>Run this in your shell, then open Pi.</p>
+                <p>On a fresh install with no user config or route file, Bifrost builds pools on the first prompt without init.</p>
                 <div class="command">
                   <code>pi install npm:pi-bifrost</code>
                   <button class="copy-button" type="button" data-copy="pi install npm:pi-bifrost">Copy<span class="sr-only"> install command</span></button>
@@ -333,8 +334,8 @@
             <li>
               <span>02</span>
               <div>
-                <h3>Set up your model groups</h3>
-                <p>Run this inside Pi. It probes available models, which can incur provider usage or rate limits. Review the proposal before confirming it.</p>
+                <h3>Save model groups (optional)</h3>
+                <p>This step is optional. Run it inside Pi to refresh the catalog and save model pools. It does not probe models by default. Pass <code>-f</code> to probe, which can incur provider usage or rate limits. Review the summary before confirming it.</p>
                 <div class="command">
                   <code>/bifrost init</code>
                   <button class="copy-button" type="button" data-copy="/bifrost init">Copy<span class="sr-only"> initialization command</span></button>
@@ -343,7 +344,7 @@
             </li>
           </ol>
 
-          <p class="install-after">Two independent choices: <code>/bifrost classifier</code> changes how Bifrost picks a tier; selecting <code>bifrost/auto</code> in Pi's model picker changes how Pi dispatches the chosen model. Use either, both, or neither. Rules work without a classifier.</p>
+          <p class="install-after">Classification is enabled by default, and the active classifier can receive the current prompt on a cache miss. Run <code>/bifrost classifier off</code> to use rules and the default tier without that extra call. This does not make generation local; the selected provider still receives the prompt. Selecting <code>bifrost/auto</code> in Pi's model picker is a separate opt-in for per-request dispatch.</p>
           <div class="hero-actions install-actions">
             <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/getting-started.md">Getting started</a>
             <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/configuration.md">Configuration guide</a>
