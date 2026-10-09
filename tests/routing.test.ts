@@ -26,6 +26,50 @@ import { emptyEconomicSnapshot, hasHardEconomicAdmission, publishEconomicObserva
 
 describe("routing", () => {
   describe("affinity observation", () => {
+    it("keeps the configured winner when the final eligible pool exceeds the advisory limit", () => {
+      const models = Array.from({ length: 514 }, (_, index) => makeModel("fixture", `model-${index}`));
+      const ctx = makeCtx(models);
+      const now = 1_000;
+      const reliabilityConfig = { ...DEFAULT_RELIABILITY, failureThreshold: 1, cooldownMinutes: 10 };
+      const reliability = recordModelFailure(
+        emptyReliabilityState(), "fixture/model-513", reliabilityConfig, now, "dispatch", "transport",
+      );
+      const patterns = models.map(modelKey);
+      let randomCalls = 0;
+
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: patterns },
+        strategy: "random",
+        affinity: { mode: "retain-within-tier" },
+      }, reliability, reliabilityConfig, now, undefined, () => { randomCalls += 1; return 0.75; }, {
+        targetOrigin: "automatic",
+        anchor: { modelKey: "fixture/model-513", provider: "fixture", lastSuccessfulDispatchAt: now - 100 },
+      }).resolution;
+
+      assert.equal(modelKey(result.selected), "fixture/model-384");
+      assert.equal(randomCalls, 1);
+      assert.equal(result.primary.selectionCandidates?.length, 513);
+      assert.equal(result.primary.skipped.some((candidate) => candidate.key === "fixture/model-513" && candidate.reason === "open_circuit"), true);
+      assert.equal(result.affinityObservation?.status, "not_applicable");
+      assert.equal(result.affinityObservation?.selection, "not_applicable");
+    });
+
+    it("keeps the configured winner when an affinity anchor is newer than the route snapshot", () => {
+      const ctx = makeCtx([makeModel("fixture", "strategy"), makeModel("fixture", "anchor")]);
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture/strategy", "fixture/anchor"] },
+        strategy: "first",
+        affinity: { mode: "retain-within-tier" },
+      }, undefined, undefined, 1_000, undefined, undefined, {
+        targetOrigin: "automatic",
+        anchor: { modelKey: "fixture/anchor", provider: "fixture", lastSuccessfulDispatchAt: 1_001 },
+      }).resolution;
+
+      assert.equal(modelKey(result.selected), "fixture/strategy");
+      assert.equal(result.affinityObservation?.status, "not_applicable");
+      assert.equal(result.affinityObservation?.selection, "not_applicable");
+    });
+
     it("compares the unchanged random winner against the final eligible pool without another RNG call", () => {
       const ctx = makeCtx([makeModel("fixture", "anchor"), makeModel("fixture", "other")]);
       let randomCalls = 0;

@@ -362,14 +362,19 @@ export function resolveConfiguredTier(
     const targetOrigin = affinity?.intrinsicOrigin ?? affinity?.targetOrigin ?? "automatic";
     const selectionCandidates = targetPool.selectionCandidates ?? targetPool.healthyCandidates;
     const strategyWinner = resolution.selected ? modelKey(resolution.selected) : undefined;
-    const observation = observeAffinity({
-      targetOrigin,
-      eligibleModelKeys: selectionCandidates.map(modelKey),
-      ...(strategyWinner ? { baseStrategyWinner: strategyWinner } : {}),
-      ...(affinity?.anchor ? { anchor: affinity.anchor } : {}),
-      snapshotAsOf: routeNow,
-      ...(config.affinity?.providerAdvisory ? { includeSameProviderAdvisory: true } : {}),
-    });
+    let observation: ReturnType<typeof observeAffinity>;
+    try {
+      observation = observeAffinity({
+        targetOrigin,
+        eligibleModelKeys: selectionCandidates.map(modelKey),
+        ...(strategyWinner ? { baseStrategyWinner: strategyWinner } : {}),
+        ...(affinity?.anchor ? { anchor: affinity.anchor } : {}),
+        snapshotAsOf: routeNow,
+        ...(config.affinity?.providerAdvisory ? { includeSameProviderAdvisory: true } : {}),
+      });
+    } catch {
+      observation = Object.freeze({ version: 1, status: "not_applicable", snapshotAsOf: routeNow });
+    }
     let selection: AffinityRouteObservation["selection"] = observation.status === "not_applicable" ? "not_applicable"
       : !affinity.anchor ? "no_anchor" as const : "strategy" as const;
     if (affinityMode === "retain-within-tier" && observation.status !== "not_applicable" && affinity.anchor) {
