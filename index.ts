@@ -1137,6 +1137,42 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return undefined;
   }
 
+  function hasActiveAllowanceRetryAttempt(
+    ctx: ExtensionContext,
+    boundary: { entryId: string; message: object },
+    failedModelKey: string,
+  ): boolean {
+    const attempt = allowanceRetryAttemptBySession.get(ctx.sessionManager);
+    return !!attempt && attempt.userMessage.deref() === boundary.message && attempt.entryId === boundary.entryId
+      && attempt.candidateKey === failedModelKey && attempt.candidateKey !== attempt.failedModelKey
+      && attempt.expiresAt > Date.now() && !ctx.signal?.aborted && !ctx.hasPendingMessages?.()
+      && autoBoundaryStillActive(ctx, {
+        sessionId: attempt.sessionId,
+        entryId: attempt.entryId,
+        message: boundary.message,
+        branchEpoch: attempt.branchEpoch,
+        manualGeneration: attempt.manualGeneration,
+        configGeneration: attempt.configGeneration,
+      });
+  }
+
+  function allowanceFailureStopReason(
+    ctx: ExtensionContext,
+    event: TurnEndEvent,
+    boundary: { entryId: string; message: object },
+    failedModelKey: string,
+  ): string {
+    const content = (event.message as { content?: unknown }).content;
+    if ((Array.isArray(content) && content.length > 0)
+      || event.toolResults.length > 0 || event.toolResultEntryIds.length > 0) {
+      return "Automatic retry stopped because this turn produced output or used tools.";
+    }
+    if (hasActiveAllowanceRetryAttempt(ctx, boundary, failedModelKey)) {
+      return "The alternate also reached a usage limit. Automatic retry limit reached.";
+    }
+    return "Automatic retry stopped because this turn had other activity.";
+  }
+
   function isSideEffectFreeAllowanceFailure(
     ctx: ExtensionContext,
     assistantMessage: object,
@@ -2347,12 +2383,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             observation,
           });
           else {
-            const content = (event.message as { content?: unknown }).content;
-            const producedOutput = Array.isArray(content) && content.length > 0;
-            const usedTools = event.toolResults.length > 0 || event.toolResultEntryIds.length > 0;
-            setAllowanceRetryStopReason(ctx, producedOutput || usedTools
-              ? "Automatic retry stopped because this turn produced output or used tools."
-              : "Automatic retry stopped because this turn had other activity.");
+            setAllowanceRetryStopReason(ctx, allowanceFailureStopReason(ctx, event, boundary, failedModelKey));
           }
         }
       }
@@ -2416,8 +2447,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       await renewV2Receipt(ctx, receipt);
     }
     if (allowanceRetryEnabled && event.message.stopReason === "error" && receipt.failureObservation?.category === "allowance_exhausted"
-      && receipt.retryEligible) {
-      const safeFailure = isSideEffectFreeAllowanceFailure(ctx, event.message, event.messageEntryId, boundary,
+      && (receipt.retryEligible || hasActiveAllowanceRetryAttempt(ctx, boundary, receipt.modelKey))) {
+      const safeFailure = receipt.retryEligible && isSideEffectFreeAllowanceFailure(ctx, event.message, event.messageEntryId, boundary,
         receipt.modelKey, event.toolResults, event.toolResultEntryIds);
       if (safeFailure) pendingAllowanceFailureBySession.set(ctx.sessionManager, {
         sessionId: receipt.sessionId,
@@ -2434,12 +2465,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         receipt,
       });
       else {
-        const content = (event.message as { content?: unknown }).content;
-        const producedOutput = Array.isArray(content) && content.length > 0;
-        const usedTools = event.toolResults.length > 0 || event.toolResultEntryIds.length > 0;
-        setAllowanceRetryStopReason(ctx, producedOutput || usedTools
-          ? "Automatic retry stopped because this turn produced output or used tools."
-          : "Automatic retry stopped because this turn had other activity.");
+        setAllowanceRetryStopReason(ctx, allowanceFailureStopReason(ctx, event, boundary, receipt.modelKey));
       }
     }
   });

@@ -451,6 +451,7 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
           "Bifrost must stop after one alternate, without trying a third model");
         assert.match(result.stderr, /retrying once with fake\/usage-exhausted-alternate/);
         assert.doesNotMatch(result.stderr, /retrying once with fake\/healthy/);
+        assert.match(result.stderr, /The alternate also reached a usage limit\. Automatic retry limit reached\./);
       } finally {
         rmSync(home, { recursive: true, force: true });
         rmSync(work, { recursive: true, force: true });
