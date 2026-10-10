@@ -4,6 +4,7 @@ import http from "node:http";
 const port = Number(process.env.PORT ?? 0);
 const attempts = new Map();
 const stats = [];
+let catalogRequests = 0;
 
 function json(response, status, body, headers = {}) {
   response.writeHead(status, { "content-type": "application/json", ...headers });
@@ -19,7 +20,14 @@ function sse(response, content = "ok") {
 const server = http.createServer((request, response) => {
   response.on("error", () => {});
   request.on("error", () => {});
-  if (request.url === "/_stats") return json(response, 200, { attempts: Object.fromEntries(attempts), stats });
+  if (request.url === "/_stats") return json(response, 200, { attempts: Object.fromEntries(attempts), stats, catalogRequests });
+  if (request.method === "GET" && request.url === "/v1/models") {
+    catalogRequests++;
+    return json(response, 200, {
+      object: "list",
+      data: ["new", "probe-slow"].map((id) => ({ id, object: "model" })),
+    });
+  }
   if (request.method !== "POST" || request.url !== "/v1/chat/completions") return json(response, 404, { error: "not found" });
   let body = "";
   request.on("data", (chunk) => { body += chunk; });
@@ -39,6 +47,9 @@ const server = http.createServer((request, response) => {
           ? authorization.slice("Bearer fixture-".length)
           : "fake";
     stats.push({ provider, model, attempt, kind: classifierRequest ? "classifier" : "generation" });
+    if (model === "credits-exhausted") return json(response, 402, {
+      error: { message: "You have no remaining credits. Purchase pre-paid credits to continue using Inference Providers. Alternatively, subscribe to PRO to get monthly included credits." },
+    });
     if (model === "subscription-required") return json(response, 403, {
       type: "error",
       error: { api_error: { message: "An active OpenCode Go subscription is required to use Go" } },
@@ -53,6 +64,7 @@ const server = http.createServer((request, response) => {
       response.write(`data: ${JSON.stringify({ id: "fake", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: "partial" }, finish_reason: null }] })}\n\n`);
       return response.socket.destroy();
     }
+    if (model === "probe-slow") return setTimeout(() => sse(response, "probe-slow-done"), 32_000);
     // "slow" keeps an agent run open long enough to queue steer prompts.
     if (model === "slow") return setTimeout(() => sse(response, "slow-done"), 8000);
     return sse(response, "healthy");
