@@ -247,12 +247,16 @@ export function createPiNativeClassifier(options: PiNativeOptions) {
       resolvedModelId = resolved.id;
       const providerAvailable = async (): Promise<boolean> => {
         try {
-          return !options.onProviderSelected || await options.onProviderSelected(resolved.model);
+          return !options.onProviderSelected || await abortableResult(
+            Promise.resolve().then(() => options.onProviderSelected!(resolved.model)), controller.signal,
+          );
         } catch {
           return false;
         }
       };
       if (!await providerAvailable()) {
+        if (signal?.aborted) return finish("aborted");
+        if (controller.signal.aborted) return finish("timeout");
         trace("provider_circuit_open", { provider: resolved.model.provider });
         return finish("circuit_open");
       }
@@ -280,6 +284,11 @@ export function createPiNativeClassifier(options: PiNativeOptions) {
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         if (signal?.aborted) return finish("aborted");
         if (attempt > 1 && !await providerAvailable()) {
+          if (signal?.aborted) return finish("aborted");
+          if (controller.signal.aborted) {
+            recordFailure("timeout");
+            return finish("timeout");
+          }
           if (trialClaimed) options.reliability?.abandonTrial(key);
           trialClaimed = false;
           trace("provider_circuit_open", { provider: resolved.model.provider, attempt });
@@ -332,9 +341,22 @@ export function createPiNativeClassifier(options: PiNativeOptions) {
         const policy = errorPolicy(result?.errorMessage, !result);
         failure = policy.outcome;
         try {
-          await options.onProviderError?.(resolved.model, result?.errorMessage);
+          await abortableResult(
+            Promise.resolve().then(() => options.onProviderError?.(resolved.model, result?.errorMessage)),
+            controller.signal,
+          );
         } catch {
+          if (signal?.aborted) return finish("aborted");
+          if (controller.signal.aborted) {
+            recordFailure("timeout");
+            return finish("timeout");
+          }
           // Provider pause recording is handled by the enclosing router; classifier fallback remains bounded.
+        }
+        if (signal?.aborted) return finish("aborted");
+        if (controller.signal.aborted) {
+          recordFailure("timeout");
+          return finish("timeout");
         }
         trace("error", { attempt, stop_reason: result?.stopReason, outcome: failure, retryable: policy.retry });
         if (!policy.retry) {

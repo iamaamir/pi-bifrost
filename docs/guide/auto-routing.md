@@ -41,7 +41,7 @@ flowchart TD
 
 A fallback policy controls what happens when a tier has no eligible model. Legacy configuration can fall back to the configured default tier. Schema version 2 can set an ordered `tierPolicies.<tier>.fallbackTiers` list. An empty list makes that tier a boundary and stops fallback there. Version 2 alone keeps legacy fallback behavior. See [fallback boundaries](configuration.md#explicit-fallback-boundaries-schema-version-2).
 
-When no hard boundary applies, permissive fallback can warn and reuse the last dispatched model. This can include a model on an ordinary failure cooldown. Explicit fallback boundaries, reserve policies, and active provider pauses prevent that reuse.
+An explicit fallback boundary, active provider pause, or configured `mode: "policy"` reserve admission prevents reuse of the last dispatched model. A reserve observation alone does not create a hard boundary. Without one of these guards, permissive fallback can warn and reuse the last dispatched model, including a model on an ordinary failure cooldown.
 
 This selection diagram shows tier-based routing. A direct model binding skips tier selection and its strategy. Bifrost still applies normal model eligibility and reliability checks.
 

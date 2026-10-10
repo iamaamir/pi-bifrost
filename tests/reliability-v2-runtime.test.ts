@@ -14,8 +14,9 @@ import { TYPE_SAFE_API_KEY_ENV } from "../classifier-backends.ts";
 import { CLASSIFIER_BACKEND_IDS } from "../classifier-backends.ts";
 import { makeModel, makePiClassifierModel } from "./helpers.ts";
 
-async function runAllowanceRuntime({ reloadOptOut = false, failedContent = [], toolResults = [], priorToolHistory = false, rejectSettlement = false, interveneDuringSettlement = false, routeAfterPrepare = false, reloadAfterPrepare = false, inlineQuick = false, poolExhausted = false, dispatchPreparedRetry = false, retryDisabled = false, stateVersion = 2, repeatPrefixOnRetry = false, mismatchedPrefixOnRetry = false, directRuleOnRetry = false, initialFallback = false }: {
+async function runAllowanceRuntime({ reloadOptOut = false, reloadAllowanceScope, failedContent = [], toolResults = [], priorToolHistory = false, rejectSettlement = false, interveneDuringSettlement = false, routeAfterPrepare = false, reloadAfterPrepare = false, inlineQuick = false, poolExhausted = false, dispatchPreparedRetry = false, retryDisabled = false, stateVersion = 2, repeatPrefixOnRetry = false, mismatchedPrefixOnRetry = false, directRuleOnRetry = false, initialFallback = false }: {
   reloadOptOut?: boolean;
+  reloadAllowanceScope?: "provider" | "model";
   failedContent?: unknown[];
   toolResults?: unknown[];
   priorToolHistory?: boolean;
@@ -94,6 +95,10 @@ async function runAllowanceRuntime({ reloadOptOut = false, failedContent = [], t
     bifrostExtension(pi);
     assert.ok(routeDefinition?.route && commandHandler);
     if (stateVersion === 2) await commandHandler("reliability migrate --fresh", ctx);
+    if (reloadAllowanceScope) {
+      writeFileSync(configPath, JSON.stringify({ ...config, reliability: { ...config.reliability, allowanceCooldownScope: reloadAllowanceScope } }));
+      await commandHandler("reload", ctx);
+    }
     if (inlineQuick) {
       await handlers.get("input")?.({ text: "quick summary", source: "interactive", streamingBehavior: "steer" } as never, ctx);
     }
@@ -158,6 +163,16 @@ async function runAllowanceRuntime({ reloadOptOut = false, failedContent = [], t
 }
 
 describe("reliability v2 registered Auto runtime", () => {
+  it("reopens the v2 runtime when allowance scope changes in either direction", async () => {
+    const providerToModel = await runAllowanceRuntime({ inlineQuick: true, reloadAllowanceScope: "model" });
+    assert.ok(providerToModel.state!.scopes[modelScopeKey("opencode/go")]?.openUntil,
+      "provider-to-model reload applies the model-only allowance cooldown immediately");
+
+    const modelToProvider = await runAllowanceRuntime({ reloadAllowanceScope: "provider" });
+    assert.equal(modelToProvider.state!.scopes[modelScopeKey("fixture/allowed")]?.openUntil, undefined,
+      "model-to-provider reload does not keep applying the prior model-only allowance cooldown policy");
+  });
+
   it("fails closed before a registered prompt-classifier call if the v2 snapshot becomes unreadable after preflight", async () => {
     const previousCwd = process.cwd();
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;

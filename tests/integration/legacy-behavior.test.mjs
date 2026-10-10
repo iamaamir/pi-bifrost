@@ -21,13 +21,22 @@ function startFakeServer() {
   const child = spawn("node", [FAKE_SERVER], { stdio: ["ignore", "pipe", "ignore"] });
   return new Promise((resolve, reject) => {
     let buf = "";
-    const timer = setTimeout(() => reject(new Error("fake server start timeout")), 10_000);
+    let settled = false;
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.kill();
+      reject(error);
+    };
+    const timer = setTimeout(() => fail(new Error("fake server start timeout")), 10_000);
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       buf += chunk;
       try {
         const parsed = JSON.parse(buf);
         if (parsed.port) {
+          settled = true;
           clearTimeout(timer);
           resolve({ child, port: parsed.port });
         }
@@ -35,10 +44,8 @@ function startFakeServer() {
         // partial JSON; wait for more
       }
     });
-    child.on("exit", () => {
-      clearTimeout(timer);
-      reject(new Error("fake server exited before ready"));
-    });
+    child.on("error", (error) => fail(error));
+    child.on("close", () => fail(new Error("fake server exited before ready")));
   });
 }
 
@@ -91,7 +98,10 @@ function runPi({ home, work, args }) {
         const violations = readFileSync(join(home, "test-network-violations.log"), "utf8");
         assert.equal(violations, "", "test network guard recorded a blocked external request");
       } catch (error) {
-        if (error.code !== "ENOENT") throw error;
+        if (error.code !== "ENOENT") {
+          reject(error);
+          return;
+        }
       }
       resolve({ code, stdout, stderr });
     });

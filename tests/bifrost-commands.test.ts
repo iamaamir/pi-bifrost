@@ -12,6 +12,7 @@ import { providerReliabilityPath, reliabilityV2Path } from "../runtime-reliabili
 import { createProviderCooldownStore } from "../runtime-reliability-v2.ts";
 import { emptyReliabilityV2State } from "../reliability-v2.ts";
 import { buildInitOwnershipReceipt } from "../reconciliation-command.ts";
+import { REGISTRY_REFRESH_TTL_MS } from "../ux-status.ts";
 
 function makeCtx(
   models: Array<{ provider: string; id: string }> = [],
@@ -449,6 +450,41 @@ describe("bifrost command ui", () => {
       assert.deepEqual(saved.models, { quick: ["fixture/chat"] });
       assert.equal(saved.classifier.backend, "typesafe");
       assert.ok(existsSync(join(tempDir, ".pi", "bifrost-reconcile-ownership.json")));
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("saves starter pools beside an empty selected config when a classifier is chosen", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-classifier-empty-bootstrap-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = join(tempDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    mkdirSync(agentDir);
+    process.chdir(tempDir);
+    try {
+      const globalConfig = join(agentDir, "bifrost.json");
+      writeFileSync(globalConfig, "{}\n");
+      const { ctx } = makeCtx([{ provider: "fixture", id: "chat" }], (title, options) =>
+        title === "Classifier backend" ? options.find((option) => option.startsWith("typesafe")) : undefined,
+      );
+      const state = makeState() as any;
+      state.bootstrapModelsInMemory = true;
+      state.config.default = "quick";
+      state.config.models = { quick: ["fixture/chat"] };
+
+      await createCommandRouter(state)("classifier", ctx);
+
+      const saved = JSON.parse(readFileSync(globalConfig, "utf8"));
+      assert.equal(saved.default, "quick");
+      assert.deepEqual(saved.models, { quick: ["fixture/chat"] });
+      assert.equal(saved.classifier.backend, "typesafe");
+      assert.ok(existsSync(join(agentDir, "bifrost-reconcile-ownership.json")));
+      assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
     } finally {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -1617,6 +1653,126 @@ describe("command aliases", () => {
       await createCommandRouter(state as never)("init -f", ctx as never);
       assert.equal(calls.some((call) => call.kind === "select" && call.title === "Bifrost commands"), false);
       assert(calls.some((call) => call.kind === "notify" && String(call.value).startsWith("info:Probing")));
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes catalog and keeps failed paid probes from changing existing memberships", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-force-reconcile-"));
+    const previousCwd = process.cwd();
+    const realNow = Date.now;
+    let now = realNow();
+    Date.now = () => now;
+    process.chdir(tempDir);
+    try {
+      const piDir = join(tempDir, ".pi");
+      mkdirSync(piDir);
+      const configPath = join(piDir, "bifrost.json");
+      const ownershipPath = join(piDir, "bifrost-reconcile-ownership.json");
+      writeFileSync(configPath, JSON.stringify({ default: "quick", models: {
+        quick: ["fixture/failed-existing", "manual/only"],
+      } }));
+      writeFileSync(ownershipPath, JSON.stringify(buildInitOwnershipReceipt({
+        quick: ["fixture/failed-existing"],
+      })));
+      const models = ["failed-existing", "verified", "failed-new"].map((id) => makeModel("fixture", id));
+      let refreshCalls = 0;
+      const { ctx } = makeCtx(models);
+      const registry = (ctx as any).modelRegistry;
+      registry.getAll = () => models;
+      registry.getProvider = () => ({ id: "fixture" });
+      registry.getProviderAuthStatus = () => ({ configured: true });
+      registry.getError = () => undefined;
+      registry.refresh = async () => { refreshCalls++; return { aborted: false, errors: new Map() }; };
+      registry.streamSimple = (model: { id: string }) => ({ result: async () => {
+        now += REGISTRY_REFRESH_TTL_MS + 1;
+        return {
+          role: "assistant", content: model.id === "verified" ? [{ type: "text", text: "ok" }] : [],
+          usage: { totalTokens: 1 }, stopReason: model.id === "verified" ? "stop" : "error",
+        };
+      } });
+      (ctx as any).ui.confirm = async () => true;
+      const state = makeState() as any;
+      state.forceRegistryRefresh = true;
+      state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} };
+
+      await createCommandRouter(state)("init -f", ctx);
+
+      const saved = JSON.parse(readFileSync(configPath, "utf8"));
+      assert.equal(refreshCalls, 1);
+      assert.deepEqual(saved.models.quick.sort(), ["fixture/failed-existing", "fixture/verified", "manual/only"]);
+      assert.equal(saved.models.quick.includes("fixture/failed-new"), false);
+    } finally {
+      Date.now = realNow;
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps preexisting stale inventory advisory after successful forced probes", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-force-stale-evidence-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const piDir = join(tempDir, ".pi");
+      mkdirSync(piDir);
+      const configPath = join(piDir, "bifrost.json");
+      const original = { default: "quick", models: { quick: ["fixture/existing"] } };
+      writeFileSync(configPath, JSON.stringify(original));
+      writeFileSync(join(piDir, "bifrost-reconcile-ownership.json"), JSON.stringify(
+        buildInitOwnershipReceipt({ quick: ["fixture/existing"] }),
+      ));
+      const models = [makeModel("fixture", "existing"), makeModel("fixture", "verified")];
+      const { ctx } = makeCtx(models);
+      const registry = (ctx as any).modelRegistry;
+      registry.getAll = () => models;
+      registry.getProviderAuthStatus = () => ({ configured: true });
+      registry.streamSimple = (_model: { id: string }) => ({ result: async () => ({
+        role: "assistant", content: [{ type: "text", text: "ok" }], usage: { totalTokens: 1 }, stopReason: "stop",
+      }) });
+      (ctx as any).ui.confirm = async () => { throw new Error("stale inventory must not reach save confirmation"); };
+      const state = makeState() as any;
+      state.registryInventoryEvidence = {
+        fixture: { status: "complete", refreshedAt: Date.now() - REGISTRY_REFRESH_TTL_MS - 1 },
+      };
+      state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} };
+
+      await createCommandRouter(state)("init -f", ctx);
+
+      assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), original);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stops forced init when catalog refresh is cancelled and marks evidence stale", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-force-cancel-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const model = makeModel("fixture", "chat");
+      const { ctx } = makeCtx([model]);
+      let probes = 0;
+      const registry = (ctx as any).modelRegistry;
+      registry.getAll = () => [model];
+      registry.getProviderAuthStatus = () => ({ configured: true });
+      registry.refresh = async () => ({ aborted: false, errors: new Map() });
+      registry.streamSimple = () => { probes++; throw new Error("cancelled refresh must stop before probes"); };
+      const controller = new AbortController();
+      controller.abort();
+      (ctx as any).signal = controller.signal;
+      const state = makeState() as any;
+      state.registryInventoryEvidence = { fixture: { status: "complete", refreshedAt: Date.now() } };
+
+      await createCommandRouter(state)("init -f", ctx);
+
+      assert.equal(probes, 0);
+      assert.equal(state.registryInventoryEvidence.fixture.status, "stale");
+      assert.equal(state.forceRegistryRefresh, true);
+      assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
     } finally {
       process.chdir(previousCwd);
       rmSync(tempDir, { recursive: true, force: true });

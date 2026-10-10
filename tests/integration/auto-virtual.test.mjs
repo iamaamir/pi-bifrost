@@ -17,13 +17,22 @@ function startFakeServer() {
   const child = spawn("node", [FAKE_SERVER], { stdio: ["ignore", "pipe", "ignore"] });
   return new Promise((resolve, reject) => {
     let buf = "";
-    const timer = setTimeout(() => reject(new Error("fake server start timeout")), 10_000);
+    let settled = false;
+    const fail = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.kill();
+      reject(error);
+    };
+    const timer = setTimeout(() => fail(new Error("fake server start timeout")), 10_000);
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
       buf += chunk;
       try {
         const parsed = JSON.parse(buf);
         if (parsed.port) {
+          settled = true;
           clearTimeout(timer);
           resolve({ child, port: parsed.port });
         }
@@ -31,10 +40,8 @@ function startFakeServer() {
         // partial JSON; wait for more
       }
     });
-    child.on("exit", () => {
-      clearTimeout(timer);
-      reject(new Error("fake server exited before ready"));
-    });
+    child.on("error", (error) => fail(error));
+    child.on("close", () => fail(new Error("fake server exited before ready")));
   });
 }
 
@@ -85,13 +92,30 @@ function listAvailableProviders({ home, work }) {
     });
     let stdout = "";
     let stderr = "";
+    let forceKill;
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", reject);
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      forceKill = setTimeout(() => child.kill("SIGKILL"), 1_000);
+      reject(new Error("pi model inventory timed out"));
+    }, 15_000);
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      clearTimeout(forceKill);
+      reject(error);
+    });
     child.on("close", (code) => {
-      assertNoNetworkViolations(home);
+      clearTimeout(timer);
+      clearTimeout(forceKill);
+      try {
+        assertNoNetworkViolations(home);
+      } catch (error) {
+        reject(error);
+        return;
+      }
       resolve({ code, stdout, stderr });
     });
   });
@@ -137,6 +161,22 @@ function runAuto({ home, work, messages, model = "bifrost/auto" }) {
     });
   });
 }
+
+it("rejects a pre-recorded network guard violation without an uncaught close error", async () => {
+  const home = mkdtempSync(join(tmpdir(), "bifrost-auto-home-"));
+  const work = mkdtempSync(join(tmpdir(), "bifrost-auto-work-"));
+  try {
+    writePiModels({ home, port: 0, models: [] });
+    writeFileSync(join(home, "test-network-violations.log"), "blocked external request fixture\n");
+    await assert.rejects(
+      listAvailableProviders({ home, work }),
+      /test network guard recorded a blocked external request/u,
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(work, { recursive: true, force: true });
+  }
+});
 
 describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, () => {
   let server;

@@ -137,7 +137,10 @@ function runPi({ home, work, report, model, negative = false, generateExtensionT
         const violations = readFileSync(join(home, "test-network-violations.log"), "utf8");
         assert.equal(violations, "", "test network guard recorded a blocked external request");
       } catch (error) {
-        if (error.code !== "ENOENT") throw error;
+        if (error.code !== "ENOENT") {
+          reject(error);
+          return;
+        }
       }
       resolve({ code, stdout, stderr });
     });

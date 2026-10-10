@@ -709,7 +709,13 @@ async function handleInit(
 ): Promise<void> {
   clearBifrostWidgets(ctx);
   const forceProbe = isForced(args);
-  if (!forceProbe && typeof ctx.modelRegistry.refresh === "function") {
+  let initRefreshReceipt: { catalogKeys: string[]; evidence: Map<string, object> } | undefined;
+  let refreshedCatalogKeys: string[] | undefined;
+  let refreshedProviders: string[] = [];
+  if (typeof ctx.modelRegistry.refresh === "function") {
+    state.registryInventoryEvidence = Object.freeze(Object.fromEntries(
+      Object.entries(state.registryInventoryEvidence ?? {}).map(([provider, evidence]) => [provider, { ...evidence, status: "stale" as const }]),
+    ));
     uiBusy(ctx, "Refreshing Pi's model catalog...");
     try {
       const outcome = await waitForRegistryRefresh(
@@ -717,7 +723,12 @@ async function handleInit(
         ctx.signal,
         (result) => {
           let knownProviders: string[] = [];
-          try { knownProviders = [...new Set(ctx.modelRegistry.getAll().filter((model) => !isBifrostAuto(model)).map((model) => model.provider))]; }
+          try {
+            const catalog = ctx.modelRegistry.getAll().filter((model) => !isBifrostAuto(model));
+            knownProviders = [...new Set(catalog.map((model) => model.provider))];
+            refreshedProviders = knownProviders;
+            refreshedCatalogKeys = catalog.map(modelKey).sort();
+          }
           catch { /* failed catalog snapshots stay stale */ }
           const refreshedAt = Date.now();
           for (const provider of knownProviders) {
@@ -730,10 +741,22 @@ async function handleInit(
         },
       );
       if (outcome === "aborted") {
+        state.forceRegistryRefresh = true;
         log(ctx, "Model catalog refresh was cancelled; no configuration was changed.", "warning");
         return;
       }
+      state.forceRegistryRefresh = false;
+      if (refreshedCatalogKeys) {
+        initRefreshReceipt = {
+          catalogKeys: refreshedCatalogKeys,
+          evidence: new Map(refreshedProviders.flatMap((provider) => {
+            const evidence = state.registryInventoryEvidence?.[provider];
+            return evidence ? [[provider, evidence] as const] : [];
+          })),
+        };
+      }
     } catch {
+      state.forceRegistryRefresh = true;
       log(ctx, "Pi's model catalog could not be refreshed; using the available catalog snapshot.", "warning");
     } finally { uiDone(ctx); }
   }
@@ -826,6 +849,17 @@ async function handleInit(
       log(ctx, "Proceeding with full registry — most models will likely be unreachable.", "warning");
       probeLoaded = false;
     }
+  }
+
+  let refreshRemainsCurrent = false;
+  if (forceProbe && initRefreshReceipt && !ctx.signal?.aborted && !state.forceRegistryRefresh) {
+    try {
+      const currentKeys = ctx.modelRegistry.getAll().filter((model) => !isBifrostAuto(model)).map(modelKey).sort();
+      refreshRemainsCurrent = currentKeys.length === initRefreshReceipt.catalogKeys.length
+        && currentKeys.every((key, index) => key === initRefreshReceipt!.catalogKeys[index])
+        && [...initRefreshReceipt.evidence].every(([provider, evidence]) =>
+          state.registryInventoryEvidence?.[provider] === evidence);
+    } catch { /* an unreadable catalog cannot extend this command's refresh evidence */ }
   }
 
   if (probeLoaded && workingModels.length > 0) {
@@ -926,12 +960,29 @@ async function handleInit(
   let changes: readonly { kind: "add" | "remove"; tier: string; modelKey: string }[];
   if (source.configBytes !== null) {
     const byProvider = new Map<string, Record<string, string[]>>();
+    let configuredModels: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(Buffer.from(source.configBytes).toString("utf8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const configured = (parsed as Record<string, unknown>).models;
+        if (configured && typeof configured === "object" && !Array.isArray(configured)) {
+          configuredModels = configured as Record<string, unknown>;
+        }
+      }
+    } catch { /* the membership planner reports invalid source config */ }
+    const probeVerified = new Set(Object.values(models).flat());
     for (const model of available) {
       if (isBifrostAuto(model)) continue;
       const tier = guessTier(model);
       if (!tier) continue;
+      const key = modelKey(model);
+      const configuredPool = configuredModels[tier];
+      const alreadyConfigured = typeof configuredPool === "string"
+        ? configuredPool === key
+        : Array.isArray(configuredPool) && configuredPool.includes(key);
+      if (probeLoaded && !probeVerified.has(key) && !alreadyConfigured) continue;
       const byTier = byProvider.get(model.provider) ?? {};
-      byTier[tier] = [...(byTier[tier] ?? []), modelKey(model)];
+      byTier[tier] = [...(byTier[tier] ?? []), key];
       byProvider.set(model.provider, byTier);
     }
     const inventories = [...byProvider.entries()].map(([provider, modelsByTier]) => {
@@ -941,7 +992,8 @@ async function handleInit(
       catch { authConfigured = undefined; }
       const now = Date.now();
       const fresh = evidence?.status === "complete" && now >= evidence.refreshedAt
-        && now - evidence.refreshedAt < REGISTRY_REFRESH_TTL_MS;
+        && (now - evidence.refreshedAt < REGISTRY_REFRESH_TTL_MS
+          || refreshRemainsCurrent && initRefreshReceipt?.evidence.get(provider) === evidence);
       const status = state.forceRegistryRefresh ? "stale" as const
         : authConfigured === false ? "auth_failed" as const
           : fresh && authConfigured === true ? "complete" as const : "stale" as const;
@@ -1039,7 +1091,19 @@ async function handleInit(
   }
   const currentKeys = ctx.modelRegistry.getAvailable().filter((model) => !isBifrostAuto(model)).map(modelKey).sort();
   const plannedKeys = available.filter((model) => !isBifrostAuto(model)).map(modelKey).sort();
-  if (currentKeys.length !== plannedKeys.length || currentKeys.some((key, index) => key !== plannedKeys[index])) {
+  let refreshReceiptChanged = false;
+  if (refreshRemainsCurrent && initRefreshReceipt) {
+    try {
+      const currentCatalogKeys = ctx.modelRegistry.getAll().filter((model) => !isBifrostAuto(model)).map(modelKey).sort();
+      refreshReceiptChanged = state.forceRegistryRefresh === true
+        || currentCatalogKeys.length !== initRefreshReceipt.catalogKeys.length
+        || currentCatalogKeys.some((key, index) => key !== initRefreshReceipt!.catalogKeys[index])
+        || [...initRefreshReceipt.evidence].some(([provider, evidence]) =>
+          state.registryInventoryEvidence?.[provider] !== evidence);
+    } catch { refreshReceiptChanged = true; }
+  }
+  if (refreshReceiptChanged || currentKeys.length !== plannedKeys.length
+    || currentKeys.some((key, index) => key !== plannedKeys[index])) {
     log(ctx, "Pi's model inventory changed while Init was awaiting confirmation; no files were changed. Retry to review the new memberships.", "warning");
     return;
   }
@@ -2177,8 +2241,18 @@ function persistBootstrapConfig(
     return false;
   }
   const userFiles = hasUserBootstrapFiles(process.cwd(), getAgentDir(), CONFIG_DIR_NAME, join(state.extensionDir, "bifrost.json"));
-  const stillFresh = sourceAtStart.configBytes === null && sourceAtStart.ownershipBytes === null
-    && source.configBytes === null && source.ownershipBytes === null
+  const isEmptyConfig = (bytes: Uint8Array | null): boolean => {
+    if (!bytes) return false;
+    try {
+      const parsed: unknown = JSON.parse(Buffer.from(bytes).toString("utf8"));
+      return Boolean(parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        && Object.getPrototypeOf(parsed) === Object.prototype && Object.keys(parsed).length === 0);
+    } catch { return false; }
+  };
+  const freshEmptyConfig = isEmptyConfig(sourceAtStart.configBytes) && isEmptyConfig(source.configBytes)
+    && Buffer.from(sourceAtStart.configBytes!).equals(Buffer.from(source.configBytes!));
+  const stillFresh = (sourceAtStart.configBytes === null && source.configBytes === null || freshEmptyConfig)
+    && sourceAtStart.ownershipBytes === null && source.ownershipBytes === null
     && sourceAtStart.source === source.source && state.bootstrapModelsInMemory
     && (state.configGeneration ?? 0) === configGenerationAtStart
     && !userFiles.userConfig && !userFiles.routeFile

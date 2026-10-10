@@ -2,7 +2,15 @@
 
 Status: implementation authorized by the user on 7 October 2026. Scope is PRD.md and IMPLEMENTATION.md with image support excluded. This ledger records actual acceptance evidence; planned milestones are not completed features.
 
-## Current subscription recovery checkpoint (10 October)
+## Current review repair checkpoint (10 October)
+
+The seven remaining review findings are addressed. Init refreshes the catalog before forced probes, adds only probe-verified new models, and preserves existing memberships. Long probes retain the command's original refresh evidence only while catalog keys and evidence identities remain unchanged, including after save confirmation. Expired prior evidence remains advisory. Classifier selection can save generated pools into an unchanged empty configuration through the existing transaction.
+
+Classifier provider callbacks now observe the deadline and user cancellation. A late callback cannot restart classification. An already-started provider-state write may still save its valid failure observation after the deadline. Reloading the effective allowance scope recreates the model reliability store. Integration subprocess failures reject their promises, and documentation distinguishes configured provider pauses, declared quota snapshots, and hard reserve admission.
+
+The primary passed 951 unit tests, typecheck, 67 guarded pinned-Pi fake-provider integrations, and whitespace checks. The final general UI pass produced 19 captures. All six reliability UI scenarios passed before the final command-only long-probe evidence repair; reliability production code remained unchanged after that run. Runtime fixes have failing-before and passing-after regressions. Standards/Axiom and Spec reviews approved the final production diff with no outstanding findings. The three changed production files have combined SHA-256 `ac9bebeadbd737a149c9aada0b9004aeb44e7c1fb32aed78bc3742fb8be632b4` (sorted path, null byte, file bytes, null byte). Live-provider acceptance remains with the user; this checkpoint does not merge or publish the release. The user's root `bifrost.json` remains unchanged and excluded.
+
+## Prior subscription recovery checkpoint (10 October)
 
 The reported subscription-required HTTP 403 now produces a billing denial. A generic 403 does not pause the provider as a billing failure. Terminal classifier failures use the same rule; a successful SDK retry does not create a false pause.
 

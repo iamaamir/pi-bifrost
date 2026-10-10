@@ -1058,6 +1058,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       && (previousReliability.windowMinutes ?? 5) === (nextReliability.windowMinutes ?? 5)
       && (previousReliability.cooldownMinutes ?? 60) === (nextReliability.cooldownMinutes ?? 60)
       && (previousReliability.cooldownOnAllowanceExhausted ?? true) === (nextReliability.cooldownOnAllowanceExhausted ?? true)
+      && (previousReliability.allowanceCooldownScope ?? "provider") === (nextReliability.allowanceCooldownScope ?? "provider")
       && (previousReliability.retryOnAllowanceExhausted ?? true) === (nextReliability.retryOnAllowanceExhausted ?? true)
       && (previousReliability.observations?.enabled ?? false) === (nextReliability.observations?.enabled ?? false);
     state.configGeneration = (state.configGeneration ?? 0) + 1;

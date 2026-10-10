@@ -196,6 +196,136 @@ describe("pi-native classifier transport", () => {
     assert.strictEqual(perCall[0], observations[1]);
   });
 
+  it("bounds async provider admission by the classification deadline", async () => {
+    let release!: (allowed: boolean) => void;
+    let classifyCalls = 0;
+    const registry: PiClassifierRegistry = {
+      getModelOfType: () => model(),
+      getAvailableOfType: async () => [model()],
+      classify: async () => { classifyCalls++; return answer(); },
+    };
+    const observations: TypeSafeObservation[] = [];
+    const pending = createPiNativeClassifier({
+      registry,
+      timeoutMs: 100,
+      onProviderSelected: () => new Promise((resolve) => { release = resolve; }),
+      observe: (value) => observations.push(value),
+    })(request);
+    await new Promise((resolve) => setTimeout(resolve, 130));
+    const completedBeforeRelease = await Promise.race([pending.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 10))]);
+    release(true);
+    assert.equal(completedBeforeRelease, true, "deadline should settle while provider admission is still pending");
+    assert.equal(await pending, undefined);
+    assert.equal(observations[0]?.outcome, "timeout");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(classifyCalls, 0, "a late admission result must not start classifier work");
+  });
+
+  it("bounds async provider error recording and does not retry after its deadline", async () => {
+    const rateLimited = { ...answer(), answers: {}, stopReason: "error", errorMessage: "429 rate limit" } as ClassifierResult;
+    let rejectRecording!: (error: Error) => void;
+    let classifyCalls = 0;
+    const registry: PiClassifierRegistry = {
+      getModelOfType: () => model(),
+      getAvailableOfType: async () => [model()],
+      classify: async () => { classifyCalls++; return rateLimited; },
+    };
+    const events: string[] = [];
+    const reliability = {
+      tryClaimTrial: () => ({ allowed: true, claimed: true }),
+      recordFailure: (_key: string, _source: string, reason: string) => events.push(`failure:${reason}`),
+      abandonTrial: () => events.push("abandoned"),
+    } as unknown as ReliabilityStore;
+    const observations: TypeSafeObservation[] = [];
+    const pending = createPiNativeClassifier({
+      registry,
+      timeoutMs: 100,
+      maxAttempts: 3,
+      reliability,
+      onProviderError: () => new Promise((_resolve, reject) => { rejectRecording = reject; }),
+      sleepImpl: async () => {},
+      observe: (value) => observations.push(value),
+    })(request);
+    await new Promise((resolve) => setTimeout(resolve, 130));
+    const completedBeforeRelease = await Promise.race([pending.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 10))]);
+    rejectRecording(new Error("late callback rejection"));
+    assert.equal(completedBeforeRelease, true, "deadline should settle while provider error recording is still pending");
+    assert.equal(await pending, undefined);
+    assert.equal(observations[0]?.outcome, "timeout");
+    assert.deepEqual(events, ["failure:timeout"]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(classifyCalls, 1, "a late callback rejection must not restart provider retries");
+  });
+
+  it("releases the classifier trial when user abort interrupts provider error recording", async () => {
+    const rateLimited = { ...answer(), answers: {}, stopReason: "error", errorMessage: "429 rate limit" } as ClassifierResult;
+    let rejectRecording!: (error: Error) => void;
+    let classifyCalls = 0;
+    const registry: PiClassifierRegistry = {
+      getModelOfType: () => model(),
+      getAvailableOfType: async () => [model()],
+      classify: async () => { classifyCalls++; return rateLimited; },
+    };
+    const events: string[] = [];
+    const reliability = {
+      tryClaimTrial: () => ({ allowed: true, claimed: true }),
+      recordFailure: (_key: string, _source: string, reason: string) => events.push(`failure:${reason}`),
+      abandonTrial: () => events.push("abandoned"),
+    } as unknown as ReliabilityStore;
+    const observations: TypeSafeObservation[] = [];
+    const controller = new AbortController();
+    const pending = createPiNativeClassifier({
+      registry,
+      timeoutMs: 1_000,
+      reliability,
+      onProviderError: () => new Promise((_resolve, reject) => { rejectRecording = reject; }),
+      observe: (value) => observations.push(value),
+    })(request, controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    const completedBeforeRelease = await Promise.race([pending.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 10))]);
+    rejectRecording(new Error("late callback rejection"));
+    assert.equal(await pending, undefined);
+    assert.equal(completedBeforeRelease, true, "user abort should not wait for provider error recording");
+    assert.equal(observations[0]?.outcome, "aborted");
+    assert.deepEqual(events, ["abandoned"]);
+    assert.equal(classifyCalls, 1);
+  });
+
+  it("preserves user abort while async provider admission is pending", async () => {
+    let release!: (allowed: boolean) => void;
+    let classifyCalls = 0;
+    const registry: PiClassifierRegistry = {
+      getModelOfType: () => model(),
+      getAvailableOfType: async () => [model()],
+      classify: async () => { classifyCalls++; return answer(); },
+    };
+    const events: string[] = [];
+    const reliability = {
+      tryClaimTrial: () => ({ allowed: true, claimed: true }),
+      abandonTrial: () => events.push("abandoned"),
+    } as unknown as ReliabilityStore;
+    const observations: TypeSafeObservation[] = [];
+    const controller = new AbortController();
+    const pending = createPiNativeClassifier({
+      registry,
+      timeoutMs: 1_000,
+      reliability,
+      onProviderSelected: () => new Promise((resolve) => { release = resolve; }),
+      observe: (value) => observations.push(value),
+    })(request, controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const completedBeforeRelease = await Promise.race([pending.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 10))]);
+    release(true);
+    assert.equal(await pending, undefined);
+    assert.equal(completedBeforeRelease, true, "user abort should settle while provider admission is still pending");
+    assert.equal(observations[0]?.outcome, "aborted");
+    assert.deepEqual(events, []);
+    assert.equal(classifyCalls, 0);
+  });
+
   it("isolates throwing metrics and per-call observers from each other and the result", async () => {
     const originalError = console.error;
     console.error = () => {};
