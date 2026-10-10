@@ -1,0 +1,46 @@
+name: Verification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verification-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install Pillow==12.3.0
+      - run: npm ci
+      - run: npm run verify:release
+      - name: Upload failure logs and UI screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-failure-${{ github.event.pull_request.head.sha || github.sha }}
+          path: screenshots/
+          if-no-files-found: ignore
+      - name: Upload candidate-bound manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-manifest-${{ github.event.pull_request.head.sha || github.sha }}
+          path: screenshots/verification/**/result.json
+          if-no-files-found: ignore

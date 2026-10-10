@@ -57,6 +57,7 @@
     "test:ui": "python3 scripts/ui-smoke.py",
     "test:ui:agent-tui": "bash scripts/ui-smoke-agent-tui.sh",
     "test:ui:reliability": "bash scripts/ui-reliability-fake-provider.sh",
+    "verify:release": "node scripts/verify-release.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "benchmark:jev": "node --experimental-strip-types scripts/jev-benchmark.ts",

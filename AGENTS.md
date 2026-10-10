@@ -61,6 +61,8 @@ Do not introduce a proxy as the default design. Do not build multi-agent orchest
 
 ## Verification
 
+For feature and regression changes, follow [the coverage contract](docs/testing-coverage.md).
+
 Run relevant checks before claiming work complete:
 
 ```bash
