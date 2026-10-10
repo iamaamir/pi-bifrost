@@ -230,6 +230,7 @@ function textFromRawFields(input: DataRecord): string {
 function textCategory(text: string): FailureCategory | undefined {
   if (/insufficient[_\s-]+quota|usage[_\s-]+(?:limit[_\s-]+reached|not[_\s-]+included)|quota\s+(?:is\s+)?exhaust|allowance\s+(?:is\s+)?exhaust|usage\s+limit\s+(?:has\s+been\s+)?reached|no\s+remaining\s+credits|credits?\s+(?:are\s+)?exhaust/.test(text)) return "allowance_exhausted";
   if (/authentication|unauthori[sz]ed|invalid\s+api\s+key|credential/.test(text)) return "authentication";
+  if (/\b(?:active\s+)?(?:[a-z0-9_-]+\s+){0,3}subscription\s+(?:(?:is|has)\s+)?(?:required|expired)\b|\bexpired\s+subscription\b/.test(text)) return "billing_denied";
   if (/billing\s+(?:denied|issue|failure)|payment\s+required/.test(text)) return "billing_denied";
   if (/context\s+(?:length|window|limit)|too\s+many\s+tokens/.test(text)) return "context_limit";
   if (/tool\s+(?:call|protocol)|invalid\s+tool\s+result/.test(text)) return "tool_protocol";

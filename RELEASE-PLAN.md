@@ -2,7 +2,19 @@
 
 Status: implementation authorized by the user on 7 October 2026. Scope is PRD.md and IMPLEMENTATION.md with image support excluded. This ledger records actual acceptance evidence; planned milestones are not completed features.
 
-## Current runtime checkpoint (10 October)
+## Current subscription recovery checkpoint (10 October)
+
+The reported subscription-required HTTP 403 now produces a billing denial. A generic 403 does not pause the provider as a billing failure. Terminal classifier failures use the same rule; a successful SDK retry does not create a false pause.
+
+A parsed tier prefix permits one proven-empty Auto recovery within that same tier. The initial and retry selections must stay in the requested tier. A matching direct-model rule cannot replace the prefix during recovery, and a changed retry tier cancels dispatch. An exhausted prefixed tier does not widen to the default or another tier. Other replay safety guards and opt-out flags remain unchanged.
+
+Prefix syntax is unchanged. The separate [issue 27](https://github.com/iamaamir/pi-bifrost/issues/27) tracks avoiding accidental overrides such as ordinary “quick summary” text.
+
+The primary passed 942 unit tests, typecheck, 66 full pinned-Pi fake-provider integrations, 19 general UI captures, six reliability UI scenarios, and whitespace checks. Unit, typecheck, and full integration gates passed again after the final diagnostic wording edits. UI gates passed on the functional recovery change before those wording-only edits. The integrations include the exact subscription 403 with a raw quick-prefixed prompt, both reliability versions, same-provider sibling exclusion, one same-tier alternate, no third attempt, and no other-tier dispatch when quick is exhausted.
+
+Axiom approved the frozen production change. The four changed production TypeScript files since `6ebcad7` have combined SHA-256 `16714d38674830f8774590c25211d0450c1e2c417b51c07b71368294563430a4` (sorted path, null byte, file bytes, null byte). Live-provider acceptance remains with the user. The local root `bifrost.json` is unchanged and excluded from the commit.
+
+## Prior provider pause checkpoint (10 October)
 
 Provider pauses and automatic first-use configuration saving are accepted for this candidate. Usage and billing failures pause the configured provider across physical and Auto routing. Generic HTTP 429 uses a short provider pause. Fresh setup saves a minimal project configuration and ownership receipt through the existing transaction. See [ADR 0024](docs/adr/0024-provider-usage-and-rate-pauses.md) and [ADR 0025](docs/adr/0025-automatic-first-use-configuration-save.md).
 

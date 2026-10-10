@@ -30,8 +30,19 @@ const server = http.createServer((request, response) => {
     attempts.set(model, attempt);
     const classifierRequest = JSON.stringify(payload.messages ?? [])
       .includes("Classify the request into exactly one category.");
-    const provider = request.headers.authorization === "Bearer ui-fixture-backup-only" ? "fake-backup" : "fake";
+    const authorization = request.headers.authorization ?? "";
+    const provider = authorization === "Bearer ui-fixture-backup-only"
+      ? "fake-backup"
+      : authorization === "Bearer fixture-only"
+        ? "fake"
+        : authorization.startsWith("Bearer fixture-")
+          ? authorization.slice("Bearer fixture-".length)
+          : "fake";
     stats.push({ provider, model, attempt, kind: classifierRequest ? "classifier" : "generation" });
+    if (model === "subscription-required") return json(response, 403, {
+      type: "error",
+      error: { api_error: { message: "An active OpenCode Go subscription is required to use Go" } },
+    });
     if (model === "usage-exhausted" || model === "usage-exhausted-alternate") return json(response, 429, { error: { code: "usage_limit_reached", message: "The usage limit has been reached. Please try again later." } });
     if (model === "quota") return json(response, 429, { error: { message: "quota exhausted" } }, { "retry-after": "1" });
     if (model === "fail") return json(response, 500, { error: { message: "simulated provider failure" } });

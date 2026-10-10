@@ -28,7 +28,7 @@ After configured repeated failures inside a time window, Bifrost opens that mode
 
 Reliability state persists in `.pi/bifrost-reliability.json`. After cooldown, Bifrost may try that model once. Success restores it; failure keeps it excluded longer.
 
-An `allowance_exhausted` result means a provider reported that usage or credit is exhausted. An HTTP 402 result means billing was denied. It does not prove that the provider account has no credits. By default, both results pause every model with the same configured Pi provider ID. This rule applies to Auto and physical routing.
+An `allowance_exhausted` result means a provider reported that usage or credit is exhausted. An HTTP 402 result means billing was denied. Text that clearly says a subscription is required or expired also means billing was denied, including a matching HTTP 403 response. A generic HTTP 403 does not prove a billing denial. These results do not prove that the provider account has no credits. By default, they pause every model with the same configured Pi provider ID. This rule applies to Auto and physical routing.
 
 This rule does not identify shared billing accounts. Set `reliability.allowanceCooldownScope` to `model` to limit usage and billing pauses to the reported model.
 
@@ -38,7 +38,7 @@ Usage and billing pauses last for `cooldownMinutes`, which defaults to 60. Set `
 
 In Pi Auto, an explicit usage or billing rejection can trigger one attempt on another configured model. The pause applies first. Pi must prove that every failed response was empty and came from the same model. Pi must also omit its earlier failed responses from the next request. The turn must have no tool calls, tool results, queued work, or other activity.
 
-Physical routing, direct model bindings, explicit tier prefixes, exhausted fallback boundaries, tool continuations, unsafe turns, and turns with no eligible alternate do not retry. Pi can make its own bounded retry first. Bifrost does not send an extra classifier or probe request for recovery. See [ADR 0023](../adr/0023-bounded-allowance-recovery.md) and [provider pauses](../adr/0024-provider-usage-and-rate-pauses.md).
+Physical routing, direct model bindings, exhausted fallback boundaries, tool continuations, unsafe turns, and turns with no eligible alternate do not retry. An explicit tier prefix can recover only when the initial selection stayed in that tier, and its alternate must also come from that tier. If the initial selection fell back to another tier or the requested tier has no eligible alternate, recovery stops even when a general fallback is configured. Unprefixed Auto keeps its existing fallback behavior. Pi can make its own bounded retry first. Bifrost does not send an extra classifier or probe request for recovery. See [ADR 0023](../adr/0023-bounded-allowance-recovery.md) and [provider pauses](../adr/0024-provider-usage-and-rate-pauses.md).
 
 ## Existing users: migrate reliability state
 

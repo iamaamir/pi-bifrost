@@ -69,6 +69,21 @@ describe("failure observation normalization", () => {
     assert.equal(JSON.stringify(observation).includes(errorText), false);
   });
 
+  it("recognizes explicit subscription denial but leaves generic HTTP 403 unknown", () => {
+    const subscription = normalizeFailureObservation({
+      ...base,
+      errorText: "Upstream request failed: An active OpenCode Go subscription is required to use Go",
+    }, { now: 1000 });
+    assert.equal(subscription?.category, "billing_denied");
+    assert.equal(subscription?.categoryEvidence, "text_heuristic");
+
+    const expired = normalizeFailureObservation({ ...base, errorText: "The provider subscription has expired" }, { now: 1000 });
+    assert.equal(expired?.category, "billing_denied");
+
+    const forbidden = normalizeFailureObservation({ ...base, structured: { httpStatus: 403 }, errorText: "Forbidden" }, { now: 1000 });
+    assert.equal(forbidden?.category, "unknown");
+  });
+
   it("recognizes explicit exhausted-credit wording while ignoring generic 402 and incidental credit mentions", () => {
     const errorText = 'Error: 402 "You have no remaining credits. Purchase pre-paid credits to continue using Inference Providers. Alternatively, subscribe to PRO to get monthly included credits."';
     const observation = normalizeFailureObservation({ ...base, errorText }, { now: 1000 });

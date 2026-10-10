@@ -71,9 +71,19 @@ function writeFixture({ home, work, port, models, bifrost, retry = { enabled: fa
   };
   mkdirSync(agent, { recursive: true });
   mkdirSync(join(work, ".pi"), { recursive: true });
-  writeFileSync(join(agent, "models.json"), JSON.stringify({
-    providers: { fake: { baseUrl: `http://127.0.0.1:${port}/v1`, api: "openai-completions", apiKey: "fixture-only", models } },
-  }));
+  const modelsByProvider = new Map();
+  for (const { provider = "fake", ...model } of models) {
+    const providerModels = modelsByProvider.get(provider) ?? [];
+    providerModels.push(model);
+    modelsByProvider.set(provider, providerModels);
+  }
+  const providers = Object.fromEntries([...modelsByProvider].map(([provider, providerModels]) => [provider, {
+    baseUrl: `http://127.0.0.1:${port}/v1`,
+    api: "openai-completions",
+    apiKey: provider === "fake" ? "fixture-only" : `fixture-${provider}`,
+    models: providerModels,
+  }]));
+  writeFileSync(join(agent, "models.json"), JSON.stringify({ providers }));
   writeFileSync(join(agent, "settings.json"), JSON.stringify({ retry }));
   writeFileSync(join(work, ".pi", "bifrost.json"), JSON.stringify(configuredBifrost));
 }
@@ -86,16 +96,17 @@ export default function(pi) {
   pi.on("session_shutdown", (_event, ctx) => {
     const branch = ctx.sessionManager.getBranch();
     const messages = branch.filter((entry) => entry.type === "message");
-    const users = messages.filter((entry) => entry.message.role === "user");
+    const users = messages.filter((entry) => entry.message.role === "user").map((entry) => ({ id: entry.id }));
     const assistants = messages.filter((entry) => entry.message.role === "assistant").map((entry) => ({
-      id: entry.id, provider: entry.message.provider, model: entry.message.model,
+      id: entry.id, parentId: entry.parentId, provider: entry.message.provider, model: entry.message.model,
       stopReason: entry.message.stopReason,
       contentLength: Array.isArray(entry.message.content) ? entry.message.content.length : -1,
     }));
     const contextEdits = branch.filter((entry) => entry.type === "context_edit").map((entry) => ({
       targetId: entry.targetId, isNull: entry.replacement === null,
     }));
-    writeFileSync(${JSON.stringify(output)}, JSON.stringify({ userCount: users.length, assistants, contextEdits }));
+    const entries = branch.map((entry) => ({ type: entry.type, id: entry.id, parentId: entry.parentId, targetId: entry.targetId }));
+    writeFileSync(${JSON.stringify(output)}, JSON.stringify({ userCount: users.length, users, assistants, contextEdits, entries }));
   });
 }`);
   return { extension, output };
@@ -190,6 +201,103 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
   before(async () => { server = await startFakeServer(); fakePort = server.port; });
   after(async () => { if (server?.child) await stopChild(server.child); });
 
+  for (const mode of ["v1", "v2"]) {
+    for (const { name, quickModels, shouldRecover } of [
+      {
+        name: "eligible same-tier alternate",
+        quickModels: ["fake-a/subscription-required", "fake-a/sibling", "fake-b/quick"],
+        shouldRecover: true,
+      },
+      {
+        name: "exhausted quick pool despite a general model",
+        quickModels: ["fake-a/subscription-required", "fake-a/sibling"],
+        shouldRecover: false,
+      },
+    ]) {
+      it(`recovers a quick-prefixed subscription 403 once in ${mode} Auto only with ${name}`, async () => {
+        const home = mkdtempSync(join(tmpdir(), `bifrost-subscription-prefix-${mode}-home-`));
+        const work = mkdtempSync(join(tmpdir(), `bifrost-subscription-prefix-${mode}-work-`));
+        try {
+          const models = [
+            { provider: "fake-a", id: "subscription-required", reasoning: false },
+            { provider: "fake-a", id: "sibling", reasoning: false },
+            { provider: "fake-b", id: "quick", reasoning: false },
+            { provider: "fake-c", id: "general", reasoning: false },
+          ];
+          writeFixture({
+            home,
+            work,
+            port: server.port,
+            models,
+            bifrost: {
+              ...(mode === "v2" ? { schemaVersion: 2 } : {}),
+              enabled: true,
+              default: "quick",
+              strategy: "first",
+              categoryStrategies: { quick: "first", general: "first" },
+              classifier: { enabled: false },
+              models: { quick: quickModels, general: ["fake-c/general"] },
+              reliability: {
+                enabled: true,
+                failureThreshold: 3,
+                windowMinutes: 5,
+                cooldownMinutes: 60,
+                allowanceCooldownScope: "provider",
+                ...(mode === "v2" ? { stateVersion: 2 } : {}),
+              },
+              debug: { enabled: true },
+            },
+          });
+          const observer = writeOutcomeObserver(work);
+          const before = await fakeStats(server.port);
+          const result = await runPi({
+            home,
+            work,
+            extraExtensions: [observer.extension],
+            messages: [...(mode === "v2" ? ["/bifrost reliability migrate --fresh"] : []), "quick summary"],
+          });
+          const after = await fakeStats(server.port);
+          const delta = (model) => (after.attempts[model] ?? 0) - (before.attempts[model] ?? 0);
+
+          assert.equal(result.timedOut, false, result.stderr);
+          assert.equal(delta("subscription-required"), 1, result.stderr);
+          assert.equal(delta("sibling"), 0, `${result.stderr}\nthe failed provider sibling is never retried`);
+          assert.equal(delta("general"), 0, "the explicit quick prefix never widens to general");
+          if (shouldRecover) {
+            assert.equal(result.code, 0, result.stderr);
+            assert.equal(delta("quick"), 1, "one eligible other-provider quick model is dispatched");
+            assert.match(result.stderr, /Bifrost: billing was denied for fake-a\/subscription-required; retrying once with fake-b\/quick \(quick\)/);
+            const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
+            assert.equal(outcome.userCount, 1, "the failed request is not re-enqueued");
+            assert.equal(outcome.assistants.length, 2, "there is one failed generation and one bounded alternate");
+            const failed = outcome.assistants.find((entry) => entry.provider === "fake-a" && entry.model === "subscription-required");
+            const succeeded = outcome.assistants.find((entry) => entry.provider === "fake-b" && entry.model === "quick" && entry.stopReason === "stop");
+            assert.ok(failed, "the original provider denial remains in the transcript");
+            assert.ok(succeeded, "the alternate succeeds on the same turn");
+            assert.equal(failed.contentLength, 0, "recovery requires an empty failed response");
+            assert.equal(outcome.users[0].id, failed.parentId, `the failed generation belongs to the original user boundary: ${JSON.stringify(outcome)}`);
+            const ancestors = new Set();
+            let currentId = succeeded.id;
+            while (currentId && !ancestors.has(currentId)) {
+              ancestors.add(currentId);
+              currentId = outcome.entries.find((entry) => entry.id === currentId)?.parentId;
+            }
+            assert.ok(ancestors.has(outcome.users[0].id), `the alternate remains under the original user boundary: ${JSON.stringify(outcome)}`);
+            assert.ok(outcome.contextEdits.some((entry) => entry.targetId === failed.id && entry.isNull),
+              "Pi records a null projection edit for the empty failed response");
+          } else {
+            assert.notEqual(result.code, 0, result.stderr);
+            assert.equal(delta("quick"), 0, "provider pause exhausts quick and recovery stops");
+            assert.match(result.stderr, /billing was denied for fake-a\/subscription-required\. No eligible configured alternative is available for quick; no retry was sent/);
+          }
+        } finally {
+          rmSync(home, { recursive: true, force: true });
+          rmSync(work, { recursive: true, force: true });
+        }
+      });
+    }
+  }
+
   it("retains the successful Auto model across native turns while prefixes use the random strategy", async () => {
     const home = mkdtempSync(join(tmpdir(), "bifrost-affinity-auto-home-"));
     const work = mkdtempSync(join(tmpdir(), "bifrost-affinity-auto-work-"));
@@ -248,7 +356,9 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
       assert.equal(result.timedOut, false, "pinned Pi must finish within the bounded test window");
       assert.equal(result.code, 0, result.stderr);
 
-      const attempts = Object.fromEntries(Object.entries(after.attempts).map(([model, count]) => [model, count - (before.attempts[model] ?? 0)]));
+      const attempts = Object.fromEntries(Object.entries(after.attempts)
+        .map(([model, count]) => [model, count - (before.attempts[model] ?? 0)])
+        .filter(([, count]) => count !== 0));
       assert.deepEqual(attempts, { allowed: 2, alternate: 1 }, "three user turns generate exactly three fake-provider requests, with no classifier calls");
       assert.match(result.stderr, /Bifrost auto: quick → fake\/allowed/);
       assert.match(result.stderr, /Bifrost auto: quick → fake\/alternate/);
@@ -293,7 +403,9 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
       assert.equal(baseline.timedOut, false, "baseline Pi must finish within the bounded test window");
       assert.equal(baseline.code, 0, baseline.stderr);
       assert.deepEqual(
-        Object.fromEntries(Object.entries(baselineAfter.attempts).map(([model, count]) => [model, count - (baselineBefore.attempts[model] ?? 0)])),
+        Object.fromEntries(Object.entries(baselineAfter.attempts)
+          .map(([model, count]) => [model, count - (baselineBefore.attempts[model] ?? 0)])
+          .filter(([, count]) => count !== 0)),
         { allowed: 1, alternate: 2 },
         "the explicit-off baseline also makes exactly one provider request per turn",
       );
@@ -460,7 +572,7 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
           "Bifrost must stop after one alternate, without trying a third model");
         assert.match(result.stderr, /retrying once with fake\/usage-exhausted-alternate/);
         assert.doesNotMatch(result.stderr, /retrying once with fake\/healthy/);
-        assert.match(result.stderr, /The alternate also reached a usage limit\. Automatic retry limit reached\./);
+        assert.match(result.stderr, /The alternate also returned a usage limit\. Automatic retry limit reached\./);
       } finally {
         rmSync(home, { recursive: true, force: true });
         rmSync(work, { recursive: true, force: true });

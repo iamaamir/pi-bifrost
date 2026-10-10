@@ -33,6 +33,8 @@ function fixture(options: {
   appendModelChangeOnSetModel?: boolean;
   appendThinkingChangeOnSetModel?: boolean;
   classifierEnabled?: boolean;
+  classifierModel?: Model<Api>;
+  streamSimple?: (model: Model<Api>, request: unknown, options: any) => unknown;
   refresh?: () => Promise<unknown>;
 } = {}) {
   const previousCwd = process.cwd();
@@ -49,7 +51,10 @@ function fixture(options: {
     enabled: true,
     ...(options.defaultTier === undefined ? {} : { default: options.defaultTier }),
     strategy: "first",
-    classifier: { enabled: options.classifierEnabled ?? false },
+    classifier: {
+      enabled: options.classifierEnabled ?? false,
+      ...(options.classifierModel ? { backend: "prompt", model: `${options.classifierModel.provider}/${options.classifierModel.id}` } : {}),
+    },
     models: { quick: (options.models ?? [makeModel("provider-a", "model-a")]).map((model) => `${model.provider}/${model.id}`) },
     rules: [],
     reliability: configuredReliability,
@@ -58,7 +63,7 @@ function fixture(options: {
   process.chdir(cwd);
   process.env.PI_CODING_AGENT_DIR = agentDir;
 
-  const inventory = options.models ?? [makeModel("provider-a", "model-a")];
+  const inventory = [...(options.models ?? [makeModel("provider-a", "model-a")]), ...(options.classifierModel ? [options.classifierModel] : [])];
   const handlers = new Map<string, Hook>();
   const notices: string[] = [];
   let routeDefinition: VirtualModelDefinition | undefined;
@@ -79,6 +84,7 @@ function fixture(options: {
         find: (provider: string, id: string) => inventory.find((model) => model.provider === provider && model.id === id),
         getProviderAuthStatus: () => ({ configured: false }),
         refresh: options.refresh ?? (async () => ({ refreshed: [], errors: new Map() })),
+        ...(options.streamSimple ? { streamSimple: options.streamSimple } : {}),
       },
       sessionManager,
       ui: { notify: (message: string) => notices.push(message), setStatus: () => {}, setWorkingMessage: () => {}, setWorkingVisible: () => {} },
@@ -218,6 +224,39 @@ describe("provider cooldowns through registered Pi runtime hooks", { concurrency
       await input(h, h.primary, "next-user", "quick next request");
       assert.equal((h.primary.ctx.model as Model<Api>).provider, "provider-b");
       assert.equal((h.primary.ctx.model as Model<Api>).id, "model-b");
+    } finally { h.cleanup(); }
+  });
+
+  it("pauses a classifier provider only for an explicit subscription 403", async () => {
+    const models = [
+      makeModel("provider-a", "go"),
+      makeModel("provider-a", "sibling"),
+      makeModel("provider-b", "quick"),
+    ];
+    const classifierModel = makeModel("provider-a", "classifier");
+    const h = fixture({
+      models,
+      defaultTier: "quick",
+      classifierEnabled: true,
+      classifierModel,
+      streamSimple: (_model, _request, options) => {
+        options.onResponse({ status: 403, headers: {} });
+        return {
+          result: async () => ({
+            content: [],
+            stopReason: "error",
+            errorMessage: "Upstream request failed: An active OpenCode Go subscription is required to use Go",
+          }),
+        };
+      },
+    });
+    try {
+      const result = await input(h, h.primary, "classifier-subscription-user", "summarize this code");
+      assert.equal((result as { action: string }).action, "continue");
+      assert.equal((h.primary.ctx.model as Model<Api>).provider, "provider-b",
+        "the terminal classifier denial must pause provider A before model selection");
+      assert.ok(scopeFromSidecar(h.cwd, "usage", "provider-a")?.openUntil > Date.now(),
+        "the configured provider ID must receive the usage pause");
     } finally { h.cleanup(); }
   });
 

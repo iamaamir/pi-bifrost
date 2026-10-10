@@ -3,6 +3,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { spawn } from "node:child_process";
 import { debug } from "./debug.ts";
 import { promptWithMinimalSession } from "./session-fallback.ts";
+import { normalizeFailureObservation } from "./failure-observations.ts";
 
 // ── Classifier model — union type, no type-cast lies ─────────
 
@@ -132,7 +133,7 @@ async function classifyWithDirectHttp(
         signal: signal ?? ctx.signal,
         cacheRetention: "none",
         onResponse: async (response) => {
-          if (response.status === 402 || response.status === 429) {
+          if (response.status === 402 || response.status === 403 || response.status === 429) {
             providerLimitResponse = { status: response.status, retryAfter: response.headers["retry-after"]?.slice(0, 128) };
           } else {
             providerLimitResponse = undefined;
@@ -148,6 +149,18 @@ async function classifyWithDirectHttp(
     }
     if (providerLimitResponse && (!response || response.stopReason === "error")) {
       if (response?.errorMessage) providerLimitResponse.errorMessage = response.errorMessage.slice(0, 1_024);
+      if (providerLimitResponse.status === 403
+        && normalizeFailureObservation({
+          outcomeId: "classifier-terminal-response",
+          modelKey: `${classifierModel.model.provider}/${classifierModel.model.id}`,
+          source: "runtime",
+          ...(providerLimitResponse.errorMessage ? { errorText: providerLimitResponse.errorMessage } : {}),
+          structured: { httpStatus: 403 },
+        })?.category !== "billing_denied") {
+        providerLimitResponse = undefined;
+      }
+    }
+    if (providerLimitResponse && (!response || response.stopReason === "error")) {
       onProviderLimitResponse?.();
       try {
         await options.onProviderHttpResponse?.(

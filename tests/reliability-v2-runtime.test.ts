@@ -14,7 +14,7 @@ import { TYPE_SAFE_API_KEY_ENV } from "../classifier-backends.ts";
 import { CLASSIFIER_BACKEND_IDS } from "../classifier-backends.ts";
 import { makeModel, makePiClassifierModel } from "./helpers.ts";
 
-async function runAllowanceRuntime({ reloadOptOut = false, failedContent = [], toolResults = [], priorToolHistory = false, rejectSettlement = false, interveneDuringSettlement = false, routeAfterPrepare = false, reloadAfterPrepare = false }: {
+async function runAllowanceRuntime({ reloadOptOut = false, failedContent = [], toolResults = [], priorToolHistory = false, rejectSettlement = false, interveneDuringSettlement = false, routeAfterPrepare = false, reloadAfterPrepare = false, inlineQuick = false, poolExhausted = false, dispatchPreparedRetry = false, retryDisabled = false, stateVersion = 2, repeatPrefixOnRetry = false, mismatchedPrefixOnRetry = false, directRuleOnRetry = false, initialFallback = false }: {
   reloadOptOut?: boolean;
   failedContent?: unknown[];
   toolResults?: unknown[];
@@ -23,6 +23,15 @@ async function runAllowanceRuntime({ reloadOptOut = false, failedContent = [], t
   interveneDuringSettlement?: boolean;
   routeAfterPrepare?: boolean;
   reloadAfterPrepare?: boolean;
+  inlineQuick?: boolean;
+  poolExhausted?: boolean;
+  dispatchPreparedRetry?: boolean;
+  retryDisabled?: boolean;
+  stateVersion?: 1 | 2;
+  repeatPrefixOnRetry?: boolean;
+  mismatchedPrefixOnRetry?: boolean;
+  directRuleOnRetry?: boolean;
+  initialFallback?: boolean;
 } = {}) {
   const previousCwd = process.cwd();
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -32,22 +41,30 @@ async function runAllowanceRuntime({ reloadOptOut = false, failedContent = [], t
   mkdirSync(agentDir, { recursive: true });
   mkdirSync(configDir, { recursive: true });
   const config = {
-    schemaVersion: 2,
+    ...(stateVersion === 2 ? { schemaVersion: 2 } : {}),
     enabled: true,
-    default: "quick",
+    default: initialFallback ? "general" : "quick",
     strategy: "first",
+    categoryStrategies: { quick: "first", general: "first" },
     classifier: { enabled: false },
-    models: { quick: routeAfterPrepare || reloadAfterPrepare ? ["fixture/allowed", "fixture/alternate"] : ["fixture/allowed"] },
-    reliability: { stateVersion: 2, failureThreshold: 3, windowMinutes: 10, cooldownMinutes: 1, allowanceCooldownScope: "model" },
-    rules: [],
+    models: inlineQuick
+      ? { quick: initialFallback ? ["opencode/unavailable"] : poolExhausted ? ["opencode/go", "opencode/sibling"] : ["opencode/go", "opencode/sibling", "other/quick"], general: ["third/general"] }
+      : { quick: routeAfterPrepare || reloadAfterPrepare ? ["fixture/allowed", "fixture/alternate"] : ["fixture/allowed"] },
+    reliability: { stateVersion, failureThreshold: 3, windowMinutes: 10, cooldownMinutes: 1,
+      allowanceCooldownScope: inlineQuick ? "provider" : "model", ...(retryDisabled ? { retryOnAllowanceExhausted: false } : {}) },
+    rules: directRuleOnRetry ? [{ pattern: "^summary$", model: "direct/bound" }] : [],
   } as const;
   const configPath = join(configDir, "bifrost.json");
   writeFileSync(configPath, JSON.stringify(config));
-  const user = { role: "user", content: [{ type: "text", text: "fresh user turn" }] } as const;
+  const user = { role: "user", content: [{ type: "text", text: inlineQuick ? "summary" : "fresh user turn" }] } as const;
   const branch: SessionMessageEntry[] = [{ type: "message", id: "user-allowance", parentId: "root", timestamp: new Date().toISOString(), message: user as never }];
-  const model = makeModel("fixture", "allowed");
-  const alternate = makeModel("fixture", "alternate");
-  const availableModels = [model];
+  const model = inlineQuick ? makeModel("opencode", "go") : makeModel("fixture", "allowed");
+  const sibling = makeModel(inlineQuick ? "opencode" : "fixture", inlineQuick ? "sibling" : "alternate");
+  const alternate = inlineQuick ? makeModel("other", "quick") : sibling;
+  const general = makeModel("third", "general");
+  const initialModel = inlineQuick && initialFallback ? general : model;
+  const direct = makeModel("direct", "bound");
+  const availableModels = inlineQuick ? [...(initialFallback ? [general] : [model, sibling, general]), ...(directRuleOnRetry ? [direct] : [])] : [model];
   const handlers = new Map<string, (event: never, ctx: ExtensionContext) => Promise<unknown>>();
   let routeDefinition: VirtualModelDefinition | undefined;
   let commandHandler: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
@@ -76,26 +93,31 @@ async function runAllowanceRuntime({ reloadOptOut = false, failedContent = [], t
     process.env.PI_CODING_AGENT_DIR = agentDir;
     bifrostExtension(pi);
     assert.ok(routeDefinition?.route && commandHandler);
-    await commandHandler("reliability migrate --fresh", ctx);
+    if (stateVersion === 2) await commandHandler("reliability migrate --fresh", ctx);
+    if (inlineQuick) {
+      await handlers.get("input")?.({ text: "quick summary", source: "interactive", streamingBehavior: "steer" } as never, ctx);
+    }
     if (reloadOptOut) {
       writeFileSync(configPath, JSON.stringify({ ...config, reliability: { ...config.reliability, cooldownOnAllowanceExhausted: false } }));
       await commandHandler("reload", ctx);
     }
     const route = routeDefinition.route as (request: ModelRouteRequest, ctx: ExtensionContext) => Promise<{ model: unknown }>;
     const request = { model: ctx.model, reason: "user", thinkingLevel: "low", messages: [user] } as unknown as ModelRouteRequest;
-    assert.equal((await route(request, ctx)).model, model);
-    if (routeAfterPrepare || reloadAfterPrepare) availableModels.push(alternate);
+    assert.equal((await route(request, ctx)).model, initialModel);
+    if (routeAfterPrepare || reloadAfterPrepare || dispatchPreparedRetry) availableModels.push(alternate);
     if (priorToolHistory) {
       const earlierToolCall = {
         role: "assistant", content: [{ type: "toolCall", id: "tool-call", name: "edit_file", arguments: {} }],
-        api: model.api, provider: model.provider, model: model.id, stopReason: "toolUse", timestamp: Date.now(),
+        api: initialModel.api, provider: initialModel.provider, model: initialModel.id, stopReason: "toolUse", timestamp: Date.now(),
       } as const;
       branch.push({ type: "message", id: "assistant-tool-call", parentId: "user-allowance", timestamp: new Date().toISOString(), message: earlierToolCall as never });
       branch.push({ type: "toolResult", id: "tool-result", parentId: "assistant-tool-call", timestamp: new Date().toISOString(), message: { role: "toolResult", content: [] } } as never);
     }
     const assistant = {
-      role: "assistant", content: failedContent, api: model.api, provider: model.provider, model: model.id,
-      stopReason: "error", errorMessage: "The usage limit has been reached.", timestamp: Date.now(),
+      role: "assistant", content: failedContent, api: initialModel.api, provider: initialModel.provider, model: initialModel.id,
+      stopReason: "error", errorMessage: inlineQuick
+        ? "Upstream request failed: An active OpenCode Go subscription is required to use Go"
+        : "The usage limit has been reached.", timestamp: Date.now(),
     } as const;
     branch.push({ type: "message", id: "assistant-allowance", parentId: "user-allowance", timestamp: new Date().toISOString(), message: assistant as never });
     if (rejectSettlement) writeFileSync(`${reliabilityV2Path(cwd)}.lock`, "malformed held lock");
@@ -104,23 +126,29 @@ async function runAllowanceRuntime({ reloadOptOut = false, failedContent = [], t
     if (interveneDuringSettlement) branch.push({ type: "custom" } as never);
     const beforeSettle = await beforeSettleOperation;
     let routeError: unknown;
-    if ((routeAfterPrepare || reloadAfterPrepare) && beforeSettle) {
+    let retryModel: unknown;
+    if ((routeAfterPrepare || reloadAfterPrepare || dispatchPreparedRetry) && beforeSettle) {
       branch.push({ type: "context_edit", targetId: "assistant-allowance", replacement: null } as never);
-      if (routeAfterPrepare) branch.push({ type: "custom" } as never);
+      if (routeAfterPrepare && !dispatchPreparedRetry) branch.push({ type: "custom" } as never);
+      if (repeatPrefixOnRetry || mismatchedPrefixOnRetry) {
+        await handlers.get("input")?.({ text: mismatchedPrefixOnRetry ? "general summary" : "quick summary", source: "interactive", streamingBehavior: "steer" } as never, ctx);
+      }
       if (reloadAfterPrepare) {
         writeFileSync(configPath, JSON.stringify({ ...config, reliability: { ...config.reliability, retryOnAllowanceExhausted: false } }));
         await commandHandler("reload", ctx);
       }
       try {
         const route = routeDefinition!.route as (request: ModelRouteRequest, ctx: ExtensionContext) => Promise<{ model: unknown }>;
-        await route({ model: ctx.model, reason: "user", thinkingLevel: "low", messages: [user] } as unknown as ModelRouteRequest, ctx);
+        retryModel = (await route({ model: ctx.model, reason: "user", thinkingLevel: "low", messages: [user] } as unknown as ModelRouteRequest, ctx))?.model;
       } catch (error) { routeError = error; }
     }
     await handlers.get("agent_settled")?.({} as never, ctx);
-    const state = new ReliabilityV2Store({ path: reliabilityV2Path(cwd), config: reliabilityV2Config(reloadOptOut
-      ? { ...config.reliability, cooldownOnAllowanceExhausted: false }
-      : config.reliability), requireInitialized: true }).readSnapshot();
-    return { state, beforeSettle, routeError };
+    const state = stateVersion === 2
+      ? new ReliabilityV2Store({ path: reliabilityV2Path(cwd), config: reliabilityV2Config(reloadOptOut
+        ? { ...config.reliability, cooldownOnAllowanceExhausted: false }
+        : config.reliability), requireInitialized: true }).readSnapshot()
+      : undefined;
+    return { state, beforeSettle, routeError, retryModel };
   } finally {
     process.chdir(previousCwd);
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -209,15 +237,15 @@ describe("reliability v2 registered Auto runtime", () => {
 
   it("enforces allowance cooldown with observations off, and honors a reload opt-out", async () => {
     const { state: enforced } = await runAllowanceRuntime();
-    const enforcedScope = enforced.scopes[modelScopeKey("fixture/allowed")];
+    const enforcedScope = enforced!.scopes[modelScopeKey("fixture/allowed")];
     assert.ok(enforcedScope?.openUntil && enforcedScope.openUntil > Date.now(),
       "a runtime-bound allowance observation should immediately cool down the selected model");
     assert.equal(enforcedScope?.failures.length, 1);
-    assert.equal(Object.values(enforced.settledOutcomes).some((outcome) => outcome.observation !== undefined), false,
+    assert.equal(Object.values(enforced!.settledOutcomes).some((outcome) => outcome.observation !== undefined), false,
       "enforcement evidence must not silently enable optional observation persistence");
 
     const { state: optedOut } = await runAllowanceRuntime({ reloadOptOut: true });
-    const optedOutScope = optedOut.scopes[modelScopeKey("fixture/allowed")];
+    const optedOutScope = optedOut!.scopes[modelScopeKey("fixture/allowed")];
     assert.equal(optedOutScope?.openUntil, undefined,
       "a valid reload with cooldownOnAllowanceExhausted=false restores threshold behavior");
     assert.equal(optedOutScope?.failures.length, 1);
@@ -231,15 +259,58 @@ describe("reliability v2 registered Auto runtime", () => {
     assert.equal(withTools.beforeSettle, undefined, "tool results cannot enter the retry boundary");
     assert.equal(withPriorTools.beforeSettle, undefined, "earlier tool calls and results cannot enter the retry boundary");
     for (const { state } of [withOutput, withTools, withPriorTools]) {
-      assert.ok(state.scopes[modelScopeKey("fixture/allowed")]?.openUntil,
+      assert.ok(state!.scopes[modelScopeKey("fixture/allowed")]?.openUntil,
         "unsafe failures still settle and apply the model-only cooldown");
+    }
+  });
+
+  it("recovers a quick-prefixed subscription denial once within the quick provider pool", async () => {
+    for (const stateVersion of [1, 2] as const) {
+      const recovered = await runAllowanceRuntime({ inlineQuick: true, dispatchPreparedRetry: true, stateVersion, repeatPrefixOnRetry: true });
+      assert.ok(recovered.beforeSettle, `stateVersion ${stateVersion} accepts the exact subscription-required denial`);
+      assert.equal((recovered.retryModel as { provider: string; id: string } | undefined)?.provider, "other");
+      assert.equal((recovered.retryModel as { provider: string; id: string } | undefined)?.id, "quick");
+      if (stateVersion === 2) {
+        assert.equal(Object.keys(recovered.state!.dispatches).length, 2, "the initial and alternate admissions are persisted");
+      }
+
+      const exhausted = await runAllowanceRuntime({ inlineQuick: true, poolExhausted: true, stateVersion });
+      assert.equal(exhausted.beforeSettle, undefined, "an explicit quick prefix cannot widen recovery to general");
+      if (stateVersion === 2) assert.equal(Object.keys(exhausted.state!.dispatches).length, 1);
+
+      const initialFallback = await runAllowanceRuntime({ inlineQuick: true, initialFallback: true, stateVersion });
+      assert.equal(initialFallback.beforeSettle, undefined, "a quick prefix that initially fell to general cannot recover across tiers");
+      if (stateVersion === 2) assert.equal(Object.keys(initialFallback.state!.dispatches).length, 1);
+
+      const disabled = await runAllowanceRuntime({ inlineQuick: true, retryDisabled: true, stateVersion });
+      assert.equal(disabled.beforeSettle, undefined, "the retry opt-out stops prefixed recovery");
+    }
+  });
+
+  it("keeps an explicit quick recovery inside quick when stripped text matches a direct-model rule", async () => {
+    for (const stateVersion of [1, 2] as const) {
+      const recovered = await runAllowanceRuntime({ inlineQuick: true, dispatchPreparedRetry: true, repeatPrefixOnRetry: true, directRuleOnRetry: true, stateVersion });
+      assert.ok(recovered.beforeSettle, `stateVersion ${stateVersion} should prepare the bounded recovery`);
+      assert.equal((recovered.retryModel as { provider: string; id: string } | undefined)?.provider, "other");
+      assert.equal((recovered.retryModel as { provider: string; id: string } | undefined)?.id, "quick",
+        "an explicit quick prefix keeps precedence over a direct-model rule during recovery");
+    }
+  });
+
+  it("cancels a prepared explicit quick recovery when the same user boundary forces another tier", async () => {
+    for (const stateVersion of [1, 2] as const) {
+      const changedTier = await runAllowanceRuntime({ inlineQuick: true, dispatchPreparedRetry: true, mismatchedPrefixOnRetry: true, stateVersion });
+      assert.ok(changedTier.beforeSettle, `stateVersion ${stateVersion} should prepare the original quick recovery`);
+      assert.match(String(changedTier.routeError), /prepared usage-limit retry was cancelled because the requested tier changed/);
+      if (stateVersion === 2) assert.equal(Object.keys(changedTier.state!.dispatches).length, 1,
+        "the mismatched prefix does not admit a cross-tier generation");
     }
   });
 
   it("does not continue the failed turn when v2 receipt settlement is unconfirmed", async () => {
     const { state, beforeSettle } = await runAllowanceRuntime({ rejectSettlement: true });
     assert.equal(beforeSettle, undefined, "the real registered before-settle hook must not omit the failure or continue");
-    const dispatch = Object.values(state.dispatches)[0];
+    const dispatch = Object.values(state!.dispatches)[0];
     assert.ok(dispatch);
     assert.equal(dispatch.settledAt, undefined, "the receipt remains visibly unsettled for inspection");
   });
@@ -247,7 +318,7 @@ describe("reliability v2 registered Auto runtime", () => {
   it("rechecks the raw branch after awaited settlement before preparing an alternate", async () => {
     const { state, beforeSettle } = await runAllowanceRuntime({ interveneDuringSettlement: true });
     assert.equal(beforeSettle, undefined, "a branch entry appended during settlement must cancel the retry");
-    const dispatch = Object.values(state.dispatches)[0];
+    const dispatch = Object.values(state!.dispatches)[0];
     assert.ok(dispatch?.settledAt, "the original allowance failure remains settled");
   });
 
@@ -255,14 +326,14 @@ describe("reliability v2 registered Auto runtime", () => {
     const { state, beforeSettle, routeError } = await runAllowanceRuntime({ routeAfterPrepare: true });
     assert.ok(beforeSettle, "the original safe boundary prepares the alternate");
     assert.match(String(routeError), /prepared usage-limit retry was cancelled/);
-    assert.equal(Object.keys(state.dispatches).length, 1, "the stale continuation does not admit a second model");
+    assert.equal(Object.keys(state!.dispatches).length, 1, "the stale continuation does not admit a second model");
   });
 
   it("stops a prepared retry after reload disables recovery instead of routing normally", async () => {
     const { state, beforeSettle, routeError } = await runAllowanceRuntime({ reloadAfterPrepare: true });
     assert.ok(beforeSettle, "the original safe boundary prepares the alternate");
     assert.match(String(routeError), /prepared usage-limit retry was cancelled/);
-    assert.equal(Object.keys(state.dispatches).length, 1, "the reloaded route does not admit another model");
+    assert.equal(Object.keys(state!.dispatches).length, 1, "the reloaded route does not admit another model");
   });
 
   it("binds the latest real branch user despite a trailing synthetic user message and stores only normalized failure evidence", async () => {

@@ -12,7 +12,7 @@ When Pi reports a usage or billing rejection, the request can end before it prod
 
 When `reliability.retryOnAllowanceExhausted` is enabled (default `true`) and allowance cooldown is enabled, Pi Auto may make at most one automatic attempt on a different configured model after an explicit usage or billing rejection. The retry is allowed only when Pi's pinned `agent_before_settle` boundary proves all of the following:
 
-- the request belongs to one exact user message and one automatic Auto route;
+- the request belongs to one exact user message and one Auto model selection, either automatic or from an explicit tier prefix;
 - every failed assistant attempt from the original user boundary has no content and names the same admitted model;
 - any earlier failed attempt was omitted from the model projection by Pi's exact null context edit;
 - there are no tool calls or tool results, queued messages, aborts, or intervening messages;
@@ -23,7 +23,7 @@ Bifrost settles the original failure before editing the model-context projection
 
 The retry setting applies only when reliability is enabled and `cooldownOnAllowanceExhausted` is enabled. Bifrost must save the configured model or provider pause before it can safely dispatch an alternate. See ADR 0024 for pause scope.
 
-Physical selection, direct model bindings, explicit tier prefixes, exhausted explicit schema-v2 fallback boundaries, tool continuations, unsafe or unknown failures, and the absence of an eligible configured alternate do not trigger this behavior. Pi's own bounded retries may run first. Bifrost accepts that chain only when each preceding attempt is an empty error from the same admitted model and Pi recorded a null context edit for that exact assistant entry. When the requested tier has no eligible alternate and no explicit fallback policy, Bifrost checks the configured default and remaining configured tiers in stable config order. The retry flag is adapter lifecycle policy and is rejected by the resolve-only router API. A second Bifrost allowance failure ends the turn; Bifrost does not try a third model.
+Physical selection, direct model bindings, exhausted explicit schema-v2 fallback boundaries, tool continuations, unsafe or unknown failures, and the absence of an eligible configured alternate do not trigger this behavior. An explicit tier prefix can recover only when the initial selection stayed in that tier, and its alternate must also come from that tier. If the initial selection used the existing fallback to another tier, or the requested tier has no eligible alternate, recovery stops even when a general fallback is configured. An unprefixed Auto route keeps its existing fallback behavior. Pi's own bounded retries may run first. Bifrost accepts that chain only when each preceding attempt is an empty error from the same admitted model and Pi recorded a null context edit for that exact assistant entry. When an unprefixed requested tier has no eligible alternate and no explicit fallback policy, Bifrost checks the configured default and remaining configured tiers in stable config order. The retry flag is adapter lifecycle policy and is rejected by the resolve-only router API. A second Bifrost allowance failure ends the turn; Bifrost does not try a third model.
 
 The user can turn the behavior off with:
 

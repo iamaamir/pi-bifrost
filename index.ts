@@ -1373,6 +1373,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     readonly assistantMessage: WeakRef<object>;
     readonly failedModelKey: string;
     readonly requestedTier: string;
+    readonly selectedTier: string;
+    readonly explicitTier: boolean;
     readonly observation: NonNullable<ReturnType<typeof normalizeFailureObservation>>;
     readonly receipt?: AutoDispatchReceipt;
   }
@@ -1384,6 +1386,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     readonly assistantEntryId: string;
     readonly approvedAssistantEntryIds: readonly string[];
     readonly requestedTier: string;
+    readonly explicitTier: boolean;
     readonly candidateKey: string;
     readonly selectedTier: string;
     readonly randomValue: number;
@@ -1475,6 +1478,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     event: TurnEndEvent,
     boundary: { entryId: string; message: object },
     failedModelKey: string,
+    failureCategory: NonNullable<ReturnType<typeof normalizeFailureObservation>>["category"],
   ): string {
     const content = (event.message as { content?: unknown }).content;
     if ((Array.isArray(content) && content.length > 0)
@@ -1482,7 +1486,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       return "Automatic retry stopped because this turn produced output or used tools.";
     }
     if (hasActiveAllowanceRetryAttempt(ctx, boundary, failedModelKey)) {
-      return "The alternate also reached a usage limit. Automatic retry limit reached.";
+      const failureLabel = failureCategory === "billing_denied" ? "a billing denial"
+        : failureCategory === "allowance_exhausted" ? "a usage limit" : "another failure";
+      return `The alternate also returned ${failureLabel}. Automatic retry limit reached.`;
     }
     return "Automatic retry stopped because this turn had other activity.";
   }
@@ -1551,7 +1557,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   ): AutoRouteProof | undefined {
     const matches = (autoRouteProofsBySession.get(ctx.sessionManager) ?? []).filter((proof) =>
       proof.modelKey === model && proof.entryId === boundary.entryId && proof.userMessage.deref() === boundary.message
-      && proof.explicitTier === false && autoBoundaryStillActive(ctx, { ...proof, message: boundary.message }));
+      && autoBoundaryStillActive(ctx, { ...proof, message: boundary.message }));
     return matches.length === 1 ? matches[0] : undefined;
   }
 
@@ -1569,7 +1575,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     if (!isBudgetLimitFailure(observation) || observation?.source !== "runtime") return undefined;
     if (observation.category !== "allowance_exhausted" && observation.category !== "billing_denied") return undefined;
     const failureCategory = observation.category;
-      const approvedAssistantEntryIds = isSideEffectFreeAllowanceFailure(ctx, assistantMessage, pending.assistantEntryId, boundary, failedModelKey);
+    const approvedAssistantEntryIds = isSideEffectFreeAllowanceFailure(ctx, assistantMessage, pending.assistantEntryId, boundary, failedModelKey);
     if (reliability?.retryOnAllowanceExhausted === false) {
       setAllowanceRetryStopReason(ctx, "Automatic retry is off.");
       return undefined;
@@ -1592,7 +1598,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     }
     const previousAttempt = allowanceRetryAttemptBySession.get(ctx.sessionManager);
     if (previousAttempt?.entryId === boundary.entryId && previousAttempt.userMessage.deref() === boundary.message) {
-      setAllowanceRetryStopReason(ctx, "The alternate also reached a usage limit. Automatic retry limit reached.");
+      const failureLabel = failureCategory === "billing_denied" ? "a billing denial" : "a usage limit";
+      setAllowanceRetryStopReason(ctx, `The alternate also returned ${failureLabel}. Automatic retry limit reached.`);
       return undefined;
     }
     const proof = receipt
@@ -1601,6 +1608,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       : uniqueV1RouteProof(ctx, boundary, failedModelKey);
     if (!proof) {
       setAllowanceRetryStopReason(ctx, "The original route could not be verified; no retry was sent.");
+      return undefined;
+    }
+    const explicitTier = receipt?.explicitTier ?? pending.explicitTier;
+    const initialSelectedTier = receipt?.tier ?? pending.selectedTier;
+    if (explicitTier && initialSelectedTier !== requestedTier) {
+      setAllowanceRetryStopReason(ctx, "The requested tier selected another tier before this failure; no retry was sent.");
       return undefined;
     }
     const ownerBoundary: AutoUserBoundary = receipt
@@ -1632,7 +1645,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         ? userContent.flatMap((block) => block && typeof block === "object" && (block as { type?: unknown }).type === "text"
           && typeof (block as { text?: unknown }).text === "string" ? [(block as { text: string }).text] : []).join("\n")
         : "";
-    if (getPipeline(ctx).matchRule(prompt)?.includes("/")) {
+    if (!explicitTier && getPipeline(ctx).matchRule(prompt)?.includes("/")) {
       setAllowanceRetryStopReason(ctx, "Your explicit model route was preserved.");
       return undefined;
     }
@@ -1671,9 +1684,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     }
 
     const randomValue = Math.random();
-    const alternative = resolveAllowanceAlternative(ctx, requestedTier, failedModelKey, randomValue);
+    const alternative = resolveAllowanceAlternative(ctx, requestedTier, failedModelKey, randomValue, explicitTier);
     if (!alternative) {
-      log(ctx, `Bifrost: ${failedModelKey} reached a usage limit. No eligible configured alternative is available for ${requestedTier}; no retry was sent.`, "warning");
+      const failureLabel = failureCategory === "billing_denied" ? "billing was denied for" : "usage limit reached for";
+      log(ctx, `Bifrost: ${failureLabel} ${failedModelKey}. No eligible configured alternative is available for ${requestedTier}; no retry was sent.`, "warning");
       debugLifecycle("reliability", "allowance_retry_unavailable", ctx.sessionManager, boundary.message, {
         model: failedModelKey,
         tier: requestedTier,
@@ -1693,6 +1707,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       assistantEntryId: pending.assistantEntryId,
       approvedAssistantEntryIds,
       requestedTier,
+      explicitTier,
       candidateKey: modelKey(alternative.model),
       selectedTier: alternative.selectedTier,
       randomValue,
@@ -2166,13 +2181,16 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     requestedTier: string,
     failedModelKey: string,
     randomValue: number,
+    explicitTier = false,
   ): { model: Model<Api>; selectedTier: string; attempt: ReturnType<typeof resolveConfiguredTier> } | undefined {
     const random = () => randomValue;
     const firstAttempt = resolveForTier(ctx, requestedTier, undefined, false, random);
     const first = firstAttempt.resolution;
-    if (first.selected && modelKey(first.selected) !== failedModelKey) {
+    if (first.selected && modelKey(first.selected) !== failedModelKey
+      && (!explicitTier || first.selectedTier === requestedTier)) {
       return { model: first.selected, selectedTier: first.selectedTier ?? requestedTier, attempt: firstAttempt };
     }
+    if (explicitTier) return undefined;
     if (hasExplicitTierPolicy(state.config, requestedTier)) return undefined;
 
     const orderedTiers = [state.config.default, ...Object.keys(state.config.models ?? {})]
@@ -2329,6 +2347,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       let autoBoundary: AutoUserBoundary | undefined;
       let dispatchReceipt: AutoDispatchReceipt | undefined;
       let activeRouteTier: string | undefined;
+      let activeRouteRequestedTier: string | undefined;
+      let activeRouteExplicitTier = false;
       let dispatchRecoveryToken: AllowanceRetryToken | undefined;
       let rejectionCategory = "preflight_rejection";
       let terminalRouteCategory: string | undefined;
@@ -2446,12 +2466,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           let activeRecoveryToken: AllowanceRetryToken | undefined;
           dispatchRecoveryToken = undefined;
           let recoveryRuleTier: string | undefined;
-          if (request.reason === "user" && autoBoundary && !forcedTier) {
+          if (request.reason === "user" && autoBoundary) {
             const prepared = allowanceRetryBySession.get(ctx.sessionManager);
             const cancelled = allowanceRetryCancelledBySession.get(ctx.sessionManager);
             const token = currentAllowanceRetry(ctx, autoBoundary);
-            if (token) {
-              const ruleTarget = getPipeline(ctx).matchRule(prompt);
+            if (token && (!forcedTier || forcedTier === token.requestedTier)) {
+              const ruleTarget = token.explicitTier ? undefined : getPipeline(ctx).matchRule(prompt);
               recoveryRuleTier = ruleTarget?.includes("/") ? ruleTarget : undefined;
               if (recoveryRuleTier === undefined) {
                 activeRecoveryToken = token;
@@ -2467,6 +2487,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
                 clearAllowanceRetry(ctx.sessionManager, "explicit_rule_matched");
                 forcedTier = recoveryRuleTier;
               }
+            } else if (token && forcedTier) {
+              clearAllowanceRetry(ctx.sessionManager, "explicit_tier_override");
+              terminalRouteCategory = "allowance_retry_tier_changed";
+              throw new Error("Bifrost: the prepared usage-limit retry was cancelled because the requested tier changed; no model was dispatched.");
             } else if ([prepared, cancelled].some((candidate) => candidate?.entryId === autoBoundary.entryId
               && candidate.userMessage.deref() === autoBoundary.message)) {
               terminalRouteCategory = "allowance_retry_boundary_changed";
@@ -2567,7 +2591,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             ...(activeRouteOrigin === "automatic" && affinityStore ? (() => { const anchor = affinityAnchor(ctx); return anchor ? { anchor } : {}; })() : {}),
           };
           let recoveryResolution = activeRecoveryToken
-            ? resolveAllowanceAlternative(ctx, activeRecoveryToken.requestedTier, activeRecoveryToken.failedModelKey, activeRecoveryToken.randomValue)
+            ? resolveAllowanceAlternative(ctx, activeRecoveryToken.requestedTier, activeRecoveryToken.failedModelKey, activeRecoveryToken.randomValue, activeRecoveryToken.explicitTier)
             : undefined;
           if (activeRecoveryToken && !recoveryResolution) {
             terminalRouteCategory = "allowance_retry_candidate_unavailable";
@@ -2652,6 +2676,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             return undefined;
           }
           activeRouteTier = resolved.selectedTier ?? classification.tier;
+          activeRouteRequestedTier = classification.tier;
+          activeRouteExplicitTier = activeRecoveryToken?.explicitTier ?? (activeRouteOrigin === "explicit_tier");
           if (!state.enabled || state.pinned) throw new Error("Bifrost: virtual auto was disabled or pinned during routing; select a physical model");
           debug("virtual", "select", { tier: classification.tier, model: modelKey(model), source: classification.kind === "classified" ? classification.source : "fallback", ...classifierIdentity, skipped: resolved.skipped, routingDurationMs });
           debugLifecycle("virtual", "selected", ctx.sessionManager, correlationTurn, {
@@ -2671,7 +2697,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               modelKey: modelKey(model),
               requestedTier: classification.tier,
               selectedTier: activeRouteTier,
-              explicitTier: activeRouteOrigin === "explicit_tier",
+              explicitTier: activeRouteExplicitTier,
             });
           }
           if (activeRecoveryToken) {
@@ -2752,9 +2778,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               userMessage: boundary.message,
               configGeneration: boundary.configGeneration,
               modelKey: key,
+              requestedTier: activeRouteRequestedTier ?? activeRouteTier,
               tier: activeRouteTier,
+              explicitTier: activeRouteExplicitTier,
               affinityEligible: state.enabled && !state.pinned && activeRouteOrigin === "automatic",
-              retryEligible: activeRouteOrigin === "automatic",
+              retryEligible: activeRouteOrigin === "automatic" || activeRouteOrigin === "explicit_tier",
               observationsEnabled: state.config.reliability?.observations?.enabled === true,
               admittedAt: Date.now(),
               proofUntil: Date.now() + V2_MAX_DISPATCH_LIFETIME_MS,
@@ -3013,10 +3041,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             assistantMessage: new WeakRef(event.message),
             failedModelKey,
             requestedTier: routeProof.requestedTier,
+            selectedTier: routeProof.selectedTier,
+            explicitTier: routeProof.explicitTier,
             observation,
           });
           else {
-            setAllowanceRetryStopReason(ctx, allowanceFailureStopReason(ctx, event, boundary, failedModelKey));
+            setAllowanceRetryStopReason(ctx, allowanceFailureStopReason(ctx, event, boundary, failedModelKey, observation.category));
           }
         }
       }
@@ -3110,12 +3140,14 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         assistantEntryId: event.messageEntryId,
         assistantMessage: new WeakRef(event.message),
         failedModelKey: receipt.modelKey,
-        requestedTier: receipt.tier,
+        requestedTier: receipt.requestedTier,
+        selectedTier: receipt.tier,
+        explicitTier: receipt.explicitTier,
         observation: receipt.failureObservation,
         receipt,
       });
       else {
-        setAllowanceRetryStopReason(ctx, allowanceFailureStopReason(ctx, event, boundary, receipt.modelKey));
+        setAllowanceRetryStopReason(ctx, allowanceFailureStopReason(ctx, event, boundary, receipt.modelKey, receipt.failureObservation.category));
       }
     }
   });

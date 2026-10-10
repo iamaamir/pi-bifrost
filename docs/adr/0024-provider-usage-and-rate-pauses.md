@@ -14,7 +14,7 @@ By default, a confirmed usage-exhaustion or billing-denial response pauses model
 
 `reliability.enabled: false` disables provider pause recording and enforcement. It does not erase saved provider pause state.
 
-An HTTP 402 response is `billing_denied`. It pauses the provider by default, but does not prove that the provider account has no credits. Explicit usage or credit exhaustion is `allowance_exhausted`.
+An HTTP 402 response is `billing_denied`. Text that clearly says a subscription is required or expired is also `billing_denied`, including an HTTP 403 response. A generic HTTP 403 remains an authentication or permission failure unless its text provides that billing evidence. Billing denials pause the provider by default, but do not prove that the provider account has no credits. Explicit usage or credit exhaustion is `allowance_exhausted`.
 
 HTTP 429 rate limits pause the configured provider. A validated retry time sets a pause of up to five minutes. If no valid time is available, the pause lasts five seconds. A clear usage-exhaustion response follows the usage-pause policy. Rate-limit pauses do not retry the current prompt. HTTP 5xx responses follow normal model failure handling.
 

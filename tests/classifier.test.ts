@@ -127,6 +127,54 @@ describe("classifier", () => {
     assert.equal(subprocessCalls, 0);
   });
 
+  it("reports a terminal classifier 403 only when its text proves subscription denial", async () => {
+    const model = makeModel("fixture", "go-classifier");
+    for (const [errorMessage, expected] of [
+      ["An active OpenCode Go subscription is required to use Go", true],
+      ["Forbidden", false],
+    ] as const) {
+      const observed: Array<{ status: number; errorMessage?: string }> = [];
+      const controller = new AbortController();
+      await classifyWithLLM({
+        cwd: process.cwd(),
+        signal: controller.signal,
+        modelRegistry: {
+          streamSimple: (_model: unknown, _context: unknown, options: { onResponse?: (response: { status: number; headers: Record<string, string> }, model: { provider: string; id: string }) => void | Promise<void> }) => ({
+            result: async () => {
+              await options.onResponse?.({ status: 403, headers: {} }, model);
+              if (!expected) controller.abort();
+              return { content: [], stopReason: "error", errorMessage };
+            },
+          }),
+        },
+      } as never, { kind: "registry", model }, ["frontier"], "request", {
+        method: "direct",
+        onProviderHttpResponse: (_providerModel, status, _retryAfter, terminalError) => { observed.push({ status, errorMessage: terminalError }); },
+      });
+      assert.equal(observed.length, expected ? 1 : 0, errorMessage);
+      if (expected) assert.deepEqual(observed, [{ status: 403, errorMessage }]);
+    }
+
+    const observedAfterRetry: number[] = [];
+    const retried = await classifyWithLLM({
+      cwd: process.cwd(),
+      modelRegistry: {
+        streamSimple: (_model: unknown, _context: unknown, options: { onResponse?: (response: { status: number; headers: Record<string, string> }, model: { provider: string; id: string }) => void | Promise<void> }) => ({
+          result: async () => {
+            await options.onResponse?.({ status: 403, headers: {} }, model);
+            await options.onResponse?.({ status: 200, headers: {} }, model);
+            return { content: [{ type: "text", text: "quick" }], stopReason: "stop" };
+          },
+        }),
+      },
+    } as never, { kind: "registry", model }, ["quick"], "request", {
+      method: "auto",
+      onProviderHttpResponse: (_providerModel, status) => { observedAfterRetry.push(status); },
+    });
+    assert.equal(retried, "quick");
+    assert.deepEqual(observedAfterRetry, [], "a successful retry after an intermediate 403 does not report a provider pause");
+  });
+
   it("forwards bounded terminal quota details without logging provider text", async () => {
     const model = makeModel("fixture", "classifier");
     const errorMessage = `insufficient_quota ${"x".repeat(1_100)} PRIVATE_PROVIDER_ERROR`;

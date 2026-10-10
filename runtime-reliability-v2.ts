@@ -67,7 +67,9 @@ export interface AutoDispatchReceipt {
   readonly configGeneration: number;
   readonly manualGeneration: number;
   readonly modelKey: string;
+  readonly requestedTier: string;
   readonly tier: string;
+  readonly explicitTier: boolean;
   readonly observationsEnabled: boolean;
   readonly affinityEligible: boolean;
   readonly retryEligible: boolean;
@@ -123,7 +125,9 @@ export class AutoDispatchReceiptBook {
     userMessage: object;
     configGeneration: number;
     modelKey: string;
+    requestedTier: string;
     tier: string;
+    explicitTier: boolean;
     observationsEnabled: boolean;
     affinityEligible: boolean;
     retryEligible: boolean;
@@ -145,7 +149,9 @@ export class AutoDispatchReceiptBook {
       configGeneration: input.configGeneration,
       manualGeneration: owner.manualGeneration,
       modelKey: input.modelKey,
+      requestedTier: input.requestedTier,
       tier: input.tier,
+      explicitTier: input.explicitTier,
       observationsEnabled: input.observationsEnabled,
       affinityEligible: input.affinityEligible,
       retryEligible: input.retryEligible,
