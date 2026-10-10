@@ -14,13 +14,15 @@ It shows effective routing and reliability state after configuration layers merg
 |---------|---------|--------------|--------|
 | `pi` command is missing | Run `pi --version` in a terminal | Pi is not installed or not on `PATH` | Install [Pi](https://pi.dev), then reopen the terminal |
 | Pi rejects the package | Check `pi --version` | Pi is older than `1.0.1` | Upgrade Pi, then rerun `pi install npm:pi-bifrost` |
-| `Bifrost: no healthy physical model for tier X` | `/bifrost preview <prompt>` | Effective config has an empty `models` pool (the shipped fallback config ships none) or pool models are uncredentialed/unresolvable | Add models via `/bifrost init`, or put a `bifrost.json` with populated `models` in the project or `.pi/` |
+| `Bifrost: no healthy physical model for tier X` | `/bifrost preview <prompt>` | Effective config has an empty `models` pool or pool models are uncredentialed/unresolvable | Refresh the Pi catalog with `/bifrost init`, or add model pools to the active configuration |
 | Init reports zero registry models | Open Pi's model picker; run `/bifrost debug` | No provider is configured or authenticated in Pi | Configure at least one Pi provider and credential, then restart or refresh Pi |
 | Probe returns errors or timeouts | `/bifrost probe`; inspect provider account/network | Invalid credentials, no credits, network failure, provider outage, or burst rate limit | Fix provider access; lower `probe.concurrency`; probe again |
-| Init finds no usable models | Read probe summary | Every registry model failed, timed out, or was unsupported | Fix provider access before accepting generated pools |
+| Init finds no models | Open Pi's model picker; run `/bifrost debug` | Pi has no available chat models | Configure a provider in Pi, then run `/bifrost init` again |
 | Preview resolves an unexpected tier | `/bifrost preview <prompt>`; `/bifrost classifier status`; `/bifrost cache stats` | Earlier cache/classifier result beat regex, rule order differs, or default tier applied | Inspect preview `source`; clear stale local cache; test classifier; reorder rules or change default |
 | Wrong exact model is selected | `/bifrost preview <prompt>`; `/bifrost debug` | Broad substring pattern, tier strategy, candidate order, or health exclusion | Use exact `provider/id`; inspect strategy and candidate list; probe unhealthy model |
 | A configured model is skipped | `/bifrost debug`; `/bifrost probe` | Reliability circuit is open after repeated failures | Fix provider/model health and run a successful probe; otherwise wait for controlled recovery |
+| Pi reports a usage or billing rejection | `/bifrost reliability`; `/bifrost debug` | By default, the configured Pi provider is paused in Auto and physical routing | Wait for the pause or use `/bifrost reliability reset --provider <exact-id>`. A reset stops during an active recovery trial. Auto can make one alternate attempt only after Pi proves the turn was empty and safe. Set `reliability.retryOnAllowanceExhausted: false` to disable that retry. See [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks) |
+| A provider returns HTTP 429 | `/bifrost reliability`; `/bifrost debug` | Bifrost applies a short provider pause. A clear quota response uses the usage-pause policy instead. | Wait for the pause. The rate-limit pause does not retry the current prompt. See [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks) |
 | Config edit has no effect | `/bifrost debug` | Higher-precedence config overrides it or config was not reloaded | Check all config locations; edit winning layer; run `/bifrost reload` |
 | Init probe result is stale | `/bifrost init -f` | Cached probe is older than one hour | Run `/bifrost init -f` to force a fresh probe |
 | Prompt classifier fails | `/bifrost classifier test`; `/bifrost classifier status` | Missing model, provider error, invalid response, or fallback configuration | Select a working classifier model or disable classifier for rules/default-only routing |
@@ -29,7 +31,7 @@ It shows effective routing and reliability state after configuration layers merg
 
 ## Lower probe pressure
 
-`/bifrost probe` sends a tiny request to every model available in Pi's registry. `/bifrost init` does the same when no probe result newer than one hour exists. Pass `-f` to force a fresh probe regardless of cache age. Default concurrency is 50. Before the first init, lower it in `~/.pi/agent/bifrost.json` or `.pi/bifrost.json` when providers enforce tight burst limits:
+`/bifrost probe` sends a tiny request to every available chat model. `/bifrost init` refreshes model metadata but does not probe models. Pass `-f` to `/bifrost init` when you want a fresh probe. Default concurrency is 50. Before a probe, lower it in `~/.pi/agent/bifrost.json` or `.pi/bifrost.json` when providers enforce tight burst limits:
 
 ```json
 {

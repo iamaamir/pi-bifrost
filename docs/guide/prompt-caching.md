@@ -142,6 +142,6 @@ No. It reports Bifrost's local tier-classification cache only.
 
 No. Pinning improves the opportunity for cache locality by keeping the model stable. Providers still control cache eligibility and billing.
 
-### Can Bifrost automatically replay a failed request on another model?
+### Can Bifrost retry after an allowance failure?
 
-No. It never automatically replays failed prompts because the original turn may already have caused side effects. Reliability circuits change future routing only.
+In Pi Auto, Bifrost can make one attempt on another configured model after a usage or billing rejection. Pi must prove the failed turn was empty and had no tools or other activity. By default, the rejection pauses all models with the same configured Pi provider ID in Auto and physical routing. Set `reliability.retryOnAllowanceExhausted: false` to disable the retry. See [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks) and [ADR 0023](../adr/0023-bounded-allowance-recovery.md).

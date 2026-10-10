@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import pty
+import select
 import fcntl
 import termios
 import struct
@@ -13,6 +14,8 @@ import subprocess
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -21,7 +24,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "screenshots" / "ui-smoke"
-PI = shutil.which("pi")
+PI = os.environ.get("PI_BIN") or str(ROOT / "node_modules" / ".bin" / "pi")
+FAKE_SERVER = ROOT / "scripts" / "fake-provider-server.mjs"
+OUTBOUND_GUARD = ROOT / "scripts" / "test-outbound-guard.cjs"
+FAKE_PORT: int | None = None
 
 WIDTH = 120
 HEIGHT = 36
@@ -351,22 +357,153 @@ def set_winsize(fd: int, rows: int, cols: int) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, winsz)
 
 
-def spawn_pi(log_path: Path, cwd: Path) -> tuple[subprocess.Popen[bytes], int]:
-    if not PI:
-        raise SystemExit("pi not found on PATH")
+def start_fake_provider() -> tuple[subprocess.Popen[str], int]:
+    proc = subprocess.Popen(
+        ["node", str(FAKE_SERVER)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        cwd=str(ROOT),
+    )
+    assert proc.stdout is not None
+    ready, _, _ = select.select([proc.stdout], [], [], 10)
+    if not ready:
+        stop_process(proc)
+        raise TimeoutError("local fake provider did not start within 10 seconds")
+    try:
+        payload = json.loads(proc.stdout.readline())
+        port = payload.get("port")
+        if not isinstance(port, int):
+            raise ValueError("fake provider did not report a local port")
+        return proc, port
+    except Exception:
+        stop_process(proc)
+        raise
+
+
+def stop_process(proc: subprocess.Popen[object]) -> None:
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=2)
+
+
+def fake_stats(port: int) -> dict[str, object]:
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/_stats", timeout=1) as response:
+        return json.loads(response.read())
+
+
+def wait_for_model_attempts(port: int, before: dict[str, int], models: tuple[str, ...], timeout: float = 25.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            stats = fake_stats(port)
+            attempts = stats.get("attempts", {})
+            if isinstance(attempts, dict) and all(int(attempts.get(model, 0)) > before.get(model, 0) for model in models):
+                return
+        except (OSError, urllib.error.URLError, ValueError):
+            pass
+        time.sleep(0.1)
+    raise TimeoutError(f"expected bounded fake-provider requests were not observed for {', '.join(models)}")
+
+
+def wait_for_provider_request(port: int, provider: str, model: str, timeout: float = 25.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            requests = fake_stats(port).get("stats", [])
+            if isinstance(requests, list) and any(
+                isinstance(request, dict) and request.get("provider") == provider and request.get("model") == model
+                for request in requests
+            ):
+                return
+        except (OSError, urllib.error.URLError, ValueError):
+            pass
+        time.sleep(0.1)
+    raise TimeoutError(f"expected request to {provider}/{model} was not observed")
+
+
+def write_agent_fixture(
+    agent_dir: Path,
+    port: int,
+    model_inventory: Iterable[str] = (),
+    only_models: Iterable[str] | None = None,
+    backup_provider: bool = False,
+) -> None:
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    available = list(only_models) if only_models is not None else ["usage-exhausted", "healthy", "classifier", *model_inventory]
+    models = [{"id": model_id, "reasoning": False} for model_id in available]
+    (agent_dir / "models.json").write_text(json.dumps({
+        "providers": {
+            "fake": {
+                "baseUrl": f"http://127.0.0.1:{port}/v1",
+                "api": "openai-completions",
+                "apiKey": "ui-fixture-only",
+                "models": models,
+            },
+            **({"fake-backup": {
+                "baseUrl": f"http://127.0.0.1:{port}/v1",
+                "api": "openai-completions",
+                "apiKey": "ui-fixture-backup-only",
+                "models": [{"id": "healthy", "reasoning": False}],
+            }} if backup_provider else {}),
+        },
+    }) + "\n")
+    (agent_dir / "settings.json").write_text('{"retry":{"enabled":false}}\n')
+
+
+def pi_test_environment(home: Path, agent_dir: Path, port: int) -> dict[str, str]:
+    return {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(home),
+        "PI_CODING_AGENT_DIR": str(agent_dir),
+        "PI_SKIP_VERSION_CHECK": "1",
+        "PI_OFFLINE": "1",
+        "NODE_OPTIONS": f"--require={OUTBOUND_GUARD}",
+        "BIFROST_TEST_ALLOWED_ORIGIN": f"http://127.0.0.1:{port}",
+        "BIFROST_TEST_NETWORK_VIOLATIONS": str(home / "test-network-violations.log"),
+    }
+
+
+def assert_no_network_violations(home: Path) -> None:
+    path = home / "test-network-violations.log"
+    if path.exists() and path.read_text(errors="ignore"):
+        raise AssertionError("test network guard recorded a blocked external request")
+
+
+def assert_fake_only_inventory(home: Path, cwd: Path, agent_dir: Path, port: int) -> None:
+    result = subprocess.run(
+        [PI, "-e", str(ROOT), "--list-models"],
+        cwd=str(cwd),
+        env=pi_test_environment(home, agent_dir, port),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    rows = [line.strip().split() for line in result.stdout.splitlines()[1:] if line.strip()]
+    providers = {row[0] for row in rows}
+    assert providers - {"bifrost"} == {"fake"}, result.stdout
+    assert [row[1] for row in rows if row[0] == "bifrost"] == ["auto"], result.stdout
+    assert_no_network_violations(home)
+
+
+def spawn_pi(log_path: Path, cwd: Path, agent_dir: Path, provider: str = "fake", model: str = "healthy") -> tuple[subprocess.Popen[bytes], int]:
+    if not PI or not Path(PI).exists():
+        raise SystemExit(f"pinned Pi binary not found: {PI}")
 
     master, slave = pty.openpty()
     set_winsize(master, HEIGHT, WIDTH)
-    env = os.environ.copy()
-    env.update(
-        {
-            "PI_TUI_WRITE_LOG": str(log_path),
-            "PI_SKIP_VERSION_CHECK": "1",
-            "PI_OFFLINE": "1",
-            "TERM": "xterm-256color",
-            "COLORTERM": "truecolor",
-        }
-    )
+    env = pi_test_environment(agent_dir.parent.parent, agent_dir, int(FAKE_PORT))
+    env.update({
+        "PI_TUI_WRITE_LOG": str(log_path),
+        "TERM": "xterm-256color",
+        "COLORTERM": "truecolor",
+    })
     proc = subprocess.Popen(
         [
             PI,
@@ -376,9 +513,9 @@ def spawn_pi(log_path: Path, cwd: Path) -> tuple[subprocess.Popen[bytes], int]:
             "--no-session",
             "--no-tools",
             "--provider",
-            "ollama",
+            provider,
             "--model",
-            "gemma4:12b-mlx",
+            model,
         ],
         stdin=slave,
         stdout=slave,
@@ -420,7 +557,17 @@ def wait_stable(path: Path, timeout: float = 8.0, stable_for: float = 0.6) -> No
     raise TimeoutError(f"log not stable: {path}")
 
 
-def capture(name: str, enabled: bool, actions: Iterable[tuple[float, str]] = ()) -> Path:
+def capture(
+    name: str,
+    enabled: bool,
+    actions: Iterable[tuple[float, str]] = (),
+    config_override: dict[str, object] | None = None,
+    model_inventory: Iterable[str] = (),
+    reload_invalid_economics: bool = False,
+    fresh_install: bool = False,
+    launch_auto: bool = False,
+    only_models: Iterable[str] | None = None,
+) -> Path:
     OUT.mkdir(parents=True, exist_ok=True)
     log_path = OUT / f"{name}.ansi.log"
     png_path = OUT / f"{name}.png"
@@ -430,23 +577,140 @@ def capture(name: str, enabled: bool, actions: Iterable[tuple[float, str]] = ())
 
     tmp = tempfile.TemporaryDirectory()
     workspace = Path(tmp.name)
-    config = json.loads((ROOT / "bifrost.json").read_text())
-    config["enabled"] = enabled
-    (workspace / "bifrost.json").write_text(json.dumps(config, indent=2) + "\n")
+    if not fresh_install:
+        config = json.loads((ROOT / "bifrost.json").read_text())
+        config["enabled"] = enabled
+        config["default"] = "general"
+        config["models"] = {"general": ["fake/healthy"]}
+        config["classifier"] = {"enabled": False, "backend": "prompt"}
+        if config_override:
+            config.update(config_override)
+        (workspace / "bifrost.json").write_text(json.dumps(config, indent=2) + "\n")
+    home = workspace / "isolated-home"
+    agent_dir = home / ".pi" / "agent"
+    assert FAKE_PORT is not None
+    write_agent_fixture(agent_dir, FAKE_PORT, model_inventory, only_models, name == "allowance-recovery")
+    if name in ("fresh-physical", "fresh-auto"):
+        assert_fake_only_inventory(home, workspace, agent_dir, FAKE_PORT)
 
-    proc, master = spawn_pi(log_path, workspace)
+    before = fake_stats(FAKE_PORT)
+    previous_attempts = before.get("attempts", {})
+    attempts_before = previous_attempts if isinstance(previous_attempts, dict) else {}
+    provider, model = ("bifrost", "auto") if launch_auto or name in ("allowance-recovery", "auto-large-pool") else ("fake", "healthy")
+    proc, master = spawn_pi(log_path, workspace, agent_dir, provider, model)
     stop = threading.Event()
     t = threading.Thread(target=reader, args=(master, stop), daemon=True)
     t.start()
 
     try:
         time.sleep(2.5)
+        if reload_invalid_economics:
+            fixture_config_path = workspace / "bifrost.json"
+            fixture_config = json.loads(fixture_config_path.read_text())
+            fixture_config["schemaVersion"] = 2
+            fixture_config["economics"] = {
+                "mode": "policy",
+                "scopes": {"selected": {"kind": "model", "model": "fake/healthy"}},
+                "sources": [{"id": "manual", "scopeRef": "selected", "authority": "declared"}],
+                "admission": [],
+            }
+            fixture_config_path.write_text(json.dumps(fixture_config, indent=2) + "\n")
         for delay, payload in actions:
             time.sleep(delay)
             send(master, payload)
             time.sleep(1.5)
 
+        if name == "classify":
+            wait_for_model_attempts(
+                FAKE_PORT,
+                {key: int(value) for key, value in attempts_before.items() if isinstance(value, int)},
+                ("classifier", "healthy"),
+            )
+        if name == "classifier-degradation":
+            wait_for_model_attempts(
+                FAKE_PORT,
+                {key: int(value) for key, value in attempts_before.items() if isinstance(value, int)},
+                ("classifier", "healthy"),
+            )
+        if name == "allowance-recovery":
+            wait_for_model_attempts(
+                FAKE_PORT,
+                {key: int(value) for key, value in attempts_before.items() if isinstance(value, int)},
+                ("usage-exhausted",),
+            )
+            wait_for_provider_request(FAKE_PORT, "fake-backup", "healthy")
+        if name == "auto-large-pool":
+            wait_for_model_attempts(FAKE_PORT, attempts_before, ("pool-000",))
+            stats = fake_stats(FAKE_PORT)
+            attempts = stats.get("attempts", {})
+            if not isinstance(attempts, dict) or int(attempts.get("pool-000", 0)) <= int(attempts_before.get("pool-000", 0)):
+                raise AssertionError("large-pool Auto routing did not generate with the first configured model")
+            if any(int(attempts.get(f"pool-{index:03d}", 0)) > int(attempts_before.get(f"pool-{index:03d}", 0)) for index in range(1, 513)):
+                raise AssertionError("large-pool Auto routing generated with a model other than the configured first model")
+        if name == "reload-invalid-economics":
+            wait_for_model_attempts(FAKE_PORT, attempts_before, ("healthy",))
+        if name in ("fresh-physical", "fresh-auto"):
+            wait_for_model_attempts(FAKE_PORT, attempts_before, ("healthy",))
+            if (workspace / "bifrost.json").exists():
+                raise AssertionError("fresh background setup wrote workspace config instead of project config")
+            config_path = workspace / ".pi" / "bifrost.json"
+            ownership_path = workspace / ".pi" / "bifrost-reconcile-ownership.json"
+            if not config_path.is_file() or not ownership_path.is_file():
+                raise AssertionError("fresh background setup did not persist project config and ownership receipt")
+            saved = json.loads(config_path.read_text())
+            if set(saved) - {"schemaVersion", "default", "models", "classifier"}:
+                raise AssertionError("fresh background setup copied unrelated or sensitive config fields")
+            if saved.get("default") not in saved.get("models", {}):
+                raise AssertionError("fresh background config default does not name a saved tier")
+            memberships = [model for values in saved.get("models", {}).values() for model in values]
+            if "fake/healthy" not in memberships:
+                raise AssertionError("fresh background config did not save the catalog model")
+            classifier = saved.get("classifier", {})
+            if set(classifier) - {"model", "method"}:
+                raise AssertionError("fresh background config copied unrelated classifier fields")
+            receipt = json.loads(ownership_path.read_text())
+            generated = [
+                model
+                for source in receipt.get("sources", {}).values()
+                for models in source.get("generated", {}).values()
+                for model in models
+            ]
+            if sorted(generated) != sorted(memberships):
+                raise AssertionError("fresh background ownership receipt does not match saved generated memberships")
+            first_run = " ".join((log_path.read_text(errors="ignore") if log_path.exists() else "").split()).lower()
+            if "save bifrost setup?" in first_run or "choose classifier" in first_run or "select classifier" in first_run:
+                raise AssertionError("fresh first prompt unexpectedly opened an init or classifier picker")
+            if "in-memory pools" not in first_run:
+                raise AssertionError("fresh setup did not expose the metadata-derived in-memory pools")
+            if name == "fresh-auto" and "bifrost auto:" not in first_run:
+                raise AssertionError("direct Auto first prompt did not visibly route through the discovered pool")
+        if name == "init-refresh":
+            config_path = workspace / "bifrost.json"
+            if not config_path.exists():
+                raise AssertionError("manual init did not save refreshed membership")
+            saved = json.loads(config_path.read_text())
+            memberships = [model for values in saved.get("models", {}).values() for model in values]
+            if "manual/keep" not in memberships or "fake/healthy" not in memberships:
+                raise AssertionError("manual init did not preserve manual membership and add catalog membership")
+            if saved.get("customSetting") != {"preserve": True}:
+                raise AssertionError("manual init changed an unrelated config field")
+            if saved.get("classifier") != {
+                "enabled": False,
+                "backend": "prompt",
+                "model": "fake/classifier",
+                "criteria": {"general": "keep this criterion"},
+            }:
+                raise AssertionError("manual init changed explicit classifier settings")
+            init_screen = " ".join((log_path.read_text(errors="ignore") if log_path.exists() else "").split()).lower()
+            if init_screen.count("save bifrost setup?") != 1:
+                raise AssertionError("manual init must ask exactly once to save the refreshed setup")
+            if "choose classifier" in init_screen or "select classifier" in init_screen:
+                raise AssertionError("manual init opened a classifier picker after save")
+            if "save memberships: +3 / -0" not in init_screen or "to workspace (bifrost.json)" not in init_screen:
+                raise AssertionError("manual init did not preview the exact workspace membership changes")
+
         time.sleep(2.0)
+        assert_no_network_violations(home)
         raw = log_path.read_text(errors="ignore") if log_path.exists() else ""
         screen = Screen(WIDTH, HEIGHT)
         screen.parse(raw)
@@ -474,23 +738,196 @@ def capture(name: str, enabled: bool, actions: Iterable[tuple[float, str]] = ())
 
 
 def main() -> int:
-    captures = [
+    global FAKE_PORT
+    provider, FAKE_PORT = start_fake_provider()
+    try:
+        version = subprocess.run([PI, "--version"], capture_output=True, text=True, timeout=5, check=True).stdout.strip()
+        print(f"[ui-smoke] using pinned Pi {version}")
+        if version != "1.0.1":
+            raise AssertionError(f"expected pinned Pi 1.0.1, got {version}")
+        captures = [
         ("startup", True, []),
+        ("fresh-physical", True, [(1.0, "quick show fresh setup works\r"), (1.0, "/bifrost inspect\r")], None, [], False, True, False, ["healthy"]),
+        ("fresh-auto", True, [(1.0, "quick show fresh setup works\r")], None, [], False, True, True, ["healthy"]),
+        (
+            "init-refresh",
+            True,
+            [(0.5, "/bifrost init\r"), (2.0, "\r")],
+            {
+                "schemaVersion": 2,
+                "strategy": "first",
+                "models": {"general": ["manual/keep"]},
+                "rules": [{"pattern": "retain rule", "model": "general"}],
+                "tierPolicies": {"general": {"fallbackTiers": []}},
+                "classifier": {
+                    "enabled": False,
+                    "backend": "prompt",
+                    "model": "fake/classifier",
+                    "criteria": {"general": "keep this criterion"},
+                },
+                "customSetting": {"preserve": True},
+            },
+            [],
+            False,
+        ),
+        (
+            "allowance-recovery",
+            True,
+            [(1.0, "switch to a healthy model after the usage limit\r")],
+            {
+                "strategy": "first",
+                "categoryStrategies": {"general": "first"},
+                "classifier": {"enabled": False},
+                "models": {"general": ["fake/usage-exhausted", "fake-backup/healthy"]},
+            },
+        ),
         ("dashboard", True, [(1.0, "/bifrost\r")]),
+        ("validate", True, [(0.5, "/bifrost validate\r")]),
+        ("inspect", True, [(0.5, "/bifrost inspect\r")]),
+        (
+            "inspect-reserve",
+            True,
+            [(0.5, "/bifrost inspect\r"), (0.5, "jjjjjj")],
+            {
+                "schemaVersion": 2,
+                "economics": {
+                    "mode": "observe",
+                    "scopes": {"example-provider": {"kind": "provider", "provider": "example"}},
+                    "sources": [{"id": "manual-estimate", "scopeRef": "example-provider", "authority": "estimated"}],
+                    "admission": [{"id": "monthly-reserve", "scopeRef": "example-provider", "windowId": "monthly", "reserveRatio": 0.15, "unknown": "ignore"}],
+                    "observations": [],
+                },
+            },
+        ),
         ("preview", True, [(0.5, "/bifrost classifier off\r"), (0.5, "/bifrost preview hello\r")]),
+        ("preview-trace", True, [(0.5, "/bifrost classifier off\r"), (0.5, "/bifrost preview --trace hello\r")]),
+        (
+            "strict-no-route",
+            True,
+            [(0.5, "restricted keep this text\r")],
+            {
+                "schemaVersion": 2,
+                "classifier": {"enabled": False},
+                "default": "general",
+                "models": {"general": ["gemma4:12b-mlx"], "restricted": ["missing-strict-model"]},
+                "rules": [{"pattern": "restricted", "model": "restricted"}],
+                "tierPolicies": {"restricted": {"fallbackTiers": []}},
+            },
+        ),
         ("preview-dismiss", True, [(0.5, "/bifrost classifier off\r"), (0.5, "/bifrost preview hello\r"), (0.5, "\x1b")]),
         ("disabled", False, []),
-        ("classify", True, [(1.0, "hello\r")]),
+        (
+            "classify",
+            True,
+            [(1.0, "hello\r")],
+            {"classifier": {"enabled": True, "backend": "prompt", "model": "fake/classifier", "fallbackToRegex": True}},
+        ),
+        (
+            "classifier-degradation",
+            True,
+            [(1.0, "hello\r")],
+            {"classifier": {
+                "enabled": True,
+                "backend": "pi-native",
+                "piNative": {"model": "fake/not-a-classifier"},
+                "fallback": "prompt",
+                "model": "fake/classifier",
+            }},
+        ),
         ("pinned", True, [(1.0, "\x10")]),
+        (
+            "auto-large-pool",
+            True,
+            [(1.0, "route through the large model pool\r")],
+            {
+                "strategy": "first",
+                "categoryStrategies": {"general": "first"},
+                "classifier": {"enabled": False},
+                "models": {"general": [f"fake/pool-{index:03d}" for index in range(513)]},
+                "debug": {"enabled": True},
+            },
+            [f"pool-{index:03d}" for index in range(513)],
+        ),
+        (
+            "reload-invalid-economics",
+            True,
+            [(0.5, "/bifrost reload\r"), (0.5, "hello after rejected reload\r")],
+            {"classifier": {"enabled": False}, "debug": {"enabled": True}},
+            [],
+            True,
+        ),
     ]
-    results = []
-    for name, enabled, actions in captures:
-        print(f"[ui-smoke] capturing {name}…")
-        results.append(capture(name, enabled, actions))
-    print("[ui-smoke] done")
-    for p in results:
-        print(p)
-    return 0
+        results = []
+        for capture_spec in captures:
+            name, enabled, actions = capture_spec[:3]
+            config_override = capture_spec[3] if len(capture_spec) > 3 else None
+            model_inventory = capture_spec[4] if len(capture_spec) > 4 else []
+            reload_invalid_economics = capture_spec[5] if len(capture_spec) > 5 else False
+            fresh_install = capture_spec[6] if len(capture_spec) > 6 else False
+            launch_auto = capture_spec[7] if len(capture_spec) > 7 else False
+            only_models = capture_spec[8] if len(capture_spec) > 8 else None
+            print(f"[ui-smoke] capturing {name}…")
+            results.append(capture(
+                name,
+                enabled,
+                actions,
+                config_override,
+                model_inventory,
+                reload_invalid_economics,
+                fresh_install,
+                launch_auto,
+                only_models,
+            ))
+            if name == "preview-trace":
+                trace_text = (OUT / "preview-trace.txt").read_text(errors="ignore")
+                if "route trace v1" not in trace_text:
+                    raise AssertionError("preview trace UI did not render the versioned route trace")
+            if name == "validate":
+                validate_text = (OUT / "validate.txt").read_text(errors="ignore")
+                if "validation (loaded effective config)" not in validate_text:
+                    raise AssertionError("validate UI did not render the loaded-config label")
+            if name == "inspect":
+                inspect_text = (OUT / "inspect.txt").read_text(errors="ignore")
+                if "inspection (local snapshot)" not in inspect_text or "registry:" not in inspect_text:
+                    raise AssertionError("inspect UI did not render its local snapshot labels")
+            if name == "inspect-reserve":
+                reserve_text = (OUT / "inspect-reserve.txt").read_text(errors="ignore")
+                if "reserve policy: observe" not in reserve_text or "source=manual-estimate scope=example-provider authority=estimated" not in reserve_text:
+                    raise AssertionError("inspect UI did not render sanitized reserve policy evidence")
+            if name == "classifier-degradation":
+                degradation_text = (OUT / "classifier-degradation.txt").read_text(errors="ignore").lower()
+                if "pi-native classifier" not in degradation_text or "prompt classifier" not in degradation_text:
+                    raise AssertionError("classifier degradation UI did not show the primary failure and actual prompt fallback")
+            if name == "allowance-recovery":
+                recovery_text = (OUT / "allowance-recovery.txt").read_text(errors="ignore").lower()
+                if "retrying once with fake-backup/healthy" not in recovery_text:
+                    raise AssertionError("allowance recovery UI did not show the alternate model action")
+                if "fake-backup/healthy" not in recovery_text or "healthy" not in recovery_text:
+                    raise AssertionError("allowance recovery UI did not show the resulting model response or active model")
+                if "(bifrost) auto" not in recovery_text or "→ healthy" not in recovery_text:
+                    raise AssertionError("allowance recovery UI did not restore the Auto footer to the successful alternate model")
+            if name == "strict-no-route":
+                strict_text = (OUT / "strict-no-route.txt").read_text(errors="ignore")
+                if "restricted keep this text" not in strict_text or "turn was not sent" not in strict_text:
+                    raise AssertionError("strict no-route did not show the rejection and restore the typed prompt")
+            if name == "auto-large-pool":
+                large_pool_text = (OUT / "auto-large-pool.txt").read_text(errors="ignore").lower()
+                if "(bifrost) auto" not in large_pool_text:
+                    raise AssertionError("large-pool Auto routing did not restore the Auto status in the footer")
+            if name == "reload-invalid-economics":
+                reload_text = " ".join((OUT / "reload-invalid-economics.txt").read_text(errors="ignore").split())
+                prefix = "Bifrost config reload rejected:"
+                body = "The configured economic policy is invalid or unsupported."
+                if reload_text.count(prefix) != 1 or reload_text.count(body) != 1:
+                    raise AssertionError("invalid economics reload should report the rejection once in the current UI")
+                if "hello after rejected reload" not in reload_text or "healthy" not in reload_text:
+                    raise AssertionError("last-good routing config did not remain active after the rejected reload")
+        print("[ui-smoke] done")
+        for p in results:
+            print(p)
+        return 0
+    finally:
+        stop_process(provider)
 
 
 if __name__ == "__main__":

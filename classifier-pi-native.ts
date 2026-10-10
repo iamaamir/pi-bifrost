@@ -4,7 +4,7 @@ import type { AuthOperationOptions, ClassifierApi, ClassifierContext, Classifier
 import type { ReliabilityStore } from "./reliability-store.ts";
 import { debug as bifrostDebug } from "./debug.ts";
 import type { TypeSafeObservation, TypeSafeOutcome } from "./classifier-metrics.ts";
-import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, type ClassificationJudgment, type ClassifierRequest, type ClassifierTransport } from "./classifier-backends.ts";
+import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, type ClassificationJudgment, type ClassifierRequest } from "./classifier-backends.ts";
 import { abortableDelay, criterionText, finite, sleep } from "./classifier-semantics.ts";
 import { TYPESAFE_MIN_CONFIDENCE } from "./typesafe-classifier.ts";
 
@@ -47,11 +47,13 @@ export interface PiNativeOptions {
   readonly maxAttempts?: number;
   readonly minConfidence?: number;
   readonly reliability?: ReliabilityStore;
+  readonly onProviderSelected?: (model: { provider: string; id: string }) => boolean | Promise<boolean>;
   readonly debug?: boolean;
   readonly sleepImpl?: (ms: number) => Promise<void>;
   /** True when no TypeSafe credential resolves. Selects the empty-catalog error text. */
   readonly credentialMissing?: () => boolean;
   readonly observe?: (observation: TypeSafeObservation) => void;
+  readonly onProviderError?: (model: { provider: string; id: string }, errorMessage?: string) => void | Promise<void>;
 }
 
 type ResolvedClassifierModel = { readonly model: ClassifierModel<ClassifierApi>; readonly id: string };
@@ -157,13 +159,17 @@ export function decodePiNativeJudgment(result: ClassifierResult, tiers: readonly
   };
 }
 
-export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTransport {
+export function createPiNativeClassifier(options: PiNativeOptions) {
   const timeoutMs = Math.min(MAX_PI_NATIVE_TIMEOUT_MS, Math.max(100, Math.floor(options.timeoutMs ?? DEFAULT_PI_NATIVE_TIMEOUT_MS)));
   const maxAttempts = Math.min(MAX_PI_NATIVE_ATTEMPTS, Math.max(1, Math.floor(options.maxAttempts ?? DEFAULT_PI_NATIVE_MAX_ATTEMPTS)));
   const sleepImpl = options.sleepImpl ?? sleep;
   let warnedMissingModel = false;
 
-  return async function classifyWithPi(request: ClassifierRequest, signal?: AbortSignal): Promise<PiNativeJudgment | undefined> {
+  return async function classifyWithPi(
+    request: ClassifierRequest,
+    signal?: AbortSignal,
+    onObservation?: (observation: TypeSafeObservation) => void,
+  ): Promise<PiNativeJudgment | undefined> {
     const startedAt = performance.now();
     const deadline = startedAt + timeoutMs;
     const controller = new AbortController();
@@ -196,17 +202,23 @@ export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTr
       });
       if (!observed) {
         observed = true;
+        const observation: TypeSafeObservation = Object.freeze({
+          outcome,
+          latencyMs: performance.now() - startedAt,
+          attempts,
+          model: judgment?.model ?? resolvedModelId,
+          tier: judgment?.tier,
+          confidence: judgment?.confidence,
+        });
         try {
-          options.observe?.({
-            outcome,
-            latencyMs: performance.now() - startedAt,
-            attempts,
-            model: judgment?.model ?? resolvedModelId,
-            tier: judgment?.tier,
-            confidence: judgment?.confidence,
-          });
+          options.observe?.(observation);
         } catch {
           console.error("[bifrost] pi-native observation failed");
+        }
+        try {
+          onObservation?.(observation);
+        } catch {
+          // Per-call observers are advisory and must not change classification.
         }
       }
       return judgment;
@@ -233,6 +245,21 @@ export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTr
         return finish(resolved === "missing_credential" ? "missing_key" : "missing_catalog");
       }
       resolvedModelId = resolved.id;
+      const providerAvailable = async (): Promise<boolean> => {
+        try {
+          return !options.onProviderSelected || await abortableResult(
+            Promise.resolve().then(() => options.onProviderSelected!(resolved.model)), controller.signal,
+          );
+        } catch {
+          return false;
+        }
+      };
+      if (!await providerAvailable()) {
+        if (signal?.aborted) return finish("aborted");
+        if (controller.signal.aborted) return finish("timeout");
+        trace("provider_circuit_open", { provider: resolved.model.provider });
+        return finish("circuit_open");
+      }
       key = `classifier/${CLASSIFIER_BACKEND_IDS.piNative}/${resolved.id}`;
       if (options.reliability) {
         const claim = options.reliability.tryClaimTrial(key);
@@ -256,6 +283,17 @@ export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTr
       let failure: TypeSafeOutcome = "network";
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         if (signal?.aborted) return finish("aborted");
+        if (attempt > 1 && !await providerAvailable()) {
+          if (signal?.aborted) return finish("aborted");
+          if (controller.signal.aborted) {
+            recordFailure("timeout");
+            return finish("timeout");
+          }
+          if (trialClaimed) options.reliability?.abandonTrial(key);
+          trialClaimed = false;
+          trace("provider_circuit_open", { provider: resolved.model.provider, attempt });
+          return finish("circuit_open");
+        }
         attempts = attempt;
         const remaining = deadline - performance.now();
         trace("attempt", { attempt, model: resolved.id, remaining_ms: Math.max(0, Math.round(remaining)) });
@@ -302,6 +340,24 @@ export function createPiNativeClassifier(options: PiNativeOptions): ClassifierTr
 
         const policy = errorPolicy(result?.errorMessage, !result);
         failure = policy.outcome;
+        try {
+          await abortableResult(
+            Promise.resolve().then(() => options.onProviderError?.(resolved.model, result?.errorMessage)),
+            controller.signal,
+          );
+        } catch {
+          if (signal?.aborted) return finish("aborted");
+          if (controller.signal.aborted) {
+            recordFailure("timeout");
+            return finish("timeout");
+          }
+          // Provider pause recording is handled by the enclosing router; classifier fallback remains bounded.
+        }
+        if (signal?.aborted) return finish("aborted");
+        if (controller.signal.aborted) {
+          recordFailure("timeout");
+          return finish("timeout");
+        }
         trace("error", { attempt, stop_reason: result?.stopReason, outcome: failure, retryable: policy.retry });
         if (!policy.retry) {
           if (failure === "auth") {

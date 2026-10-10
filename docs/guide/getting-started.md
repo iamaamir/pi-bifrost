@@ -42,32 +42,53 @@ Restart Pi if the extension is not loaded in the current session.
 - **Strategy:** rule that chooses one healthy model from a tier pool.
 - **Classifier:** optional backend that judges the tier. It never chooses the exact provider model.
 
+For a tier-based route, Bifrost follows these steps:
+
+```mermaid
+flowchart TD
+    A[Prompt] --> B[Resolve a tier]
+    B --> C[Load its configured model pool]
+    C --> D[Check which models can be used]
+    D --> E[Choose one allowed model]
+    E --> F[Pi sends the prompt]
+```
+
 ## Initialize
 
-Inside Pi, run:
+On a fresh install, routing is on and physical model selection is the default. Bifrost reads Pi's available chat-model catalog in the background. If no meaningful user configuration, route file, or explicit routing override blocks setup, Bifrost builds model pools and saves a minimal `.pi/bifrost.json` in the background. An empty `{}` file does not block setup. Bifrost does not probe models or save prompts or secrets. Routing is ready before the save completes. If a safe save cannot finish, routing continues in memory and Bifrost warns you.
+
+You can send a first prompt without running init. A saved configuration or runtime preference can change routing; use `/bifrost debug` to inspect it. Selecting `bifrost/auto` in Pi's model picker is a separate opt-in. Any setting in a meaningful configuration blocks automatic pool setup. A project route file or explicit routing override also blocks setup.
+
+To inspect the active pools and local status before sending a prompt, run `/bifrost inspect` or `/bifrost debug`. These commands do not classify or probe. Catalog availability does not confirm that a model is healthy.
+
+Run this command when you want to refresh the model list or save it to a configuration file:
 
 ```text
 /bifrost init
 ```
 
-Initialization:
+The command:
 
-1. refreshes Pi's model registry;
-2. reuses probe results newer than one hour or probes every available registry model (results are cached in `.pi/bifrost-probe.json`); pass `-f` to force a fresh probe regardless of cache age;
-3. proposes `quick`, `general`, and `frontier` pools;
-4. orders candidates using one-time probe latency;
-5. proposes a prompt classifier when a working classifier model is found;
-6. shows the complete proposed configuration;
-7. writes `.pi/bifrost.json` only after confirmation;
-8. prints `/bifrost classifier` as the next step. In Pi's interactive UI, you can open the backend picker immediately.
+1. refreshes Pi's model catalog;
+2. proposes `quick`, `general`, and `frontier` pools from available chat models;
+3. detects a classifier backend and selects an available chat model when prompt classification needs one;
+4. shows the catalog source, save target, membership changes, classifier choice, and uncategorized count, then asks once before it saves.
+
+After init saves, inspect the pools and status. Edit the saved configuration before your first generation if you need different pools or strategies, then run `/bifrost reload`.
+
+Init updates the first existing destination in this order: project config `.pi/bifrost.json`, workspace config `bifrost.json`, then user config `~/.pi/agent/bifrost.json`. If none exists, it saves project config at `.pi/bifrost.json`. The displayed save target is the one init will update. Init preserves handwritten model entries and other configuration fields when it reconciles generated model memberships.
+
+The command does not probe models by default. Pass `-f` to send probe requests. These requests can use provider credits or hit rate limits.
 
 Bifrost does not ship maintainer-specific provider/model IDs as routing defaults.
 
 ### Probe usage warning
 
-When a fresh result is unavailable, the probe sends `1+1=` to every available registry model. The primary transport caps output at 5 tokens; an empty response may trigger one minimal-session fallback request. Default concurrency is 50 and per-model timeout is 10 seconds. Requests may incur provider usage, consume credits, or trigger burst rate limits.
+When you run `/bifrost init -f` or `/bifrost probe`, Bifrost sends `1+1=` to available chat models. The primary transport caps output at 5 tokens. An empty response can trigger one minimal-session fallback request. Default concurrency is 50 and per-model timeout is 10 seconds. Requests can incur provider usage, consume credits, or trigger burst rate limits.
 
-For providers with tight limits, create a config file before init. In `~/.pi/agent/bifrost.json` (all projects) or `.pi/bifrost.json` (this project):
+Init does not probe models unless you pass `-f`. For tight provider limits, add probe settings to your existing config before running `/bifrost probe` or `/bifrost init -f`. If you are setting up Bifrost for the first time, run `/bifrost init` without `-f` and save the starter pools first. Then add probe settings before you probe.
+
+Add this fragment to `~/.pi/agent/bifrost.json` (all projects) or `.pi/bifrost.json` (this project):
 
 ```json
 {
@@ -78,29 +99,29 @@ For providers with tight limits, create a config file before init. In `~/.pi/age
 }
 ```
 
+Do not replace a complete Bifrost configuration with this fragment. A user configuration with only probe settings blocks automatic first-use pools.
+
 See [Troubleshooting](troubleshooting.md#lower-probe-pressure) for symptoms and repair.
 
 ## Review the proposal
 
 Before confirming, check:
 
-1. Every model ID belongs to a provider/account you intend to use.
-2. Expensive or quota-sensitive models are not in broad adaptive tiers.
-3. Each tier strategy matches your intent.
-4. The default tier exists and has candidates.
-5. Classifier behavior matches your privacy and cost requirements.
+1. The save target shown by init is the configuration you intend to update.
+2. The membership-change summary and uncategorized count look reasonable.
+3. The classifier choice matches your privacy and cost requirements.
 
-Init normally enables the prompt classifier when it finds a working model. After init writes configuration, run `/bifrost classifier`. Choose `prompt`, `typesafe`, or `pi-native`. If you use `init --write`, run the command yourself after init. If you remove `classifier.backend`, Bifrost detects a backend from your TypeSafe credentials. See [Classifier backends](classifiers.md).
+The confirmation summary does not show every model ID, strategy, or default tier. After saving, run `/bifrost inspect` to review pools and status. Edit the saved configuration before your first generation if needed.
 
-Prompt classification sends the current prompt to the configured model on local-cache misses. It adds tokens and latency.
+Classification is enabled by default. Init detects a classifier backend. When the prompt backend needs a model, Bifrost selects an available chat model as its default. On a local-cache miss, the active classifier can receive the current prompt. Run `/bifrost classifier off` to disable that extra call. Run `/bifrost classifier` to choose another backend or model. See [Classifier backends](classifiers.md).
 
-For rules/default-only routing, disable it after init:
+For rules/default-only routing, disable the classifier. This command works without a Bifrost JSON config file:
 
 ```text
 /bifrost classifier off
 ```
 
-Or set this in `.pi/bifrost.json`:
+Or set this in your existing `.pi/bifrost.json`:
 
 ```json
 {
@@ -109,6 +130,8 @@ Or set this in `.pi/bifrost.json`:
   }
 }
 ```
+
+Setting `cache.enabled` to `false` disables classification-cache use, but does not remove saved entries. Run `/bifrost cache clear` to empty them. The selected generation provider still receives the prompt.
 
 ## Preview before generation
 

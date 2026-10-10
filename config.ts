@@ -1,4 +1,5 @@
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { readJsonFile } from "./storage.ts";
 import type { RoutingStrategy, RouteRule } from "./routing.ts";
@@ -6,6 +7,7 @@ import type { CacheOptions } from "./cache.ts";
 import type { DebugConfig } from "./debug.ts";
 import type { ReliabilityConfig } from "./reliability.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend, type TierCriterion } from "./classifier-backends.ts";
+import { emptyEconomicSnapshot, publishEconomicObservation, validateEconomicPolicy, type EconomicSignal, type ReservePolicy } from "./economic-signals.ts";
 
 export { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL } from "./classifier-backends.ts";
 export type { ClassifierBackend, TierCriterion } from "./classifier-backends.ts";
@@ -24,6 +26,21 @@ export interface ProbeConfig {
   concurrency?: number;
   /** Per-model probe timeout in milliseconds. Default 10000. */
   timeoutMs?: number;
+}
+
+export interface TierPolicy {
+  fallbackTiers: string[];
+}
+
+export interface EconomicConfig extends ReservePolicy {
+  /** User-entered static/manual observations. No source adapter is inferred. */
+  observations?: readonly EconomicSignal[];
+}
+
+export interface AffinityConfig {
+  mode: "off" | "observe" | "retain-within-tier";
+  /** Report same-provider candidate availability as advisory evidence. */
+  providerAdvisory?: boolean;
 }
 
 export interface TypeSafeConfig {
@@ -53,6 +70,8 @@ export interface PiNativeConfig {
 export interface ClassifierConfig {
   enabled?: boolean;
   backend?: ClassifierBackend;
+  /** Optional total external classification budget. Absent preserves backend-specific timeouts. */
+  totalTimeoutMs?: number;
   /** Existing prompt classifier model. Also used for explicit TypeSafe prompt fallback. */
   model?: string | string[];
   endpoint?: string;
@@ -69,6 +88,10 @@ export interface ClassifierConfig {
 }
 
 export interface BifrostConfig {
+  schemaVersion?: number;
+  tierPolicies?: Record<string, TierPolicy>;
+  economics?: EconomicConfig;
+  affinity?: AffinityConfig;
   enabled?: boolean;
   default?: string;
   strategy?: RoutingStrategy;
@@ -178,6 +201,22 @@ export const ALL_STRATEGIES: readonly RoutingStrategy[] = [
 export interface ConfigIssue {
   readonly severity: "error" | "warning";
   readonly message: string;
+  /** Stable content-free identifier for supported structured diagnostics. */
+  readonly code?: string;
+  /** Static config path; dynamic tier and field names are replaced with placeholders. */
+  readonly path?: string;
+}
+
+export function classifierTotalTimeoutIssue(config: BifrostConfig): ConfigIssue | undefined {
+  const timeout = (config.classifier as unknown as Record<string, unknown> | undefined)?.totalTimeoutMs;
+  if (timeout === undefined) return undefined;
+  if (typeof timeout === "number" && Number.isSafeInteger(timeout) && timeout >= 1 && timeout <= 60_000) return undefined;
+  return {
+    severity: "error",
+    code: "config.classifier_total_timeout_invalid",
+    path: "classifier.totalTimeoutMs",
+    message: "Classifier totalTimeoutMs must be a safe integer between 1 and 60000.",
+  };
 }
 
 export const PROMPT_ONLY_FIELDS = [
@@ -194,6 +233,17 @@ export function configHasNoPools(config: BifrostConfig): boolean {
   // Unvalidated JSON: treat non-string entries as blank instead of throwing.
   const blank = (entry: unknown): boolean => typeof entry !== "string" || entry.trim() === "";
   return Object.values(config.models ?? {}).every((pool) => (Array.isArray(pool) ? pool.every(blank) : blank(pool)));
+}
+
+export function hasExplicitTierPolicy(config: BifrostConfig, tier: string): boolean {
+  return config.schemaVersion === 2
+    && Object.hasOwn(config.tierPolicies ?? {}, tier)
+    && Array.isArray(config.tierPolicies?.[tier]?.fallbackTiers);
+}
+
+export function hasExplicitTierPolicies(config: BifrostConfig): boolean {
+  return config.schemaVersion === 2
+    && Object.values(config.tierPolicies ?? {}).some((policy) => Array.isArray(policy?.fallbackTiers));
 }
 
 export function classifierConfigErrors(config: BifrostConfig, effectiveBackend?: ClassifierBackend): string[] {
@@ -217,6 +267,171 @@ export function hasClassifierConfigErrors(config: BifrostConfig, effectiveBacken
   return classifierConfigErrors(config, effectiveBackend).length > 0;
 }
 
+export function validateTierPolicyConfig(config: BifrostConfig): ConfigIssue[] {
+  const issues: ConfigIssue[] = [];
+  const policyIssue = (code: string, path: string, message: string): void => {
+    issues.push({ severity: "error", code, path, message });
+  };
+  const modelKeys = Object.keys(config.models ?? {});
+  const schemaVersion = config.schemaVersion;
+  if (schemaVersion !== undefined && schemaVersion !== 1 && schemaVersion !== 2) {
+    policyIssue("config.schema_version_unsupported", "schemaVersion", `Unsupported schemaVersion "${String(schemaVersion)}"; supported versions are 1 and 2.`);
+  }
+  const tierPolicies = config.tierPolicies as Record<string, unknown> | undefined;
+  if (tierPolicies !== undefined && schemaVersion !== 2) {
+    policyIssue("config.tier_policies_requires_v2", "tierPolicies", "tierPolicies requires schemaVersion 2.");
+  }
+  if (tierPolicies !== undefined && (!tierPolicies || typeof tierPolicies !== "object" || Array.isArray(tierPolicies))) {
+    policyIssue("config.tier_policies_invalid", "tierPolicies", "tierPolicies must be an object keyed by configured tier.");
+  }
+  const edges = new Map<string, string[]>();
+  if (tierPolicies && typeof tierPolicies === "object" && !Array.isArray(tierPolicies)) {
+    for (const [tier, rawPolicy] of Object.entries(tierPolicies)) {
+      if (!modelKeys.includes(tier)) {
+        policyIssue("config.tier_policy_unknown_tier", "tierPolicies.*", `tierPolicies.${tier} references a tier not found in models [${modelKeys.join(", ")}].`);
+      }
+      if (!criterionObject(rawPolicy)) {
+        policyIssue("config.tier_policy_invalid", "tierPolicies.*", `tierPolicies.${tier} must be an object with fallbackTiers.`);
+        continue;
+      }
+      for (const key of Object.keys(rawPolicy)) {
+        if (key !== "fallbackTiers") {
+          policyIssue("config.tier_policy_unknown_field", "tierPolicies.*", `Unknown field "${key}" in tierPolicies.${tier}.`);
+        }
+      }
+      const fallbackTiers = rawPolicy.fallbackTiers;
+      if (!Array.isArray(fallbackTiers) || fallbackTiers.some((fallback) => typeof fallback !== "string")) {
+        policyIssue("config.tier_policy_fallback_invalid", "tierPolicies.*.fallbackTiers", `tierPolicies.${tier}.fallbackTiers must be an array of tier names.`);
+        continue;
+      }
+      const seenFallbacks = new Set<string>();
+      for (const fallback of fallbackTiers) {
+        if (!modelKeys.includes(fallback)) {
+          policyIssue("config.tier_policy_unknown_fallback", "tierPolicies.*.fallbackTiers", `Fallback tier "${fallback}" in tierPolicies.${tier} was not found in models.`);
+        }
+        if (fallback === tier) {
+          policyIssue("config.tier_policy_self_fallback", "tierPolicies.*.fallbackTiers", `tierPolicies.${tier} cannot fall back to itself.`);
+        }
+        if (seenFallbacks.has(fallback)) {
+          policyIssue("config.tier_policy_duplicate_fallback", "tierPolicies.*.fallbackTiers", `Duplicate fallback tier "${fallback}" in tierPolicies.${tier}.`);
+        }
+        seenFallbacks.add(fallback);
+      }
+      edges.set(tier, fallbackTiers);
+    }
+  }
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visitTier = (tier: string): void => {
+    if (visiting.has(tier)) {
+      policyIssue("config.tier_policy_cycle", "tierPolicies.*.fallbackTiers", `tierPolicies contains a fallback cycle through tier "${tier}".`);
+      return;
+    }
+    if (visited.has(tier)) return;
+    visiting.add(tier);
+    for (const fallback of edges.get(tier) ?? []) {
+      if (edges.has(fallback)) visitTier(fallback);
+    }
+    visiting.delete(tier);
+    visited.add(tier);
+  };
+  for (const tier of edges.keys()) visitTier(tier);
+  issues.push(...validateEconomicConfig(config));
+  return issues;
+}
+
+export function validateEconomicConfig(config: BifrostConfig): ConfigIssue[] {
+  const raw = (config as unknown as Record<string, unknown>).economics;
+  if (raw === undefined) return [];
+  const issues: ConfigIssue[] = [];
+  const add = (code: string, path: string, message: string): void => {
+    issues.push({ severity: "error", code, path, message });
+  };
+  if (config.schemaVersion !== 2) {
+    add("config.economics_requires_v2", "economics", "economics requires schemaVersion 2.");
+  }
+  if (!criterionObject(raw)) {
+    add("config.economics_invalid", "economics", "economics must be an object.");
+    return issues;
+  }
+  const allowedFields = new Set(["mode", "scopes", "sources", "sourceOrder", "admission", "preference", "tierOverrides", "observations"]);
+  for (const key of Object.keys(raw)) {
+    if (!allowedFields.has(key)) add("config.economics_unknown_field", "economics.*", "economics contains an unsupported field.");
+  }
+  const { observations, ...policyValue } = raw;
+  const checkUnknownFields = (value: unknown, allowed: readonly string[], path: string): void => {
+    if (!criterionObject(value)) return;
+    for (const key of Object.keys(value)) {
+      if (!allowed.includes(key)) add("config.economics_unknown_field", path, "economics contains an unsupported field.");
+    }
+  };
+  if (criterionObject(policyValue.scopes)) {
+    for (const scope of Object.values(policyValue.scopes)) {
+      checkUnknownFields(scope, scope && typeof scope === "object" && (scope as { kind?: unknown }).kind === "model"
+        ? ["kind", "model"] : ["kind", "provider"], "economics.scopes.*");
+    }
+  }
+  if (Array.isArray(policyValue.sources)) {
+    for (const source of policyValue.sources) {
+      checkUnknownFields(source, ["id", "scopeRef", "authority"], "economics.sources[]");
+      if (criterionObject(source) && source.authority === "authoritative") {
+        add("config.economics_authority_forbidden", "economics.sources[].authority", "Config-declared economic sources cannot claim authoritative status.");
+      }
+    }
+  }
+  if (Array.isArray(policyValue.admission)) {
+    for (const rule of policyValue.admission) {
+      checkUnknownFields(rule, ["id", "scopeRef", "windowId", "reserveRatio", "unknown"], "economics.admission[]");
+    }
+  }
+  if (policyValue.preference !== undefined) {
+    checkUnknownFields(policyValue.preference, ["billingClass"], "economics.preference");
+    if (!criterionObject(policyValue.preference)
+      || !["subscription", "metered", "free"].includes(String(policyValue.preference.billingClass))) {
+      add("config.economics_preference_invalid", "economics.preference.billingClass", "economics.preference.billingClass must name an explicit billing class.");
+    }
+  }
+  if (criterionObject(policyValue.tierOverrides)) {
+    for (const overrides of Object.values(policyValue.tierOverrides)) {
+      if (!criterionObject(overrides)) continue;
+      for (const override of Object.values(overrides)) {
+        checkUnknownFields(override, ["reserveRatio", "unknown"], "economics.tierOverrides.*.*");
+      }
+    }
+  }
+  const validation = validateEconomicPolicy(policyValue as unknown as ReservePolicy, { accountDispatch: false });
+  for (const issue of validation.diagnostics) {
+    if (issue.code === "policy.invalid_preference") continue;
+    const code = issue.code === "policy.unsupported_account_scope" ? "config.economics_account_scope_unsupported" : `config.economics_${issue.code.replaceAll(".", "_")}`;
+    const path = issue.code === "policy.empty_admission" && policyValue.preference !== undefined
+      ? "economics.admission"
+      : issue.scopeRef ? "economics.scopes.*" : issue.sourceId ? "economics.sources[]" : issue.ruleId ? "economics.admission[]" : "economics";
+    add(code, path, "The configured economic policy is invalid or unsupported.");
+  }
+  if (observations !== undefined && !Array.isArray(observations)) {
+    add("config.economics_observations_invalid", "economics.observations", "economics.observations must be an array of static signals.");
+  } else if (Array.isArray(observations)) {
+    if (observations.length > 64) add("config.economics_observation_limit", "economics.observations", "economics.observations exceeds the configured observation limit.");
+    let snapshot = emptyEconomicSnapshot();
+    for (const observation of observations) {
+      checkUnknownFields(observation, ["sourceId", "scopeRef", "billing", "observedAt", "expiresAt", "revision", "windows"], "economics.observations[]");
+      if (criterionObject(observation) && Array.isArray(observation.windows)) {
+        for (const window of observation.windows) {
+          checkUnknownFields(window, ["id", "period", "unit", "currency", "remaining", "limit", "resetsAt"], "economics.observations[].windows[]");
+          if (criterionObject(window)) checkUnknownFields(window.period, ["id", "sequence"], "economics.observations[].windows[].period");
+        }
+      }
+      const result = publishEconomicObservation(snapshot, policyValue as unknown as ReservePolicy, observation as EconomicSignal);
+      if (!result.accepted) {
+        add("config.economics_observation_invalid", "economics.observations[]", "A configured static economic observation is invalid or stale.");
+      } else {
+        snapshot = result.snapshot;
+      }
+    }
+  }
+  return issues;
+}
+
 /**
  * Validate a resolved BifrostConfig. Returns issues (errors stop
  * the extension from starting, warnings are logged only).
@@ -224,9 +439,11 @@ export function hasClassifierConfigErrors(config: BifrostConfig, effectiveBacken
 export function validateConfig(
   config: BifrostConfig,
 ): ConfigIssue[] {
-  const issues: ConfigIssue[] = [];
+  const issues: ConfigIssue[] = validateTierPolicyConfig(config);
   const modelKeys = Object.keys(config.models ?? {});
   const classifier = config.classifier;
+  const totalTimeoutIssue = classifierTotalTimeoutIssue(config);
+  if (totalTimeoutIssue) issues.push(totalTimeoutIssue);
   if (classifier?.backend && !Object.values(CLASSIFIER_BACKEND_IDS).includes(classifier.backend)) {
     issues.push({ severity: "error", message: `Unknown classifier backend "${classifier.backend}".` });
   }
@@ -339,25 +556,81 @@ export function validateConfig(
   }
 
   const reliability = config.reliability;
+  const affinityRaw = (config as unknown as Record<string, unknown>).affinity;
+  if (affinityRaw !== undefined) {
+    if (!criterionObject(affinityRaw)
+      || Object.keys(affinityRaw).some((key) => key !== "mode" && key !== "providerAdvisory")
+      || (affinityRaw.mode !== "off" && affinityRaw.mode !== "observe" && affinityRaw.mode !== "retain-within-tier")
+      || (affinityRaw.providerAdvisory !== undefined && typeof affinityRaw.providerAdvisory !== "boolean")) {
+      issues.push({ severity: "error", code: "config.affinity_invalid", path: "affinity", message: "affinity must contain a supported mode and optional boolean providerAdvisory." });
+    }
+    if (config.schemaVersion !== 2) {
+      issues.push({ severity: "error", code: "config.affinity_requires_schema_v2", path: "affinity", message: "affinity requires schemaVersion 2." });
+    }
+  }
+  const reliabilityProblem = (code: string, path: string, message: string): void => {
+    issues.push({ severity: "error", code, path, message });
+  };
+  const reliabilityRaw = (config as unknown as Record<string, unknown>).reliability;
+  const reliabilityRecord = criterionObject(reliabilityRaw) ? reliabilityRaw : undefined;
+  if (reliabilityRaw !== undefined && !reliabilityRecord) {
+    issues.push({ severity: "error", code: "config.reliability_invalid", path: "reliability", message: "reliability must be an object." });
+  }
+  if (reliabilityRecord) {
+    const stateVersion = reliabilityRecord.stateVersion;
+    if (stateVersion !== undefined && stateVersion !== 1 && stateVersion !== 2) {
+      issues.push({ severity: "error", code: "config.reliability_state_version_unsupported", path: "reliability.stateVersion", message: "reliability.stateVersion must be 1 or 2." });
+    }
+    if (stateVersion === 2 && config.schemaVersion !== 2) {
+      issues.push({ severity: "error", code: "config.reliability_state_v2_requires_schema_v2", path: "reliability.stateVersion", message: "reliability.stateVersion 2 requires schemaVersion 2." });
+    }
+    const observations = reliabilityRecord.observations;
+    if (observations !== undefined) {
+      if (stateVersion !== 2 || !criterionObject(observations)) {
+        issues.push({ severity: "error", code: "config.reliability_observations_invalid", path: "reliability.observations", message: "reliability.observations requires stateVersion 2 and must be an object." });
+      } else if (Object.keys(observations).some((key) => key !== "enabled") || (observations.enabled !== undefined && typeof observations.enabled !== "boolean")) {
+        issues.push({ severity: "error", code: "config.reliability_observations_invalid", path: "reliability.observations", message: "reliability.observations supports only a boolean enabled field." });
+      }
+    }
+    if (reliabilityRecord.cooldownOnAllowanceExhausted !== undefined
+      && typeof reliabilityRecord.cooldownOnAllowanceExhausted !== "boolean") {
+      reliabilityProblem("config.reliability_allowance_cooldown_invalid", "reliability.cooldownOnAllowanceExhausted", "reliability.cooldownOnAllowanceExhausted must be a boolean.");
+    }
+    if (reliabilityRecord.allowanceCooldownScope !== undefined
+      && reliabilityRecord.allowanceCooldownScope !== "provider" && reliabilityRecord.allowanceCooldownScope !== "model") {
+      reliabilityProblem("config.reliability_allowance_scope_invalid", "reliability.allowanceCooldownScope", "reliability.allowanceCooldownScope must be provider or model.");
+    }
+    if (reliabilityRecord.retryOnAllowanceExhausted !== undefined
+      && typeof reliabilityRecord.retryOnAllowanceExhausted !== "boolean") {
+      reliabilityProblem("config.reliability_allowance_retry_invalid", "reliability.retryOnAllowanceExhausted", "reliability.retryOnAllowanceExhausted must be a boolean.");
+    }
+    const known = new Set(["enabled", "failureThreshold", "windowMinutes", "cooldownMinutes", "path", "stateVersion", "observations", "cooldownOnAllowanceExhausted", "allowanceCooldownScope", "retryOnAllowanceExhausted"]);
+    if (Object.keys(reliabilityRecord).some((key) => !known.has(key))) {
+      issues.push({ severity: "error", code: "config.reliability_unknown_field", path: "reliability", message: "reliability contains an unsupported field." });
+    }
+  }
   if (reliability?.failureThreshold !== undefined && (!Number.isInteger(reliability.failureThreshold) || reliability.failureThreshold < 1)) {
-    issues.push({
-      severity: "error",
-      message: `Reliability failureThreshold must be an integer >= 1, got ${reliability.failureThreshold}.`,
-    });
+    reliabilityProblem("config.reliability_threshold_invalid", "reliability.failureThreshold", "Reliability failureThreshold must be an integer >= 1.");
   }
 
   if (reliability?.windowMinutes !== undefined && (!Number.isInteger(reliability.windowMinutes) || reliability.windowMinutes < 1)) {
-    issues.push({
-      severity: "error",
-      message: `Reliability windowMinutes must be an integer >= 1, got ${reliability.windowMinutes}.`,
-    });
+    reliabilityProblem("config.reliability_window_invalid", "reliability.windowMinutes", "Reliability windowMinutes must be an integer >= 1.");
   }
 
   if (reliability?.cooldownMinutes !== undefined && (!Number.isInteger(reliability.cooldownMinutes) || reliability.cooldownMinutes < 1)) {
-    issues.push({
-      severity: "error",
-      message: `Reliability cooldownMinutes must be an integer >= 1, got ${reliability.cooldownMinutes}.`,
-    });
+    reliabilityProblem("config.reliability_cooldown_invalid", "reliability.cooldownMinutes", "Reliability cooldownMinutes must be an integer >= 1.");
+  }
+  if (reliability?.stateVersion === 2) {
+    const threshold = reliability.failureThreshold ?? 3;
+    const windowMinutes = reliability.windowMinutes ?? 5;
+    const cooldownMinutes = reliability.cooldownMinutes ?? 60;
+    if (!Number.isSafeInteger(threshold) || threshold > 10_000) {
+      reliabilityProblem("config.reliability_v2_bounds_invalid", "reliability.failureThreshold", "Reliability v2 failureThreshold must be a safe integer from 1 to 10000.");
+    }
+    if (!Number.isSafeInteger(windowMinutes) || windowMinutes > 1_000_000
+      || !Number.isSafeInteger(cooldownMinutes) || cooldownMinutes > 1_000_000) {
+      reliabilityProblem("config.reliability_v2_bounds_invalid", "reliability", "Reliability v2 window and cooldown must be safe whole-minute values no greater than 1000000.");
+    }
   }
 
   const probe = config.probe;
@@ -451,6 +724,7 @@ export function mergeConfig(
     override.categoryStrategies,
   );
   merged.models = mergeObj(base.models, override.models);
+  merged.tierPolicies = mergeTierPolicies(base.tierPolicies, override.tierPolicies);
   merged.classifier = mergeObj(base.classifier, override.classifier);
   if (merged.classifier) {
     merged.classifier.criteria = mergeCriteria(base.classifier?.criteria, override.classifier?.criteria);
@@ -483,11 +757,134 @@ export function mergeConfig(
   return merged;
 }
 
+function mergeTierPolicies(
+  base: unknown,
+  override: unknown,
+): BifrostConfig["tierPolicies"] {
+  if (override === undefined) return base as BifrostConfig["tierPolicies"];
+  if (!criterionObject(override)) return override as BifrostConfig["tierPolicies"];
+  const merged = criterionObject(base) ? { ...base } : {};
+  for (const [tier, policy] of Object.entries(override)) {
+    const previous = merged[tier];
+    merged[tier] = criterionObject(previous) && criterionObject(policy)
+      ? { ...previous, ...policy } as unknown as TierPolicy
+      : policy as TierPolicy;
+  }
+  return merged as BifrostConfig["tierPolicies"];
+}
+
 export function loadConfig(
   cwd: string,
   extensionDir: string,
 ): BifrostConfig {
-  const base: BifrostConfig = {
+  const base = defaultConfig();
+
+  const configs = configLayerPaths(cwd, extensionDir).map(([, path]) => readJson<BifrostConfig>(path));
+  let merged: BifrostConfig = base;
+  for (const cfg of configs) {
+    if (cfg) merged = mergeConfig(merged, cfg);
+  }
+  return merged;
+}
+
+export interface ConfigLoadDiagnostic {
+  readonly layer: "extension" | "global" | "workspace" | "project";
+  readonly message: string;
+}
+
+export interface ConfigLoadResult {
+  readonly config: BifrostConfig;
+  readonly diagnostics: readonly ConfigLoadDiagnostic[];
+}
+
+/** Load command-reload layers while preserving parse/root-shape failures for strict last-good gating. */
+export function loadConfigForReload(cwd: string, extensionDir: string): ConfigLoadResult {
+  const diagnostics: ConfigLoadDiagnostic[] = [];
+  let merged = defaultConfig();
+  for (const [layer, path] of configLayerPaths(cwd, extensionDir)) {
+    let text: string | undefined;
+    try {
+      if (existsSync(path)) text = readFileSync(path, "utf8");
+    } catch {
+      diagnostics.push({ layer, message: `${layer} config could not be read.` });
+      continue;
+    }
+    if (text === undefined) continue;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      diagnostics.push({ layer, message: `${layer} config is not valid JSON.` });
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      diagnostics.push({ layer, message: `${layer} config must contain an object.` });
+      continue;
+    }
+    merged = mergeConfig(merged, parsed as BifrostConfig);
+  }
+  return { config: merged, diagnostics };
+}
+
+/**
+ * Compose the existing config layers while substituting exact bytes for one
+ * selected source. This is for prospective validation only; diagnostics make
+ * the result ineligible for apply until every layer parses as an object.
+ */
+export function loadConfigWithSourceOverride(
+  cwd: string,
+  extensionDir: string,
+  source: "project" | "workspace" | "user",
+  replacementBytes: Uint8Array,
+): ConfigLoadResult {
+  const diagnostics: ConfigLoadDiagnostic[] = [];
+  if (source !== "project" && source !== "workspace" && source !== "user") {
+    return {
+      config: defaultConfig(),
+      diagnostics: [{ layer: "project", message: "Selected config source is invalid." }],
+    };
+  }
+  const selectedLayer: ConfigLoadDiagnostic["layer"] = source === "project" ? "project"
+    : source === "workspace" ? "workspace" : "global";
+  let merged = defaultConfig();
+  for (const [layer, path] of configLayerPaths(cwd, extensionDir)) {
+    let text: string | undefined;
+    if (layer === selectedLayer) {
+      try {
+        text = new TextDecoder("utf-8", { fatal: true }).decode(replacementBytes);
+      } catch {
+        diagnostics.push({ layer, message: `${layer} config is not valid UTF-8.` });
+        continue;
+      }
+    } else {
+      try {
+        if (existsSync(path)) text = readFileSync(path, "utf8");
+      } catch {
+        diagnostics.push({ layer, message: `${layer} config could not be read.` });
+        continue;
+      }
+    }
+    if (text === undefined) continue;
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      diagnostics.push({ layer, message: `${layer} config is not valid JSON.` });
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      diagnostics.push({ layer, message: `${layer} config must contain an object.` });
+      continue;
+    }
+    merged = mergeConfig(merged, parsed as BifrostConfig);
+  }
+  return { config: merged, diagnostics };
+}
+
+function defaultConfig(): BifrostConfig {
+  return {
     enabled: true,
     default: "general",
     strategy: "first",
@@ -499,18 +896,18 @@ export function loadConfig(
     models: {},
     rules: DEFAULT_RULES,
   };
+}
 
-  const configs = [
-    readJson<BifrostConfig>(join(extensionDir, "bifrost.json")),
-    readJson<BifrostConfig>(join(getAgentDir(), "bifrost.json")),
-    readJson<BifrostConfig>(join(cwd, "bifrost.json")),
-    readJson<BifrostConfig>(join(cwd, CONFIG_DIR_NAME, "bifrost.json")),
+function configLayerPaths(
+  cwd: string,
+  extensionDir: string,
+): Array<readonly [ConfigLoadDiagnostic["layer"], string]> {
+  return [
+    ["extension", join(extensionDir, "bifrost.json")],
+    ["global", join(getAgentDir(), "bifrost.json")],
+    ["workspace", join(cwd, "bifrost.json")],
+    ["project", join(cwd, CONFIG_DIR_NAME, "bifrost.json")],
   ];
-  let merged: BifrostConfig = base;
-  for (const cfg of configs) {
-    if (cfg) merged = mergeConfig(merged, cfg);
-  }
-  return merged;
 }
 
 export function loadRules(cwd: string, config: BifrostConfig): RouteRule[] {

@@ -28,10 +28,26 @@ const server = http.createServer((request, response) => {
     const model = payload.model ?? "unknown";
     const attempt = (attempts.get(model) ?? 0) + 1;
     attempts.set(model, attempt);
-    stats.push({ model, attempt });
+    const classifierRequest = JSON.stringify(payload.messages ?? [])
+      .includes("Classify the request into exactly one category.");
+    const authorization = request.headers.authorization ?? "";
+    const provider = authorization === "Bearer ui-fixture-backup-only"
+      ? "fake-backup"
+      : authorization === "Bearer fixture-only"
+        ? "fake"
+        : authorization.startsWith("Bearer fixture-")
+          ? authorization.slice("Bearer fixture-".length)
+          : "fake";
+    stats.push({ provider, model, attempt, kind: classifierRequest ? "classifier" : "generation" });
+    if (model === "subscription-required") return json(response, 403, {
+      type: "error",
+      error: { api_error: { message: "An active OpenCode Go subscription is required to use Go" } },
+    });
+    if (model === "usage-exhausted" || model === "usage-exhausted-alternate") return json(response, 429, { error: { code: "usage_limit_reached", message: "The usage limit has been reached. Please try again later." } });
     if (model === "quota") return json(response, 429, { error: { message: "quota exhausted" } }, { "retry-after": "1" });
     if (model === "fail") return json(response, 500, { error: { message: "simulated provider failure" } });
     if (model === "fail-then-ok" && attempt === 1) return json(response, 500, { error: { message: "simulated transient failure" } });
+    if (model === "classifier") return sse(response, "general");
     if (model === "partial") {
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.write(`data: ${JSON.stringify({ id: "fake", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: "partial" }, finish_reason: null }] })}\n\n`);

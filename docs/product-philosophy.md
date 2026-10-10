@@ -7,7 +7,7 @@ Its job is to select a suitable configured model for each coding-agent turn, saf
 ## Core promises
 
 1. **Direct** — select the host's actual active model before generation when the host supports it. Where the host offers native virtual models, an explicitly selected virtual mode may dispatch the physical model per request as long as selection and dispatch stay visible.
-2. **Safe** — preserve user work. Do not automatically replay a turn that may have edited files, invoked tools, or touched external systems.
+2. **Safe** — preserve user work. Do not replay a turn that may have emitted assistant content, invoked tools, or touched external systems. The narrow, configurable allowance-recovery exception in [ADR 0023](adr/0023-bounded-allowance-recovery.md) applies only when Pi proves the failed initial Auto generation had no such effects.
 3. **Inspectable** — show what was selected, why it was selected, what was excluded, and how a user can change it.
 4. **User-owned** — configuration and explicit user actions remain the primary policy surface.
 5. **Portable** — share routing/reliability policy where host capabilities permit; keep adapters thin; do not make a proxy the default architecture.
@@ -49,7 +49,7 @@ If any answer is no, ship the smaller advisory or observability version first, o
 
 Bifrost does not grow by copying every competitor feature.
 
-- No hidden replay of arbitrary user work.
+- No hidden replay of arbitrary user work; see the bounded, observable exception in ADR 0023.
 - No opaque model scoring that overrides declared policy without trace or opt-in.
 - No prompt-guided delegation as a substitute for direct host model selection.
 - No proxy-first architecture when a host exposes a safe native model-switching capability.

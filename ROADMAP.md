@@ -32,11 +32,28 @@ Features that need an eval harness, persistent analytics, telemetry infra, or up
 - [x] **Default config overhaul.** Replaced the bloated research config with a 3-tier minimal default (`quick`/`general`/`frontier`), no hardcoded model IDs, `DEFAULT_RULES` is the single source of truth, `/bifrost init` and `guessTier` aligned to the new names. See [`docs/adr/0006-default-config.md`](docs/adr/0006-default-config.md).
 - [x] **Optional TypeSafe/Jev classifier.** Explicit opt-in tier judgment with strict decoding, confidence gates, safe credential handling, bounded failure recovery, local metrics, and dual-gated troubleshooting traces. See [`docs/jev-typesafe-architecture.md`](docs/jev-typesafe-architecture.md).
 
+## Current release candidate (not shipped)
+
+The current working candidate adds the following opt-in and inspectable behavior. These items are not shipped until the release candidate passes its final verification and is published; see [`RELEASE-PLAN.md`](RELEASE-PLAN.md) for checkpoint and gate evidence.
+
+- **Strict fallback boundaries:** schema v2 can give a tier an ordered `fallbackTiers` list. An empty list is terminal: an exhausted boundary does not fall through to the active or previously dispatched model. Tiers without a policy retain legacy behavior.
+- **Reliability version policy:** v1 remains the default and available this release, but is deprecated; the v1-to-v2 migration command remains available. Receipt-owned v2 is recommended only for supported Auto user turns. Physical routing and direct utility calls still require v1, so v2 is not a general switch for every workflow. Before migration, stop other Pi sessions that may write v1 state and ensure the current session has no active or queued generation. The cooperative source lock cannot fence older/uncooperative binaries or a stale v1 writer after migration. Any future v1 removal must be announced at least one published release ahead and wait until intended v1-dependent workflows are covered; no removal version or date is set.
+- **Receipt-owned reliability v2:** explicitly enabled Auto turns use separate, durable admission receipts and controlled recovery trials. The bounded allowance-recovery exception in ADR 0023 also applies after confirmed V2 settlement.
+- **Bounded allowance recovery:** Auto can make one visible attempt on another configured eligible model after an explicit usage-limit rejection, only when Pi proves failed responses were empty, from the same model, and exactly omitted, with no tools, results, queue, or other activity. Pi's own bounded retry may run first. `reliability.retryOnAllowanceExhausted: false` disables Bifrost failover. See [ADR 0023](docs/adr/0023-bounded-allowance-recovery.md).
+- **Provider usage and rate pauses:** usage and billing rejections pause models with the same configured Pi provider ID by default. The policy applies in Auto and physical routing. It does not identify shared billing accounts. `reliability.allowanceCooldownScope: "model"` limits usage and billing pauses to one model. Generic HTTP 429 pauses remain provider-scoped. See [ADR 0024](docs/adr/0024-provider-usage-and-rate-pauses.md).
+- **Explicit config reconciliation:** preview is local and write-free by default; a reviewed proposal digest is required for apply. Optional provider refresh is a separate preview action. The ownership sidecar tracks exact generated memberships, and the journal keeps exact backups. Init updates only generated memberships that remain safe to reconcile and preserves handwritten entries and other config fields.
+- **Automatic fresh setup:** when no meaningful config, route file, or explicit routing override blocks setup, Bifrost starts with physical selection and builds model lists from Pi's catalog on the first prompt. It saves a minimal project `.pi/bifrost.json` and ownership receipt in the background. An empty `{}` file does not block setup. The save does not probe or store prompts or secrets. Init remains available for catalog refresh and reconciliation. Selecting `bifrost/auto` remains a separate opt-in. See [ADR 0025](docs/adr/0025-automatic-first-use-configuration-save.md).
+- **Economic snapshots and billing preference:** schema v2 accepts explicit declared/estimated facts, windows and resets, with observe or configured reserve behavior and an optional billing-class preference. Facts are snapshots; Bifrost does not fetch live quota or infer subscription/billing state, and these controls do not provide a spend-cap guarantee.
+- **Branch-local affinity:** Pi Auto defaults to retaining an eligible model after a proven successful same-tier dispatch; physical routing and the resolve-only API stay off by default. Schema-v2 config can opt out or select observation mode. Retention does not cross tiers or override hard exclusions. This is not the session-base behavior proposed in ADR 0019.
+- **Experimental resolve-only API:** `pi-bifrost/router` evaluates caller-supplied snapshots without changing Pi's selected model. Results are advisory and require fresh validation before dispatch.
+
+The pinned Pi 1.0.1 host source also settles the classifier catalog question for this candidate: `ModelRegistry.getAvailable()` returns `Model<Api>[]` (`packages/coding-agent/src/core/model-registry.ts` at Pi tag `v1.0.1`, commit `a7229ddc21810d6245105978033b7df645ecc2f7`). The `pi-ai` `Models` contract documents unqualified accessors, including `getAvailable()`, as chat-only; classifier entries have a distinct `ClassifierModel` type for `classify()` (`packages/ai/src/models.ts`, `packages/ai/src/types.ts` at the same tag). Bifrost's routing, probe, and init use this available chat catalog. This is a pinned host-contract dependency, not a Bifrost predicate that can protect against a future Pi contract change.
+
 ---
 
-## In progress (v0.4 — transparency & safety)
+## Remaining ADR work
 
-Four small ADRs. Each is a building block: traces make the rest debuggable; the other three fix specific sharp edges the latest reviews uncovered.
+These earlier ADRs remain tracked independently from the current release candidate above. Some candidate behavior overlaps their scope; use each ADR for its full requirements and remaining gaps.
 
 ### [ADR 0007 — Explainable decision traces](docs/adr/0007-decision-traces.md)
 `/bifrost preview` today prints a flattened summary. Promote it to a structured, machine-readable trace: stage timings (`cache`, `classifier`, `regex`, `fallback`), inputs, route taken, candidates filtered by reliability, strategy choice, and selected model. Same data shown to the user; same data available to tests. **Effort:** Low · **Reach:** every user who debugs a misroute.
@@ -69,11 +86,11 @@ These stay parked until the listed dependency is resolved.
 ### Thinking-level routing
 **ADR candidate, not yet implemented.** When Bifrost routes to a reasoning-capable model, Pi can clamp or elevate thinking level. Need to expose effective level + clamp reason in routing feedback; any policy must be opt-in. Waiting on: nothing — ADR 0004 is documented and ready. Moved to In progress when picked up. See [`docs/adr/0004-thinking-level-routing.md`](docs/adr/0004-thinking-level-routing.md). **Effort:** Low for visibility.
 
-### Reliability v2 — safe request retry
-Re-sending a prompt after a provider failure risks duplicating work (output may have streamed, tools may have fired). Blocked on Pi extension hooks for pre-output error interception and turn replay. Until then, fail-fast + record + circuit-open. **Effort:** Research first.
+### Broader automatic request retry or replay
+Deferred. The narrow allowance-recovery exception in ADR 0023 does not authorize retries after output, tool use, queued work, host-owned retry, or unknown activity. Broader replay would need a separate safety design and deterministic host proof for each supported boundary. **Effort:** Deferred.
 
-### Classifier-type models must stay out of tier pools
-**Note only (2026-10-04).** A System One model is a classifier only, and it cannot serve a coding turn. Exclude by model type and not by provider name. One `type: "classifier"` predicate guards three surfaces: the candidate match in `routing.ts` (the `isVirtualModel` filter sites), the probe list in `probe.ts` (`getAvailable()`), and the config that `init` generates. The phase-5 detection engine raises this exposure, because the `auth-file` path is exactly the user who set up the TypeSafe provider. **Waiting on:** one live proof of whether `ctx.modelRegistry.getAvailable()` returns classifier-typed entries (its type surface reads `Model<Api>[]`). **Effort:** Low (one predicate).
+### Live quota allowance adapter
+Blocked on documented provider or host support that exposes authoritative allowance windows, reset semantics, account identity, freshness, and authorization through Pi-managed credentials. The candidate includes reactive pauses based on errors from requests that Pi already sent. It does not fetch live limits. Explicit economic snapshots remain separate. Do not use private consumer endpoints or describe either feature as live tracking. **Effort:** External evidence required.
 
 ### PTY test harness evolution
 `agent-tui` POC passed startup/dashboard/preview scenarios; existing Python smoke remains the gate. Promotion blocked on pinning `agent-tui` install and deterministic Pi behavior in CI. See [`docs/agent-tui-evaluation.md`](docs/agent-tui-evaluation.md). **Effort:** Medium.
@@ -108,7 +125,7 @@ The proposed "confidence-aware policy engine" expansion included 17 features. Se
 
 - **Weighted multi-dimensional scoring** (quality × cost × latency × reliability × context × suitability). Needs per-model quality scores from an eval harness we don't have. Until then the discrete `strategy` enum covers what we can measure today.
 - **Model suitability profiles.** Same dependency — needs quality scores.
-- **Quota-aware routing.** Needs per-provider quota telemetry; pi not an LLM gateway.
+- **Proactive quota-aware routing.** Reactive pauses use errors from requests already sent. Proactive routing needs documented per-provider quota telemetry through Pi; Pi is not an LLM gateway.
 - **Shadow evaluation + automatic data-driven tuning.** Needs labelled routing data and an offline eval stack. Out of scope until a separate observability story lands.
 - **Routing analytics.** Overlaps with usage stats; defer the routing-quality analytics until stats ships.
 - **Token estimation + expected total-cost projection.** Token estimation alone is a small add; full cost projection requires output-token prediction which is rarely accurate enough to drive routing. Defer the projection; revisit estimation if a real need appears.

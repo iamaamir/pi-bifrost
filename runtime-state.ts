@@ -82,10 +82,12 @@ export function loadRuntimeState(path: string, fallback: RuntimeModeState = DEFA
   }
 }
 
-export function saveRuntimeState(path: string, state: PersistedModeState): void {
+export function saveRuntimeState(path: string, state: PersistedModeState): boolean {
   try {
     writeJsonFile(path, state);
+    return true;
   } catch (err) {
     console.error(`[bifrost] failed to save runtime state: ${err}`);
+    return false;
   }
 }

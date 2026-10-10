@@ -5,6 +5,39 @@
   "description": "Configuration for the pi-bifrost model router. Routes prompts to configured tiers or exact provider models. Optional classifiers can select a tier. Merged from extension defaults → global → project root → project config (.pi/bifrost.json), with later layers winning.",
   "type": "object",
   "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [1, 2],
+      "description": "Config schema version. Omit or set 1 to retain legacy routing behavior. Version 2 permits explicit per-tier fallback boundaries; each boundary is activated only by its tierPolicies entry.",
+      "examples": [2]
+    },
+    "tierPolicies": {
+      "type": "object",
+      "description": "Optional strict fallback boundaries. A configured tier with fallbackTiers resolves only itself and the listed tiers in order. An empty list allows no fallback. Requires schemaVersion 2.",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["fallbackTiers"],
+        "additionalProperties": false,
+        "properties": {
+          "fallbackTiers": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Ordered configured tier names to try after this tier. Must not include this tier, duplicates, missing tiers, or form a cycle."
+          }
+        }
+      },
+      "examples": [
+        { "quick": { "fallbackTiers": ["general"] }, "general": { "fallbackTiers": [] } }
+      ]
+    },
+    "economics": {
+      "$ref": "#/definitions/EconomicsConfig",
+      "description": "Optional local reserve signals and admission policy. Without this namespace, Bifrost keeps legacy routing behavior. Config-declared facts are declared or estimated; Pi does not query live billing or account APIs."
+    },
+    "affinity": {
+      "$ref": "#/definitions/AffinityConfig",
+      "description": "Optional explicit affinity override. When absent, the Pi extension retains a proven successful Auto-dispatch anchor within the selected tier; physical selection and the resolve-only API remain off by default. Retention stays inside the final selection pool and does not override hard exclusions. This namespace requires schemaVersion 2."
+    },
     "enabled": {
       "type": "boolean",
       "description": "Enable or disable routing. When disabled, Bifrost does not switch models for new turns. Pi uses the selected physical model.",
@@ -109,6 +142,12 @@
           "type": "string",
           "enum": ["prompt", "typesafe", "pi-native"],
           "description": "Classifier backend. If omitted, Bifrost detects Pi-managed TypeSafe credentials first, TYPESAFE_API_KEY second, and otherwise uses prompt. An explicit value always wins."
+        },
+        "totalTimeoutMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60000,
+          "description": "Optional total budget for external classification across direct backends, retries, and prompt fallback. When it expires, Bifrost stops external classifier attempts and continues with local regex/default routing. Caller cancellation stops routing. If omitted, backend-specific timeouts remain unchanged."
         },
         "typesafe": {
           "type": "object",
@@ -262,6 +301,34 @@
           "description": "How long an opened circuit stays open before model becomes eligible again.",
           "default": 60
         },
+        "cooldownOnAllowanceExhausted": {
+          "type": "boolean",
+          "description": "Immediately pause a provider after a normalized explicit usage-allowance or billing failure. A 402 response pauses the provider; ordinary 429 rate limits use a short provider throttle. Set false to disable usage and billing pauses; rate-limit throttles remain enabled.",
+          "default": true
+        },
+        "allowanceCooldownScope": {
+          "type": "string",
+          "enum": ["provider", "model"],
+          "description": "Scope usage-allowance and billing pauses. The default provider scope pauses all configured models under the same provider ID. Set model to keep those pauses model-scoped. HTTP 429 throttles always use provider scope.",
+          "default": "provider"
+        },
+        "retryOnAllowanceExhausted": {
+          "type": "boolean",
+          "description": "Retry at most once on a different configured model only when reliability and cooldownOnAllowanceExhausted are enabled and Pi proves the failed Auto generation had no assistant content, tool calls, tool results, or other activity. The failed response is omitted from the next model context; the raw transcript remains visible.",
+          "default": true
+        },
+        "stateVersion": {
+          "type": "integer",
+          "enum": [1, 2],
+          "description": "Reliability state format. Omitted or 1 uses the legacy runtime; 2 opts into the experimental receipt-owned runtime and requires explicit /bifrost reliability migrate preparation. Physical routing and direct utility requests are unsupported while version 2 is enabled."
+        },
+        "observations": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false, "description": "Store allowlisted failure categories and timestamps from proven runtime failures. No provider error text is retained." }
+          }
+        },
         "path": {
           "type": "string",
           "description": "Custom path for persisted reliability state. Default: .pi/bifrost-reliability.json"
@@ -302,6 +369,131 @@
           "default": 10000
         }
       }
+    },
+    "EconomicsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "scopes", "sources", "admission"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["observe", "policy"], "description": "observe reports reserve and billing preference effects without changing candidate membership, order, or random selection. policy excludes only candidates rejected by a configured hard reserve and may prefer an explicitly configured billing class among the remaining eligible candidates." },
+        "preference": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["billingClass"],
+          "description": "Optional preference among final eligible candidates in the already selected tier. It does not exclude candidates or override a direct model selection. Requires fresh explicit billing facts; unknown or conflicting facts remain neutral.",
+          "properties": {
+            "billingClass": { "type": "string", "enum": ["subscription", "metered", "free"] }
+          }
+        },
+        "scopes": {
+          "type": "object",
+          "maxProperties": 64,
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "object", "required": ["kind", "model"], "additionalProperties": false, "properties": { "kind": { "const": "model" }, "model": { "type": "string", "minLength": 1, "maxLength": 256 } } },
+              { "type": "object", "required": ["kind", "provider"], "additionalProperties": false, "properties": { "kind": { "const": "provider" }, "provider": { "type": "string", "minLength": 1, "maxLength": 128 } } }
+            ]
+          }
+        },
+        "sources": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object", "required": ["id", "scopeRef", "authority"], "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "scopeRef": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "authority": { "type": "string", "enum": ["declared", "estimated"], "description": "A static fact entered by the user; it is not authoritative provider billing data." }
+            }
+          }
+        },
+        "sourceOrder": { "type": "object", "additionalProperties": { "type": "array", "maxItems": 16, "items": { "type": "string" } } },
+        "admission": {
+          "type": "array", "maxItems": 128,
+          "items": {
+            "type": "object", "required": ["id", "scopeRef", "windowId", "reserveRatio", "unknown"], "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "scopeRef": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "windowId": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "reserveRatio": { "type": "number", "minimum": 0, "maximum": 1 },
+              "unknown": { "type": "string", "enum": ["block", "ignore"] }
+            }
+          }
+        },
+        "tierOverrides": { "type": "object", "additionalProperties": { "type": "object", "additionalProperties": { "type": "object", "additionalProperties": false, "properties": { "reserveRatio": { "type": "number", "minimum": 0, "maximum": 1 }, "unknown": { "type": "string", "enum": ["block", "ignore"] } } } } },
+        "observations": {
+          "type": "array", "maxItems": 64,
+          "description": "User-entered static observations only. Values are local evidence and must be refreshed by the user; no provider adapter is invoked.",
+          "items": {
+            "type": "object", "required": ["sourceId", "scopeRef", "billing", "observedAt", "expiresAt", "revision", "windows"], "additionalProperties": false,
+            "properties": {
+              "sourceId": { "type": "string" }, "scopeRef": { "type": "string" },
+              "billing": { "type": "string", "enum": ["subscription", "metered", "free", "unknown"] },
+              "observedAt": { "type": "integer", "minimum": 0 }, "expiresAt": { "type": "integer", "minimum": 0 }, "revision": { "type": "integer", "minimum": 0 },
+              "windows": { "type": "array", "maxItems": 16, "items": { "$ref": "#/definitions/EconomicWindow" } }
+            }
+          }
+        }
+      }
+    },
+    "AffinityConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["off", "observe", "retain-within-tier"], "description": "Explicit Pi extension override: off disables affinity, observe reports the proven Auto anchor without changing selection, and retain-within-tier may keep an automatic successful-dispatch anchor only when it is in the selected tier's final selection pool. It never crosses tiers or bypasses hard exclusions." },
+        "providerAdvisory": { "type": "boolean", "default": false, "description": "Include whether any final eligible candidate shares the anchor provider. This reports candidate availability only; it does not claim cache reuse or savings." }
+      }
+    },
+    "EconomicWindow": {
+      "type": "object", "required": ["id", "period", "unit", "remaining"], "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "period": { "type": "object", "required": ["id", "sequence"], "additionalProperties": false, "properties": { "id": { "type": "string" }, "sequence": { "type": "integer", "minimum": 0 } } },
+        "unit": { "type": "string", "enum": ["requests", "tokens", "credits", "ratio", "currency"] },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "remaining": { "type": "number", "minimum": 0 },
+        "limit": { "type": "number", "exclusiveMinimum": 0 },
+        "resetsAt": { "type": "integer", "minimum": 0 }
+      }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": { "required": ["tierPolicies"] },
+      "then": {
+        "properties": { "schemaVersion": { "const": 2 } },
+        "required": ["schemaVersion"]
+      }
+    },
+    {
+      "if": { "required": ["economics"] },
+      "then": {
+        "properties": { "schemaVersion": { "const": 2 } },
+        "required": ["schemaVersion"]
+      }
+    },
+    {
+      "if": { "required": ["affinity"] },
+      "then": {
+        "properties": { "schemaVersion": { "const": 2 } },
+        "required": ["schemaVersion"]
+      }
+    },
+    {
+      "if": { "properties": { "reliability": { "properties": { "stateVersion": { "const": 2 } }, "required": ["stateVersion"] } }, "required": ["reliability"] },
+      "then": {
+        "properties": { "schemaVersion": { "const": 2 } },
+        "required": ["schemaVersion"]
+      }
+    },
+    {
+      "if": { "properties": { "reliability": { "required": ["observations"] } }, "required": ["reliability"] },
+      "then": {
+        "properties": { "schemaVersion": { "const": 2 }, "reliability": { "required": ["stateVersion"] } },
+        "required": ["schemaVersion"]
+      }
+    }
+  ]
 }

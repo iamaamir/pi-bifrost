@@ -1,56 +1,164 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CONFIG_DIR_NAME, ModelSelectorComponent, type ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { CONFIG_DIR_NAME, ModelSelectorComponent, getAgentDir, type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { createHash } from "node:crypto";
+import { constants, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
 import type { BifrostConfig, ClassifierConfig } from "./config.ts";
-import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, PROMPT_ONLY_FIELDS, loadConfig } from "./config.ts";
+import { DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, PROMPT_ONLY_FIELDS, classifierTotalTimeoutIssue, loadConfigForReload, loadConfigWithSourceOverride, validateConfig, validateEconomicConfig, validateTierPolicyConfig } from "./config.ts";
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
-import type { ClassificationPipeline, ClassificationResult, ClassificationSource } from "./classification-pipeline.ts";
+import { buildRouteDecisionSummary, type ClassificationPipeline, type ClassificationResult, type ClassificationSource, type RouteDecisionSummary } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
 import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
 import { showBifrostResult } from "./result-viewer.ts";
 import {
   findCandidates,
-  getStrategy,
+  buildTierResolutionOptions,
+  resolveConfiguredTier,
   guessTier,
   modelKey,
-  resolveModelWithFallback,
   type HealthyModelResolution,
+  type RoutedModelResolution,
   type RoutingStrategy,
+  type AffinityRoutingContext,
 } from "./routing.ts";
 import type { ReliabilityStore } from "./reliability-store.ts";
+import type { ReliabilityV2Store } from "./reliability-v2-store.ts";
+import { ReliabilityV2StoreError } from "./reliability-v2-store.ts";
+import type { ProviderCooldownStore } from "./provider-cooldowns.ts";
+import { projectProviderCooldownsForRouting, providerScopeModelKey } from "./provider-cooldowns.ts";
+import { emptyReliabilityState, getCircuitState, hasActiveAllowanceCooldown } from "./reliability.ts";
+import { createProviderCooldownStore, createReliabilityV2Store, reliabilityV2Config, reliabilityV2Path } from "./runtime-reliability-v2.ts";
+import { projectReliabilityV2ForRouting } from "./reliability-v2-routing.ts";
 import { classifierMetricsEnabled, type ClassifierMetricsState, type ClassifierMetricsStore } from "./classifier-metrics.ts";
 import type { EffectiveBackend } from "./classifier-detection.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend } from "./classifier-backends.ts";
 import { piClassificationSupported } from "./classifier-pi-native.ts";
 import { resolveTypeSafeApiKey, type TypeSafeCredentialSource } from "./typesafe-classifier.ts";
+import { inspectDiagnostics, validateDiagnostics, type BifrostDiagnostic, type InspectDiagnosticsReport, type ValidateDiagnosticsReport } from "./diagnostics.ts";
+import type { EconomicDiagnostic, EconomicSnapshot, ReservePolicy } from "./economic-signals.ts";
+import { reconcileEconomicSnapshot } from "./economic-config.ts";
+import { resolvePiAffinityMode, type AffinityAnchor } from "./affinity.ts";
+import {
+  buildInitOwnershipReceipt,
+  buildInitMembershipPlan,
+  parseReconciliationCommandArgs,
+  runReconciliationCommand,
+  type ReconciliationCommandReport,
+  type ReconciliationCommandRequest,
+  type ReconciliationConfigSource,
+  type ReconciliationRegistrySnapshot,
+  type ReconciliationSourceSnapshot,
+} from "./reconciliation-command.ts";
+import {
+  applyReconciliationTransaction,
+  recoverReconciliationTransaction,
+  ReconciliationStoreError,
+} from "./reconciliation-store.ts";
+import { projectProviderRefreshEvidence, waitForRegistryRefresh } from "./registry-refresh.ts";
+import { REGISTRY_REFRESH_TTL_MS } from "./ux-status.ts";
+import { isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
+import { hasExplicitExtensionRoutingFile, hasUserBootstrapFiles } from "./auto-setup.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
 export interface BifrostState {
   config: BifrostConfig;
+  /** New routing config semantics are blocked until an accepted config is installed. */
+  tierPolicyValid?: boolean;
+  economicSnapshot?: EconomicSnapshot;
+  economicPolicy?: ReservePolicy;
+  /** Private compatibility provenance retained while economics is absent. */
+  economicHistoryPolicy?: ReservePolicy;
+  economicPolicyValid?: boolean;
+  /** Invalid/unsupported affinity namespace must not silently become legacy routing. */
+  affinityConfigValid?: boolean;
+  economicDiagnostics?: readonly EconomicDiagnostic[];
+  economicQuarantinedSourceRevisions?: ReadonlyMap<string, number>;
   enabled: boolean;
   classifierEnabled: boolean;
   pinned: boolean;
   cacheEntries: CacheEntry[];
   reliabilityStore: ReliabilityStore;
+  reliabilityV2Store?: ReliabilityV2Store;
+  providerCooldownStore?: ProviderCooldownStore;
+  configGeneration?: number;
+  /** True when this session generated model memberships from Pi's startup catalog without writing config. */
+  bootstrapModelsInMemory?: boolean;
+  reliabilityV2ConfigValid?: boolean;
+  reliabilityV2StateError?: string;
+  onConfigInstalled?: (config: BifrostConfig, previousConfig: BifrostConfig, validatedReload?: boolean) => void;
+  onManualControl?: (session: object, action?: "on" | "off" | "pin" | "unpin") => void;
+  /** Read-only projection of the current branch-local successful Auto anchor. */
+  getAffinityAnchor?: (ctx: ExtensionContext) => AffinityAnchor | undefined;
   classifierMetricsStore: ClassifierMetricsStore;
   extensionDir: string;
   /** Uses the extension instance's sticky detector without locking on context-free facts. */
-  effectiveClassifierBackend: (config: BifrostConfig) => EffectiveBackend;
+  effectiveClassifierBackend: (config: BifrostConfig, ctx?: ExtensionContext) => EffectiveBackend;
   getPipeline: (ctx: ExtensionContext) => ClassificationPipeline;
   invalidatePipeline: () => void;
   /** Leave Bifrost's virtual selection for its last dispatched physical model. */
   selectPhysicalFromVirtual?: (ctx: ExtensionContext) => Promise<boolean>;
   /** Persist runtime mode toggles (enabled/pinned/classifierEnabled) to disk. */
-  saveModeState: () => void;
+  saveModeState: () => boolean | void;
   lastRegistryRefreshAt?: number;
   forceRegistryRefresh?: boolean;
+  /** Per-provider, content-free registry refresh evidence for offline reconciliation. */
+  registryInventoryEvidence?: Readonly<Record<string, { status: "complete" | "partial" | "stale"; refreshedAt: number }>>;
   /** Recorded when detection fills an absent classifier.backend; status and test report read it (fix 12). */
   classifierDetection?: { backend: ClassifierBackend; reason: string };
+}
+
+function installConfigIfTierPoliciesValid(
+  state: BifrostState,
+  config: BifrostConfig,
+  ctx: ExtensionContext,
+  validatedReload = false,
+): boolean {
+  const errors = validateTierPolicyConfig(config).filter((issue) => issue.severity === "error");
+  errors.push(...validateConfig(config).filter((issue) => issue.severity === "error"
+    && (issue.code?.startsWith("config.reliability_") || issue.code?.startsWith("config.affinity_"))));
+  const totalTimeoutIssue = classifierTotalTimeoutIssue(config);
+  if (totalTimeoutIssue) errors.push(totalTimeoutIssue);
+  if (errors.length > 0) {
+    debug("config", "reload_rejected", { category: "validation_failed", issueCount: errors.length });
+    log(ctx, `Bifrost config reload rejected: ${errors.map((issue) => issue.message).join(" ")}`, "error");
+    return false;
+  }
+  const previousConfig = state.config;
+  const reconciled = reconcileEconomicSnapshot(
+    state.economicSnapshot,
+    state.economicHistoryPolicy ?? state.economicPolicy,
+    config.economics,
+    state.economicQuarantinedSourceRevisions,
+  );
+  state.config = config;
+  state.tierPolicyValid = true;
+  state.affinityConfigValid = true;
+  state.economicSnapshot = reconciled.snapshot;
+  state.economicPolicy = reconciled.policy;
+  state.economicHistoryPolicy = reconciled.historyPolicy;
+  state.economicPolicyValid = validateEconomicConfig(config).every((issue) => issue.severity !== "error");
+  state.economicDiagnostics = reconciled.diagnostics;
+  state.economicQuarantinedSourceRevisions = reconciled.quarantinedSourceRevisions;
+  state.onConfigInstalled?.(config, previousConfig, validatedReload);
+  state.invalidatePipeline();
+  return true;
+}
+
+function installReloadedConfig(
+  state: BifrostState,
+  loaded: ReturnType<typeof loadConfigForReload>,
+  ctx: ExtensionContext,
+): boolean {
+  if (loaded.diagnostics.length > 0) {
+    debug("config", "reload_rejected", { category: "source_invalid", issueCount: loaded.diagnostics.length });
+    log(ctx, `Bifrost config reload rejected: ${loaded.diagnostics.map(({ message }) => message).join(" ")}`, "error");
+    return false;
+  }
+  return installConfigIfTierPoliciesValid(state, loaded.config, ctx, true);
 }
 
 export function log(
@@ -134,8 +242,14 @@ export function clearBifrostWidgets(ctx: ExtensionContext) {
   }
 }
 
-export function syncBifrostModeStatus(ctx: ExtensionContext, state: Pick<BifrostState, "enabled" | "pinned" | "classifierEnabled">) {
-  setBifrostModeStatus(ctx, state);
+export function syncBifrostModeStatus(ctx: ExtensionContext, state: Pick<BifrostState, "enabled" | "pinned" | "classifierEnabled" | "config" | "economicPolicyValid">) {
+  setBifrostModeStatus(ctx, {
+    enabled: state.enabled,
+    pinned: state.pinned,
+    classifierEnabled: state.classifierEnabled,
+    economicMode: state.config.economics?.mode,
+    economicPolicyValid: state.economicPolicyValid,
+  });
 }
 
 function openCircuitCount(state: BifrostState, now = Date.now()): number {
@@ -147,17 +261,21 @@ function formatCandidateLines(
   selectedKey: string | undefined,
 ): string[] {
   const skipped = new Map(resolution.skipped.map((item) => [item.key, item]));
+  const reserves = new Map((resolution.economic ?? []).map((item) => [item.key, item.evaluation]));
   return resolution.candidates.map((m) => {
     const key = modelKey(m);
     const skippedCandidate = skipped.get(key);
+    const reserve = reserves.get(key);
     if (skippedCandidate) {
       const until = skippedCandidate.openUntil
         ? new Date(skippedCandidate.openUntil).toISOString()
         : "unknown";
       return `xx ${key} (open circuit until ${until})`;
     }
+    if (reserve?.mode === "policy" && reserve.disposition === "rejected") return `xx ${key} (reserve policy)`;
     const marker = key === selectedKey ? "=>" : "  ";
-    return `${marker} ${key} ($${(m.cost.input + m.cost.output).toFixed(2)}/1M tokens, ctx ${m.contextWindow})`;
+    const reserveNote = reserve?.mode === "observe" && reserve.wouldReject ? "; reserve would reject" : "";
+    return `${marker} ${key} ($${(m.cost.input + m.cost.output).toFixed(2)}/1M tokens, ctx ${m.contextWindow}${reserveNote})`;
   });
 }
 
@@ -179,40 +297,91 @@ export type BifrostTierDisplay = {
   requestedCandidateLines: string[];
   fallbackCandidateLines: string[];
   defaultTier?: string;
+  explicitBoundary?: true;
+  attemptedTiers?: Array<{ tier: string; strategy: string; candidates: string[] }>;
 };
+
+type ResolvedTierDisplay = BifrostTierDisplay & { resolution: RoutedModelResolution };
+type AffinityInspectEvidence = {
+  mode: "off" | "observe" | "retain-within-tier";
+  source: "config" | "auto_default" | "physical_default";
+  status: "anchored" | "locality_unknown" | "disabled";
+  anchor?: { model: string; provider: string; lastSuccessfulAt: string; ageMs: number };
+};
+
+function inspectAffinity(state: BifrostState, ctx: ExtensionContext): AffinityInspectEvidence | undefined {
+  const surface = isBifrostAuto(ctx.model) && state.enabled && !state.pinned ? "auto" : "physical";
+  const { mode, source } = resolvePiAffinityMode(state.config.affinity?.mode, surface);
+  if (mode === "off") return { mode, source, status: "disabled" };
+  const anchor = state.getAffinityAnchor?.(ctx);
+  if (!anchor) return { mode, source, status: "locality_unknown" };
+  const now = Date.now();
+  return {
+    mode,
+    source,
+    status: "anchored",
+    anchor: {
+      model: anchor.modelKey,
+      provider: anchor.provider,
+      lastSuccessfulAt: formatDiagnosticTimestamp(anchor.lastSuccessfulDispatchAt),
+      ageMs: Math.max(0, now - anchor.lastSuccessfulDispatchAt),
+    },
+  };
+}
 
 function resolveTierDisplay(
   tier: string,
   state: BifrostState,
   ctx: ExtensionContext,
-): BifrostTierDisplay {
-  const pattern = state.config.models?.[tier] ?? tier;
-  const strategy = getStrategy(state.config.categoryStrategies, state.config.strategy, tier);
-  const defaultTier = state.config.default;
-  const defaultPattern = defaultTier ? (state.config.models?.[defaultTier] ?? defaultTier) : undefined;
-  const defaultStrategy = defaultTier
-    ? getStrategy(state.config.categoryStrategies, state.config.strategy, defaultTier)
-    : strategy;
-
-  const resolved = resolveModelWithFallback(ctx, {
-    requestedTier: tier,
-    requestedPattern: pattern,
-    requestedStrategy: strategy,
-    defaultTier,
-    defaultPattern,
-    defaultStrategy,
-    reliabilityState: state.reliabilityStore.getState(),
-    reliabilityConfig: state.config.reliability,
-  });
+  intrinsicOrigin: string = "automatic",
+): ResolvedTierDisplay {
+  const surface = isBifrostAuto(ctx.model) && state.enabled && !state.pinned ? "auto" : "physical";
+  const affinityMode = resolvePiAffinityMode(state.config.affinity?.mode, surface);
+  const anchor = affinityMode.mode !== "off" ? state.getAffinityAnchor?.(ctx) : undefined;
+  const affinity: AffinityRoutingContext = {
+    intrinsicOrigin,
+    effectiveMode: affinityMode.mode,
+    modeSource: affinityMode.source,
+    ...(anchor ? { anchor } : {}),
+  };
+  let reliabilityState = state.reliabilityStore.getState();
+  if (state.enabled && state.config.reliability?.enabled !== false && state.providerCooldownStore) {
+    const registryModels = typeof ctx.modelRegistry.getAll === "function"
+      ? ctx.modelRegistry.getAll() : ctx.modelRegistry.getAvailable();
+    reliabilityState = projectProviderCooldownsForRouting(
+      reliabilityState,
+      state.providerCooldownStore,
+      registryModels,
+      state.config.reliability?.cooldownOnAllowanceExhausted !== false
+        && state.config.reliability?.allowanceCooldownScope !== "model",
+    );
+  }
+  const { options, resolution: resolved } = resolveConfiguredTier(
+    ctx,
+    tier,
+    state.config,
+    reliabilityState,
+    state.config.reliability,
+    undefined,
+    state.config.economics && state.economicPolicyValid && state.economicPolicy && state.economicSnapshot
+      ? { policy: state.economicPolicy, snapshot: state.economicSnapshot }
+      : undefined,
+    undefined,
+    affinity,
+  );
+  const explicitBoundary = resolved.explicitBoundary === true;
+  const defaultTier = explicitBoundary ? undefined : options.defaultTier;
+  const strategy = explicitBoundary ? resolved.strategy : options.requestedStrategy;
 
   const selectedKey = resolved.selected ? modelKey(resolved.selected) : undefined;
   const requestedCandidateLines = formatCandidateLines(
     resolved.primary,
     resolved.selectedTier === tier ? selectedKey : undefined,
   );
-  const fallbackCandidateLines = resolved.fallback
+  const fallbackResolution = explicitBoundary ? resolved.attemptedTiers?.[1]?.resolution : resolved.fallback;
+  const fallbackCandidateLines = fallbackResolution
     ? formatCandidateLines(
-        resolved.fallback,
+        fallbackResolution,
         resolved.selectedTier && resolved.selectedTier !== tier ? selectedKey : undefined,
       )
     : [];
@@ -225,6 +394,18 @@ function resolveTierDisplay(
     requestedCandidateLines,
     fallbackCandidateLines,
     defaultTier,
+    ...(explicitBoundary ? {
+      explicitBoundary: true as const,
+      attemptedTiers: (resolved.attemptedTiers ?? []).map((attempt) => ({
+        tier: attempt.tier,
+        strategy: attempt.strategy,
+        candidates: formatCandidateLines(
+          attempt.resolution,
+          resolved.selectedTier === attempt.tier ? selectedKey : undefined,
+        ),
+      })),
+    } : {}),
+    resolution: resolved,
   };
 }
 
@@ -242,7 +423,7 @@ export function buildInitProposal(
   models: Record<string, string[]>,
   classifierModel: string | undefined,
   extensionDir: string,
-  classifierBackend: ClassifierBackend = CLASSIFIER_BACKEND_IDS.prompt,
+  classifierBackend?: ClassifierBackend,
 ): Record<string, unknown> {
   const tierKeys = Object.keys(models);
   const firstPopulatedTier = Object.entries(models).find(([, candidates]) => candidates.length > 0)?.[0];
@@ -262,8 +443,8 @@ export function buildInitProposal(
     categoryStrategies,
     classifier: {
       enabled: true,
-      backend: classifierBackend,
-      ...(classifierBackend === CLASSIFIER_BACKEND_IDS.prompt && classifierModel ? { model: classifierModel, method: "auto" as const } : {}),
+      ...(classifierBackend ? { backend: classifierBackend } : {}),
+      ...(classifierBackend !== CLASSIFIER_BACKEND_IDS.typesafe && classifierModel ? { model: classifierModel, method: "auto" as const } : {}),
       ...(classifierBackend === CLASSIFIER_BACKEND_IDS.typesafe ? { typesafe: { model: TYPE_SAFE_MODEL }, criteria: DEFAULT_CLASSIFIER_CRITERIA } : {}),
     },
     models,
@@ -274,13 +455,312 @@ export function buildInitProposal(
 // ── Command handlers ────────────────────────────────────────
 
 const isForced = (args:string):boolean => args?.split(/\s+/).includes("-f");
+const MAX_RECONCILIATION_CONFIG_BYTES = 10_000_000;
+const MAX_RECONCILIATION_OWNERSHIP_BYTES = 5_000_000;
+
+function reconciliationPaths(source: ReconciliationConfigSource): { configPath: string; ownershipPath: string; journalPath: string } {
+  const cwd = process.cwd();
+  if (source === "workspace") {
+    const metadataDirectory = join(cwd, CONFIG_DIR_NAME);
+    return {
+      configPath: join(cwd, "bifrost.json"),
+      ownershipPath: join(metadataDirectory, "bifrost-reconcile-workspace-ownership.json"),
+      journalPath: join(metadataDirectory, "bifrost-reconcile-workspace.journal"),
+    };
+  }
+  const directory = source === "project" ? join(cwd, CONFIG_DIR_NAME) : getAgentDir();
+  return {
+    configPath: join(directory, "bifrost.json"),
+    ownershipPath: join(directory, "bifrost-reconcile-ownership.json"),
+    journalPath: join(directory, "bifrost-reconcile.journal"),
+  };
+}
+
+function readReconciliationSource(source: ReconciliationConfigSource): ReconciliationSourceSnapshot {
+  const paths = reconciliationPaths(source);
+  const configBytes = readBoundedRegularSnapshot(paths.configPath) ?? null;
+  const ownershipBytes = readBoundedRegularSnapshot(paths.ownershipPath) ?? null;
+  if (configBytes && configBytes.byteLength > MAX_RECONCILIATION_CONFIG_BYTES
+    || ownershipBytes && ownershipBytes.byteLength > MAX_RECONCILIATION_OWNERSHIP_BYTES) {
+    throw new Error("source exceeds reconciliation bounds");
+  }
+  return { ...paths, source, configBytes, ownershipBytes };
+}
+
+function selectInitSource(): ReconciliationSourceSnapshot {
+  const project = readReconciliationSource("project");
+  if (project.configBytes !== null || project.ownershipBytes !== null) return project;
+  const workspace = readReconciliationSource("workspace");
+  if (workspace.configBytes !== null || workspace.ownershipBytes !== null) return workspace;
+  const user = readReconciliationSource("user");
+  return user.configBytes !== null || user.ownershipBytes !== null ? user : project;
+}
+
+function initSourceLabel(source: ReconciliationSourceSnapshot): string {
+  return source.source === "workspace" ? "workspace (bifrost.json)"
+    : source.source === "user" ? `user (${source.configPath})`
+      : "project (.pi/bifrost.json)";
+}
+
+function reconciliationRegistrySnapshot(
+  ctx: ExtensionContext,
+  state: BifrostState,
+  provider: string,
+  now = Date.now(),
+): ReconciliationRegistrySnapshot {
+  let models: ReconciliationRegistrySnapshot["models"] = [];
+  let hasRegistryError = false;
+  const knownProviders = new Set<string>();
+  try {
+    const all = ctx.modelRegistry.getAll();
+    models = all.map((model) => ({ provider: model.provider, id: model.id, virtual: isVirtualModel(model) }));
+    for (const model of models) if (!model.virtual) knownProviders.add(model.provider);
+  } catch {
+    hasRegistryError = true;
+  }
+  try {
+    if (ctx.modelRegistry.getProvider(provider)) knownProviders.add(provider);
+  } catch {
+    hasRegistryError = true;
+  }
+  try {
+    hasRegistryError ||= Boolean(ctx.modelRegistry.getError());
+  } catch {
+    hasRegistryError = true;
+  }
+  let authConfigured: boolean | undefined;
+  try {
+    const status = ctx.modelRegistry.getProviderAuthStatus(provider);
+    if (status && typeof status.configured === "boolean") authConfigured = status.configured;
+  } catch {
+    authConfigured = undefined;
+  }
+  const rawEvidence = state.registryInventoryEvidence?.[provider];
+  const refreshEvidence = rawEvidence
+    && (rawEvidence.status === "complete" || rawEvidence.status === "partial" || rawEvidence.status === "stale")
+    && Number.isFinite(rawEvidence.refreshedAt)
+    ? { status: rawEvidence.status, refreshedAt: rawEvidence.refreshedAt }
+    : undefined;
+  return {
+    models,
+    knownProviders: [...knownProviders],
+    authConfigured,
+    hasRegistryError,
+    forceRefresh: state.forceRegistryRefresh === true,
+    refreshEvidence,
+    now,
+    freshnessTtlMs: REGISTRY_REFRESH_TTL_MS,
+  };
+}
+
+function setRegistryProviderEvidence(
+  state: BifrostState,
+  provider: string,
+  evidence: { readonly status: "complete" | "partial" | "stale"; readonly refreshedAt: number },
+): void {
+  state.registryInventoryEvidence = Object.freeze({
+    ...(state.registryInventoryEvidence ?? {}),
+    [provider]: Object.freeze({ status: evidence.status, refreshedAt: evidence.refreshedAt }),
+  });
+}
+
+function prospectiveConfigInstallable(source: ReconciliationConfigSource, bytes: Uint8Array, state: BifrostState): boolean {
+  const loaded = loadConfigWithSourceOverride(process.cwd(), state.extensionDir, source, bytes);
+  if (loaded.diagnostics.length > 0) return false;
+  const errors = validateTierPolicyConfig(loaded.config).filter((issue) => issue.severity === "error");
+  const validation = validateConfig(loaded.config);
+  errors.push(...validation.filter((issue) => issue.severity === "error"
+    && (issue.code?.startsWith("config.reliability_") || issue.code?.startsWith("config.affinity_"))));
+  return errors.length === 0 && classifierTotalTimeoutIssue(loaded.config) === undefined;
+}
+
+function reconciliationReportLines(report: ReconciliationCommandReport): string[] {
+  const lines = ["--- config reconcile ---", `source: ${report.source}`, `status: ${report.status}`];
+  if (report.provider) lines.push(`provider: ${report.provider}`);
+  if (report.tier) lines.push(`tier: ${report.tier}`);
+  if (report.inventoryStatus) lines.push(`inventory: ${report.inventoryStatus}`);
+  if (report.reason) lines.push(`reason: ${report.reason}`);
+  if (report.proposalDigest) lines.push(`proposal: ${report.proposalDigest}`);
+  if (report.changes.length) {
+    lines.push("changes:", ...report.changes.map((change) => `  ${change.disposition} ${change.kind} ${change.tier}: ${change.modelKey}`));
+  } else lines.push("changes: none");
+  if (report.warnings.length) lines.push(`warnings: ${report.warnings.join(", ")}`);
+  if (report.applyResult?.configBackupPath) lines.push(`config backup: ${report.applyResult.configBackupPath}`);
+  if (report.applyResult?.ownershipBackupPath) lines.push(`ownership backup: ${report.applyResult.ownershipBackupPath}`);
+  if (report.reason === "operator_repair_required") {
+    lines.push("repair: verify no Bifrost writer is active, inspect and remove only its exact stale reconciliation lock files, then retry recover.");
+  }
+  lines.push("-----------------------");
+  return lines;
+}
+
+function emitReconciliationReport(ctx: ExtensionContext, report: ReconciliationCommandReport, json: boolean): void {
+  if (json) {
+    console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify({
+      ...report,
+      ...(report.reason === "operator_repair_required"
+        ? { operatorGuidance: "verify_no_active_writer_remove_exact_stale_locks_then_retry_recover" }
+        : {}),
+    })}`);
+  } else {
+    uiOutput(ctx, reconciliationReportLines(report));
+  }
+}
+
+function blockedReconciliationReport(
+  request: ReconciliationCommandRequest,
+  reason: "source_invalid" | "store_io_failure",
+): ReconciliationCommandReport {
+  return { action: request.action, source: request.source, status: "blocked", reason, changes: [], warnings: [] };
+}
+
+async function handleReconciliationCommand(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
+  const commandArgs = args.replace(/^config\s+reconcile(?:\s+|$)/iu, "");
+  const parsed = parseReconciliationCommandArgs(commandArgs);
+  if (!parsed.ok) {
+    log(ctx, "usage: /bifrost config reconcile [--source project|user] [--tier <tier> --provider <provider>] [--refresh | --apply --proposal <digest> | --recover] [--json]", "warning");
+    return;
+  }
+  const request = parsed.request;
+  let source: ReconciliationSourceSnapshot;
+  try {
+    if (request.action === "recover") {
+      source = { ...reconciliationPaths(request.source), source: request.source, configBytes: null, ownershipBytes: null };
+    } else source = readReconciliationSource(request.source);
+  } catch {
+    emitReconciliationReport(ctx, blockedReconciliationReport(request, "source_invalid"), request.json);
+    return;
+  }
+
+  if (request.action === "preview" && request.refresh) {
+    const initial = reconciliationRegistrySnapshot(ctx, state, request.provider);
+    if (!initial.knownProviders.includes(request.provider)) {
+      const { refresh: _refresh, ...previewRequest } = request;
+      const report = runReconciliationCommand(previewRequest, { source, registry: initial }, {
+        validateMergedConfig: () => false,
+        apply: applyReconciliationTransaction,
+        recover: recoverReconciliationTransaction,
+      });
+      emitReconciliationReport(ctx, report, request.json);
+      return;
+    }
+    if (ctx.hasUI && !(await ctx.ui.confirm(
+      "Refresh provider model catalog?",
+      `Contact ${request.provider} to refresh its model catalog before previewing. This will not apply config changes.`,
+    ))) {
+      log(ctx, "catalog refresh cancelled; no config proposal was made");
+      return;
+    }
+    uiBusy(ctx, `Refreshing ${request.provider} model catalog...`);
+    try {
+      const outcome = await waitForRegistryRefresh(
+        (signal) => ctx.modelRegistry.refresh({ allowNetwork: true, force: true, providers: [request.provider], signal }),
+        ctx.signal,
+        (result) => setRegistryProviderEvidence(state, request.provider, projectProviderRefreshEvidence(
+          result,
+          request.provider,
+          initial.knownProviders,
+          Date.now(),
+        )),
+      );
+      if (outcome === "aborted") {
+        setRegistryProviderEvidence(state, request.provider, { status: "stale", refreshedAt: Date.now() });
+        emitReconciliationReport(ctx, {
+          action: "preview", source: request.source, status: "aborted", reason: "inventory_stale",
+          provider: request.provider, tier: request.tier, changes: [], warnings: [],
+        }, request.json);
+        return;
+      }
+    } catch {
+      setRegistryProviderEvidence(state, request.provider, { status: "stale", refreshedAt: Date.now() });
+    } finally {
+      uiDone(ctx);
+    }
+  }
+
+  const registry = request.action === "recover"
+    ? reconciliationRegistrySnapshot(ctx, state, "")
+    : reconciliationRegistrySnapshot(ctx, state, request.provider);
+  const dependencies = {
+    validateMergedConfig: (selected: ReconciliationConfigSource, bytes: Uint8Array) => prospectiveConfigInstallable(selected, bytes, state),
+    apply: applyReconciliationTransaction,
+    recover: recoverReconciliationTransaction,
+  };
+  const planRequest: ReconciliationCommandRequest = request.action === "preview" && request.refresh
+    ? (({ refresh: _refresh, ...previewRequest }) => previewRequest)(request)
+    : request;
+  const report = runReconciliationCommand(planRequest, { source, registry }, dependencies);
+  if (report.status === "committed") {
+    const loaded = loadConfigForReload(process.cwd(), state.extensionDir);
+    if (!installReloadedConfig(state, loaded, ctx)) {
+      emitReconciliationReport(ctx, report, request.json);
+      return;
+    }
+    syncBifrostModeStatus(ctx, state);
+    clearBifrostWidgets(ctx);
+  }
+  emitReconciliationReport(ctx, report, request.json);
+}
+
 async function handleInit(
   args: string,
   ctx: ExtensionContext,
   state: BifrostState,
 ): Promise<void> {
   clearBifrostWidgets(ctx);
-  // Try to load cached probe results. If stale or missing, run probe inline.
+  const forceProbe = isForced(args);
+  let initRefreshReceipt: { catalogKeys: string[]; evidence: Map<string, object> } | undefined;
+  let refreshedCatalogKeys: string[] | undefined;
+  let refreshedProviders: string[] = [];
+  if (typeof ctx.modelRegistry.refresh === "function") {
+    state.registryInventoryEvidence = Object.freeze(Object.fromEntries(
+      Object.entries(state.registryInventoryEvidence ?? {}).map(([provider, evidence]) => [provider, { ...evidence, status: "stale" as const }]),
+    ));
+    uiBusy(ctx, "Refreshing Pi's model catalog...");
+    try {
+      const outcome = await waitForRegistryRefresh(
+        (signal) => ctx.modelRegistry.refresh({ allowNetwork: true, force: true, ...(signal ? { signal } : {}) }),
+        ctx.signal,
+        (result) => {
+          let knownProviders: string[] = [];
+          try {
+            const catalog = ctx.modelRegistry.getAll().filter((model) => !isBifrostAuto(model));
+            knownProviders = [...new Set(catalog.map((model) => model.provider))];
+            refreshedProviders = knownProviders;
+            refreshedCatalogKeys = catalog.map(modelKey).sort();
+          }
+          catch { /* failed catalog snapshots stay stale */ }
+          const refreshedAt = Date.now();
+          for (const provider of knownProviders) {
+            const evidence = projectProviderRefreshEvidence(result, provider, knownProviders, refreshedAt);
+            state.registryInventoryEvidence = Object.freeze({
+              ...(state.registryInventoryEvidence ?? {}),
+              [provider]: Object.freeze(evidence),
+            });
+          }
+        },
+      );
+      if (outcome === "aborted") {
+        state.forceRegistryRefresh = true;
+        log(ctx, "Model catalog refresh was cancelled; no configuration was changed.", "warning");
+        return;
+      }
+      state.forceRegistryRefresh = false;
+      if (refreshedCatalogKeys) {
+        initRefreshReceipt = {
+          catalogKeys: refreshedCatalogKeys,
+          evidence: new Map(refreshedProviders.flatMap((provider) => {
+            const evidence = state.registryInventoryEvidence?.[provider];
+            return evidence ? [[provider, evidence] as const] : [];
+          })),
+        };
+      }
+    } catch {
+      state.forceRegistryRefresh = true;
+      log(ctx, "Pi's model catalog could not be refreshed; using the available catalog snapshot.", "warning");
+    } finally { uiDone(ctx); }
+  }
+  // Reuse valid probe data when present. A paid probe runs only for explicit -f.
   const probePath = join(process.cwd(), ".pi", "bifrost-probe.json");
   let workingModels: { provider: string; model: string; cost: { input: number; output: number }; duration_ms: number }[] = [];
   let probeLoaded = false;
@@ -310,8 +790,8 @@ async function handleInit(
     }
   }
 
-  // If no fresh probe data, run probe inline.
-  if (!probeLoaded) {
+  // If requested, run the existing explicit paid probe flow.
+  if (!probeLoaded && forceProbe) {
     const available = ctx.modelRegistry.getAvailable();
     const availableCount = available.length;
     log(ctx, `Probing ${availableCount} models to find working ones...`);
@@ -371,6 +851,17 @@ async function handleInit(
     }
   }
 
+  let refreshRemainsCurrent = false;
+  if (forceProbe && initRefreshReceipt && !ctx.signal?.aborted && !state.forceRegistryRefresh) {
+    try {
+      const currentKeys = ctx.modelRegistry.getAll().filter((model) => !isBifrostAuto(model)).map(modelKey).sort();
+      refreshRemainsCurrent = currentKeys.length === initRefreshReceipt.catalogKeys.length
+        && currentKeys.every((key, index) => key === initRefreshReceipt!.catalogKeys[index])
+        && [...initRefreshReceipt.evidence].every(([provider, evidence]) =>
+          state.registryInventoryEvidence?.[provider] === evidence);
+    } catch { /* an unreadable catalog cannot extend this command's refresh evidence */ }
+  }
+
   if (probeLoaded && workingModels.length > 0) {
     log(ctx, `Using ${workingModels.length} probe-verified models (${probeAge}).`);
   }
@@ -408,44 +899,171 @@ async function handleInit(
     }
   }
 
-  // Pick a classifier default: fastest cheap working model.
+  const detectedClassifier = state.effectiveClassifierBackend(state.config, ctx);
+  const classifierEnabled = state.classifierEnabled && state.config.classifier?.enabled !== false;
+  const needsDetectedPromptModel = classifierEnabled
+    && detectedClassifier.backend === CLASSIFIER_BACKEND_IDS.prompt
+    && state.config.classifier?.model === undefined;
   let classifierModel: string | undefined;
-  if (probeLoaded && workingModels.length > 0) {
-    const cheapWorking = workingModels
-      .filter((w) => (w.cost.input + w.cost.output) < 2)
-      .sort((a, b) => a.duration_ms - b.duration_ms);
-    if (cheapWorking.length > 0) {
-      classifierModel = `${cheapWorking[0].provider}/${cheapWorking[0].model}`;
-    }
-  }
-  if (!classifierModel) {
-    // Fallback: any working model, or a sensible default.
-    if (workingModels.length > 0) {
-      classifierModel = `${workingModels[0].provider}/${workingModels[0].model}`;
-    } else {
+  if (needsDetectedPromptModel) {
+    const reliability = state.reliabilityStore.getState();
+    const eligible = [...available]
+      .filter((model) => !isBifrostAuto(model))
+      .sort((left, right) => modelKey(left).localeCompare(modelKey(right)))
+      .filter((model) => {
+        const key = modelKey(model);
+        const circuit = getCircuitState(reliability, key, Date.now(), state.config.reliability);
+        return !circuit.open && !hasActiveAllowanceCooldown(reliability, key, Date.now());
+      });
+    const eligibleKeys = new Set(eligible.map(modelKey));
+    const probeChoices = probeLoaded
+      ? workingModels
+        .filter((model) => eligibleKeys.has(`${model.provider}/${model.model}`)
+          && (model.cost.input + model.cost.output) < 2)
+        .sort((left, right) => left.duration_ms - right.duration_ms)
+      : [];
+    classifierModel = probeChoices[0]
+      ? `${probeChoices[0].provider}/${probeChoices[0].model}`
+      : eligible[0] ? modelKey(eligible[0]) : undefined;
+    if (!classifierModel) {
       log(ctx, "No working models found for classifier. Init will omit classifier.model; regex fallback remains available.", "warning");
     }
   }
+  const effectiveClassifierSummary = !classifierEnabled ? "off"
+    : detectedClassifier.backend !== CLASSIFIER_BACKEND_IDS.prompt
+      ? `${detectedClassifier.backend} (${detectedClassifier.auto ? "detected default" : "configured"})`
+      : state.config.classifier?.model
+        ? `prompt (${state.config.classifier.model}, configured)`
+        : classifierModel
+          ? `prompt (${classifierModel}, detected default)`
+          : "prompt (no eligible model; regex fallback)";
 
   const proposal = buildInitProposal(
     models,
     classifierModel,
     state.extensionDir,
-    state.config.classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt,
-  );
+    state.config.classifier?.backend,
+  ) as Record<string, unknown> & { classifier: Record<string, unknown> };
+  proposal.classifier = {
+    ...proposal.classifier,
+    ...state.config.classifier,
+    enabled: state.config.classifier?.enabled ?? true,
+  };
 
-  const totalAssigned = Object.values(models).reduce((s, v) => s + v.length, 0);
+  let source: ReconciliationSourceSnapshot;
+  try { source = selectInitSource(); }
+  catch {
+    log(ctx, "Init could not safely snapshot the current config; no files were changed.", "error");
+    return;
+  }
+  let transaction: Parameters<typeof applyReconciliationTransaction>[0];
+  let changes: readonly { kind: "add" | "remove"; tier: string; modelKey: string }[];
+  if (source.configBytes !== null) {
+    const byProvider = new Map<string, Record<string, string[]>>();
+    let configuredModels: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(Buffer.from(source.configBytes).toString("utf8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const configured = (parsed as Record<string, unknown>).models;
+        if (configured && typeof configured === "object" && !Array.isArray(configured)) {
+          configuredModels = configured as Record<string, unknown>;
+        }
+      }
+    } catch { /* the membership planner reports invalid source config */ }
+    const probeVerified = new Set(Object.values(models).flat());
+    for (const model of available) {
+      if (isBifrostAuto(model)) continue;
+      const tier = guessTier(model);
+      if (!tier) continue;
+      const key = modelKey(model);
+      const configuredPool = configuredModels[tier];
+      const alreadyConfigured = typeof configuredPool === "string"
+        ? configuredPool === key
+        : Array.isArray(configuredPool) && configuredPool.includes(key);
+      if (probeLoaded && !probeVerified.has(key) && !alreadyConfigured) continue;
+      const byTier = byProvider.get(model.provider) ?? {};
+      byTier[tier] = [...(byTier[tier] ?? []), key];
+      byProvider.set(model.provider, byTier);
+    }
+    const inventories = [...byProvider.entries()].map(([provider, modelsByTier]) => {
+      const evidence = state.registryInventoryEvidence?.[provider];
+      let authConfigured: boolean | undefined;
+      try { authConfigured = ctx.modelRegistry.getProviderAuthStatus(provider)?.configured; }
+      catch { authConfigured = undefined; }
+      const now = Date.now();
+      const fresh = evidence?.status === "complete" && now >= evidence.refreshedAt
+        && (now - evidence.refreshedAt < REGISTRY_REFRESH_TTL_MS
+          || refreshRemainsCurrent && initRefreshReceipt?.evidence.get(provider) === evidence);
+      const status = state.forceRegistryRefresh ? "stale" as const
+        : authConfigured === false ? "auth_failed" as const
+          : fresh && authConfigured === true ? "complete" as const : "stale" as const;
+      return { provider, status, modelsByTier };
+    });
+    const plan = buildInitMembershipPlan(
+      source,
+      inventories,
+      (selected, bytes) => prospectiveConfigInstallable(selected, bytes, state),
+      source.source === "workspace" ? state.config.models : undefined,
+    );
+    if (plan.status !== "ready" || !plan.transaction) {
+      log(ctx, plan.status === "advisory"
+        ? "Pi's model inventory is incomplete or stale, so Init cannot safely change memberships. Refresh the catalog and retry; no files were changed."
+        : plan.reason === "no_changes"
+          ? "The refreshed catalog has no safe membership changes; no files were changed."
+          : "Init could not safely prepare a membership update (" + (plan.reason ?? "unknown source state") + "); no files were changed.",
+      plan.reason === "no_changes" ? undefined : "warning");
+      return;
+    }
+    transaction = plan.transaction;
+    changes = plan.changes;
+  } else {
+    if (source.ownershipBytes !== null) {
+      log(ctx, "Init found an ownership receipt without its config and cannot safely replace it.", "error");
+      return;
+    }
+    const ownership = buildInitOwnershipReceipt(models);
+    if (!ownership) {
+      log(ctx, "Init could not create a safe exact-membership ownership receipt; no files were changed.", "error");
+      return;
+    }
+    const configBytes = Buffer.from(JSON.stringify(proposal, null, 2) + "\n", "utf8");
+    const ownershipBytes = Buffer.from(JSON.stringify(ownership, null, 2) + "\n", "utf8");
+    if (configBytes.byteLength > MAX_RECONCILIATION_CONFIG_BYTES
+      || ownershipBytes.byteLength > 5_000_000
+      || !prospectiveConfigInstallable(source.source, configBytes, state)) {
+      log(ctx, "Init's proposed config is invalid or exceeds the safe write limit; no files were changed.", "error");
+      return;
+    }
+    transaction = {
+      configPath: source.configPath,
+      ownershipPath: source.ownershipPath,
+      journalPath: source.journalPath,
+      expectedConfigDigest: null,
+      expectedOwnershipDigest: null,
+      nextConfigBytes: configBytes,
+      nextOwnershipBytes: ownershipBytes,
+    };
+    changes = Object.entries(models).flatMap(([tier, keys]) => keys.map((key) => ({ kind: "add" as const, tier, modelKey: key })));
+  }
+  const added = changes.filter((change) => change.kind === "add");
+  const removed = changes.filter((change) => change.kind === "remove");
+  const tierSummary = [...new Set(changes.map((change) => change.tier))].sort()
+    .map((tier) => tier + ": +" + added.filter((change) => change.tier === tier).length
+      + "/-" + removed.filter((change) => change.tier === tier).length)
+    .slice(0, 5);
+  const deltaSummary = "memberships: +" + added.length + " / -" + removed.length
+    + (tierSummary.length ? " (" + tierSummary.join(", ") + ")" : "");
   uiOutput(ctx, [
     "--- init ---",
     `source: ${probeLoaded ? `probe (${workingModels.length} working)` : `registry (${available.length} listed)`}`,
-    `assigned: ${totalAssigned} models`,
-    `classifier: ${classifierModel}`,
+    `save target: ${initSourceLabel(source)}`,
+    deltaSummary,
+    `classifier: ${effectiveClassifierSummary}`,
     `uncategorized: ${uncategorized.length}`,
-    "proposed config:",
-    JSON.stringify(proposal, null, 2),
+    "proposed config: classifier and routing defaults detected from Pi's available models",
     "----------------",
-    probeLoaded ? "" : "⚠ Run /bifrost probe first to filter unreachable models.",
-    "Assign uncategorized models manually in the generated config.",
+    probeLoaded ? "" : "Catalog entries are listed models, not a health check.",
+    uncategorized.length ? "Uncategorized models stay out of generated pools." : "",
   ].filter(Boolean));
 
   if (uncategorized.length > 0) {
@@ -459,44 +1077,78 @@ async function handleInit(
   }
 
   const ok = writeWithoutPrompt || await ctx.ui.confirm(
-    "Write config?",
-    "Write proposed config to .pi/bifrost.json?",
+    "Save Bifrost setup?",
+    `Save ${deltaSummary} to ${initSourceLabel(source)}?`,
   );
   if (!ok) {
     log(ctx, "config not written");
     return;
   }
 
-  const dir = join(process.cwd(), CONFIG_DIR_NAME);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "bifrost.json"), JSON.stringify(proposal, null, 2));
+  if (ctx.signal?.aborted) {
+    log(ctx, "Init was cancelled before the reviewed update could be saved.", "warning");
+    return;
+  }
+  const currentKeys = ctx.modelRegistry.getAvailable().filter((model) => !isBifrostAuto(model)).map(modelKey).sort();
+  const plannedKeys = available.filter((model) => !isBifrostAuto(model)).map(modelKey).sort();
+  let refreshReceiptChanged = false;
+  if (refreshRemainsCurrent && initRefreshReceipt) {
+    try {
+      const currentCatalogKeys = ctx.modelRegistry.getAll().filter((model) => !isBifrostAuto(model)).map(modelKey).sort();
+      refreshReceiptChanged = state.forceRegistryRefresh === true
+        || currentCatalogKeys.length !== initRefreshReceipt.catalogKeys.length
+        || currentCatalogKeys.some((key, index) => key !== initRefreshReceipt!.catalogKeys[index])
+        || [...initRefreshReceipt.evidence].some(([provider, evidence]) =>
+          state.registryInventoryEvidence?.[provider] !== evidence);
+    } catch { refreshReceiptChanged = true; }
+  }
+  if (refreshReceiptChanged || currentKeys.length !== plannedKeys.length
+    || currentKeys.some((key, index) => key !== plannedKeys[index])) {
+    log(ctx, "Pi's model inventory changed while Init was awaiting confirmation; no files were changed. Retry to review the new memberships.", "warning");
+    return;
+  }
+  let currentSource: ReconciliationSourceSnapshot;
+  try { currentSource = selectInitSource(); }
+  catch {
+    log(ctx, "The config destination changed while Init was awaiting confirmation; no files were changed.", "warning");
+    return;
+  }
+  if (currentSource.source !== source.source || currentSource.configPath !== source.configPath) {
+    log(ctx, "The config destination changed while Init was awaiting confirmation; no files were changed.", "warning");
+    return;
+  }
+  const targetDirectory = dirname(source.configPath);
+  if (!existsSync(targetDirectory)) mkdirSync(targetDirectory, { recursive: true });
+  const ownershipDirectory = dirname(source.ownershipPath);
+  if (!existsSync(ownershipDirectory)) mkdirSync(ownershipDirectory, { recursive: true });
+  try { applyReconciliationTransaction(transaction); }
+  catch (error) {
+    const locked = error instanceof ReconciliationStoreError && error.code === "locked";
+    log(ctx, locked
+      ? "Init could not acquire reconciliation locks. Verify no Bifrost writer is active and repair only exact stale lock files before retrying."
+      : "Init could not safely commit the reviewed membership update; existing files were preserved.", "error");
+    return;
+  }
 
   // Auto-reload so the extension picks up the new config immediately.
-  state.config = loadConfig(process.cwd(), state.extensionDir);
+  const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
+  if (!installReloadedConfig(state, loadedConfig, ctx)) return;
   const runtimeState = loadRuntimeState(runtimeStatePath(process.cwd()), {
     enabled: state.config.enabled ?? true,
     pinned: false,
     classifierEnabled: state.config.classifier?.enabled ?? true,
   });
   state.enabled = runtimeState.enabled;
-  state.pinned = runtimeState.pinned;
   state.classifierEnabled = runtimeState.classifierEnabled;
   state.reliabilityStore.reload(state.config.reliability, process.cwd());
   state.classifierMetricsStore.reload({
     cwd: process.cwd(),
     enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
   });
-  state.invalidatePipeline();
-
-  log(ctx, "wrote .pi/bifrost.json and reloaded config");
+  log(ctx, `updated ${initSourceLabel(source)} and reloaded config`);
   log(ctx, `Bifrost active with ${Object.keys(state.config.models ?? {}).length} tier(s). Try a prompt.`);
-  log(ctx, "Next: run /bifrost classifier to choose the routing backend.");
-  if (ctx.mode === "tui" && ctx.hasUI && !writeWithoutPrompt && await ctx.ui.confirm(
-    "Choose classifier backend?",
-    "Open /bifrost classifier now?",
-  )) {
-    await handleClassifierChoose(ctx, state);
-  }
+  const classifier = state.effectiveClassifierBackend(state.config, ctx);
+  log(ctx, `Classifier: ${classifier.backend} (${classifier.auto ? "detected default" : "configured"}). Use /bifrost classifier to change it.`);
 
   // Clear the init widget so it doesn't persist in the TUI.
   if (ctx.hasUI) {
@@ -678,8 +1330,8 @@ async function handleBenchmark(
  * unchanged.
  *
  * This is a projection of what `resolveTierDisplay` already computes. It carries
- * no stage timings and no structured candidate records, so it is deliberately
- * not a DecisionTrace (see ADR 0007).
+ * no stage timings or structured candidate records. The opt-in `--trace` path
+ * uses the separate RouteDecisionSummary type (ADR 0007).
  */
 export type BifrostPreviewReport = BifrostPreviewSuccess | BifrostPreviewFailure;
 
@@ -699,6 +1351,8 @@ export type BifrostPreviewSuccess = {
   readonly fallbackCandidates: string[];
   readonly defaultTier?: string;
   readonly selected?: string;
+  readonly fallbackBoundary?: "explicit";
+  readonly attemptedTiers?: Array<{ readonly tier: string; readonly strategy: string; readonly candidates: string[] }>;
 };
 
 /** No routing decision was made, so no routing field is reported. */
@@ -715,8 +1369,8 @@ export const BIFROST_JSON_PREFIX = "[bifrost-json] ";
 const PREVIEW_SUB = "preview";
 
 /**
- * Split the argument text of a `preview` subcommand into its prompt and whether
- * `--json` was requested.
+ * Split leading preview flags from the prompt. Each supported flag is consumed
+ * at most once; a duplicate flag remains prompt text for compatibility.
  *
  * Precondition: `args` is the full argument string including the subcommand
  * word, and `sub` is that word. `sub` is a parameter rather than a hardcoded
@@ -726,15 +1380,20 @@ const PREVIEW_SUB = "preview";
  * loses that many leading characters; pass the real subcommand, or pass `""` to
  * parse a bare prompt with nothing removed.
  */
-export function parsePreviewArgs(args: string, sub: string): { prompt: string; json: boolean } {
-  const rest = args.slice(sub.length).trim();
-  if (rest === "--json") return { prompt: "", json: true };
-  // Any whitespace separates the flag from the prompt, so a tab or a double space
-  // is not mistaken for prompt text. `--json` is still only a flag as the very
-  // first token: a later mention stays part of the prompt.
-  const flagged = /^--json\s+([\s\S]*)$/.exec(rest);
-  if (flagged) return { prompt: flagged[1].trim(), json: true };
-  return { prompt: rest, json: false };
+export function parsePreviewArgs(args: string, sub: string): { prompt: string; json: boolean; trace?: true } {
+  let rest = args.slice(sub.length).trim();
+  let json = false;
+  let trace = false;
+  while (rest.startsWith("--json") || rest.startsWith("--trace")) {
+    const flag = /^(--json|--trace)(?=\s|$)/.exec(rest)?.[1];
+    if (!flag) break;
+    if ((flag === "--json" && json) || (flag === "--trace" && trace)) break;
+    json ||= flag === "--json";
+    trace ||= flag === "--trace";
+    rest = rest.slice(flag.length).trimStart();
+  }
+  const parsed = { prompt: rest.trim(), json };
+  return trace ? { ...parsed, trace: true } : parsed;
 }
 
 /** Build the failure half of the report. Pure: no classification, no display, no side effects. */
@@ -767,11 +1426,79 @@ export function buildPreviewReport(input: {
     fallbackCandidates: display.fallbackCandidateLines,
     ...(display.defaultTier !== undefined ? { defaultTier: display.defaultTier } : {}),
     ...(display.selected !== undefined ? { selected: display.selected } : {}),
+    ...(display.explicitBoundary ? {
+      fallbackBoundary: "explicit" as const,
+      attemptedTiers: display.attemptedTiers ?? [],
+    } : {}),
   };
 }
 
 export function serializePreviewReport(report: BifrostPreviewReport): string {
   return JSON.stringify(report);
+}
+
+export type BifrostTracePreview = RouteDecisionSummary & {
+  readonly classifierDisclosure: {
+    readonly enabled: boolean;
+    readonly configuredClassifierMayReceivePrompt: boolean;
+  };
+};
+
+export function buildTracePreview(
+  summary: RouteDecisionSummary,
+  classifierEnabled: boolean,
+): BifrostTracePreview {
+  return {
+    ...summary,
+    classifierDisclosure: {
+      enabled: classifierEnabled,
+      configuredClassifierMayReceivePrompt: classifierEnabled,
+    },
+  };
+}
+
+export function renderTracePreview(trace: BifrostTracePreview): string[] {
+  const lines = [
+    "--- route trace v1 ---",
+    `outcome: ${trace.outcome}`,
+    `classification: ${trace.classification.source}${trace.classification.tier ? ` → ${trace.classification.tier}` : ""}`,
+    `classifier disclosure: ${trace.classifierDisclosure.enabled
+      ? "enabled; the configured classifier may receive the preview prompt"
+      : "disabled; preview prompt is not sent to a classifier"}`,
+  ];
+  if (trace.classification.classifier) {
+    lines.push(`classifier: ${trace.classification.classifier.backend}`);
+    if (trace.classification.classifier.model !== undefined) lines.push(`classifier model: ${trace.classification.classifier.model}`);
+    if (trace.classification.classifier.confidence !== undefined) lines.push(`classifier confidence: ${trace.classification.classifier.confidence}`);
+  }
+  const renderPool = (label: string, pool: RouteDecisionSummary["requested"] | RouteDecisionSummary["fallback"]) => {
+    if (!pool) return;
+    lines.push(`${label}: ${pool.tier} (${pool.strategy})`);
+    for (const candidate of pool.candidates) {
+      lines.push(`  ${candidate.status}: ${candidate.model}${candidate.exclusion ? ` (${candidate.exclusion})` : ""}`);
+    }
+  };
+  if (trace.explicitBoundary && trace.attempted) {
+    lines.push("fallback boundary: explicit");
+    trace.attempted.forEach((pool, index) => renderPool(`attempt ${index + 1}`, pool));
+  } else {
+    renderPool("requested", trace.requested);
+    renderPool("fallback", trace.fallback);
+  }
+  if (trace.fallbackReason) lines.push(`fallback reason: ${trace.fallbackReason}`);
+  if (trace.affinity) {
+    lines.push(`affinity: ${trace.affinity.mode} (${trace.affinity.status}; source=${trace.affinity.modeSource ?? "config"}; selection=${trace.affinity.selection})`);
+    if (trace.affinity.status !== "not_applicable" && trace.affinity.anchor) {
+      lines.push(`  anchor: ${trace.affinity.anchor.modelKey} at ${formatDiagnosticTimestamp(trace.affinity.anchor.lastSuccessfulDispatchAt)}`);
+    }
+    if (trace.affinity.strategyWinner) lines.push(`  strategy winner: ${trace.affinity.strategyWinner}`);
+    if (trace.affinity.selectedModel) lines.push(`  selected model: ${trace.affinity.selectedModel}`);
+    if (trace.affinity.selectedTier) lines.push(`  selected tier: ${trace.affinity.selectedTier}`);
+  }
+  if (trace.selectedStrategy) lines.push(`selected strategy: ${trace.selectedStrategy}`);
+  lines.push(`selected: ${trace.selected ? `${trace.selectedTier} → ${trace.selected}` : "none"}`);
+  lines.push("----------------------");
+  return lines;
 }
 
 export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
@@ -795,6 +1522,13 @@ export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
     ...(report.fallbackCandidates.length > 0 && report.defaultTier && report.defaultTier !== report.tier
       ? [`fallback candidates (${report.defaultTier}):`, ...report.fallbackCandidates]
       : []),
+    ...(report.fallbackBoundary === "explicit" ? [
+      "fallback boundary: explicit",
+      ...(report.attemptedTiers ?? []).flatMap((attempt, index) => [
+        `attempt ${index + 1} (${attempt.tier}, ${attempt.strategy}):`,
+        ...attempt.candidates.map((candidate) => `  ${candidate}`),
+      ]),
+    ] : []),
     `selected:  ${report.selected ?? PREVIEW_NONE}`,
     "---------------",
   ];
@@ -810,17 +1544,29 @@ async function handlePreview(
   ctx: ExtensionContext,
   state: BifrostState,
 ): Promise<void> {
-  const { prompt, json } = parsePreviewArgs(args, PREVIEW_SUB);
+  const { prompt, json, trace } = parsePreviewArgs(args, PREVIEW_SUB);
   if (!prompt) {
     // A machine caller must still get its line: the text notification below stays
     // for the interactive path, but a consumer that scans for the marker needs a
     // parseable outcome even when there is nothing to route.
-    if (json) emitPreviewReport(buildPreviewFailure(prompt, "usage"));
-    log(ctx, json ? "usage: /bifrost preview --json <prompt>" : "usage: /bifrost preview <prompt>", "warning");
+    if (json && trace) {
+      const summary: RouteDecisionSummary = {
+        version: 1,
+        kind: "route-decision",
+        outcome: "usage",
+        error: "usage",
+        classification: { source: "unclassified" },
+      };
+      console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(buildTracePreview(summary, state.classifierEnabled))}`);
+    } else if (json) emitPreviewReport(buildPreviewFailure(prompt, "usage"));
+    log(ctx, json ? `usage: /bifrost preview ${trace ? "--trace " : ""}--json <prompt>` : `usage: /bifrost preview ${trace ? "--trace " : ""}<prompt>`, "warning");
     return;
   }
 
   clearBifrostWidgets(ctx);
+  if (trace && state.classifierEnabled) {
+    log(ctx, "Preview may send the prompt to the configured classifier", "warning");
+  }
   setBifrostStatus(ctx, "previewing prompt...", "accent");
   uiBusy(ctx, "Classifying preview prompt...");
   let classification;
@@ -831,15 +1577,35 @@ async function handlePreview(
     syncBifrostModeStatus(ctx, state);
   }
   if (classification.kind === "unclassified") {
+    if (trace) {
+      const summary = buildRouteDecisionSummary(classification);
+      const report = buildTracePreview(summary, state.classifierEnabled);
+      if (json) console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(report)}`);
+      else await uiResult(ctx, "Bifrost route trace", renderTracePreview(report));
+      return;
+    }
     if (json) emitPreviewReport(buildPreviewFailure(prompt, "unclassified"));
     log(ctx, "no tier matched", "warning");
+    return;
+  }
+
+  const display = resolveTierDisplay(classification.tier, state, ctx, classification.kind === "classified" && classification.source === "inline" ? "explicit_tier" : "automatic");
+  if (trace) {
+    const options = buildTierResolutionOptions(classification.tier, state.config);
+    const summary = buildRouteDecisionSummary(classification, {
+      resolution: display.resolution,
+      options,
+    });
+    const report = buildTracePreview(summary, state.classifierEnabled);
+    if (json) console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(report)}`);
+    else await uiResult(ctx, "Bifrost route trace", renderTracePreview(report));
     return;
   }
 
   const report = buildPreviewReport({
     prompt,
     classification,
-    display: resolveTierDisplay(classification.tier, state, ctx),
+    display,
   });
 
   if (json) {
@@ -913,13 +1679,19 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "unpin", description: "Resume routing", reflects: { state: "pinned", sets: false, note: "already unpinned" } },
   // Common commands, in menu order. The two prompt commands lead because both
   // prefill the editor rather than run: keep them adjacent.
-  { value: PREVIEW_SUB, description: "Preview routing for a prompt", argumentHint: `[--json] <prompt>`, menu: "common" },
+  { value: PREVIEW_SUB, description: "Preview routing for a prompt", argumentHint: `[--trace] [--json] <prompt>`, menu: "common" },
   { value: "benchmark", description: "Classify a benchmark prompt", argumentHint: "<prompt>", menu: "common" },
   { value: "providers", description: "List available providers", menu: "common" },
   { value: "probe", description: "Probe working models", menu: "common" },
-  { value: "init", description: "Probe models and generate config (pass -f to force re-probe)", aliases: ["init -f"], menu: "common" },
+  { value: "init", description: "Refresh model catalog and save setup (pass -f to probe)", aliases: ["init -f"], menu: "common" },
   { value: "classifier status", description: "Show classifier state", menu: "common" },
   { value: "reload", description: "Reload config after editing", menu: "common" },
+  { value: "validate", description: "Validate loaded config and model references", argumentHint: "[--json]", menu: "common" },
+  { value: "inspect", description: "Inspect configured models and local health", argumentHint: "[--json]", menu: "common" },
+  { value: "config reconcile", description: "Preview or apply exact generated model membership", argumentHint: "[flags]" },
+  { value: "reliability", description: "Show provider cooldowns" },
+  { value: "reliability reset", description: "Clear one provider cooldown", argumentHint: "--provider <provider-id>" },
+  { value: "reliability migrate", description: "Prepare receipt-owned reliability v2", argumentHint: "[--fresh]" },
   // Everything else, in declaration order.
   { value: "cache stats", description: "Show classification cache" },
   // Reachable from the dashboard now that the menu is derived from the
@@ -959,6 +1731,403 @@ export function getBifrostCommandCompletions(prefix: string) {
 function formatBifrostCommandChoice(command: CommandSpec): string {
   const hint = command.argumentHint ? ` ${command.argumentHint}` : "";
   return `/bifrost ${command.value}${hint} — ${command.description}`;
+}
+
+function parseDiagnosticJsonFlag(args: string, command: "validate" | "inspect"): boolean | undefined {
+  const rest = args.slice(command.length).trim();
+  if (!rest) return false;
+  if (rest === "--json") return true;
+  return undefined;
+}
+
+async function handleReliabilityCommand(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
+  const rest = args.trim().slice("reliability".length).trim();
+  if (!rest) {
+    try {
+      const store = state.providerCooldownStore ?? createProviderCooldownStore(process.cwd(), state.config.reliability);
+      const paused = store.list();
+      if (paused.length === 0) {
+        log(ctx, "No provider cooldowns or recovery trials are active.");
+        return;
+      }
+      log(ctx, ["Provider cooldowns:", ...paused.map((item) =>
+        `  ${item.providerId}: ${item.openUntil === undefined ? "cooldown expired" : `paused until ${new Date(item.openUntil).toISOString()}`}${item.trialActive ? "; recovery trial active" : item.recoveryPending ? "; recovery trial available" : ""}`),
+      ].join("\n"));
+    } catch {
+      log(ctx, "Provider cooldown state is invalid or unavailable; inspect the project .pi provider reliability sidecar.", "error");
+    }
+    return;
+  }
+  if (rest.startsWith("reset ")) {
+    const match = /^reset\s+--provider\s+([A-Za-z0-9][A-Za-z0-9._:+@-]{0,200})$/u.exec(rest);
+    if (!match) {
+      log(ctx, "usage: /bifrost reliability reset --provider <provider-id>", "warning");
+      return;
+    }
+    const providerId = match[1]!;
+    let knownProviders = new Set<string>();
+    try {
+      for (const model of ctx.modelRegistry.getAll()) knownProviders.add(model.provider);
+    } catch { /* configured provider IDs remain available below */ }
+    for (const tiers of Object.values(state.config.models ?? {})) {
+      for (const key of tiers ?? []) knownProviders.add(key.slice(0, key.indexOf("/")));
+    }
+    if (state.config.default) {
+      for (const key of state.config.models?.[state.config.default] ?? []) knownProviders.add(key.slice(0, key.indexOf("/")));
+    }
+    try { providerScopeModelKey("usage", providerId); }
+    catch { log(ctx, "Provider ID is outside the supported reliability namespace.", "warning"); return; }
+    let store: ProviderCooldownStore;
+    try {
+      store = state.providerCooldownStore ?? createProviderCooldownStore(process.cwd(), state.config.reliability);
+      if (!knownProviders.has(providerId) && !store.list().some((item) => item.providerId === providerId)) {
+        log(ctx, `Provider ${providerId} is not configured or present in cooldown state; nothing was reset.`, "warning");
+        return;
+      }
+      const result = await store.reset(providerId);
+      log(ctx, result === "trial_active"
+        ? `Provider ${providerId} has an active recovery trial; cooldown reset was stopped.`
+        : result === "reset" ? `Provider ${providerId} cooldown was reset.` : `Provider ${providerId} has no active cooldown.`);
+    } catch {
+      log(ctx, `Provider ${providerId} cooldown could not be reset; provider state was left unchanged.`, "error");
+    }
+    return;
+  }
+  if (rest !== "migrate" && rest !== "migrate --fresh") {
+    log(ctx, "usage: /bifrost reliability [reset --provider <provider-id> | migrate [--fresh]]", "warning");
+    return;
+  }
+  const stateVersion = state.config.reliability?.stateVersion;
+  const reliabilityConfigErrors = validateConfig(state.config).filter((issue) => issue.severity === "error" && issue.code?.startsWith("config.reliability_"));
+  if (reliabilityConfigErrors.length > 0 || !state.reliabilityV2ConfigValid
+    || (stateVersion === 2 && state.config.schemaVersion !== 2)) {
+    log(ctx, "Repair the reliability settings and validate the config before preparing the v2 sidecar.", "error");
+    return;
+  }
+  let store: ReliabilityV2Store;
+  try { store = createReliabilityV2Store(process.cwd(), state.config.reliability); }
+  catch { log(ctx, "Reliability migration could not prepare a safe sidecar location; no files were changed.", "error"); return; }
+  try {
+    store.readSnapshot();
+    if (stateVersion === 2) state.reliabilityV2Store = store;
+    log(ctx, "Reliability v2 sidecar already exists and was left unchanged.");
+    return;
+  } catch (error) {
+    if (!(error instanceof ReliabilityV2StoreError) || error.code !== "uninitialized_state") {
+      log(ctx, "An existing reliability v2 sidecar is invalid or unsafe; repair it explicitly before migration.", "error");
+      return;
+    }
+  }
+  const fresh = rest === "migrate --fresh";
+  // The store treats this as a detached placeholder when sourcePath is provided and reads the
+  // authoritative bounded source only after it owns the cooperative v1 source fence.
+  const snapshot = Buffer.from(JSON.stringify(emptyReliabilityState()) + "\n", "utf8");
+  try {
+    const destination = reliabilityV2Path(process.cwd());
+    const backupPath = join(dirname(destination), "bifrost-reliability-v1.json.backup");
+    const result = await store.initializeFromV1Migration({
+      sourceSnapshot: snapshot,
+      sourcePath: state.reliabilityStore.path,
+      backupPath,
+      requireSourceAbsent: fresh,
+    });
+    state.reliabilityV2Store = store;
+    log(ctx, result.status === "seeded"
+      ? "Reliability v2 sidecar initialized. Auto routing can now use receipt-owned circuit trials; model selection was not changed."
+      : "Reliability v2 sidecar already exists and was left unchanged.");
+  } catch (error) {
+    const code = error instanceof ReliabilityV2StoreError ? error.code : "migration_failed";
+    log(ctx, code === "source_lock_contended"
+      ? "Reliability migration stopped safely because its v1 source lock is busy. Stop other Pi sessions that may write the source and ensure this session has no active or queued generation. If the lock remains, inspect the exact default `.pi/bifrost-reliability.json.migration.lock` or custom `reliability.path` plus `.migration.lock`; remove only a proven stale lock, never based on age or PID alone. V1 state and backup were left untouched; no v2 state was committed."
+      : code === "source_missing"
+        ? "No v1 reliability file exists; pass --fresh only if you intend to initialize an empty v2 sidecar."
+        : code === "source_exists"
+          ? "--fresh is allowed only when no v1 reliability file exists; existing v1 state was left unchanged."
+      : code === "source_changed"
+        ? "Reliability migration stopped because the v1 source changed during migration. No v2 state was committed; review the source and retry."
+        : `Reliability migration stopped safely (${code}); existing files were preserved.`, "error");
+  }
+}
+
+const MAX_RELIABILITY_MIGRATION_SOURCE_BYTES = 16 * 1024 * 1024;
+
+function readBoundedRegularSnapshot(path: string): Buffer | undefined {
+  let pathStat;
+  try { pathStat = lstatSync(path); }
+  catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return undefined;
+    throw new Error("unsafe source");
+  }
+  if (!pathStat.isFile() || pathStat.isSymbolicLink()) throw new Error("unsafe source");
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const before = fstatSync(fd);
+    if (!before.isFile() || before.dev !== pathStat.dev || before.ino !== pathStat.ino
+      || before.size > MAX_RELIABILITY_MIGRATION_SOURCE_BYTES) throw new Error("unsafe source");
+    const bytes = Buffer.alloc(MAX_RELIABILITY_MIGRATION_SOURCE_BYTES + 1);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = readSync(fd, bytes, offset, bytes.length - offset, offset);
+      if (count === 0) break;
+      offset += count;
+    }
+    if (offset > MAX_RELIABILITY_MIGRATION_SOURCE_BYTES) throw new Error("source too large");
+    const after = fstatSync(fd);
+    if (after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size
+      || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs || offset !== before.size) {
+      throw new Error("source changed");
+    }
+    return Buffer.from(bytes.subarray(0, offset));
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+const DIAGNOSTIC_FIELD_PATHS = new Set([
+  "schemaVersion",
+  "tierPolicies",
+  "tierPolicies.*",
+  "tierPolicies.*.fallbackTiers",
+]);
+
+interface EconomicInspectEvidence {
+  readonly mode: "off" | "observe" | "policy" | "invalid";
+  readonly sources: readonly {
+    readonly source: string;
+    readonly scope: string;
+    readonly authority: string;
+    readonly freshness: "missing" | "current" | "expired" | "future";
+    readonly observedAgeMs?: number;
+    readonly periods: readonly {
+      readonly window: string;
+      readonly period: string;
+      readonly unit: string;
+      readonly applicability: "current" | "reset" | "expired" | "future";
+    }[];
+  }[];
+  readonly diagnostics: readonly { readonly code: string; readonly severity: string; readonly source?: string; readonly scope?: string }[];
+}
+
+interface ReliabilityV2InspectEvidence {
+  readonly version: 2;
+  readonly status: "initialized" | "unavailable";
+  readonly revision?: number;
+  readonly observationsEnabled: boolean;
+  readonly cooldownOnAllowanceExhausted: boolean;
+  readonly scopes?: readonly { readonly model: string; readonly generation: number; readonly recentFailureCount: number; readonly openUntil?: number }[];
+  readonly observations?: readonly { readonly model: string; readonly category: string; readonly categoryEvidence: string; readonly observedAt: number; readonly retryAt?: number; readonly source: string }[];
+  readonly observationCount?: number;
+  readonly reasonCode?: string;
+}
+
+function inspectReliabilityV2(state: BifrostState): ReliabilityV2InspectEvidence | undefined {
+  if (state.config.reliability?.stateVersion !== 2) return undefined;
+  const observationsEnabled = state.config.reliability.observations?.enabled === true;
+  try {
+    if (!state.reliabilityV2Store) throw new ReliabilityV2StoreError("uninitialized_state", "unavailable");
+    const snapshot = state.reliabilityV2Store.readSnapshot();
+    const projected = Object.entries(snapshot.scopes).flatMap(([scopeKey, scope]) => {
+      const match = /^model:(\d+):(.+)$/.exec(scopeKey);
+      const model = match && Number(match[1]) === match[2]!.length ? match[2] : undefined;
+      return model ? [{ model, generation: scope.generation, recentFailureCount: scope.failures.length, ...(scope.openUntil === undefined ? {} : { openUntil: scope.openUntil }) }] : [];
+    });
+    const observations = Object.values(snapshot.settledOutcomes).flatMap((outcome) => outcome.observation ? [{
+      model: outcome.observation.modelKey,
+      category: outcome.observation.category,
+      categoryEvidence: outcome.observation.categoryEvidence,
+      observedAt: outcome.observation.observedAt,
+      ...(outcome.observation.retryAt === undefined ? {} : { retryAt: outcome.observation.retryAt }),
+      source: outcome.observation.source,
+    }] : []);
+    return {
+      version: 2,
+      status: "initialized",
+      revision: snapshot.revision,
+      observationsEnabled,
+      cooldownOnAllowanceExhausted: state.config.reliability?.cooldownOnAllowanceExhausted ?? true,
+      scopes: projected.slice(0, 200),
+      observations: observations.slice(0, 200),
+      observationCount: observations.length,
+    };
+  } catch (error) {
+    const code = error instanceof ReliabilityV2StoreError ? error.code : "state_unavailable";
+    return {
+      version: 2,
+      status: "unavailable",
+      observationsEnabled,
+      cooldownOnAllowanceExhausted: state.config.reliability?.cooldownOnAllowanceExhausted ?? true,
+      reasonCode: code,
+    };
+  }
+}
+
+function inspectEconomicEvidence(state: BifrostState, now = Date.now()): EconomicInspectEvidence {
+  if (state.economicPolicyValid === false) return { mode: "invalid", sources: [], diagnostics: [] };
+  if (!state.config.economics) return { mode: "off", sources: [], diagnostics: [] };
+  const policy = state.economicPolicy;
+  if (!policy) return { mode: "off", sources: [], diagnostics: [] };
+  const signals = state.economicSnapshot?.signals ?? [];
+  const sources = policy.sources.map((source) => {
+    const signal = signals.find((item) => item.sourceId === source.id && item.scopeRef === source.scopeRef);
+    const freshness = !signal
+      ? "missing" as const
+      : now < signal.observedAt
+        ? "future" as const
+        : signal.expiresAt <= now ? "expired" as const : "current" as const;
+    const periods = signal ? signal.windows.map((window) => ({
+      window: window.id,
+      period: window.period.id,
+      unit: window.unit,
+      applicability: now < signal.observedAt
+        ? "future" as const
+        : signal.expiresAt <= now
+          ? "expired" as const
+          : window.resetsAt !== undefined && window.resetsAt <= now
+            ? "reset" as const
+            : "current" as const,
+    })) : [];
+    return {
+      source: source.id,
+      scope: source.scopeRef,
+      authority: source.authority,
+      freshness,
+      ...(signal ? { observedAgeMs: Math.max(0, now - signal.observedAt) } : {}),
+      periods,
+    };
+  });
+  return {
+    mode: policy.mode,
+    sources,
+    diagnostics: (state.economicDiagnostics ?? []).map((item) => ({
+      code: item.code,
+      severity: item.severity,
+      ...(item.sourceId ? { source: item.sourceId } : {}),
+      ...(item.scopeRef ? { scope: item.scopeRef } : {}),
+    })),
+  };
+}
+
+function renderDiagnostic(item: BifrostDiagnostic): string {
+  const fieldPath = item.path && DIAGNOSTIC_FIELD_PATHS.has(item.path) ? `path=${item.path}` : "";
+  const location = [fieldPath, item.tier ? `tier=${item.tier}` : "", item.entryIndex !== undefined ? `entry=${item.entryIndex}` : "", item.ruleIndex !== undefined ? `rule=${item.ruleIndex}` : "", item.model ? `model=${item.model}` : ""].filter(Boolean).join(" ");
+  return `  ${item.severity} ${item.code}${location ? ` (${location})` : ""}: ${item.repair}`;
+}
+
+function formatDiagnosticTimestamp(timestamp: number): string {
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? "unknown" : date.toISOString();
+}
+
+function renderDiagnosticLines(report: ValidateDiagnosticsReport | (InspectDiagnosticsReport & { economics?: EconomicInspectEvidence; reliabilityV2?: ReliabilityV2InspectEvidence; affinity?: AffinityInspectEvidence })): string[] {
+  const lines = [report.kind === "validation" ? "--- validation (loaded effective config) ---" : "--- inspection (local snapshot) ---"];
+  if (report.kind === "validation") {
+    lines.push("config source: loaded effective config (run /bifrost reload after editing files)");
+  } else {
+    lines.push(`observed: ${formatDiagnosticTimestamp(report.observedAt)}`);
+    lines.push(`registry: ${report.registry.knownModelCount} known, ${report.registry.availableModelCount} available`);
+    lines.push(`reliability policy: ${report.reliabilityPolicy.enabled ? "enabled" : "disabled"}; usage/billing cooldown=${report.reliabilityPolicy.cooldownOnAllowanceExhausted ? "on" : "off"} (${report.reliabilityPolicy.allowanceCooldownScope} scope); provider rate-limit throttles=on`);
+    if (report.registry.bifrostLastRefreshAgeMs !== undefined) {
+      lines.push(`Bifrost last registry refresh age: ${report.registry.bifrostLastRefreshAgeMs} ms`);
+    }
+    for (const tier of report.tiers) {
+      lines.push(`${tier.tier}: ${tier.configuredEntryCount} configured entries`);
+      for (const candidate of tier.candidates) {
+        const failure = candidate.failureEvidence
+          ? `, lastFailure=${candidate.failureEvidence.category}, evidence=${candidate.failureEvidence.evidence}, scope=${candidate.failureEvidence.scope}` : "";
+        lines.push(`  ${candidate.model}: available=${candidate.available}, auth=${candidate.auth}, circuit=${candidate.circuit}${candidate.openUntil === undefined ? "" : ` until ${formatDiagnosticTimestamp(candidate.openUntil)}`}${failure}`);
+      }
+    }
+    if (report.economics) {
+      lines.push(`reserve policy: ${report.economics.mode}`);
+      for (const source of report.economics.sources) {
+        const age = source.observedAgeMs === undefined ? "" : ` age=${source.observedAgeMs}ms`;
+        const periods = source.periods.map((period) => `${period.window}:${period.period}(${period.applicability})`).join(", ") || "none";
+        lines.push(`  source=${source.source} scope=${source.scope} authority=${source.authority} freshness=${source.freshness}${age} periods=${periods}`);
+      }
+      for (const diagnostic of report.economics.diagnostics) {
+        lines.push(`  ${diagnostic.severity} ${diagnostic.code}${diagnostic.source ? ` source=${diagnostic.source}` : ""}${diagnostic.scope ? ` scope=${diagnostic.scope}` : ""}`);
+      }
+    }
+    if (report.reliabilityV2) {
+      const reliability = report.reliabilityV2;
+      lines.push(`reliability v2: ${reliability.status}${reliability.revision === undefined ? "" : ` revision=${reliability.revision}`} observations=${reliability.observationsEnabled ? "on" : "off"} allowanceCooldown=${reliability.cooldownOnAllowanceExhausted ? "on" : "off"}`);
+      if (reliability.reasonCode) lines.push(`  reason=${reliability.reasonCode}`);
+      for (const scope of reliability.scopes ?? []) {
+        lines.push(`  model=${scope.model} generation=${scope.generation} recentFailures=${scope.recentFailureCount}${scope.openUntil === undefined ? "" : ` openUntil=${formatDiagnosticTimestamp(scope.openUntil)}`}`);
+      }
+      for (const observation of reliability.observations ?? []) {
+        lines.push(`  observation model=${observation.model} category=${observation.category} evidence=${observation.categoryEvidence} at=${formatDiagnosticTimestamp(observation.observedAt)}${observation.retryAt === undefined ? "" : ` retryAt=${formatDiagnosticTimestamp(observation.retryAt)}`} source=${observation.source}`);
+      }
+      if ((reliability.observationCount ?? 0) > 200) lines.push(`  ... ${reliability.observationCount! - 200} more observations`);
+    }
+    if (report.affinity) {
+      lines.push(`affinity: ${report.affinity.mode} (${report.affinity.status}; source=${report.affinity.source})`);
+      if (report.affinity.anchor) {
+        lines.push(`  last successful model=${report.affinity.anchor.model} provider=${report.affinity.anchor.provider} at=${report.affinity.anchor.lastSuccessfulAt} age=${report.affinity.anchor.ageMs}ms`);
+      }
+    }
+  }
+  if (report.diagnostics.length === 0) lines.push("diagnostics: none");
+  else lines.push("diagnostics:", ...report.diagnostics.map(renderDiagnostic));
+  lines.push("----------------");
+  return lines;
+}
+
+async function handleDiagnosticsCommand(
+  command: "validate" | "inspect",
+  args: string,
+  ctx: ExtensionContext,
+  state: BifrostState,
+): Promise<void> {
+  const json = parseDiagnosticJsonFlag(args, command);
+  if (json === undefined) {
+    log(ctx, `usage: /bifrost ${command} [--json]`, "warning");
+    return;
+  }
+  const v2Evidence = command === "inspect" ? inspectReliabilityV2(state) : undefined;
+  let reliabilityState = state.reliabilityStore.getState();
+  if (v2Evidence?.status === "initialized" && state.reliabilityV2Store && state.config.reliability) {
+    try {
+      reliabilityState = projectReliabilityV2ForRouting(state.reliabilityV2Store.readSnapshot(), reliabilityV2Config(state.config.reliability), Date.now());
+    } catch { /* unavailable evidence is reported separately; do not fabricate a health snapshot */ }
+  }
+  if (command === "inspect" && state.enabled && state.config.reliability?.enabled !== false && state.providerCooldownStore) {
+    try {
+      const registryModels = typeof ctx.modelRegistry.getAll === "function"
+        ? ctx.modelRegistry.getAll() : ctx.modelRegistry.getAvailable();
+      reliabilityState = projectProviderCooldownsForRouting(
+        reliabilityState,
+        state.providerCooldownStore,
+        registryModels,
+        state.config.reliability?.cooldownOnAllowanceExhausted !== false
+          && state.config.reliability?.allowanceCooldownScope !== "model",
+      );
+    } catch { /* provider state is local-only; an unreadable sidecar adds no health evidence */ }
+  }
+  const affinityEvidence = command === "inspect" ? inspectAffinity(state, ctx) : undefined;
+  const report = command === "validate"
+    ? validateDiagnostics({ config: state.config, registry: ctx.modelRegistry })
+    : {
+      ...inspectDiagnostics({
+      config: state.config,
+      registry: ctx.modelRegistry,
+      reliabilityState,
+      reliabilityConfig: state.config.reliability,
+      lastRegistryRefreshAt: state.lastRegistryRefreshAt,
+      }),
+      economics: inspectEconomicEvidence(state),
+      ...(affinityEvidence ? { affinity: affinityEvidence } : {}),
+      ...(v2Evidence ? { reliabilityV2: v2Evidence } : {}),
+      modelPoolSource: state.bootstrapModelsInMemory ? "session_catalog_in_memory" : "configured",
+    };
+  if (json) {
+    console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(report)}`);
+    return;
+  }
+  const lines = renderDiagnosticLines(report);
+  if (command === "inspect") lines.splice(-1, 0, `model pool source: ${state.bootstrapModelsInMemory ? "Pi catalog (in memory; run /bifrost init to refresh and save)" : "configuration"}`);
+  await uiResult(ctx, `Bifrost ${command}`, lines);
 }
 
 // The registry is a string-valued array, so a renamed command compiles fine
@@ -1057,10 +2226,139 @@ export function nextClassifierConfig(
   return next;
 }
 
+function persistBootstrapConfig(
+  ctx: ExtensionContext,
+  state: BifrostState,
+  sourceAtStart: ReconciliationSourceSnapshot,
+  classifierChoice?: { backend: ClassifierBackend; promptModel?: string | null; piNativeModel?: string | null },
+  configGenerationAtStart = state.configGeneration ?? 0,
+): boolean {
+  if (!state.bootstrapModelsInMemory) return true;
+  let source: ReconciliationSourceSnapshot;
+  try { source = selectInitSource(); }
+  catch {
+    log(ctx, "Cannot safely save Bifrost's in-memory model setup because a config source is invalid.", "error");
+    return false;
+  }
+  const userFiles = hasUserBootstrapFiles(process.cwd(), getAgentDir(), CONFIG_DIR_NAME, join(state.extensionDir, "bifrost.json"));
+  const isEmptyConfig = (bytes: Uint8Array | null): boolean => {
+    if (!bytes) return false;
+    try {
+      const parsed: unknown = JSON.parse(Buffer.from(bytes).toString("utf8"));
+      return Boolean(parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        && Object.getPrototypeOf(parsed) === Object.prototype && Object.keys(parsed).length === 0);
+    } catch { return false; }
+  };
+  const freshEmptyConfig = isEmptyConfig(sourceAtStart.configBytes) && isEmptyConfig(source.configBytes)
+    && Buffer.from(sourceAtStart.configBytes!).equals(Buffer.from(source.configBytes!));
+  const stillFresh = (sourceAtStart.configBytes === null && source.configBytes === null || freshEmptyConfig)
+    && sourceAtStart.ownershipBytes === null && source.ownershipBytes === null
+    && sourceAtStart.source === source.source && state.bootstrapModelsInMemory
+    && (state.configGeneration ?? 0) === configGenerationAtStart
+    && !userFiles.userConfig && !userFiles.routeFile
+    && !hasExplicitExtensionRoutingFile(join(state.extensionDir, "bifrost.json"));
+  if (!stillFresh && !classifierChoice) {
+    state.bootstrapModelsInMemory = false;
+    return true;
+  }
+  let current: Record<string, unknown> = {};
+  if (source.configBytes !== null) {
+    try {
+      const parsed: unknown = JSON.parse(Buffer.from(source.configBytes).toString("utf8"));
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
+        || Object.getPrototypeOf(parsed) !== Object.prototype) throw new Error("invalid config object");
+      current = parsed as Record<string, unknown>;
+    } catch {
+      log(ctx, "Cannot safely update the classifier because the selected config is invalid JSON.", "error");
+      return false;
+    }
+  } else if (source.ownershipBytes !== null) {
+    log(ctx, "Cannot save Bifrost's starter setup because an ownership receipt exists without its config.", "error");
+    return false;
+  }
+  const currentClassifier = current.classifier && typeof current.classifier === "object" && !Array.isArray(current.classifier)
+    ? current.classifier as Record<string, unknown>
+    : source.configBytes === null && state.config.classifier
+      ? state.config.classifier as unknown as Record<string, unknown> : {};
+  if (classifierChoice) current.classifier = nextClassifierConfig(currentClassifier, classifierChoice);
+  const generatedModels = Object.fromEntries(Object.entries(state.config.models ?? {})
+    .map(([tier, pool]) => [tier, typeof pool === "string" ? [pool] : pool])) as Record<string, readonly string[]>;
+  if (stillFresh) {
+    const generatedDefault = state.config.default;
+    if (!generatedDefault || Object.keys(generatedModels).length === 0) {
+      if (!classifierChoice) {
+        state.bootstrapModelsInMemory = false;
+        return true;
+      }
+    } else {
+      const receipt = buildInitOwnershipReceipt(generatedModels);
+      if (!receipt) {
+        log(ctx, "Cannot safely save Bifrost's generated model pools and default; no files were changed.", "error");
+        return false;
+      }
+      current.models = generatedModels;
+      current.default = generatedDefault;
+    }
+  }
+  if (!stillFresh && source.configBytes === null && !classifierChoice) {
+    state.bootstrapModelsInMemory = false;
+    return true;
+  }
+  const configBytes = Buffer.from(JSON.stringify(current, null, 2) + "\n", "utf8");
+  const ownership = stillFresh
+    ? buildInitOwnershipReceipt(generatedModels)
+    : source.ownershipBytes
+      ? undefined
+      : buildInitOwnershipReceipt({});
+  const ownershipBytes = ownership
+    ? Buffer.from(JSON.stringify(ownership, null, 2) + "\n", "utf8")
+    : source.ownershipBytes ? Buffer.from(source.ownershipBytes) : undefined;
+  if (!ownershipBytes || configBytes.byteLength > MAX_RECONCILIATION_CONFIG_BYTES
+    || ownershipBytes.byteLength > MAX_RECONCILIATION_OWNERSHIP_BYTES
+    || !prospectiveConfigInstallable(source.source, configBytes, state)) {
+    log(ctx, "The requested classifier config is invalid or exceeds a safe write limit; no files were changed.", "error");
+    return false;
+  }
+  const expectedConfigDigest = source.configBytes
+    ? createHash("sha256").update(source.configBytes).digest("hex") : null;
+  const expectedOwnershipDigest = source.ownershipBytes
+    ? createHash("sha256").update(source.ownershipBytes).digest("hex") : null;
+  const targetDirectory = dirname(source.configPath);
+  if (!existsSync(targetDirectory)) mkdirSync(targetDirectory, { recursive: true });
+  const ownershipDirectory = dirname(source.ownershipPath);
+  if (!existsSync(ownershipDirectory)) mkdirSync(ownershipDirectory, { recursive: true });
+  try {
+    applyReconciliationTransaction({
+      configPath: source.configPath,
+      ownershipPath: source.ownershipPath,
+      journalPath: source.journalPath,
+      expectedConfigDigest,
+      expectedOwnershipDigest,
+      nextConfigBytes: configBytes,
+      nextOwnershipBytes: ownershipBytes,
+    });
+  } catch {
+    log(ctx, "Could not safely save the classifier and starter model setup; existing files were preserved.", "error");
+    return false;
+  }
+  state.bootstrapModelsInMemory = false;
+  if (stillFresh) log(ctx, "Saving Bifrost's detected starter model pools with your classifier choice.");
+  return true;
+}
+
 async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState): Promise<void> {
   if (!ctx.hasUI) {
     log(ctx, "Choose classifier backend in Pi UI: prompt, typesafe, or pi-native", "warning");
     return;
+  }
+  let bootstrapSourceAtStart: ReconciliationSourceSnapshot | undefined;
+  const configGenerationAtStart = state.configGeneration ?? 0;
+  if (state.bootstrapModelsInMemory) {
+    try { bootstrapSourceAtStart = selectInitSource(); }
+    catch {
+      log(ctx, "Cannot safely change the classifier because a config source is invalid.", "error");
+      return;
+    }
   }
   const backendOptions = [
     "prompt — choose a Pi model",
@@ -1114,20 +2412,35 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
   }
   const classifier = current.classifier && typeof current.classifier === "object" && !Array.isArray(current.classifier)
     ? current.classifier as Record<string, unknown> : {};
-  current.classifier = nextClassifierConfig(classifier, {
+  const choice = {
     backend,
     promptModel: backend === CLASSIFIER_BACKEND_IDS.prompt
       ? selectedPromptModel ?? (needsPromptModel ? null : undefined) : undefined,
     piNativeModel: selectedPiNativeModel,
-  });
+  };
+  if (bootstrapSourceAtStart) {
+    if (!persistBootstrapConfig(ctx, state, bootstrapSourceAtStart, choice, configGenerationAtStart)) return;
+    const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
+    if (!installReloadedConfig(state, loadedConfig, ctx)) return;
+    state.classifierMetricsStore.reload({
+      cwd: process.cwd(),
+      enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
+    });
+    log(ctx, `classifier backend set to ${backend}; config reloaded`);
+    if (backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
+      log(ctx, `TypeSafe credential missing; use ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`, "warning");
+    }
+    return;
+  }
+  current.classifier = nextClassifierConfig(classifier, choice);
   mkdirSync(join(process.cwd(), CONFIG_DIR_NAME), { recursive: true });
   writeFileSync(path, JSON.stringify(current, null, 2) + "\n");
-  state.config = loadConfig(process.cwd(), state.extensionDir);
+  const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
+  if (!installReloadedConfig(state, loadedConfig, ctx)) return;
   state.classifierMetricsStore.reload({
     cwd: process.cwd(),
     enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
   });
-  state.invalidatePipeline();
   log(ctx, `classifier backend set to ${backend}; config reloaded`);
   if (backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
     log(ctx, `TypeSafe credential missing; use ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`, "warning");
@@ -1141,6 +2454,7 @@ export function createCommandRouter(
 ): (args: string, ctx: ExtensionContext) => Promise<void> {
   const routes: CommandEntry[] = [
     exact("on", (_, ctx) => {
+      state.onManualControl?.(ctx.sessionManager, "on");
       state.enabled = true;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
@@ -1149,6 +2463,7 @@ export function createCommandRouter(
     }),
     exact("off", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
+      state.onManualControl?.(ctx.sessionManager, "off");
       state.enabled = false;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
@@ -1157,6 +2472,7 @@ export function createCommandRouter(
     }),
     exact("pin", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
+      state.onManualControl?.(ctx.sessionManager, "pin");
       state.pinned = true;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
@@ -1164,6 +2480,7 @@ export function createCommandRouter(
       log(ctx, "Bifrost pinned");
     }),
     exact("unpin", (_, ctx) => {
+      state.onManualControl?.(ctx.sessionManager, "unpin");
       state.pinned = false;
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
@@ -1172,7 +2489,11 @@ export function createCommandRouter(
     }),
     exact("reload", (_, ctx) => {
       const done = debugMeasure("command", "reload");
-      state.config = loadConfig(process.cwd(), state.extensionDir);
+      const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
+      if (!installReloadedConfig(state, loadedConfig, ctx)) {
+        done({ accepted: false });
+        return;
+      }
       // Re-init debug — user may have updated debug config since startup.
       setupDebug(state.config.debug ?? { enabled: false }, process.cwd());
       const runtimeState = loadRuntimeState(runtimeStatePath(process.cwd()), {
@@ -1182,14 +2503,12 @@ export function createCommandRouter(
       });
       state.enabled = runtimeState.enabled;
       state.classifierEnabled = runtimeState.classifierEnabled;
-      state.pinned = runtimeState.pinned;
       state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path), (state.config.cache?.ttlHours ?? 720) * 60 * 60 * 1000);
       state.reliabilityStore.reload(state.config.reliability, process.cwd());
       state.classifierMetricsStore.reload({
         cwd: process.cwd(),
         enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
       });
-      state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       done();
@@ -1200,6 +2519,11 @@ export function createCommandRouter(
       });
       log(ctx, "Bifrost config reloaded");
     }),
+
+    spaced("validate", (args, ctx) => handleDiagnosticsCommand("validate", args, ctx, state)),
+    spaced("inspect", (args, ctx) => handleDiagnosticsCommand("inspect", args, ctx, state)),
+    spaced("config", (args, ctx) => handleReconciliationCommand(args, ctx, state)),
+    spaced("reliability", (args, ctx) => handleReliabilityCommand(args, ctx, state)),
 
     // Providers
     exact("providers", (_, ctx) => {
@@ -1317,19 +2641,24 @@ export function createCommandRouter(
     exact("classifier", (_, ctx) => handleClassifierChoose(ctx, state)),
     exact("classifier on", (_, ctx) => {
       state.classifierEnabled = true;
-      state.saveModeState();
       state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
       debug("command", "classifier_toggle", { enabled: true });
-      log(ctx, "LLM classifier enabled");
+      let saved = true;
+      try { saved = state.saveModeState() !== false; } catch { saved = false; }
+      log(ctx, saved ? "LLM classifier enabled" : "LLM classifier enabled for this session; its preference could not be saved.", saved ? undefined : "error");
     }),
     exact("classifier off", (_, ctx) => {
       state.classifierEnabled = false;
-      state.saveModeState();
       state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
       debug("command", "classifier_toggle", { enabled: false });
-      log(ctx, "LLM classifier disabled; regex fallback active");
+      let saved = true;
+      try { saved = state.saveModeState() !== false; } catch { saved = false; }
+      log(ctx, saved
+        ? "LLM classifier disabled; regex fallback active"
+        : "LLM classifier disabled for this session; its preference could not be saved.",
+      saved ? undefined : "error");
     }),
     exact("classifier status", (_, ctx) => {
       const rawModel = state.config.classifier?.model;

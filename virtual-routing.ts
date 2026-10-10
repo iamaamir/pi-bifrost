@@ -12,6 +12,7 @@ const REASON_LABELS: Record<RouteReasonCode, string> = {
   trial_active: "trial in progress",
   requested_tier_unhealthy: "tier unhealthy",
   requested_tier_unavailable: "tier unavailable",
+  requested_tier_excluded: "reserve policy exclusion",
   all_tiers_exhausted: "all tiers exhausted",
 };
 
@@ -44,9 +45,38 @@ export function noModelError(
   pool: string | string[] | undefined,
   reason?: RouteReasonCode,
   skipped?: readonly SkippedCandidate[],
+  reserveExcluded?: { readonly count: number; readonly reasonCodes: readonly string[]; readonly tiers?: readonly string[] },
 ): string {
   const suffix = reason ? ` (${reasonLabel(reason)})` : "";
-  return `Bifrost: no healthy physical model for tier ${tier}${suffix}: ${poolProblem(tier, pool, skipped)}`;
+  const reserveCount = reserveExcluded?.count ?? 0;
+  const reasonCodes = reserveExcluded?.reasonCodes ?? [];
+  const reserveFiltered = reserveCount > 0;
+  const reserveTiers = reserveExcluded?.tiers ?? [];
+  const fallbackOnly = reserveTiers.length > 0 && reserveTiers.every((reserveTier) => reserveTier !== tier);
+  const hasFallbackTier = reserveTiers.some((reserveTier) => reserveTier !== tier);
+  const reserveAttribution = fallbackOnly
+    ? ` in fallback tier${reserveTiers.length === 1 ? "" : "s"} ${reserveTiers.join(", ")}`
+    : hasFallbackTier
+      ? ` across tiers ${reserveTiers.join(", ")}`
+      : "";
+  const configuredPatterns = pool === undefined ? [] : Array.isArray(pool) ? pool : [pool];
+  const requestedUnavailableDetail = fallbackOnly && configuredPatterns.length === 0
+    ? `; requested tier ${tier} had no resolved models`
+    : "";
+  const reliabilityDetail = skipped?.length
+    ? `; reliability blocked ${skipped.map((entry) => `${entry.key} (${reasonLabel(entry.reason)})`).join(", ")}`
+    : "";
+  const problem = reason === "requested_tier_excluded" || reserveFiltered
+    ? (reserveFiltered
+      ? `reserve policy excluded ${reserveCount} configured candidate(s)${reserveAttribution}${reasonCodes.length ? ` (reasons: ${reasonCodes.join(", ")})` : ""}${requestedUnavailableDetail}${reliabilityDetail}`
+      : "configured candidates excluded by reserve policy")
+    : poolProblem(tier, pool, skipped);
+  const availability = reason === "requested_tier_unavailable" && fallbackOnly
+    ? "no available physical model"
+    : reason === "requested_tier_excluded" || reserveFiltered
+      ? "no eligible physical model"
+      : "no healthy physical model";
+  return `Bifrost: ${availability} for tier ${tier}${suffix}: ${problem}`;
 }
 
 export interface VirtualRouteDependencies {
@@ -56,8 +86,10 @@ export interface VirtualRouteDependencies {
   /** Last dispatched physical model — session fact, not routing policy. */
   sticky?: () => Model<Api> | undefined;
   onDispatch?: (model: Model<Api>, thinkingLevel: ModelRoute["thinkingLevel"], intent: DispatchIntent) => void;
+  /** Async admission fence for receipt-owned runtimes; runs before Pi can invoke a provider. */
+  beforeDispatch?: (model: Model<Api>, request: ModelRouteRequest, intent: DispatchIntent) => Promise<void>;
   /** Release dispatch bookkeeping (e.g. claimed half-open trial) when dispatch setup throws. */
-  onDispatchFailed?: (model: Model<Api>) => void;
+  onDispatchFailed?: (model: Model<Api>) => void | Promise<void>;
   /** Visible degrade: kept model when no pool resolves. */
   onDegrade?: (model: Model<Api>) => void;
   routeError?: (detail: string) => Error;
@@ -81,11 +113,12 @@ export function createVirtualRoute(deps: VirtualRouteDependencies): (request: Mo
   return async (request) => {
     const sticky = request.reason === "retry" ? (request.failed ?? request.previous) : request.previous;
     const fail = (detail: string) => deps.routeError ? deps.routeError(detail) : new Error(`Bifrost: ${detail}`);
-    const dispatch = (model: Model<Api>, thinkingLevel: ModelRoute["thinkingLevel"], intent: DispatchIntent): ModelRoute => {
+    const dispatch = async (model: Model<Api>, thinkingLevel: ModelRoute["thinkingLevel"], intent: DispatchIntent): Promise<ModelRoute> => {
       try {
+        await deps.beforeDispatch?.(model, request, intent);
         deps.onDispatch?.(model, thinkingLevel, intent);
       } catch (error) {
-        deps.onDispatchFailed?.(model);
+        try { await deps.onDispatchFailed?.(model); } catch { /* retain the dispatch failure */ }
         throw error;
       }
       return { model, thinkingLevel };

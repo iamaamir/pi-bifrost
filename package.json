@@ -4,12 +4,21 @@
   "description": "Route Pi turns through models you choose, with configured tiers and opt-in per-request dispatch.",
   "files": [
     "*.ts",
+    "dist/router/",
     "bifrost.json",
     "schema.json",
     "examples/",
+    "docs/router-api.md",
     "CHANGELOG.md"
   ],
   "type": "module",
+  "exports": {
+    "./router": {
+      "types": "./dist/router/router.d.ts",
+      "import": "./dist/router/router.js"
+    },
+    "./*": "./*"
+  },
   "license": "MIT",
   "author": {
     "name": "Aamir",
@@ -41,6 +50,8 @@
     "image": "https://iamaamir.github.io/pi-bifrost/social-card.png"
   },
   "scripts": {
+    "build:router": "node scripts/build-router.mjs",
+    "prepack": "npm run build:router",
     "test": "node --test --experimental-strip-types \"tests/*.test.ts\" \"tests/*.test.mjs\"",
     "test:integration": "node --test --experimental-strip-types tests/integration/*.test.mjs",
     "test:ui": "python3 scripts/ui-smoke.py",
@@ -59,6 +70,7 @@
     "@earendil-works/pi-ai": "1.0.1",
     "@earendil-works/pi-coding-agent": "1.0.1",
     "@types/node": "^26.1.1",
-    "agent-tui": "^1.1.0"
+    "agent-tui": "^1.1.0",
+    "typescript": "6.0.3"
   }
 }

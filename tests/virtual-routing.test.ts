@@ -52,6 +52,44 @@ describe("virtual fail-closed errors", () => {
     assert.match(message, /credentials/);
   });
 
+  it("explains reserve-excluded candidates without calling them unavailable", () => {
+    const message = noModelError("restricted", ["fixture/reserved"], "requested_tier_excluded", undefined, { count: 1, reasonCodes: ["reserve_reached"] });
+    assert.match(message, /no eligible physical model/);
+    assert.match(message, /reserve policy exclusion\): reserve policy excluded 1 configured candidate\(s\) \(reasons: reserve_reached\)/);
+    assert.doesNotMatch(message, /resolved 0 available models|credentials/);
+  });
+
+  it("shows reserve and reliability exclusions together for mixed blocked pools", () => {
+    for (const reason of ["open_circuit", "trial_active"] as const) {
+      const message = noModelError("restricted", ["fixture/reserved", "fixture/blocked"], "all_tiers_exhausted", [
+        { key: "fixture/blocked", reason },
+      ], { count: 1, reasonCodes: ["reserve_reached"] });
+      assert.match(message, /reserve policy excluded 1 configured candidate\(s\) \(reasons: reserve_reached\)/u);
+      assert.match(message, reason === "open_circuit" ? /fixture\/blocked \(open circuit\)/u : /fixture\/blocked \(trial in progress\)/u);
+    }
+  });
+
+  it("attributes reserve fallback exclusions to the default tier when the request is empty", () => {
+    const message = noModelError("quick", [], "requested_tier_excluded", [], {
+      count: 1,
+      reasonCodes: ["reserve_reached"],
+      tiers: ["general"],
+    });
+    assert.match(message, /requested tier quick had no resolved models/u);
+    assert.match(message, /no eligible physical model for tier quick \(reserve policy exclusion\)/u);
+    assert.match(message, /reserve policy excluded 1 configured candidate\(s\) in fallback tier general/u);
+  });
+
+  it("names every tier when reserve exclusions include request and fallback", () => {
+    const message = noModelError("quick", ["fixture/quick", "fixture/general"], "requested_tier_excluded", [], {
+      count: 2,
+      reasonCodes: ["reserve_reached"],
+      tiers: ["general", "quick"],
+    });
+    assert.match(message, /reserve policy excluded 2 configured candidate\(s\) across tiers general, quick/u);
+    assert.doesNotMatch(message, /in fallback tier/u);
+  });
+
   it("delegates dispatch thinking level to pi-ai clampThinkingLevel", async () => {
     const nonReasoning = Object.assign(makeModel("fixture", "plain"), { reasoning: false });
     const limited = Object.assign(makeModel("fixture", "limited"), {

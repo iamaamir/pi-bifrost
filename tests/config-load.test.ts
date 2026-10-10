@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_RULES, loadConfig, loadRules } from "../config.ts";
+import { DEFAULT_RULES, loadConfig, loadRules, validateTierPolicyConfig } from "../config.ts";
 
 function writeJson(path: string, value: unknown): void {
   mkdirSync(join(path, ".."), { recursive: true });
@@ -175,6 +175,34 @@ describe("config load", () => {
       const config = loadConfig(cwd, extensionDir);
       assert.equal(config.default, "quick");
       assert.deepEqual(config.models, { quick: ["cwd-quick"] });
+    } finally {
+      process.env.HOME = oldHome;
+      process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(extensionDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves invalid strict namespaces from project config for startup rejection", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
+    const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
+    const home = mkdtempSync(join(tmpdir(), "bifrost-home-"));
+    const agentDir = join(home, "agent");
+    const oldHome = process.env.HOME;
+    const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.HOME = home;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      for (const tierPolicies of [null, "invalid", []]) {
+        writeJson(join(cwd, "bifrost.json"), {
+          schemaVersion: 2,
+          models: { general: ["fixture/model"] },
+          tierPolicies,
+        });
+        const loaded = loadConfig(cwd, extensionDir);
+        assert.ok(validateTierPolicyConfig(loaded).some((issue) => issue.message.includes("tierPolicies must be an object")));
+      }
     } finally {
       process.env.HOME = oldHome;
       process.env.PI_CODING_AGENT_DIR = oldAgentDir;

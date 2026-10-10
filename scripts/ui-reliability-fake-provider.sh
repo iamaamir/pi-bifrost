@@ -19,7 +19,7 @@ export AGENT_TUI_SOCKET="$tmp/a.sock" AGENT_TUI_SESSION_STORE="$tmp/s.jsonl" AGE
 cleanup(){ "$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true; kill "$server" 2>/dev/null||true; [[ "${KEEP:-}" == 1 ]] || rm -rf "$tmp"; }; trap cleanup EXIT
 
 poll_until(){ local path="$1" needle="$2" max="${3:-60}"; for _ in $(seq 1 "$max"); do [[ -f "$path" ]] && grep -q "$needle" "$path" && return 0; sleep 1; done; echo "timed out" >&2; return 1; }
-start_pi(){ "$A" --json daemon start >/dev/null; local run; run=$($A --json run --cwd "$work" --cols 120 --rows 36 --env "PI_CODING_AGENT_DIR=$home/.pi/agent" --env "PI_SKIP_VERSION_CHECK=1" -- "$PI" -e "$ROOT" --approve --no-session --no-tools --provider fake --model healthy); node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>console.log(JSON.parse(s).session_id))' <<<"$run"; }
+start_pi(){ "$A" --json daemon start >/dev/null; local run; run=$($A --json run --cwd "$work" --cols 120 --rows 36 --env "HOME=$home" --env "PI_CODING_AGENT_DIR=$home/.pi/agent" --env "PI_SKIP_VERSION_CHECK=1" --env "PI_OFFLINE=1" --env "NODE_OPTIONS=--require=$ROOT/scripts/test-outbound-guard.cjs" --env "BIFROST_TEST_ALLOWED_ORIGIN=http://127.0.0.1:$port" --env "BIFROST_TEST_NETWORK_VIOLATIONS=$tmp/test-network-violations.log" -- "$PI" -e "$ROOT" --approve --no-session --no-tools --provider fake --model healthy); node -e 'let s="";process.stdin.on("data",x=>s+=x).on("end",()=>console.log(JSON.parse(s).session_id))' <<<"$run"; }
 prompt(){ "$A" --session "$1" type "$2" >/dev/null; "$A" --session "$1" press Escape Enter >/dev/null; }
 
 wait_mode_state(){
@@ -64,7 +64,7 @@ curl -sf "http://127.0.0.1:$port/_stats" >/dev/null || { echo 'FAIL: server died
 
 # ── Scenario 2: quota (429) opens circuit ──
 echo '--- scenario 2: quota ---'
-rm -f "$work/.pi/bifrost-reliability.json"
+rm -f "$work/.pi/bifrost-reliability.json" "$work/.pi/bifrost-provider-reliability.json"
 cat >"$work/bifrost.json" <<'EOF'
 {"enabled":true,"default":"economical","strategy":"cheapest","classifier":{"enabled":false},"reliability":{"failureThreshold":1,"windowMinutes":5,"cooldownMinutes":60},"models":{"economical":["fake/quota","fake/healthy"]},"rules":[{"pattern":"quota","model":"economical"}]}
 EOF
@@ -79,7 +79,7 @@ curl -sf "http://127.0.0.1:$port/_stats" >/dev/null || { echo 'FAIL: server died
 
 # ── Scenario 3: successful request creates no circuit state ──
 echo '--- scenario 3: no false circuit ---'
-rm -f "$work/.pi/bifrost-reliability.json"
+rm -f "$work/.pi/bifrost-reliability.json" "$work/.pi/bifrost-provider-reliability.json"
 cat >"$work/bifrost.json" <<'EOF'
 {"enabled":true,"default":"economical","strategy":"cheapest","classifier":{"enabled":false},"reliability":{"failureThreshold":1,"windowMinutes":5,"cooldownMinutes":60},"models":{"economical":["fake/healthy"]},"rules":[{"pattern":"ok","model":"economical"}]}
 EOF
@@ -95,7 +95,7 @@ echo 'scenario 3: pass'
 
 # ── Scenario 4: runtime mode survives reloads ──
 echo '--- scenario 4: mode persistence across reloads ---'
-rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json"
+rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json" "$work/.pi/bifrost-provider-reliability.json"
 cat >"$work/bifrost.json" <<'EOF'
 {"enabled":true,"default":"economical","strategy":"cheapest","classifier":{"enabled":false},"reliability":{"failureThreshold":1,"windowMinutes":5,"cooldownMinutes":60},"models":{"economical":["fake/healthy"]},"rules":[{"pattern":"ok","model":"economical"}]}
 EOF
@@ -127,7 +127,7 @@ echo 'scenario 4: pass'
 
 # ── Scenario 5: /model picker selects Bifrost Auto and routes a prompt ──
 echo '--- scenario 5: model picker -> bifrost/auto ---'
-rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json"
+rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json" "$work/.pi/bifrost-provider-reliability.json"
 cat >"$work/bifrost.json" <<'EOF'
 {"enabled":true,"default":"economical","strategy":"cheapest","classifier":{"enabled":false},"models":{"economical":["fake/healthy"]},"rules":[{"pattern":"hello","model":"economical"}],"debug":{"enabled":true}}
 EOF
@@ -146,7 +146,7 @@ echo 'scenario 5: pass'
 
 # ── Scenario 6: steer-queued prompts dispatch and settle within one run ──
 echo '--- scenario 6: queued multi-dispatch settlement ---'
-rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json"
+rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json" "$work/.pi/bifrost-provider-reliability.json"
 cat >"$home/.pi/agent/models.json" <<EOF
 {"providers":{"fake":{"baseUrl":"http://127.0.0.1:$port/v1","api":"openai-completions","apiKey":"test","models":[{"id":"healthy","reasoning":false},{"id":"fast","reasoning":false},{"id":"strong","reasoning":false},{"id":"slow","reasoning":false}]}}}
 EOF
@@ -182,4 +182,9 @@ fi
 echo 'scenario 6: pass'
 "$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true
 
+if [[ -s "$tmp/test-network-violations.log" ]]; then
+  echo 'FAIL: test network guard recorded a blocked external request' >&2
+  cat "$tmp/test-network-violations.log" >&2
+  exit 1
+fi
 echo 'all reliability E2E scenarios: pass'

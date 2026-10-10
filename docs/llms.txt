@@ -22,7 +22,13 @@ Requires Pi 1.0.1 or newer and at least one authenticated provider model availab
 pi install npm:pi-bifrost
 ```
 
-Inside Pi, run `/bifrost init`. Init reuses recent probe results or sends small requests to available models, which can incur usage or rate limits. It proposes a configuration and writes it after confirmation. Then run `/bifrost classifier` to select a classifier backend, or `/bifrost classifier off` to use rules and the default tier without a classifier call.
+On a fresh install, routing is on and physical selection is the default. A saved configuration or runtime preference can change the routing state. Use `/bifrost debug` to check it. When no meaningful configuration, route file, or explicit routing override blocks setup, Bifrost builds model pools in the background and saves a minimal project `.pi/bifrost.json` in the background. An empty `{}` configuration does not block setup. A configuration with one setting does block it. No init is required. The save does not probe models or write prompts or secrets. If a safe save fails, routing continues in memory and Bifrost warns.
+
+Init remains optional. Run `/bifrost init` inside Pi when you want to refresh the catalog and save or reconcile pools. It shows a short summary and asks once before saving. The summary does not show every model ID or how Bifrost chooses among models. Use the displayed save target. Pass `-f` or run `/bifrost probe` only when you want provider probes; usage or rate limits may apply. See `docs/adr/0025-automatic-first-use-configuration-save.md`.
+
+Selecting `bifrost/auto` in Pi's model picker is a separate opt-in. Classification is enabled by default, and the active classifier can receive the current prompt on a cache miss. Run `/bifrost classifier off` to use rules and the default tier without the extra classification call. This command works without a Bifrost JSON config file.
+
+The separate classification cache can store normalized prompt terms. Disabling cache use does not clear saved entries. `/bifrost cache clear` empties them. If no config exists and you want cache use off, run `/bifrost init` without `-f` to save starter pools. Add `cache.enabled: false` to that config, keep its pools, and run `/bifrost reload`. Neither setting makes generation local. The selected generation provider still receives the prompt.
 
 ## Route
 
@@ -30,9 +36,13 @@ Inside Pi, run `/bifrost init`. Init reuses recent probe results or sends small 
 prompt → tier → configured model pool → reliability filter → strategy → Pi model
 ```
 
-A tier is selected from a tier prefix, rule, local classification cache, optional classifier, or configured default. An exact-model rule can bypass the tier. Strategies include `first`, `fastest` (current list order, which init can sort by probe speed), `cheapest`, `cheapest_input`, `cheapest_output`, `largest_context`, and `random`. Persistent circuits skip repeatedly failing models on future turns and later allow controlled recovery. Bifrost never automatically replays a failed user prompt.
+A tier is selected from a tier prefix, rule, local classification cache, optional classifier, or configured default. An exact-model rule can bypass the tier. Strategies include `first`, `fastest`, `cheapest`, `cheapest_input`, `cheapest_output`, `largest_context`, and `random`. Init can sort models by probe speed for `fastest`.
 
-Physical selection is the default: Bifrost activates Pi's provider/model before generation. Selecting `bifrost/auto` in Pi's `/model` picker opts into per-request physical dispatch using the same routing policy. Pi's footer shows `bifrost/auto → provider/model`; assistant messages record the physical model that answered. Tool continuations and retries remain on the model that started the turn. Selecting a physical model pins it for the session.
+Persistent circuits skip repeatedly failing models on future turns and later allow controlled recovery. By default, usage and billing rejections pause models with the same configured Pi provider ID in Auto and physical routing. Bifrost does not identify billing accounts or fetch live usage limits. Generic HTTP 429 pauses that provider briefly. It does not retry the current prompt.
+
+Set `reliability.allowanceCooldownScope: "model"` to limit usage and billing pauses to one model. Set `reliability.enabled: false` to disable pause enforcement. In Auto, Bifrost can retry one usage or billing rejection only when Pi proves the turn was empty and safe to continue. Set `reliability.retryOnAllowanceExhausted: false` to disable that retry but keep the pause. See `docs/guide/reliability-and-cache.md` and `docs/adr/0024-provider-usage-and-rate-pauses.md`.
+
+Physical selection is the default: Bifrost activates Pi's provider/model before generation. Selecting `bifrost/auto` in Pi's `/model` picker opts into per-request physical dispatch using the same routing policy. Pi's footer shows `bifrost/auto → provider/model`; assistant messages record the physical model that answered. Tool continuations and Pi-owned retries remain on the model that started the turn. Only the bounded Auto allowance recovery above can use another configured model for an empty failed turn. Selecting a physical model pins it for the session.
 
 ## Controls
 
@@ -41,6 +51,7 @@ Physical selection is the default: Bifrost activates Pi's provider/model before 
 - `/bifrost pin` keeps the current physical model for the session. `/bifrost unpin` resumes routing.
 - `/bifrost off` and `/bifrost on` disable or enable routing. Off or pin exits Auto using the last dispatched physical model, or a default-tier model before any dispatch.
 - `/bifrost classifier test` makes a fresh classifier request; `/bifrost classifier status` shows safe operational state.
+- `/bifrost reliability` shows active provider pauses and recovery trials. `/bifrost reliability reset --provider <id>` clears one known provider pause, unless its recovery trial is active.
 
 ## Optional tier classifiers
 
@@ -48,4 +59,4 @@ Classifiers choose a tier, never the exact provider model. Backends: `prompt` (a
 
 ## Limits
 
-Bifrost is not a model proxy or multi-agent orchestrator. Its local classification cache stores normalized prompt terms, not answers. Treat those terms as potentially sensitive. Reliability circuits are not authoritative quota enforcement. Switching models can fragment provider prompt-cache locality. Pin one model when context continuity matters. Bifrost does not guarantee better code, lower cost, lower latency, or cache savings.
+Bifrost is not a model proxy or multi-agent orchestrator. Its local classification cache stores normalized prompt terms, not answers. Treat those terms as potentially sensitive. Provider pauses use configured provider IDs and errors from requests that Pi already sent. They do not provide authoritative quota data. Switching models can fragment provider prompt-cache locality. Pin one model when context continuity matters. Bifrost does not guarantee better code, lower cost, lower latency, or cache savings.

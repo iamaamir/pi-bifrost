@@ -2,6 +2,35 @@
 
 All notable changes to pi-bifrost are documented here.
 
+## [Unreleased]
+
+### Added
+- Experimental `pi-bifrost/router` API over caller-supplied snapshots, shipped as JavaScript with TypeScript declarations. Resolution is advisory; it does not reserve or dispatch a model.
+- Optional schema-version-2 economic reserves. Static declared/estimated provider or model facts can be observed first, then explicitly applied as a pre-strategy candidate filter. No live billing adapter, account scope, or spend-cap guarantee is included.
+- Optional schema-version-2 billing preference can prefer an explicitly configured class among the final eligible candidates when fresh facts support it. Unknown, stale, or conflicting facts stay neutral; the preference does not claim savings or override hard exclusions.
+- Pi Auto now retains a proven successful model within the selected tier by default when `affinity` is absent; physical routing and the resolve-only API remain off by default. Schema-version-2 `affinity.mode` explicitly selects `off`, `observe`, or `retain-within-tier`. Retention stays inside the final eligible tier pool and is not session-base stickiness.
+- `/bifrost config reconcile` previews exact generated model membership offline, then applies only a digest-matched proposal with a journal and exact backups. `--refresh` is a separate preview action. Init updates generated memberships through the same ownership receipt and journal while it preserves manual entries and unrelated configuration.
+- Fresh installs build in-memory model pools from Pi's available chat-model catalog on first use. `/bifrost init` refreshes catalog metadata and asks once before saving; only `init -f` runs model probes.
+- Init detects the classifier backend and selects an available chat model for prompt classification when needed. Users can change it with `/bifrost classifier`.
+- `/bifrost inspect` includes reserve mode and source freshness metadata without printing remaining allowance values.
+- `/bifrost validate [--json]` checks the active loaded config and local model references; `/bifrost inspect [--json]` reports local registry, auth-presence, and circuit snapshots without routing, probing, or writing state.
+- `/bifrost preview --trace [--json] <prompt>` shows a versioned, content-free route decision with configured pools, selected strategy, and reliability exclusions. The existing `--json` preview report stays unchanged.
+- Schema version 2 supports explicit per-tier `fallbackTiers` boundaries. Each policy tries only its requested tier and listed tiers in order; tiers without a policy keep the legacy default fallback.
+- Experimental receipt-owned reliability v2 is opt-in for Auto user turns with `schemaVersion: 2` and `reliability.stateVersion: 2`. Prepare its separate sidecar with `/bifrost reliability migrate`; physical and direct utility routing remain unsupported.
+- Auto can make one bounded retry on another configured model after an explicit usage-limit rejection, but only when Pi proves failed responses were empty, from the same model, and exactly omitted, with no tools or other activity. Pi's own bounded retry may run first. This defaults on and can be disabled with `reliability.retryOnAllowanceExhausted: false`. See [ADR 0023](docs/adr/0023-bounded-allowance-recovery.md).
+- With `reliability.observations.enabled`, reliability v2 stores bounded, allowlisted failure categories and model-only scope. These observations omit prompt and raw provider error text and do not change circuit policy.
+- `classifier.totalTimeoutMs` sets one bounded deadline across classification attempts; existing per-backend limits continue to apply.
+
+### Fixed
+- Invalid schema versions or tier-policy configuration block physical and Auto routing. Reload rejects unreadable, malformed, or non-object config layers and keeps the active config; an exhausted explicit boundary also does not degrade to a previously dispatched model.
+- Managed state writes now use exclusive sibling temporary files and same-directory atomic rename, preserve existing permissions, and never unlink a valid target before replacement. New managed files are private by default; committed-directory sync failures are reported without claiming that the rename was rolled back. Interrupted journaled reconciliation requires explicit stale-lock repair; locks are never stolen automatically.
+- Explicit allowance-exhaustion evidence now gives the affected model an immediate cooldown for the next fresh Auto or physical turn. The default cooldown can be disabled with `reliability.cooldownOnAllowanceExhausted: false`; existing longer cooldowns and controlled recovery are preserved. Specific structured quota codes and bounded explicit exhaustion wording qualify. Generic HTTP 429 and Pi's ambiguous friendly usage-limit message keep normal rate-limit handling. This remains model-scoped: it does not infer provider/account exhaustion, query live quota, or replay prompts. Concrete prompt-registered classifiers honor known model health in v1 and v2; direct endpoint/native classifier paths are unchanged and do not gain inferred attribution.
+- Auto lifecycle diagnostics use random diagnostic IDs rather than reliability receipt IDs, and log only static categories and bounded metadata. They omit classifier text, raw stderr, URLs, and raw errors. Shutdown flush is bounded and best-effort; new log files use mode `0600` and rotation.
+- Direct TypeSafe and Pi-native classifiers now expose a frozen per-call outcome observation while preserving their existing first two arguments, result, and metrics observer. Auto warns when a concrete classifier attempt falls back, including timeout, authentication, network, confidence, missing credential/catalog, circuit, and total-budget outcomes; the warning names the fallback actually used and still appears with deep debugging disabled. Notices are deduplicated per session and classifier binding, include only verified circuit expiry, and clear after successful recovery. Cache hits, inline routing, caller aborts, and disabled classifier paths do not create false warnings. This adds no requests, retries, routing policy, prompts, raw provider errors, or credentials to logs.
+
+### Deprecated
+- Reliability v1 remains the default and available during this release, and its migration command remains available, but v1 is deprecated. Receipt-owned v2 is recommended only for supported Auto user turns; physical and direct utility workflows still require v1. Before migration, stop other Pi sessions that may write v1 state and ensure the current session has no active or queued generation. The cooperative lock cannot fence older/uncooperative binaries or a stale v1 writer after migration. Any future v1 removal will be announced at least one published release ahead and wait until intended v1-dependent workflows are covered; no removal version or date is set.
+
 ## [0.5.0] - 2026-10-05
 
 ### Added

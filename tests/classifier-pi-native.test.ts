@@ -88,8 +88,9 @@ describe("pi-native classifier transport", () => {
   it("maps a choice answer to a judgment with the resolved catalog model id", async () => {
     const h = harness({ listed: [model()], results: [answer("general", 0.8)] });
     const observations: TypeSafeObservation[] = [];
+    const perCall: TypeSafeObservation[] = [];
     const classify = createPiNativeClassifier({ registry: h.registry, observe: (o) => observations.push(o) });
-    const judgment = await classify(request);
+    const judgment = await classify(request, undefined, (o) => perCall.push(o));
     assert.deepEqual(judgment, {
       tier: "general",
       confidence: 0.8,
@@ -99,7 +100,40 @@ describe("pi-native classifier transport", () => {
     });
     assert.equal(observations[0]?.outcome, "success");
     assert.equal(observations[0]?.model, "typesafe/jev-latest");
+    assert.strictEqual(perCall[0], observations[0]);
     assert.equal(h.listCalls(), 1);
+  });
+
+  it("keeps per-call outcomes isolated across overlapping Pi-native requests", async () => {
+    let classifyCalls = 0;
+    let discoveryCalls = 0;
+    const registry: PiClassifierRegistry = {
+      getModelOfType: () => model(),
+      getAvailableOfType: async () => { discoveryCalls++; return [model()]; },
+      classify: async (_model, context, options) => {
+        classifyCalls++;
+        const state = context.state as { prompt: string };
+        if (state.prompt === "slow prompt") {
+          return new Promise((resolve) => options?.signal?.addEventListener("abort", () => resolve({ ...answer(), stopReason: "aborted" } as ClassifierResult), { once: true }));
+        }
+        return answer();
+      },
+    };
+    const classifier = createPiNativeClassifier({ registry, timeoutMs: 100 });
+    const slow: TypeSafeObservation[] = [];
+    const fast: TypeSafeObservation[] = [];
+    const [slowResult, fastResult] = await Promise.all([
+      classifier({ ...request, prompt: "slow prompt" }, undefined, (value) => slow.push(value)),
+      classifier({ ...request, prompt: "fast prompt" }, undefined, (value) => fast.push(value)),
+    ]);
+    assert.equal(slowResult, undefined);
+    assert.equal(fastResult?.tier, "general");
+    assert.equal(discoveryCalls, 2);
+    assert.equal(classifyCalls, 2);
+    assert.equal(slow.length, 1);
+    assert.equal(slow[0]?.outcome, "timeout");
+    assert.equal(fast.length, 1);
+    assert.equal(fast[0]?.outcome, "success");
   });
 
   it("records resolved model id in the finish trace", async () => {
@@ -149,11 +183,168 @@ describe("pi-native classifier transport", () => {
       },
     };
     const observations: TypeSafeObservation[] = [];
+    const perCall: TypeSafeObservation[] = [];
     const classify = createPiNativeClassifier({ registry, timeoutMs: 100, observe: (o) => observations.push(o) });
     assert.equal(await classify(request), undefined);
     assert.equal(lookupSignal?.aborted, true);
     assert.equal(observations[0]?.outcome, "timeout");
     assert.equal(h.calls(), 0);
+    // A direct per-invocation callback reports the terminal reason even when debug is off.
+    const second = createPiNativeClassifier({ registry, timeoutMs: 100, observe: (o) => observations.push(o) });
+    assert.equal(await second(request, undefined, (o) => perCall.push(o)), undefined);
+    assert.equal(perCall[0]?.outcome, "timeout");
+    assert.strictEqual(perCall[0], observations[1]);
+  });
+
+  it("bounds async provider admission by the classification deadline", async () => {
+    let release!: (allowed: boolean) => void;
+    let classifyCalls = 0;
+    const registry: PiClassifierRegistry = {
+      getModelOfType: () => model(),
+      getAvailableOfType: async () => [model()],
+      classify: async () => { classifyCalls++; return answer(); },
+    };
+    const observations: TypeSafeObservation[] = [];
+    const pending = createPiNativeClassifier({
+      registry,
+      timeoutMs: 100,
+      onProviderSelected: () => new Promise((resolve) => { release = resolve; }),
+      observe: (value) => observations.push(value),
+    })(request);
+    await new Promise((resolve) => setTimeout(resolve, 130));
+    const completedBeforeRelease = await Promise.race([pending.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 10))]);
+    release(true);
+    assert.equal(completedBeforeRelease, true, "deadline should settle while provider admission is still pending");
+    assert.equal(await pending, undefined);
+    assert.equal(observations[0]?.outcome, "timeout");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(classifyCalls, 0, "a late admission result must not start classifier work");
+  });
+
+  it("bounds async provider error recording and does not retry after its deadline", async () => {
+    const rateLimited = { ...answer(), answers: {}, stopReason: "error", errorMessage: "429 rate limit" } as ClassifierResult;
+    let rejectRecording!: (error: Error) => void;
+    let classifyCalls = 0;
+    const registry: PiClassifierRegistry = {
+      getModelOfType: () => model(),
+      getAvailableOfType: async () => [model()],
+      classify: async () => { classifyCalls++; return rateLimited; },
+    };
+    const events: string[] = [];
+    const reliability = {
+      tryClaimTrial: () => ({ allowed: true, claimed: true }),
+      recordFailure: (_key: string, _source: string, reason: string) => events.push(`failure:${reason}`),
+      abandonTrial: () => events.push("abandoned"),
+    } as unknown as ReliabilityStore;
+    const observations: TypeSafeObservation[] = [];
+    const pending = createPiNativeClassifier({
+      registry,
+      timeoutMs: 100,
+      maxAttempts: 3,
+      reliability,
+      onProviderError: () => new Promise((_resolve, reject) => { rejectRecording = reject; }),
+      sleepImpl: async () => {},
+      observe: (value) => observations.push(value),
+    })(request);
+    await new Promise((resolve) => setTimeout(resolve, 130));
+    const completedBeforeRelease = await Promise.race([pending.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 10))]);
+    rejectRecording(new Error("late callback rejection"));
+    assert.equal(completedBeforeRelease, true, "deadline should settle while provider error recording is still pending");
+    assert.equal(await pending, undefined);
+    assert.equal(observations[0]?.outcome, "timeout");
+    assert.deepEqual(events, ["failure:timeout"]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(classifyCalls, 1, "a late callback rejection must not restart provider retries");
+  });
+
+  it("releases the classifier trial when user abort interrupts provider error recording", async () => {
+    const rateLimited = { ...answer(), answers: {}, stopReason: "error", errorMessage: "429 rate limit" } as ClassifierResult;
+    let rejectRecording!: (error: Error) => void;
+    let classifyCalls = 0;
+    const registry: PiClassifierRegistry = {
+      getModelOfType: () => model(),
+      getAvailableOfType: async () => [model()],
+      classify: async () => { classifyCalls++; return rateLimited; },
+    };
+    const events: string[] = [];
+    const reliability = {
+      tryClaimTrial: () => ({ allowed: true, claimed: true }),
+      recordFailure: (_key: string, _source: string, reason: string) => events.push(`failure:${reason}`),
+      abandonTrial: () => events.push("abandoned"),
+    } as unknown as ReliabilityStore;
+    const observations: TypeSafeObservation[] = [];
+    const controller = new AbortController();
+    const pending = createPiNativeClassifier({
+      registry,
+      timeoutMs: 1_000,
+      reliability,
+      onProviderError: () => new Promise((_resolve, reject) => { rejectRecording = reject; }),
+      observe: (value) => observations.push(value),
+    })(request, controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    const completedBeforeRelease = await Promise.race([pending.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 10))]);
+    rejectRecording(new Error("late callback rejection"));
+    assert.equal(await pending, undefined);
+    assert.equal(completedBeforeRelease, true, "user abort should not wait for provider error recording");
+    assert.equal(observations[0]?.outcome, "aborted");
+    assert.deepEqual(events, ["abandoned"]);
+    assert.equal(classifyCalls, 1);
+  });
+
+  it("preserves user abort while async provider admission is pending", async () => {
+    let release!: (allowed: boolean) => void;
+    let classifyCalls = 0;
+    const registry: PiClassifierRegistry = {
+      getModelOfType: () => model(),
+      getAvailableOfType: async () => [model()],
+      classify: async () => { classifyCalls++; return answer(); },
+    };
+    const events: string[] = [];
+    const reliability = {
+      tryClaimTrial: () => ({ allowed: true, claimed: true }),
+      abandonTrial: () => events.push("abandoned"),
+    } as unknown as ReliabilityStore;
+    const observations: TypeSafeObservation[] = [];
+    const controller = new AbortController();
+    const pending = createPiNativeClassifier({
+      registry,
+      timeoutMs: 1_000,
+      reliability,
+      onProviderSelected: () => new Promise((resolve) => { release = resolve; }),
+      observe: (value) => observations.push(value),
+    })(request, controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const completedBeforeRelease = await Promise.race([pending.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 10))]);
+    release(true);
+    assert.equal(await pending, undefined);
+    assert.equal(completedBeforeRelease, true, "user abort should settle while provider admission is still pending");
+    assert.equal(observations[0]?.outcome, "aborted");
+    assert.deepEqual(events, []);
+    assert.equal(classifyCalls, 0);
+  });
+
+  it("isolates throwing metrics and per-call observers from each other and the result", async () => {
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      const h = harness({ listed: [model()], results: [answer()] });
+      const perCall: TypeSafeObservation[] = [];
+      const metricsThrowing = createPiNativeClassifier({ registry: h.registry, observe: () => { throw new Error("metrics failure"); } });
+      assert.equal((await metricsThrowing(request, undefined, (o) => perCall.push(o)))?.tier, "general");
+      assert.equal(perCall[0]?.outcome, "success");
+
+      const h2 = harness({ listed: [model()], results: [answer()] });
+      const metrics: TypeSafeObservation[] = [];
+      const requestObserverThrowing = createPiNativeClassifier({ registry: h2.registry, observe: (o) => metrics.push(o) });
+      assert.equal((await requestObserverThrowing(request, undefined, () => { throw new Error("request observer failure"); }))?.tier, "general");
+      assert.equal(metrics.length, 1);
+      assert.equal(metrics[0]?.outcome, "success");
+    } finally {
+      console.error = originalError;
+    }
   });
 
   it("reports rejected catalog discovery as a measured miss", async () => {
@@ -261,6 +452,42 @@ describe("pi-native classifier transport", () => {
     const classify = createPiNativeClassifier({ registry: h.registry, maxAttempts: 3, sleepImpl: async () => {} });
     const judgment = await classify(request);
     assert.equal(judgment, undefined);
+    assert.equal(h.calls(), 1);
+  });
+
+  it("reports HTTP budget failures with the resolved registry provider", async () => {
+    const error = { ...answer(), answers: {}, stopReason: "error", errorMessage: "HTTP 402 Payment Required" } as ClassifierResult;
+    const h = harness({ listed: [model("huggingface", "deepseek-r1")], results: [error] });
+    const failures: Array<{ provider: string; id: string; errorText?: string }> = [];
+    await createPiNativeClassifier({
+      registry: h.registry,
+      onProviderError: (resolved, errorText) => { failures.push({ provider: resolved.provider, id: resolved.id, errorText }); },
+    })(request);
+    assert.deepEqual(failures, [{ provider: "huggingface", id: "deepseek-r1", errorText: "HTTP 402 Payment Required" }]);
+  });
+
+  it("rechecks provider admission before retrying after a rate limit", async () => {
+    const limited = { ...answer(), answers: {}, stopReason: "error", errorMessage: "429 rate limit" } as ClassifierResult;
+    const h = harness({ listed: [model()], results: [limited, answer()] });
+    const admission: boolean[] = [];
+    const delays: number[] = [];
+    const failures: string[] = [];
+    const classify = createPiNativeClassifier({
+      registry: h.registry,
+      maxAttempts: 3,
+      onProviderSelected: () => {
+        const allowed = admission.length === 0;
+        admission.push(allowed);
+        return allowed;
+      },
+      onProviderError: (_providerModel, errorText) => { if (errorText) failures.push(errorText); },
+      sleepImpl: async (delay) => { delays.push(delay); },
+    });
+
+    assert.equal(await classify(request), undefined);
+    assert.deepEqual(admission, [true, false]);
+    assert.deepEqual(delays, [1_000]);
+    assert.deepEqual(failures, ["429 rate limit"]);
     assert.equal(h.calls(), 1);
   });
 

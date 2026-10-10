@@ -13,14 +13,16 @@ After any edit, run `/bifrost reload` in Pi.
 
 ## Reliability: circuit breaker for flaky models
 
-Adds model health tracking and automatic fallback. Models with repeated failures are skipped temporarily (circuit open). Probes close circuits on success. Add to `.pi/bifrost.json`:
+Adds model health tracking and automatic fallback. Models with repeated failures are skipped temporarily (circuit open). Probes close circuits on success. Merge this valid JSON object into your existing `.pi/bifrost.json`. Keep its current `default` and `models` values. Do not replace the full config with this fragment.
 
 ```json
-"reliability": {
-  "enabled": true,
-  "failureThreshold": 3,
-  "windowMinutes": 5,
-  "cooldownMinutes": 60
+{
+  "reliability": {
+    "enabled": true,
+    "failureThreshold": 3,
+    "windowMinutes": 5,
+    "cooldownMinutes": 60
+  }
 }
 ```
 
@@ -32,6 +34,8 @@ Adds model health tracking and automatic fallback. Models with repeated failures
 - Persists breaker state in `.pi/bifrost-reliability.json`
 
 See full example: `economical-frontier-reliability.json`
+
+The experimental Auto reliability configuration is shown in `reliability-v2-auto.json`. Follow the [setup and migration steps](../docs/guide/reliability-and-cache.md#existing-users-migrate-reliability-state) and prepare the state file before you use this configuration.
 
 Try:
 
@@ -55,6 +59,17 @@ Copy a recipe to `.pi/bifrost.json`, then reload:
 /bifrost reload
 ```
 
+## Reconcile generated model membership
+
+Preview and apply are separate steps. Preview is offline by default; `--refresh` explicitly contacts one provider and still only creates a proposal.
+
+```text
+/bifrost config reconcile --source project --tier general --provider openai --json
+/bifrost config reconcile --source project --tier general --provider openai --apply --proposal <digest> --json
+```
+
+Use `--source user` for the user config layer. Reconciliation edits one source and tier at a time, preserves higher layer overrides, and tracks only exact membership it generated. Handwritten entries stay unowned. See the [command guide](../docs/guide/commands.md#reconcile-generated-model-membership) for freshness, backup, and stale-lock recovery details.
+
 Preview before sending:
 
 ```text
@@ -63,14 +78,32 @@ Preview before sending:
 
 ## Recipes
 
+### `economic-reserve-observe.json`
+
+Starts with a provider-scoped estimate in observe mode. The example includes no balance or remaining allowance. Add a user-entered observation only when you have a current fact, then use `mode: "policy"` only after reviewing `/bifrost inspect` and the configured unknown handling. Pi does not fetch billing data or provide an account-level spend cap.
+
+Try:
+
+```text
+/bifrost inspect
+```
+
+### `economic-billing-preference.json`
+
+Shows an explicit subscription preference between two models with different declared billing classes. The preference-only policy has `admission: []`: it changes strategy ordering only when a fresh preferred-class fact exists among final eligible candidates in the selected tier. It does not restore reserve- or circuit-excluded candidates, cross a tier boundary, or guarantee savings. The example uses static facts only; no adapter or account binding is configured.
+
+The command shows the source alias, period, and freshness without printing quota values.
+
 ### `rules-only-local.json`
 
-Use when prompts must stay local or routing should never make an extra classifier call.
+Use when routing should follow explicit patterns and skip the extra classifier call.
 
 - Disables the LLM classifier.
 - Uses ordered regex rules.
 - Routes complex work to a local frontier tier.
 - Falls back to `economical` when no rule matches.
+
+This setting disables the extra classification call. It does not change which provider receives the generation prompt.
 
 Try:
 
@@ -79,7 +112,7 @@ Try:
 /bifrost preview fix this race condition
 ```
 
-Tradeoff: deterministic and private, but rules only understand patterns you define.
+Tradeoff: routing follows only the patterns you define.
 
 ### `economical-frontier.json`
 
