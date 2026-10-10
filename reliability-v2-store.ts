@@ -5,9 +5,16 @@ import { dirname, resolve } from "node:path";
 import {
   abandonReliabilityV2Dispatch,
   admitReliabilityV2Dispatch,
+  claimReliabilityV2HalfOpenScope,
+  claimReliabilityV2ScopeTrial,
+  clearReliabilityV2ScopeCooldown,
+  clearReliabilityV2ScopeCooldowns,
   emptyReliabilityV2State,
+  importReliabilityV2ProviderAllowance,
   renewReliabilityV2Leases,
   settleReliabilityV2Dispatch,
+  setReliabilityV2ScopeCooldown,
+  settleReliabilityV2ScopeTrial,
   validateReliabilityV2State,
   type ReliabilityV2Admission,
   type ReliabilityV2Config,
@@ -375,7 +382,7 @@ function safeRequest(value: unknown, required: readonly string[], optional: read
       const descriptor = Object.getOwnPropertyDescriptor(record, key);
       if (!descriptor || !("value" in descriptor)) return undefined;
       const item = descriptor.value;
-      if (key === "modelKeys") {
+      if (key === "modelKeys" || key === "cooldownModelKeys") {
         const copied = safeDataArray(item, (entry) => typeof entry === "string");
         if (!copied) return undefined;
         result[key] = copied;
@@ -393,6 +400,33 @@ function safeRequest(value: unknown, required: readonly string[], optional: read
             leaseId: ownData(source, "leaseId"),
             expiresAt: ownData(source, "expiresAt"),
             maxExpiresAt: ownData(source, "maxExpiresAt"),
+          });
+        });
+      } else if (key === "legacyAllowanceMarkers") {
+        const copied = safeDataArray(item, (entry) => {
+          const marker = plainRecord(entry);
+          return !!marker && exactKeys(marker, ["modelKey", "openUntil", "generation", "observedAt"]);
+        });
+        if (!copied) return undefined;
+        result[key] = copied.map((entry) => {
+          const marker = entry as DataRecord;
+          return Object.assign(Object.create(null) as DataRecord, {
+            modelKey: ownData(marker, "modelKey"),
+            openUntil: ownData(marker, "openUntil"),
+            generation: ownData(marker, "generation"),
+            observedAt: ownData(marker, "observedAt"),
+          });
+        });
+      } else if (key === "recoveredScopes") {
+        const copied = safeDataArray(item, (entry) => {
+          const recovered = plainRecord(entry);
+          return !!recovered && exactKeys(recovered, ["modelKey", "generation"]);
+        });
+        if (!copied) return undefined;
+        result[key] = copied.map((entry) => {
+          const source = entry as DataRecord;
+          return Object.assign(Object.create(null) as DataRecord, {
+            modelKey: ownData(source, "modelKey"), generation: ownData(source, "generation"),
           });
         });
       } else if (key === "settlement") {
@@ -516,9 +550,56 @@ export class ReliabilityV2Store {
   }
 
   async admit(requestValue: Omit<ReliabilityV2Admission, "now">): Promise<ReliabilityV2Result> {
-    const request = safeRequest(requestValue, ["ownerToken", "dispatchId", "outcomeId", "modelKeys"]);
+    const request = safeRequest(requestValue, ["ownerToken", "dispatchId", "outcomeId", "modelKeys"], ["legacyAllowanceMarkers"]);
     if (!request) return { status: "invalid", reason: "invalid_admission_request", state: emptyReliabilityV2State() };
     return this.transact((state, now) => admitReliabilityV2Dispatch(state, { ...request, now }, this.config));
+  }
+
+  async claimHalfOpenScope(requestValue: {
+    ownerToken: string;
+    dispatchId: string;
+    outcomeId: string;
+    modelKey: string;
+  }): Promise<ReliabilityV2Result> {
+    const request = safeRequest(requestValue, ["ownerToken", "dispatchId", "outcomeId", "modelKey"]);
+    if (!request) return { status: "invalid", reason: "invalid_half_open_claim", state: emptyReliabilityV2State() };
+    return this.transact((state, now) => claimReliabilityV2HalfOpenScope(state, { ...request, now }, this.config));
+  }
+
+  async claimScopeTrial(requestValue: {
+    ownerToken: string;
+    dispatchId: string;
+    outcomeId: string;
+    modelKey: string;
+    cooldownModelKeys: string[];
+  }): Promise<ReliabilityV2Result> {
+    const request = safeRequest(requestValue, ["ownerToken", "dispatchId", "outcomeId", "modelKey", "cooldownModelKeys"]);
+    if (!request) return { status: "invalid", reason: "invalid_scope_trial_claim", state: emptyReliabilityV2State() };
+    return this.transact((state, now) => claimReliabilityV2ScopeTrial(state, { ...request, now }, this.config));
+  }
+
+  async setScopeCooldown(modelKey: string, openUntil: number): Promise<ReliabilityV2Result> {
+    return this.transact((state, now) => setReliabilityV2ScopeCooldown(
+      state, modelKey, openUntil, this.config, now,
+    ));
+  }
+
+  async importProviderAllowance(providerKey: string, watermarkKey: string, openUntil: number): Promise<ReliabilityV2Result> {
+    return this.transact((state, now) => importReliabilityV2ProviderAllowance(
+      state, providerKey, watermarkKey, openUntil, this.config, now,
+    ));
+  }
+
+  async clearScopeCooldown(modelKey: string): Promise<ReliabilityV2Result> {
+    return this.transact((state, now) => clearReliabilityV2ScopeCooldown(
+      state, modelKey, this.config, now,
+    ));
+  }
+
+  async clearScopeCooldowns(modelKeys: string[], trialKey: string): Promise<ReliabilityV2Result> {
+    return this.transact((state, now) => clearReliabilityV2ScopeCooldowns(
+      state, modelKeys, trialKey, this.config, now,
+    ));
   }
 
   async renew(requestValue: Omit<ReliabilityV2LeaseOperation, "now">): Promise<ReliabilityV2Result> {
@@ -531,6 +612,18 @@ export class ReliabilityV2Store {
     const request = safeRequest(requestValue, ["ownerToken", "dispatchId", "outcomeId", "settlement"]);
     if (!request) return { status: "invalid", reason: "invalid_settle_request", state: emptyReliabilityV2State() };
     return this.transact((state, now) => settleReliabilityV2Dispatch(state, { ...request, now }, this.config));
+  }
+
+  async settleScopeTrial(
+    requestValue: Omit<ReliabilityV2SettleRequest, "now">,
+    recoveredScopes: Array<{ modelKey: string; generation: number }>,
+  ): Promise<ReliabilityV2Result> {
+    const request = safeRequest({ ...requestValue, recoveredScopes }, ["ownerToken", "dispatchId", "outcomeId", "settlement", "recoveredScopes"]);
+    if (!request) return { status: "invalid", reason: "invalid_scope_trial_settlement", state: emptyReliabilityV2State() };
+    const { recoveredScopes: ownedScopes, ...settlementRequest } = request;
+    return this.transact((state, now) => settleReliabilityV2ScopeTrial(
+      state, { ...settlementRequest, now }, ownedScopes, this.config,
+    ));
   }
 
   async abandon(requestValue: Omit<ReliabilityV2LeaseOperation, "now">): Promise<ReliabilityV2Result> {

@@ -38,7 +38,7 @@ async function runAllowanceRuntime({ reloadOptOut = false, failedContent = [], t
     strategy: "first",
     classifier: { enabled: false },
     models: { quick: routeAfterPrepare || reloadAfterPrepare ? ["fixture/allowed", "fixture/alternate"] : ["fixture/allowed"] },
-    reliability: { stateVersion: 2, failureThreshold: 3, windowMinutes: 10, cooldownMinutes: 1 },
+    reliability: { stateVersion: 2, failureThreshold: 3, windowMinutes: 10, cooldownMinutes: 1, allowanceCooldownScope: "model" },
     rules: [],
   } as const;
   const configPath = join(configDir, "bifrost.json");
@@ -437,7 +437,7 @@ describe("reliability v2 registered Auto runtime", () => {
         model: model.id,
         usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
         stopReason: "error",
-        errorMessage: "429 rate limit for secret-user-request-token",
+        errorMessage: "Rate limit for secret-user-request-token",
         timestamp: Date.now(),
       } as const;
       branch.push({ type: "message", id: "assistant-entry", parentId: "user-entry", timestamp: new Date().toISOString(), message: assistant as never });

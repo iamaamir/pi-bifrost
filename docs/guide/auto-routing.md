@@ -41,7 +41,7 @@ flowchart TD
 
 A fallback policy controls what happens when a tier has no eligible model. Legacy configuration can fall back to the configured default tier. Schema version 2 can set an ordered `tierPolicies.<tier>.fallbackTiers` list. An empty list makes that tier a boundary and stops fallback there. Version 2 alone keeps legacy fallback behavior. See [fallback boundaries](configuration.md#explicit-fallback-boundaries-schema-version-2).
 
-When no hard boundary applies, permissive fallback can warn and reuse the last dispatched model. This can include a model on an ordinary failure cooldown. Explicit fallback boundaries, reserve policies, and model-only allowance cooldowns prevent that reuse.
+When no hard boundary applies, permissive fallback can warn and reuse the last dispatched model. This can include a model on an ordinary failure cooldown. Explicit fallback boundaries, reserve policies, and active provider pauses prevent that reuse.
 
 This selection diagram shows tier-based routing. A direct model binding skips tier selection and its strategy. Bifrost still applies normal model eligibility and reliability checks.
 
@@ -114,11 +114,13 @@ Set `affinity.mode` to `off` or `observe` when you want to change Auto retention
 
 ## Recover from one empty allowance failure
 
-Auto can make one attempt on a different configured model after an explicit usage-limit rejection. This recovery is enabled by default when reliability and allowance cooldown are enabled. Set `reliability.retryOnAllowanceExhausted` to `false` to turn it off.
+Auto can make one attempt on a different configured model after an explicit usage or billing rejection. This recovery is enabled by default when reliability and allowance cooldown are enabled. Set `reliability.retryOnAllowanceExhausted` to `false` to turn off the retry. The provider pause still applies.
 
 Pi must prove that every failed attempt from the original user turn was empty and came from the same model. Pi must record a null context edit for each earlier failure. This exact edit omits an empty reply from the next request and keeps it in the transcript. The turn must have no tool calls, tool results, queued messages, aborts, or intervening messages. The session, branch, configuration, and manual-control state must stay unchanged. Pi must finish its own bounded retry first. Unknown or unsafe turns stop without recovery.
 
-Bifrost settles the failed model and saves its model-only cooldown before it rechecks the configured pools. It applies the normal eligibility rules and checks one alternate before dispatch. Bifrost does not send the prompt through `sendUserMessage`, run a classifier or probe for recovery, or infer provider-wide quota state.
+Bifrost saves the applicable model or provider pause before it rechecks the configured pools. By default, usage and billing rejections pause all models with the same configured Pi provider ID. The setting `reliability.allowanceCooldownScope: "model"` limits those pauses to one model. Generic HTTP 429 rate limits remain provider-scoped. Bifrost does not identify shared billing accounts or fetch live usage limits.
+
+Bifrost applies normal eligibility rules before it dispatches one alternate. It does not send the prompt through `sendUserMessage`, run a classifier or probe for recovery, or retry after output or activity. An active provider pause blocks every model with that provider ID, including a pinned model while Bifrost is on. See [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks).
 
 ```mermaid
 sequenceDiagram

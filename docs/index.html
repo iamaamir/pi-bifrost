@@ -131,7 +131,7 @@
               <p class="eyebrow">02 / Persistent failure circuit</p>
               <h2 id="circuit-title">Failed model? Skip it on the next turn.</h2>
               <p>After repeated failures within your configured window, Bifrost opens that model's circuit. It excludes the model from new routing decisions and can choose another healthy model from your list.</p>
-              <p>The circuit survives a restart. After cooldown, one controlled trial checks recovery. With reliability and allowance cooldowns enabled, Auto can make one alternate attempt after Pi proves allowance failures were empty and omitted, with no tool activity. Set <code>reliability.retryOnAllowanceExhausted: false</code> to turn it off.</p>
+              <p>Reliability state survives a restart. Usage or billing rejections pause the configured Pi provider in Auto and physical routing by default. Set <code>reliability.allowanceCooldownScope</code> to <code>model</code> to limit those pauses to one model. A generic HTTP 429 pauses the provider briefly. Auto can make one alternate attempt only after Pi proves the failed turn was empty and safe to continue. Set <code>reliability.retryOnAllowanceExhausted: false</code> to stop the retry but keep the pause. Read the <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/reliability-and-cache.md">reliability guide</a> for scope and timing details.</p>
               <p class="story-fact">This scene shows the third failure with the default threshold, then a separate new user turn. <a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/reliability-and-cache.md#reliability-circuits">See reliability rules</a>.</p>
             </section>
             <section id="classifier" data-demo-scene="classifier" aria-labelledby="classifier-title">
@@ -154,12 +154,12 @@
             </div>
             <section id="physical" class="story-secondary" data-demo-scene="physical" aria-labelledby="physical-title">
               <p class="eyebrow">04 / Default route</p><h2 id="physical-title">Pi switches models before the prompt.</h2>
-              <p>On a fresh install, routing is on by default. When no user config or route file exists, Bifrost builds in-memory pools from Pi's available catalog on the first prompt. A nonempty partial config blocks automatic pools, even if it has one setting. An empty <code>{}</code> config file does not. Physical selection is the default; <code>bifrost/auto</code> is opt-in. Use <code>/bifrost inspect</code> or <code>/bifrost debug</code> to review pools and status without classification or probes.</p>
+              <p>On a fresh install, routing is on by default. Bifrost builds model lists from Pi's catalog and saves a small project <code>.pi/bifrost.json</code> in the background. An empty <code>{}</code> configuration does not block setup. A configuration with one setting, a route file, or an explicit routing setting does. This save sends no probes and writes no prompts or secrets. If a safe save fails, routing continues in memory and Bifrost warns. <code>bifrost/auto</code> remains a separate opt-in. Use <code>/bifrost inspect</code> or <code>/bifrost debug</code> to review lists and status.</p>
               <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/routing-controls.md#what-happens-when-you-send-a-message">See the default route</a>.</p>
             </section>
             <section id="setup" class="story-secondary" data-demo-scene="setup" aria-labelledby="setup-title">
-              <p class="eyebrow">05 / Setup</p><h2 id="setup-title">Save model pools when you need a file.</h2>
-              <p>Init is optional. Run <code>/bifrost init</code> inside Pi to refresh the catalog and save or reconcile model pools. It shows a short summary and asks once before saving, but does not show every model ID or strategy. Inspect and edit the saved config before generation when needed. Pass <code>-f</code> to probe models, which can incur provider usage or rate limits.</p>
+              <p class="eyebrow">05 / Setup</p><h2 id="setup-title">Refresh or review model lists.</h2>
+              <p>First-use setup saves a minimal project config automatically when it is safe. Run <code>/bifrost init</code> to refresh the catalog or reconcile saved model lists. Init shows a short summary and asks once before it saves. The summary omits some model IDs and selection rules. Inspect and edit the saved config before a model answers when needed. Pass <code>-f</code> to probe models. Probes can use provider credits or reach rate limits.</p>
               <p class="story-fact"><a href="https://github.com/iamaamir/pi-bifrost/blob/main/docs/guide/getting-started.md#initialize">Read the init steps and probe limits</a>.</p>
             </section>
             <section id="rules" class="story-secondary" data-demo-scene="rules" aria-labelledby="rules-title">
@@ -324,7 +324,7 @@
               <div>
                 <h3>Install Bifrost</h3>
                 <p>Run this in your shell, then open Pi.</p>
-                <p>On a fresh install with no user config or route file, Bifrost builds pools on the first prompt without init.</p>
+                <p>Bifrost builds model lists and saves a small project config in the background. No init is required.</p>
                 <div class="command">
                   <code>pi install npm:pi-bifrost</code>
                   <button class="copy-button" type="button" data-copy="pi install npm:pi-bifrost">Copy<span class="sr-only"> install command</span></button>
@@ -401,11 +401,12 @@
           <summary>What happens when a model fails?</summary>
           <div class="faq-answer">
             <p>
-              Bifrost records the failure, opens a circuit after the configured
-              threshold, and excludes that model from future routes until a
-              controlled recovery trial. Auto can make one attempt on another
-              configured model after an explicit allowance failure only when Pi
-              proves failed responses were empty and omitted, with no tool activity.
+              Bifrost records model failures and can stop using a model for a
+              time. Usage or billing rejections pause the same configured Pi
+              provider by default in Auto and physical routing. A generic HTTP
+              429 pauses that provider briefly. Auto can make one alternate
+              attempt only after Pi proves the failure was empty and safe to
+              continue. Pins do not bypass a provider pause.
             </p>
           </div>
         </details>

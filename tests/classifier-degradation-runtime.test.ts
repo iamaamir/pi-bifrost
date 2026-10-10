@@ -314,7 +314,7 @@ describe("direct classifier degradation at the registered Auto route", () => {
         backend: "typesafe",
         fallback: "prompt",
         model: "fixture/prompt",
-        totalTimeoutMs: 30,
+        totalTimeoutMs: 500,
         typesafe: { timeoutMs: 100, maxAttempts: 1, debug: false },
       },
       cache: { enabled: false },

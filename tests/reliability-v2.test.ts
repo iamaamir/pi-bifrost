@@ -363,6 +363,33 @@ describe("experimental reliability v2 transitions", () => {
     assert.equal(Object.hasOwn(settled.state.settledOutcomes["outcome-observe"]!.observation!, "outcomeId"), false);
   });
 
+  it("admits only the exact active V2 allowance marker carried through provider-scope migration", () => {
+    const initial = admit(emptyReliabilityV2State(), "dispatch-legacy-quota", "outcome-legacy-quota", "owner-legacy-quota", [modelA], 1);
+    const observation = normalizeFailureObservation({
+      outcomeId: "outcome-legacy-quota", modelKey: modelA, source: "runtime", observedAt: 2,
+      structured: { category: "allowance_exhausted" },
+    }, { now: 2 })!;
+    const opened = settleReliabilityV2Dispatch(initial.state, {
+      ownerToken: "owner-legacy-quota", dispatchId: "dispatch-legacy-quota", outcomeId: "outcome-legacy-quota",
+      settlement: { kind: "failure", observation }, now: 3,
+    }, config);
+    const marker = { modelKey: modelA, openUntil: 13, generation: 1, observedAt: 2 };
+    assert.equal(opened.state.scopes[modelScopeKey(modelA)]?.openUntil, marker.openUntil);
+    const migrated = admitReliabilityV2Dispatch(opened.state, {
+      ownerToken: "owner-after-migration", dispatchId: "dispatch-after-migration", outcomeId: "outcome-after-migration",
+      modelKeys: [modelA], legacyAllowanceMarkers: [marker], now: 4,
+    }, config);
+    assert.equal(migrated.status, "admitted");
+    assert.equal(migrated.leases?.length, 0, "a legacy quota pause is not mistaken for a model half-open trial");
+    assert.equal(migrated.state.scopes[modelScopeKey(modelA)]?.openUntil, marker.openUntil,
+      "admission does not erase or rewrite the source model history");
+    const forged = admitReliabilityV2Dispatch(opened.state, {
+      ownerToken: "owner-forged-marker", dispatchId: "dispatch-forged-marker", outcomeId: "outcome-forged-marker",
+      modelKeys: [modelA], legacyAllowanceMarkers: [{ ...marker, observedAt: 1 }], now: 4,
+    }, config);
+    assert.notEqual(forged.status, "admitted", "an unbound/forged marker cannot bypass the model circuit");
+  });
+
   it("opens immediately for runtime allowance exhaustion, keeps generic 429 at threshold, and honors opt-out", () => {
     const policy = { ...config, failureThreshold: 3, cooldownMs: 60_000 };
     const admitted = admit(emptyReliabilityV2State(), "dispatch-allowance", "outcome-allowance", "owner-allowance", [modelA], 1, policy);
@@ -380,6 +407,19 @@ describe("experimental reliability v2 transitions", () => {
       "a short retry hint cannot shorten the configured minimum cooldown");
     assert.equal(settled.state.settledOutcomes["outcome-allowance"]?.observation?.category, "allowance_exhausted");
     assert.equal(JSON.stringify(settled.state).includes("private usage-limit response"), false);
+
+    const billingAdmitted = admit(emptyReliabilityV2State(), "dispatch-billing", "outcome-billing", "owner-billing", [modelA], 1, policy);
+    const billingDenied = normalizeFailureObservation({
+      outcomeId: "outcome-billing", modelKey: modelA, source: "runtime", observedAt: 2,
+      structured: { httpStatus: 402 },
+    }, { now: 2 })!;
+    const billingSettled = settleReliabilityV2Dispatch(billingAdmitted.state, {
+      ownerToken: "owner-billing", dispatchId: "dispatch-billing", outcomeId: "outcome-billing",
+      settlement: { kind: "failure", observation: billingDenied }, now: 3,
+    }, policy);
+    assert.equal(billingDenied.category, "billing_denied");
+    assert.equal(scope(billingSettled.state).openUntil, 60_003,
+      "HTTP 402 is recorded accurately while receiving the immediate budget-limit circuit policy");
 
     const rateLimitConfig = { ...policy, failureThreshold: 2 };
     const rateAdmitted = admit(emptyReliabilityV2State(), "dispatch-429", "outcome-429", "owner-429", [modelA], 1, rateLimitConfig);

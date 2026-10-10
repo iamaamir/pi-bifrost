@@ -91,15 +91,21 @@ describe("shipped JSON artifacts", () => {
       && item.then?.properties?.schemaVersion?.const === 2));
   });
 
-  it("documents the default-on, model-only allowance cooldown and explicit opt-out", () => {
+  it("documents the default-on provider usage/billing cooldown and explicit opt-out", () => {
     const schema = readJson("schema.json") as {
-      definitions?: { ReliabilityConfig?: { properties?: { cooldownOnAllowanceExhausted?: { type?: string; default?: unknown; description?: string } } } };
+      definitions?: { ReliabilityConfig?: { properties?: {
+        allowanceCooldownScope?: { enum?: unknown[]; default?: unknown };
+        cooldownOnAllowanceExhausted?: { type?: string; default?: unknown; description?: string };
+      } } };
     };
     const property = schema.definitions?.ReliabilityConfig?.properties?.cooldownOnAllowanceExhausted;
+    const scope = schema.definitions?.ReliabilityConfig?.properties?.allowanceCooldownScope;
     assert.equal(property?.type, "boolean");
     assert.equal(property?.default, true);
-    assert.match(String(property?.description), /model-only/);
-    assert.match(String(property?.description), /Generic HTTP 429/);
+    assert.deepEqual(scope?.enum, ["provider", "model"]);
+    assert.equal(scope?.default, "provider");
+    assert.match(String(property?.description), /usage-allowance or billing failure/);
+    assert.match(String(property?.description), /ordinary 429 rate limits use a short provider throttle/);
   });
 
   it("documents the default-on, bounded zero-effect allowance retry and explicit opt-out", () => {

@@ -167,7 +167,7 @@ export function isNormalizedFailureObservation(
     || !scope || scopeKeys.length !== 2 || scopeKind !== "model" || scopeModel !== modelKey || scopeEvidence !== "model-only"
     || scopeKeys.some((key) => key !== "kind" && key !== "modelKey")) return false;
 
-  if (evidence === "http_status" && category !== "rate_limit" && category !== "overload") return false;
+  if (evidence === "http_status" && category !== "rate_limit" && category !== "overload" && category !== "billing_denied") return false;
   if (evidence === "text_heuristic" && (category === "unknown" || category === "activation_failed")) return false;
   if (evidence === "unknown" && category !== "unknown") return false;
   if (!Reflect.ownKeys(observation).includes("retryAt")) return true;
@@ -180,14 +180,20 @@ export function isNormalizedFailureObservation(
 function statusCategory(value: unknown): FailureCategory | undefined {
   if (typeof value !== "number" || !Number.isInteger(value) || value < 100 || value > 599) return undefined;
   if (value === 429) return "rate_limit";
+  if (value === 402) return "billing_denied";
   if (value === 503) return "overload";
   return undefined;
+}
+
+function anchoredHttpStatus(text: string): number | undefined {
+  const match = /^\s*(?:(?:HTTP(?:\/\d(?:\.\d)?)?\s+|status\s*[:=]\s*)(402|429)\b|(402|429)(?:\s|$))/i.exec(text);
+  return match ? Number(match[1] ?? match[2]) : undefined;
 }
 
 function semanticErrorCodeCategory(input: DataRecord): FailureCategory | undefined {
   const error = asDataRecord(ownValue(input, "error"));
   const code = error ? ownValue(error, "code") : undefined;
-  if (code === "usage_limit_reached" || code === "insufficient_quota") return "allowance_exhausted";
+  if (code === "usage_limit_reached" || code === "usage_not_included" || code === "insufficient_quota") return "allowance_exhausted";
   if (code === "rate_limit_exceeded") return "rate_limit";
   return undefined;
 }
@@ -222,7 +228,7 @@ function textFromRawFields(input: DataRecord): string {
 }
 
 function textCategory(text: string): FailureCategory | undefined {
-  if (/quota\s+(?:is\s+)?exhaust|allowance\s+(?:is\s+)?exhaust|usage\s+limit\s+(?:has\s+been\s+)?reached|no\s+remaining\s+credits/.test(text)) return "allowance_exhausted";
+  if (/insufficient[_\s-]+quota|usage[_\s-]+(?:limit[_\s-]+reached|not[_\s-]+included)|quota\s+(?:is\s+)?exhaust|allowance\s+(?:is\s+)?exhaust|usage\s+limit\s+(?:has\s+been\s+)?reached|no\s+remaining\s+credits|credits?\s+(?:are\s+)?exhaust/.test(text)) return "allowance_exhausted";
   if (/authentication|unauthori[sz]ed|invalid\s+api\s+key|credential/.test(text)) return "authentication";
   if (/billing\s+(?:denied|issue|failure)|payment\s+required/.test(text)) return "billing_denied";
   if (/context\s+(?:length|window|limit)|too\s+many\s+tokens/.test(text)) return "context_limit";
@@ -280,12 +286,17 @@ export function normalizeFailureObservation(
   const structured = asDataRecord(ownValue(input, "structured"));
   const structuredCategory = (structured ? categoryValue(ownValue(structured, "category")) : undefined)
     ?? semanticErrorCodeCategory(input);
+  const failureText = textFromRawFields(input);
   const structuredStatus = structured ? statusCategory(ownValue(structured, "httpStatus")) : undefined;
-  const categoryFromText = textCategory(textFromRawFields(input));
-  const category = structuredCategory ?? structuredStatus ?? categoryFromText ?? "unknown";
+  const status = structuredStatus ?? statusCategory(anchoredHttpStatus(failureText));
+  const categoryFromText = textCategory(failureText);
+  const quotaTextOverrides429 = status === "rate_limit" && categoryFromText === "allowance_exhausted";
+  const category = structuredCategory ?? (quotaTextOverrides429 ? categoryFromText : status ?? categoryFromText) ?? "unknown";
   const categoryEvidence: CategoryEvidence = structuredCategory
     ? "structured"
-    : structuredStatus
+    : quotaTextOverrides429
+      ? "text_heuristic"
+    : status
       ? "http_status"
       : categoryFromText
         ? "text_heuristic"

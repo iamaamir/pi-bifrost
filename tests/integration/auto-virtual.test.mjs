@@ -187,7 +187,12 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
           const promptStats = afterPrompt.stats.slice(beforePrompt.stats.length);
           assert.equal(result.code, 0, result.stderr);
           assert.match(result.stdout, /healthy/u);
-          assert.match(result.stderr, /Bifrost loaded 1 listed chat model\(s\) into in-memory pools/u);
+          if (index === 0) {
+            assert.match(result.stderr, /Bifrost loaded 1 listed chat model\(s\) into in-memory pools/u);
+            assert.match(result.stderr, /Bifrost saved the detected starter pools to project config/u);
+          } else {
+            assert.doesNotMatch(result.stderr, /Bifrost loaded .* into in-memory pools/u);
+          }
           assert.match(result.stderr, /Bifrost(?: auto)?: quick → fake\/healthy/u);
           assert.deepEqual(
             promptStats.reduce((counts, item) => ({ ...counts, [item.kind]: (counts[item.kind] ?? 0) + 1 }), {}),
@@ -203,7 +208,15 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
           `the two ordinary ${model} sessions must make exact bounded request counts`,
         );
         assert.equal(existsSync(join(work, "bifrost.json")), false);
-        assert.equal(existsSync(join(work, ".pi", "bifrost.json")), false);
+        const savedConfigPath = join(work, ".pi", "bifrost.json");
+        const ownershipPath = join(work, ".pi", "bifrost-reconcile-ownership.json");
+        assert.equal(existsSync(savedConfigPath), true);
+        assert.equal(existsSync(ownershipPath), true);
+        const savedConfig = JSON.parse(readFileSync(savedConfigPath, "utf8"));
+        assert.equal(savedConfig.default, "quick");
+        assert.deepEqual(savedConfig.models.quick, ["fake/healthy"]);
+        const ownership = JSON.parse(readFileSync(ownershipPath, "utf8"));
+        assert.ok(Object.values(ownership.sources).some((source) => source.generated.quick?.includes("fake/healthy")));
         if (model === "bifrost/auto") {
           assert.deepEqual(JSON.parse(readFileSync(join(work, ".pi", "bifrost-state.json"), "utf8")), {
             enabled: true,

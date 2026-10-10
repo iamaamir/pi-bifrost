@@ -64,7 +64,7 @@ curl -sf "http://127.0.0.1:$port/_stats" >/dev/null || { echo 'FAIL: server died
 
 # ── Scenario 2: quota (429) opens circuit ──
 echo '--- scenario 2: quota ---'
-rm -f "$work/.pi/bifrost-reliability.json"
+rm -f "$work/.pi/bifrost-reliability.json" "$work/.pi/bifrost-provider-reliability.json"
 cat >"$work/bifrost.json" <<'EOF'
 {"enabled":true,"default":"economical","strategy":"cheapest","classifier":{"enabled":false},"reliability":{"failureThreshold":1,"windowMinutes":5,"cooldownMinutes":60},"models":{"economical":["fake/quota","fake/healthy"]},"rules":[{"pattern":"quota","model":"economical"}]}
 EOF
@@ -79,7 +79,7 @@ curl -sf "http://127.0.0.1:$port/_stats" >/dev/null || { echo 'FAIL: server died
 
 # ── Scenario 3: successful request creates no circuit state ──
 echo '--- scenario 3: no false circuit ---'
-rm -f "$work/.pi/bifrost-reliability.json"
+rm -f "$work/.pi/bifrost-reliability.json" "$work/.pi/bifrost-provider-reliability.json"
 cat >"$work/bifrost.json" <<'EOF'
 {"enabled":true,"default":"economical","strategy":"cheapest","classifier":{"enabled":false},"reliability":{"failureThreshold":1,"windowMinutes":5,"cooldownMinutes":60},"models":{"economical":["fake/healthy"]},"rules":[{"pattern":"ok","model":"economical"}]}
 EOF
@@ -95,7 +95,7 @@ echo 'scenario 3: pass'
 
 # ── Scenario 4: runtime mode survives reloads ──
 echo '--- scenario 4: mode persistence across reloads ---'
-rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json"
+rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json" "$work/.pi/bifrost-provider-reliability.json"
 cat >"$work/bifrost.json" <<'EOF'
 {"enabled":true,"default":"economical","strategy":"cheapest","classifier":{"enabled":false},"reliability":{"failureThreshold":1,"windowMinutes":5,"cooldownMinutes":60},"models":{"economical":["fake/healthy"]},"rules":[{"pattern":"ok","model":"economical"}]}
 EOF
@@ -127,7 +127,7 @@ echo 'scenario 4: pass'
 
 # ── Scenario 5: /model picker selects Bifrost Auto and routes a prompt ──
 echo '--- scenario 5: model picker -> bifrost/auto ---'
-rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json"
+rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json" "$work/.pi/bifrost-provider-reliability.json"
 cat >"$work/bifrost.json" <<'EOF'
 {"enabled":true,"default":"economical","strategy":"cheapest","classifier":{"enabled":false},"models":{"economical":["fake/healthy"]},"rules":[{"pattern":"hello","model":"economical"}],"debug":{"enabled":true}}
 EOF
@@ -146,7 +146,7 @@ echo 'scenario 5: pass'
 
 # ── Scenario 6: steer-queued prompts dispatch and settle within one run ──
 echo '--- scenario 6: queued multi-dispatch settlement ---'
-rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json"
+rm -f "$work/.pi/bifrost-state.json" "$work/.pi/bifrost-reliability.json" "$work/.pi/bifrost-provider-reliability.json"
 cat >"$home/.pi/agent/models.json" <<EOF
 {"providers":{"fake":{"baseUrl":"http://127.0.0.1:$port/v1","api":"openai-completions","apiKey":"test","models":[{"id":"healthy","reasoning":false},{"id":"fast","reasoning":false},{"id":"strong","reasoning":false},{"id":"slow","reasoning":false}]}}}
 EOF

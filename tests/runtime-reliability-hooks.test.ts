@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import bifrostExtension from "../index.ts";
+import { createProviderCooldownStore } from "../runtime-reliability-v2.ts";
 import { makeModel } from "./helpers.ts";
 
 type Hook = (event: unknown, ctx: ExtensionContext) => Promise<unknown>;
@@ -30,7 +31,10 @@ function startTrialHarness(freshAllowance = false) {
     default: "restricted",
     strategy: "first",
     classifier: { enabled: false, backend: "prompt" },
-    reliability: { enabled: true, failureThreshold: freshAllowance ? 3 : 1, windowMinutes: 5, cooldownMinutes: 1 },
+    reliability: {
+      enabled: true, failureThreshold: freshAllowance ? 3 : 1, windowMinutes: 5, cooldownMinutes: 1,
+      ...(freshAllowance ? { allowanceCooldownScope: "model" } : {}),
+    },
     models: { restricted: freshAllowance ? [modelKey, "fixture/alternative"] : [modelKey] },
     rules: [{ pattern: "hello", model: "restricted" }],
   }));
@@ -99,6 +103,93 @@ function startTrialHarness(freshAllowance = false) {
 }
 
 describe("reliability settlement through registered Pi hooks", () => {
+  it("blocks legacy fallback when the active provider is paused after a selected model trial is contended", async () => {
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-trial-contention-"));
+    const agentDir = join(cwd, "agent");
+    mkdirSync(agentDir, { recursive: true });
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    const now = Date.now();
+    const active = makeModel("provider-b", "active");
+    const candidate = makeModel("provider-a", "trial");
+    const reliabilityPath = join(cwd, ".pi", "bifrost-reliability.json");
+    writeFileSync(reliabilityPath, JSON.stringify({
+      version: 1,
+      models: { "provider-a/trial": { failures: [now - 1000], openUntil: now - 1 } },
+    }));
+    writeFileSync(join(cwd, "bifrost.json"), JSON.stringify({
+      enabled: true,
+      default: "restricted",
+      strategy: "first",
+      classifier: { enabled: false, backend: "prompt" },
+      reliability: { enabled: true, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 1, allowanceCooldownScope: "model" },
+      models: { restricted: ["provider-a/trial"] },
+      rules: [{ pattern: "hello", model: "restricted" }],
+    }));
+    process.chdir(cwd);
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    const providerStore = createProviderCooldownStore(cwd, { cooldownMinutes: 1, allowanceCooldownScope: "model" });
+    await providerStore.pauseRate("provider-b", now + 60_000, now);
+
+    const inventory: Model<Api>[] = [active, candidate];
+    const handlers = new Map<string, Hook>();
+    let modelSwitches = 0;
+    const createContext = (sessionId: string) => {
+      const branch: unknown[] = [];
+      return {
+        cwd,
+        mode: "rpc",
+        hasUI: false,
+        signal: new AbortController().signal,
+        model: active,
+        modelRegistry: {
+          getAvailable: () => inventory,
+          find: (provider: string, id: string) => inventory.find((model) => model.provider === provider && model.id === id),
+          getProviderAuthStatus: () => ({ configured: false }),
+          getAvailableOfType: async () => [],
+          refresh: async () => ({ refreshed: [], errors: [] }),
+        },
+        sessionManager: { getHeader: () => ({ id: sessionId }), getBranch: () => branch },
+        ui: {},
+      } as unknown as ExtensionContext;
+    };
+    const firstContext = createContext("trial-contention-session-1");
+    const secondContext = createContext("trial-contention-session-2");
+    const pi = {
+      registerVirtualModel: () => {},
+      registerCommand: () => {},
+      on: (event: string, handler: Hook) => { handlers.set(event, handler); return () => {}; },
+      setModel: async (model: Model<Api>) => {
+        modelSwitches += 1;
+        (firstContext as { model: Model<Api> }).model = model;
+        return true;
+      },
+    } as unknown as ExtensionAPI;
+    bifrostExtension(pi);
+
+    try {
+      const input = handlers.get("input")!;
+      const [firstResult, secondResult] = await Promise.all([
+        input({ text: "hello", source: "interactive", streamingBehavior: "steer" }, firstContext),
+        input({ text: "hello", source: "interactive", streamingBehavior: "steer" }, secondContext),
+      ]);
+      const actions = [firstResult, secondResult]
+        .map((value) => (value as { action: string }).action)
+        .sort();
+      assert.deepEqual(actions, ["continue", "handled"],
+        "one request owns the selected model trial; its contended sibling must not fall back onto a paused provider");
+      assert.equal(modelSwitches, 1, "only the trial owner activates the selected model");
+      assert.equal(providerStore.read("provider-b", false).openUntil, now + 60_000,
+        "the active provider remains paused after the selected model's trial contention");
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("does not close a half-open trial for missing, canceled, or unknown assistant outcomes", async () => {
     const abandonedMessages = [
       [],
@@ -130,6 +221,22 @@ describe("reliability settlement through registered Pi hooks", () => {
       assert.deepEqual(record.failures, []);
       assert.equal(record.openUntil, undefined);
       assert.equal(typeof record.lastSuccessAt, "number");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("opens an immediate model-only circuit for a terminal billing denial", async () => {
+    const harness = startTrialHarness(true);
+    try {
+      await harness.run([{
+        role: "assistant", provider: "fixture", model: "trial", stopReason: "error",
+        errorMessage: "HTTP 402 Payment Required",
+      }]);
+      const record = harness.state();
+      assert.equal(record.failures.length, 1);
+      assert.ok(record.openUntil && record.openUntil > Date.now());
+      assert.match(record.lastFailureReason ?? "", /billing_denied/u);
     } finally {
       harness.cleanup();
     }

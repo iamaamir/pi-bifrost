@@ -121,6 +121,20 @@ describe("reliability", () => {
       "the model can re-enter controlled half-open recovery after its cooldown");
   });
 
+  it("opens immediately for a model-bound runtime billing-denied observation", () => {
+    const key = "openai/gpt-5.4";
+    const now = 1_000;
+    const config = { failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60 };
+    const billing = normalizeFailureObservation({
+      outcomeId: "billing-denied", modelKey: key, source: "runtime", observedAt: now,
+      structured: { httpStatus: 402 },
+    }, { now })!;
+    const opened = recordModelFailure(emptyReliabilityState(), key, config, now, "agent_settled", "payment required", billing);
+    assert.equal(opened.models[key]?.openUntil, now + 60 * 60_000);
+    assert.equal(opened.models[key]?.lastFailureReason, "billing_denied:http_status:model-only");
+    assert.equal(hasActiveAllowanceCooldown(opened, key, now), true);
+  });
+
   it("does not promote generic rate limits, unbound observations, or non-runtime sources to immediate cooldowns", () => {
     const key = "openai/gpt-5.4";
     const now = 1_000;

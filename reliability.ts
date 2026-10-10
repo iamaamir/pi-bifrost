@@ -8,7 +8,9 @@ export interface ReliabilityConfig {
   stateVersion?: 1 | 2;
   /** Store only allowlisted failure categories in reliability v2. Disabled by default. */
   observations?: { enabled?: boolean };
-  /** Open a model-only cooldown immediately for a normalized allowance-exhaustion failure. */
+  /** Scope usage-limit cooldowns to the provider by default, or retain the legacy model-only scope. */
+  allowanceCooldownScope?: "provider" | "model";
+  /** Open a cooldown immediately for a normalized allowance-exhaustion failure. */
   cooldownOnAllowanceExhausted?: boolean;
   /** Retry one proven side-effect-free Auto generation on a different configured model after allowance exhaustion. */
   retryOnAllowanceExhausted?: boolean;
@@ -46,6 +48,7 @@ export interface CircuitState {
 export const DEFAULT_RELIABILITY: Required<Omit<ReliabilityConfig, "path" | "stateVersion" | "observations">> = {
   enabled: true,
   cooldownOnAllowanceExhausted: true,
+  allowanceCooldownScope: "provider",
   retryOnAllowanceExhausted: true,
   failureThreshold: 3,
   windowMinutes: 5,
@@ -56,6 +59,7 @@ export function resolveReliabilityConfig(config?: ReliabilityConfig): Required<O
   return {
     enabled: config?.enabled ?? DEFAULT_RELIABILITY.enabled,
     cooldownOnAllowanceExhausted: config?.cooldownOnAllowanceExhausted ?? DEFAULT_RELIABILITY.cooldownOnAllowanceExhausted,
+    allowanceCooldownScope: config?.allowanceCooldownScope ?? DEFAULT_RELIABILITY.allowanceCooldownScope,
     retryOnAllowanceExhausted: config?.retryOnAllowanceExhausted ?? DEFAULT_RELIABILITY.retryOnAllowanceExhausted,
     failureThreshold: config?.failureThreshold ?? DEFAULT_RELIABILITY.failureThreshold,
     windowMinutes: config?.windowMinutes ?? DEFAULT_RELIABILITY.windowMinutes,
@@ -70,7 +74,10 @@ export function hasActiveAllowanceCooldown(state: ReliabilityState, model: strin
   return !!record
     && typeof record.openUntil === "number" && Number.isFinite(record.openUntil) && record.openUntil > now
     && (record.lastFailureReason === "allowance_exhausted:structured:model-only"
-      || record.lastFailureReason === "allowance_exhausted:text_heuristic:model-only");
+      || record.lastFailureReason === "allowance_exhausted:text_heuristic:model-only"
+      || record.lastFailureReason === "billing_denied:http_status:model-only"
+      || record.lastFailureReason === "billing_denied:structured:model-only"
+      || record.lastFailureReason === "billing_denied:text_heuristic:model-only");
 }
 
 export function emptyReliabilityState(): ReliabilityState {
@@ -145,7 +152,7 @@ export function recordModelFailure(
   const normalizedObservation = observation && isNormalizedFailureObservation(observation, { now })
     ? observation : undefined;
   const boundAllowanceObservation = normalizedObservation
-    && normalizedObservation.category === "allowance_exhausted"
+    && (normalizedObservation.category === "allowance_exhausted" || normalizedObservation.category === "billing_denied")
     && normalizedObservation.source === "runtime"
     && normalizedObservation.modelKey === model
     && normalizedObservation.scope.kind === "model"
@@ -165,7 +172,7 @@ export function recordModelFailure(
       ? preserveActiveAllowanceMarker ? Math.max(current.openUntil ?? 0, now + cooldownMs) : now + cooldownMs
       : current.openUntil;
   const storedReason = boundAllowanceObservation && allowanceCooldownUntil !== undefined
-    ? `allowance_exhausted:${boundAllowanceObservation.categoryEvidence}:model-only`
+    ? `${boundAllowanceObservation.category}:${boundAllowanceObservation.categoryEvidence}:model-only`
     : preserveActiveAllowanceMarker ? current.lastFailureReason! : reason;
 
   return {

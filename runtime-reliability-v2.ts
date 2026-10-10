@@ -3,15 +3,21 @@ import { resolveStoragePath } from "./storage.ts";
 import type { ReliabilityConfig } from "./reliability.ts";
 import type { ReliabilityV2Config, ReliabilityV2LeaseReference } from "./reliability-v2.ts";
 import { ReliabilityV2Store } from "./reliability-v2-store.ts";
+import { ProviderCooldownStore } from "./provider-cooldowns.ts";
 import type { FailureObservation } from "./failure-observations.ts";
 
 export const V2_LEASE_TTL_MS = 120_000;
 export const V2_RENEW_INTERVAL_MS = 40_000;
 export const V2_MAX_DISPATCH_LIFETIME_MS = 24 * 60 * 60 * 1000;
 export const V2_STATE_RELATIVE_PATH = ".pi/bifrost-reliability-v2.json";
+export const PROVIDER_STATE_RELATIVE_PATH = ".pi/bifrost-provider-reliability.json";
 
 export function reliabilityV2Path(cwd: string): string {
   return resolveStoragePath(cwd, undefined, V2_STATE_RELATIVE_PATH);
+}
+
+export function providerReliabilityPath(cwd: string): string {
+  return resolveStoragePath(cwd, undefined, PROVIDER_STATE_RELATIVE_PATH);
 }
 
 export function reliabilityV2Config(config?: ReliabilityConfig): ReliabilityV2Config {
@@ -19,7 +25,8 @@ export function reliabilityV2Config(config?: ReliabilityConfig): ReliabilityV2Co
     failureThreshold: config?.failureThreshold ?? 3,
     windowMs: (config?.windowMinutes ?? 5) * 60_000,
     cooldownMs: (config?.cooldownMinutes ?? 60) * 60_000,
-    cooldownOnAllowanceExhausted: config?.cooldownOnAllowanceExhausted ?? true,
+    cooldownOnAllowanceExhausted: config?.allowanceCooldownScope === "model"
+      && config.cooldownOnAllowanceExhausted !== false,
     leaseTtlMs: V2_LEASE_TTL_MS,
     maxDispatchLifetimeMs: V2_MAX_DISPATCH_LIFETIME_MS,
     dedupRetentionMs: V2_MAX_DISPATCH_LIFETIME_MS,
@@ -30,6 +37,20 @@ export function reliabilityV2Config(config?: ReliabilityConfig): ReliabilityV2Co
 
 export function createReliabilityV2Store(cwd: string, config?: ReliabilityConfig): ReliabilityV2Store {
   return new ReliabilityV2Store({ path: reliabilityV2Path(cwd), config: reliabilityV2Config(config), requireInitialized: true });
+}
+
+export function createProviderCooldownStore(cwd: string, config?: ReliabilityConfig): ProviderCooldownStore {
+  // The shared provider sidecar stores cooldown scopes and trial leases only.
+  // Model failure thresholds/windows are irrelevant here, and valid v1 configs
+  // permit values above the v2 store's model-policy bounds.
+  const configuredCooldown = config?.cooldownMinutes ?? 60;
+  const cooldownMinutes = Number.isSafeInteger(configuredCooldown) && configuredCooldown >= 1
+    ? Math.min(configuredCooldown, 1_000_000)
+    : 60;
+  return new ProviderCooldownStore(
+    new ReliabilityV2Store({ path: providerReliabilityPath(cwd), config: reliabilityV2Config({ cooldownMinutes }), requireInitialized: false }),
+    cooldownMinutes * 60_000,
+  );
 }
 
 export type V2ReceiptOutcome = "success" | "failure" | "cancelled" | undefined;
@@ -53,6 +74,7 @@ export interface AutoDispatchReceipt {
   readonly admittedAt: number;
   proofUntil: number;
   leases: ReliabilityV2LeaseReference[];
+  providerTrialClaim?: import("./provider-cooldowns.ts").ProviderTrialClaim;
   outcome: V2ReceiptOutcome;
   failureObservation?: FailureObservation;
   assistantEntryId?: string;

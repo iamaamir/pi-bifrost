@@ -9,6 +9,7 @@
   },
   "reliability": {
     "stateVersion": 2,
+    "allowanceCooldownScope": "provider",
     "failureThreshold": 3,
     "windowMinutes": 5,
     "cooldownMinutes": 60,

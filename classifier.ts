@@ -70,6 +70,8 @@ export interface ClassifierOptions {
   spawnImpl?: typeof spawn;
   /** Test seam for deterministic prompt HTTP cancellation coverage. */
   fetchImpl?: typeof fetch;
+  /** Observe only the status and bounded Retry-After metadata from registry-model responses. */
+  onProviderHttpResponse?: (model: Model<Api>, status: number, retryAfter?: string, errorMessage?: string) => void | Promise<void>;
 }
 
 export function categoryLabel(category: string): string {
@@ -109,11 +111,13 @@ async function classifyWithDirectHttp(
   prompt: string,
   options: ClassifierOptions = {},
   signal?: AbortSignal,
+  onProviderLimitResponse?: () => void,
 ): Promise<string | undefined> {
   const systemPrompt = options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
   const maxTokens = options.maxTokens ?? 20;
   const temperature = options.temperature ?? 0;
   const userPrompt = classificationPrompt(categories, prompt);
+  let providerLimitResponse: { status: number; retryAfter?: string; errorMessage?: string } | undefined;
 
   if (classifierModel.kind === "registry") {
     const stream = ctx.modelRegistry.streamSimple(
@@ -127,9 +131,37 @@ async function classifyWithDirectHttp(
         temperature,
         signal: signal ?? ctx.signal,
         cacheRetention: "none",
+        onResponse: async (response) => {
+          if (response.status === 402 || response.status === 429) {
+            providerLimitResponse = { status: response.status, retryAfter: response.headers["retry-after"]?.slice(0, 128) };
+          } else {
+            providerLimitResponse = undefined;
+          }
+        },
       },
     );
-    const response = await stream.result();
+    let response: Awaited<ReturnType<typeof stream.result>> | undefined;
+    try {
+      response = await stream.result();
+    } catch (error) {
+      if (!providerLimitResponse) throw error;
+    }
+    if (providerLimitResponse && (!response || response.stopReason === "error")) {
+      if (response?.errorMessage) providerLimitResponse.errorMessage = response.errorMessage.slice(0, 1_024);
+      onProviderLimitResponse?.();
+      try {
+        await options.onProviderHttpResponse?.(
+          classifierModel.model,
+          providerLimitResponse.status,
+          providerLimitResponse.retryAfter,
+          providerLimitResponse.errorMessage,
+        );
+      } catch {
+        // Provider observations cannot change classification behavior.
+      }
+      return undefined;
+    }
+    if (!response) return undefined;
     const content = response.content
       .filter((c: { type: string; text?: string }): c is { type: "text"; text: string } => c.type === "text")
       .map((c: { text: string }) => c.text)
@@ -358,6 +390,7 @@ export async function classifyWithLLM(
   const activeSignal = classifierSignal(ctx, signal);
   if (activeSignal?.aborted) return undefined;
   const method = options.method ?? "auto";
+  let providerLimitResponse = false;
 
   if (method === "direct" || method === "auto") {
     const direct = await classifyWithDirectHttp(
@@ -367,9 +400,11 @@ export async function classifyWithLLM(
       prompt,
       options,
       activeSignal,
+      () => { providerLimitResponse = true; },
     );
     if (activeSignal?.aborted) return undefined;
     if (direct) return direct;
+    if (providerLimitResponse) return undefined;
   }
 
   if (activeSignal?.aborted) return undefined;

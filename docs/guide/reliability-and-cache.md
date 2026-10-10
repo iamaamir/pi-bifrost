@@ -18,6 +18,7 @@ After configured repeated failures inside a time window, Bifrost opens that mode
     "enabled": true,
     "cooldownOnAllowanceExhausted": true,
     "retryOnAllowanceExhausted": true,
+    "allowanceCooldownScope": "provider",
     "failureThreshold": 3,
     "windowMinutes": 5,
     "cooldownMinutes": 60
@@ -27,11 +28,17 @@ After configured repeated failures inside a time window, Bifrost opens that mode
 
 Reliability state persists in `.pi/bifrost-reliability.json`. After cooldown, Bifrost may try that model once. Success restores it; failure keeps it excluded longer.
 
-A normalized runtime `allowance_exhausted` result opens that model's circuit immediately by default, even before `failureThreshold` is reached. `cooldownMinutes` is the minimum cooldown and defaults to 60 minutes; a valid future retry hint may extend it, never shorten it. Set `cooldownOnAllowanceExhausted: false` to keep the ordinary repeated-failure threshold instead. Generic HTTP 429 and `rate_limit` results still use `failureThreshold`.
+An `allowance_exhausted` result means a provider reported that usage or credit is exhausted. An HTTP 402 result means billing was denied. It does not prove that the provider account has no credits. By default, both results pause every model with the same configured Pi provider ID. This rule applies to Auto and physical routing.
 
-This signal is model-scoped. Bifrost does not know whether another model shares the same provider account, so it excludes only the reported model and warns that shared scope is unknown. `/bifrost inspect --json` shows the effective setting and allowlisted evidence when available. The warning and debug JSONL event identify the category, evidence kind, and model-only scope; they do not include the provider error text.
+This rule does not identify shared billing accounts. Set `reliability.allowanceCooldownScope` to `model` to limit usage and billing pauses to the reported model.
 
-In Pi Auto, an explicit usage-limit rejection can trigger one attempt on another configured eligible model when reliability and `cooldownOnAllowanceExhausted` are enabled. Bifrost must save the failed model's cooldown before it can safely choose an alternate. Pi must prove every failed response was empty, from the same model, and that its own earlier failures were omitted by exact null context edits. The turn must have no tools, tool results, queued work, or other intervening activity. Bifrost settles the failed model before it selects and admits the alternate. The retry uses the same user turn; empty failures are omitted from the next model request but remain visible in the transcript. Physical routing, direct model bindings, explicit tier prefixes, exhausted explicit fallback boundaries, tool continuations, unsafe turns, and turns with no eligible alternate do not retry. Pi's own bounded retry may run first. Bifrost does not infer provider-wide quota state or run an extra classifier or probe. Set `retryOnAllowanceExhausted: false` to stop after every failure. See [ADR 0023](../adr/0023-bounded-allowance-recovery.md).
+Generic HTTP 429 rate limits remain provider-scoped. A validated retry time can pause that provider for up to five minutes. Without one, the pause is five seconds. These rate-limit pauses do not retry the current prompt. HTTP 5xx responses follow normal model failure handling.
+
+Usage and billing pauses last for `cooldownMinutes`, which defaults to 60. Set `cooldownOnAllowanceExhausted: false` to disable these pauses. Set `retryOnAllowanceExhausted: false` to keep the pause but disable the one Auto retry. `/bifrost reliability` shows active provider pauses and recovery trials. Use `/bifrost reliability reset --provider <id>` to clear one provider pause. The command does not clear model reliability records.
+
+In Pi Auto, an explicit usage or billing rejection can trigger one attempt on another configured model. The pause applies first. Pi must prove that every failed response was empty and came from the same model. Pi must also omit its earlier failed responses from the next request. The turn must have no tool calls, tool results, queued work, or other activity.
+
+Physical routing, direct model bindings, explicit tier prefixes, exhausted fallback boundaries, tool continuations, unsafe turns, and turns with no eligible alternate do not retry. Pi can make its own bounded retry first. Bifrost does not send an extra classifier or probe request for recovery. See [ADR 0023](../adr/0023-bounded-allowance-recovery.md) and [provider pauses](../adr/0024-provider-usage-and-rate-pauses.md).
 
 ## Existing users: migrate reliability state
 
@@ -53,11 +60,11 @@ Current Bifrost saves and migration share a source lock. The command holds that 
 
 If migration stops because a lock is busy, do not remove the lock based only on its age or process ID. The default lock path is `.pi/bifrost-reliability.json.migration.lock`. With a custom `reliability.path`, the lock path is that exact path plus `.migration.lock`. Stop every process that can write the source, then inspect the exact lock file and its owner metadata. A process ID can be reused. Bifrost never removes a lock automatically. Remove only a lock that you have proved is stale. If ownership is uncertain, leave it in place. After you remove a verified stale lock, leave the source and backup unchanged. Restart or reload the old Pi session before using it, so its in-memory reliability state cannot write after migration.
 
-Set `reliability.enabled: false` to stop reliability checks. With it off, Bifrost does not read the migrated state file for routing. Optional `reliability.observations.enabled: true` stores bounded model-level failure categories and times. Raw provider error text is never persisted.
+Set `reliability.enabled: false` to stop reliability checks and provider pause enforcement. This does not erase saved reliability state. With it off, Bifrost does not read the migrated state file for routing. Optional `reliability.observations.enabled: true` stores bounded model-level failure categories and times. Raw provider error text is never persisted.
 
-## Reliability is not quota enforcement
+## Provider pauses are not account checks
 
-A circuit records observed model health. It does not know authoritative provider weekly quota unless Pi or the provider exposes that information.
+A provider pause groups models by the provider ID in Pi configuration. Bifrost does not identify provider accounts or fetch live usage limits.
 
 Current safeguards for quota-sensitive models:
 
@@ -67,7 +74,7 @@ Current safeguards for quota-sensitive models:
 - use deterministic strategies instead of `random` where needed;
 - preview routes before sending consequential work.
 
-Bifrost does not currently provide authoritative provider quota guards.
+These pauses use errors from requests that Pi already sent. They do not provide authoritative quota data or prevent every provider charge.
 
 ## Local classification cache
 

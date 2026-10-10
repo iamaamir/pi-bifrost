@@ -17,6 +17,8 @@
 | `/bifrost inspect` | Show configured model availability, auth presence, and local reliability circuits without routing, classifying, or probing |
 | `/bifrost config reconcile` | Preview exact generated model membership for one selected config source, tier, and provider; apply only with the reviewed digest |
 | `/bifrost reliability migrate` | Prepare migrated reliability state; see the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state) |
+| `/bifrost reliability` | Show active provider pauses and recovery trials |
+| `/bifrost reliability reset` | Clear one provider pause and its trial state with `--provider <exact-id>`. Model reliability records stay unchanged. |
 | `/bifrost cache stats` | Inspect local classification cache |
 | `/bifrost cache clear` | Empty saved local classification-cache entries |
 | `/bifrost classifier` | Choose `prompt`, `typesafe`, or `pi-native`. The Pi-native picker can select a catalog model or use the default |
@@ -30,7 +32,11 @@
 
 `validate` and `inspect` accept a leading `--json` flag. Both commands are read-only: they do not classify, refresh the registry, probe providers, or write reliability state. `inspect` shows local registry/auth/circuit snapshots and the effective affinity mode: Auto defaults to within-tier retention, while physical routing defaults off. It reports the mode source and, when active, the proven Auto anchor's model and age without branch or prompt data. Its “Bifrost last registry refresh age” is the time since this extension last refreshed Pi's registry, not a freshness claim about provider data. JSON mode emits a version-1 `[bifrost-json] ` report line to stderr. The validation report names its source as `loaded-effective-config`; it does not read un-reloaded disk edits.
 
-On a fresh install with no user config or route file, Bifrost can build model pools in memory when the first prompt arrives. Init is optional. Its summary does not show every model ID, strategy, or default tier. After saving, inspect the pools and status. Edit the saved config before generation if needed.
+On first use, when no meaningful configuration, route file, or explicit routing override blocks setup, Bifrost builds model pools and saves a minimal project `.pi/bifrost.json` in the background. An empty `{}` configuration does not block setup. No init is required. Routing continues if the safe save fails, and Bifrost shows a warning. The ownership receipt and configuration are written through a journaled transaction.
+
+Provider usage and billing pauses use Pi's configured provider ID. Bifrost does not identify shared billing accounts. Use `/bifrost reliability` to see active pauses. The reset command accepts only one exact provider ID that Bifrost knows. It stops during an active recovery trial.
+
+Init remains available to refresh the catalog or reconcile model lists. Its summary does not show every model ID, selection rule, or default tier. After init saves, inspect the lists and status. Edit the saved configuration before a model answers if needed.
 
 Init displays its save target. It updates an existing project `.pi/bifrost.json`, workspace `bifrost.json`, or user `~/.pi/agent/bifrost.json` in that order. When none exists, it creates project `.pi/bifrost.json`.
 
@@ -134,7 +140,7 @@ An explicit catalog refresh is network-enabled and can incur provider requests. 
 
 Reconciliation updates only exact model keys owned by its sidecar. Existing manual entries are never adopted as generated membership. Incomplete, stale, or auth-unknown inventory cannot authorize removals. Apply uses a journal and keeps exact backups. `/bifrost config reconcile --recover` resumes or reports a pending journal. If a process crashed while holding a lock, recovery does not steal it: first verify that no Bifrost writer is active, inspect the exact lock files, and remove only locks proven stale before retrying recovery.
 
-On a fresh install, Bifrost builds model pools in memory from Pi's available chat-model catalog. It does this when the first prompt arrives. It does not write configuration or probe models. `/bifrost init` refreshes the catalog and asks once before it saves. It reconciles generated model memberships through the ownership receipt and keeps manual entries and other configuration fields. Use `-f` only when you want to probe models.
+On first use, Bifrost builds model lists from Pi's available chat-model catalog and saves a minimal project config in the background. This save does not probe models or write prompts or secrets. `/bifrost init` refreshes the catalog and asks once before it saves. It reconciles generated model memberships through the ownership receipt and keeps manual entries and other configuration fields. Use `-f` only when you want to probe models.
 
 ### Diagnose unavailable models
 

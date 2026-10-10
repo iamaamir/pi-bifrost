@@ -596,11 +596,15 @@ export function validateConfig(
       && typeof reliabilityRecord.cooldownOnAllowanceExhausted !== "boolean") {
       reliabilityProblem("config.reliability_allowance_cooldown_invalid", "reliability.cooldownOnAllowanceExhausted", "reliability.cooldownOnAllowanceExhausted must be a boolean.");
     }
+    if (reliabilityRecord.allowanceCooldownScope !== undefined
+      && reliabilityRecord.allowanceCooldownScope !== "provider" && reliabilityRecord.allowanceCooldownScope !== "model") {
+      reliabilityProblem("config.reliability_allowance_scope_invalid", "reliability.allowanceCooldownScope", "reliability.allowanceCooldownScope must be provider or model.");
+    }
     if (reliabilityRecord.retryOnAllowanceExhausted !== undefined
       && typeof reliabilityRecord.retryOnAllowanceExhausted !== "boolean") {
       reliabilityProblem("config.reliability_allowance_retry_invalid", "reliability.retryOnAllowanceExhausted", "reliability.retryOnAllowanceExhausted must be a boolean.");
     }
-    const known = new Set(["enabled", "failureThreshold", "windowMinutes", "cooldownMinutes", "path", "stateVersion", "observations", "cooldownOnAllowanceExhausted", "retryOnAllowanceExhausted"]);
+    const known = new Set(["enabled", "failureThreshold", "windowMinutes", "cooldownMinutes", "path", "stateVersion", "observations", "cooldownOnAllowanceExhausted", "allowanceCooldownScope", "retryOnAllowanceExhausted"]);
     if (Object.keys(reliabilityRecord).some((key) => !known.has(key))) {
       issues.push({ severity: "error", code: "config.reliability_unknown_field", path: "reliability", message: "reliability contains an unsupported field." });
     }

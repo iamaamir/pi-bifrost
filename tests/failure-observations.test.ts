@@ -79,8 +79,13 @@ describe("failure observation normalization", () => {
     assert.equal(JSON.stringify(observation).includes(errorText), false);
 
     const generic402 = normalizeFailureObservation({ ...base, structured: { httpStatus: 402 } }, { now: 1000 });
-    assert.equal(generic402?.category, "unknown");
-    assert.equal(generic402?.categoryEvidence, "unknown");
+    assert.equal(generic402?.category, "billing_denied");
+    assert.equal(generic402?.categoryEvidence, "http_status");
+    const bare402 = normalizeFailureObservation({ ...base, errorText: "402" }, { now: 1000 });
+    assert.equal(bare402?.category, "billing_denied");
+    const http402 = normalizeFailureObservation({ ...base, errorText: "HTTP 402 Payment Required" }, { now: 1000 });
+    assert.equal(http402?.category, "billing_denied");
+    assert.equal(http402?.categoryEvidence, "http_status");
     const incidentalCredits = normalizeFailureObservation({
       ...base,
       errorText: "This feature requires credits to use with the selected model",
@@ -122,12 +127,27 @@ describe("failure observation normalization", () => {
       structured: { httpStatus: 429 },
       errorText: "The usage limit has been reached",
     }, { now: 1000 });
-    assert.equal(explicitRateLimit?.category, "rate_limit");
-    assert.equal(explicitRateLimit?.categoryEvidence, "http_status");
+    assert.equal(explicitRateLimit?.category, "allowance_exhausted");
+    assert.equal(explicitRateLimit?.categoryEvidence, "text_heuristic");
 
     const status = normalizeFailureObservation({ ...base, structured: { httpStatus: 429 } }, { now: 1000 });
     assert.equal(status?.category, "rate_limit");
     assert.equal(status?.categoryEvidence, "http_status");
+  });
+
+  it("lets explicit quota codes in Pi-style 429 failures override transient rate-limit status", () => {
+    for (const errorText of [
+      'HTTP 429: {"error":{"code":"insufficient_quota"}}',
+      "429 usage_limit_reached",
+    ]) {
+      const observation = normalizeFailureObservation({ ...base, errorText }, { now: 1000 });
+      assert.equal(observation?.category, "allowance_exhausted");
+      assert.equal(observation?.categoryEvidence, "text_heuristic");
+      assert.equal(JSON.stringify(observation).includes(errorText), false);
+    }
+    const ordinary = normalizeFailureObservation({ ...base, errorText: "HTTP 429 Too Many Requests" }, { now: 1000 });
+    assert.equal(ordinary?.category, "rate_limit");
+    assert.equal(ordinary?.categoryEvidence, "http_status");
   });
 
   it("keeps HTTP 429 and 503 model-scoped and ignores supplied broader scopes", () => {

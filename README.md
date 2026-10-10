@@ -20,7 +20,9 @@ pi install npm:pi-bifrost
 
 Fresh installs route by default. Before Pi sends your message, Bifrost chooses the active model in Pi.
 
-If no user configuration or project route file exists, Bifrost builds temporary model lists from Pi's list for your first prompt. You can send a message without `/bifrost init`. A nonempty partial user configuration blocks this setup. An empty `{}` configuration file does not. Saved settings can change routing. See [Getting started](docs/guide/getting-started.md).
+When no route file or meaningful configuration blocks setup, Bifrost builds model lists from Pi's catalog in the background. It saves a minimal `.pi/bifrost.json` in the background. You do not need to run `/bifrost init`. An empty `{}` file does not block setup. A partial configuration, route file, or explicit routing override does.
+
+The save stores no prompt or secret data. If a safe save cannot finish, routing continues in memory and Bifrost warns you. See [Getting started](docs/guide/getting-started.md).
 
 Select `bifrost/auto` in Pi's `/model` picker to let Bifrost choose which model answers each message. The footer shows Auto and the selected model. Use `/bifrost inspect` or `/bifrost debug` to see model lists and status without a classifier call. Pi's list does not prove a model will work.
 
@@ -81,11 +83,13 @@ The classifier is on by default. The local cache saves earlier routing decisions
 
 To stop using the local cache, add `"cache": { "enabled": false }` inside your existing configuration. Keep its model lists. This stops cache lookups and new classification entries. It does not clear saved entries. `/bifrost cache clear` empties them. If you have no configuration, run `/bifrost init` first. See [reliability and local cache](docs/guide/reliability-and-cache.md).
 
-If a model stops because you reach its usage limit, Auto can try another allowed model once. This is permitted only before the model produces output or uses tools. Pi must also safely remove the empty failed attempt. Otherwise Bifrost stops. See [Auto routing](docs/guide/auto-routing.md#recover-from-one-empty-allowance-failure) for the full limits.
+By default, a usage or billing rejection pauses all models with the same configured Pi provider ID. This applies to Auto and physical routing. It does not identify shared billing accounts. Set `reliability.allowanceCooldownScope` to `model` to limit the pause to one model. See [provider pauses](docs/guide/reliability-and-cache.md#provider-pauses-are-not-account-checks).
+
+Auto can try another allowed model once after a usage or billing rejection. Pi must prove the failed turn was empty and safe to continue. The provider pause still applies when you disable the retry. See [Auto routing](docs/guide/auto-routing.md#recover-from-one-empty-allowance-failure) for the full limits.
 
 Bifrost saves model failures locally and can stop using a model for a time. Bifrost does not fetch live usage limits from model services. See the [reliability guide](docs/guide/reliability-and-cache.md) and its [migration steps](docs/guide/reliability-and-cache.md#existing-users-migrate-reliability-state). Model changes can reduce prompt-cache reuse. Providers control cache use and billing. See [provider prompt caching](docs/guide/prompt-caching.md).
 
-Set `reliability.retryOnAllowanceExhausted` to `false` to turn off the one Auto retry described above.
+Set `reliability.retryOnAllowanceExhausted` to `false` to turn off the one Auto retry. Use `/bifrost reliability` to see active provider pauses. See [all commands](docs/guide/commands.md) for how to reset one provider pause.
 
 ## Advanced
 

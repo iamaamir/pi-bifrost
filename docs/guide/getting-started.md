@@ -55,9 +55,9 @@ flowchart TD
 
 ## Initialize
 
-On a fresh install, routing is on and physical model selection is the default. Bifrost reads Pi's available chat-model catalog in the background when your first prompt arrives. It builds model pools in memory when no user configuration exists or the config file contains only `{}`. It does not probe models or write a file.
+On a fresh install, routing is on and physical model selection is the default. Bifrost reads Pi's available chat-model catalog in the background. If no meaningful user configuration, route file, or explicit routing override blocks setup, Bifrost builds model pools and saves a minimal `.pi/bifrost.json` in the background. An empty `{}` file does not block setup. Bifrost does not probe models or save prompts or secrets. Routing is ready before the save completes. If a safe save cannot finish, routing continues in memory and Bifrost warns you.
 
-You can send a first prompt without running init. A saved config or runtime preference can change the routing state; use `/bifrost debug` to check it. Selecting `bifrost/auto` in Pi's model picker is a separate opt-in. A nonempty user Bifrost config or project route file blocks automatic pool setup. Even one setting is enough. An empty `{}` configuration file does not block setup.
+You can send a first prompt without running init. A saved configuration or runtime preference can change routing; use `/bifrost debug` to inspect it. Selecting `bifrost/auto` in Pi's model picker is a separate opt-in. Any setting in a meaningful configuration blocks automatic pool setup. A project route file or explicit routing override also blocks setup.
 
 To inspect the active pools and local status before sending a prompt, run `/bifrost inspect` or `/bifrost debug`. These commands do not classify or probe. Catalog availability does not confirm that a model is healthy.
 
@@ -74,7 +74,7 @@ The command:
 3. detects a classifier backend and selects an available chat model when prompt classification needs one;
 4. shows the catalog source, save target, membership changes, classifier choice, and uncategorized count, then asks once before it saves.
 
-After saving, inspect the pools and status. Edit the saved configuration before your first generation if you need different pools or strategies, then run `/bifrost reload`.
+After init saves, inspect the pools and status. Edit the saved configuration before your first generation if you need different pools or strategies, then run `/bifrost reload`.
 
 Init updates the first existing destination in this order: project config `.pi/bifrost.json`, workspace config `bifrost.json`, then user config `~/.pi/agent/bifrost.json`. If none exists, it saves project config at `.pi/bifrost.json`. The displayed save target is the one init will update. Init preserves handwritten model entries and other configuration fields when it reconciles generated model memberships.
 
@@ -99,7 +99,7 @@ Add this fragment to `~/.pi/agent/bifrost.json` (all projects) or `.pi/bifrost.j
 }
 ```
 
-Do not replace a complete Bifrost config with this fragment. A user config with only probe settings blocks automatic first-use pools.
+Do not replace a complete Bifrost configuration with this fragment. A user configuration with only probe settings blocks automatic first-use pools.
 
 See [Troubleshooting](troubleshooting.md#lower-probe-pressure) for symptoms and repair.
 

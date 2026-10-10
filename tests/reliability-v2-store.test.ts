@@ -8,6 +8,7 @@ import {
   admitReliabilityV2Dispatch,
   emptyReliabilityV2State,
   modelScopeKey,
+  settleReliabilityV2Dispatch,
   validateReliabilityV2State,
   type ReliabilityV2Config,
   type ReliabilityV2State,
@@ -389,5 +390,42 @@ describe("experimental reliability v2 file transactions", () => {
     assert.equal(settled.status, "settled");
     assert.ok(settled.state.scopes[modelScopeKey("provider/model")]?.openUntil);
     assert.equal(settled.state.settledOutcomes["outcome-allowance"]?.observation, undefined);
+  });
+
+  it("accepts a safely copied legacy allowance marker through the production store", async () => {
+    const directory = tempDirectory();
+    const path = join(directory, "state.json");
+    const markerConfig = { ...config, cooldownMs: 120_000 };
+    const now = Date.now();
+    const initial = admitReliabilityV2Dispatch(emptyReliabilityV2State(), {
+      ownerToken: "owner-legacy", dispatchId: "dispatch-legacy", outcomeId: "outcome-legacy",
+      modelKeys: ["provider/model"], now,
+    }, markerConfig);
+    const observation = normalizeFailureObservation({
+      outcomeId: "outcome-legacy", modelKey: "provider/model", source: "runtime", observedAt: now + 1,
+      structured: { category: "allowance_exhausted" },
+    }, { now: now + 1 })!;
+    const opened = settleReliabilityV2Dispatch(initial.state, {
+      ownerToken: "owner-legacy", dispatchId: "dispatch-legacy", outcomeId: "outcome-legacy",
+      settlement: { kind: "failure", observation }, now: now + 2,
+    }, markerConfig);
+    assert.equal(opened.status, "settled");
+    const scope = opened.state.scopes[modelScopeKey("provider/model")]!;
+    assert.ok(scope.openUntil);
+    writeJsonFile(path, opened.state);
+
+    const store = new ReliabilityV2Store({ path, config: markerConfig, lockTimeoutMs: 1000, lockPollMs: 5 });
+    const marker = {
+      modelKey: "provider/model", openUntil: scope.openUntil!, generation: scope.generation, observedAt: now + 1,
+    };
+    releaseLiveLockSoon(path);
+    const admission = store.admit({
+      ownerToken: "owner-after-import", dispatchId: "dispatch-after-import", outcomeId: "outcome-after-import",
+      modelKeys: ["provider/model"], legacyAllowanceMarkers: [marker],
+    });
+    marker.modelKey = "provider/changed";
+    const result = await admission;
+    assert.equal(result.status, "admitted");
+    assert.equal(result.state.dispatches["dispatch-after-import"]?.scopes[0]?.modelKey, "provider/model");
   });
 });

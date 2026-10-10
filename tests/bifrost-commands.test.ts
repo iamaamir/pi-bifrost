@@ -8,7 +8,9 @@ import { makeModel, makePiClassifierModel, makeRegistry } from "./helpers.ts";
 import { createPipeline } from "../classification-pipeline.ts";
 import { DEFAULT_THRESHOLD, lookupCache, touchCacheEntry, updateCache, type CacheEntry } from "../cache.ts";
 import { reliabilityPath } from "../reliability.ts";
-import { reliabilityV2Path } from "../runtime-reliability-v2.ts";
+import { providerReliabilityPath, reliabilityV2Path } from "../runtime-reliability-v2.ts";
+import { createProviderCooldownStore } from "../runtime-reliability-v2.ts";
+import { emptyReliabilityV2State } from "../reliability-v2.ts";
 import { buildInitOwnershipReceipt } from "../reconciliation-command.ts";
 
 function makeCtx(
@@ -1774,6 +1776,27 @@ describe("route dispatch", () => {
     });
   });
 
+  it("shows provider cooldowns and resets only the exact configured provider", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    state.config.models = { general: ["fixture/model"] };
+    await inTempDir(async () => {
+      const providerCooldownStore = createProviderCooldownStore(process.cwd(), state.config.reliability);
+      Object.assign(state, { providerCooldownStore });
+      await providerCooldownStore.pauseUsage("fixture");
+      await createCommandRouter(state as never)("reliability", ctx as never);
+      assert.ok(calls.some((call) => String(call.value).includes("fixture: paused until")));
+      await createCommandRouter(state as never)("reliability reset --provider other", ctx as never);
+      assert.ok(calls.some((call) => String(call.value).includes("not configured or present in cooldown state")));
+      assert.ok(providerCooldownStore.read("fixture").openUntil);
+      await createCommandRouter(state as never)("reliability reset --provider fixture", ctx as never);
+      assert.ok(calls.some((call) => String(call.value).includes("Provider fixture cooldown was reset")));
+      assert.equal(providerCooldownStore.read("fixture").openUntil, undefined);
+      await createCommandRouter(state as never)("reliability reset --provider *", ctx as never);
+      assert.ok(calls.some((call) => String(call.value).includes("usage: /bifrost reliability reset")));
+    });
+  });
+
   it("rejects an invalid tier policy reload and retains the last-good routing state", async () => {
     const { ctx, calls } = makeCtx();
     const state = makeState();
@@ -2037,11 +2060,13 @@ describe("dashboard menu", () => {
       // a hint this parser does not understand fails loudly here rather than
       // silently yielding a value that is not in the registry.
       const head = match[1];
-      const hintAt = head.search(/[[<]/);
-      const command = hintAt === -1 ? head : head.slice(0, hintAt).trimEnd();
-      assert.ok(command.length > 0, `no command value in row: ${row}`);
-      if (hintAt !== -1) {
-        assert.match(head.slice(hintAt), /^(?:\[[^\]]*\] ?|<[^>]*> ?)+$/, `malformed hint: ${row}`);
+      const command = BIFROST_COMMAND_OPTIONS.map((item) => item.value)
+        .sort((left, right) => right.length - left.length)
+        .find((value) => head === value || head.startsWith(`${value} `));
+      assert.ok(command, `no command value in row: ${row}`);
+      const hint = head.slice(command.length).trim();
+      if (hint) {
+        assert.match(hint, /^(?:\[[^\]]*\]|--[\w-]+|<[^>]*>)(?: (?:\[[^\]]*\]|--[\w-]+|<[^>]*>))*$/, `malformed hint: ${row}`);
       }
       return command;
     };
@@ -2093,8 +2118,8 @@ describe("dashboard menu", () => {
     }
   });
 
-  it("offers 22 rows", async () => {
-    assert.equal((await rowsFor()).length, 22);
+  it("offers 24 rows", async () => {
+    assert.equal((await rowsFor()).length, 24);
   });
 
   it("keeps the top row actionable in every state combination", async () => {
@@ -2304,7 +2329,9 @@ describe("diagnostics commands", () => {
     assert.equal(report.registry.knownModelCount, 1);
     assert.equal(report.registry.availableModelCount, 1);
     assert.equal(report.registry.bifrostLastRefreshAgeMs >= 0, true);
-    assert.deepEqual(report.reliabilityPolicy, { enabled: true, cooldownOnAllowanceExhausted: true });
+    assert.deepEqual(report.reliabilityPolicy, {
+      enabled: true, cooldownOnAllowanceExhausted: true, allowanceCooldownScope: "provider",
+    });
     assert.deepEqual(report.tiers[0].candidates[0], {
       model: "fixture/known", available: true, auth: "configured", circuit: "open", openUntil: h.reliability.models["fixture/known"].openUntil,
     });
@@ -2312,6 +2339,66 @@ describe("diagnostics commands", () => {
     assert.equal(JSON.stringify(report).includes("PRIVATE_LABEL_SENTINEL"), false);
     assert.equal(JSON.stringify(h.reliability), before);
     assert.deepEqual(h.counters(), { registryReads: 2, networkCalls: 0, writes: 0 });
+  });
+
+  it("projects provider cooldowns into inspect for v1 and v2 without writing or refreshing", async () => {
+    const h = diagnosticHarness();
+    const modelKey = "fixture/known";
+    h.reliability.models[modelKey] = { failures: [], openUntil: 0 };
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-inspect-provider-cooldown-"));
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    const providerStore = createProviderCooldownStore(cwd, {
+      enabled: true,
+      cooldownMinutes: 1,
+      allowanceCooldownScope: "provider",
+    });
+    (h.state as any).providerCooldownStore = providerStore;
+    try {
+      await providerStore.pauseUsage("fixture");
+      const providerPath = providerReliabilityPath(cwd);
+      const sidecarBefore = readFileSync(providerPath);
+      const inspect = async () => {
+        const lines = await withStubs(() => createCommandRouter(h.state as never)("inspect --json", h.context as never));
+        return JSON.parse(lines.find((line) => line.startsWith(BIFROST_JSON_PREFIX))!.slice(BIFROST_JSON_PREFIX.length));
+      };
+      const v1 = await inspect();
+      assert.equal(v1.tiers[0].candidates[0].circuit, "open",
+        "v1 inspection should project provider usage pause onto configured candidates");
+      assert.ok(v1.tiers[0].candidates[0].openUntil > Date.now());
+
+      const mutableState = h.state as any;
+      mutableState.config.reliability.stateVersion = 2;
+      mutableState.reliabilityV2Store = { readSnapshot: () => emptyReliabilityV2State() };
+      const v2 = await inspect();
+      assert.equal(v2.tiers[0].candidates[0].circuit, "open",
+        "v2 model projection should retain the shared provider cooldown projection");
+
+      mutableState.config.reliability.cooldownOnAllowanceExhausted = false;
+      const optedOut = await inspect();
+      assert.equal(optedOut.tiers[0].candidates[0].circuit, "closed",
+        "usage pause projection must respect the cooldown opt-out");
+      mutableState.config.reliability.cooldownOnAllowanceExhausted = true;
+      mutableState.config.reliability.allowanceCooldownScope = "model";
+      const modelScope = await inspect();
+      assert.equal(modelScope.tiers[0].candidates[0].circuit, "closed",
+        "provider usage pauses must not project when scope is model-only");
+      mutableState.config.reliability.allowanceCooldownScope = "provider";
+      mutableState.config.reliability.enabled = false;
+      const disabled = await inspect();
+      assert.equal(disabled.tiers[0].candidates[0].circuit, "disabled",
+        "disabled reliability must suppress provider pause projection");
+      mutableState.config.reliability.enabled = true;
+      mutableState.enabled = false;
+      const routerOff = await inspect();
+      assert.equal(routerOff.tiers[0].candidates[0].circuit, "closed",
+        "disabled Bifrost routing must suppress provider pause projection");
+
+      assert.deepEqual(h.counters(), { registryReads: 16, networkCalls: 0, writes: 0 });
+      assert.deepEqual(readFileSync(providerPath), sidecarBefore,
+        "inspection must only read provider cooldown state");
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 
   it("adds reserve freshness to inspect without exposing allowance values", async () => {
@@ -2374,7 +2461,7 @@ describe("diagnostics commands", () => {
     })).join("\n");
     assert.match(output, /loaded effective config \(run \/bifrost reload after editing files\)/);
     assert.match(output, /Bifrost last registry refresh age:/);
-    assert.match(output, /allowance cooldown=on \(model-only\)/);
+    assert.match(output, /usage\/billing cooldown=on \(provider scope\)/);
     assert.doesNotMatch(output, /provider data freshness/i);
     assert.doesNotMatch(output, /PRIVATE_(?:AUTH|LABEL)_SENTINEL/);
   });

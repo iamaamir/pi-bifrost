@@ -128,7 +128,9 @@ describe("offline diagnostics", () => {
       now,
     });
     const projection = report.tiers[0]?.candidates[0];
-    assert.deepEqual(report.reliabilityPolicy, { enabled: true, cooldownOnAllowanceExhausted: true });
+    assert.deepEqual(report.reliabilityPolicy, {
+      enabled: true, cooldownOnAllowanceExhausted: true, allowanceCooldownScope: "provider",
+    });
     assert.equal(projection?.circuit, "open");
     assert.deepEqual(projection?.failureEvidence, {
       category: "allowance_exhausted", evidence: "structured", scope: "model-only",

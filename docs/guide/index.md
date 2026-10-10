@@ -2,7 +2,7 @@
 
 Pi-Bifrost is a configuration-first model router for [Pi](https://pi.dev). It resolves a configured tier for a user prompt, filters unhealthy candidates, and applies that tier's model-selection strategy. Physical selection before generation is the default. If you select `bifrost/auto`, Pi dispatches the physical model per request instead.
 
-New to Bifrost? Start with [Install and initialize](getting-started.md). Init is optional on a fresh install. The guide explains in-memory first-use pools, the physical-model default, classifier privacy, and how to review saved pools before generation.
+New to Bifrost? Start with [Install and initialize](getting-started.md). Init is optional on a fresh install. The guide explains first-use model lists, the physical-model default, classifier privacy, and how to review saved lists before generation.
 
 ## Start here
 
@@ -57,8 +57,8 @@ Optional classifiers, including TypeSafe/Jev and Pi-native, choose a tier. They 
 ## Product boundaries
 
 - Bifrost uses Pi's real provider/model. In Auto, Pi shows the virtual selection and dispatched physical model together.
-- Automatic retries are limited to one explicit allowance failure after Pi proves the initial Auto generation had no output or tool activity; see [the recovery boundary](reliability-and-cache.md#reliability-circuits).
-- Reliability circuits protect future turns; they are not provider quota guards.
+- Automatic retries are limited to one usage or billing rejection after Pi proves the initial Auto generation had no output or tool activity; see [the recovery boundary](reliability-and-cache.md#reliability-circuits).
+- Reliability state records model failures. Usage and billing errors pause models that use the same configured provider ID by default. Bifrost does not identify provider accounts or fetch live usage limits. See [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks).
 - Provider prompt caches remain controlled by Pi's provider integration and each provider.
 - Adaptive routing may trade prompt-cache locality for per-turn task fit. It cannot guarantee better results, lower cost, lower latency, or cache savings.
 - `/bifrost pin` is a session-local hard lock. Use it when continuity or one exact model matters more than per-message routing. A tier name at the start of a message is ignored while pinned.

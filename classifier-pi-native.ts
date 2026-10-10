@@ -47,11 +47,13 @@ export interface PiNativeOptions {
   readonly maxAttempts?: number;
   readonly minConfidence?: number;
   readonly reliability?: ReliabilityStore;
+  readonly onProviderSelected?: (model: { provider: string; id: string }) => boolean | Promise<boolean>;
   readonly debug?: boolean;
   readonly sleepImpl?: (ms: number) => Promise<void>;
   /** True when no TypeSafe credential resolves. Selects the empty-catalog error text. */
   readonly credentialMissing?: () => boolean;
   readonly observe?: (observation: TypeSafeObservation) => void;
+  readonly onProviderError?: (model: { provider: string; id: string }, errorMessage?: string) => void | Promise<void>;
 }
 
 type ResolvedClassifierModel = { readonly model: ClassifierModel<ClassifierApi>; readonly id: string };
@@ -243,6 +245,17 @@ export function createPiNativeClassifier(options: PiNativeOptions) {
         return finish(resolved === "missing_credential" ? "missing_key" : "missing_catalog");
       }
       resolvedModelId = resolved.id;
+      const providerAvailable = async (): Promise<boolean> => {
+        try {
+          return !options.onProviderSelected || await options.onProviderSelected(resolved.model);
+        } catch {
+          return false;
+        }
+      };
+      if (!await providerAvailable()) {
+        trace("provider_circuit_open", { provider: resolved.model.provider });
+        return finish("circuit_open");
+      }
       key = `classifier/${CLASSIFIER_BACKEND_IDS.piNative}/${resolved.id}`;
       if (options.reliability) {
         const claim = options.reliability.tryClaimTrial(key);
@@ -266,6 +279,12 @@ export function createPiNativeClassifier(options: PiNativeOptions) {
       let failure: TypeSafeOutcome = "network";
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         if (signal?.aborted) return finish("aborted");
+        if (attempt > 1 && !await providerAvailable()) {
+          if (trialClaimed) options.reliability?.abandonTrial(key);
+          trialClaimed = false;
+          trace("provider_circuit_open", { provider: resolved.model.provider, attempt });
+          return finish("circuit_open");
+        }
         attempts = attempt;
         const remaining = deadline - performance.now();
         trace("attempt", { attempt, model: resolved.id, remaining_ms: Math.max(0, Math.round(remaining)) });
@@ -312,6 +331,11 @@ export function createPiNativeClassifier(options: PiNativeOptions) {
 
         const policy = errorPolicy(result?.errorMessage, !result);
         failure = policy.outcome;
+        try {
+          await options.onProviderError?.(resolved.model, result?.errorMessage);
+        } catch {
+          // Provider pause recording is handled by the enclosing router; classifier fallback remains bounded.
+        }
         trace("error", { attempt, stop_reason: result?.stopReason, outcome: failure, retryable: policy.retry });
         if (!policy.retry) {
           if (failure === "auth") {

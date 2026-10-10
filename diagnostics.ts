@@ -83,6 +83,7 @@ export interface InspectDiagnosticsReport {
   readonly reliabilityPolicy: {
     readonly enabled: boolean;
     readonly cooldownOnAllowanceExhausted: boolean;
+    readonly allowanceCooldownScope: "provider" | "model";
   };
   readonly diagnostics: readonly BifrostDiagnostic[];
 }
@@ -311,6 +312,7 @@ export function inspectDiagnostics(input: InspectDiagnosticsInput): InspectDiagn
     reliabilityPolicy: {
       enabled: input.config.reliability?.enabled !== false,
       cooldownOnAllowanceExhausted: input.config.reliability?.cooldownOnAllowanceExhausted ?? true,
+      allowanceCooldownScope: input.config.reliability?.allowanceCooldownScope ?? "provider",
     },
     diagnostics,
   };

@@ -248,9 +248,13 @@ describe("validateConfig", () => {
     assert.ok(errors[0].message.includes("integer"));
   });
 
-  it("accepts the default-on model-only allowance cooldown and rejects non-boolean overrides", () => {
+  it("accepts provider-scoped allowance cooldowns and the model-only opt-out", () => {
     assert.equal(validateConfig({ ...baseConfig, reliability: {} }).some((issue) => issue.code === "config.reliability_allowance_cooldown_invalid"), false);
     assert.equal(validateConfig({ ...baseConfig, reliability: { cooldownOnAllowanceExhausted: false } }).some((issue) => issue.code === "config.reliability_allowance_cooldown_invalid"), false);
+    assert.equal(validateConfig({ ...baseConfig, reliability: { allowanceCooldownScope: "provider" } }).some((issue) => issue.code === "config.reliability_allowance_scope_invalid"), false);
+    assert.equal(validateConfig({ ...baseConfig, reliability: { allowanceCooldownScope: "model" } }).some((issue) => issue.code === "config.reliability_allowance_scope_invalid"), false);
+    assert.ok(validateConfig({ ...baseConfig, reliability: { allowanceCooldownScope: "account" } as never })
+      .some((issue) => issue.code === "config.reliability_allowance_scope_invalid"));
     assert.ok(validateConfig({
       ...baseConfig,
       reliability: { cooldownOnAllowanceExhausted: "yes" } as never,

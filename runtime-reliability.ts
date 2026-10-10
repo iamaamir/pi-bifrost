@@ -111,7 +111,8 @@ export class RuntimeReliabilityTracker {
         let failureObservation: FailureObservation | undefined;
         try {
           const candidate = classifyFailure?.(model, last);
-          if (candidate?.modelKey === model && candidate.category === "allowance_exhausted"
+          if (candidate?.modelKey === model
+            && (candidate.category === "allowance_exhausted" || candidate.category === "billing_denied")
             && candidate.source === "runtime" && candidate.scope.kind === "model"
             && candidate.scope.modelKey === model) failureObservation = candidate;
         } catch { /* failure classification cannot change host settlement */ }

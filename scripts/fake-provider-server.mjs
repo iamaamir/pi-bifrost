@@ -30,8 +30,9 @@ const server = http.createServer((request, response) => {
     attempts.set(model, attempt);
     const classifierRequest = JSON.stringify(payload.messages ?? [])
       .includes("Classify the request into exactly one category.");
-    stats.push({ model, attempt, kind: classifierRequest ? "classifier" : "generation" });
-    if (model === "usage-exhausted" || model === "usage-exhausted-alternate") return json(response, 429, { error: { message: "The usage limit has been reached. Please try again later." } });
+    const provider = request.headers.authorization === "Bearer ui-fixture-backup-only" ? "fake-backup" : "fake";
+    stats.push({ provider, model, attempt, kind: classifierRequest ? "classifier" : "generation" });
+    if (model === "usage-exhausted" || model === "usage-exhausted-alternate") return json(response, 429, { error: { code: "usage_limit_reached", message: "The usage limit has been reached. Please try again later." } });
     if (model === "quota") return json(response, 429, { error: { message: "quota exhausted" } }, { "retry-after": "1" });
     if (model === "fail") return json(response, 500, { error: { message: "simulated provider failure" } });
     if (model === "fail-then-ok" && attempt === 1) return json(response, 500, { error: { message: "simulated transient failure" } });

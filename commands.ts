@@ -27,8 +27,10 @@ import {
 import type { ReliabilityStore } from "./reliability-store.ts";
 import type { ReliabilityV2Store } from "./reliability-v2-store.ts";
 import { ReliabilityV2StoreError } from "./reliability-v2-store.ts";
+import type { ProviderCooldownStore } from "./provider-cooldowns.ts";
+import { projectProviderCooldownsForRouting, providerScopeModelKey } from "./provider-cooldowns.ts";
 import { emptyReliabilityState, getCircuitState, hasActiveAllowanceCooldown } from "./reliability.ts";
-import { createReliabilityV2Store, reliabilityV2Config, reliabilityV2Path } from "./runtime-reliability-v2.ts";
+import { createProviderCooldownStore, createReliabilityV2Store, reliabilityV2Config, reliabilityV2Path } from "./runtime-reliability-v2.ts";
 import { projectReliabilityV2ForRouting } from "./reliability-v2-routing.ts";
 import { classifierMetricsEnabled, type ClassifierMetricsState, type ClassifierMetricsStore } from "./classifier-metrics.ts";
 import type { EffectiveBackend } from "./classifier-detection.ts";
@@ -81,12 +83,13 @@ export interface BifrostState {
   cacheEntries: CacheEntry[];
   reliabilityStore: ReliabilityStore;
   reliabilityV2Store?: ReliabilityV2Store;
+  providerCooldownStore?: ProviderCooldownStore;
   configGeneration?: number;
   /** True when this session generated model memberships from Pi's startup catalog without writing config. */
   bootstrapModelsInMemory?: boolean;
   reliabilityV2ConfigValid?: boolean;
   reliabilityV2StateError?: string;
-  onConfigInstalled?: (config: BifrostConfig, previousConfig: BifrostConfig) => void;
+  onConfigInstalled?: (config: BifrostConfig, previousConfig: BifrostConfig, validatedReload?: boolean) => void;
   onManualControl?: (session: object, action?: "on" | "off" | "pin" | "unpin") => void;
   /** Read-only projection of the current branch-local successful Auto anchor. */
   getAffinityAnchor?: (ctx: ExtensionContext) => AffinityAnchor | undefined;
@@ -112,6 +115,7 @@ function installConfigIfTierPoliciesValid(
   state: BifrostState,
   config: BifrostConfig,
   ctx: ExtensionContext,
+  validatedReload = false,
 ): boolean {
   const errors = validateTierPolicyConfig(config).filter((issue) => issue.severity === "error");
   errors.push(...validateConfig(config).filter((issue) => issue.severity === "error"
@@ -139,7 +143,7 @@ function installConfigIfTierPoliciesValid(
   state.economicPolicyValid = validateEconomicConfig(config).every((issue) => issue.severity !== "error");
   state.economicDiagnostics = reconciled.diagnostics;
   state.economicQuarantinedSourceRevisions = reconciled.quarantinedSourceRevisions;
-  state.onConfigInstalled?.(config, previousConfig);
+  state.onConfigInstalled?.(config, previousConfig, validatedReload);
   state.invalidatePipeline();
   return true;
 }
@@ -154,7 +158,7 @@ function installReloadedConfig(
     log(ctx, `Bifrost config reload rejected: ${loaded.diagnostics.map(({ message }) => message).join(" ")}`, "error");
     return false;
   }
-  return installConfigIfTierPoliciesValid(state, loaded.config, ctx);
+  return installConfigIfTierPoliciesValid(state, loaded.config, ctx, true);
 }
 
 export function log(
@@ -340,11 +344,23 @@ function resolveTierDisplay(
     modeSource: affinityMode.source,
     ...(anchor ? { anchor } : {}),
   };
+  let reliabilityState = state.reliabilityStore.getState();
+  if (state.enabled && state.config.reliability?.enabled !== false && state.providerCooldownStore) {
+    const registryModels = typeof ctx.modelRegistry.getAll === "function"
+      ? ctx.modelRegistry.getAll() : ctx.modelRegistry.getAvailable();
+    reliabilityState = projectProviderCooldownsForRouting(
+      reliabilityState,
+      state.providerCooldownStore,
+      registryModels,
+      state.config.reliability?.cooldownOnAllowanceExhausted !== false
+        && state.config.reliability?.allowanceCooldownScope !== "model",
+    );
+  }
   const { options, resolution: resolved } = resolveConfiguredTier(
     ctx,
     tier,
     state.config,
-    state.reliabilityStore.getState(),
+    reliabilityState,
     state.config.reliability,
     undefined,
     state.config.economics && state.economicPolicyValid && state.economicPolicy && state.economicSnapshot
@@ -1609,6 +1625,8 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "validate", description: "Validate loaded config and model references", argumentHint: "[--json]", menu: "common" },
   { value: "inspect", description: "Inspect configured models and local health", argumentHint: "[--json]", menu: "common" },
   { value: "config reconcile", description: "Preview or apply exact generated model membership", argumentHint: "[flags]" },
+  { value: "reliability", description: "Show provider cooldowns" },
+  { value: "reliability reset", description: "Clear one provider cooldown", argumentHint: "--provider <provider-id>" },
   { value: "reliability migrate", description: "Prepare receipt-owned reliability v2", argumentHint: "[--fresh]" },
   // Everything else, in declaration order.
   { value: "cache stats", description: "Show classification cache" },
@@ -1660,8 +1678,59 @@ function parseDiagnosticJsonFlag(args: string, command: "validate" | "inspect"):
 
 async function handleReliabilityCommand(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
   const rest = args.trim().slice("reliability".length).trim();
+  if (!rest) {
+    try {
+      const store = state.providerCooldownStore ?? createProviderCooldownStore(process.cwd(), state.config.reliability);
+      const paused = store.list();
+      if (paused.length === 0) {
+        log(ctx, "No provider cooldowns or recovery trials are active.");
+        return;
+      }
+      log(ctx, ["Provider cooldowns:", ...paused.map((item) =>
+        `  ${item.providerId}: ${item.openUntil === undefined ? "cooldown expired" : `paused until ${new Date(item.openUntil).toISOString()}`}${item.trialActive ? "; recovery trial active" : item.recoveryPending ? "; recovery trial available" : ""}`),
+      ].join("\n"));
+    } catch {
+      log(ctx, "Provider cooldown state is invalid or unavailable; inspect the project .pi provider reliability sidecar.", "error");
+    }
+    return;
+  }
+  if (rest.startsWith("reset ")) {
+    const match = /^reset\s+--provider\s+([A-Za-z0-9][A-Za-z0-9._:+@-]{0,200})$/u.exec(rest);
+    if (!match) {
+      log(ctx, "usage: /bifrost reliability reset --provider <provider-id>", "warning");
+      return;
+    }
+    const providerId = match[1]!;
+    let knownProviders = new Set<string>();
+    try {
+      for (const model of ctx.modelRegistry.getAll()) knownProviders.add(model.provider);
+    } catch { /* configured provider IDs remain available below */ }
+    for (const tiers of Object.values(state.config.models ?? {})) {
+      for (const key of tiers ?? []) knownProviders.add(key.slice(0, key.indexOf("/")));
+    }
+    if (state.config.default) {
+      for (const key of state.config.models?.[state.config.default] ?? []) knownProviders.add(key.slice(0, key.indexOf("/")));
+    }
+    try { providerScopeModelKey("usage", providerId); }
+    catch { log(ctx, "Provider ID is outside the supported reliability namespace.", "warning"); return; }
+    let store: ProviderCooldownStore;
+    try {
+      store = state.providerCooldownStore ?? createProviderCooldownStore(process.cwd(), state.config.reliability);
+      if (!knownProviders.has(providerId) && !store.list().some((item) => item.providerId === providerId)) {
+        log(ctx, `Provider ${providerId} is not configured or present in cooldown state; nothing was reset.`, "warning");
+        return;
+      }
+      const result = await store.reset(providerId);
+      log(ctx, result === "trial_active"
+        ? `Provider ${providerId} has an active recovery trial; cooldown reset was stopped.`
+        : result === "reset" ? `Provider ${providerId} cooldown was reset.` : `Provider ${providerId} has no active cooldown.`);
+    } catch {
+      log(ctx, `Provider ${providerId} cooldown could not be reset; provider state was left unchanged.`, "error");
+    }
+    return;
+  }
   if (rest !== "migrate" && rest !== "migrate --fresh") {
-    log(ctx, "usage: /bifrost reliability migrate [--fresh]", "warning");
+    log(ctx, "usage: /bifrost reliability [reset --provider <provider-id> | migrate [--fresh]]", "warning");
     return;
   }
   const stateVersion = state.config.reliability?.stateVersion;
@@ -1893,7 +1962,7 @@ function renderDiagnosticLines(report: ValidateDiagnosticsReport | (InspectDiagn
   } else {
     lines.push(`observed: ${formatDiagnosticTimestamp(report.observedAt)}`);
     lines.push(`registry: ${report.registry.knownModelCount} known, ${report.registry.availableModelCount} available`);
-    lines.push(`reliability policy: ${report.reliabilityPolicy.enabled ? "enabled" : "disabled"}; allowance cooldown=${report.reliabilityPolicy.cooldownOnAllowanceExhausted ? "on" : "off"} (model-only)`);
+    lines.push(`reliability policy: ${report.reliabilityPolicy.enabled ? "enabled" : "disabled"}; usage/billing cooldown=${report.reliabilityPolicy.cooldownOnAllowanceExhausted ? "on" : "off"} (${report.reliabilityPolicy.allowanceCooldownScope} scope); provider rate-limit throttles=on`);
     if (report.registry.bifrostLastRefreshAgeMs !== undefined) {
       lines.push(`Bifrost last registry refresh age: ${report.registry.bifrostLastRefreshAgeMs} ms`);
     }
@@ -1958,6 +2027,19 @@ async function handleDiagnosticsCommand(
     try {
       reliabilityState = projectReliabilityV2ForRouting(state.reliabilityV2Store.readSnapshot(), reliabilityV2Config(state.config.reliability), Date.now());
     } catch { /* unavailable evidence is reported separately; do not fabricate a health snapshot */ }
+  }
+  if (command === "inspect" && state.enabled && state.config.reliability?.enabled !== false && state.providerCooldownStore) {
+    try {
+      const registryModels = typeof ctx.modelRegistry.getAll === "function"
+        ? ctx.modelRegistry.getAll() : ctx.modelRegistry.getAvailable();
+      reliabilityState = projectProviderCooldownsForRouting(
+        reliabilityState,
+        state.providerCooldownStore,
+        registryModels,
+        state.config.reliability?.cooldownOnAllowanceExhausted !== false
+          && state.config.reliability?.allowanceCooldownScope !== "model",
+      );
+    } catch { /* provider state is local-only; an unreadable sidecar adds no health evidence */ }
   }
   const affinityEvidence = command === "inspect" ? inspectAffinity(state, ctx) : undefined;
   const report = command === "validate"

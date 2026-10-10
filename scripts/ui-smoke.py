@@ -411,11 +411,28 @@ def wait_for_model_attempts(port: int, before: dict[str, int], models: tuple[str
     raise TimeoutError(f"expected bounded fake-provider requests were not observed for {', '.join(models)}")
 
 
+def wait_for_provider_request(port: int, provider: str, model: str, timeout: float = 25.0) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            requests = fake_stats(port).get("stats", [])
+            if isinstance(requests, list) and any(
+                isinstance(request, dict) and request.get("provider") == provider and request.get("model") == model
+                for request in requests
+            ):
+                return
+        except (OSError, urllib.error.URLError, ValueError):
+            pass
+        time.sleep(0.1)
+    raise TimeoutError(f"expected request to {provider}/{model} was not observed")
+
+
 def write_agent_fixture(
     agent_dir: Path,
     port: int,
     model_inventory: Iterable[str] = (),
     only_models: Iterable[str] | None = None,
+    backup_provider: bool = False,
 ) -> None:
     agent_dir.mkdir(parents=True, exist_ok=True)
     available = list(only_models) if only_models is not None else ["usage-exhausted", "healthy", "classifier", *model_inventory]
@@ -428,6 +445,12 @@ def write_agent_fixture(
                 "apiKey": "ui-fixture-only",
                 "models": models,
             },
+            **({"fake-backup": {
+                "baseUrl": f"http://127.0.0.1:{port}/v1",
+                "api": "openai-completions",
+                "apiKey": "ui-fixture-backup-only",
+                "models": [{"id": "healthy", "reasoning": False}],
+            }} if backup_provider else {}),
         },
     }) + "\n")
     (agent_dir / "settings.json").write_text('{"retry":{"enabled":false}}\n')
@@ -566,7 +589,7 @@ def capture(
     home = workspace / "isolated-home"
     agent_dir = home / ".pi" / "agent"
     assert FAKE_PORT is not None
-    write_agent_fixture(agent_dir, FAKE_PORT, model_inventory, only_models)
+    write_agent_fixture(agent_dir, FAKE_PORT, model_inventory, only_models, name == "allowance-recovery")
     if name in ("fresh-physical", "fresh-auto"):
         assert_fake_only_inventory(home, workspace, agent_dir, FAKE_PORT)
 
@@ -613,8 +636,9 @@ def capture(
             wait_for_model_attempts(
                 FAKE_PORT,
                 {key: int(value) for key, value in attempts_before.items() if isinstance(value, int)},
-                ("usage-exhausted", "healthy"),
+                ("usage-exhausted",),
             )
+            wait_for_provider_request(FAKE_PORT, "fake-backup", "healthy")
         if name == "auto-large-pool":
             wait_for_model_attempts(FAKE_PORT, attempts_before, ("pool-000",))
             stats = fake_stats(FAKE_PORT)
@@ -627,8 +651,32 @@ def capture(
             wait_for_model_attempts(FAKE_PORT, attempts_before, ("healthy",))
         if name in ("fresh-physical", "fresh-auto"):
             wait_for_model_attempts(FAKE_PORT, attempts_before, ("healthy",))
-            if (workspace / "bifrost.json").exists() or (workspace / ".pi" / "bifrost.json").exists():
-                raise AssertionError("fresh background setup must stay in memory until the user saves")
+            if (workspace / "bifrost.json").exists():
+                raise AssertionError("fresh background setup wrote workspace config instead of project config")
+            config_path = workspace / ".pi" / "bifrost.json"
+            ownership_path = workspace / ".pi" / "bifrost-reconcile-ownership.json"
+            if not config_path.is_file() or not ownership_path.is_file():
+                raise AssertionError("fresh background setup did not persist project config and ownership receipt")
+            saved = json.loads(config_path.read_text())
+            if set(saved) - {"schemaVersion", "default", "models", "classifier"}:
+                raise AssertionError("fresh background setup copied unrelated or sensitive config fields")
+            if saved.get("default") not in saved.get("models", {}):
+                raise AssertionError("fresh background config default does not name a saved tier")
+            memberships = [model for values in saved.get("models", {}).values() for model in values]
+            if "fake/healthy" not in memberships:
+                raise AssertionError("fresh background config did not save the catalog model")
+            classifier = saved.get("classifier", {})
+            if set(classifier) - {"model", "method"}:
+                raise AssertionError("fresh background config copied unrelated classifier fields")
+            receipt = json.loads(ownership_path.read_text())
+            generated = [
+                model
+                for source in receipt.get("sources", {}).values()
+                for models in source.get("generated", {}).values()
+                for model in models
+            ]
+            if sorted(generated) != sorted(memberships):
+                raise AssertionError("fresh background ownership receipt does not match saved generated memberships")
             first_run = " ".join((log_path.read_text(errors="ignore") if log_path.exists() else "").split()).lower()
             if "save bifrost setup?" in first_run or "choose classifier" in first_run or "select classifier" in first_run:
                 raise AssertionError("fresh first prompt unexpectedly opened an init or classifier picker")
@@ -730,7 +778,7 @@ def main() -> int:
                 "strategy": "first",
                 "categoryStrategies": {"general": "first"},
                 "classifier": {"enabled": False},
-                "models": {"general": ["fake/usage-exhausted", "fake/healthy"]},
+                "models": {"general": ["fake/usage-exhausted", "fake-backup/healthy"]},
             },
         ),
         ("dashboard", True, [(1.0, "/bifrost\r")]),
@@ -739,7 +787,7 @@ def main() -> int:
         (
             "inspect-reserve",
             True,
-            [(0.5, "/bifrost inspect\r")],
+            [(0.5, "/bifrost inspect\r"), (0.5, "jjjjjj")],
             {
                 "schemaVersion": 2,
                 "economics": {
@@ -852,9 +900,9 @@ def main() -> int:
                     raise AssertionError("classifier degradation UI did not show the primary failure and actual prompt fallback")
             if name == "allowance-recovery":
                 recovery_text = (OUT / "allowance-recovery.txt").read_text(errors="ignore").lower()
-                if "retrying once with fake/healthy" not in recovery_text:
+                if "retrying once with fake-backup/healthy" not in recovery_text:
                     raise AssertionError("allowance recovery UI did not show the alternate model action")
-                if "fake/healthy" not in recovery_text or "healthy" not in recovery_text:
+                if "fake-backup/healthy" not in recovery_text or "healthy" not in recovery_text:
                     raise AssertionError("allowance recovery UI did not show the resulting model response or active model")
                 if "(bifrost) auto" not in recovery_text or "→ healthy" not in recovery_text:
                     raise AssertionError("allowance recovery UI did not restore the Auto footer to the successful alternate model")

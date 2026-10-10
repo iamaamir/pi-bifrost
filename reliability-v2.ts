@@ -103,7 +103,15 @@ export interface ReliabilityV2Admission {
   dispatchId: string;
   outcomeId: string;
   modelKeys: readonly string[];
+  legacyAllowanceMarkers?: readonly ReliabilityV2LegacyAllowanceMarker[];
   now: number;
+}
+
+export interface ReliabilityV2LegacyAllowanceMarker {
+  modelKey: string;
+  openUntil: number;
+  generation: number;
+  observedAt: number;
 }
 
 export interface ReliabilityV2LeaseOperation {
@@ -294,6 +302,159 @@ export function emptyReliabilityV2State(): ReliabilityV2State {
 export function modelScopeKey(key: string): string {
   if (!modelKey(key)) throw new Error("Invalid model key");
   return `model:${key.length}:${key}`;
+}
+
+/** Opens a content-free scope and invalidates any in-flight lease. */
+export function setReliabilityV2ScopeCooldown(
+  stateValue: unknown,
+  key: string,
+  openUntil: number,
+  configValue: unknown,
+  now: number,
+): ReliabilityV2Result {
+  const checked = validation(stateValue, configValue, now);
+  if (!checked || !modelKey(key) || !timestamp(openUntil) || openUntil <= now) {
+    return noChange("invalid", "invalid_scope_cooldown", checked?.state);
+  }
+  const scopeKey = modelScopeKey(key);
+  const current = checked.state.scopes[scopeKey] ?? { generation: 0, failures: [] };
+  const generation = increment(current.generation);
+  if (generation === undefined) return noChange("overflow", "scope_generation_overflow", checked.state);
+  const next = cloneState(checked.state);
+  next.scopes[scopeKey] = {
+    generation,
+    failures: [...current.failures],
+    openUntil: Math.max(current.openUntil ?? 0, openUntil),
+    ...(current.cooldownMultiplier === undefined ? {} : { cooldownMultiplier: current.cooldownMultiplier }),
+  };
+  const committed = commit(next);
+  return committed ? { status: "settled", state: committed } : noChange("overflow", "revision_overflow", checked.state);
+}
+
+/** Imports one active legacy allowance pause and its permanent content-free watermark atomically. */
+export function importReliabilityV2ProviderAllowance(
+  stateValue: unknown,
+  providerKey: string,
+  watermarkKey: string,
+  openUntil: number,
+  configValue: unknown,
+  now: number,
+): ReliabilityV2Result {
+  const checked = validation(stateValue, configValue, now);
+  if (!checked || !modelKey(providerKey) || !modelKey(watermarkKey) || !timestamp(openUntil) || openUntil <= now) {
+    return noChange("invalid", "invalid_provider_allowance_import", checked?.state);
+  }
+  const watermarkScopeKey = modelScopeKey(watermarkKey);
+  if (checked.state.scopes[watermarkScopeKey]) return noChange("settled", "already_imported", checked.state);
+
+  const next = cloneState(checked.state);
+  const pauseScopeKey = modelScopeKey(providerKey);
+  const current = next.scopes[pauseScopeKey] ?? { generation: 0, failures: [] };
+  const generation = increment(current.generation);
+  if (generation === undefined) return noChange("overflow", "scope_generation_overflow", checked.state);
+  next.scopes[pauseScopeKey] = {
+    generation,
+    failures: [...current.failures],
+    openUntil: Math.max(current.openUntil ?? 0, openUntil),
+    ...(current.cooldownMultiplier === undefined ? {} : { cooldownMultiplier: current.cooldownMultiplier }),
+  };
+  next.scopes[watermarkScopeKey] = { generation: 0, failures: [], openUntil: MAX_TIMESTAMP };
+  const committed = commit(next);
+  return committed ? { status: "settled", state: committed, reason: "imported" }
+    : noChange("overflow", "revision_overflow", checked.state);
+}
+
+/** Clears a scope only when no live half-open dispatch owns it. */
+export function clearReliabilityV2ScopeCooldown(
+  stateValue: unknown,
+  key: string,
+  configValue: unknown,
+  now: number,
+): ReliabilityV2Result {
+  const checked = validation(stateValue, configValue, now);
+  if (!checked || !modelKey(key)) return noChange("invalid", "invalid_scope_reset", checked?.state);
+  const scopeKey = modelScopeKey(key);
+  const current = checked.state.scopes[scopeKey];
+  if (!current) return noChange("settled", "already_clear", checked.state);
+  if (current.lease && current.lease.expiresAt > now && current.lease.generation === current.generation) {
+    return noChange("blocked", "trial_active", checked.state);
+  }
+  const generation = increment(current.generation);
+  if (generation === undefined) return noChange("overflow", "scope_generation_overflow", checked.state);
+  const next = cloneState(checked.state);
+  next.scopes[scopeKey] = { generation, failures: [...current.failures] };
+  const committed = commit(next);
+  return committed ? { status: "settled", state: committed } : noChange("overflow", "revision_overflow", checked.state);
+}
+
+/** Clears related scopes together so reset cannot race a half-open provider trial. */
+export function clearReliabilityV2ScopeCooldowns(
+  stateValue: unknown,
+  keys: readonly string[],
+  trialKey: string,
+  configValue: unknown,
+  now: number,
+): ReliabilityV2Result {
+  const checked = validation(stateValue, configValue, now);
+  if (!checked || keys.length === 0 || !keys.every(modelKey) || !modelKey(trialKey)) {
+    return noChange("invalid", "invalid_scope_reset", checked?.state);
+  }
+  const trial = checked.state.scopes[modelScopeKey(trialKey)];
+  if (trial?.lease && trial.lease.generation === trial.generation && trial.lease.expiresAt > checked.now) {
+    return noChange("blocked", "trial_active", checked.state);
+  }
+  const next = cloneState(checked.state);
+  let changed = false;
+  for (const key of [...keys, trialKey]) {
+    const scopeKey = modelScopeKey(key);
+    const current = next.scopes[scopeKey];
+    if (!current) continue;
+    const generation = increment(current.generation);
+    if (generation === undefined) return noChange("overflow", "scope_generation_overflow", checked.state);
+    next.scopes[scopeKey] = { generation, failures: [...current.failures] };
+    changed ||= current.openUntil !== undefined || current.lease !== undefined || current.failures.length > 0;
+  }
+  if (!changed) return noChange("settled", "already_clear", checked.state);
+  const committed = commit(next);
+  return committed ? { status: "settled", state: committed } : noChange("overflow", "revision_overflow", checked.state);
+}
+
+/** Settles a provider trial and clears only the unchanged expired pause generations it recovered. */
+export function settleReliabilityV2ScopeTrial(
+  stateValue: unknown,
+  requestValue: unknown,
+  recoveredScopesValue: unknown,
+  configValue: unknown,
+): ReliabilityV2Result {
+  const request = requestRecord(requestValue, ["ownerToken", "dispatchId", "outcomeId", "settlement", "now"]);
+  const recoveredScopes = safeArray(recoveredScopesValue);
+  const config = isConfig(configValue) ? configValue : undefined;
+  const checked = request && config ? validation(stateValue, config, ownValue(request, "now")) : undefined;
+  if (!request || !checked || !recoveredScopes || !recoveredScopes.every((item) => {
+    const record = plainRecord(item);
+    return !!record && hasOnlyKeys(record, ["modelKey", "generation"])
+      && modelKey(ownValue(record, "modelKey")) && safeInteger(ownValue(record, "generation"));
+  })) return noChange("invalid", "invalid_scope_trial_settlement", checked?.state);
+  const settled = settleReliabilityV2Dispatch(checked.state, request, checked.config);
+  if (settled.status !== "settled" && settled.status !== "duplicate") return settled;
+  const next = cloneState(settled.state);
+  let changed = settled.state !== checked.state;
+  for (const item of recoveredScopes) {
+    const record = plainRecord(item)!;
+    const key = ownValue(record, "modelKey") as string;
+    const generation = ownValue(record, "generation") as number;
+    const scopeKey = modelScopeKey(key);
+    const current = next.scopes[scopeKey];
+    if (!current || current.generation !== generation || current.openUntil === undefined || current.openUntil > checked.now) continue;
+    const nextGeneration = increment(current.generation);
+    if (nextGeneration === undefined) return noChange("overflow", "scope_generation_overflow", checked.state);
+    next.scopes[scopeKey] = { generation: nextGeneration, failures: [...current.failures] };
+    changed = true;
+  }
+  if (!changed) return settled;
+  const committed = commit(next);
+  return committed ? { status: settled.status, state: committed, ...(settled.reason ? { reason: settled.reason } : {}) }
+    : noChange("overflow", "revision_overflow", checked.state);
 }
 
 function validLease(value: unknown): value is ReliabilityV2Lease {
@@ -622,7 +783,7 @@ export function admitReliabilityV2Dispatch(
   requestValue: unknown,
   configValue: unknown,
 ): ReliabilityV2Result {
-  const request = requestRecord(requestValue, ["ownerToken", "dispatchId", "outcomeId", "modelKeys", "now"]);
+  const request = requestRecord(requestValue, ["ownerToken", "dispatchId", "outcomeId", "modelKeys", "now"], ["legacyAllowanceMarkers"]);
   const config = isConfig(configValue) ? configValue : undefined;
   const now = request ? ownValue(request, "now") : undefined;
   const checked = config && validation(stateValue, config, now);
@@ -631,9 +792,30 @@ export function admitReliabilityV2Dispatch(
   const dispatchId = ownValue(request, "dispatchId");
   const outcomeId = ownValue(request, "outcomeId");
   const models = safeArray(ownValue(request, "modelKeys"));
-  if (!opaqueId(ownerToken) || !opaqueId(dispatchId) || !opaqueId(outcomeId) || !models || models.length === 0 || !models.every(modelKey)) {
+  const legacyMarkersValue = ownValue(request, "legacyAllowanceMarkers");
+  const legacyMarkers = legacyMarkersValue === undefined ? [] : safeArray(legacyMarkersValue);
+  if (!opaqueId(ownerToken) || !opaqueId(dispatchId) || !opaqueId(outcomeId) || !models || models.length === 0 || !models.every(modelKey)
+    || !legacyMarkers || !legacyMarkers.every((value) => {
+      const marker = plainRecord(value);
+      if (!marker || !hasOnlyKeys(marker, ["modelKey", "openUntil", "generation", "observedAt"])) return false;
+      const markerModel = ownValue(marker, "modelKey");
+      const markerOpenUntil = ownValue(marker, "openUntil");
+      const markerGeneration = ownValue(marker, "generation");
+      const markerObservedAt = ownValue(marker, "observedAt");
+      if (!modelKey(markerModel) || !models.includes(markerModel) || !timestamp(markerOpenUntil) || markerOpenUntil <= checked.now
+        || !safeInteger(markerGeneration) || !timestamp(markerObservedAt)) return false;
+      const current = checked.state.scopes[modelScopeKey(markerModel)];
+      if (!current || current.generation !== markerGeneration || current.openUntil !== markerOpenUntil) return false;
+      return Object.entries(checked.state.settledOutcomes).some(([id, outcome]) => outcome.expiresAt > checked.now
+        && outcome.observation?.modelKey === markerModel
+        && outcome.observation.observedAt === markerObservedAt
+        && outcome.observation.source === "runtime"
+        && (outcome.observation.category === "allowance_exhausted" || outcome.observation.category === "billing_denied")
+        && validObservationSummary(outcome.observation, id, checked.now));
+    })) {
     return noChange("invalid", "invalid_admission_identity_or_models", checked.state);
   }
+  const ignoredSet = new Set(legacyMarkers.map((marker) => (marker as ReliabilityV2LegacyAllowanceMarker).modelKey));
   const keys = models.map((key) => modelScopeKey(key));
   if (new Set(keys).size !== keys.length) return noChange("invalid", "duplicate_model_scope", checked.state);
 
@@ -650,11 +832,12 @@ export function admitReliabilityV2Dispatch(
   for (let index = 0; index < models.length; index += 1) {
     const key = keys[index]!;
     const current = next.scopes[key] ?? { generation: 0, failures: [] };
-    if (current.openUntil !== undefined && current.openUntil > checked.now) {
+    const ignoredActiveCooldown = ignoredSet.has(models[index]!);
+    if (!ignoredActiveCooldown && current.openUntil !== undefined && current.openUntil > checked.now) {
       blockedModels.push({ key, reason: "open" });
       continue;
     }
-    const halfOpen = current.openUntil !== undefined && current.openUntil <= checked.now;
+    const halfOpen = !ignoredActiveCooldown && current.openUntil !== undefined && current.openUntil <= checked.now;
     if (halfOpen && current.lease && current.lease.generation === current.generation && current.lease.expiresAt > checked.now) {
       blockedModels.push({ key, reason: "lease_owned" });
       continue;
@@ -687,6 +870,90 @@ export function admitReliabilityV2Dispatch(
   const proofUntil = maxExpiresAt;
   next.dispatches[dispatchId] = {
     ownerToken, dispatchId, outcomeId, admittedAt: checked.now, proofUntil, scopes,
+  };
+  const committed = commit(next);
+  return committed
+    ? { status: "admitted", state: committed, leases: leaseReferences(next.dispatches[dispatchId]!) }
+    : noChange("overflow", "revision_overflow", checked.state);
+}
+
+/** Claims a single trial only for an expired scope; healthy scopes create no receipt. */
+export function claimReliabilityV2HalfOpenScope(
+  stateValue: unknown,
+  requestValue: unknown,
+  configValue: unknown,
+): ReliabilityV2Result {
+  const request = requestRecord(requestValue, ["ownerToken", "dispatchId", "outcomeId", "modelKey", "now"]);
+  const config = isConfig(configValue) ? configValue : undefined;
+  const checked = request && config ? validation(stateValue, config, ownValue(request, "now")) : undefined;
+  const key = request ? ownValue(request, "modelKey") : undefined;
+  if (!request || !checked || !opaqueId(ownValue(request, "ownerToken"))
+    || !opaqueId(ownValue(request, "dispatchId")) || !opaqueId(ownValue(request, "outcomeId")) || !modelKey(key)) {
+    return noChange("invalid", "invalid_half_open_claim", checked?.state);
+  }
+  const scope = checked.state.scopes[modelScopeKey(key)];
+  if (scope?.openUntil === undefined) return noChange("admitted", "healthy", checked.state);
+  if (scope.openUntil > checked.now) return noChange("blocked", "scope_open", checked.state);
+  return admitReliabilityV2Dispatch(checked.state, {
+    ownerToken: ownValue(request, "ownerToken"),
+    dispatchId: ownValue(request, "dispatchId"),
+    outcomeId: ownValue(request, "outcomeId"),
+    modelKeys: [key],
+    now: checked.now,
+  }, checked.config);
+}
+
+/** Claims the one provider-scoped trial lease after a provider cooldown expires. */
+export function claimReliabilityV2ScopeTrial(
+  stateValue: unknown,
+  requestValue: unknown,
+  configValue: unknown,
+): ReliabilityV2Result {
+  const request = requestRecord(requestValue, ["ownerToken", "dispatchId", "outcomeId", "modelKey", "cooldownModelKeys", "now"]);
+  const config = isConfig(configValue) ? configValue : undefined;
+  const checked = request && config ? validation(stateValue, config, ownValue(request, "now")) : undefined;
+  const key = request ? ownValue(request, "modelKey") : undefined;
+  const cooldownKeys = request ? safeArray(ownValue(request, "cooldownModelKeys")) : undefined;
+  const ownerToken = request ? ownValue(request, "ownerToken") : undefined;
+  const dispatchId = request ? ownValue(request, "dispatchId") : undefined;
+  const outcomeId = request ? ownValue(request, "outcomeId") : undefined;
+  if (!request || !checked || !opaqueId(ownerToken) || !opaqueId(dispatchId) || !opaqueId(outcomeId)
+    || !modelKey(key) || !cooldownKeys || cooldownKeys.length === 0 || !cooldownKeys.every(modelKey)) {
+    return noChange("invalid", "invalid_scope_trial_claim", checked?.state);
+  }
+  const cooldowns = cooldownKeys.map((cooldownKey) => checked.state.scopes[modelScopeKey(cooldownKey)]?.openUntil);
+  if (cooldowns.some((openUntil) => openUntil !== undefined && openUntil > checked.now)) {
+    return noChange("blocked", "provider_pause_active", checked.state);
+  }
+  if (!cooldowns.some((openUntil) => openUntil !== undefined && openUntil <= checked.now)) {
+    return noChange("admitted", "healthy", checked.state);
+  }
+  const next = cleanupCandidate(checked.state, checked.now);
+  if (mapValue(next.dispatches, dispatchId) || mapValue(next.settledOutcomes, outcomeId)
+    || Object.values(next.dispatches).some((receipt) => receipt.outcomeId === outcomeId)) {
+    return noChange("duplicate", "dispatch_or_outcome_id_exists", checked.state);
+  }
+  if (Object.keys(next.dispatches).length >= checked.config.maxDispatchReceipts) {
+    return noChange("capacity", "dispatch_receipt_capacity", checked.state);
+  }
+  const scopeKey = modelScopeKey(key);
+  const current = next.scopes[scopeKey] ?? { generation: 0, failures: [] };
+  if (current.lease && current.lease.generation === current.generation && current.lease.expiresAt > checked.now) {
+    return noChange("blocked", "trial_lease_owned", checked.state);
+  }
+  const proofUntil = safeAdd(checked.now, checked.config.maxDispatchLifetimeMs);
+  if (proofUntil === undefined) return noChange("overflow", "lease_time_overflow", checked.state);
+  const maxExpiresAt = proofUntil;
+  const requestedExpiry = safeAdd(checked.now, checked.config.leaseTtlMs);
+  if (requestedExpiry === undefined) return noChange("overflow", "lease_time_overflow", checked.state);
+  const expiresAt = Math.min(requestedExpiry, maxExpiresAt);
+  const lease: ReliabilityV2Lease = { ownerToken, dispatchId, outcomeId, leaseId: dispatchId,
+    generation: current.generation, expiresAt, maxExpiresAt };
+  next.scopes[scopeKey] = { ...current, failures: [...current.failures], lease };
+  next.dispatches[dispatchId] = {
+    ownerToken, dispatchId, outcomeId, admittedAt: checked.now, proofUntil,
+    scopes: [{ scopeKey, modelKey: key, generation: current.generation,
+      leaseId: dispatchId, expiresAt, maxExpiresAt }],
   };
   const committed = commit(next);
   return committed
@@ -775,7 +1042,8 @@ function validSettlement(value: unknown): value is ReliabilityV2Settlement {
   const validObservation = observation === undefined || !!normalizeObservationFields(observation, MAX_TIMESTAMP);
   if (!validObservation || allowanceExhaustion === undefined) return validObservation;
   const allowance = normalizeObservationFields(allowanceExhaustion, MAX_TIMESTAMP);
-  return !!allowance && allowance.category === "allowance_exhausted" && allowance.source === "runtime";
+  return !!allowance && (allowance.category === "allowance_exhausted" || allowance.category === "billing_denied")
+    && allowance.source === "runtime";
 }
 
 function observationSummaryForReceipt(
@@ -871,7 +1139,7 @@ export function settleReliabilityV2Dispatch(
   const suppliedAllowanceExhaustion = ownValue(plainRecord(settlement)!, "allowanceExhaustion");
   const allowanceEvidence = observationSummaryForReceipt(suppliedAllowanceExhaustion, receipt, checked.now);
   if (suppliedAllowanceExhaustion !== undefined && (!allowanceEvidence
-    || allowanceEvidence.category !== "allowance_exhausted"
+    || (allowanceEvidence.category !== "allowance_exhausted" && allowanceEvidence.category !== "billing_denied")
     || allowanceEvidence.source !== "runtime"
     || settlement.kind !== "failure")) {
     return noChange("invalid", "invalid_allowance_exhaustion_binding", checked.state);
@@ -932,9 +1200,11 @@ export function settleReliabilityV2Dispatch(
         && previous.lease.expiresAt > checked.now;
       let openUntil = previous.openUntil;
       let cooldownMultiplier = previous.cooldownMultiplier;
-      const allowanceTrigger = allowanceEvidence?.category === "allowance_exhausted" ? allowanceEvidence : observation;
+      const allowanceTrigger = allowanceEvidence
+        && (allowanceEvidence.category === "allowance_exhausted" || allowanceEvidence.category === "billing_denied")
+        ? allowanceEvidence : observation;
       const allowanceExhausted = checked.config.cooldownOnAllowanceExhausted !== false
-        && allowanceTrigger?.category === "allowance_exhausted"
+        && (allowanceTrigger?.category === "allowance_exhausted" || allowanceTrigger?.category === "billing_denied")
         && allowanceTrigger.source === "runtime"
         && allowanceTrigger.modelKey === scopeReceipt.modelKey;
       if (admittedTrial) {

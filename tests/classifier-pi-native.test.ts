@@ -325,6 +325,42 @@ describe("pi-native classifier transport", () => {
     assert.equal(h.calls(), 1);
   });
 
+  it("reports HTTP budget failures with the resolved registry provider", async () => {
+    const error = { ...answer(), answers: {}, stopReason: "error", errorMessage: "HTTP 402 Payment Required" } as ClassifierResult;
+    const h = harness({ listed: [model("huggingface", "deepseek-r1")], results: [error] });
+    const failures: Array<{ provider: string; id: string; errorText?: string }> = [];
+    await createPiNativeClassifier({
+      registry: h.registry,
+      onProviderError: (resolved, errorText) => { failures.push({ provider: resolved.provider, id: resolved.id, errorText }); },
+    })(request);
+    assert.deepEqual(failures, [{ provider: "huggingface", id: "deepseek-r1", errorText: "HTTP 402 Payment Required" }]);
+  });
+
+  it("rechecks provider admission before retrying after a rate limit", async () => {
+    const limited = { ...answer(), answers: {}, stopReason: "error", errorMessage: "429 rate limit" } as ClassifierResult;
+    const h = harness({ listed: [model()], results: [limited, answer()] });
+    const admission: boolean[] = [];
+    const delays: number[] = [];
+    const failures: string[] = [];
+    const classify = createPiNativeClassifier({
+      registry: h.registry,
+      maxAttempts: 3,
+      onProviderSelected: () => {
+        const allowed = admission.length === 0;
+        admission.push(allowed);
+        return allowed;
+      },
+      onProviderError: (_providerModel, errorText) => { if (errorText) failures.push(errorText); },
+      sleepImpl: async (delay) => { delays.push(delay); },
+    });
+
+    assert.equal(await classify(request), undefined);
+    assert.deepEqual(admission, [true, false]);
+    assert.deepEqual(delays, [1_000]);
+    assert.deepEqual(failures, ["429 rate limit"]);
+    assert.equal(h.calls(), 1);
+  });
+
   it("records a deadline abort as timeout and settles the claimed trial", async () => {
     const h = harness({ listed: [model()], results: [answer()] });
     const events: string[] = [];

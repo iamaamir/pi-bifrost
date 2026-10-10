@@ -303,8 +303,14 @@
         },
         "cooldownOnAllowanceExhausted": {
           "type": "boolean",
-          "description": "Immediately open a model-only circuit for a normalized explicit usage-allowance exhaustion. Generic HTTP 429/rate-limit failures keep using failureThreshold. Set false to disable this immediate cooldown.",
+          "description": "Immediately pause a provider after a normalized explicit usage-allowance or billing failure. A 402 response pauses the provider; ordinary 429 rate limits use a short provider throttle. Set false to disable usage and billing pauses; rate-limit throttles remain enabled.",
           "default": true
+        },
+        "allowanceCooldownScope": {
+          "type": "string",
+          "enum": ["provider", "model"],
+          "description": "Scope usage-allowance and billing pauses. The default provider scope pauses all configured models under the same provider ID. Set model to keep those pauses model-scoped. HTTP 429 throttles always use provider scope.",
+          "default": "provider"
         },
         "retryOnAllowanceExhausted": {
           "type": "boolean",

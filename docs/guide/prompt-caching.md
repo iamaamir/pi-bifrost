@@ -144,4 +144,4 @@ No. Pinning improves the opportunity for cache locality by keeping the model sta
 
 ### Can Bifrost retry after an allowance failure?
 
-In Pi Auto, Bifrost can make one attempt on another configured model after an explicit usage-limit rejection, but only when Pi proves the initial response was empty and no tools or other activity occurred. All other failures stop. Set `reliability.retryOnAllowanceExhausted: false` to disable this behavior. See [ADR 0023](../adr/0023-bounded-allowance-recovery.md).
+In Pi Auto, Bifrost can make one attempt on another configured model after a usage or billing rejection. Pi must prove the failed turn was empty and had no tools or other activity. By default, the rejection pauses all models with the same configured Pi provider ID in Auto and physical routing. Set `reliability.retryOnAllowanceExhausted: false` to disable the retry. See [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks) and [ADR 0023](../adr/0023-bounded-allowance-recovery.md).
