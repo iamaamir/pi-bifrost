@@ -1215,7 +1215,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   function bootstrapVerifiedSelectionConfig(ctx: ExtensionContext): BifrostConfig | undefined {
     const record = autoBootstrapBySession.get(ctx.sessionManager);
-    if (!record || !autoBootstrapCanUpdateProgress(record) || record.verified.size === 0) return undefined;
+    if (!record || !autoBootstrapCanUpdateProgress(record) || record.verified.size !== 0) return undefined;
     const models = Object.fromEntries(Object.entries(state.config.models ?? {}).map(([tier, pool]) => [
       tier, Array.isArray(pool) ? pool.filter((key) => record.verified.has(key)) : [],
     ]));
