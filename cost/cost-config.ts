@@ -24,22 +24,29 @@ export interface CostConfig {
 
 let costConfig: CostConfig = {};
 
+/**
+ * Set the global cost-tracking configuration.
+ */
 export function setupCost(cfg: CostConfig): void {
   costConfig = { ...cfg };
 }
 
+/** Returns true if persisting metrics to disk is enabled. */
 export function isCostPersistenceEnabled(): boolean {
   return costConfig.persist === true;
 }
 
+/** Returns true if the TUI cost widget is enabled. */
 export function isCostWidgetEnabled(): boolean {
   return costConfig.widget === true;
 }
 
+/** Returns true if any form of cost collection (widget or persistence) is enabled. */
 export function isCostCollectionEnabled(): boolean {
   return isCostWidgetEnabled() || isCostPersistenceEnabled();
 }
 
+/** Get the current cost configuration state. */
 export function getCostConfig(): CostConfig {
   return costConfig;
 }

@@ -4,6 +4,10 @@ import { buildTurn, recordTurnAsync, persistSessionCost, flushPendingTurns, shou
 import { updateWidget } from "./cost-ui.ts";
 import { isCostCollectionEnabled } from "./cost-config.ts";
 
+/**
+ * Extract cost/usage metadata from the latest assistant message in the session branch,
+ * record it in the in-memory store, update the TUI widget, and trigger periodic checkpoints.
+ */
 export function trackCost(ctx: ExtensionContext): void {
   if (!isCostCollectionEnabled()) return;
   debug("cost", "event_fired", { session: ctx.sessionManager });
@@ -63,6 +67,11 @@ export function trackCost(ctx: ExtensionContext): void {
   }
 }
 
+/**
+ * Register the event listeners for cost tracking:
+ * - agent_settled: tracks costs after each successful agent turn.
+ * - session_compact: flushes metrics to disk after session compaction.
+ */
 export function registerCostTracking(pi: any): void {
   pi.on("agent_settled", async (_event: any, ctx: ExtensionContext) => {
     trackCost(ctx);

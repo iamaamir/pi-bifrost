@@ -11,22 +11,39 @@ const sessionIds = new WeakMap<object, string>();
 const sessionTurnsSinceSave = new WeakMap<object, number>();
 const sessionLastSaveTime = new WeakMap<object, number>();
 
+/**
+ * Resolve the maximum number of cost turns to retain in memory, based on config.
+ */
 function maxHistory(): number {
   return getCostConfig().maxHistory ?? DEFAULT_MAX_HISTORY;
 }
 
+/**
+ * Retrieve the current cost metrics for a given session context.
+ */
 export function getMetrics(session: object): CostMetrics | undefined {
   return sessionMetrics.get(session);
 }
 
+/**
+ * Retrieve the bounded history of cost turns for a given session context.
+ */
 export function getHistory(session: object): CostTurn[] | undefined {
   return sessionHistory.get(session);
 }
 
+/**
+ * Retrieve the generated session ID for a given session context.
+ */
 export function getSessionId(session: object): string | undefined {
   return sessionIds.get(session);
 }
 
+/**
+ * Record a cost turn into the in-memory metrics and bounded history for a session.
+ * Updates aggregate totals (input/output/cache read/write/missed tokens) and
+ * the ring-buffer history, tracking turns since last checkpoint.
+ */
 export function recordTurn(session: object, turn: CostTurn): void {
   let metrics = sessionMetrics.get(session);
   if (!metrics) {
@@ -102,6 +119,10 @@ export async function persistSessionCost(session: object, cwd: string): Promise<
   debug("cost", "persist_success", { sessionId, metricKeys: Object.keys(metrics) });
 }
 
+/**
+ * Checkpoint: returns true when the session has accumulated enough new turns
+ * or elapsed time to warrant flushing metrics to disk. No-op when persistence is disabled.
+ */
 export function shouldCheckpoint(session: object): boolean {
   if (!isCostPersistenceEnabled()) return false;
   const config = getCostConfig();
@@ -115,6 +136,12 @@ export function shouldCheckpoint(session: object): boolean {
   );
 }
 
+/**
+ * Compute estimated cache-miss tokens and cost for a turn, based on Pi's
+ * model: overlap against the previous prompt minus cache read.
+ * Uses a noise floor to avoid micro-misses and only estimates cost when
+ * the missed tokens exceed the threshold.
+ */
 export function computeMiss(
   session: object,
   finalCost: any,
@@ -158,6 +185,10 @@ export function computeMiss(
   };
 }
 
+/**
+ * Build a CostTurn record from a settled assistant message, its cost/usage
+ * breakdown, and a computed cache-miss estimate.
+ */
 export function buildTurn(
   session: object,
   msg: any,
@@ -178,6 +209,10 @@ export function buildTurn(
 
 const pendingMicrotasks = new WeakSet<object>();
 
+/**
+ * Asynchronously record a cost turn off the hot path via a microtask,
+ * to avoid blocking event processing.
+ */
 export function recordTurnAsync(session: object, turn: CostTurn): void {
   pendingMicrotasks.add(session);
   queueMicrotask(() => {
@@ -186,6 +221,10 @@ export function recordTurnAsync(session: object, turn: CostTurn): void {
   });
 }
 
+/**
+ * Wait for all pending asynchronous cost turns for a session to flush
+ * before persistence, so no metrics are lost on shutdown.
+ */
 export function flushPendingTurns(session: object): Promise<void> {
   return new Promise((resolve) => {
     if (!pendingMicrotasks.has(session)) {

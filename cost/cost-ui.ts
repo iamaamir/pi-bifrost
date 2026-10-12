@@ -17,6 +17,10 @@ const DEFAULT_OPTIONS: CostUIOptions = {
   minMissCost: 0.1,
 };
 
+/**
+ * Updates the 'bifrost-cost' TUI widget with current session metrics, including
+ * total tokens, cache efficiency, and cache-miss notifications.
+ */
 export function updateWidget(ctx: ExtensionContext, options: CostUIOptions = DEFAULT_OPTIONS): void {
   if (!options.enabled || !isCostWidgetEnabled()) {
     if (ctx.mode === "tui" && ctx.hasUI) ctx.ui.setWidget("bifrost-cost", []);
