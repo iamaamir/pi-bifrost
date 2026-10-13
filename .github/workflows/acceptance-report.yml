@@ -1,0 +1,49 @@
+name: Acceptance report
+
+on:
+  workflow_run:
+    workflows: [Verification]
+    types: [in_progress, completed]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  group: acceptance-report-${{ github.event.workflow_run.pull_requests[0].number || github.event.workflow_run.head_sha || github.event.workflow_run.id }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out trusted default-branch publisher
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate report artifact metadata
+        id: report
+        if: github.event.action == 'completed'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/ci-report-publish.mjs --prepare
+        continue-on-error: true
+      - name: Download the named report artifact
+        if: github.event.action == 'completed' && steps.report.outputs.artifact-id != ''
+        uses: actions/download-artifact@v5
+        with:
+          artifact-ids: ${{ steps.report.outputs.artifact-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: ${{ runner.temp }}/bifrost-acceptance-report
+      - name: Update the PR acceptance report
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BIFROST_REPORT_DIR: ${{ runner.temp }}/bifrost-acceptance-report
+        run: node scripts/ci-report-publish.mjs
