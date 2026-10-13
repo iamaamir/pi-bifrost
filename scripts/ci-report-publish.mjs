@@ -58,7 +58,13 @@ export async function publishWorkflowRun({ event, repository, serverUrl, api, re
       || (event.action === "in_progress" && initialRun.status !== "in_progress")
       || (initialRun.repository?.full_name && initialRun.repository.full_name !== repository)) return { status: "stale", reason: "Workflow run metadata no longer matches the event." };
   const linkedPulls = await api.listPullRequestsForCommit(repository, initialRun.head_sha);
-  const linkedNumbers = new Set((linkedPulls ?? []).map((item) => item.number).filter(Number.isSafeInteger));
+  const headRepository = initialRun.head_repository?.full_name;
+  const headOwner = safeRepo(headRepository) ? headRepository.split("/")[0] : null;
+  const fallbackPulls = !linkedPulls?.length && headOwner && initialRun.head_branch
+    ? await api.listOpenPullRequestsByHead(repository, headOwner, initialRun.head_branch)
+    : [];
+  const linkedNumbers = new Set([...(linkedPulls ?? []), ...fallbackPulls.filter((item) => item.head?.sha === initialRun.head_sha && item.base?.repo?.full_name === repository)]
+    .map((item) => item.number).filter(Number.isSafeInteger));
   const eventNumbers = (eventRun.pull_requests ?? []).map((item) => item?.number).filter(Number.isSafeInteger);
   const targets = [...new Set(eventNumbers.length ? eventNumbers.filter((number) => linkedNumbers.has(number)) : [...linkedNumbers])].slice(0, 10);
   if (!targets.length) return { status: "ignored", reason: "GitHub has no PR whose base repository and head SHA match this run." };
@@ -154,6 +160,10 @@ export function createGitHubApi({ token, apiBase = process.env.GITHUB_API_URL ??
     },
     async listPullRequestsForCommit(repo, sha) {
       const rows = await getJson(`/repos/${repoPath(repo)}/commits/${encodeURIComponent(sha)}/pulls?per_page=100`);
+      return Array.isArray(rows) ? rows : [];
+    },
+    async listOpenPullRequestsByHead(repo, owner, branch) {
+      const rows = await getJson(`/repos/${repoPath(repo)}/pulls?state=open&head=${encodeURIComponent(`${owner}:${branch}`)}&per_page=100`);
       return Array.isArray(rows) ? rows : [];
     },
     async listArtifacts(repo, runId) {

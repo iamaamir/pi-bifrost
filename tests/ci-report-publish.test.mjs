@@ -66,13 +66,17 @@ function fixture({ action = "completed", attempt = 1, head = headSha, prHead = h
     base: { repo: { full_name: "iamaamir/pi-bifrost" } },
     head: { sha: prHead, ref: "feature/report", repo: { full_name: pullRepository } },
   };
-  const calls = { create: [], update: [], comments: [] };
-  const state = { run, pr, comments: [], workflows: [run], linkedPulls: [{ number: prNumber }] };
+  const calls = { create: [], update: [], comments: [], headLookups: [] };
+  const state = { run, pr, comments: [], workflows: [run], linkedPulls: [], headPulls: [pr] };
   const api = {
     async getRun() { return structuredClone(state.run); },
     async getPullRequest() { return structuredClone(state.pr); },
     async listWorkflowRuns() { return structuredClone(state.workflows); },
     async listPullRequestsForCommit() { return structuredClone(state.linkedPulls); },
+    async listOpenPullRequestsByHead(_repo, owner, branch) {
+      calls.headLookups.push({ owner, branch });
+      return structuredClone(state.headPulls);
+    },
     async listIssueComments() {
       calls.comments.push(true);
       if (mutateBeforeFinalCheck) mutateBeforeFinalCheck(state);
@@ -111,8 +115,17 @@ test("creates one candidate-bound comment for a fork PR after all release gates 
   assert.equal(result.results[0].status, "created");
   assert.equal(result.results[0].confidence, "VERIFIED CHECKS");
   assert.equal(value.calls.create.length, 1);
+  assert.deepEqual(value.calls.headLookups, [{ owner: "fork-owner", branch: "feature/report" }]);
   assert.match(value.calls.create[0].body, /Workflow run/);
   assert.equal(value.calls.create[0].body.includes("fork-owner"), false);
+});
+
+test("ignores a fork head lookup whose SHA no longer matches the run", async () => {
+  const value = fixture();
+  value.state.headPulls[0].head.sha = "b".repeat(40);
+  const result = await publishWorkflowRun({ ...value, serverUrl: "https://github.com", reportData: value.report });
+  assert.equal(result.status, "ignored");
+  assert.equal(value.calls.create.length, 0);
 });
 
 test("keeps closing provenance when a failing report exceeds the old comment cap", async () => {
