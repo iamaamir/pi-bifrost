@@ -148,7 +148,11 @@ export function createGitHubApi({ token, apiBase = process.env.GITHUB_API_URL ??
   };
   const requestComment = async (method, path, body) => {
     const response = await fetchImpl(`${base}${path}`, { method, headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify({ body }) });
-    if (!response.ok) throw new Error(`GitHub comment request failed (${response.status}).`);
+    if (!response.ok) {
+      const detail = await response.json().catch(() => null);
+      const reason = typeof detail?.message === "string" ? `: ${detail.message.replace(/[\r\n]/g, " ").slice(0, 200)}` : "";
+      throw new Error(`GitHub comment request failed (${response.status})${reason}.`);
+    }
     return response.json();
   };
   return {

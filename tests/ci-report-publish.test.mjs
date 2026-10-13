@@ -6,12 +6,21 @@ import test from "node:test";
 import { MAX_REPORT_BYTES, makeReportData, renderCiReport, writeCiReport } from "../scripts/ci-report.mjs";
 import {
   COMMENT_MARKER,
+  createGitHubApi,
   publishWorkflowRun,
   reportArtifactName,
   readReportDataDirectory,
   validateArtifactMetadata,
   validateReportData,
 } from "../scripts/ci-report-publish.mjs";
+
+test("reports a bounded GitHub permission error without logging a token", async () => {
+  const api = createGitHubApi({
+    token: "fixture-secret",
+    fetchImpl: async () => ({ ok: false, status: 403, json: async () => ({ message: "Permission denied\nby GitHub" }) }),
+  });
+  await assert.rejects(api.createIssueComment("iamaamir/pi-bifrost", 35, "test"), /GitHub comment request failed \(403\): Permission denied by GitHub\./);
+});
 
 const headSha = "a".repeat(40);
 const workflowPath = ".github/workflows/verification.yml@main";
