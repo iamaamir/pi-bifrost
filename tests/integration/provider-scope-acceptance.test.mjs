@@ -2,10 +2,10 @@
 // Drives a real Pi AgentSession through the real Bifrost extension with two
 // faux providers and a hard `routingScope`. Proves that a real Auto dispatch
 // selects only the permitted provider and the excluded provider is never
-// called, in both directions. The child runs behind the outbound fence, so
-// the excluded provider cannot be reached over the network either.
+// called, in both directions, and that an empty allowlist denies every
+// provider. The child runs behind the outbound fence, so the excluded
+// provider cannot be reached over the network either.
 
-import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,13 +13,11 @@ import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import {
   REPO_ROOT,
-  assertFenceBlocked,
   assertNoViolations,
-  fenceProbeScript,
+  assertOutboundFence,
   fixtureChildEnv,
   isolateAmbientCredentials,
   runFauxFixtureChild,
-  runNode,
 } from "../fixtures/faux-harness.mjs";
 
 const CHILD = join(REPO_ROOT, "tests", "fixtures", "provider-scope-faux-child.mjs");
@@ -39,19 +37,13 @@ describe("provider routing scope dispatch", () => {
     await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
     const port = server.address().port;
     env = fixtureChildEnv({ scratch, violations, allowedOrigin: `http://127.0.0.1:${port}` });
-    writeFileSync(violations, "");
-    const probe = await runNode(["-e", fenceProbeScript({
+    await assertOutboundFence({
+      env,
+      violations,
       allowedUrl: `http://127.0.0.1:${port}`,
       blockedPort: port + 1,
       expectAllowedText: "allowed loopback fixture",
-    })], { cwd: REPO_ROOT, env });
-    assert.equal(probe.status, 0, `${probe.stdout}\n${probe.stderr}`);
-    assertFenceBlocked(violations, [
-      /blocked fetch to https:\/\/127\.0\.0\.1:/,
-      /blocked fetch to http:\/\/127\.0\.0\.1:/,
-      /blocked socket connection to 127\.0\.0\.1:/,
-      /blocked UDP datagram to 127\.0\.0\.1/,
-    ]);
+    });
   });
 
   after(async () => {
@@ -79,4 +71,20 @@ describe("provider routing scope dispatch", () => {
       assertNoViolations(violations, `${permitted} scope run made a blocked outbound attempt`);
     });
   }
+
+  it("denies every provider when the allowlist is empty", async () => {
+    writeFileSync(violations, "");
+    await runFauxFixtureChild({
+      child: CHILD,
+      env: {
+        ...env,
+        BIFROST_FAUX_SCRATCH: scratch,
+        BIFROST_SCOPE_PERMITTED: "fake",
+        BIFROST_SCOPE_EXCLUDED: "scoped",
+        BIFROST_SCOPE_ORDER: JSON.stringify(["fake/chat", "scoped/chat"]),
+        BIFROST_SCOPE_DENY_ALL: "1",
+      },
+    });
+    assertNoViolations(violations, "deny-all scope run made a blocked outbound attempt");
+  });
 });

@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -6,13 +5,11 @@ import { join } from "node:path";
 import { it } from "node:test";
 import {
   REPO_ROOT,
-  assertFenceBlocked,
   assertNoViolations,
-  fenceProbeScript,
+  assertOutboundFence,
   fixtureChildEnv,
   isolateAmbientCredentials,
   runFauxFixtureChild,
-  runNode,
 } from "../fixtures/faux-harness.mjs";
 
 const CHILD = join(REPO_ROOT, "tests", "fixtures", "native-faux-provider-child.mjs");
@@ -31,18 +28,13 @@ it("routes real AgentSession behind tested HTTP, HTTPS, TCP, and UDP outbound fe
       allowedOrigin: `http://127.0.0.1:${port}`,
     });
     writeFileSync(violations, "");
-    const probe = await runNode(["-e", fenceProbeScript({
+    await assertOutboundFence({
+      env,
+      violations,
       allowedUrl: `http://127.0.0.1:${port}`,
       blockedPort: port + 1,
       expectAllowedText: "allowed loopback fixture",
-    })], { cwd: REPO_ROOT, env });
-    assert.equal(probe.status, 0, `${probe.stdout}\n${probe.stderr}`);
-    assertFenceBlocked(violations, [
-      /blocked fetch to https:\/\/127\.0\.0\.1:/,
-      /blocked fetch to http:\/\/127\.0\.0\.1:/,
-      /blocked socket connection to 127\.0\.0\.1:/,
-      /blocked UDP datagram to 127\.0\.0\.1/,
-    ]);
+    });
 
     for (const testCase of [
       // pi-subagents 0.77.0 producer marker: child host must preserve Pi's
