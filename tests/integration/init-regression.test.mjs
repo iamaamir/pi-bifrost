@@ -7,7 +7,8 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readF
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BUNDLED_PUBLIC_INIT_DEFAULTS, loadConfigForReload } from "../../config.ts";
+import { BUNDLED_PUBLIC_INIT_DEFAULTS } from "../../config.ts";
+import { loadConfigForReload } from "../../config-load.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PI = join(ROOT, "node_modules", ".bin", "pi");

@@ -1,6 +1,4 @@
-import type { ClassifierModel } from "./classifier.ts";
-import { classifyCompiled, compileRules, type RouteRule } from "./routing.ts";
-import type { RoutedModelResolution, RoutingStrategy, SkippedCandidate, TierResolutionOptions } from "./routing.ts";
+import { classifyCompiled, compileRules, type RouteRule, type RoutingModelBase, type RoutedModelResolution, type RoutingStrategy, type SkippedCandidate, type TierResolutionOptions } from "./routing.ts";
 import { debug, debugMeasure } from "./debug.ts";
 import { CLASSIFIER_BACKEND_IDS, type ClassificationJudgment, type ClassifierOutput, type ClassifierBackend } from "./classifier-backends.ts";
 import type { EconomicCandidateEvaluation } from "./routing.ts";
@@ -118,8 +116,23 @@ export interface RouteDecisionSummary {
   readonly affinity?: AffinityRouteObservation;
 }
 
-export interface ResolvedRouteDecisionInput {
-  readonly resolution: RoutedModelResolution;
+export interface RegistryClassifierRef<M extends { readonly id: string } = { readonly id: string }> {
+  readonly kind: "registry";
+  readonly model: M;
+}
+
+export interface EndpointClassifierRef {
+  readonly kind: "endpoint";
+  readonly id: string;
+  readonly baseUrl: string;
+}
+
+/** Provider-neutral classifier target used only to label pipeline attempts. */
+export type ClassifierModelRef<M extends { readonly id: string } = { readonly id: string }> =
+  RegistryClassifierRef<M> | EndpointClassifierRef;
+
+export interface ResolvedRouteDecisionInput<M extends RoutingModelBase = RoutingModelBase> {
+  readonly resolution: RoutedModelResolution<M>;
   readonly options: TierResolutionOptions;
 }
 
@@ -177,9 +190,9 @@ function summarizePool(
 }
 
 /** Summarize the actual classification and resolver result without retaining prompt or model objects. */
-export function buildRouteDecisionSummary(
+export function buildRouteDecisionSummary<M extends RoutingModelBase>(
   classification: ClassificationResult,
-  route?: ResolvedRouteDecisionInput,
+  route?: ResolvedRouteDecisionInput<M>,
 ): RouteDecisionSummary {
   if (classification.kind === "unclassified") {
     return {
@@ -269,7 +282,7 @@ export function buildRouteDecisionSummary(
  * `cacheLookup` may internally mutate its backing store for LRU
  * tracking — this is an accepted impurity (see ADR candidate #4).
  */
-export interface PipelineDeps {
+export interface PipelineDeps<MClassifier extends { readonly id: string } = { readonly id: string }> {
   /** Disable process-global debug instrumentation for isolated resolve-only callers. */
   readonly instrumentation?: "none";
   /** Optional total network-classification budget. Absent preserves backend budgets. */
@@ -278,11 +291,11 @@ export interface PipelineDeps {
   readonly cacheLookup: (text: string) => string | undefined;
   /** Optional direct backend (typesafe or pi-native) attempted before the prompt classifier. */
   readonly classifyDirect?: (text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<DirectClassifierOutput>;
-  /** Classifier models in priority order. Empty array = skip LLM. */
-  readonly classifierModels: readonly ClassifierModel[];
+  /** Classifier targets in priority order. Empty array = skip LLM. */
+  readonly classifierModels: readonly ClassifierModelRef<MClassifier>[];
   /** Invoke the LLM classifier for a single model. Returns tier or undefined. */
   readonly classifyWithLLM: (
-    model: ClassifierModel,
+    model: ClassifierModelRef<MClassifier>,
     text: string,
     tiers: readonly string[],
     signal?: AbortSignal,
@@ -311,7 +324,9 @@ function normalizeJudgment(output: ClassifierOutput, backend: ClassifierBackend)
 
 // ── Factory ────────────────────────────────────────────────────
 
-export function createPipeline(deps: PipelineDeps): ClassificationPipeline {
+export function createPipeline<MClassifier extends { readonly id: string } = { readonly id: string }>(
+  deps: PipelineDeps<MClassifier>,
+): ClassificationPipeline {
   const {
     cacheLookup,
     classifyDirect,

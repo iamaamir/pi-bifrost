@@ -1,5 +1,16 @@
 # Pi-Bifrost examples
 
+## Router SDK consumer examples
+
+These run wherever `pi-bifrost` is installed — no Pi, no API key, no provider connection:
+
+- `examples/router-standalone.mjs` — a standalone Node.js application: custom tiers, selected and no-decision results, and known-but-unavailable reporting from `pi-bifrost/router`.
+- `examples/host-adapter.mjs` — a host integration: translate your inventory into public DTOs, resolve, revalidate, and let your host dispatch.
+
+The Pi config recipes below need a running Pi with Bifrost installed.
+
+## Config recipes
+
 These recipes show decisions Bifrost can automate. They are templates, not universal model lists. Replace model patterns with models available in your Pi registry.
 
 Where files live:

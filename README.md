@@ -10,6 +10,16 @@ Pi-Bifrost chooses a suitable model for each message from the models you allow. 
 
 A tier is a named model group, such as `quick` or `general`. A classifier is an extra AI call that chooses a tier. It cannot choose a model outside your lists.
 
+## Router SDK
+
+Use Bifrost's routing engine without running Pi. Other applications can give Bifrost their model inventory and configuration, and get back an advisory, inspectable route decision they execute themselves.
+
+```js
+import { createRouter } from "pi-bifrost/router";
+```
+
+The Pi packages are optional peer dependencies; a standalone consumer installs the package without Pi, API keys, or network access on the default path. See [docs/router-api.md](docs/router-api.md) and the shipped `examples/router-standalone.mjs` plus `examples/host-adapter.mjs`.
+
 ## Install
 
 Connect and sign in to a model provider in Pi before you install Bifrost.

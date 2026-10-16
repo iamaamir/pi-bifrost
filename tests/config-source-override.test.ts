@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { BUNDLED_PUBLIC_INIT_DEFAULTS, loadConfigForReload, loadConfigWithSourceOverride } from "../config.ts";
+import { BUNDLED_PUBLIC_INIT_DEFAULTS } from "../config.ts";
+import { loadConfigForReload, loadConfigWithSourceOverride } from "../config-load.ts";
 
 const AGENT_DIR_ENV = "PI_CODING_AGENT_DIR";
 

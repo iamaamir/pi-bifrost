@@ -1,5 +1,3 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
-
 /**
  * Pi's virtual catalog API id. The Pi package exports only
  * VIRTUAL_MODEL_STATE_ENTRY today, so this is the one owned mirror of the
@@ -11,15 +9,15 @@ export const VIRTUAL_MODEL_API = "pi-virtual";
 export const BIFROST_AUTO_PROVIDER = "bifrost";
 export const BIFROST_AUTO_ID = "auto";
 
-export function isVirtualModel(model: { api: string } | undefined): boolean {
+export function isVirtualModel(model: { api?: string } | undefined): boolean {
   return model?.api === VIRTUAL_MODEL_API;
 }
 
-export function isGenerativeModel(model: { api: string; type?: string } | undefined): boolean {
+export function isGenerativeModel(model: { api?: string; type?: string } | undefined): boolean {
   return !!model && !isVirtualModel(model) && model.type !== "classifier";
 }
 
-export function isBifrostAuto(model: Model<Api> | undefined): boolean {
+export function isBifrostAuto(model: { api?: string; provider: string; id: string } | undefined): boolean {
   return (
     model?.provider === BIFROST_AUTO_PROVIDER &&
     model.id === BIFROST_AUTO_ID &&

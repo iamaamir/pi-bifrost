@@ -13,7 +13,7 @@ import { createProviderCooldownStore } from "../runtime-reliability-v2.ts";
 import { emptyReliabilityV2State } from "../reliability-v2.ts";
 import { buildInitOwnershipReceipt } from "../reconciliation-command.ts";
 import { REGISTRY_REFRESH_TTL_MS } from "../ux-status.ts";
-import { loadConfigForReload } from "../config.ts";
+import { loadConfigForReload } from "../config-load.ts";
 
 function writeRecentProbeCache(path: string, results: unknown): void {
   writeFileSync(path, JSON.stringify(results));

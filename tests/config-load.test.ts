@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_RULES, loadConfig, loadConfigForReload, loadRules, validateConfig, validateTierPolicyConfig } from "../config.ts";
+import { DEFAULT_RULES, validateConfig, validateTierPolicyConfig } from "../config.ts";
+import { loadConfig, loadConfigForReload, loadRules } from "../config-load.ts";
 
 function writeJson(path: string, value: unknown): void {
   mkdirSync(join(path, ".."), { recursive: true });

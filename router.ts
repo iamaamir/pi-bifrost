@@ -1,12 +1,10 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { types as nodeTypes } from "node:util";
 import { validateConfig, type BifrostConfig } from "./config.ts";
 import { buildRouteDecisionSummary, createPipeline, type ClassificationResult, type RouteDecisionSummary } from "./classification-pipeline.ts";
 import type { ClassificationJudgment, TierCriterion } from "./classifier-backends.ts";
 import { parseInlineOverride } from "./inline-override.ts";
 import { emptyReliabilityState, type ReliabilityConfig, type ReliabilityState } from "./reliability.ts";
-import { resolveConfiguredTier } from "./routing.ts";
+import { resolveConfiguredTier, type RoutingHostContext, type RoutingModelBase } from "./routing.ts";
 import { hasHardEconomicAdmission, validateEconomicPolicy, validateEconomicSnapshot, type EconomicSnapshot, type ReservePolicy } from "./economic-signals.ts";
 import { observeAffinity, type AffinityAnchor, type AffinityTargetOrigin } from "./affinity.ts";
 
@@ -111,8 +109,8 @@ const MAX_ID_LENGTH = 256;
 const MAX_EPOCH = 8.64e15;
 
 interface InternalRegistry {
-  readonly find: (provider: string, modelId: string) => Model<Api> | undefined;
-  readonly getAvailable: () => Model<Api>[];
+  readonly find: (provider: string, modelId: string) => RoutingModelBase | undefined;
+  readonly getAvailable: () => RoutingModelBase[];
   readonly knownUnavailable: (decision: RouteDecisionSummary) => readonly string[];
 }
 
@@ -135,15 +133,15 @@ function assertValidModel(model: RouterModel): void {
   }
 }
 
-function internalModel(model: RouterModel): Model<Api> {
-  // The resolver reads only these fields. The peer transport model is never
+function internalModel(model: RouterModel): RoutingModelBase {
+  // The resolver reads only these fields. The host transport model is never
   // accepted or returned by the public API.
   return {
     provider: model.provider,
     id: model.id,
     cost: { input: model.cost.input, output: model.cost.output },
     contextWindow: model.contextWindow,
-  } as Model<Api>;
+  };
 }
 
 interface DataObjectSchema { readonly [key: string]: DataSchema }
@@ -317,7 +315,7 @@ function buildRegistry(snapshot: RouterRegistrySnapshot): InternalRegistry {
   if (!Array.isArray(snapshot?.knownModels) || !Array.isArray(snapshot?.availableModels)) {
     throw new Error("Invalid router registry snapshot.");
   }
-  const known = new Map<string, Model<Api>>();
+  const known = new Map<string, RoutingModelBase>();
   for (const model of snapshot.knownModels) {
     assertValidModel(model);
     if (model.virtual) continue;
@@ -325,9 +323,9 @@ function buildRegistry(snapshot: RouterRegistrySnapshot): InternalRegistry {
     if (known.has(key)) throw new Error("Duplicate model in router registry snapshot.");
     known.set(key, internalModel(model));
   }
-  const available: Model<Api>[] = [];
+  const available: RoutingModelBase[] = [];
   const availableKeys = new Set<string>();
-  const availableByKey = new Map<string, Model<Api>>();
+  const availableByKey = new Map<string, RoutingModelBase>();
   for (const model of snapshot.availableModels) {
     assertValidModel(model);
     if (model.virtual) continue;
@@ -455,8 +453,8 @@ function sanitizedReliabilityState(value: ReliabilityState | undefined, now: num
   return { version: 1, models };
 }
 
-function registryContext(registry: InternalRegistry): ExtensionContext {
-  return { modelRegistry: registry } as unknown as ExtensionContext;
+function registryContext(registry: InternalRegistry): RoutingHostContext {
+  return { modelRegistry: registry };
 }
 
 function isValidJudgment(value: unknown, tiers: readonly string[]): value is ClassificationJudgment {
