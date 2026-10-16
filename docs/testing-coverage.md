@@ -10,6 +10,8 @@ When a user reports a failure, keep their error shape and sequence in a regressi
 
 Some contracts need a different boundary. The resolve-only API uses an installed-package consumer test. File-system faults, lease races, and exact deadline boundaries use deterministic lower-level tests as well as the Pi happy and failure paths. State this distinction in review. Do not call these tests Pi E2E.
 
+Two local provider fixtures exist. `scripts/fake-provider-server.mjs` is an HTTP server. Use it to check transport behavior: HTTP status codes, `retry-after`, stream failures, and full `pi` CLI runs. Pi's `fauxProvider` runs in-process. Use it to check dispatch identity, because it reports an exact `callCount` and the exact model argument. Reach it through `tests/fixtures/faux-harness.mjs`. That harness runs a fixture child behind the outbound guard with a credential-scrubbed environment, then opens a real AgentSession with the real Bifrost extension.
+
 Before review, run `npm run verify:release` on a clean, frozen candidate. Attach its result manifest to the reviewed revision. If source changes during the run, rerun the full command on the final candidate. Partial reruns do not replace a failed manifest. The reviewer checks this map against the changed behavior and checks that assertions can fail for the reported regression.
 
 ## Per-change executed evidence
