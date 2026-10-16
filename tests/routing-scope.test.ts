@@ -46,6 +46,15 @@ describe("routing scope", () => {
       assert.ok(compiled);
       assert.equal(checkProviderScope(compiled, "anthropic").allowed, false);
     });
+
+    it("fails closed when only part of an allowlist is malformed", () => {
+      const providers = ["anthropic", 7] as unknown as string[];
+      const compiled = compileRoutingScope({ providers, tiers: { quick: { providers } } });
+      assert.ok(compiled);
+      // One bad entry denies the whole list; it does not keep "anthropic".
+      assert.equal(checkProviderScope(compiled, "anthropic").allowed, false);
+      assert.equal(checkProviderScope(compiled, "anthropic", { tier: "quick" }).allowed, false);
+    });
   });
 
   describe("checkProviderScope", () => {

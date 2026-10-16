@@ -48,8 +48,12 @@ const EMPTY_PROVIDERS: ReadonlySet<string> = Object.freeze(new Set<string>());
 
 function providerList(value: unknown): readonly string[] | undefined {
   if (value === undefined) return undefined;
+  // A present list is fail-closed: a non-array, or any non-string entry,
+  // denies every provider rather than silently keeping the valid subset.
+  // Validated config never reaches this with a mixed list; this is defence
+  // in depth for callers that build a scope from unvalidated input.
   if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === "string");
+  return value.every((entry): entry is string => typeof entry === "string") ? value : [];
 }
 
 /**

@@ -20,7 +20,7 @@ const REASON_LABELS: Record<RouteReasonCode, string> = {
 
 type RouteReasonCode = SkippedCandidate["reason"] | NonNullable<RoutedModelResolution["fallbackReason"]>;
 
-function reasonLabel(reason: RouteReasonCode): string {
+export function reasonLabel(reason: RouteReasonCode): string {
   return REASON_LABELS[reason];
 }
 

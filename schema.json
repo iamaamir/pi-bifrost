@@ -547,8 +547,8 @@
         }
       },
       "examples": [
-        { "providers": ["anthropic", "openai-codex"] },
-        { "providers": ["anthropic", "openai-codex"], "tiers": { "quick": { "providers": ["openai-codex"] } } }
+        { "providers": ["provider-one", "provider-two"] },
+        { "providers": ["provider-one", "provider-two"], "tiers": { "quick": { "providers": ["provider-two"] } } }
       ]
     },
     "EconomicWindow": {

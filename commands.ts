@@ -26,6 +26,7 @@ import {
   type RoutingStrategy,
   type AffinityRoutingContext,
 } from "./routing.ts";
+import { reasonLabel } from "./virtual-routing.ts";
 import type { ReliabilityStore } from "./reliability-store.ts";
 import type { ReliabilityV2Store } from "./reliability-v2-store.ts";
 import { ReliabilityV2StoreError } from "./reliability-v2-store.ts";
@@ -274,7 +275,7 @@ function formatCandidateLines(
     const skippedCandidate = skipped.get(key);
     const reserve = reserves.get(key);
     if (skippedCandidate) {
-      if (skippedCandidate.reason === "provider_not_allowed") return `xx ${key} (provider not allowed)`;
+      if (skippedCandidate.reason === "provider_not_allowed") return `xx ${key} (${reasonLabel("provider_not_allowed")})`;
       const until = skippedCandidate.openUntil
         ? new Date(skippedCandidate.openUntil).toISOString()
         : "unknown";
