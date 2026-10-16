@@ -351,6 +351,107 @@ describe("experimental resolve-only router", () => {
     if (direct.status === "completed") assert.equal(direct.decision.selected, "fixture/general-model");
   });
 
+  it("enforces a global routing scope and reports the exclusion without a selection", async () => {
+    const quick = model("fixture", "quick-model");
+    const router = createRouter(snapshot({
+      config: {
+        schemaVersion: 2,
+        models: { quick: ["fixture/quick-model"] },
+        default: "quick",
+        strategy: "first",
+        rules: [],
+        routingScope: { providers: ["other"] },
+      },
+      registry: { knownModels: [quick], availableModels: [quick] },
+    }));
+    const result = await router.resolve({ prompt: "request" });
+    assert.equal(result.status, "completed");
+    if (result.status !== "completed") return;
+    assert.equal(result.decision.outcome, "unresolved");
+    assert.equal(result.decision.selected, undefined);
+    assert.deepEqual(result.decision.requested?.candidates, [
+      { model: "fixture/quick-model", status: "excluded", exclusion: "provider_not_allowed", scope: "global" },
+    ]);
+  });
+
+  it("scopes a fallback with its own tier allowlist, not the requested tier's", async () => {
+    const router = createRouter(snapshot({
+      config: {
+        schemaVersion: 2,
+        models: { quick: ["fixture/quick-model"], general: ["fixture/general-model"] },
+        tierPolicies: { quick: { fallbackTiers: ["general"] } },
+        default: "general",
+        strategy: "first",
+        rules: [],
+        routingScope: { providers: ["fixture", "other"], tiers: { quick: { providers: ["other"] } } },
+      },
+    }));
+    const result = await router.resolve({ prompt: "quick please do task" });
+    assert.equal(result.status, "completed");
+    if (result.status !== "completed") return;
+    assert.equal(result.decision.selected, "fixture/general-model");
+    assert.equal(result.decision.selectedTier, "general");
+    assert.equal(result.decision.fallbackReason, "requested_tier_provider_excluded");
+    assert.deepEqual(result.decision.attempted?.map((pool) => pool.tier), ["quick", "general"]);
+    // The requested tier's own allowlist excludes its pool...
+    assert.deepEqual(result.decision.attempted?.[0]?.candidates, [
+      { model: "fixture/quick-model", status: "excluded", exclusion: "provider_not_allowed", scope: "tier" },
+    ]);
+    // ...but the fallback pool is scoped by the fallback tier alone, so it stays eligible.
+    assert.deepEqual(result.decision.attempted?.[1]?.candidates, [
+      { model: "fixture/general-model", status: "eligible" },
+    ]);
+  });
+
+  it("allows a fallback that satisfies the global allowlist", async () => {
+    const router = createRouter(snapshot({
+      config: {
+        schemaVersion: 2,
+        models: { quick: ["fixture/missing"], general: ["fixture/general-model"] },
+        tierPolicies: { quick: { fallbackTiers: ["general"] } },
+        default: "general",
+        strategy: "first",
+        rules: [],
+        routingScope: { providers: ["fixture"], tiers: { quick: { providers: ["fixture"] } } },
+      },
+    }));
+    const result = await router.resolve({ prompt: "quick please do task" });
+    assert.equal(result.status, "completed");
+    if (result.status !== "completed") return;
+    assert.equal(result.decision.selected, "fixture/general-model");
+    assert.equal(result.decision.selectedTier, "general");
+    assert.equal(result.decision.fallbackReason, "requested_tier_unavailable");
+  });
+
+  it("rejects an unsupported routing scope field at the snapshot boundary", () => {
+    assert.throws(() => createRouter(snapshot({
+      config: {
+        ...snapshot().config,
+        schemaVersion: 2,
+        routingScope: { denylist: ["fixture"] },
+      } as unknown as RouterSnapshot["config"],
+    })), /Invalid router snapshot data/);
+  });
+
+  it("isolates an accepted routing scope from later mutation", async () => {
+    const accepted = snapshot({
+      config: {
+        schemaVersion: 2,
+        models: { quick: ["fixture/quick-model"] },
+        default: "quick",
+        strategy: "first",
+        rules: [],
+        routingScope: { providers: ["fixture"], tiers: { quick: { providers: ["fixture"] } } },
+      },
+    });
+    const router = createRouter(accepted);
+    accepted.config.routingScope!.providers![0] = "mutated";
+    accepted.config.routingScope!.tiers!.quick.providers[0] = "mutated";
+    const result = await router.resolve({ prompt: "request" });
+    assert.equal(result.status, "completed");
+    if (result.status === "completed") assert.equal(result.decision.selected, "fixture/quick-model");
+  });
+
   it("excludes explicitly virtual entries", async () => {
     const router = createRouter(snapshot({
       config: { models: { quick: ["bifrost/auto", "fixture/virtual"] }, default: "quick", rules: [] },

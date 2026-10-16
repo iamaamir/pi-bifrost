@@ -274,6 +274,7 @@ function formatCandidateLines(
     const skippedCandidate = skipped.get(key);
     const reserve = reserves.get(key);
     if (skippedCandidate) {
+      if (skippedCandidate.reason === "provider_not_allowed") return `xx ${key} (provider not allowed)`;
       const until = skippedCandidate.openUntil
         ? new Date(skippedCandidate.openUntil).toISOString()
         : "unknown";
@@ -1114,7 +1115,7 @@ async function handleInit(
   };
   proposal.reliability = publicDefaults.reliability ?? resolveReliabilityConfig(undefined);
   proposal.debug = publicDefaults.debug ?? { enabled: false };
-  for (const key of ["schemaVersion", "tierPolicies", "economics", "affinity", "probe"] as const) {
+  for (const key of ["schemaVersion", "tierPolicies", "economics", "affinity", "routingScope", "probe"] as const) {
     if (sourceConfig[key] !== undefined) proposal[key] = sourceConfig[key];
     else if (publicDefaults[key] !== undefined) proposal[key] = publicDefaults[key];
   }

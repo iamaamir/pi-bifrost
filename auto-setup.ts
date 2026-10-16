@@ -39,6 +39,30 @@ function projectKnownFields(source: unknown, keys: readonly string[]): PlainReco
   return Object.keys(result).length ? result : undefined;
 }
 
+/** Preserve explicit provider restrictions across generated first-use config. */
+function projectRoutingScope(source: unknown): PlainRecord | undefined {
+  const record = plainRecord(source);
+  if (!record) return undefined;
+  const result: PlainRecord = {};
+  if (Array.isArray(record.providers)) {
+    const providers = record.providers.filter((provider) => typeof provider === "string");
+    if (providers.length === record.providers.length) result.providers = providers;
+  }
+  const tiers = plainRecord(record.tiers);
+  if (tiers) {
+    const projected: PlainRecord = {};
+    for (const [tier, value] of Object.entries(tiers)) {
+      const entry = plainRecord(value);
+      if (!entry || !Array.isArray(entry.providers)) continue;
+      const providers = entry.providers.filter((provider) => typeof provider === "string");
+      if (providers.length !== entry.providers.length) continue;
+      projected[tier] = { providers };
+    }
+    if (Object.keys(projected).length) result.tiers = projected;
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
 function projectClassifier(source: unknown): PlainRecord | undefined {
   const record = plainRecord(source);
   if (!record) return undefined;
@@ -105,6 +129,8 @@ export function serializeBootstrapConfig(
     ])],
     ["probe", projectKnownFields(source.probe, ["concurrency", "timeoutMs"])],
   ] as const) if (value) result[key] = value;
+  const routingScope = projectRoutingScope(source.routingScope);
+  if (routingScope) result.routingScope = routingScope;
   if (source.affinity && (source.affinity.mode === "off" || source.affinity.mode === "observe" || source.affinity.mode === "retain-within-tier")) {
     result.affinity = { mode: source.affinity.mode, ...(typeof source.affinity.providerAdvisory === "boolean" ? { providerAdvisory: source.affinity.providerAdvisory } : {}) };
   }

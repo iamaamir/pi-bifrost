@@ -74,7 +74,34 @@ You can annotate any object-valued section with an optional `description` string
 }
 ```
 
+### Provider routing scope (schema version 2)
+
+`routingScope` is a hard provider allowlist for Bifrost-controlled routing. It is an eligibility filter, not a preference: no strategy, affinity anchor, fallback, or recovery path may select a provider outside the effective scope. It requires `schemaVersion: 2` and does nothing on its own — it only removes candidates that other routing rules would otherwise consider.
+
+```json
+{
+  "schemaVersion": 2,
+  "models": {
+    "quick": ["subscription/quick-model"],
+    "general": ["subscription/general-model", "metered/general-model"]
+  },
+  "routingScope": {
+    "providers": ["subscription", "metered"],
+    "tiers": { "quick": { "providers": ["subscription"] } }
+  }
+}
+```
+
 Inside dynamically keyed maps — `models`, `categoryStrategies`, `tierPolicies`, `classifier.criteria`, `economics.scopes`, `economics.tierOverrides`, `economics.sourceOrder` — a key named `description` has always been a possible user-defined key (for example a tier named `description`). Versions 1 and 2 keep that meaning unchanged. Schema version 3 keeps every version 2 capability and additionally reserves `description` in those maps as inline metadata, which makes the syntax above unambiguous. A version 3 configuration whose dynamically keyed `description` holds a non-string value — or a layer that did not opt into version 3 while the effective version is 3 — is rejected with a precise diagnostic; rename the user-defined key or stay on your current version. Descriptions are optional under every supported version. Keys one level below `economics.tierOverrides` are admission rule IDs in every version, so a rule named `description` keeps its meaning and its reserve override.
+
+- Omit `routingScope` to keep the existing v2 behavior unchanged. Omit `providers` inside a scope to add no restriction at that level. Set `providers: []` to deny all providers at that level.
+- `providers` is the global allowlist. `tiers` adds a per-tier allowlist keyed by a configured tier name. A tier allowlist can only narrow the global allowlist; a candidate must satisfy both.
+- Provider ids match exactly against Pi registry provider ids. There are no patterns, wildcards, substring matches, or case folding.
+- Each evaluated pool uses its own tier allowlist: a fallback tier is scoped by the fallback tier's allowlist, not by the tier that failed. The global allowlist applies to every pool, so no fallback can reach a provider outside the global scope.
+- Configuration layers compose by intersection: extension, global, workspace, and project allowlists are intersected, so a later source can only narrow an earlier restriction. Two nonempty allowlists at the same level that share no provider are a conflict. Because that is invalid strict configuration, it is reported as a config error and blocks routing until corrected, like other version-2 policy errors.
+- A direct-model rule that is not a configured tier is governed by the global allowlist only; Bifrost does not invent a tier scope for it.
+
+`routingScope` controls Bifrost's own routing. It does not change Pi's model inventory, model picker, or manual model selection outside Bifrost. `/bifrost preview` and `/bifrost preview --trace` report an excluded candidate as `provider not allowed` with the rejecting level.
 
 ### Economic observations and billing preference (schema version 2)
 

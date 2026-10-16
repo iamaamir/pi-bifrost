@@ -10,9 +10,11 @@ export type DispatchIntent = "select" | "sticky" | "degrade";
 const REASON_LABELS: Record<RouteReasonCode, string> = {
   open_circuit: "open circuit",
   trial_active: "trial in progress",
+  provider_not_allowed: "provider not allowed",
   requested_tier_unhealthy: "tier unhealthy",
   requested_tier_unavailable: "tier unavailable",
   requested_tier_excluded: "reserve policy exclusion",
+  requested_tier_provider_excluded: "provider not allowed",
   all_tiers_exhausted: "all tiers exhausted",
 };
 
