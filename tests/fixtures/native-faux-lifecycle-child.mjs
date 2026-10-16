@@ -1,116 +1,68 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { after, it } from "node:test";
+import { existsSync } from "node:fs";
+import { it } from "node:test";
+import { assertNoViolations, assertProviderCallCounts, startFauxHarness } from "./faux-harness.mjs";
 
 // The parent owns scratch lifetime. This child never deletes scratch: the parent
 // removes it only after this process has exited, so no in-process async work can
 // recreate fixture files afterwards.
-const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const scratch = process.env.BIFROST_NATIVE_LIFECYCLE_SCRATCH;
 assert.ok(scratch, "BIFROST_NATIVE_LIFECYCLE_SCRATCH is required by the parent");
 const violationPath = process.env.BIFROST_TEST_NETWORK_VIOLATIONS;
-for (const name of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]) {
-  assert.equal(process.env[name], undefined, `${name} leaked into the isolated lifecycle child`);
-}
 
-let runtime;
-let session;
-let providers = [];
-const invocations = [];
-const previous = { cwd: process.cwd(), environment: { ...process.env } };
-after(() => {
-  session?.dispose();
-  for (const provider of providers) runtime?.unregisterProvider(provider.provider.id);
-  for (const name of Object.keys(process.env)) delete process.env[name];
-  Object.assign(process.env, previous.environment);
-  process.chdir(previous.cwd);
-});
+const routes = [
+  { provider: "faux-seed", id: "physical", response: "seed response" },
+  { provider: "faux-alpha", id: "physical", response: "alpha response" },
+  { provider: "faux-beta", id: "physical", response: "beta response" },
+  { provider: "faux-frontier", id: "physical", response: "frontier response" },
+  { provider: "faux-default", id: "physical", response: "default response" },
+  { provider: "faux-collision", id: "physical", response: "collision response" },
+];
+const turns = [
+  { prompt: "direct alpha marker", model: "faux-alpha/physical", response: "alpha response" },
+  { prompt: "direct beta marker", model: "faux-beta/physical", response: "beta response" },
+  { prompt: "frontier override collision marker", model: "faux-frontier/physical", response: "frontier response" },
+  { prompt: "plain request with no configured marker", model: "faux-default/physical", response: "default response" },
+];
 
 it("routes real AgentSession turns by direct rules, tier override precedence, and default", async () => {
-  const home = join(scratch, "home");
-  const cwd = join(scratch, "workspace");
-  const agentDir = join(home, ".pi", "agent");
-  mkdirSync(agentDir, { recursive: true });
-  mkdirSync(join(cwd, ".pi"), { recursive: true });
-  writeFileSync(join(agentDir, "auth.json"), "{}\n");
-  writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
-
-  for (const name of Object.keys(process.env)) delete process.env[name];
-  for (const name of ["PATH", "TMPDIR", "LANG", "TERM"]) {
-    if (previous.environment[name] !== undefined) process.env[name] = previous.environment[name];
-  }
-  process.env.HOME = home;
-  process.env.PI_CODING_AGENT_DIR = agentDir;
-
-  const [{ createAgentSession, ModelRuntime, DefaultResourceLoader }, { fauxProvider, fauxAssistantMessage, fauxText }] = await Promise.all([
-    import("@earendil-works/pi-coding-agent"),
-    import("@earendil-works/pi-ai"),
-  ]);
-
-  const routes = [
-    { provider: "faux-seed", id: "physical", response: "seed response" },
-    { provider: "faux-alpha", id: "physical", response: "alpha response" },
-    { provider: "faux-beta", id: "physical", response: "beta response" },
-    { provider: "faux-frontier", id: "physical", response: "frontier response" },
-    { provider: "faux-default", id: "physical", response: "default response" },
-    { provider: "faux-collision", id: "physical", response: "collision response" },
-  ];
-  providers = routes.map(({ provider, id, response }) => {
-    const faux = fauxProvider({ provider, models: [{ id, reasoning: false }] });
-    faux.setResponses([(_context, _options, _state, model) => {
-      invocations.push(`${model.provider}/${model.id}`);
-      return fauxAssistantMessage(fauxText(response));
-    }]);
-    return faux;
+  // wipeEnv strips the environment to PATH/TMPDIR/LANG/TERM before boot: no
+  // ambient provider config may reach this session.
+  const harness = await startFauxHarness({
+    scratch,
+    wipeEnv: true,
+    bifrost: {
+      enabled: true,
+      default: "quick",
+      models: { quick: ["faux-default/physical"], frontier: ["faux-frontier/physical"] },
+      classifier: { enabled: false },
+      cache: { enabled: false },
+      rules: [
+        { pattern: "direct alpha marker", model: "faux-alpha/physical" },
+        { pattern: "direct beta marker", model: "faux-beta/physical" },
+        { pattern: "override collision marker", model: "faux-collision/physical" },
+      ],
+    },
+    providers: routes.map(({ provider, id, response }) => ({ provider, models: [{ id, reasoning: false }], response })),
+    startModel: "faux-seed/physical",
   });
-  writeFileSync(join(cwd, ".pi", "bifrost.json"), JSON.stringify({
-    enabled: true,
-    default: "quick",
-    models: { quick: ["faux-default/physical"], frontier: ["faux-frontier/physical"] },
-    classifier: { enabled: false },
-    cache: { enabled: false },
-    rules: [
-      { pattern: "direct alpha marker", model: "faux-alpha/physical" },
-      { pattern: "direct beta marker", model: "faux-beta/physical" },
-      { pattern: "override collision marker", model: "faux-collision/physical" },
-    ],
-  }));
-  process.chdir(cwd);
+  try {
+    for (const [index, turn] of turns.entries()) {
+      await harness.session.prompt(turn.prompt);
+      assert.equal(harness.session.getLastAssistantText(), turn.response, `turn ${index + 1} must complete with its own scripted response`);
+      assert.equal(`${harness.session.model.provider}/${harness.session.model.id}`, turn.model, `turn ${index + 1} must leave Pi on selected physical model`);
+    }
 
-  runtime = await ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: null, refreshOnCreate: false });
-  for (const faux of providers) {
-    runtime.registerNativeProvider(faux.provider);
-    await runtime.setRuntimeApiKey(faux.provider.id, "fixture-only");
+    assert.deepEqual(harness.invocations, turns.map(({ model }) => model), "provider model arguments must match exact per-turn routing with no extra calls");
+    assertNoViolations(violationPath, "socket, UDP, and fetch guard must record zero outbound attempts");
+    assertProviderCallCounts(harness.providers, Object.fromEntries(
+      turns.map(({ model }) => [model.slice(0, model.indexOf("/")), 1]),
+    ));
+    for (const faux of harness.providers.values()) {
+      assert.equal(faux.getPendingResponseCount(), 1 - faux.state.callCount, `${faux.provider.id} queue must match expected calls`);
+    }
+    assert.equal(existsSync(scratch), true, "child must not delete the parent-owned scratch");
+  } finally {
+    harness.dispose();
   }
-  await runtime.refresh({ allowNetwork: false });
-  const seed = runtime.getModel("faux-seed", "physical");
-  assert.ok(seed, "seed model must be available and differ from every route target");
-  const { default: bifrostExtension } = await import(join(root, "index.ts"));
-  const resourceLoader = new DefaultResourceLoader({ cwd, agentDir, extensionFactories: [bifrostExtension] });
-  await resourceLoader.reload();
-  ({ session } = await createAgentSession({ cwd, agentDir, modelRuntime: runtime, model: seed, noTools: "all", resourceLoader }));
-  await session.bindExtensions({ mode: "print" });
-
-  const turns = [
-    { prompt: "direct alpha marker", model: "faux-alpha/physical", response: "alpha response" },
-    { prompt: "direct beta marker", model: "faux-beta/physical", response: "beta response" },
-    { prompt: "frontier override collision marker", model: "faux-frontier/physical", response: "frontier response" },
-    { prompt: "plain request with no configured marker", model: "faux-default/physical", response: "default response" },
-  ];
-  for (const [index, turn] of turns.entries()) {
-    await session.prompt(turn.prompt);
-    assert.equal(session.getLastAssistantText(), turn.response, `turn ${index + 1} must complete with its own scripted response`);
-    assert.equal(`${session.model.provider}/${session.model.id}`, turn.model, `turn ${index + 1} must leave Pi on selected physical model`);
-  }
-
-  assert.deepEqual(invocations, turns.map(({ model }) => model), "provider model arguments must match exact per-turn routing with no extra calls");
-  assert.equal(existsSync(violationPath) ? readFileSync(violationPath, "utf8") : "", "", "socket, UDP, and fetch guard must record zero outbound attempts");
-  for (const faux of providers) {
-    const expectedCalls = turns.some(({ model }) => model === `${faux.provider.id}/physical`) ? 1 : 0;
-    assert.equal(faux.state.callCount, expectedCalls, `${faux.provider.id} must receive only expected calls`);
-    assert.equal(faux.getPendingResponseCount(), 1 - expectedCalls, `${faux.provider.id} queue must match expected calls`);
-  }
-  assert.equal(existsSync(scratch), true, "child must not delete the parent-owned scratch");
 });

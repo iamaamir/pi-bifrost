@@ -9,9 +9,11 @@ import type { DebugConfig } from "./debug.ts";
 import type { ReliabilityConfig } from "./reliability.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend, type TierCriterion } from "./classifier-backends.ts";
 import { emptyEconomicSnapshot, publishEconomicObservation, validateEconomicPolicy, type EconomicSignal, type ReservePolicy } from "./economic-signals.ts";
+import { mergeRoutingScope, mergeRoutingScopeConflicts, routingScopeConflicts, type RoutingScope } from "./routing-scope.ts";
 
 export { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL } from "./classifier-backends.ts";
 export type { ClassifierBackend, TierCriterion } from "./classifier-backends.ts";
+export type { RoutingScope, RoutingScopeTier } from "./routing-scope.ts";
 
 export const MAX_CONFIG_SOURCE_BYTES = 10_000_000;
 const MAX_CONFIG_SOURCE_DIAGNOSTICS = 32;
@@ -115,6 +117,8 @@ export interface BifrostConfig {
   tierPolicies?: Record<string, TierPolicy>;
   economics?: EconomicConfig;
   affinity?: AffinityConfig;
+  /** Hard provider allowlists for Bifrost-controlled routing. */
+  routingScope?: RoutingScope;
   enabled?: boolean;
   default?: string;
   strategy?: RoutingStrategy;
@@ -377,6 +381,7 @@ function validateTierPolicyConfigInternal(config: BifrostConfig, maxIssues = Num
     }
   }
   issues.push(...validateEconomicConfig(config));
+  issues.push(...validateRoutingScopeConfig(config));
   return issues;
 }
 
@@ -474,6 +479,94 @@ export function validateEconomicConfig(config: BifrostConfig): ConfigIssue[] {
     }
   }
   return issues;
+}
+
+/**
+ * Validate the hard provider allowlists. Restriction membership uses exact
+ * configured provider ids; an empty array is a deliberate deny-all.
+ */
+export function validateRoutingScopeConfig(config: BifrostConfig): ConfigIssue[] {
+  const raw = (config as unknown as Record<string, unknown>).routingScope;
+  if (raw === undefined) return [];
+  const issues: ConfigIssue[] = [];
+  const add = (code: string, path: string, message: string): void => {
+    issues.push({ severity: "error", code, path, message });
+  };
+  if (config.schemaVersion !== 2) {
+    add("config.routing_scope_requires_v2", "routingScope", "routingScope requires schemaVersion 2.");
+  }
+  if (!criterionObject(raw)) {
+    add("config.routing_scope_invalid", "routingScope", "routingScope must be an object with optional providers and tiers.");
+    return issues;
+  }
+  for (const key of Object.keys(raw)) {
+    if (key !== "providers" && key !== "tiers") {
+      add("config.routing_scope_unknown_field", "routingScope", `Unknown field "${key}" in routingScope.`);
+    }
+  }
+  checkProviderAllowlist(raw.providers, "routingScope.providers", "routingScope.providers", add);
+  const tiers = raw.tiers;
+  if (tiers !== undefined) {
+    if (!criterionObject(tiers)) {
+      add("config.routing_scope_tier_invalid", "routingScope.tiers", "routingScope.tiers must be an object keyed by configured tier.");
+    } else {
+      const modelKeys = Object.keys(config.models ?? {});
+      const modelKeySet = new Set(modelKeys);
+      for (const [tier, entry] of Object.entries(tiers)) {
+        if (!modelKeySet.has(tier)) {
+          add("config.routing_scope_unknown_tier", "routingScope.tiers.*", `routingScope.tiers.${tier} references a tier not found in models [${modelKeys.join(", ")}].`);
+        }
+        if (!criterionObject(entry)) {
+          add("config.routing_scope_tier_invalid", "routingScope.tiers.*", `routingScope.tiers.${tier} must be an object with a providers array.`);
+          continue;
+        }
+        for (const key of Object.keys(entry)) {
+          if (key !== "providers") {
+            add("config.routing_scope_unknown_field", "routingScope.tiers.*", `Unknown field "${key}" in routingScope.tiers.${tier}.`);
+          }
+        }
+        checkProviderAllowlist(entry.providers, "routingScope.tiers.*.providers", `routingScope.tiers.${tier}.providers`, add);
+      }
+    }
+  }
+  for (const conflict of routingScopeConflicts(raw as RoutingScope)) {
+    add("config.routing_scope_conflict", "routingScope", conflict);
+  }
+  return issues;
+}
+
+/** Restriction arrays accept exact provider ids only — no patterns, no folding. */
+function checkProviderAllowlist(
+  value: unknown,
+  path: string,
+  label: string,
+  add: (code: string, path: string, message: string) => void,
+): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    add("config.routing_scope_providers_invalid", path, `${label} must be an array of provider ids.`);
+    return;
+  }
+  const seen = new Set<string>();
+  let malformed = false;
+  let duplicate = false;
+  for (const entry of value) {
+    if (typeof entry !== "string" || entry.length === 0 || entry.trim() !== entry || entry.includes("/")) {
+      malformed = true;
+      continue;
+    }
+    if (seen.has(entry)) {
+      duplicate = true;
+      continue;
+    }
+    seen.add(entry);
+  }
+  if (malformed) {
+    add("config.routing_scope_provider_invalid", path, `${label} must list exact provider ids without surrounding whitespace or "/".`);
+  }
+  if (duplicate) {
+    add("config.routing_scope_duplicate_provider", path, `${label} lists the same provider id more than once.`);
+  }
 }
 
 /**
@@ -798,6 +891,11 @@ export function mergeConfig(
   merged.debug = mergeObj(base.debug, override.debug);
   merged.reliability = mergeObj(base.reliability, override.reliability);
   merged.probe = mergeObj(base.probe, override.probe);
+  // Hard provider allowlists intersect across layers so a later source can
+  // only narrow an earlier restriction, never widen it.
+  const mergedScope = mergeRoutingScope(base.routingScope, override.routingScope);
+  if (mergedScope === undefined) delete merged.routingScope;
+  else merged.routingScope = mergedScope;
   return merged;
 }
 
@@ -844,6 +942,23 @@ function sourcePolicyDiagnostics(value: Record<string, unknown>): string[] {
   const version = value.schemaVersion;
   if (version !== undefined && version !== 1 && version !== 2) {
     add("schemaVersion is unsupported; supported versions are 1 and 2.");
+  }
+  const routingScope = value.routingScope;
+  if (routingScope !== undefined) {
+    if (version === 1) add("routingScope requires schemaVersion 2.");
+    const sourceTierNames = new Set<string>();
+    if (criterionObject(value.models)) for (const tier of Object.keys(value.models)) sourceTierNames.add(tier);
+    if (criterionObject(routingScope) && criterionObject(routingScope.tiers)) {
+      for (const tier of Object.keys(routingScope.tiers)) sourceTierNames.add(tier);
+    }
+    const scopeIssues = validateRoutingScopeConfig({
+      ...defaultConfig(),
+      schemaVersion: 2,
+      models: Object.fromEntries([...sourceTierNames].map((tier) => [tier, []])),
+      routingScope: routingScope as RoutingScope,
+    }).filter(({ code }) => code?.startsWith("config.routing_scope_")
+      && code !== "config.routing_scope_unknown_tier");
+    if (scopeIssues.length) add("routingScope contains an invalid source-local restriction.");
   }
   const tierPolicies = value.tierPolicies;
   if (tierPolicies !== undefined) {
@@ -984,6 +1099,14 @@ function loadConfigLayers(
     const sourceDiagnostics = sourcePolicyDiagnostics(parsed as Record<string, unknown>);
     if (sourceDiagnostics.length) {
       for (const message of sourceDiagnostics) addDiagnostic(layer, `${layer} config ${message}`);
+      continue;
+    }
+    const scopeConflicts = mergeRoutingScopeConflicts(
+      merged.routingScope,
+      (parsed as BifrostConfig).routingScope,
+    );
+    if (scopeConflicts.length) {
+      for (const message of scopeConflicts) addDiagnostic(layer, `${layer} config ${message}`);
       continue;
     }
     sourceFields.push(Object.freeze({ layer, fields: Object.freeze(Object.keys(parsed)) }));

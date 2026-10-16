@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mergeConfig, validateConfig, validateTierPolicyConfig, configHasNoPools, hasClassifierConfigErrors, type BifrostConfig } from "../config.ts";
+import { mergeConfig, validateConfig, validateTierPolicyConfig, validateRoutingScopeConfig, configHasNoPools, hasClassifierConfigErrors, type BifrostConfig } from "../config.ts";
 import type { RoutingStrategy } from "../routing.ts";
 
 const baseConfig: BifrostConfig = {
@@ -456,5 +456,99 @@ describe("validateConfig", () => {
       rules: [{ pattern: "[invalid", model: "frontier" }],
     });
     assert.equal(issues.length, 3);
+  });
+});
+
+describe("routingScope configuration", () => {
+  const versioned = (routingScope: unknown) => ({ ...baseConfig, schemaVersion: 2, routingScope }) as BifrostConfig;
+
+  it("treats an absent routingScope as no restriction", () => {
+    assert.deepEqual(validateRoutingScopeConfig(baseConfig), []);
+    assert.deepEqual(validateRoutingScopeConfig({ ...baseConfig, schemaVersion: 2 }), []);
+  });
+
+  it("requires schema version 2", () => {
+    const issues = validateRoutingScopeConfig({ ...baseConfig, routingScope: { providers: ["anthropic"] } });
+    assert.ok(issues.some((issue) => issue.code === "config.routing_scope_requires_v2" && issue.path === "routingScope"));
+  });
+
+  it("accepts a global allowlist and a narrowing tier allowlist", () => {
+    assert.deepEqual(validateRoutingScopeConfig(versioned({
+      providers: ["anthropic", "openai"],
+      tiers: { frontier: { providers: ["anthropic"] } },
+    })), []);
+  });
+
+  it("accepts an intentionally empty allowlist as deny-all", () => {
+    assert.deepEqual(validateRoutingScopeConfig(versioned({ providers: [] })), []);
+    assert.deepEqual(validateRoutingScopeConfig(versioned({ tiers: { frontier: { providers: [] } } })), []);
+  });
+
+  it("rejects unknown fields, malformed providers, duplicates, and unknown tiers by stable code and path", () => {
+    const issues = validateRoutingScopeConfig(versioned({
+      providers: ["anthropic", "anthropic", " openai", "provider/model", ""],
+      extra: true,
+      tiers: {
+        missing: { providers: ["anthropic"] },
+        frontier: { providers: "anthropic", extra: true },
+      },
+    }));
+    const metadata = issues.map(({ code, path }) => ({ code, path }));
+    for (const expected of [
+      { code: "config.routing_scope_unknown_field", path: "routingScope" },
+      { code: "config.routing_scope_provider_invalid", path: "routingScope.providers" },
+      { code: "config.routing_scope_duplicate_provider", path: "routingScope.providers" },
+      { code: "config.routing_scope_unknown_tier", path: "routingScope.tiers.*" },
+      { code: "config.routing_scope_providers_invalid", path: "routingScope.tiers.*.providers" },
+      { code: "config.routing_scope_unknown_field", path: "routingScope.tiers.*" },
+    ]) {
+      assert.ok(metadata.some((item) => item.code === expected.code && item.path === expected.path), expected.code);
+    }
+  });
+
+  it("rejects a malformed routingScope namespace and a malformed tiers map", () => {
+    assert.ok(validateRoutingScopeConfig(versioned("anthropic")).some((issue) => issue.code === "config.routing_scope_invalid"));
+    assert.ok(validateRoutingScopeConfig(versioned({ tiers: [] })).some((issue) => issue.code === "config.routing_scope_tier_invalid"));
+    assert.ok(validateRoutingScopeConfig(versioned({ tiers: { frontier: [] } })).some((issue) => issue.code === "config.routing_scope_tier_invalid"));
+  });
+
+  it("reports a tier allowlist that cannot intersect the global allowlist", () => {
+    assert.ok(validateRoutingScopeConfig(versioned({
+      providers: ["anthropic"],
+      tiers: { frontier: { providers: ["openai"] } },
+    })).some((issue) => issue.code === "config.routing_scope_conflict"));
+  });
+
+  it("is included in strict tier-policy validation", () => {
+    const issues = validateTierPolicyConfig({
+      ...baseConfig,
+      schemaVersion: 2,
+      routingScope: { providers: ["anthropic"], tiers: { frontier: { providers: ["openai"] } } },
+    });
+    assert.ok(issues.some((issue) => issue.code === "config.routing_scope_conflict"));
+  });
+
+  it("intersects provider allowlists across layers so a later source only narrows", () => {
+    const merged = mergeConfig(
+      { ...baseConfig, schemaVersion: 2, routingScope: { providers: ["anthropic", "openai"], tiers: { frontier: { providers: ["anthropic", "openai"] } } } },
+      { routingScope: { providers: ["openai"], tiers: { frontier: { providers: ["openai"] } } } },
+    );
+    assert.deepEqual(merged.routingScope, {
+      providers: ["openai"],
+      tiers: { frontier: { providers: ["openai"] } },
+    });
+  });
+
+  it("lets an explicit empty allowlist deny all during merge", () => {
+    const merged = mergeConfig(
+      { ...baseConfig, schemaVersion: 2, routingScope: { providers: ["anthropic"] } },
+      { routingScope: { providers: [] } },
+    );
+    assert.deepEqual(merged.routingScope, { providers: [] });
+  });
+
+  it("never adds a routingScope key when no layer configures one", () => {
+    const merged = mergeConfig({ ...baseConfig }, { strategy: "first" });
+    assert.equal(Object.hasOwn(merged, "routingScope"), false);
   });
 });

@@ -22,6 +22,7 @@ import {
   type TierResolutionConfig,
 } from "../routing.ts";
 import { emptyReliabilityState, recordModelFailure, DEFAULT_RELIABILITY } from "../reliability.ts";
+import { compileRoutingScope } from "../routing-scope.ts";
 import { makeCtx, makeModel, withoutCost } from "./helpers.ts";
 import { emptyEconomicSnapshot, hasHardEconomicAdmission, publishEconomicObservation, type EconomicSignal, type ReservePolicy } from "../economic-signals.ts";
 
@@ -1022,6 +1023,248 @@ describe("routing", () => {
       });
       assert.equal(result.selected, undefined);
       assert.equal(result.fallbackReason, "all_tiers_exhausted");
+    });
+  });
+
+  describe("provider routing scope", () => {
+    it("excludes a provider outside the global allowlist without touching reliability", () => {
+      const allowed = makeModel("anthropic", "claude-sonnet", 3);
+      const blocked = makeModel("openai", "gpt-4.1-mini", 1);
+      const ctx = makeCtx([allowed, blocked]);
+      const now = Date.UTC(2026, 0, 1);
+      const scope = compileRoutingScope({ providers: ["anthropic"] });
+
+      const result = resolveHealthyModel(
+        ctx, [modelKey(allowed), modelKey(blocked)], "first", undefined, undefined, now, undefined, undefined,
+        { scope: scope!, evaluatedTier: "general" },
+      );
+
+      assert.equal(modelKey(result.selected), "anthropic/claude-sonnet");
+      assert.deepEqual(result.skipped, [
+        { key: "openai/gpt-4.1-mini", reason: "provider_not_allowed", scope: "global" },
+      ]);
+      assert.deepEqual(result.healthyCandidates.map(modelKey), ["anthropic/claude-sonnet"]);
+    });
+
+    it("treats an explicit empty allowlist as deny-all", () => {
+      const ctx = makeCtx([makeModel("anthropic", "claude-sonnet", 3)]);
+      const result = resolveHealthyModel(
+        ctx, ["anthropic/claude-sonnet"], "first", undefined, undefined, Date.UTC(2026, 0, 1), undefined, undefined,
+        { scope: compileRoutingScope({ providers: [] })!, evaluatedTier: "general" },
+      );
+
+      assert.equal(result.selected, undefined);
+      assert.equal(result.skipped[0]?.reason, "provider_not_allowed");
+      assert.equal(result.skipped[0]?.scope, "global");
+    });
+
+    it("scopes every evaluated pool with its own tier allowlist", () => {
+      const anthropic = makeModel("anthropic", "claude-sonnet", 3);
+      const openai = makeModel("openai", "gpt-4.1-mini", 1);
+      const ctx = makeCtx([anthropic, openai]);
+      const scope = compileRoutingScope({
+        providers: ["anthropic", "openai"],
+        tiers: { frontier: { providers: ["anthropic"] }, economical: { providers: ["openai"] } },
+      });
+      const now = Date.UTC(2026, 0, 1);
+
+      const frontierRejected = resolveHealthyModel(
+        ctx, [modelKey(openai)], "first", undefined, undefined, now, undefined, undefined,
+        { scope: scope!, evaluatedTier: "frontier" },
+      );
+      assert.equal(frontierRejected.selected, undefined);
+      assert.equal(frontierRejected.skipped[0]?.scope, "tier");
+
+      // A different tier's allowlist never constrains this pool.
+      const economicalAllowed = resolveHealthyModel(
+        ctx, [modelKey(openai)], "first", undefined, undefined, now, undefined, undefined,
+        { scope: scope!, evaluatedTier: "economical" },
+      );
+      assert.equal(modelKey(economicalAllowed.selected), "openai/gpt-4.1-mini");
+    });
+
+    it("still excludes a fallback pool that its own tier scope rejects", () => {
+      const broken = makeModel("anthropic", "claude-sonnet", 3);
+      const openai = makeModel("openai", "gpt-4.1-mini", 1);
+      const ctx = makeCtx([broken, openai]);
+      const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 60 };
+      const now = Date.UTC(2026, 0, 1);
+      const state = recordModelFailure(emptyReliabilityState(), modelKey(broken), cfg, now, "probe", "timeout");
+      const scope = compileRoutingScope({
+        providers: ["anthropic", "openai"],
+        tiers: { economical: { providers: ["anthropic"] } },
+      });
+
+      const result = resolveModelWithFallback(ctx, {
+        requestedTier: "frontier",
+        requestedPattern: ["anthropic/claude-sonnet"],
+        requestedStrategy: "first",
+        defaultTier: "economical",
+        defaultPattern: ["openai/gpt-4.1-mini"],
+        defaultStrategy: "first",
+        reliabilityState: state,
+        reliabilityConfig: cfg,
+        now,
+        scope: scope!,
+      });
+
+      assert.equal(result.selected, undefined);
+      assert.deepEqual(result.fallback?.skipped, [
+        { key: "openai/gpt-4.1-mini", reason: "provider_not_allowed", scope: "tier" },
+      ]);
+    });
+
+    it("falls back within the scope and reports the provider exclusion as the reason", () => {
+      const anthropic = makeModel("anthropic", "claude-sonnet", 3);
+      const openai = makeModel("openai", "gpt-4.1-mini", 1);
+      const ctx = makeCtx([anthropic, openai]);
+      const scope = compileRoutingScope({
+        providers: ["anthropic", "openai"],
+        tiers: { frontier: { providers: ["openai"] } },
+      });
+
+      const result = resolveModelWithFallback(ctx, {
+        requestedTier: "frontier",
+        requestedPattern: ["anthropic/claude-sonnet"],
+        requestedStrategy: "first",
+        defaultTier: "economical",
+        defaultPattern: ["openai/gpt-4.1-mini"],
+        defaultStrategy: "first",
+        now: Date.UTC(2026, 0, 1),
+        scope: scope!,
+      });
+
+      assert.equal(modelKey(result.selected), "openai/gpt-4.1-mini");
+      assert.equal(result.selectedTier, "economical");
+      assert.equal(result.fallbackReason, "requested_tier_provider_excluded");
+      assert.deepEqual(result.primary.skipped, [
+        { key: "anthropic/claude-sonnet", reason: "provider_not_allowed", scope: "tier" },
+      ]);
+    });
+
+    it("applies scope before reliability so an excluded provider's open circuit is never reported", () => {
+      const broken = makeModel("openai", "gpt-4.1-mini", 1);
+      const allowed = makeModel("anthropic", "claude-sonnet", 3);
+      const ctx = makeCtx([broken, allowed]);
+      const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 60 };
+      const now = Date.UTC(2026, 0, 1);
+      const state = recordModelFailure(emptyReliabilityState(), modelKey(broken), cfg, now, "probe", "timeout");
+      const scope = compileRoutingScope({ providers: ["anthropic"] });
+
+      const result = resolveModelWithFallback(ctx, {
+        requestedTier: "general",
+        requestedPattern: ["openai/gpt-4.1-mini"],
+        requestedStrategy: "first",
+        defaultTier: "economical",
+        defaultPattern: ["anthropic/claude-sonnet"],
+        defaultStrategy: "first",
+        reliabilityState: state,
+        reliabilityConfig: cfg,
+        now,
+        scope: scope!,
+      });
+
+      assert.equal(modelKey(result.selected), "anthropic/claude-sonnet");
+      // Scope still runs first; the excluded provider never reaches reliability state.
+      assert.equal(result.fallbackReason, "requested_tier_provider_excluded");
+      assert.deepEqual(result.primary.skipped, [
+        { key: "openai/gpt-4.1-mini", reason: "provider_not_allowed", scope: "global" },
+      ]);
+    });
+
+    it("reports reliability when a requested pool has both an open circuit and a scope exclusion", () => {
+      const broken = makeModel("anthropic", "claude-sonnet", 3);
+      const blocked = makeModel("openai", "gpt-4.1-mini", 1);
+      const ctx = makeCtx([broken, blocked]);
+      const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 60 };
+      const now = Date.UTC(2026, 0, 1);
+      const state = recordModelFailure(emptyReliabilityState(), modelKey(broken), cfg, now, "probe", "timeout");
+      const scope = compileRoutingScope({
+        providers: ["anthropic", "openai"],
+        tiers: { general: { providers: ["anthropic"] } },
+      });
+
+      const result = resolveModelWithFallback(ctx, {
+        requestedTier: "general",
+        requestedPattern: ["anthropic/claude-sonnet", "openai/gpt-4.1-mini"],
+        requestedStrategy: "first",
+        defaultTier: "economical",
+        defaultPattern: [],
+        defaultStrategy: "first",
+        reliabilityState: state,
+        reliabilityConfig: cfg,
+        now,
+        scope: scope!,
+      });
+
+      assert.equal(result.selected, undefined);
+      assert.equal(result.fallbackReason, "all_tiers_exhausted");
+      // Every candidate keeps its own reason, so the scope rejection stays visible.
+      const skipped = new Map(result.primary.skipped.map((candidate) => [candidate.key, candidate]));
+      assert.equal(skipped.get("anthropic/claude-sonnet")?.reason, "open_circuit");
+      assert.deepEqual(skipped.get("openai/gpt-4.1-mini"), {
+        key: "openai/gpt-4.1-mini", reason: "provider_not_allowed", scope: "tier",
+      });
+    });
+
+    it("applies scope to every explicit fallback tier and reports the exclusion", () => {
+      const anthropic = makeModel("anthropic", "claude-sonnet", 3);
+      const openai = makeModel("openai", "gpt-4.1-mini", 1);
+      const ctx = makeCtx([anthropic, openai]);
+      const config: TierResolutionConfig = {
+        schemaVersion: 2,
+        models: { frontier: ["anthropic/claude-sonnet"], economical: ["openai/gpt-4.1-mini"] },
+        default: "economical",
+        tierPolicies: { frontier: { fallbackTiers: ["economical"] } },
+        routingScope: { providers: ["openai"] },
+      };
+
+      const result = resolveConfiguredTier(
+        ctx, "frontier", config, undefined, undefined, Date.UTC(2026, 0, 1),
+      ).resolution;
+
+      assert.equal(modelKey(result.selected), "openai/gpt-4.1-mini");
+      assert.equal(result.selectedTier, "economical");
+      assert.equal(result.fallbackReason, "requested_tier_provider_excluded");
+    });
+
+    it("applies only the global scope to a direct model rule without inventing a tier", () => {
+      const anthropic = makeModel("anthropic", "claude-sonnet", 3);
+      const ctx = makeCtx([anthropic]);
+      const config: TierResolutionConfig = {
+        models: { general: ["anthropic/claude-sonnet"] },
+        routingScope: { providers: ["openai"], tiers: { general: { providers: ["anthropic"] } } },
+      };
+
+      const result = resolveConfiguredTier(
+        ctx, "anthropic/claude-sonnet", config, undefined, undefined, Date.UTC(2026, 0, 1),
+      ).resolution;
+
+      assert.equal(result.selected, undefined);
+      assert.deepEqual(result.primary.skipped, [
+        { key: "anthropic/claude-sonnet", reason: "provider_not_allowed", scope: "global" },
+      ]);
+    });
+
+    it("never retains an affinity anchor outside the scope", () => {
+      const anchor = makeModel("anthropic", "claude-sonnet", 3);
+      const allowed = makeModel("openai", "gpt-4.1-mini", 1);
+      const ctx = makeCtx([anchor, allowed]);
+      const now = Date.UTC(2026, 0, 1);
+
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["anthropic/claude-sonnet", "openai/gpt-4.1-mini"] },
+        strategy: "first",
+        affinity: { mode: "retain-within-tier" },
+        routingScope: { providers: ["openai"] },
+      }, undefined, undefined, now, undefined, undefined, {
+        targetOrigin: "automatic",
+        anchor: { modelKey: "anthropic/claude-sonnet", provider: "anthropic", lastSuccessfulDispatchAt: now - 100 },
+      }).resolution;
+
+      assert.equal(modelKey(result.selected), "openai/gpt-4.1-mini");
+      assert.equal(result.affinityObservation?.selection, "anchor_not_eligible");
+      assert.equal(result.primary.skipped[0]?.reason, "provider_not_allowed");
     });
   });
 

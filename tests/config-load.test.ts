@@ -309,6 +309,40 @@ describe("config load", () => {
     }
   });
 
+  it("intersects routing scopes across layers and diagnoses a disjoint override", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
+    const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
+    const home = mkdtempSync(join(tmpdir(), "bifrost-home-"));
+    const agentDir = join(home, "agent");
+    const oldHome = process.env.HOME;
+    const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.HOME = home;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      writeJson(join(cwd, "bifrost.json"), {
+        schemaVersion: 2,
+        models: { general: ["fixture/general"] },
+        routingScope: { providers: ["anthropic", "openai"] },
+      });
+      writeJson(join(cwd, ".pi", "bifrost.json"), { routingScope: { providers: ["openai"] } });
+      const narrowed = loadConfigForReload(cwd, extensionDir);
+      assert.deepEqual(narrowed.diagnostics, []);
+      assert.deepEqual(narrowed.config.routingScope, { providers: ["openai"] });
+
+      writeJson(join(cwd, ".pi", "bifrost.json"), { routingScope: { providers: ["google"] } });
+      const conflict = loadConfigForReload(cwd, extensionDir);
+      assert.ok(conflict.diagnostics.some(({ layer, message }) =>
+        layer === "project" && message.includes("routingScope.providers conflicts")));
+      assert.deepEqual(conflict.config.routingScope, { providers: ["anthropic", "openai"] });
+    } finally {
+      process.env.HOME = oldHome;
+      process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(extensionDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("bounds config reads while following symlinks to regular config files", () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
     const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));

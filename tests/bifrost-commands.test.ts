@@ -1580,6 +1580,28 @@ describe("preview json marker", () => {
     assert.equal("selected" in report, false);
   });
 
+  it("labels a provider-scope exclusion in the preview candidate list", async () => {
+    const { ctx } = makeCtx([makeModel("fixture", "allowed-model")]);
+    const state = makeState();
+    Object.assign(state.config, {
+      schemaVersion: 2,
+      models: { general: ["allowed-model"] },
+      default: undefined,
+      routingScope: { providers: ["other"] },
+    });
+    state.getPipeline = () => ({
+      classify: async () => ({ kind: "classified" as const, tier: "general", source: "regex" }),
+    }) as never;
+    const dispatch = createCommandRouter(state as never);
+
+    const [report] = await captureJsonReports(async () => {
+      await dispatch("preview --json hello", ctx as never);
+    }) as Array<Record<string, unknown>>;
+
+    assert.deepEqual(report.requestedCandidates, ["xx fixture/allowed-model (provider not allowed)"]);
+    assert.equal("selected" in report, false);
+  });
+
   it("reports source cache when the prompt is already cached", async () => {
     // The review found the documented `source` values incomplete by tracing
     // `classify`: `handlePreview` calls the real pipeline, whose stage 2 is the

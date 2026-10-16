@@ -68,6 +68,8 @@ export interface RouteDecisionCandidate {
   readonly model: string;
   readonly status: "eligible" | "excluded";
   readonly exclusion?: SkippedCandidate["reason"] | "economic_reserve";
+  /** Which hard provider restriction excluded this candidate. */
+  readonly scope?: SkippedCandidate["scope"];
   readonly reserve?: {
     readonly disposition: string;
     readonly wouldReject: boolean;
@@ -133,6 +135,8 @@ function summarizePool(
   billingPreference?: BillingPreferenceProjection,
 ): RouteDecisionPool {
   const exclusions = new Map(skipped.map((candidate) => [candidate.key, candidate.reason]));
+  const scopes = new Map(skipped.flatMap((candidate) => candidate.scope === undefined
+    ? [] : [[candidate.key, candidate.scope] as const]));
   const reserveEvaluations = new Map((economic ?? []).map(({ key, evaluation }) => [key, evaluation]));
   return {
     tier,
@@ -141,12 +145,14 @@ function summarizePool(
     candidates: candidates.map((candidate) => {
       const model = `${candidate.provider}/${candidate.id}`;
       const exclusion = exclusions.get(model);
+      const scope = scopes.get(model);
       const reserve = reserveEvaluations.get(model);
       const hardExcluded = reserve?.mode === "policy" && reserve.disposition === "rejected";
       return {
         model,
         status: exclusion || hardExcluded ? "excluded" : "eligible",
         ...(exclusion ? { exclusion } : hardExcluded ? { exclusion: "economic_reserve" as const } : {}),
+        ...(scope ? { scope } : {}),
         ...(reserve ? {
           reserve: {
             disposition: reserve.disposition,
