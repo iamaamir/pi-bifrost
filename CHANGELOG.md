@@ -5,6 +5,7 @@ All notable changes to pi-bifrost are documented here.
 ## [Unreleased]
 
 ### Added
+- A `bifrost_config` agent tool and the packaged `configure-bifrost` skill let an agent build configuration from a described goal instead of hand-written JSON: `inspect` reports Pi's real model list and every config layer, `check` validates a candidate offline, `preview` shows bounded route decisions without dispatching, and `apply` writes one approved config file atomically then reloads it through the same path as `/bifrost reload`. Nothing is written before the user agrees, and routing behavior itself is unchanged.
 - Experimental `pi-bifrost/router` API over caller-supplied snapshots, shipped as JavaScript with TypeScript declarations. Resolution is advisory; it does not reserve or dispatch a model.
 - Optional schema-version-2 economic reserves. Static declared/estimated provider or model facts can be observed first, then explicitly applied as a pre-strategy candidate filter. No live billing adapter, account scope, or spend-cap guarantee is included.
 - Optional schema-version-2 billing preference can prefer an explicitly configured class among the final eligible candidates when fresh facts support it. Unknown, stale, or conflicting facts stay neutral; the preference does not claim savings or override hard exclusions.

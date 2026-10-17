@@ -2570,6 +2570,44 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
 
 // ── Route table ─────────────────────────────────────────────
 
+/**
+ * Re-read every config layer and install the result through Bifrost's runtime
+ * reload path. Shared by `/bifrost reload` and by an approved agent apply, so
+ * both activate a saved configuration exactly the same way.
+ */
+export function reloadBifrostConfig(state: BifrostState, ctx: ExtensionContext): boolean {
+  const done = debugMeasure("command", "reload");
+  const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
+  if (!installReloadedConfig(state, loadedConfig, ctx)) {
+    done({ accepted: false });
+    return false;
+  }
+  // Re-init debug — user may have updated debug config since startup.
+  setupDebug(state.config.debug ?? { enabled: false }, process.cwd());
+  const runtimeState = loadRuntimeState(runtimeStatePath(process.cwd()), {
+    enabled: state.config.enabled ?? true,
+    pinned: false,
+    classifierEnabled: state.config.classifier?.enabled ?? true,
+  });
+  state.enabled = runtimeState.enabled;
+  state.classifierEnabled = runtimeState.classifierEnabled;
+  state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path), (state.config.cache?.ttlHours ?? 720) * 60 * 60 * 1000);
+  state.reliabilityStore.reload(state.config.reliability, process.cwd());
+  state.classifierMetricsStore.reload({
+    cwd: process.cwd(),
+    enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
+  });
+  syncBifrostModeStatus(ctx, state);
+  clearBifrostWidgets(ctx);
+  done();
+  debug("command", "reloaded", {
+    enabled: state.enabled,
+    classifierEnabled: state.classifierEnabled,
+    tiers: Object.keys(state.config.models ?? {}).join(","),
+  });
+  return true;
+}
+
 export function createCommandRouter(
   state: BifrostState,
 ): (args: string, ctx: ExtensionContext) => Promise<void> {
@@ -2609,35 +2647,7 @@ export function createCommandRouter(
       log(ctx, "Bifrost unpinned");
     }),
     exact("reload", (_, ctx) => {
-      const done = debugMeasure("command", "reload");
-      const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
-      if (!installReloadedConfig(state, loadedConfig, ctx)) {
-        done({ accepted: false });
-        return;
-      }
-      // Re-init debug — user may have updated debug config since startup.
-      setupDebug(state.config.debug ?? { enabled: false }, process.cwd());
-      const runtimeState = loadRuntimeState(runtimeStatePath(process.cwd()), {
-        enabled: state.config.enabled ?? true,
-        pinned: false,
-        classifierEnabled: state.config.classifier?.enabled ?? true,
-      });
-      state.enabled = runtimeState.enabled;
-      state.classifierEnabled = runtimeState.classifierEnabled;
-      state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path), (state.config.cache?.ttlHours ?? 720) * 60 * 60 * 1000);
-      state.reliabilityStore.reload(state.config.reliability, process.cwd());
-      state.classifierMetricsStore.reload({
-        cwd: process.cwd(),
-        enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
-      });
-      syncBifrostModeStatus(ctx, state);
-      clearBifrostWidgets(ctx);
-      done();
-      debug("command", "reloaded", {
-        enabled: state.enabled,
-        classifierEnabled: state.classifierEnabled,
-        tiers: Object.keys(state.config.models ?? {}).join(","),
-      });
+      if (!reloadBifrostConfig(state, ctx)) return;
       log(ctx, "Bifrost config reloaded");
     }),
 

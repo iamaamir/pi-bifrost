@@ -42,16 +42,21 @@ describe("packed experimental router consumer", () => {
         "affinity", "economic-preferences", "economic-signals", "failure-observations", "inline-override", "reliability", "reliability-v1-fence", "router", "routing", "session-fallback", "storage", "virtual-model",
       ].flatMap((name) => [`dist/router/${name}.js`, `dist/router/${name}.d.ts`]);
       const archivePaths = packed.files.map((file) => file.path);
+      const agentSkill = [
+        "skills/configure-bifrost/SKILL.md",
+        "skills/configure-bifrost/references/configuration-reference.md",
+      ];
       for (const required of [
         ...rootSources, ...routerGraph, "bifrost.json", "schema.json", "package.json",
-        "README.md", "CHANGELOG.md", "docs/router-api.md",
+        "README.md", "CHANGELOG.md", "docs/router-api.md", ...agentSkill,
       ]) {
         assert.ok(archivePaths.includes(required), `release archive missing ${required}`);
       }
       assert.ok(archivePaths.every((path) => path.endsWith(".ts") && !path.includes("/")
         || ["bifrost.json", "schema.json", "README.md", "CHANGELOG.md", "package.json", "docs/router-api.md"].includes(path)
         || routerGraph.includes(path)
-        || path.startsWith("examples/")), "release contains files outside source, router API, and examples allowlists");
+        || path.startsWith("examples/")
+        || agentSkill.includes(path)), "release contains files outside source, router API, examples, and agent skill allowlists");
       assert.ok(packed.files.some((file) => file.path === "dist/router/router.js"), "the package must contain built JS");
       assert.ok(packed.files.some((file) => file.path === "dist/router/router.d.ts"), "the package must contain API declarations");
       mkdirSync(consumer);
@@ -70,6 +75,13 @@ describe("packed experimental router consumer", () => {
       assert.deepEqual(packageJson.exports["./*"], "./*", "legacy package subpaths stay mapped");
       assert.deepEqual(packageJson.pi.extensions, ["./index.ts"], "the Pi extension entry stays unchanged");
       assert.ok(readFileSync(join(installedPackage, "index.ts"), "utf8"));
+      // The agent skill must be discoverable from the installed package: Pi reads
+      // the declared skill directory, which has to contain a readable SKILL.md.
+      assert.deepEqual(packageJson.pi.skills, ["./skills/configure-bifrost"], "the package declares its agent skill");
+      const installedSkill = join(installedPackage, "skills", "configure-bifrost", "SKILL.md");
+      assert.ok(existsSync(installedSkill), "the installed package ships the agent skill");
+      assert.match(readFileSync(installedSkill, "utf8"), /^---\nname: configure-bifrost\ndescription: /, "the installed skill has loadable frontmatter");
+      assert.ok(existsSync(join(installedPackage, "skills", "configure-bifrost", "references", "configuration-reference.md")));
       for (const peerName of ["@earendil-works/pi-ai", "@earendil-works/pi-coding-agent"]) {
         assert.ok(readFileSync(join(consumerModules, peerName, "package.json"), "utf8"));
       }
