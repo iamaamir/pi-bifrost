@@ -19,6 +19,7 @@
 
 import { createHash } from "node:crypto";
 import { closeSync, constants, lstatSync, openSync, readSync } from "node:fs";
+import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionContext, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -35,6 +36,7 @@ import {
 import { findCandidates } from "./routing.ts";
 import { createRouter, type RouterModel, type RouterRegistrySnapshot, type RouterSnapshot } from "./router.ts";
 import { writeTextFile } from "./storage.ts";
+import { reportText, shortDigest } from "./config-agent-report.ts";
 import { isGenerativeModel } from "./virtual-model.ts";
 
 // ── Limits ─────────────────────────────────────────────────────
@@ -42,7 +44,6 @@ import { isGenerativeModel } from "./virtual-model.ts";
 const MAX_PROMPTS = 8;
 const MAX_PROMPT_CHARS = 2_000;
 const MAX_APPROVAL_MESSAGE_CHARS = 4_000;
-const MAX_REPORT_LINES = 120;
 
 // ── Public types ───────────────────────────────────────────────
 
@@ -297,8 +298,14 @@ function serializeSource(object: Record<string, unknown>): string {
   return `${JSON.stringify(object, null, 2)}\n`;
 }
 
-function shortDigest(digest: string | null): string {
-  return digest === null ? "absent" : digest.slice(0, 12);
+/**
+ * Canonical text form of a source digest. An absent source has no digest
+ * (`null`), and the tool schema only accepts strings, so an agent can only
+ * ever pass back the literal `"absent"` for a file that does not exist yet.
+ * Both sides of the apply guard are normalized through this.
+ */
+function sourceDigestText(digest: string | null | undefined): string {
+  return digest ?? "absent";
 }
 
 // ── Source files ───────────────────────────────────────────────
@@ -533,7 +540,7 @@ function issuesOf(config: BifrostConfig, diagnostics: readonly { readonly layer:
 }
 
 function routeFileFor(cwd: string): string | null {
-  const candidates = [".pi/bifrost-routes.json", "bifrost-routes.json"].map((relative) => `${cwd}/${relative}`);
+  const candidates = [join(cwd, ".pi", "bifrost-routes.json"), join(cwd, "bifrost-routes.json")];
   for (const path of candidates) {
     try {
       const stats = lstatSync(path);
@@ -687,14 +694,21 @@ export interface ConfigAgentCheckInput {
   readonly extensionDir: string;
 }
 
-export function checkConfigCandidate(input: ConfigAgentCheckInput): ConfigAgentCheckResult {
-  const { request, catalog, cwd, extensionDir } = input;
-  const plan = planCandidate(cwd, extensionDir, request);
-  const empty = (status: ConfigAgentStatus, reason: string): ConfigAgentCheckResult => ({
+/**
+ * Shared shape for a check result that produced nothing to report: usage and
+ * rejection answers from both the pure check path and the tool's unknown-
+ * operation default return this. */
+function emptyCheckResult(
+  status: ConfigAgentStatus,
+  reason: string,
+  source: ConfigAgentSource,
+  sourcePath: string,
+): ConfigAgentCheckResult {
+  return {
     operation: "check",
     status,
-    source: plan.source,
-    sourcePath: plan.sourcePath,
+    source,
+    sourcePath,
     proposalDigest: null,
     guards: null,
     changes: [],
@@ -709,11 +723,16 @@ export function checkConfigCandidate(input: ConfigAgentCheckInput): ConfigAgentC
     removedModels: [],
     writeEligible: false,
     notes: [reason],
-  });
-  if (!plan.ok) return empty("usage", plan.reason ?? "invalid request");
+  };
+}
+
+export function checkConfigCandidate(input: ConfigAgentCheckInput): ConfigAgentCheckResult {
+  const { request, catalog, cwd, extensionDir } = input;
+  const plan = planCandidate(cwd, extensionDir, request);
+  if (!plan.ok) return emptyCheckResult("usage", plan.reason ?? "invalid request", plan.source, plan.sourcePath);
 
   const bytes = Buffer.from(plan.nextText, "utf-8");
-  if (bytes.byteLength > MAX_CONFIG_SOURCE_BYTES) return empty("rejected", "the candidate exceeds Bifrost's config size limit");
+  if (bytes.byteLength > MAX_CONFIG_SOURCE_BYTES) return emptyCheckResult("rejected", "the candidate exceeds Bifrost's config size limit", plan.source, plan.sourcePath);
 
   const before = effectiveConfig(cwd, extensionDir);
   const prospective = loadConfigWithSourceOverride(cwd, extensionDir, plan.source, bytes);
@@ -997,7 +1016,7 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
   if (liveSource.readError) {
     return { ...withCheck, status: "rejected", reason: `the selected source ${liveSource.readError}`, notes: ["Nothing was written."] };
   }
-  if (liveSource.digest !== request.sourceDigest) {
+  if (sourceDigestText(liveSource.digest) !== sourceDigestText(request.sourceDigest)) {
     return {
       ...withCheck,
       status: "stale",
@@ -1143,161 +1162,6 @@ export function inspectConfigAgent(input: ConfigAgentInspectInput): ConfigAgentI
   };
 }
 
-// ── Rendering ──────────────────────────────────────────────────
-
-function modelLine(model: ConfigAgentModel): string {
-  return `${model.key} ($${(model.inputCost + model.outputCost).toFixed(2)}/1M tokens, ctx ${model.contextWindow}${model.reasoning ? ", reasoning" : ""})`;
-}
-
-function bounded(lines: readonly string[]): string[] {
-  return lines.length <= MAX_REPORT_LINES ? [...lines] : [...lines.slice(0, MAX_REPORT_LINES), `... ${lines.length - MAX_REPORT_LINES} more line(s)`];
-}
-
-function renderInspect(result: ConfigAgentInspectResult): string {
-  const lines = [
-    "--- bifrost configuration ---",
-    `enabled: ${result.routing.enabled}`,
-    `schemaVersion: ${result.routing.schemaVersion}`,
-    `default tier: ${result.routing.defaultTier ?? "none"}`,
-    `global strategy: ${result.routing.strategy ?? "first"}`,
-    "layers (lowest to highest precedence):",
-    ...result.layers.map((layer) => `  ${layer.layer}${layer.editable ? "" : " (read-only)"}: ${layer.path}${layer.exists ? ` [${layer.bytes} bytes, ${layer.fields.length} field(s)]` : " [absent]"}${layer.readError ? ` -- ${layer.readError}` : ""}`),
-    "tiers:",
-    ...result.routing.tiers.map((tier) => `  ${tier.tier} (${tier.strategy})${tier.fallbackTiers ? ` fallback: [${tier.fallbackTiers.join(", ")}]` : ""}: ${tier.pool.join(", ") || "empty"}`),
-    `classifier: ${result.routing.classifier.enabled ? `enabled (${result.routing.classifier.backend ?? "auto backend"})` : "disabled"}`,
-    `affinity: ${result.routing.affinity.mode}`,
-    `reliability: v${result.routing.reliability.stateVersion}${result.routing.reliability.enabled ? "" : " (disabled)"}`,
-    `available models: ${result.inventory.length}${result.inventoryProvider ? ` of ${result.availableModelCount} (provider "${result.inventoryProvider}")` : ""}`,
-    `known but unavailable models: ${result.knownUnavailableCount}`,
-  ];
-  lines.push("available model inventory:");
-  for (const model of result.inventory.slice(0, 40)) lines.push(`  ${modelLine(model)}`);
-  if (result.inventory.length > 40) lines.push(`  ... ${result.inventory.length - 40} more; repeat inspect with a provider to narrow this list`);
-  if (result.issues.length > 0) {
-    lines.push("issues:");
-    for (const issue of result.issues) lines.push(`  ${issue.severity}: ${issue.message}`);
-  }
-  lines.push("restrictions:");
-  for (const restriction of result.restrictions) lines.push(`  ${restriction}`);
-  lines.push("-----------------------------");
-  return bounded(lines).join("\n");
-}
-
-function changeLine(change: ConfigAgentChange): string {
-  return `${change.kind} ${change.field}`;
-}
-
-/**
- * The agent has to pass these digests back to apply, so the model-facing report
- * carries them in full even though the summary lines stay abbreviated.
- */
-function digestLines(proposalDigest: string | null, guards: ConfigAgentGuards | null): string[] {
-  if (!proposalDigest || !guards) return [];
-  return [
-    "apply digests (pass these back unchanged):",
-    `  proposalDigest: ${proposalDigest}`,
-    `  sourceDigest: ${guards.sourceDigest ?? "absent"}`,
-    `  effectiveDigest: ${guards.effectiveDigest}`,
-    `  catalogDigest: ${guards.catalogDigest}`,
-  ];
-}
-
-function renderCheck(result: ConfigAgentCheckResult): string {
-  const lines = [
-    "--- bifrost candidate check ---",
-    `status: ${result.status}`,
-    `source: ${result.source} (${result.sourcePath})`,
-    `proposal: ${shortDigest(result.proposalDigest)}`,
-  ];
-  if (result.status === "usage" || result.status === "rejected") {
-    lines.push("nothing was written");
-    for (const issue of result.issues.filter((issue) => issue.severity === "error")) lines.push(`  error: ${issue.message}`);
-    for (const note of result.notes) lines.push(`  ${note}`);
-    lines.push("------------------------------");
-    return bounded(lines).join("\n");
-  }
-  lines.push(result.changes.length === 0 ? "changes: none" : "changes:");
-  for (const change of result.changes) lines.push(`  ${changeLine(change)}`);
-  lines.push("tiers after the change:");
-  for (const tier of result.routingAfter?.tiers ?? []) {
-    lines.push(`  ${tier.tier} (${tier.strategy})${tier.fallbackTiers ? ` fallback: [${tier.fallbackTiers.join(", ")}]` : ""}: ${tier.pool.join(", ") || "empty"}`);
-  }
-  if (result.references.length > 0) {
-    lines.push("pool entries that cannot route:");
-    for (const reference of result.references) lines.push(`  ${reference.tier}: ${reference.entry} (${reference.status})`);
-  }
-  if (result.newlyEligibleModels.length > 0) lines.push(`newly referenced models that are available: ${result.newlyEligibleModels.join(", ")}`);
-  if (result.removedModels.length > 0) lines.push(`models no longer referenced by any tier: ${result.removedModels.join(", ")}`);
-  const warnings = result.issues.filter((issue) => issue.severity === "warning");
-  if (warnings.length > 0) {
-    lines.push("warnings:");
-    for (const warning of warnings) lines.push(`  ${warning.message}`);
-  }
-  for (const note of result.notes) lines.push(`note: ${note}`);
-  lines.push(`write eligible: ${result.writeEligible}`);
-  if (result.writeEligible) lines.push(...digestLines(result.proposalDigest, result.guards));
-  lines.push("------------------------------");
-  return bounded(lines).join("\n");
-}
-
-function renderPreview(result: ConfigAgentPreviewResult): string {
-  const lines = [
-    "--- bifrost candidate preview (offline) ---",
-    `status: ${result.status}`,
-    `source: ${result.source} (${result.sourcePath})`,
-    `proposal: ${shortDigest(result.proposalDigest)}`,
-    `network: ${result.network}; prompt execution: ${result.promptExecution}`,
-  ];
-  if (result.status !== "ok") {
-    for (const note of result.notes) lines.push(`  ${note}`);
-    lines.push("-------------------------------------------");
-    return bounded(lines).join("\n");
-  }
-  lines.push("tier assignments (forced tier resolution, deterministic):");
-  for (const tier of result.tiers) {
-    lines.push(`  ${tier.tier} (${tier.strategy}) -> ${tier.selected ?? "nothing resolved"}`);
-    for (const excluded of tier.excluded) lines.push(`    excluded: ${excluded.model} (${excluded.exclusion})`);
-    if (tier.unknownUnavailable.length > 0) lines.push(`    known but unavailable: ${tier.unknownUnavailable.join(", ")}`);
-  }
-  if (result.cases.length > 0) {
-    lines.push("representative prompts:");
-    for (const entry of result.cases) {
-      lines.push(`  "${entry.prompt.slice(0, 80)}" -> ${entry.decidedBy} / ${entry.confidence}: ${entry.selected ? `${entry.selectedTier} => ${entry.selected}` : "no selection"}`);
-      if (entry.fallbackReason) lines.push(`    fallback: ${entry.fallbackReason}`);
-      for (const excluded of entry.excluded) lines.push(`    excluded: ${excluded.model} (${excluded.exclusion})`);
-      if (entry.unavailable.length > 0) lines.push(`    known but unavailable: ${entry.unavailable.join(", ")}`);
-    }
-  }
-  for (const note of result.notes) lines.push(`note: ${note}`);
-  lines.push(...digestLines(result.proposalDigest, result.guards));
-  lines.push("-------------------------------------------");
-  return bounded(lines).join("\n");
-}
-
-function renderApply(result: ConfigAgentApplyResult): string {
-  const lines = [
-    "--- bifrost configuration apply ---",
-    `status: ${result.status}`,
-    `source: ${result.source} (${result.sourcePath})`,
-    `applied: ${result.applied}; reloaded: ${result.reloaded}; verified: ${result.verified}`,
-  ];
-  if (result.reason) lines.push(`reason: ${result.reason}`);
-  for (const change of result.changes) lines.push(`  ${changeLine(change)}`);
-  if (result.routing) lines.push(`active default tier: ${result.routing.defaultTier ?? "none"}; tiers: ${result.routing.tiers.map((tier) => tier.tier).join(", ") || "none"}`);
-  for (const note of result.notes) lines.push(`note: ${note}`);
-  lines.push("----------------------------------");
-  return bounded(lines).join("\n");
-}
-
-function reportText(result: ConfigAgentToolResult): string {
-  switch (result.operation) {
-    case "inspect": return renderInspect(result);
-    case "check": return renderCheck(result);
-    case "preview": return renderPreview(result);
-    case "apply": return renderApply(result);
-  }
-}
-
 // ── Tool ───────────────────────────────────────────────────────
 
 /** Tool name the skill and the agent-facing instructions refer to. */
@@ -1349,7 +1213,7 @@ const ConfigAgentParameters = Type.Object({
   prompts: Type.Optional(Type.Array(Type.String(), { description: "Representative prompts to evaluate in preview. Offline: nothing is sent anywhere." })),
   provider: Type.Optional(Type.String({ description: "Restrict the inventory reported by inspect to one provider. Display only." })),
   proposalDigest: Type.Optional(Type.String({ description: "proposalDigest returned by check or preview for this exact candidate." })),
-  sourceDigest: Type.Optional(Type.String({ description: "sourceDigest returned by check or preview for this exact candidate." })),
+  sourceDigest: Type.Optional(Type.String({ description: "sourceDigest returned by check or preview for this exact candidate. When the source file does not exist yet, check reports the literal \"absent\"; pass that string back unchanged." })),
   effectiveDigest: Type.Optional(Type.String({ description: "effectiveDigest returned by check or preview for this exact candidate." })),
   catalogDigest: Type.Optional(Type.String({ description: "catalogDigest returned by check or preview for this exact candidate." })),
 });
@@ -1448,26 +1312,12 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
           break;
         }
         default:
-          result = {
-            operation: "check",
-            status: "usage",
-            source: "project",
-            sourcePath: "",
-            proposalDigest: null,
-            guards: null,
-            changes: [],
-            nextSource: null,
-            effectiveAfter: null,
-            effectiveBefore: null,
-            issues: [],
-            diagnostics: [],
-            references: [],
-            routingAfter: null,
-            newlyEligibleModels: [],
-            removedModels: [],
-            writeEligible: false,
-            notes: [`unknown operation ${String(operation)}; use inspect, check, preview, or apply`],
-          };
+          result = emptyCheckResult(
+            "usage",
+            `unknown operation ${String(operation)}; use inspect, check, preview, or apply`,
+            "project",
+            "",
+          );
       }
       return {
         content: [{ type: "text", text: reportText(result) }],

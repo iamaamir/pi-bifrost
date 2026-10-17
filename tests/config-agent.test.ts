@@ -208,8 +208,8 @@ describe("agent-facing configuration inspection", () => {
       assert.equal(details.issues.filter((issue) => issue.severity === "error").length, 0);
 
       // The inventory mirrors the registry, including cost and context metadata.
-      assert.match(text, /alpha\/strong \(\$20\.00\/1M tokens, ctx 200000/);
-      assert.match(text, /beta\/code \(\$2\.00\/1M tokens, ctx 128000/);
+      assert.match(text, /alpha\/strong \(\$5\.00 in \+ \$15\.00 out per 1M, ctx 200000/);
+      assert.match(text, /beta\/code \(\$0\.50 in \+ \$1\.50 out per 1M, ctx 128000/);
       assert.doesNotMatch(text, /beta\/retired/);
 
       // No credential or account field may appear anywhere in the payload.
@@ -718,6 +718,38 @@ describe("apply requires approval, matching digests, and proves the result", () 
       assert.equal(applied.applied, true, "the approved file is on disk");
       assert.equal(applied.reloaded, false);
       assert.ok(applied.notes.some((note) => /\/bifrost reload/.test(note)));
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("applies the first configuration to an absent source using the rendered digest", async () => {
+    const harness = freshHarness();
+    try {
+      assert.equal(harness.readFile(".pi/bifrost.json"), undefined, "a fresh project has no source yet");
+      const { details } = await checkedCandidate(harness, { candidate });
+      assert.equal(details.guards!.sourceDigest, null, "an absent source has no digest");
+      // A real agent can only copy the digest string the rendered report prints
+      // ("absent"): the tool schema accepts strings, never null.
+      const renderedSourceDigest = details.guards!.sourceDigest ?? "absent";
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run({
+        ...applyParams(details, { candidate }),
+        sourceDigest: renderedSourceDigest,
+      }));
+      assert.equal(applied.status, "ok", applied.reason ?? "");
+      assert.equal(applied.applied, true);
+      const stored = JSON.parse(harness.readFile(".pi/bifrost.json") ?? "{}") as Record<string, unknown>;
+      assert.deepEqual(stored, details.nextSource);
+
+      // Once the source exists, the same literal "absent" must still be stale.
+      const second = await checkedCandidate(harness, { candidate: { ...candidate, default: "deep" } });
+      assert.ok(second.details.guards!.sourceDigest, "an existing source has a real digest");
+      const replayed = detailsOf<ConfigAgentApplyResult>(await harness.run({
+        ...applyParams(second.details, { candidate: { ...candidate, default: "deep" } }),
+        sourceDigest: "absent",
+      }));
+      assert.equal(replayed.status, "stale");
+      assert.match(replayed.reason ?? "", /selected source changed/);
     } finally {
       harness.cleanup();
     }

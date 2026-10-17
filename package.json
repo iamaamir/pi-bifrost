@@ -8,7 +8,7 @@
     "bifrost.json",
     "schema.json",
     "examples/",
-    "skills/",
+    "skills/configure-bifrost/",
     "docs/router-api.md",
     "CHANGELOG.md"
   ],
