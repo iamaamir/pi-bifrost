@@ -8,6 +8,7 @@
     "bifrost.json",
     "schema.json",
     "examples/",
+    "skills/",
     "docs/router-api.md",
     "CHANGELOG.md"
   ],
@@ -45,6 +46,9 @@
   "pi": {
     "extensions": [
       "./index.ts"
+    ],
+    "skills": [
+      "./skills/configure-bifrost"
     ],
     "minPiVersion": "1.0.1",
     "image": "https://iamaamir.github.io/pi-bifrost/social-card.png"

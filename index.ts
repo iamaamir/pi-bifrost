@@ -76,7 +76,8 @@ import {
 } from "./runtime-reliability-v2.ts";
 import { ReliabilityV2Store } from "./reliability-v2-store.ts";
 import { loadRuntimeState, runtimeStatePath, saveRuntimeState, isPassiveModelSelection, createSelfSelectTracker } from "./runtime-state.ts";
-import { createCommandRouter, getBifrostCommandCompletions, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.ts";
+import { createCommandRouter, getBifrostCommandCompletions, reloadBifrostConfig, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.ts";
+import { createBifrostConfigTool } from "./config-agent.ts";
 import { setupDebug, debug, debugMeasure, isDebugEnabled, flushDebug } from "./debug.ts";
 import { parseInlineOverride } from "./inline-override.ts";
 import { BIFROST_AUTO_ID, BIFROST_AUTO_PROVIDER, isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
@@ -3189,6 +3190,16 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   const handleCommand = createCommandRouter(state);
+
+  // Agent-facing configuration tool. The companion `configure-bifrost` skill
+  // teaches the agent how to compose a policy from the user's goal; this tool
+  // owns inspection, validation, offline preview, and the approved write.
+  if (typeof pi.registerTool === "function") {
+    pi.registerTool(createBifrostConfigTool({
+      extensionDir,
+      reload: (ctx) => reloadBifrostConfig(state, ctx),
+    }));
+  }
 
   pi.registerCommand("bifrost", {
     description: "Bifrost model router control",

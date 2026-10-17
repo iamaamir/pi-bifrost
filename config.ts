@@ -1046,7 +1046,9 @@ function defaultConfig(): BifrostConfig {
   };
 }
 
-function configLayerPaths(
+/** Layer paths in merge order (lowest precedence first). Single source of truth
+ * for which file each source lives in. */
+export function configLayerPaths(
   cwd: string,
   extensionDir: string,
 ): Array<readonly [ConfigLoadDiagnostic["layer"], string]> {

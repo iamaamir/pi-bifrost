@@ -60,6 +60,26 @@ Edit your existing configuration to keep its model lists and settings. If you ha
 
 Replace the example IDs with models available in Pi. The [configuration guide](docs/guide/configuration.md) explains strategies, rules, reserves, billing preferences, and fallback tiers.
 
+### Describe the goal instead
+
+Bifrost ships a `configure-bifrost` skill and a `bifrost_config` tool, so you can
+describe the outcome you want instead of assembling the JSON yourself:
+
+```text
+Configure Bifrost for my coding workflow: cheap implementation with a strong
+orchestrator and an independent reviewer, and no silent escalation to an
+expensive model. Use the models I already have.
+```
+
+The agent reads Pi's real model list and your config files. It builds a candidate
+policy, checks it, previews routes offline, and explains the tradeoffs. It shows
+the exact changes. Nothing is written before you agree, and one config file is
+written atomically. The agent does not change how Bifrost routes; it only writes
+the configuration you approve.
+
+You can also ask for the single tool directly. It has four operations: `inspect`,
+`check`, `preview`, and `apply`. See [the skill](skills/configure-bifrost/SKILL.md).
+
 ## Inspect and control routes
 
 Use these commands in Pi:
