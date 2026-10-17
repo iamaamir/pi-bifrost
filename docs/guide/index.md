@@ -2,18 +2,19 @@
 
 Pi-Bifrost is a configuration-first model router for [Pi](https://pi.dev). It resolves a configured tier for a user prompt, filters unhealthy candidates, and applies that tier's model-selection strategy. Physical selection before generation is the default. If you select `bifrost/auto`, Pi dispatches the physical model per request instead.
 
-New to Bifrost? Start with [Install and initialize](getting-started.md). It explains prerequisites, probe usage, generated classifier behavior, preview privacy, and the first routed prompt.
+New to Bifrost? Start with [Install and initialize](getting-started.md). Init is optional on a fresh install. The guide explains first-use model lists, the physical-model default, classifier privacy, and how to review saved lists before generation.
 
 ## Start here
 
 1. [Install and initialize](getting-started.md)
-2. [Choose adaptive, explicit-tier, or pinned control](routing-controls.md)
-3. [Configure tiers, model pools, strategies, and rules](configuration.md)
-4. [Understand provider prompt caching across model switches](prompt-caching.md)
-5. [Configure optional prompt, TypeSafe/Jev, or Pi-native classifiers](classifiers.md)
-6. [Troubleshoot setup and routing](troubleshooting.md)
-7. [Use the command reference](commands.md)
-8. [Understand reliability and Bifrost's local cache](reliability-and-cache.md)
+2. [Select and dispatch a model with Auto](auto-routing.md)
+3. [Choose adaptive, explicit-tier, or pinned control](routing-controls.md)
+4. [Configure tiers, model pools, strategies, and rules](configuration.md)
+5. [Understand provider prompt caching across model switches](prompt-caching.md)
+6. [Configure optional prompt, TypeSafe/Jev, or Pi-native classifiers](classifiers.md)
+7. [Troubleshoot setup and routing](troubleshooting.md)
+8. [Use the command reference](commands.md)
+9. [Understand reliability and Bifrost's local cache](reliability-and-cache.md)
 
 ## Four terms first
 
@@ -56,8 +57,8 @@ Optional classifiers, including TypeSafe/Jev and Pi-native, choose a tier. They 
 ## Product boundaries
 
 - Bifrost uses Pi's real provider/model. In Auto, Pi shows the virtual selection and dispatched physical model together.
-- Bifrost never automatically replays a failed user prompt.
-- Reliability circuits protect future turns; they are not provider quota guards.
+- Automatic retries are limited to one usage or billing rejection after Pi proves the initial Auto generation had no output or tool activity; see [the recovery boundary](reliability-and-cache.md#reliability-circuits).
+- Reliability state records model failures. Usage and billing errors pause models that use the same configured provider ID by default. Bifrost does not identify provider accounts or fetch live usage limits. See [provider pauses](reliability-and-cache.md#provider-pauses-are-not-account-checks).
 - Provider prompt caches remain controlled by Pi's provider integration and each provider.
 - Adaptive routing may trade prompt-cache locality for per-turn task fit. It cannot guarantee better results, lower cost, lower latency, or cache savings.
 - `/bifrost pin` is a session-local hard lock. Use it when continuity or one exact model matters more than per-message routing. A tier name at the start of a message is ignored while pinned.

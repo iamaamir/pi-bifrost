@@ -199,7 +199,11 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
   const maxAttempts = Math.min(MAX_TYPESAFE_ATTEMPTS, Math.max(1, Math.floor(options.maxAttempts ?? DEFAULT_TYPESAFE_MAX_ATTEMPTS)));
   let warnedMissingKey = false;
 
-  return async function classify(input: TypeSafeInput, signal?: AbortSignal): Promise<TypeSafeJudgment | undefined> {
+  return async function classify(
+    input: TypeSafeInput,
+    signal?: AbortSignal,
+    onObservation?: (observation: TypeSafeObservation) => void,
+  ): Promise<TypeSafeJudgment | undefined> {
     const activeSignal = signal ?? options.signal;
     const startedAt = performance.now();
     const traceId = `ts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -224,17 +228,23 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
       });
       if (!observed) {
         observed = true;
+        const observation: TypeSafeObservation = Object.freeze({
+          outcome,
+          latencyMs: performance.now() - startedAt,
+          attempts,
+          model: TYPESAFE_MODEL,
+          tier: judgment?.tier,
+          confidence: judgment?.confidence,
+        });
         try {
-          options.observe?.({
-            outcome,
-            latencyMs: performance.now() - startedAt,
-            attempts,
-            model: TYPESAFE_MODEL,
-            tier: judgment?.tier,
-            confidence: judgment?.confidence,
-          });
+          options.observe?.(observation);
         } catch {
           console.error("[bifrost] TypeSafe observation failed");
+        }
+        try {
+          onObservation?.(observation);
+        } catch {
+          // Per-call observers are advisory and must not change classification.
         }
       }
       return judgment;

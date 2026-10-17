@@ -1,0 +1,234 @@
+[
+  {
+    "id": "legacy-requested-pool",
+    "schemaVersion": 1,
+    "tiers": { "quick": ["fixture/a", "fixture/b"], "general": ["fixture/c"] },
+    "requestedTier": "quick",
+    "defaultTier": "general",
+    "available": ["fixture/a", "fixture/b", "fixture/c"],
+    "allowedModels": ["fixture/a", "fixture/b"]
+  },
+  {
+    "id": "legacy-default-fallback",
+    "schemaVersion": 1,
+    "tiers": { "quick": [], "general": ["fixture/c"] },
+    "requestedTier": "quick",
+    "defaultTier": "general",
+    "available": ["fixture/c"],
+    "allowedModels": ["fixture/c"]
+  },
+  {
+    "id": "legacy-no-route",
+    "schemaVersion": 1,
+    "tiers": { "quick": [], "general": [] },
+    "requestedTier": "quick",
+    "defaultTier": "general",
+    "available": [],
+    "allowedModels": []
+  },
+  {
+    "id": "strict-empty-boundary",
+    "schemaVersion": 2,
+    "tiers": { "quick": [], "general": ["fixture/c"] },
+    "strictFallbackTiers": { "quick": [] },
+    "requestedTier": "quick",
+    "defaultTier": "general",
+    "available": ["fixture/c"],
+    "allowedModels": []
+  },
+  {
+    "id": "strict-ordered-fallback",
+    "schemaVersion": 2,
+    "tiers": { "quick": ["fixture/a"], "general": ["fixture/b"], "frontier": ["fixture/c"] },
+    "strictFallbackTiers": { "quick": ["general", "frontier"] },
+    "circuits": { "fixture/a": { "openUntil": 2000 } },
+    "requestedTier": "quick",
+    "defaultTier": "frontier",
+    "available": ["fixture/a", "fixture/b", "fixture/c"],
+    "allowedModels": ["fixture/b"]
+  },
+  {
+    "id": "strict-chain-exhausted",
+    "schemaVersion": 2,
+    "tiers": { "quick": ["fixture/a"], "general": ["fixture/b"], "frontier": ["fixture/c"] },
+    "strictFallbackTiers": { "quick": ["general", "frontier"] },
+    "circuits": {
+      "fixture/a": { "openUntil": 2000 },
+      "fixture/b": { "trialActive": true },
+      "fixture/c": { "openUntil": 2000 }
+    },
+    "requestedTier": "quick",
+    "defaultTier": "frontier",
+    "available": ["fixture/a", "fixture/b", "fixture/c"],
+    "allowedModels": []
+  },
+  {
+    "id": "exact-unavailable-default-recovery",
+    "schemaVersion": 1,
+    "tiers": { "quick": ["fixture/offline"], "general": ["fixture/ready"] },
+    "requestedTier": "quick",
+    "defaultTier": "general",
+    "available": ["fixture/ready"],
+    "allowedModels": ["fixture/ready"],
+    "expectedUnavailable": ["fixture/offline"]
+  },
+  {
+    "id": "reserve-equality-blocks",
+    "schemaVersion": 1,
+    "tiers": { "quick": ["fixture/a"] },
+    "requestedTier": "quick",
+    "defaultTier": "quick",
+    "available": ["fixture/a"],
+    "economic": {
+      "rules": [{ "windowId": "daily", "reserveRatio": 0.2, "unknown": "block" }],
+      "windows": [{ "id": "daily", "remaining": 0.2, "resetsAt": 5000 }]
+    },
+    "allowedModels": []
+  },
+  {
+    "id": "reserve-above-allows",
+    "schemaVersion": 1,
+    "tiers": { "quick": ["fixture/a", "fixture/b"] },
+    "requestedTier": "quick",
+    "defaultTier": "quick",
+    "available": ["fixture/a", "fixture/b"],
+    "economic": {
+      "rules": [{ "windowId": "daily", "reserveRatio": 0.2, "unknown": "block" }],
+      "windows": [{ "id": "daily", "remaining": 0.21, "resetsAt": 5000 }]
+    },
+    "allowedModels": ["fixture/a", "fixture/b"]
+  },
+  {
+    "id": "stale-reserve-blocks-unknown",
+    "schemaVersion": 1,
+    "tiers": { "quick": ["fixture/a"] },
+    "requestedTier": "quick",
+    "defaultTier": "quick",
+    "available": ["fixture/a"],
+    "economic": {
+      "rules": [{ "windowId": "daily", "reserveRatio": 0.2, "unknown": "block" }],
+      "observedAt": 100,
+      "expiresAt": 900,
+      "windows": [{ "id": "daily", "remaining": 0.8, "resetsAt": 5000 }]
+    },
+    "allowedModels": []
+  },
+  {
+    "id": "stale-reserve-ignore-allows",
+    "schemaVersion": 1,
+    "tiers": { "quick": ["fixture/a"] },
+    "requestedTier": "quick",
+    "defaultTier": "quick",
+    "available": ["fixture/a"],
+    "economic": {
+      "rules": [{ "windowId": "daily", "reserveRatio": 0.2, "unknown": "ignore" }],
+      "observedAt": 100,
+      "expiresAt": 900,
+      "windows": [{ "id": "daily", "remaining": 0.8, "resetsAt": 5000 }]
+    },
+    "allowedModels": ["fixture/a"]
+  },
+  {
+    "id": "reset-window-is-unknown",
+    "schemaVersion": 1,
+    "tiers": { "quick": ["fixture/a"] },
+    "requestedTier": "quick",
+    "defaultTier": "quick",
+    "available": ["fixture/a"],
+    "economic": {
+      "rules": [{ "windowId": "daily", "reserveRatio": 0.2, "unknown": "block" }],
+      "windows": [{ "id": "daily", "remaining": 0.8, "resetsAt": 999 }]
+    },
+    "allowedModels": []
+  },
+  {
+    "id": "multiple-windows-any-reserve-blocks",
+    "schemaVersion": 1,
+    "tiers": { "quick": ["fixture/a"] },
+    "requestedTier": "quick",
+    "defaultTier": "quick",
+    "available": ["fixture/a"],
+    "economic": {
+      "rules": [
+        { "windowId": "daily", "reserveRatio": 0.2, "unknown": "block" },
+        { "windowId": "weekly", "reserveRatio": 0.2, "unknown": "block" }
+      ],
+      "windows": [
+        { "id": "daily", "remaining": 0.1, "resetsAt": 5000 },
+        { "id": "weekly", "remaining": 0.8, "resetsAt": 9000 }
+      ]
+    },
+    "allowedModels": []
+  },
+  {
+    "id": "multiple-windows-expire-independently",
+    "schemaVersion": 1,
+    "tiers": { "quick": ["fixture/a"] },
+    "requestedTier": "quick",
+    "defaultTier": "quick",
+    "available": ["fixture/a"],
+    "economic": {
+      "rules": [
+        { "windowId": "daily", "reserveRatio": 0.2, "unknown": "block" },
+        { "windowId": "weekly", "reserveRatio": 0.2, "unknown": "block" }
+      ],
+      "windows": [
+        { "id": "daily", "remaining": 0.8, "resetsAt": 999 },
+        { "id": "weekly", "remaining": 0.8, "resetsAt": 9000 }
+      ]
+    },
+    "allowedModels": []
+  },
+  {
+    "id": "legacy-open-circuit-uses-default",
+    "schemaVersion": 1,
+    "tiers": { "quick": ["fixture/a"], "general": ["fixture/b"] },
+    "circuits": { "fixture/a": { "openUntil": 2000 } },
+    "requestedTier": "quick",
+    "defaultTier": "general",
+    "available": ["fixture/a", "fixture/b"],
+    "allowedModels": ["fixture/b"]
+  },
+  {
+    "id": "active-trial-excluded",
+    "schemaVersion": 1,
+    "tiers": { "quick": ["fixture/a", "fixture/b"] },
+    "circuits": { "fixture/a": { "trialActive": true } },
+    "requestedTier": "quick",
+    "defaultTier": "quick",
+    "available": ["fixture/a", "fixture/b"],
+    "allowedModels": ["fixture/b"]
+  },
+  {
+    "id": "explicit-forced-tier-wins",
+    "schemaVersion": 2,
+    "tiers": { "quick": ["fixture/a"], "alternate": ["fixture/b"] },
+    "strictFallbackTiers": { "quick": [] },
+    "requestedTier": "quick",
+    "forcedTier": "alternate",
+    "defaultTier": "quick",
+    "available": ["fixture/a", "fixture/b"],
+    "allowedModels": ["fixture/b"]
+  },
+  {
+    "id": "explicit-inline-tier-wins",
+    "schemaVersion": 1,
+    "tiers": { "quick": ["fixture/a"], "alternate": ["fixture/b"] },
+    "requestedTier": "quick",
+    "prompt": "alternate synthetic scenario",
+    "defaultTier": "quick",
+    "available": ["fixture/a", "fixture/b"],
+    "allowedModels": ["fixture/b"]
+  },
+  {
+    "id": "seeded-random-replay",
+    "schemaVersion": 1,
+    "tiers": { "quick": ["fixture/a", "fixture/b", "fixture/c"] },
+    "requestedTier": "quick",
+    "defaultTier": "quick",
+    "strategy": "random",
+    "seed": 42,
+    "available": ["fixture/a", "fixture/b", "fixture/c"],
+    "allowedModels": ["fixture/a", "fixture/b", "fixture/c"]
+  }
+]

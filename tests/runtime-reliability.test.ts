@@ -106,8 +106,8 @@ describe("RuntimeReliabilityTracker ledger", () => {
       { role: "assistant", provider: "b", model: "two", stopReason: "stop" },
     ]);
     assert.deepEqual(tracker.settle(), [
-      { model: "a/one", reason: "boom" },
-      { model: "b/two", reason: undefined },
+      { model: "a/one", outcome: "failure", reason: "provider request failed" },
+      { model: "b/two", outcome: "success" },
     ]);
   });
 
@@ -116,12 +116,12 @@ describe("RuntimeReliabilityTracker ledger", () => {
     tracker.begin("a/one");
     tracker.begin("b/two");
     tracker.release("a/one");
-    assert.deepEqual(tracker.settle(), [{ model: "b/two", reason: undefined }]);
+    assert.deepEqual(tracker.settle(), [{ model: "b/two", outcome: "abandoned" }]);
   });
 
-  it("settles cleanly when a dispatched model produced no message", () => {
+  it("abandons a dispatch when no matching assistant message was produced", () => {
     const tracker = new RuntimeReliabilityTracker();
     tracker.begin("a/one");
-    assert.deepEqual(tracker.settle(), [{ model: "a/one", reason: undefined }]);
+    assert.deepEqual(tracker.settle(), [{ model: "a/one", outcome: "abandoned" }]);
   });
 });

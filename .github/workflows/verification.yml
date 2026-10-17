@@ -1,0 +1,375 @@
+name: Verification
+
+on:
+  push:
+    branches: [main, v2]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      campaign:
+        description: "Bounded expanded campaign: seeded property repeats plus Pi compatibility"
+        required: false
+        default: default
+        type: choice
+        options:
+          - default
+          - expanded
+      mutation:
+        description: "Also run the opt-in four-module Stryker mutation experiment (slow)"
+        required: false
+        default: false
+        type: boolean
+      campaign_repeats:
+        description: "Campaign attempts per target (1-5)"
+        required: false
+        default: "3"
+        type: string
+      campaign_seed:
+        description: "Signed 32-bit fast-check seed base; attempts derive distinct replayable seeds"
+        required: false
+        default: "1729"
+        type: string
+  schedule:
+    # Scheduled runs fire only from the default branch (GitHub Actions docs:
+    # "Scheduled workflows will only run on the default branch"). v2 is not the
+    # default branch, so nightly activation stays pending until this workflow
+    # file is adopted there. Dispatch runs still support --ref for any branch.
+    - cron: "23 4 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verification-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release-gates:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install Pillow==12.3.0
+      - run: npm ci
+      - name: Run acceptance
+        id: acceptance
+        env:
+          BIFROST_CI_REPORT: "1"
+          BIFROST_CI_REPORT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          BIFROST_CI_REPORT_RUN_ID: ${{ github.run_id }}
+          BIFROST_CI_REPORT_RUN_ATTEMPT: ${{ github.run_attempt }}
+          BIFROST_CI_REPORT_REPOSITORY: ${{ github.repository }}
+          BIFROST_CI_REPORT_SERVER_URL: ${{ github.server_url }}
+        run: npm run acceptance
+      - name: Refresh CRAP trend history
+        if: always()
+        env:
+          CRAP_HISTORY: ${{ runner.temp }}/crap-history.jsonl
+        run: |
+          if [ -f docs/quality/crap-history.jsonl ]; then
+            cp docs/quality/crap-history.jsonl "$CRAP_HISTORY"
+          else
+            : > "$CRAP_HISTORY"
+          fi
+          npm run test:coverage
+          node scripts/crap-report.mjs --record --history "$CRAP_HISTORY"
+
+      - name: Attach CRAP history to report data
+        if: always()
+        env:
+          REPORT_DATA: ${{ steps.acceptance.outputs.report-data }}
+          CRAP_HISTORY: ${{ runner.temp }}/crap-history.jsonl
+        run: |
+          node --input-type=module <<'NODE'
+          import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+          const reportDataPath = process.env.REPORT_DATA;
+          const historyPath = process.env.CRAP_HISTORY;
+          if (!reportDataPath || !historyPath || !existsSync(reportDataPath) || !existsSync(historyPath)) process.exit(0);
+          let data;
+          try { data = JSON.parse(readFileSync(reportDataPath, 'utf8')); } catch { process.exit(0); }
+          if (!data || typeof data !== 'object' || Array.isArray(data)) process.exit(0);
+          const records = [];
+          for (const line of readFileSync(historyPath, 'utf8').split('\\n')) {
+            const trimmed = line.trim();
+            if (trimmed === '') continue;
+            try { records.push(JSON.parse(trimmed)); } catch { process.exit(0); }
+          }
+          data.crapHistory = records;
+          writeFileSync(reportDataPath, JSON.stringify(data));
+          NODE
+
+      - name: Upload CRAP trend history
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crap-history-${{ github.event.pull_request.head.sha || github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/crap-history.jsonl
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload failure logs and UI screenshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-failure-${{ github.event.pull_request.head.sha || github.sha }}
+          path: screenshots/
+          if-no-files-found: ignore
+      - name: Upload candidate-bound manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-manifest-${{ github.event.pull_request.head.sha || github.sha }}
+          path: screenshots/verification/**/result.json
+          if-no-files-found: ignore
+      - name: Upload acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-evidence-${{ github.event.pull_request.head.sha || github.sha }}
+          path: screenshots/acceptance/**
+          if-no-files-found: ignore
+      - name: Upload candidate-bound Markdown report
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-report-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ steps.acceptance.outputs.report-markdown }}
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload candidate-bound publisher data
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-report-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ steps.acceptance.outputs.report-data }}
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Preserve report data across checkouts
+        if: always() && github.event_name == 'pull_request'
+        env:
+          REPORT_DATA: ${{ steps.acceptance.outputs.report-data }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/bifrost-report-input"
+          if [ -f "$REPORT_DATA" ]; then cp "$REPORT_DATA" "$RUNNER_TEMP/bifrost-report-input/report-data.json"; fi
+
+      - name: Check out the proposed merge
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+      - name: Install proposed merge dependencies
+        if: github.event_name == 'pull_request'
+        run: npm ci
+      - name: Run acceptance on the proposed merge
+        id: merge-acceptance
+        if: github.event_name == 'pull_request'
+        run: npm run acceptance:deterministic
+      - name: Upload merge-result evidence
+        if: always() && github.event_name == 'pull_request' && (steps.merge-acceptance.outcome == 'success' || steps.merge-acceptance.outcome == 'failure')
+        uses: actions/upload-artifact@v4
+        with:
+          name: merge-result-evidence-${{ github.sha }}
+          path: |
+            screenshots/verification/**/result.json
+            screenshots/acceptance/**
+          if-no-files-found: ignore
+
+      - name: Render final candidate report
+        if: always() && github.event_name == 'pull_request'
+        env:
+          REPORT_INPUT: ${{ runner.temp }}/bifrost-report-input/report-data.json
+          REPORT_OUTPUT: ${{ runner.temp }}/bifrost-final-report/ci-report.md
+          REPORT_SHA: ${{ github.event.pull_request.head.sha }}
+          REPORT_RUN_ID: ${{ github.run_id }}
+          REPORT_ATTEMPT: ${{ github.run_attempt }}
+          REPORT_REPOSITORY: ${{ github.repository }}
+          REPORT_SERVER_URL: ${{ github.server_url }}
+          CRAP_HISTORY: ${{ runner.temp }}/crap-history.jsonl
+          RELEASE_RESULT: ${{ job.status }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+          import { dirname } from 'node:path';
+          import { renderCiReport } from './scripts/ci-report.mjs';
+          let data = null;
+          try { data = JSON.parse(readFileSync(process.env.REPORT_INPUT, 'utf8')); } catch {}
+          const { markdown, confidence } = renderCiReport(data, {
+            trusted: true,
+            sha: process.env.REPORT_SHA,
+            runId: process.env.REPORT_RUN_ID,
+            attempt: process.env.REPORT_ATTEMPT,
+            repository: process.env.REPORT_REPOSITORY,
+            serverUrl: process.env.REPORT_SERVER_URL,
+            conclusion: process.env.RELEASE_RESULT,
+            crapHistoryPath: process.env.CRAP_HISTORY,
+          });
+          mkdirSync(dirname(process.env.REPORT_OUTPUT), { recursive: true });
+          writeFileSync(process.env.REPORT_OUTPUT, markdown);
+          appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdown);
+          if (process.env.RELEASE_RESULT === 'success' && confidence.state !== 'VERIFIED CHECKS') process.exitCode = 1;
+          NODE
+      - name: Upload final candidate report
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-ci-report-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/bifrost-final-report/ci-report.md
+          if-no-files-found: error
+
+  # Expanded campaign and compatibility jobs stay opt-in. They run only for a
+  # manual dispatch with campaign=expanded or for the bounded schedule above;
+  # ordinary PR, push, and default manual runs keep only release-gates, so the
+  # required checks never become permanently expensive.
+  campaign:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.campaign == 'expanded')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CAMPAIGN_REPEATS: ${{ inputs.campaign_repeats || '3' }}
+      CAMPAIGN_SEED: ${{ inputs.campaign_seed || '1729' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Validate bounded campaign inputs
+        run: >-
+          node scripts/campaign-run.mjs --name bounds
+          --repeat "$CAMPAIGN_REPEATS" --seed-base "$CAMPAIGN_SEED"
+          --validate-only -- node --version
+      - name: Seeded property campaign
+        run: >-
+          node scripts/campaign-run.mjs --name properties
+          --repeat "$CAMPAIGN_REPEATS" --seed-base "$CAMPAIGN_SEED"
+          --timeout-ms 600000 --out "$RUNNER_TEMP/bifrost-campaign" --
+          node --test --experimental-strip-types
+          tests/model-selection-properties.test.ts
+          tests/classifier-properties.test.ts
+          tests/discovery-properties.test.ts
+      - name: Reliability replay-control campaign
+        run: >-
+          node scripts/campaign-run.mjs --name reliability
+          --repeat "$CAMPAIGN_REPEATS" --seed-base "$CAMPAIGN_SEED"
+          --timeout-ms 600000 --out "$RUNNER_TEMP/bifrost-campaign" --
+          node --test --experimental-strip-types
+          tests/reliability-state-machine.test.ts
+          tests/reliability-filter-properties.test.ts
+          tests/cache-properties.test.ts
+      - name: Bounded integration repeats
+        run: >-
+          node scripts/campaign-run.mjs --name integration
+          --repeat "$CAMPAIGN_REPEATS" --seed-base "$CAMPAIGN_SEED"
+          --timeout-ms 1200000 --out "$RUNNER_TEMP/bifrost-campaign" --
+          npm run test:integration
+      - name: Upload campaign evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-campaign-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/bifrost-campaign/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Pi compatibility matrix: pinned baseline and current Pi, installed into
+  # node_modules only (no tracked package or lock edit, no credentials), with
+  # real native SDK, process, package-consumer, and typecheck checks. The
+  # pinned verify-release preflight still demands 1.0.1 and is deliberately not
+  # used as an alternate-version oracle; release-gates keeps running it pinned.
+  pi-compatibility:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.campaign == 'expanded')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        pi:
+          - "1.0.1"
+          - "1.3.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Install the pinned Pi version without editing tracked dependency files
+        env:
+          PI_VERSION: ${{ matrix.pi }}
+        run: |
+          # Keep the baseline's locked transitive packages from npm ci.
+          if [ "$PI_VERSION" != "1.0.1" ]; then
+            npm install --no-save --package-lock=false --no-audit --no-fund \
+              "@earendil-works/pi-ai@$PI_VERSION" \
+              "@earendil-works/pi-coding-agent@$PI_VERSION"
+          fi
+          test "$(node -p "require('./node_modules/@earendil-works/pi-ai/package.json').version")" = "$PI_VERSION"
+          test "$(node -p "require('./node_modules/@earendil-works/pi-coding-agent/package.json').version")" = "$PI_VERSION"
+          if [ -n "$(git status --porcelain)" ]; then
+            git status --porcelain
+            echo "compatibility install changed tracked files" >&2
+            exit 1
+          fi
+      - name: Record installed versions
+        env:
+          PI_VERSION: ${{ matrix.pi }}
+        run: |
+          node -p "JSON.stringify({ expected: process.env.PI_VERSION, node: process.version, piAi: require('./node_modules/@earendil-works/pi-ai/package.json').version, piCodingAgent: require('./node_modules/@earendil-works/pi-coding-agent/package.json').version }, null, 2)" | tee "$RUNNER_TEMP/pi-compatibility-versions.json"
+      - name: Typecheck against the matrix Pi version
+        run: npm run typecheck
+      - name: Run native SDK, process, and package consumer tests
+        run: >-
+          node --test --experimental-strip-types
+          tests/router-package.test.mjs
+          tests/integration/native-classifier.test.mjs
+          tests/integration/native-faux-provider.test.mjs
+          tests/integration/native-faux-lifecycle.test.mjs
+          tests/integration/native-tool-continuation.test.mjs
+      - name: Upload compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pi-compatibility-${{ matrix.pi }}-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/pi-compatibility-versions.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Opt-in mutation experiment. Manual boolean input only: it never runs on
+  # PR/push/schedule, keeps low concurrency and hard job plus step bounds, and
+  # uploads the existing Stryker JSON report and file log even on failure. The
+  # existing four-module config keeps its disclosed focused binding and
+  # survivor limits; no mutation score threshold is enforced here.
+  mutation-experiment:
+    if: github.event_name == 'workflow_dispatch' && inputs.mutation == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Run the four-module Stryker experiment with bounded concurrency
+        timeout-minutes: 55
+        run: npx stryker run --concurrency 2 --maxConcurrentTestRunners 2 --fileLogLevel info
+      - name: Upload mutation report and log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-experiment-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: |
+            reports/mutation/
+            stryker.log
+          if-no-files-found: ignore
+          retention-days: 14

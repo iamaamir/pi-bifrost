@@ -5,16 +5,22 @@
 | Command | Behavior |
 |---------|----------|
 | `/bifrost` | Open dashboard and quick actions |
-| `/bifrost init` | Reuse fresh probe results or probe registry models, then propose configuration and guide you to `/bifrost classifier`; pass `-f` to skip probe reuse and re-probe |
+| `/bifrost init` | Refresh Pi's model catalog, reuse probe results from the last hour or probe before proposing pools, then ask once before saving; pass `-f` to force fresh probes |
 | `/bifrost probe` | Send a tiny request to each registry model and report availability; usage may apply |
-| `/bifrost preview <prompt>` | Show the model a prompt would use, without generating; pass `--json` before the prompt for one machine-readable line; an enabled classifier may receive the prompt, and a tier name in the prompt is not applied |
+| `/bifrost preview <prompt>` | Show the route without generating; leading `--offline` uses only local cache, rules and the default tier; `--json` keeps the existing report, and `--trace` adds a content-free summary. Without `--offline`, an enabled classifier may receive the prompt. A tier name in the prompt is not applied |
 | `/bifrost on` | Enable routing policy |
 | `/bifrost off` | Disable routing policy |
 | `/bifrost pin` | Hard-lock current model for this session |
 | `/bifrost unpin` | Resume per-message routing |
 | `/bifrost reload` | Reload merged configuration |
+| `/bifrost validate` | Check the active loaded configuration and local registry references; run `/bifrost reload` after editing config files |
+| `/bifrost inspect` | Show configured model availability, auth presence, and local reliability circuits without routing, classifying, or probing |
+| `/bifrost config reconcile` | Preview exact generated model membership for one selected config source, tier, and provider; apply only with the reviewed digest |
+| `/bifrost reliability migrate` | Prepare migrated reliability state; see the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state) |
+| `/bifrost reliability` | Show active provider pauses and recovery trials |
+| `/bifrost reliability reset` | Clear one provider pause and its trial state with `--provider <exact-id>`. Model reliability records stay unchanged. |
 | `/bifrost cache stats` | Inspect local classification cache |
-| `/bifrost cache clear` | Clear local classification cache |
+| `/bifrost cache clear` | Empty saved local classification-cache entries |
 | `/bifrost classifier` | Choose `prompt`, `typesafe`, or `pi-native`. The Pi-native picker can select a catalog model or use the default |
 | `/bifrost classifier on` | Enable configured classifier |
 | `/bifrost classifier off` | Disable classifier while retaining routing |
@@ -23,6 +29,20 @@
 | `/bifrost debug` | Show effective routing and reliability diagnostics |
 | `/bifrost providers` | List providers available through Pi |
 | `/bifrost benchmark <prompt>` | Classify a prompt and show the outcome without generating |
+
+`preview --offline` skips both direct and prompt classifiers for that request. It does not change your classifier settings. Invalid routing configuration stops preview before classification and returns `config_invalid`. Fix the reported source and run `/bifrost reload`.
+
+`validate` and `inspect` accept a leading `--json` flag. Both commands are read-only: they do not classify, refresh the registry, probe providers, or write reliability state. `inspect` shows local registry/auth/circuit snapshots and the effective affinity mode: Auto defaults to within-tier retention, while physical routing defaults off. It reports the mode source and, when active, the proven Auto anchor's model and age without branch or prompt data. Its “Bifrost last registry refresh age” is the time since this extension last refreshed Pi's registry, not a freshness claim about provider data. JSON mode emits a version-1 `[bifrost-json] ` report line to stderr. The validation report names its source as `loaded-effective-config`; it does not read un-reloaded disk edits.
+
+On first use, when no meaningful configuration, route file, runtime routing preference, or explicit routing override blocks setup, Bifrost loads provisional pools from Pi's catalog before generation. It checks model access in the background and saves only successful generated pools with an ownership receipt. An empty `{}` configuration does not block setup. If every probe fails or a safe save cannot finish, Bifrost leaves configuration unchanged and warns. Probe requests can use provider credits or reach rate limits.
+
+Provider usage and billing pauses use Pi's configured provider ID. Bifrost does not identify shared billing accounts. Use `/bifrost reliability` to see active pauses. The reset command accepts only one exact provider ID that Bifrost knows. It stops during an active recovery trial.
+
+Init remains available to refresh the catalog or reconcile model lists. It reuses probe results from the last hour unless you pass `-f`. Init preserves settings and handwritten model entries in the file it edits. Settings from other files remain inherited. It does not copy private classifier templates or pin inherited user settings into the edited file. Its summary does not show every model ID, selection rule, or default tier. After init saves, inspect the lists and status. Edit the saved configuration before a model answers if needed.
+
+Init displays its save target. It updates an existing project `.pi/bifrost.json`, workspace `bifrost.json`, or user `~/.pi/agent/bifrost.json` in that order. When none exists, it creates project `.pi/bifrost.json`.
+
+For safe migration, follow the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state).
 
 ## Common workflows
 
@@ -73,6 +93,8 @@ A failure is still one line, so a script never has to infer the outcome from a m
 
 `error` is `usage` when the prompt was missing, and `unclassified` when no tier matched and no default tier is configured. A failure report carries `prompt` and `error` only; it has no routing keys. The human `usage` and `no tier matched` messages still appear, so the same command is usable from a terminal.
 
+Add `--trace` as a leading flag to inspect a versioned, content-free route decision. You can use it alone or with `--json`, in either order. The text view shows the classification source, configured candidate pools, hard reserve and circuit exclusions, selected model and strategy, and any applicable affinity observation. It labels affinity as `auto_default`, `physical_default`, or `config`. Under `retain-within-tier`, affinity shows both the strategy winner and selected anchor. In the structured route summary, billing-preference evidence is separate from hard exclusions; a nonpreferred candidate remains marked eligible even when it is outside the final selection pool. `--trace --json` uses the same `[bifrost-json] ` marker and emits a version-1 `route-decision` object. It contains model identity strings and configured patterns, but never the prompt or model objects. If classifier routing is enabled, Bifrost warns that the classifier may receive the preview prompt before running classification and includes that disclosure in the result. The summary describes the resolver's selection; it does not report activation success or classifier stage timings. Without `--trace`, the existing `--json` fields and output remain unchanged.
+
 ### Keep one model for a long session
 
 ```text
@@ -100,6 +122,27 @@ Edit the relevant `bifrost.json`, then run:
 ```text
 /bifrost reload
 ```
+
+### Reconcile generated model membership
+
+Reconciliation changes one source and one tier at a time. The default source is the project file `.pi/bifrost.json`; `--source workspace` selects `bifrost.json` in the current directory; `--source user` selects `getAgentDir()/bifrost.json` (normally `~/.pi/agent/bifrost.json`). Workspace membership ownership is stored separately under `.pi/` so it cannot be confused with project ownership. It never flattens the merged config into either source. A preview reads local registry and refresh evidence only; it does not contact providers. If that evidence is stale, `--refresh` explicitly refreshes only the selected provider and still produces a preview. Apply is a separate command and requires the proposal digest from that preview:
+
+```text
+/bifrost config reconcile --tier general --provider openai
+/bifrost config reconcile --tier general --provider openai --apply --proposal <digest>
+```
+
+Use `--source workspace` or `--source user` to select those config files. The other project, workspace, user, and extension layers remain part of prospective validation, so a higher layer may still override the selected source. Add `--json` to emit one `[bifrost-json] ` report line.
+
+An explicit catalog refresh is network-enabled and can incur provider requests. It cannot be combined with `--apply`; review its proposal and run a separate apply command:
+
+```text
+/bifrost config reconcile --tier general --provider openai --refresh
+```
+
+Reconciliation updates only exact model keys owned by its sidecar. Existing manual entries are never adopted as generated membership. Incomplete, stale, or auth-unknown inventory cannot authorize removals. Apply uses a journal and keeps exact backups. `/bifrost config reconcile --recover` resumes or reports a pending journal. If a process crashed while holding a lock, recovery does not steal it: first verify that no Bifrost writer is active, inspect the exact lock files, and remove only locks proven stale before retrying recovery.
+
+On first use, Bifrost loads provisional pools from Pi's available chat-model catalog and checks them in the background. It saves only successful generated pools and keeps manual entries and other configuration fields. Probe requests can use provider credits or reach rate limits. `/bifrost init` refreshes the catalog, reuses probe results from the last hour, or probes before proposing pools. Pass `-f` to force fresh probes.
 
 ### Diagnose unavailable models
 

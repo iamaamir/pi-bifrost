@@ -1,11 +1,42 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import type { ChildProcess } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   categoryLabel,
   classificationPrompt,
   classifyWithLLM,
   extractCategory,
 } from "../classifier.ts";
+import { createPipeline } from "../classification-pipeline.ts";
+import { flushDebug, setupDebug } from "../debug.ts";
+import { makeModel } from "./helpers.ts";
+
+async function captureClassifierLogs(run: () => Promise<unknown>): Promise<{ result: unknown; debugText: string; stderrText: string }> {
+  const directory = mkdtempSync(join(tmpdir(), "bifrost-classifier-privacy-"));
+  const path = join(directory, "debug.jsonl");
+  const originalError = console.error;
+  const stderr: string[] = [];
+  setupDebug({ enabled: true, path }, directory);
+  console.error = (...values: unknown[]) => { stderr.push(values.map(String).join(" ")); };
+  try {
+    const result = await run();
+    await flushDebug();
+    return { result, debugText: readFileSync(path, "utf8"), stderrText: stderr.join("\n") };
+  } finally {
+    console.error = originalError;
+    setupDebug({ enabled: false, path }, directory);
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+function classifierEvents(text: string): Array<Record<string, unknown>> {
+  return text.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+}
 
 describe("classifier", () => {
   describe("categoryLabel", () => {
@@ -70,6 +101,391 @@ describe("classifier", () => {
     assert.equal(observedContext?.messages?.length, 1);
     assert.equal(observedOptions?.maxTokens, 20);
     assert.equal(observedOptions?.cacheRetention, "none");
+  });
+
+  it("records registry classifier HTTP budget responses and avoids a subprocess retry", async () => {
+    const model = makeModel("fixture", "classifier");
+    let subprocessCalls = 0;
+    const observed: Array<{ provider: string; status: number; retryAfter?: string }> = [];
+    const result = await classifyWithLLM({
+      cwd: process.cwd(),
+      modelRegistry: {
+        streamSimple: (_model: unknown, _context: unknown, options: { onResponse?: (response: { status: number; headers: Record<string, string> }, model: { provider: string; id: string }) => void | Promise<void> }) => ({
+          result: async () => {
+            await options.onResponse?.({ status: 402, headers: { "retry-after": "12" } }, model);
+            return { content: [], stopReason: "error" };
+          },
+        }),
+      },
+    } as never, { kind: "registry", model }, ["frontier"], "request", {
+      method: "auto",
+      onProviderHttpResponse: (providerModel, status, retryAfter) => { observed.push({ provider: providerModel.provider, status, retryAfter }); },
+      spawnImpl: (() => { subprocessCalls++; throw new Error("must not retry a 402 in a subprocess"); }) as unknown as typeof import("node:child_process").spawn,
+    });
+    assert.equal(result, undefined);
+    assert.deepEqual(observed, [{ provider: "fixture", status: 402, retryAfter: "12" }]);
+    assert.equal(subprocessCalls, 0);
+  });
+
+  it("reports a terminal classifier 403 only when its text proves subscription denial", async () => {
+    const model = makeModel("fixture", "go-classifier");
+    for (const [errorMessage, expected] of [
+      ["An active OpenCode Go subscription is required to use Go", true],
+      ["Forbidden", false],
+    ] as const) {
+      const observed: Array<{ status: number; errorMessage?: string }> = [];
+      const controller = new AbortController();
+      await classifyWithLLM({
+        cwd: process.cwd(),
+        signal: controller.signal,
+        modelRegistry: {
+          streamSimple: (_model: unknown, _context: unknown, options: { onResponse?: (response: { status: number; headers: Record<string, string> }, model: { provider: string; id: string }) => void | Promise<void> }) => ({
+            result: async () => {
+              await options.onResponse?.({ status: 403, headers: {} }, model);
+              if (!expected) controller.abort();
+              return { content: [], stopReason: "error", errorMessage };
+            },
+          }),
+        },
+      } as never, { kind: "registry", model }, ["frontier"], "request", {
+        method: "direct",
+        onProviderHttpResponse: (_providerModel, status, _retryAfter, terminalError) => { observed.push({ status, errorMessage: terminalError }); },
+      });
+      assert.equal(observed.length, expected ? 1 : 0, errorMessage);
+      if (expected) assert.deepEqual(observed, [{ status: 403, errorMessage }]);
+    }
+
+    const observedAfterRetry: number[] = [];
+    const retried = await classifyWithLLM({
+      cwd: process.cwd(),
+      modelRegistry: {
+        streamSimple: (_model: unknown, _context: unknown, options: { onResponse?: (response: { status: number; headers: Record<string, string> }, model: { provider: string; id: string }) => void | Promise<void> }) => ({
+          result: async () => {
+            await options.onResponse?.({ status: 403, headers: {} }, model);
+            await options.onResponse?.({ status: 200, headers: {} }, model);
+            return { content: [{ type: "text", text: "quick" }], stopReason: "stop" };
+          },
+        }),
+      },
+    } as never, { kind: "registry", model }, ["quick"], "request", {
+      method: "auto",
+      onProviderHttpResponse: (_providerModel, status) => { observedAfterRetry.push(status); },
+    });
+    assert.equal(retried, "quick");
+    assert.deepEqual(observedAfterRetry, [], "a successful retry after an intermediate 403 does not report a provider pause");
+  });
+
+  it("forwards bounded terminal quota details without logging provider text", async () => {
+    const model = makeModel("fixture", "classifier");
+    const errorMessage = `insufficient_quota ${"x".repeat(1_100)} PRIVATE_PROVIDER_ERROR`;
+    const observed: Array<{ status: number; errorMessage?: string }> = [];
+    const stderr: string[] = [];
+    const originalError = console.error;
+    console.error = (...values: unknown[]) => { stderr.push(values.map(String).join(" ")); };
+    let result: string | undefined;
+    try {
+      result = await classifyWithLLM({
+        cwd: process.cwd(),
+        modelRegistry: {
+          streamSimple: (_model: unknown, _context: unknown, options: { onResponse?: (response: { status: number; headers: Record<string, string> }, model: { provider: string; id: string }) => void | Promise<void> }) => ({
+            result: async () => {
+              await options.onResponse?.({ status: 429, headers: { "retry-after": "30" } }, model);
+              return { content: [], stopReason: "error", errorMessage };
+            },
+          }),
+        },
+      } as never, { kind: "registry", model }, ["frontier"], "request", {
+          method: "auto",
+          onProviderHttpResponse: (_providerModel, status, _retryAfter, terminalError) => { observed.push({ status, errorMessage: terminalError }); },
+          spawnImpl: (() => { throw new Error("terminal quota errors must not retry in a subprocess"); }) as unknown as typeof import("node:child_process").spawn,
+        });
+    } finally {
+      console.error = originalError;
+    }
+
+    assert.equal(result, undefined);
+    assert.equal(observed[0]?.status, 429);
+    assert.equal(observed[0]?.errorMessage?.length, 1_024);
+    assert.match(observed[0]?.errorMessage ?? "", /^insufficient_quota/u);
+    assert.doesNotMatch(stderr.join("\n"), /PRIVATE_PROVIDER_ERROR/u);
+  });
+
+  it("does not pause or discard classification for a retried 429 that succeeds", async () => {
+    const model = makeModel("fixture", "classifier");
+    let subprocessCalls = 0;
+    const observed: number[] = [];
+    const result = await classifyWithLLM({
+      cwd: process.cwd(),
+      modelRegistry: {
+        streamSimple: (_model: unknown, _context: unknown, options: { onResponse?: (response: { status: number; headers: Record<string, string> }, model: { provider: string; id: string }) => void | Promise<void> }) => ({
+          result: async () => {
+            await options.onResponse?.({ status: 429, headers: { "retry-after": "5" } }, model);
+            return { content: [{ type: "text", text: "frontier" }], stopReason: "stop" };
+          },
+        }),
+      },
+    } as never, { kind: "registry", model }, ["frontier"], "request", {
+      method: "auto",
+      onProviderHttpResponse: (_providerModel, status) => { observed.push(status); },
+      spawnImpl: (() => { subprocessCalls++; throw new Error("successful registry response should not spawn"); }) as unknown as typeof import("node:child_process").spawn,
+    });
+    assert.equal(result, "frontier");
+    assert.deepEqual(observed, []);
+    assert.equal(subprocessCalls, 0);
+  });
+
+  it("uses the final HTTP response when deciding whether a terminal failure is a rate limit", async () => {
+    const model = makeModel("fixture", "classifier");
+    const observed: number[] = [];
+    const result = await classifyWithLLM({
+      cwd: process.cwd(),
+      modelRegistry: {
+        streamSimple: (_model: unknown, _context: unknown, options: { onResponse?: (response: { status: number; headers: Record<string, string> }, model: { provider: string; id: string }) => void | Promise<void> }) => ({
+          result: async () => {
+            await options.onResponse?.({ status: 429, headers: { "retry-after": "5" } }, model);
+            await options.onResponse?.({ status: 503, headers: {} }, model);
+            return { content: [{ type: "text", text: "frontier" }], stopReason: "error" };
+          },
+        }),
+      },
+    } as never, { kind: "registry", model }, ["frontier"], "request", {
+      method: "direct",
+      onProviderHttpResponse: (_providerModel, status) => { observed.push(status); },
+    });
+    assert.equal(result, "frontier");
+    assert.deepEqual(observed, []);
+  });
+
+  it("keeps registry classifier output out of generic debug fields while returning the tier", async () => {
+    const sentinelPrompt = "PRIVATE_PROMPT_ECHO_SENTINEL";
+    const logs = await captureClassifierLogs(() => classifyWithLLM({
+      cwd: process.cwd(),
+      signal: new AbortController().signal,
+      modelRegistry: {
+        streamSimple: () => ({ result: async () => ({ content: [{ type: "text", text: "frontier" }] }) }),
+      },
+    } as never, { kind: "registry", model: makeModel("fixture", "classifier") }, ["frontier"], sentinelPrompt, { method: "direct" }));
+
+    assert.equal(logs.result, "frontier");
+    assert.doesNotMatch(logs.debugText, /PRIVATE_PROMPT_ECHO_SENTINEL/u);
+    const event = classifierEvents(logs.debugText).find((row) => row.event === "registry.done");
+    assert.equal(event?.outputChars, 8);
+    assert.equal(Object.hasOwn(event ?? {}, "raw"), false);
+  });
+
+  it("does not log a configured HTTP endpoint when returning a classifier tier", async () => {
+    const endpointSecret = "PRIVATE_ENDPOINT_SECRET";
+    const model = { kind: "endpoint" as const, id: "fixture-classifier", baseUrl: `https://example.invalid/${endpointSecret}/v1` };
+    const logs = await captureClassifierLogs(() => classifyWithLLM(
+      { cwd: process.cwd() } as never,
+      model,
+      ["frontier"],
+      "request",
+      { method: "direct", fetchImpl: async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: "frontier" } }] }) } as Response) },
+    ));
+
+    assert.equal(logs.result, "frontier");
+    assert.doesNotMatch(logs.debugText + logs.stderrText, new RegExp(endpointSecret, "u"));
+    const event = classifierEvents(logs.debugText).find((row) => row.event === "http.done");
+    assert.equal(event?.outputChars, 8);
+    assert.equal(Object.hasOwn(event ?? {}, "raw"), false);
+  });
+
+  it("keeps configured endpoint URLs out of empty and failed HTTP diagnostics", async () => {
+    const endpointSecret = "PRIVATE_HTTP_ENDPOINT_SENTINEL";
+    const model = { kind: "endpoint" as const, id: "fixture-classifier", baseUrl: `https://example.invalid/${endpointSecret}/v1` };
+    const empty = await captureClassifierLogs(() => classifyWithLLM(
+      { cwd: process.cwd() } as never,
+      model,
+      ["frontier"],
+      "request",
+      { method: "direct", fetchImpl: async () => ({ ok: true, json: async () => ({ choices: [{ message: { content: "" } }] }) } as Response) },
+    ));
+    assert.equal(empty.result, undefined);
+    assert.doesNotMatch(empty.debugText + empty.stderrText, new RegExp(endpointSecret, "u"));
+    const emptyEvent = classifierEvents(empty.debugText).find((row) => row.event === "http.empty_response");
+    assert.equal(emptyEvent?.outputPresent, false);
+
+    const failed = await captureClassifierLogs(() => classifyWithLLM(
+      { cwd: process.cwd() } as never,
+      model,
+      ["frontier"],
+      "request",
+      { method: "direct", fetchImpl: async () => ({ ok: false, status: 429 } as Response) },
+    ));
+    assert.equal(failed.result, undefined);
+    assert.doesNotMatch(failed.debugText + failed.stderrText, new RegExp(endpointSecret, "u"));
+    assert.match(failed.stderrText, /classifier HTTP request failed \(status 429\)/u);
+    assert.equal(classifierEvents(failed.debugText).find((row) => row.event === "http.error")?.status, 429);
+  });
+
+  it("omits subprocess stderr and process error text from debug and stderr output", async () => {
+    const sentinel = "PRIVATE_SUBPROCESS_STDERR_SENTINEL";
+    const child = new EventEmitter() as EventEmitter & { stdout: PassThrough; stderr: PassThrough; kill: () => boolean };
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    const logs = await captureClassifierLogs(() => classifyWithLLM(
+      { cwd: process.cwd() } as never,
+      { kind: "registry", model: makeModel("fixture", "classifier") },
+      ["frontier"],
+      "request",
+      { method: "subprocess", spawnImpl: (() => {
+        queueMicrotask(() => {
+          child.stderr.write(sentinel);
+          child.emit("close", 1);
+        });
+        return child as unknown as ChildProcess;
+      }) as unknown as typeof import("node:child_process").spawn },
+    ));
+
+    assert.equal(logs.result, undefined);
+    assert.doesNotMatch(logs.debugText + logs.stderrText, new RegExp(sentinel, "u"));
+    assert.match(logs.stderrText, /classifier subprocess exited with code 1/u);
+    const event = classifierEvents(logs.debugText).find((row) => row.event === "subprocess.error");
+    assert.equal(event?.stderrPresent, true);
+    assert.equal(event?.stderrChars, sentinel.length);
+    assert.equal(Object.hasOwn(event ?? {}, "stderr"), false);
+  });
+
+  it("does not interpolate child process errors into user-visible output", async () => {
+    const sentinel = "PRIVATE_PROCESS_ERROR_SENTINEL";
+    const child = new EventEmitter() as EventEmitter & { stdout: PassThrough; stderr: PassThrough; kill: () => boolean };
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    const logs = await captureClassifierLogs(() => classifyWithLLM(
+      { cwd: process.cwd() } as never,
+      { kind: "registry", model: makeModel("fixture", "classifier") },
+      ["frontier"],
+      "request",
+      { method: "subprocess", spawnImpl: (() => {
+        queueMicrotask(() => child.emit("error", new Error(sentinel)));
+        return child as unknown as ChildProcess;
+      }) as unknown as typeof import("node:child_process").spawn },
+    ));
+
+    assert.equal(logs.result, undefined);
+    assert.doesNotMatch(logs.debugText + logs.stderrText, new RegExp(sentinel, "u"));
+    assert.equal(logs.stderrText, "[bifrost] classifier subprocess failed");
+    const event = classifierEvents(logs.debugText).find((row) => row.event === "subprocess.error");
+    assert.equal(event?.errorCategory, "process_error");
+  });
+
+  it("propagates caller abort to registry classification and skips paid fallbacks", async () => {
+    const controller = new AbortController();
+    let registrySignal: AbortSignal | undefined;
+    let subprocessCalls = 0;
+    const classifierModel = { kind: "registry" as const, model: makeModel("fixture", "classifier") };
+    const ctx = {
+      cwd: process.cwd(),
+      modelRegistry: {
+        streamSimple: (_model: unknown, _context: unknown, options: { signal?: AbortSignal }) => {
+          registrySignal = options.signal;
+          return {
+            result: () => new Promise((resolve) => {
+              options.signal?.addEventListener("abort", () => resolve({ content: [] }), { once: true });
+            }),
+          };
+        },
+      },
+    } as never;
+    const resultPromise = classifyWithLLM(ctx, classifierModel, ["frontier"], "request", {
+      method: "auto",
+      spawnImpl: (() => { subprocessCalls += 1; throw new Error("must not spawn after abort"); }) as unknown as typeof import("node:child_process").spawn,
+    }, controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    assert.equal(await resultPromise, undefined);
+    assert.equal(registrySignal?.aborted, true);
+    assert.equal(subprocessCalls, 0);
+  });
+
+  it("propagates caller abort to prompt HTTP fetch", async () => {
+    const controller = new AbortController();
+    let requestSignal: AbortSignal | undefined;
+    const classifierModel = { kind: "endpoint" as const, id: "fixture-classifier", baseUrl: "https://example.invalid/v1" };
+    const ctx = { cwd: process.cwd() } as never;
+    const resultPromise = classifyWithLLM(ctx, classifierModel, ["frontier"], "request", {
+      method: "direct",
+      fetchImpl: async (_input, init) => {
+        requestSignal = init?.signal ?? undefined;
+        return new Promise((_resolve, reject) => {
+          requestSignal?.addEventListener("abort", () => reject(requestSignal?.reason), { once: true });
+        });
+      },
+    }, controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    assert.equal(await resultPromise, undefined);
+    assert.equal(requestSignal?.aborted, true);
+  });
+
+  it("cancels registry classification from the active context when the pipeline supplies its own signal", async () => {
+    const contextController = new AbortController();
+    let registrySignal: AbortSignal | undefined;
+    let subprocessCalls = 0;
+    const classifierModel = { kind: "registry" as const, model: makeModel("fixture", "classifier") };
+    const ctx = {
+      cwd: process.cwd(),
+      signal: contextController.signal,
+      modelRegistry: {
+        streamSimple: (_model: unknown, _context: unknown, options: { signal?: AbortSignal }) => {
+          registrySignal = options.signal;
+          return {
+            result: () => new Promise((resolve) => {
+              options.signal?.addEventListener("abort", () => resolve({ content: [] }), { once: true });
+            }),
+          };
+        },
+      },
+    } as never;
+    const pipeline = createPipeline({
+      totalTimeoutMs: 150,
+      cacheLookup: () => undefined,
+      classifierModels: [classifierModel],
+      classifyWithLLM: (model, text, tiers, signal) => classifyWithLLM(ctx, model, tiers, text, {
+        method: "auto",
+        spawnImpl: (() => { subprocessCalls += 1; throw new Error("must not spawn after context abort"); }) as unknown as typeof import("node:child_process").spawn,
+      }, signal),
+      regexRules: [],
+      defaultTier: "general",
+      tiers: ["general"],
+    });
+
+    const resultPromise = pipeline.classify("ordinary prompt");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    contextController.abort();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(registrySignal?.aborted, true);
+    const result = await resultPromise;
+
+    assert.equal(subprocessCalls, 0);
+    assert.equal(result.kind, "fallback");
+    if (result.kind === "fallback") assert.equal(result.tier, "general");
+  });
+
+  it("terminates only its owned prompt subprocess when caller aborts", async () => {
+    const controller = new AbortController();
+    const child = new EventEmitter() as EventEmitter & { stdout: PassThrough; stderr: PassThrough; kill: (signal?: string) => boolean };
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    const kills: string[] = [];
+    child.kill = (signal) => {
+      kills.push(signal ?? "default");
+      queueMicrotask(() => child.emit("close", null));
+      return true;
+    };
+    const classifierModel = { kind: "registry" as const, model: makeModel("fixture", "classifier") };
+    const ctx = { cwd: process.cwd() } as never;
+    const resultPromise = classifyWithLLM(ctx, classifierModel, ["frontier"], "request", {
+      method: "subprocess",
+      spawnImpl: (() => child as unknown as ChildProcess) as unknown as typeof import("node:child_process").spawn,
+    }, controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+    assert.equal(await resultPromise, undefined);
+    assert.deepEqual(kills, ["SIGTERM"]);
   });
 
   describe("extractCategory", () => {

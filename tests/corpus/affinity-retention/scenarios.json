@@ -1,0 +1,76 @@
+[
+  {
+    "id": "steady-tier-retains-anchor",
+    "turns": [
+      { "id": "s1", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"] }, "strategy": "random", "seed": 268435456, "outcome": "success", "allowedModelKeys": ["fixture/a", "fixture/b"], "strategyWinner": "fixture/a", "expectedRetention": false },
+      { "id": "s2", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"] }, "strategy": "random", "seed": 4026531840, "outcome": "success", "allowedModelKeys": ["fixture/a", "fixture/b"], "strategyWinner": "fixture/b", "expectedRetention": true },
+      { "id": "s3", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"] }, "strategy": "random", "seed": 268435456, "outcome": "success", "allowedModelKeys": ["fixture/a", "fixture/b"], "strategyWinner": "fixture/a", "expectedRetention": false }
+    ]
+  },
+  {
+    "id": "billing-preference-excludes-anchor",
+    "turns": [
+      { "id": "p1", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"] }, "strategy": "first", "outcome": "success", "allowedModelKeys": ["fixture/a", "fixture/b"], "strategyWinner": "fixture/a", "expectedRetention": false },
+      { "id": "p2", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"] }, "strategy": "first", "filter": "preferred-class", "outcome": "success", "allowedModelKeys": ["fixture/b"], "strategyWinner": "fixture/b", "expectedRetention": false }
+    ]
+  },
+  {
+    "id": "reserve-excludes-anchor",
+    "turns": [
+      { "id": "q1", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"] }, "strategy": "first", "outcome": "success", "allowedModelKeys": ["fixture/a", "fixture/b"], "strategyWinner": "fixture/a", "expectedRetention": false },
+      { "id": "q2", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"] }, "strategy": "first", "filter": "reserve", "outcome": "success", "allowedModelKeys": ["fixture/b"], "strategyWinner": "fixture/b", "expectedRetention": false }
+    ]
+  },
+  {
+    "id": "circuit-excludes-anchor",
+    "turns": [
+      { "id": "c1", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"] }, "strategy": "first", "outcome": "success", "allowedModelKeys": ["fixture/a", "fixture/b"], "strategyWinner": "fixture/a", "expectedRetention": false },
+      { "id": "c2", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"] }, "strategy": "first", "filter": "circuit", "outcome": "success", "allowedModelKeys": ["fixture/b"], "strategyWinner": "fixture/b", "expectedRetention": false }
+    ]
+  },
+  {
+    "id": "tier-change-keeps-new-tier-strategy",
+    "turns": [
+      { "id": "t1", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"], "quick": ["fixture/c", "fixture/d"] }, "strategy": "first", "outcome": "success", "allowedModelKeys": ["fixture/a", "fixture/b"], "strategyWinner": "fixture/a", "expectedRetention": false },
+      { "id": "t2", "tier": "quick", "modelsByTier": { "general": ["fixture/a", "fixture/b"], "quick": ["fixture/c", "fixture/d"] }, "strategy": "first", "outcome": "success", "allowedModelKeys": ["fixture/c", "fixture/d"], "strategyWinner": "fixture/c", "expectedRetention": false }
+    ]
+  },
+  {
+    "id": "explicit-tier-bypasses-retention",
+    "turns": [
+      { "id": "x1", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"], "quick": ["fixture/a", "fixture/b"] }, "strategy": "first", "outcome": "success", "allowedModelKeys": ["fixture/a", "fixture/b"], "strategyWinner": "fixture/a", "expectedRetention": false },
+      { "id": "x2", "tier": "quick", "origin": "explicit_tier", "modelsByTier": { "general": ["fixture/a", "fixture/b"], "quick": ["fixture/a", "fixture/b"] }, "strategy": "random", "seed": 4026531840, "outcome": "success", "allowedModelKeys": ["fixture/a", "fixture/b"], "strategyWinner": "fixture/b", "expectedRetention": false }
+    ]
+  },
+  {
+    "id": "failed-and-aborted-responses-do-not-create-anchors",
+    "turns": [
+      { "id": "f1", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"] }, "strategy": "first", "outcome": "failure", "allowedModelKeys": ["fixture/a", "fixture/b"], "strategyWinner": "fixture/a", "expectedRetention": false },
+      { "id": "f2", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"] }, "strategy": "random", "seed": 4026531840, "outcome": "aborted", "allowedModelKeys": ["fixture/a", "fixture/b"], "strategyWinner": "fixture/b", "expectedRetention": false },
+      { "id": "f3", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"] }, "strategy": "first", "outcome": "success", "allowedModelKeys": ["fixture/a", "fixture/b"], "strategyWinner": "fixture/a", "expectedRetention": false },
+      { "id": "f4", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"] }, "strategy": "random", "seed": 4026531840, "outcome": "success", "allowedModelKeys": ["fixture/a", "fixture/b"], "strategyWinner": "fixture/b", "expectedRetention": true }
+    ]
+  },
+  {
+    "id": "branch-reset-clears-anchor",
+    "turns": [
+      { "id": "r1", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"] }, "strategy": "first", "outcome": "success", "allowedModelKeys": ["fixture/a", "fixture/b"], "strategyWinner": "fixture/a", "expectedRetention": false },
+      { "id": "r2", "tier": "general", "action": "branch_reset", "outcome": "reset", "expectedRetention": false },
+      { "id": "r3", "tier": "general", "modelsByTier": { "general": ["fixture/a", "fixture/b"] }, "strategy": "random", "seed": 4026531840, "outcome": "success", "allowedModelKeys": ["fixture/a", "fixture/b"], "strategyWinner": "fixture/b", "expectedRetention": false }
+    ]
+  },
+  {
+    "id": "strict-tier-boundary-keeps-selection-local",
+    "turns": [
+      { "id": "b1", "tier": "general", "modelsByTier": { "general": ["fixture/a"], "quick": ["fixture/b"] }, "strategy": "first", "outcome": "success", "allowedModelKeys": ["fixture/a"], "strategyWinner": "fixture/a", "expectedRetention": false },
+      { "id": "b2", "tier": "quick", "modelsByTier": { "general": ["fixture/a"], "quick": ["fixture/b"] }, "strategy": "first", "strictBoundary": true, "outcome": "success", "allowedModelKeys": ["fixture/b"], "strategyWinner": "fixture/b", "expectedRetention": false }
+    ]
+  },
+  {
+    "id": "empty-requested-tier-does-not-retain-anchor-from-another-tier",
+    "turns": [
+      { "id": "z1", "tier": "general", "modelsByTier": { "general": ["fixture/a"], "quick": [] }, "strategy": "first", "outcome": "success", "allowedModelKeys": ["fixture/a"], "strategyWinner": "fixture/a", "expectedRetention": false },
+      { "id": "z2", "tier": "quick", "modelsByTier": { "general": ["fixture/a"], "quick": [] }, "strategy": "first", "strictBoundary": true, "outcome": "none", "allowedModelKeys": [], "expectedRetention": false }
+    ]
+  }
+]

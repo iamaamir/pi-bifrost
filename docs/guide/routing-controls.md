@@ -68,15 +68,15 @@ Requires Pi `1.0.1` or newer. Selecting `bifrost/auto` in Pi's `/model` picker s
 | Thinking level | Left footer level is your routing preference; Bifrost clamps the dispatched level to the target's capabilities (non-reasoning targets run `off`) |
 | Recorded model | Every assistant message records the physical model that answered |
 | Tier prefixes | Same syntax, still stripped before the model sees the prompt |
-| Tool continuations and retries | Stay on the physical model that handled the previous request |
+| Tool continuations and retries | Tool continuations and Pi-owned retries stay on the physical model that handled the previous request. Bifrost can make one separate alternate attempt after a proven empty allowance failure. See [Auto recovery](auto-routing.md#recover-from-one-empty-allowance-failure). |
 | Classification and overrides | Run on `user` requests only; compaction and extension calls use the last dispatched or default-tier physical model |
-| Failure mode | Fresh sessions fail with an actionable explanation when no pool resolves (empty pool → `run /bifrost init`); later turns keep the last dispatched physical model with a visible warning. Disabled or pinned Auto requests end with an explanation; nothing is silently replayed |
+| Failure mode | If no route resolves in a fresh session, Auto explains what needs attention. Other failures do not trigger a Bifrost alternate request. A normal cooldown on another model can still allow legacy fallback to a previous model if it remains eligible. A hard exclusion, an active provider pause, or an explicit fallback boundary blocks the route. See [Auto routing](auto-routing.md) for the one bounded allowance-recovery exception. |
 
 Selecting `bifrost/auto` enables routing and clears a pin. `/bifrost pin` and `/bifrost off` exit Auto by activating the last dispatched physical model. Before any dispatch, they resolve the default-tier model instead. Pin locks the result; off disables routing. Manual model selection keeps its existing meaning: the selected physical model is pinned.
 
 ## Pin is a hard lock
 
-`/bifrost pin` is session-local. It does not survive restart and does not propagate to child sessions.
+`/bifrost pin` is session-local. It does not survive restart and does not propagate to child sessions. A pin cannot bypass an active provider pause while Bifrost is on. Bifrost stops before dispatch. `/bifrost off` remains an explicit way to disable Bifrost routing.
 
 Pinned sessions skip all routing, and the first word of a message is never treated as a tier name. Therefore:
 

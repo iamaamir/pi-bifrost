@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 2,
+  "default": "general",
+  "strategy": "first",
+  "models": {
+    "general": ["provider/example-model"]
+  },
+  "economics": {
+    "mode": "observe",
+    "scopes": {
+      "example-provider": { "kind": "provider", "provider": "provider" }
+    },
+    "sources": [
+      { "id": "manual-estimate", "scopeRef": "example-provider", "authority": "estimated" }
+    ],
+    "admission": [
+      { "id": "monthly-reserve", "scopeRef": "example-provider", "windowId": "monthly", "reserveRatio": 0.15, "unknown": "ignore" }
+    ],
+    "observations": []
+  }
+}

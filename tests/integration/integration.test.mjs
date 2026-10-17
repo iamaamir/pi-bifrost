@@ -120,7 +120,7 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-detected-backend-"));
     mkdirSync(join(tempDir, ".pi"), { recursive: true });
     writeFileSync(join(tempDir, ".pi", "bifrost.json"), JSON.stringify({
-      default: "general", classifier: { enabled: true }, debug: { enabled: true },
+      default: "general", classifier: { enabled: true }, debug: { enabled: true, path: ".pi/bifrost-debug.jsonl" },
       models: { quick: [], general: [] },
       rules: [{ pattern: "direct hit", model: "fake/chat" }],
     }));

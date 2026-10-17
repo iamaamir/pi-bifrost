@@ -15,6 +15,10 @@ export function isVirtualModel(model: { api: string } | undefined): boolean {
   return model?.api === VIRTUAL_MODEL_API;
 }
 
+export function isGenerativeModel(model: { api: string; type?: string } | undefined): boolean {
+  return !!model && !isVirtualModel(model) && model.type !== "classifier";
+}
+
 export function isBifrostAuto(model: Model<Api> | undefined): boolean {
   return (
     model?.provider === BIFROST_AUTO_PROVIDER &&
