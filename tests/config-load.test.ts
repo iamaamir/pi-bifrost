@@ -1,10 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_RULES, loadConfig, loadRules } from "../config.ts";
+import { DEFAULT_RULES, validateConfig, validateTierPolicyConfig } from "../config.ts";
+import { loadConfig, loadConfigForReload, loadRules } from "../config-load.ts";
 
 function writeJson(path: string, value: unknown): void {
   mkdirSync(join(path, ".."), { recursive: true });
@@ -182,5 +183,168 @@ describe("config load", () => {
       rmSync(extensionDir, { recursive: true, force: true });
       rmSync(home, { recursive: true, force: true });
     }
+  });
+
+  it("preserves invalid strict namespaces from project config for startup rejection", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
+    const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
+    const home = mkdtempSync(join(tmpdir(), "bifrost-home-"));
+    const agentDir = join(home, "agent");
+    const oldHome = process.env.HOME;
+    const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.HOME = home;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      for (const tierPolicies of [null, "invalid", []]) {
+        writeJson(join(cwd, "bifrost.json"), {
+          schemaVersion: 2,
+          models: { general: ["fixture/model"] },
+          tierPolicies,
+        });
+        const loaded = loadConfigForReload(cwd, extensionDir);
+        assert.ok(loaded.diagnostics.some(({ message }) => message.includes("tierPolicies must be an object")));
+      }
+    } finally {
+      process.env.HOME = oldHome;
+      process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(extensionDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("diagnoses a masked future version while allowing tier references split across layers", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
+    const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
+    const home = mkdtempSync(join(tmpdir(), "bifrost-home-"));
+    const agentDir = join(home, "agent");
+    const oldHome = process.env.HOME;
+    const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.HOME = home;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      writeJson(join(cwd, "bifrost.json"), {
+        schemaVersion: 999,
+        models: { quick: [], general: ["fixture/general"], frontier: [] },
+      });
+      writeJson(join(cwd, ".pi", "bifrost.json"), {
+        models: { frontier: ["fixture/frontier"] },
+        tierPolicies: { general: { fallbackTiers: ["frontier"] } },
+      });
+      const loaded = loadConfigForReload(cwd, extensionDir);
+      assert.ok(loaded.diagnostics.some(({ layer, message }) => layer === "workspace" && /schemaVersion is unsupported/u.test(message)));
+
+      writeJson(join(cwd, "bifrost.json"), {
+        schemaVersion: 2,
+        models: { quick: [], general: ["fixture/general"], frontier: [] },
+      });
+      const split = loadConfigForReload(cwd, extensionDir);
+      assert.deepEqual(split.diagnostics, []);
+      assert.deepEqual(validateConfig(split.config).filter((issue) => issue.code?.startsWith("config.tier_policy_")), []);
+    } finally {
+      process.env.HOME = oldHome;
+      process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(extensionDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("validates each strict source while preserving legal partial object overrides", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
+    const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
+    const home = mkdtempSync(join(tmpdir(), "bifrost-home-"));
+    const agentDir = join(home, "agent");
+    const oldHome = process.env.HOME;
+    const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.HOME = home;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      writeJson(join(cwd, "bifrost.json"), {
+        schemaVersion: 2,
+        models: { quick: [], general: ["fixture/general"], frontier: [] },
+        tierPolicies: { general: { fallbackTiers: [] } },
+        affinity: { mode: "observe", providerAdvisory: true },
+        reliability: { failureThreshold: 5, cooldownOnAllowanceExhausted: false },
+      });
+      writeJson(join(cwd, ".pi", "bifrost.json"), {
+        tierPolicies: { general: {} },
+        affinity: { mode: "off" },
+        reliability: { stateVersion: 1 },
+      });
+      const partial = loadConfigForReload(cwd, extensionDir);
+      assert.deepEqual(partial.diagnostics, []);
+      assert.deepEqual(partial.config.tierPolicies?.general?.fallbackTiers, []);
+      assert.deepEqual(partial.config.affinity, { mode: "off" });
+      assert.deepEqual(partial.config.reliability, { failureThreshold: 5, cooldownOnAllowanceExhausted: false, stateVersion: 1 });
+      assert.deepEqual(validateConfig(partial.config).filter((issue) => issue.severity === "error"), []);
+
+      writeJson(join(cwd, "bifrost.json"), { schemaVersion: 2, affinity: { mode: "invalid" } });
+      writeJson(join(cwd, ".pi", "bifrost.json"), { affinity: { mode: "off" } });
+      const badAffinity = loadConfigForReload(cwd, extensionDir);
+      assert.ok(badAffinity.diagnostics.some(({ layer, message }) => layer === "workspace" && /affinity/u.test(message)));
+
+      writeJson(join(cwd, "bifrost.json"), { schemaVersion: 2, affinity: {} });
+      const emptyAffinity = loadConfigForReload(cwd, extensionDir);
+      assert.ok(emptyAffinity.diagnostics.some(({ layer, message }) => layer === "workspace" && /affinity/u.test(message)));
+
+      writeJson(join(cwd, "bifrost.json"), { schemaVersion: 2, reliability: { stateVersion: 999 } });
+      writeJson(join(cwd, ".pi", "bifrost.json"), { reliability: { stateVersion: 1 } });
+      const badReliability = loadConfigForReload(cwd, extensionDir);
+      assert.ok(badReliability.diagnostics.some(({ layer, message }) => layer === "workspace" && /reliability/u.test(message)));
+
+      writeJson(join(cwd, "bifrost.json"), {
+        schemaVersion: 2,
+        models: { quick: [], general: ["fixture/general"], frontier: [] },
+      });
+      writeJson(join(cwd, ".pi", "bifrost.json"), { tierPolicies: { general: {} } });
+      const emptyFinalPolicy = loadConfigForReload(cwd, extensionDir);
+      assert.deepEqual(emptyFinalPolicy.diagnostics, []);
+      assert.ok(validateConfig(emptyFinalPolicy.config).some((issue) => issue.code === "config.tier_policy_fallback_invalid"));
+    } finally {
+      process.env.HOME = oldHome;
+      process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(extensionDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds config reads while following symlinks to regular config files", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
+    const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
+    const configPath = join(extensionDir, "bifrost.json");
+    const targetPath = join(extensionDir, "linked-config.json");
+    try {
+      writeJson(targetPath, { models: { general: ["fixture/linked"] } });
+      symlinkSync(targetPath, configPath);
+      const linked = loadConfigForReload(cwd, extensionDir);
+      assert.deepEqual(linked.diagnostics, []);
+      assert.deepEqual(linked.config.models?.general, ["fixture/linked"]);
+
+      rmSync(configPath);
+      writeFileSync(configPath, Buffer.alloc(10_000_001, 0x20));
+      const oversized = loadConfigForReload(cwd, extensionDir);
+      assert.equal(oversized.diagnostics.length, 1);
+      assert.match(oversized.diagnostics[0]!.message, /size limit/u);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(extensionDir, { recursive: true, force: true });
+    }
+  });
+
+  it("validates large acyclic and cyclic tier graphs without recursive stack growth", () => {
+    const tiers = 6_000;
+    const models = Object.fromEntries(Array.from({ length: tiers }, (_, index) => [`tier-${index}`, []]));
+    const acyclic = Object.fromEntries(Array.from({ length: tiers }, (_, index) => [
+      `tier-${index}`,
+      { fallbackTiers: index + 1 < tiers ? [`tier-${index + 1}`] : [] },
+    ]));
+    const invalid = Object.fromEntries(Object.entries(acyclic));
+    invalid[`tier-${tiers - 1}`] = { fallbackTiers: ["tier-0"] };
+
+    assert.deepEqual(validateTierPolicyConfig({ schemaVersion: 2, models, tierPolicies: acyclic }), []);
+    assert.ok(validateTierPolicyConfig({ schemaVersion: 2, models, tierPolicies: invalid })
+      .some(({ code }) => code === "config.tier_policy_cycle"));
   });
 });

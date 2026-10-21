@@ -1,0 +1,217 @@
+{
+  "issue": 62,
+  "note": "Provenance for the historical StrykerJS evidence runs behind docs/mutation-evidence-62/. Full JSON reports are gitignored local artifacts under evidence/mutation-62/ (regenerable); this manifest binds the committed extracts to those report bytes. Fields the Stryker JSON report does not record are marked not-recorded, not reconstructed.",
+  "runs": [
+    {
+      "name": "focused-4-targets",
+      "reportFile": "evidence/mutation-62/campaign-4targets-focused-binding.json",
+      "reportSha256": "7ca72d6f78711a9b4895ec88d7f9a2b197af938a7a4bda30bfade91485a264c5",
+      "reportBytes": 15277324,
+      "reportSchemaVersion": "1.0",
+      "revisionAtRun": "not recorded in Stryker JSON report",
+      "extractsRegeneratedAtRevision": "HEAD at regeneration time (see git log for docs/mutation-evidence-62/)",
+      "node": {
+        "version": "v24.14.0",
+        "source": "docs/mutation-testing.md author record; not embedded in Stryker report"
+      },
+      "stryker": {
+        "package": "@stryker-mutator/core",
+        "pinnedAtRegeneration": "10.0.0",
+        "source": "package-lock.json at regeneration revision (sha256 1d005213fc6ed4162dd205b814ba69717a80465b819b21a9ecce23095f6fb878); run-time install state not recorded"
+      },
+      "command": "node --test --experimental-strip-types tests/cache.test.ts tests/classifier-cache-key.test.ts tests/classifier-detection.test.ts tests/reliability.test.ts tests/routing.test.ts",
+      "concurrency": "not recorded in Stryker JSON report (maxConcurrentTestRunners resolved to default 9007199254740991; author doc notes ~10 cores for wall-clock)",
+      "resolvedConfig": {
+        "mutate": [
+          "cache.ts",
+          "classifier-semantics.ts",
+          "reliability.ts",
+          "routing.ts"
+        ],
+        "testRunner": "command",
+        "coverageAnalysis": "off",
+        "timeoutFactor": 1.5,
+        "timeoutMS": 5000,
+        "reporters": [
+          "clear-text",
+          "progress",
+          "json"
+        ]
+      },
+      "committedConfig": {
+        "file": "stryker.config.mjs",
+        "sha256": "2f8f51014fefcd37780966a878d8d99ff341d9e55ff91ed62b307fffd4ceb589",
+        "timeoutFactor": 2,
+        "timeoutMS": 10000,
+        "divergence": "committed timeoutFactor/timeoutMS (2/10000) differ from this historical run’s resolved values (1.5/5000); replay with the committed config establishes a new run, not a reconstruction"
+      },
+      "statusTotals": {
+        "mutants": 1255,
+        "Killed": 768,
+        "Survived": 487,
+        "Timeout": 0,
+        "NoCoverage": 0,
+        "CompileError": 0,
+        "RuntimeError": 0
+      },
+      "perFileTotals": {
+        "cache.ts": {
+          "mutants": 226,
+          "Killed": 145,
+          "Survived": 81,
+          "Timeout": 0,
+          "NoCoverage": 0,
+          "RuntimeError": 0,
+          "CompileError": 0
+        },
+        "classifier-semantics.ts": {
+          "mutants": 157,
+          "Killed": 42,
+          "Survived": 115,
+          "Timeout": 0,
+          "NoCoverage": 0,
+          "RuntimeError": 0,
+          "CompileError": 0
+        },
+        "reliability.ts": {
+          "mutants": 352,
+          "Killed": 209,
+          "Survived": 143,
+          "Timeout": 0,
+          "NoCoverage": 0,
+          "RuntimeError": 0,
+          "CompileError": 0
+        },
+        "routing.ts": {
+          "mutants": 520,
+          "Killed": 372,
+          "Survived": 148,
+          "Timeout": 0,
+          "NoCoverage": 0,
+          "RuntimeError": 0,
+          "CompileError": 0
+        }
+      },
+      "scoreDenominator": "Stryker score = (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage); RuntimeError and CompileError are excluded. Here Timeout, NoCoverage, RuntimeError and CompileError are all 0, so the denominator is exactly the mutant count.",
+      "runnerSemantics": "command runner with coverageAnalysis off: any nonzero bound-command exit is reported Killed without distinguishing assertion failures from exceptions or startup failures; a zero NoCoverage count is unmeasured coverage, not proof every mutant executed.",
+      "sourceSha256": {
+        "cache.ts": "55db39ab09464b5747a1eab861f382f0750d334f996994e54476e1b1b1f37c2c",
+        "classifier-semantics.ts": "7b529f87e84128e75ff419dddeac7efd30b0cf3d76a1af7bd5587b39a851d4cc",
+        "reliability.ts": "1416c27830503769b5539618d7d40151d7f708ca2abebb4dfe6657c0068cdfcc",
+        "routing.ts": "9fbf2c35d3a71d009c0ed6d45dc43cfe6a48409d7852f8b568a57d9b9187bf77"
+      }
+    },
+    {
+      "name": "classifier-semantics-all-consumers",
+      "reportFile": "evidence/mutation-62/classifier-semantics-all-consumers.json",
+      "reportSha256": "bbc22ce6397df68bba005c1dd56a55b4c94e6f93de37ac1f4a025adbf8c17d55",
+      "reportBytes": 529167,
+      "reportSchemaVersion": "1.0",
+      "revisionAtRun": "not recorded in Stryker JSON report",
+      "extractsRegeneratedAtRevision": "HEAD at regeneration time (see git log for docs/mutation-evidence-62/)",
+      "node": {
+        "version": "v24.14.0",
+        "source": "docs/mutation-testing.md author record; not embedded in Stryker report"
+      },
+      "stryker": {
+        "package": "@stryker-mutator/core",
+        "pinnedAtRegeneration": "10.0.0",
+        "source": "package-lock.json at regeneration revision (sha256 1d005213fc6ed4162dd205b814ba69717a80465b819b21a9ecce23095f6fb878); run-time install state not recorded"
+      },
+      "command": "node --test --experimental-strip-types tests/classifier-cache-key.test.ts tests/classifier-detection.test.ts tests/classifier-effective-validation.test.ts",
+      "concurrency": "not recorded in Stryker JSON report (maxConcurrentTestRunners resolved to default 9007199254740991)",
+      "resolvedConfig": {
+        "mutate": [
+          "classifier-semantics.ts"
+        ],
+        "testRunner": "command",
+        "coverageAnalysis": "off",
+        "timeoutFactor": 2,
+        "timeoutMS": 10000,
+        "reporters": [
+          "clear-text",
+          "progress",
+          "json"
+        ]
+      },
+      "committedConfig": {
+        "file": "stryker.config.classifier-semantics.mjs",
+        "sha256": "65614fea7acc0ebe4a84010dbfe187df94c4c74a1537daa1fc1c09d18f41badd",
+        "timeoutFactor": 2,
+        "timeoutMS": 10000,
+        "divergence": "none: committed values match this run’s resolved values"
+      },
+      "statusTotals": {
+        "mutants": 157,
+        "Killed": 81,
+        "Survived": 76,
+        "Timeout": 0,
+        "NoCoverage": 0,
+        "CompileError": 0,
+        "RuntimeError": 0
+      },
+      "perFileTotals": {
+        "classifier-semantics.ts": {
+          "mutants": 157,
+          "Killed": 81,
+          "Survived": 76,
+          "Timeout": 0,
+          "NoCoverage": 0,
+          "RuntimeError": 0,
+          "CompileError": 0
+        }
+      },
+      "scoreDenominator": "Same Stryker score definition as above; Timeout, NoCoverage, RuntimeError and CompileError are all 0 here.",
+      "runnerSemantics": "Same command-runner semantics as above.",
+      "sourceSha256": {
+        "classifier-semantics.ts": "7b529f87e84128e75ff419dddeac7efd30b0cf3d76a1af7bd5587b39a851d4cc"
+      }
+    }
+  ],
+  "extractDerivation": {
+    "boundary-kills-focused-binding.jsonl": "all Killed mutants with mutator in {EqualityOperator, ConditionalExpression, LogicalOperator} from the focused-4-targets report (92 + 203 + 82 = 377); multiset verified against the previously committed rows",
+    "survivors-focused-binding.jsonl": "all Survived mutants from the focused-4-targets report (487); multiset verified against the previously committed rows",
+    "classifier-semantics-all-consumers-survivors.jsonl": "all Survived mutants from the classifier-semantics-all-consumers report (76); multiset verified against the previously committed rows",
+    "rowFields": "mutantId, file, startLine/startCol, endLine/endCol (exact Stryker range), mutator, replacement, status, source (full embedded source line, trimmed; replaces the previously truncated line text)"
+  },
+  "stochasticMutants": [
+    {
+      "mutantId": "839",
+      "file": "routing.ts",
+      "startLine": 162,
+      "startCol": 5,
+      "endLine": 164,
+      "endCol": 61,
+      "mutator": "ConditionalExpression",
+      "replacement": "case \"largest_context\":",
+      "recordedStatus": "Survived",
+      "cause": "replacement drops the largest_context return so selection falls through to the unseeded Math.random strategy; the owning tests only stub Math.random for the explicit random strategy (tests/routing.test.ts), so the outcome varies per run",
+      "repeatedOutcomes": {
+        "independentReview16": {
+          "killed": 12,
+          "survived": 4,
+          "survivingTrials": [
+            6,
+            8,
+            11,
+            13
+          ],
+          "testsPerTrial": 126,
+          "source": "independent review of this PR (outside repo); identical 5-file command, no test edits"
+        },
+        "authorRepeat10": {
+          "killed": 7,
+          "survived": 3,
+          "survivingTrials": [
+            1,
+            8,
+            9
+          ],
+          "testsPerTrial": 126,
+          "source": "worktree repeat at regeneration revision, same command, byte-exact restore verified via git status clean"
+        }
+      },
+      "warning": "no deterministic survivor/kill status or exact score replay is promised for this mutant; a rerun establishes a new outcome"
+    }
+  ]
+}

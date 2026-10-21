@@ -1,0 +1,23 @@
+Controlled mutant proof (issue #62) — cache.ts:130 eviction boundary
+Node v24.14.0, macOS, node --test --experimental-strip-types tests/cache.test.ts
+
+Mutant (Stryker EqualityOperator, status Killed in campaign run):
+  -   if (entries.length <= maxEntries) return entries;
+  +   if (entries.length > maxEntries) return entries;
+
+RED (mutant applied):
+  ℹ tests 29
+  ℹ pass 28
+  ℹ fail 1
+  ✖ evicts oldest entries over cap (0.314125ms)
+
+Restore (git diff clean):
+  GREEN (original source):
+  ℹ tests 29
+  ℹ pass 29
+  ℹ fail 0
+
+Also recorded (non-killed mutant kept honest, no test weakening):
+  cache.ts:147 `entry.lastUsed >= cutoff` -> `> cutoff` (EqualityOperator) SURVIVED;
+  manual application also passes all 29 cache tests, matching the Stryker
+  surviving-mutant report. It is listed in survivors-focused-binding.jsonl.

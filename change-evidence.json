@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "base": "774b1bbdc932059d542d2b95b5b914d9c99aab2c",
+  "contracts": [
+    {
+      "id": "native-auto-missing-route-fault",
+      "requirement": "R06",
+      "files": [
+        "tests/integration/auto-missing-route-fault.test.mjs"
+      ],
+      "boundary": "Real native Pi CLI with production Bifrost Auto: after a successful warmup, an explicitly terminal tier references a missing target. It must not dispatch the previous healthy physical model. This is not virtual registration activation-false/throw or nonstreaming cancellation proof.",
+      "assertions": "Owned pristine GREEN; bypass explicit-boundary checks in both sticky and fallback callers; same native request-counter assertion RED; byte-identical restored GREEN. All creation-time owned groups close and are absent before scratch reclaim.",
+      "boundaryTest": {
+        "file": "tests/integration/auto-missing-route-fault.test.mjs",
+        "name": "proves missing Auto targets cannot escape an explicit boundary through sticky or fallback dispatch"
+      },
+      "invariant": {
+        "file": "tests/integration/auto-missing-route-fault.test.mjs",
+        "name": "proves missing Auto targets cannot escape an explicit boundary through sticky or fallback dispatch"
+      },
+      "fault": {
+        "file": "tests/integration/auto-missing-route-fault.test.mjs",
+        "name": "proves missing Auto targets cannot escape an explicit boundary through sticky or fallback dispatch"
+      }
+    }
+  ]
+}

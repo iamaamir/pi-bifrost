@@ -1,0 +1,1651 @@
+{
+  "schemaVersion": 1,
+  "evidence": {
+    "schemaVersion": 1,
+    "profile": "deterministic",
+    "startedAt": "2026-10-12T10:13:30.478Z",
+    "endedAt": "2026-10-12T10:19:29.568Z",
+    "exitCode": 1,
+    "source": {
+      "revisionAtStart": "d008c80adba0412e9fd94658cfdfe5d0b4e1f8ea",
+      "revisionAtEnd": "d008c80adba0412e9fd94658cfdfe5d0b4e1f8ea",
+      "fingerprintAtStart": "e56f89efb06ebc5efe1ab8f490f7c3ae33f104309bd31bcd196027d20d83abd9",
+      "fingerprintAtEnd": "e56f89efb06ebc5efe1ab8f490f7c3ae33f104309bd31bcd196027d20d83abd9",
+      "changedDuringRun": false,
+      "dirtyPathsAtStart": [
+        {
+          "index": " M",
+          "path": ".github/workflows/verification.yml"
+        },
+        {
+          "index": " M",
+          "path": "DEVELOPMENT.md"
+        },
+        {
+          "index": " M",
+          "path": "package.json"
+        },
+        {
+          "index": " M",
+          "path": "scripts/fake-provider-server.mjs"
+        },
+        {
+          "index": " M",
+          "path": "scripts/test-outbound-guard.cjs"
+        },
+        {
+          "index": " M",
+          "path": "tests/integration/auto-bootstrap-selection.test.mjs"
+        },
+        {
+          "index": " M",
+          "path": "tests/integration/auto-virtual.test.mjs"
+        },
+        {
+          "index": " M",
+          "path": "tests/integration/init-regression.test.mjs"
+        },
+        {
+          "index": "??",
+          "path": "docs/acceptance-coverage.md"
+        },
+        {
+          "index": "??",
+          "path": "scripts/acceptance-deterministic.mjs"
+        },
+        {
+          "index": "??",
+          "path": "scripts/acceptance.mjs"
+        },
+        {
+          "index": "??",
+          "path": "scripts/acceptance/core.mjs"
+        },
+        {
+          "index": "??",
+          "path": "scripts/acceptance/journeys.mjs"
+        },
+        {
+          "index": "??",
+          "path": "scripts/acceptance/profiles/contract.mjs"
+        },
+        {
+          "index": "??",
+          "path": "scripts/acceptance/profiles/live.mjs"
+        },
+        {
+          "index": "??",
+          "path": "scripts/acceptance/test-event-reporter.mjs"
+        },
+        {
+          "index": "??",
+          "path": "scripts/ui-acceptance-first-use.sh"
+        },
+        {
+          "index": "??",
+          "path": "tests/acceptance-journeys.test.mjs"
+        },
+        {
+          "index": "??",
+          "path": "tests/acceptance-live.test.mjs"
+        },
+        {
+          "index": "??",
+          "path": "tests/acceptance-runner.test.mjs"
+        },
+        {
+          "index": "??",
+          "path": "tests/integration/affinity-lifecycle-acceptance.test.mjs"
+        },
+        {
+          "index": "??",
+          "path": "tests/integration/decision-parity-acceptance.test.mjs"
+        }
+      ],
+      "dirtyPathsAtEnd": [
+        {
+          "index": " M",
+          "path": ".github/workflows/verification.yml"
+        },
+        {
+          "index": " M",
+          "path": "DEVELOPMENT.md"
+        },
+        {
+          "index": " M",
+          "path": "package.json"
+        },
+        {
+          "index": " M",
+          "path": "scripts/fake-provider-server.mjs"
+        },
+        {
+          "index": " M",
+          "path": "scripts/test-outbound-guard.cjs"
+        },
+        {
+          "index": " M",
+          "path": "tests/integration/auto-bootstrap-selection.test.mjs"
+        },
+        {
+          "index": " M",
+          "path": "tests/integration/auto-virtual.test.mjs"
+        },
+        {
+          "index": " M",
+          "path": "tests/integration/init-regression.test.mjs"
+        },
+        {
+          "index": "??",
+          "path": "docs/acceptance-coverage.md"
+        },
+        {
+          "index": "??",
+          "path": "scripts/acceptance-deterministic.mjs"
+        },
+        {
+          "index": "??",
+          "path": "scripts/acceptance.mjs"
+        },
+        {
+          "index": "??",
+          "path": "scripts/acceptance/core.mjs"
+        },
+        {
+          "index": "??",
+          "path": "scripts/acceptance/journeys.mjs"
+        },
+        {
+          "index": "??",
+          "path": "scripts/acceptance/profiles/contract.mjs"
+        },
+        {
+          "index": "??",
+          "path": "scripts/acceptance/profiles/live.mjs"
+        },
+        {
+          "index": "??",
+          "path": "scripts/acceptance/test-event-reporter.mjs"
+        },
+        {
+          "index": "??",
+          "path": "scripts/ui-acceptance-first-use.sh"
+        },
+        {
+          "index": "??",
+          "path": "tests/acceptance-journeys.test.mjs"
+        },
+        {
+          "index": "??",
+          "path": "tests/acceptance-live.test.mjs"
+        },
+        {
+          "index": "??",
+          "path": "tests/acceptance-runner.test.mjs"
+        },
+        {
+          "index": "??",
+          "path": "tests/integration/affinity-lifecycle-acceptance.test.mjs"
+        },
+        {
+          "index": "??",
+          "path": "tests/integration/decision-parity-acceptance.test.mjs"
+        }
+      ]
+    },
+    "toolVersions": {
+      "runtime": "",
+      "installed": "",
+      "declared": ""
+    },
+    "cases": [
+      {
+        "order": 1,
+        "id": "gate:preflight",
+        "requirements": [
+          "R16"
+        ],
+        "boundary": "installed-tool-preflight",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:13:30.852Z",
+        "endedAt": "2026-10-12T10:13:30.978Z",
+        "durationMs": 126,
+        "attempts": 0,
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/preflight.log"
+        ],
+        "detail": "screenshots/verification/2026-10-12T10-13-30-824Z/logs/preflight.log"
+      },
+      {
+        "order": 2,
+        "id": "gate:unit",
+        "requirements": [
+          "R16"
+        ],
+        "boundary": "release-verification-gate",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:13:30.978Z",
+        "endedAt": "2026-10-12T10:13:48.056Z",
+        "durationMs": 17078,
+        "attempts": 1,
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/unit.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/test/network-violations.log"
+        ],
+        "detail": "screenshots/verification/2026-10-12T10-13-30-824Z/logs/unit.log"
+      },
+      {
+        "order": 3,
+        "id": "gate:typecheck",
+        "requirements": [
+          "R16"
+        ],
+        "boundary": "release-verification-gate",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:13:48.056Z",
+        "endedAt": "2026-10-12T10:13:49.841Z",
+        "durationMs": 1785,
+        "attempts": 1,
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/typecheck.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/typecheck/network-violations.log"
+        ],
+        "detail": "screenshots/verification/2026-10-12T10-13-30-824Z/logs/typecheck.log"
+      },
+      {
+        "order": 4,
+        "id": "gate:router-build",
+        "requirements": [
+          "R16"
+        ],
+        "boundary": "release-verification-gate",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:13:49.841Z",
+        "endedAt": "2026-10-12T10:13:50.875Z",
+        "durationMs": 1034,
+        "attempts": 1,
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/router-build.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/build-router/network-violations.log"
+        ],
+        "detail": "screenshots/verification/2026-10-12T10-13-30-824Z/logs/router-build.log"
+      },
+      {
+        "order": 5,
+        "id": "gate:pinned-pi-integration",
+        "requirements": [
+          "R16"
+        ],
+        "boundary": "release-verification-gate",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:13:50.875Z",
+        "endedAt": "2026-10-12T10:14:29.897Z",
+        "durationMs": 39022,
+        "attempts": 1,
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/pinned-pi-integration.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/test-integration/network-violations.log"
+        ],
+        "detail": "screenshots/verification/2026-10-12T10-13-30-824Z/logs/pinned-pi-integration.log"
+      },
+      {
+        "order": 6,
+        "id": "gate:pinned-pi-ui",
+        "requirements": [
+          "R16"
+        ],
+        "boundary": "release-verification-gate",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:14:29.897Z",
+        "endedAt": "2026-10-12T10:17:50.625Z",
+        "durationMs": 200728,
+        "attempts": 1,
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/pinned-pi-ui.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/test-ui/network-violations.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/allowance-recovery.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/allowance-recovery.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/allowance-recovery.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/auto-large-pool.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/auto-large-pool.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/auto-large-pool.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/classifier-degradation.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/classifier-degradation.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/classifier-degradation.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/classify.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/classify.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/classify.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/dashboard.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/dashboard.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/dashboard.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/disabled.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/disabled.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/disabled.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/fresh-auto.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/fresh-auto.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/fresh-auto.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/fresh-physical.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/fresh-physical.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/fresh-physical.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/init-refresh.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/init-refresh.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/init-refresh.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/inspect-reserve.ansi.log"
+        ],
+        "detail": "screenshots/verification/2026-10-12T10-13-30-824Z/logs/pinned-pi-ui.log"
+      },
+      {
+        "order": 7,
+        "id": "gate:pinned-pi-reliability-ui",
+        "requirements": [
+          "R16"
+        ],
+        "boundary": "release-verification-gate",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:17:50.625Z",
+        "endedAt": "2026-10-12T10:18:40.748Z",
+        "durationMs": 50123,
+        "attempts": 1,
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/pinned-pi-reliability-ui.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/test-ui-reliability/network-violations.log"
+        ],
+        "detail": "screenshots/verification/2026-10-12T10-13-30-824Z/logs/pinned-pi-reliability-ui.log"
+      },
+      {
+        "order": 8,
+        "id": "runtime-preview-router-parity",
+        "requirements": [
+          "R01"
+        ],
+        "boundary": "pinned Pi physical runtime, pinned Pi offline preview, and installed packed resolve-only API",
+        "status": "passed",
+        "required": true,
+        "startedAt": null,
+        "endedAt": null,
+        "durationMs": 1648.098667,
+        "attempts": [
+          {
+            "durationMs": 1648.098667,
+            "result": "passed",
+            "testFile": "tests/integration/decision-parity-acceptance.test.mjs",
+            "testName": "keeps selected, excluded, fallback, and no-route decisions aligned across all three surfaces"
+          }
+        ],
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/node-test-events.jsonl",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/runtime-preview-router-parity/parity.json"
+        ]
+      },
+      {
+        "order": 9,
+        "id": "support:r06:strict-activation",
+        "requirements": [
+          "R06"
+        ],
+        "boundary": "registered runtime handler; not Pi RPC",
+        "status": "passed",
+        "required": true,
+        "startedAt": null,
+        "endedAt": null,
+        "durationMs": 191.35325,
+        "attempts": [
+          {
+            "durationMs": 191.35325,
+            "result": "passed",
+            "testFile": "tests/strict-runtime.test.ts",
+            "testName": "handles false and throwing physical activation inside a strict policy"
+          }
+        ],
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/node-test-events.jsonl"
+        ]
+      },
+      {
+        "order": 10,
+        "id": "support:r06:cancelled-registry-wait",
+        "requirements": [
+          "R06"
+        ],
+        "boundary": "registered runtime handler; not Pi RPC",
+        "status": "passed",
+        "required": true,
+        "startedAt": null,
+        "endedAt": null,
+        "durationMs": 36.153834,
+        "attempts": [
+          {
+            "durationMs": 36.153834,
+            "result": "passed",
+            "testFile": "tests/strict-runtime.test.ts",
+            "testName": "stops an aborted registry wait and preserves a newer editor draft"
+          }
+        ],
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/node-test-events.jsonl"
+        ]
+      },
+      {
+        "order": 11,
+        "id": "support:r09:invalid-reload",
+        "requirements": [
+          "R09"
+        ],
+        "boundary": "config/runtime unit boundary",
+        "status": "passed",
+        "required": true,
+        "startedAt": null,
+        "endedAt": null,
+        "durationMs": 11.398709,
+        "attempts": [
+          {
+            "durationMs": 11.398709,
+            "result": "passed",
+            "testFile": "tests/strict-runtime.test.ts",
+            "testName": "blocks invalid policy at startup and retains last-good config on invalid reload"
+          }
+        ],
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/node-test-events.jsonl"
+        ]
+      },
+      {
+        "order": 12,
+        "id": "support:r10:declared-billing-class",
+        "requirements": [
+          "R10"
+        ],
+        "boundary": "real Pi RPC with synthetic registry; no live billing adapter",
+        "status": "passed",
+        "required": true,
+        "startedAt": null,
+        "endedAt": null,
+        "durationMs": 639.546417,
+        "attempts": [
+          {
+            "durationMs": 639.546417,
+            "result": "passed",
+            "testFile": "tests/integration/command-policy-acceptance.test.mjs",
+            "testName": "dispatches to the fresh declared billing-class preference and makes no classifier call"
+          }
+        ],
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/node-test-events.jsonl"
+        ]
+      },
+      {
+        "order": 13,
+        "id": "support:r11:eligible-affinity",
+        "requirements": [
+          "R11"
+        ],
+        "boundary": "pure resolver; branch/session lifecycle not proven",
+        "status": "passed",
+        "required": true,
+        "startedAt": null,
+        "endedAt": null,
+        "durationMs": 0.110416,
+        "attempts": [
+          {
+            "durationMs": 0.110416,
+            "result": "passed",
+            "testFile": "tests/routing.test.ts",
+            "testName": "retains an automatic anchor only inside the selected tier's final strategy pool"
+          }
+        ],
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/node-test-events.jsonl"
+        ]
+      },
+      {
+        "order": 14,
+        "id": "support:r13:packed-experimental-api",
+        "requirements": [
+          "R13"
+        ],
+        "boundary": "installed experimental consumer API; stable versioned contract deferred",
+        "status": "passed",
+        "required": true,
+        "startedAt": null,
+        "endedAt": null,
+        "durationMs": 5951.640292,
+        "attempts": [
+          {
+            "durationMs": 5951.640292,
+            "result": "passed",
+            "testFile": "tests/router-package.test.mjs",
+            "testName": "installs the packed JS API and resolves without loader flags on Node 22.19+"
+          }
+        ],
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/node-test-events.jsonl"
+        ]
+      },
+      {
+        "order": 15,
+        "id": "support:r14:redacted-observation",
+        "requirements": [
+          "R14"
+        ],
+        "boundary": "unit privacy projection; not complete local trace contract",
+        "status": "passed",
+        "required": true,
+        "startedAt": null,
+        "endedAt": null,
+        "durationMs": 30.205167,
+        "attempts": [
+          {
+            "durationMs": 30.205167,
+            "result": "passed",
+            "testFile": "tests/typesafe-classifier.test.ts",
+            "testName": "persists only redacted TypeSafe debug metadata"
+          }
+        ],
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/node-test-events.jsonl"
+        ]
+      },
+      {
+        "order": 16,
+        "id": "support:r17:generic-strategy",
+        "requirements": [
+          "R17"
+        ],
+        "boundary": "pure generic strategy resolver; arbitrary tier strings separately configured",
+        "status": "passed",
+        "required": true,
+        "startedAt": null,
+        "endedAt": null,
+        "durationMs": 0.021458,
+        "attempts": [
+          {
+            "durationMs": 0.021458,
+            "result": "passed",
+            "testFile": "tests/routing.test.ts",
+            "testName": "defaults to first"
+          }
+        ],
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/node-test-events.jsonl"
+        ]
+      },
+      {
+        "order": 17,
+        "id": "deferred:r13:stable-versioned-api",
+        "requirements": [
+          "R13"
+        ],
+        "boundary": "stable public API contract",
+        "status": "deferred",
+        "required": false,
+        "startedAt": null,
+        "endedAt": null,
+        "durationMs": null,
+        "attempts": [],
+        "exclusions": [
+          "The installed consumer smoke covers the existing experimental API only."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/node-test-events.jsonl"
+        ],
+        "detail": "A stable versioned resolve-only TypeScript contract is deferred; see RELEASE-PLAN.md."
+      },
+      {
+        "order": 18,
+        "id": "node-test-event-capture",
+        "requirements": [],
+        "boundary": "unit-and-pinned-pi-integration-test-events",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:13:30.824Z",
+        "endedAt": "2026-10-12T10:18:40.827Z",
+        "durationMs": 310003,
+        "attempts": 1253,
+        "exclusions": [
+          "UI verification and non-test gates do not emit Node test events."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/gates/node-test-events.jsonl"
+        ]
+      },
+      {
+        "order": 19,
+        "id": "terminal-captures",
+        "requirements": [
+          "R16"
+        ],
+        "boundary": "pinned-Pi-terminal-ui",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:13:30.824Z",
+        "endedAt": "2026-10-12T10:18:40.827Z",
+        "durationMs": 310003,
+        "attempts": 1,
+        "exclusions": [],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/allowance-recovery.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/allowance-recovery.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/allowance-recovery.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/auto-large-pool.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/auto-large-pool.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/auto-large-pool.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/classifier-degradation.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/classifier-degradation.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/classifier-degradation.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/classify.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/classify.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/classify.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/dashboard.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/dashboard.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/dashboard.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/disabled.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/disabled.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/disabled.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/fresh-auto.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/fresh-auto.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/fresh-auto.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/fresh-physical.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/fresh-physical.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/fresh-physical.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/init-refresh.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/init-refresh.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/init-refresh.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/inspect-reserve.ansi.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/inspect-reserve.png",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/terminal/inspect-reserve.txt"
+        ]
+      },
+      {
+        "order": 20,
+        "id": "first-use-held-probe-auto-save",
+        "requirements": [
+          "R02",
+          "R04",
+          "R15"
+        ],
+        "boundary": "real Pi RPC with isolated fake provider",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:40.829Z",
+        "endedAt": "2026-10-12T10:18:43.986Z",
+        "durationMs": 3157,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "keeps the first turn usable during a held probe, then transfers the same save to Auto"
+          },
+          {},
+          {},
+          {}
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/first-use-held-probe-auto-save/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/first-use-held-probe-auto-save/gates/journey-first-use-held-probe-auto-save/network-violations.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/first-use-held-probe-auto-save/observations.jsonl"
+        ]
+      },
+      {
+        "order": 21,
+        "id": "first-use-save-failure-preserves-empty-config",
+        "requirements": [
+          "R15"
+        ],
+        "boundary": "real Pi RPC with held local probes and an enforced POSIX read-only project config directory; UID 0 and filesystems that bypass mode bits are blocked",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:43.987Z",
+        "endedAt": "2026-10-12T10:18:46.602Z",
+        "durationMs": 2615,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "keeps routing available and preserves the empty config when first-use probe save fails"
+          },
+          {}
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/first-use-save-failure-preserves-empty-config/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/first-use-save-failure-preserves-empty-config/gates/journey-first-use-save-failure-preserves-empty-config/network-violations.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/first-use-save-failure-preserves-empty-config/observations.jsonl"
+        ]
+      },
+      {
+        "order": 22,
+        "id": "verified-default-restart",
+        "requirements": [
+          "R04",
+          "R16"
+        ],
+        "boundary": "real Pi RPC and restarted real Pi process with isolated fake provider",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:46.602Z",
+        "endedAt": "2026-10-12T10:18:49.068Z",
+        "durationMs": 2466,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "saves a nonempty verified default and routes from it after restart"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/verified-default-restart/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/verified-default-restart/gates/journey-verified-default-restart/network-violations.log"
+        ]
+      },
+      {
+        "order": 23,
+        "id": "normal-init-successful-probes-save-membership",
+        "requirements": [
+          "R15"
+        ],
+        "boundary": "real Pi init command with isolated fake providers and project files",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:49.068Z",
+        "endedAt": "2026-10-12T10:18:50.512Z",
+        "durationMs": 1444,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "probes on ordinary init and saves only successful models"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/normal-init-successful-probes-save-membership/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/normal-init-successful-probes-save-membership/gates/journey-normal-init-successful-probes-save-membership/network-violations.log"
+        ]
+      },
+      {
+        "order": 24,
+        "id": "normal-init-reuses-cache-and-forced-init-refreshes",
+        "requirements": [
+          "R15"
+        ],
+        "boundary": "real Pi init with cached and forced local provider probes; exact saved membership and SHA256 snapshots",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:50.513Z",
+        "endedAt": "2026-10-12T10:18:51.560Z",
+        "durationMs": 1047,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "uses a complete recent probe cache on ordinary init and refreshes it on forced init"
+          },
+          {},
+          {}
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/normal-init-reuses-cache-and-forced-init-refreshes/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/normal-init-reuses-cache-and-forced-init-refreshes/gates/journey-normal-init-reuses-cache-and-forced-init-refreshes/network-violations.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/normal-init-reuses-cache-and-forced-init-refreshes/observations.jsonl"
+        ]
+      },
+      {
+        "order": 25,
+        "id": "forced-init-all-failed-no-write",
+        "requirements": [
+          "R15"
+        ],
+        "boundary": "real Pi init -f command with isolated fake providers and exact config bytes",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:51.560Z",
+        "endedAt": "2026-10-12T10:18:52.309Z",
+        "durationMs": 749,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "leaves existing config untouched when forced probes have zero successes"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/forced-init-all-failed-no-write/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/forced-init-all-failed-no-write/gates/journey-forced-init-all-failed-no-write/network-violations.log"
+        ]
+      },
+      {
+        "order": 26,
+        "id": "forced-init-reconciles-generated-membership-preserves-manual",
+        "requirements": [
+          "R15"
+        ],
+        "boundary": "real Pi /bifrost init -f command; exact saved config values and ownership reconciliation",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:52.309Z",
+        "endedAt": "2026-10-12T10:18:53.218Z",
+        "durationMs": 909,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "removes failed generated memberships, keeps handwritten entries and preserves settings"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/forced-init-reconciles-generated-membership-preserves-manual/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/forced-init-reconciles-generated-membership-preserves-manual/gates/journey-forced-init-reconciles-generated-membership-preserves-manual/network-violations.log"
+        ]
+      },
+      {
+        "order": 27,
+        "id": "init-all-failed-cache-does-not-expand-to-registry",
+        "requirements": [
+          "R15"
+        ],
+        "boundary": "real Pi init command, all-failed probe receipt, and exact no-write cache behavior",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:53.218Z",
+        "endedAt": "2026-10-12T10:18:53.918Z",
+        "durationMs": 700,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "does not replace an all-failed fresh probe cache with the full registry"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/init-all-failed-cache-does-not-expand-to-registry/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/init-all-failed-cache-does-not-expand-to-registry/gates/journey-init-all-failed-cache-does-not-expand-to-registry/network-violations.log"
+        ]
+      },
+      {
+        "order": 28,
+        "id": "new-project-inherits-private-global-settings-without-copying",
+        "requirements": [
+          "R15"
+        ],
+        "boundary": "real Pi init and project config, followed by inherited config reload after global edit",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:53.918Z",
+        "endedAt": "2026-10-12T10:18:54.789Z",
+        "durationMs": 871,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "keeps inherited private and nondefault policy out of a new project config"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/new-project-inherits-private-global-settings-without-copying/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/new-project-inherits-private-global-settings-without-copying/gates/journey-new-project-inherits-private-global-settings-without-copying/network-violations.log"
+        ]
+      },
+      {
+        "order": 29,
+        "id": "physical-402-pause-survives-restart-v1",
+        "requirements": [
+          "R08"
+        ],
+        "boundary": "real Pi process restart with persisted provider-scoped state; exact v1 Auto parameter variant",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:54.789Z",
+        "endedAt": "2026-10-12T10:18:55.757Z",
+        "durationMs": 968,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "keeps a physical 402 provider pause across restart before v1 Auto routing"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/physical-402-pause-survives-restart-v1/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/physical-402-pause-survives-restart-v1/gates/journey-physical-402-pause-survives-restart-v1/network-violations.log"
+        ]
+      },
+      {
+        "order": 30,
+        "id": "physical-402-pause-survives-restart-v2",
+        "requirements": [
+          "R08"
+        ],
+        "boundary": "real Pi process restart with persisted provider-scoped state; exact v2 Auto parameter variant",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:55.758Z",
+        "endedAt": "2026-10-12T10:18:56.745Z",
+        "durationMs": 987,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "keeps a physical 402 provider pause across restart before v2 Auto routing"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/physical-402-pause-survives-restart-v2/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/physical-402-pause-survives-restart-v2/gates/journey-physical-402-pause-survives-restart-v2/network-violations.log"
+        ]
+      },
+      {
+        "order": 31,
+        "id": "auto-zero-effect-recovery-v1",
+        "requirements": [
+          "R03"
+        ],
+        "boundary": "real Pi v1 Auto path with fake provider 402 responses and synthetic empty-effect boundary",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:56.745Z",
+        "endedAt": "2026-10-12T10:18:57.134Z",
+        "durationMs": 389,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "retries one zero-effect allowance failure with a configured alternate in v1 Auto"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-zero-effect-recovery-v1/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-zero-effect-recovery-v1/gates/journey-auto-zero-effect-recovery-v1/network-violations.log"
+        ]
+      },
+      {
+        "order": 32,
+        "id": "auto-zero-effect-recovery-v2",
+        "requirements": [
+          "R03"
+        ],
+        "boundary": "real Pi v2 Auto path with fake provider 402 responses and synthetic empty-effect boundary",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:57.134Z",
+        "endedAt": "2026-10-12T10:18:57.567Z",
+        "durationMs": 433,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "retries one zero-effect allowance failure with a configured alternate in v2 Auto"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-zero-effect-recovery-v2/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-zero-effect-recovery-v2/gates/journey-auto-zero-effect-recovery-v2/network-violations.log"
+        ]
+      },
+      {
+        "order": 33,
+        "id": "pi-owned-error-retry-no-bifrost-replay",
+        "requirements": [
+          "R03",
+          "R08"
+        ],
+        "boundary": "real pinned Pi retry lifecycle with local fake provider and persisted reliability state",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:57.567Z",
+        "endedAt": "2026-10-12T10:18:57.991Z",
+        "durationMs": 424,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "reuses one v2 receipt and model across a Pi-owned error retry, without Bifrost replay"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/pi-owned-error-retry-no-bifrost-replay/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/pi-owned-error-retry-no-bifrost-replay/gates/journey-pi-owned-error-retry-no-bifrost-replay/network-violations.log"
+        ]
+      },
+      {
+        "order": 34,
+        "id": "manual-pin-session-control",
+        "requirements": [
+          "R02"
+        ],
+        "boundary": "real Pi command and session with local fake provider",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:57.991Z",
+        "endedAt": "2026-10-12T10:18:58.300Z",
+        "durationMs": 309,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "pin locks the current model for the session (deliberately never persisted)"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/manual-pin-session-control/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/manual-pin-session-control/gates/journey-manual-pin-session-control/network-violations.log"
+        ]
+      },
+      {
+        "order": 35,
+        "id": "manual-off-disables-router",
+        "requirements": [
+          "R02"
+        ],
+        "boundary": "real Pi slash command and physical model route",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:58.300Z",
+        "endedAt": "2026-10-12T10:18:58.591Z",
+        "durationMs": 291,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "/bifrost off disables routing"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/manual-off-disables-router/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/manual-off-disables-router/gates/journey-manual-off-disables-router/network-violations.log"
+        ]
+      },
+      {
+        "order": 36,
+        "id": "same-tier-auto-retention-and-prefix-strategy",
+        "requirements": [
+          "R02",
+          "R11",
+          "R17"
+        ],
+        "boundary": "real Pi Auto native turns plus configured prefix strategy and fake-provider request counts",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:58.591Z",
+        "endedAt": "2026-10-12T10:18:59.184Z",
+        "durationMs": 593,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "retains the successful Auto model across native turns while prefixes use the random strategy"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/same-tier-auto-retention-and-prefix-strategy/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/same-tier-auto-retention-and-prefix-strategy/gates/journey-same-tier-auto-retention-and-prefix-strategy/network-violations.log"
+        ]
+      },
+      {
+        "order": 37,
+        "id": "auto-allowance-recovery-opt-out-v1",
+        "requirements": [
+          "R03"
+        ],
+        "boundary": "real Pi v1 Auto turn with recovery explicitly disabled and no alternate dispatch",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:59.184Z",
+        "endedAt": "2026-10-12T10:18:59.548Z",
+        "durationMs": 364,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "does not retry an allowance failure when v1 Auto recovery is disabled"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-allowance-recovery-opt-out-v1/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-allowance-recovery-opt-out-v1/gates/journey-auto-allowance-recovery-opt-out-v1/network-violations.log"
+        ]
+      },
+      {
+        "order": 38,
+        "id": "auto-allowance-recovery-opt-out-v2",
+        "requirements": [
+          "R03"
+        ],
+        "boundary": "real Pi v2 Auto turn with recovery explicitly disabled and no alternate dispatch",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:59.548Z",
+        "endedAt": "2026-10-12T10:18:59.961Z",
+        "durationMs": 413,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "does not retry an allowance failure when v2 Auto recovery is disabled"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-allowance-recovery-opt-out-v2/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-allowance-recovery-opt-out-v2/gates/journey-auto-allowance-recovery-opt-out-v2/network-violations.log"
+        ]
+      },
+      {
+        "order": 39,
+        "id": "strict-boundary-blocks-generation",
+        "requirements": [
+          "R05",
+          "R06"
+        ],
+        "boundary": "real Pi physical route with local fake provider and zero-generation assertion",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:18:59.961Z",
+        "endedAt": "2026-10-12T10:19:00.277Z",
+        "durationMs": 316,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "does not generate on the active physical model after an explicit boundary is exhausted"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/strict-boundary-blocks-generation/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/strict-boundary-blocks-generation/gates/journey-strict-boundary-blocks-generation/network-violations.log"
+        ]
+      },
+      {
+        "order": 40,
+        "id": "malformed-project-config-blocks-startup",
+        "requirements": [
+          "R09"
+        ],
+        "boundary": "real Pi RPC/startup with malformed project config and zero-generation assertion",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:19:00.277Z",
+        "endedAt": "2026-10-12T10:19:00.591Z",
+        "durationMs": 314,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "blocks generation when a project config source is malformed"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/malformed-project-config-blocks-startup/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/malformed-project-config-blocks-startup/gates/journey-malformed-project-config-blocks-startup/network-violations.log"
+        ]
+      },
+      {
+        "order": 41,
+        "id": "higher-supported-config-masks-unsupported-lower-layer",
+        "requirements": [
+          "R09"
+        ],
+        "boundary": "real Pi startup with layered config files and zero-generation assertion",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:19:00.591Z",
+        "endedAt": "2026-10-12T10:19:00.908Z",
+        "durationMs": 317,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "blocks generation when a higher supported schema masks an unsupported lower layer"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/higher-supported-config-masks-unsupported-lower-layer/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/higher-supported-config-masks-unsupported-lower-layer/gates/journey-higher-supported-config-masks-unsupported-lower-layer/network-violations.log"
+        ]
+      },
+      {
+        "order": 42,
+        "id": "reload-repairs-malformed-config",
+        "requirements": [
+          "R09"
+        ],
+        "boundary": "real Pi RPC config reload from malformed startup source to valid saved route",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:19:00.908Z",
+        "endedAt": "2026-10-12T10:19:03.228Z",
+        "durationMs": 2320,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "allows routing after reload repairs a malformed startup source"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/reload-repairs-malformed-config/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/reload-repairs-malformed-config/gates/journey-reload-repairs-malformed-config/network-violations.log"
+        ]
+      },
+      {
+        "order": 43,
+        "id": "last-good-strict-boundary-survives-invalid-reload",
+        "requirements": [
+          "R06",
+          "R09"
+        ],
+        "boundary": "real Pi invalid reload after strict policy activation; provider counters assert no physical fallback",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:19:03.228Z",
+        "endedAt": "2026-10-12T10:19:05.556Z",
+        "durationMs": 2328,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "keeps the last-good strict boundary after a null project reload and blocks active-model generation"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/last-good-strict-boundary-survives-invalid-reload/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/last-good-strict-boundary-survives-invalid-reload/gates/journey-last-good-strict-boundary-survives-invalid-reload/network-violations.log"
+        ]
+      },
+      {
+        "order": 44,
+        "id": "offline-preview-has-no-classifier-request",
+        "requirements": [
+          "R07",
+          "R12"
+        ],
+        "boundary": "real Pi commands and local request counters with outbound network guard",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:19:05.557Z",
+        "endedAt": "2026-10-12T10:19:06.022Z",
+        "durationMs": 465,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "does not call an enabled prompt classifier in offline mode and keeps ordinary preview classification"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/offline-preview-has-no-classifier-request/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/offline-preview-has-no-classifier-request/gates/journey-offline-preview-has-no-classifier-request/network-violations.log"
+        ]
+      },
+      {
+        "order": 45,
+        "id": "classifier-timeout-visible-fallback",
+        "requirements": [
+          "R12"
+        ],
+        "boundary": "real Pi RPC, controlled local fake-provider deadline, visible notice and physical generation",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:19:06.022Z",
+        "endedAt": "2026-10-12T10:19:09.363Z",
+        "durationMs": 3341,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "warns on prompt-classifier timeout, falls back locally, then generates on the physical model"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/classifier-timeout-visible-fallback/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/classifier-timeout-visible-fallback/gates/journey-classifier-timeout-visible-fallback/network-violations.log"
+        ]
+      },
+      {
+        "order": 46,
+        "id": "physical-and-auto-turn-identity",
+        "requirements": [
+          "R02",
+          "R03"
+        ],
+        "boundary": "real pinned Pi transport and synthetic provider registry",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:19:09.364Z",
+        "endedAt": "2026-10-12T10:19:10.584Z",
+        "durationMs": 1220,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "binds physical and Auto turn_end IDs to the exact persisted assistant entry"
+          }
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/physical-and-auto-turn-identity/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/physical-and-auto-turn-identity/gates/journey-physical-and-auto-turn-identity/network-violations.log"
+        ]
+      },
+      {
+        "order": 47,
+        "id": "auto-streamed-output-failure-no-replay",
+        "requirements": [
+          "R03"
+        ],
+        "boundary": "real Pi Auto RPC with partial output followed by a native usage-limit SSE error and a same-tier distinct-provider control",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:19:10.584Z",
+        "endedAt": "2026-10-12T10:19:12.941Z",
+        "durationMs": 2357,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "does not replay a failed Auto turn after the provider emitted output"
+          },
+          {}
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-streamed-output-failure-no-replay/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-streamed-output-failure-no-replay/gates/journey-auto-streamed-output-failure-no-replay/network-violations.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-streamed-output-failure-no-replay/observations.jsonl"
+        ]
+      },
+      {
+        "order": 48,
+        "id": "auto-tool-side-effect-failure-no-replay",
+        "requirements": [
+          "R03"
+        ],
+        "boundary": "real Pi Auto RPC with opt-in v2 reliability, registered synthetic extension tool counter, and a distinct-provider backup",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:19:12.941Z",
+        "endedAt": "2026-10-12T10:19:15.445Z",
+        "durationMs": 2504,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "does not replay an allowance failure after a synthetic tool side effect"
+          },
+          {}
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-tool-side-effect-failure-no-replay/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-tool-side-effect-failure-no-replay/gates/journey-auto-tool-side-effect-failure-no-replay/network-violations.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-tool-side-effect-failure-no-replay/observations.jsonl"
+        ]
+      },
+      {
+        "order": 49,
+        "id": "auto-queued-followup-no-replay",
+        "requirements": [
+          "R03"
+        ],
+        "boundary": "real Pi RPC follow-up queue with held fake-provider generation gate and safe message digests",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:19:15.445Z",
+        "endedAt": "2026-10-12T10:19:17.920Z",
+        "durationMs": 2475,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "does not replay an unsafe tool turn and dispatches its queued follow-up once on a distinct provider"
+          },
+          {}
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-queued-followup-no-replay/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-queued-followup-no-replay/gates/journey-auto-queued-followup-no-replay/network-violations.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/auto-queued-followup-no-replay/observations.jsonl"
+        ]
+      },
+      {
+        "order": 50,
+        "id": "rpc-affinity-branch-lifecycle",
+        "requirements": [
+          "R11",
+          "R16"
+        ],
+        "boundary": "real Pi RPC session, native branch fork, fake-provider request stats, and event-level affinity observer",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:19:17.921Z",
+        "endedAt": "2026-10-12T10:19:20.539Z",
+        "durationMs": 2618,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "retains same-tier affinity, bypasses it for another tier, and drops it after an RPC fork"
+          },
+          {}
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/rpc-affinity-branch-lifecycle/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/rpc-affinity-branch-lifecycle/gates/journey-rpc-affinity-branch-lifecycle/network-violations.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/rpc-affinity-branch-lifecycle/observations.jsonl"
+        ]
+      },
+      {
+        "order": 51,
+        "id": "bootstrap-registry-price-order-matrix",
+        "requirements": [
+          "R04",
+          "R15",
+          "R17"
+        ],
+        "boundary": "real Pi RPC, actual provider registry and isolated local fake provider",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:19:20.539Z",
+        "endedAt": "2026-10-12T10:19:24.883Z",
+        "durationMs": 4344,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "keeps bootstrap pools stable across registry order, availability, and price metadata"
+          },
+          {},
+          {}
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/bootstrap-registry-price-order-matrix/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/bootstrap-registry-price-order-matrix/gates/journey-bootstrap-registry-price-order-matrix/network-violations.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/bootstrap-registry-price-order-matrix/observations.jsonl"
+        ]
+      },
+      {
+        "order": 52,
+        "id": "first-use-inaccessible-unverified-model-failure",
+        "requirements": [
+          "R03",
+          "R04",
+          "R05"
+        ],
+        "boundary": "real Pi RPC, held health probe and isolated fake-provider 403 response",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:19:24.883Z",
+        "endedAt": "2026-10-12T10:19:27.452Z",
+        "durationMs": 2569,
+        "attempts": [
+          {
+            "result": "passed",
+            "testName": "surfaces an inaccessible selected first-use model without replaying onto a healthy sibling"
+          },
+          {}
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/first-use-inaccessible-unverified-model-failure/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/first-use-inaccessible-unverified-model-failure/gates/journey-first-use-inaccessible-unverified-model-failure/network-violations.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/first-use-inaccessible-unverified-model-failure/observations.jsonl"
+        ]
+      },
+      {
+        "order": 53,
+        "id": "agent-tui-first-use-progress-picker-shutdown",
+        "requirements": [
+          "R04",
+          "R16"
+        ],
+        "boundary": "real Pi terminal process through pinned agent-tui with isolated local fake provider",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:19:27.452Z",
+        "endedAt": "2026-10-12T10:19:29.508Z",
+        "durationMs": 2056,
+        "attempts": [
+          {}
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded; Pi uses the integration fixture's local fake provider."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/agent-tui-first-use-progress-picker-shutdown/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/agent-tui-first-use-progress-picker-shutdown/gates/journey-agent-tui-first-use-progress-picker-shutdown/network-violations.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/agent-tui-first-use-progress-picker-shutdown/tui-first-use.jsonl",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/agent-tui-first-use-progress-picker-shutdown/captures/active-sessions-after-exit.json",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/agent-tui-first-use-progress-picker-shutdown/captures/auto-selected.json",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/agent-tui-first-use-progress-picker-shutdown/captures/first-turn-held.json",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/agent-tui-first-use-progress-picker-shutdown/captures/model-picker.json",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/agent-tui-first-use-progress-picker-shutdown/captures/one-of-two.json",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/agent-tui-first-use-progress-picker-shutdown/captures/pending-probes.json"
+        ]
+      },
+      {
+        "order": 54,
+        "id": "first-use-unverified-route-product-gap",
+        "requirements": [
+          "R04",
+          "R05"
+        ],
+        "boundary": "observed in real Pi RPC with a held health probe and isolated fake provider",
+        "status": "blocked",
+        "required": true,
+        "startedAt": "2026-10-12T10:19:24.883Z",
+        "endedAt": "2026-10-12T10:19:27.452Z",
+        "durationMs": 2569,
+        "attempts": [
+          {}
+        ],
+        "exclusions": [
+          "Live providers and real credentials are excluded."
+        ],
+        "artifacts": [
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/first-use-inaccessible-unverified-model-failure/journey.tap.txt",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/first-use-inaccessible-unverified-model-failure/gates/journey-first-use-inaccessible-unverified-model-failure/network-violations.log",
+          "screenshots/acceptance/2026-10-12T10-13-30-477Z/cases/first-use-inaccessible-unverified-model-failure/observations.jsonl"
+        ],
+        "detail": "OBSERVED_PRODUCT_GAP: the first prompt selected registered model registered-inaccessible before its held probe resolved and surfaced provider 403 (error); another registered model had already passed its probe. The original prompt was not replayed. A distinct prompt worked only after explicit physical model selection. Decide whether first-use should visibly warn or require user selection when the active physical model is unverified; the required no-wait healthy held-probe case remains passed."
+      },
+      {
+        "order": 55,
+        "id": "candidate-stable",
+        "requirements": [
+          "R16"
+        ],
+        "boundary": "source-provenance",
+        "status": "passed",
+        "required": true,
+        "startedAt": "2026-10-12T10:13:30.478Z",
+        "endedAt": "2026-10-12T10:19:29.567Z",
+        "durationMs": null,
+        "attempts": 1,
+        "exclusions": [],
+        "artifacts": []
+      }
+    ]
+  }
+}

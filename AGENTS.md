@@ -47,7 +47,7 @@ Use the feature gate in [`docs/product-philosophy.md`](docs/product-philosophy.m
 ## Non-negotiable behavior
 
 - Select Pi's actual active model before generation. Physical selection is the default. The explicitly selected `bifrost/auto` virtual model may dispatch physical models per request when selection and dispatch both stay visible.
-- Never automatically replay a failed user prompt, including behind config opt-in. A prior turn may have edited files, called tools, or caused external side effects. Any future retry design requires explicit per-incident user confirmation, host-proven zero-side-effect boundary, deterministic E2E coverage, and an approved ADR.
+- Never automatically replay arbitrary failed user work. The narrow allowance-recovery exception in [ADR 0023](docs/adr/0023-bounded-allowance-recovery.md) may retry once on another configured model only in Auto when pinned Pi proves every failed attempt from the original user boundary was empty, from the same model, and exactly omitted from projection, with no tools, tool results, queued work, or other activity. Keep it configurable and tested; every other failed turn ends without Bifrost failover.
 - Persist reliability state. Circuits must survive restart and use controlled half-open recovery.
 - Keep defaults model-agnostic. Do not ship maintainer-specific provider/model IDs in default routing policy.
 - Keep routing inspectable: selected model, source, exclusions, fallback, and user override must be explainable.
@@ -77,8 +77,11 @@ Do not introduce a proxy as the default design. Do not build multi-agent orchest
 - Keep docs, schema, examples, defaults, and generated init behavior consistent when changing config semantics.
 - Use accessible semantic HTML for site work. Native `<details>/<summary>` for FAQs/disclosure unless a custom interaction is necessary.
 - Treat prototypes as throwaway. Mark them clearly; do not promote prototype code directly to production.
+- Validate a specification against running code before building on it. When a decision cannot be checked yet, prototype rather than committing to prose across several revisions. Unverified specs surface their errors late, during review, when they cost most to fix.
 
 ## Verification
+
+For feature and regression changes, follow [the coverage contract](docs/testing-coverage.md).
 
 Run relevant checks before claiming work complete:
 
@@ -101,6 +104,20 @@ git diff --check
 ```
 
 Use local browser screenshots when layout or animation changes. Check desktop and narrow mobile viewports. Respect `prefers-reduced-motion`.
+
+## Evidence discipline
+
+A passing suite is a floor, not proof. Run the checks, then show what they do not cover.
+
+- **Never transcribe output.** Any sample in a spec, plan, doc, or PR body must be captured from a real run and diffed against live output. A hand-written sample described as generated is a defect, not a shortcut.
+- **Execute every command you document.** If a doc claims machine-readable output, pipe it into a parser and paste the result.
+- **Mutation-check assertions that guard a contract.** Revert the guard, confirm the test goes red, report the count. An assertion never seen failing is not evidence. Scope this to behavioural contracts — routing, model selection, reliability, state precedence, escaping, output shape — and leave pure wiring tests alone.
+- **Claim with evidence attached.** Say "verified" only alongside the command and its output in the same message. Never assert a suite passed without the count.
+- **Correct an instruction you were given.** If a prescribed step is wrong, say so and show the contradiction rather than reporting the expected result.
+
+### Reviewing
+
+Confirm the target before reviewing: base and head refs, both SHAs, and the changed-file list. Abort if the diff does not match the branch under discussion. A review of the wrong branch yields confident findings about unrelated code and costs a full round.
 
 ## Git
 

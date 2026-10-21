@@ -2,11 +2,12 @@
 import { appendFileSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readHistory, renderTrend } from "./crap-report.mjs";
 
 const REPORT_SCHEMA_VERSION = 1;
 const MAX_INPUT_BYTES = 8 * 1024 * 1024;
 export const MAX_REPORT_BYTES = 512 * 1024;
-const MAX_CASES = 500;
+export const MAX_CASES = 500;
 const MAX_CAUSE_DEPTH = 2;
 const STATUSES = new Set(["passed", "failed", "blocked", "missing", "deferred"]);
 const REQUIRED_GATES = [
@@ -80,7 +81,9 @@ function normalizeSource(source = {}) {
 export function makeReportData(evidence) {
   if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) throw new Error("Evidence must be a JSON object");
   if (evidence.schemaVersion !== 1) throw new Error("Unsupported acceptance evidence schema version");
-  if (!Array.isArray(evidence.cases) || evidence.cases.length > MAX_CASES) throw new Error("Evidence cases must be a bounded array");
+  if (!Array.isArray(evidence.cases)) throw new Error("Evidence cases must be a bounded array");
+  const cases = evidence.cases.slice(0, MAX_CASES);
+  const truncatedCases = evidence.cases.length - cases.length;
   const safeEvidence = {
     schemaVersion: 1,
     profile: boundedText(evidence.profile, 40),
@@ -89,7 +92,7 @@ export function makeReportData(evidence) {
     exitCode: Number.isInteger(evidence.exitCode) ? evidence.exitCode : null,
     source: normalizeSource(evidence.source),
     toolVersions: Object.fromEntries(Object.entries(evidence.toolVersions ?? {}).slice(0, 40).map(([key, value]) => [boundedText(key, 100), boundedText(value, 200)])),
-    cases: evidence.cases.map((item, index) => ({
+    cases: cases.map((item, index) => ({
       order: Number.isInteger(item?.order) ? item.order : index + 1,
       id: boundedText(item?.id ?? `case-${index + 1}`, 200),
       requirements: Array.isArray(item?.requirements) ? item.requirements.slice(0, 20).map((value) => boundedText(value, 80)) : [],
@@ -104,13 +107,19 @@ export function makeReportData(evidence) {
       artifacts: Array.isArray(item?.artifacts) ? item.artifacts.slice(0, 30).map((value) => boundedText(value, 1_000)) : [],
       ...(item?.detail ? { detail: boundedText(String(item.detail), 2_000) } : {}),
     })),
+    ...(truncatedCases > 0 ? { truncatedCases } : {}),
   };
   const output = { schemaVersion: REPORT_SCHEMA_VERSION, evidence: safeEvidence };
   if (Buffer.byteLength(JSON.stringify(output)) > MAX_REPORT_BYTES) throw new Error("Normalized report data exceeds the size limit");
   return output;
 }
 
-export const validateReportData = makeReportData;
+export function validateReportData(evidence) {
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) throw new Error("Evidence must be a JSON object");
+  if (evidence.schemaVersion !== 1) throw new Error("Unsupported acceptance evidence schema version");
+  if (!Array.isArray(evidence.cases) || evidence.cases.length > MAX_CASES) throw new Error("Evidence cases must be a bounded array");
+  return makeReportData(evidence);
+}
 
 function escapeCell(value) {
   return boundedText(String(value ?? "—"), 1_200)
@@ -236,6 +245,21 @@ function fullIssue(item) {
   return `- **${statusEmoji(item.status)} ${escapeCell(item.id)}** — ${escapeCell(detail)}${paths}`;
 }
 
+function resolveCrapHistory(context) {
+  if (Array.isArray(context?.crapHistory)) return context.crapHistory;
+  if (typeof context?.crapHistory === "string") {
+    return context.crapHistory.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => JSON.parse(line));
+  }
+  if (typeof context?.crapHistoryPath === "string") {
+    try {
+      return readHistory(context.crapHistoryPath);
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
 export function renderCiReport(inputData, context = {}) {
   context ??= {};
   let data;
@@ -258,6 +282,40 @@ export function renderCiReport(inputData, context = {}) {
   const gates = REQUIRED_GATES.map((id) => caseStatusMap(evidence.cases).get(`gate:${id}`));
   const issues = issueRows(evidence.cases);
   const deferred = evidence.cases.filter((item) => item.status === "deferred");
+
+  const crapRecords = resolveCrapHistory(context);
+  let crapSection;
+  if (crapRecords.length > 0) {
+    const latest = crapRecords[crapRecords.length - 1];
+    crapSection = [];
+    crapSection.push("### CRAP analysis");
+    crapSection.push("");
+    crapSection.push(
+      `- Current (rev ${code(latest.revision ?? "unknown")}${latest.dirty ? "*" : ""}, ${latest.at ? String(latest.at).slice(0, 10) : "unknown"}): ${latest.flagged ?? "?"}/${latest.functions ?? "?"} flagged at or above ${latest.threshold ?? "?"} (${latest.percentFlagged ?? "?"}%); max ${latest.max ?? "?"}`,
+    );
+    if (crapRecords.length > 1) {
+      const first = crapRecords[0];
+      const delta = (latest.flagged ?? 0) - (first.flagged ?? 0);
+      const direction = delta === 0 ? "unchanged" : delta > 0 ? "drifting up" : "improving";
+      crapSection.push(
+        `- Trend: ${crapRecords.length} snapshots ${String(first.at ?? "?").slice(0, 10)} → ${String(latest.at ?? "?").slice(0, 10)}: flagged ${first.flagged} → ${latest.flagged} (${delta >= 0 ? "+" : ""}${delta}), ${direction}.`,
+      );
+    }
+    crapSection.push("");
+    const trend = renderTrend(crapRecords, latest.threshold ?? 30);
+    crapSection.push("```text");
+    crapSection.push(...trend.split("\n"));
+    crapSection.push("```");
+    crapSection.push("");
+  } else {
+    crapSection = [
+      "### CRAP analysis",
+      "",
+      "Not included in this run. Supply CRAP history via CI artifacts or run `npm run crap` locally.",
+      "",
+    ];
+  }
+
   const scope = evidence.profile === "live"
     ? "Scope: Live profile; one approved model allowlisted; provider requests may be blocked; PRD coverage partial."
     : "Scope: Pi + fake providers; live providers not tested; PRD coverage partial.";
@@ -282,6 +340,7 @@ export function renderCiReport(inputData, context = {}) {
       return `| ${escapeCell(gate?.boundary === "installed-tool-preflight" ? "Preflight" : ({ unit: "Unit tests", typecheck: "Typecheck", "router-build": "Router build", "pinned-pi-integration": "Pi integration", "pinned-pi-ui": "Pi UI", "pinned-pi-reliability-ui": "Reliability UI" }[id] ?? id))} | ${gate ? statusEmoji(gate.status) : statusEmoji("missing")} |`;
     }),
     "",
+    ...crapSection,
     "### Action needed",
     "",
     ...(issues.length ? issues.slice(0, 2).map((item) => `- **${statusEmoji(item.status)} ${escapeCell(item.id)}** — ${escapeCell(conciseIssue(item))}`) : confidence.reasons.length ? confidence.reasons.slice(0, 2).map((reason) => `- ${escapeCell(reason)}`) : ["- No failed, blocked, or missing required cases were recorded." ]),
@@ -299,7 +358,6 @@ export function renderCiReport(inputData, context = {}) {
     `- Source revision: start ${code(evidence.source?.revisionAtStart || "unknown")}; end ${code(evidence.source?.revisionAtEnd || "unknown")}. Fingerprints: ${fingerprintRelation(evidence.source)}; changedDuringRun: ${evidence.source?.changedDuringRun ?? "unknown"}.`,
     `- ${evidence.profile === "live" ? "The opt-in live profile covers only its approved model and run; it does not establish support for every provider or a flake-free rate." : "Live providers were not run by deterministic CI. Fake-provider results cover only their named cases; they do not establish support for every provider or a flake-free rate."}`,
     `- Deferred cases: ${deferred.length ? deferred.slice(0, 5).map((item) => `${code(item.id)} (${escapeCell(item.boundary || "scope deferred")})`).join(", ") + (deferred.length > 5 ? `, and ${deferred.length - 5} more in the evidence` : "") : "none recorded"}.`,
-    `- ${workflowLinks}`,
     "- This report describes recorded checks for one commit. The PR controls the workflow producer and test code, so review those changes before relying on the result. It is not a probability of correctness or a claim that all product requirements are covered.",
     "",
     "</details>",

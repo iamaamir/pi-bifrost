@@ -15,7 +15,10 @@ describe("registry refresh wait", () => {
     const controller = new AbortController();
     let rejectRefresh: (error: Error) => void = () => {};
     const pending = new Promise<void>((_resolve, reject) => { rejectRefresh = reject; });
-    const waiting = waitForRegistryRefresh(() => pending, controller.signal);
+    let refreshStarted = false;
+    const waiting = waitForRegistryRefresh(() => { refreshStarted = true; return pending; }, controller.signal);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(refreshStarted, true);
     controller.abort();
     assert.equal(await waiting, "aborted");
     rejectRefresh(new Error("late failure"));
