@@ -1,26 +1,349 @@
 {
   "schemaVersion": 1,
-  "base": "774b1bbdc932059d542d2b95b5b914d9c99aab2c",
+  "base": "de28fcc3966a58499834a22ebdbfdd707181d792",
   "contracts": [
     {
-      "id": "native-auto-missing-route-fault",
-      "requirement": "R06",
+      "id": "logging-bounded-core",
+      "requirement": "R14",
       "files": [
-        "tests/integration/auto-missing-route-fault.test.mjs"
+        "logging/bounded-queue.ts",
+        "logging/context.ts",
+        "logging/drain-policy.ts",
+        "logging/file-sink.ts",
+        "logging/logger.ts",
+        "logging/overflow-policy.ts",
+        "logging/severity.ts",
+        "logging/types.ts",
+        "debug.ts",
+        "config.ts",
+        "schema.json",
+        "tests/logging-config.test.ts",
+        "tests/logging-facade.test.ts",
+        "tests/logging-file-sink.test.ts",
+        "tests/logging-logger.test.ts",
+        "tests/logging-queue.test.ts",
+        "tests/logging-severity.test.ts"
       ],
-      "boundary": "Real native Pi CLI with production Bifrost Auto: after a successful warmup, an explicitly terminal tier references a missing target. It must not dispatch the previous healthy physical model. This is not virtual registration activation-false/throw or nonstreaming cancellation proof.",
-      "assertions": "Owned pristine GREEN; bypass explicit-boundary checks in both sticky and fallback callers; same native request-counter assertion RED; byte-identical restored GREEN. All creation-time owned groups close and are absent before scratch reclaim.",
+      "boundary": "bounded, session-scoped JSONL logging with short writes, overflow admission, metadata redaction, and reload rebinding",
+      "assertions": "A complete payload survives controlled short writes and a partial write never merges into a later record; sparse arrays cannot bypass the node budget; drop-oldest, severity-first, and drop-newest all honor mixed severity and in-flight capacity; a reload re-binds the requesting session.",
       "boundaryTest": {
-        "file": "tests/integration/auto-missing-route-fault.test.mjs",
-        "name": "proves missing Auto targets cannot escape an explicit boundary through sticky or fallback dispatch"
+        "file": "tests/logging-file-sink.test.ts",
+        "name": "writes the complete payload across controlled short writes"
       },
       "invariant": {
-        "file": "tests/integration/auto-missing-route-fault.test.mjs",
-        "name": "proves missing Auto targets cannot escape an explicit boundary through sticky or fallback dispatch"
+        "file": "tests/logging-severity.test.ts",
+        "name": "bounds sparse arrays without materializing every hole"
       },
       "fault": {
-        "file": "tests/integration/auto-missing-route-fault.test.mjs",
-        "name": "proves missing Auto targets cannot escape an explicit boundary through sticky or fallback dispatch"
+        "file": "tests/logging-file-sink.test.ts",
+        "name": "reports a failure after a short write instead of treating the batch as persisted"
+      }
+    },
+    {
+      "id": "classifier-session-identity",
+      "requirement": "R14",
+      "files": [
+        "classification-pipeline.ts",
+        "classifier.ts",
+        "classifier-pi-native.ts",
+        "typesafe-classifier.ts",
+        "tests/classifier.test.ts",
+        "tests/classifier-pi-native.test.ts",
+        "tests/pipeline.test.ts",
+        "tests/typesafe-classifier.test.ts"
+      ],
+      "boundary": "classifier transports and pipeline diagnostics stay attributed to the session that admitted the turn across async overlap",
+      "assertions": "TypeSafe, pi-native, and prompt transport traces carry the captured identity instead of the process-global binding; an async classification diagnostic stays on the originating session.",
+      "boundaryTest": {
+        "file": "tests/typesafe-classifier.test.ts",
+        "name": "attributes transport traces to the captured classifier identity"
+      },
+      "invariant": {
+        "file": "tests/pipeline.test.ts",
+        "name": "attributes async classification diagnostics to the session that started the turn"
+      },
+      "fault": {
+        "file": "tests/integration/command-privacy-acceptance.test.mjs",
+        "name": "fault control: an undeclared pi-native trace key turns the per-backend allowlist assertion RED"
+      }
+    },
+    {
+      "id": "host-reload-routing",
+      "requirement": "R09",
+      "files": [
+        "index.ts",
+        "commands.ts",
+        "tests/classifier-degradation-runtime.test.ts"
+      ],
+      "boundary": "host session lifecycle and reload keep classifier degradation notices and session identity visible",
+      "assertions": "A reload re-binds the requesting session; classifier degradation notices deduplicate, re-arm after recovery, and never log prompt text.",
+      "boundaryTest": {
+        "file": "tests/classifier-degradation-runtime.test.ts",
+        "name": "warns on a TypeSafe timeout, deduplicates its open circuit, and reports recovery without logging prompt text"
+      },
+      "invariant": {
+        "file": "tests/classifier-degradation-runtime.test.ts",
+        "name": "logs every total-budget expiry while deduplicating warnings, then re-arms after a successful prompt result"
+      },
+      "fault": {
+        "exception": "The reload and degradation path is exercised by deterministic host-runtime tests; the source-mutation fault controls that bound index.ts live in the integration privacy and activation contracts."
+      }
+    },
+    {
+      "id": "auto-setup-config",
+      "requirement": "R15",
+      "files": [
+        "auto-setup.ts",
+        "tests/auto-setup.test.ts"
+      ],
+      "boundary": "generated project configuration preserves supported extension settings and excludes inherited classifier prompt text",
+      "assertions": "Supported settings survive generation; valid enabled preferences pass and off or invalid preferences fail closed.",
+      "boundaryTest": {
+        "file": "tests/auto-setup.test.ts",
+        "name": "keeps supported extension settings but excludes inherited classifier prompt text from generated project config"
+      },
+      "invariant": {
+        "file": "tests/auto-setup.test.ts",
+        "name": "allows valid enabled runtime preferences and fails closed on off or invalid preferences"
+      },
+      "fault": {
+        "exception": "Configuration generation is deterministic and fails closed on invalid input; no separate source mutation is retained for this boundary."
+      }
+    },
+    {
+      "id": "activation-cancellation",
+      "requirement": "R06",
+      "files": [
+        "tests/integration/activation-cancellation-acceptance.test.mjs"
+      ],
+      "boundary": "real Pi activation cancellation and late classifier results behind an isolated source fault",
+      "assertions": "An aborted registry wait preserves a newer editor draft and a late classifier result never dispatches; removing the guard makes the named assertion fail.",
+      "boundaryTest": {
+        "file": "tests/integration/activation-cancellation-acceptance.test.mjs",
+        "name": "stops an aborted registry wait and preserves a newer editor draft"
+      },
+      "invariant": {
+        "file": "tests/integration/activation-cancellation-acceptance.test.mjs",
+        "name": "does not dispatch after a late classifier result"
+      },
+      "fault": {
+        "file": "tests/integration/activation-cancellation-acceptance.test.mjs",
+        "name": "fault control: removing the late-abort guard allows forbidden late dispatch"
+      }
+    },
+    {
+      "id": "affinity-policy",
+      "requirement": "R11",
+      "files": [
+        "tests/integration/affinity-policy-acceptance.test.mjs"
+      ],
+      "boundary": "within-tier affinity retains only an eligible anchor and drops it on branch change",
+      "assertions": "A hard-excluded anchor is never retained, and a branch reset returns selection to the strategy winner.",
+      "boundaryTest": {
+        "file": "tests/integration/affinity-policy-acceptance.test.mjs",
+        "name": "hard-excludes an anchor that leaves the eligible pool"
+      },
+      "invariant": {
+        "file": "tests/integration/affinity-policy-acceptance.test.mjs",
+        "name": "resets the Auto adapter anchor on a branch change and then routes from strategy"
+      },
+      "fault": {
+        "file": "tests/integration/affinity-policy-acceptance.test.mjs",
+        "name": "fails the named hard-exclusion assertion under a hard-filter-bypass fault in an isolated copy"
+      }
+    },
+    {
+      "id": "cache-lifecycle",
+      "requirement": "R12",
+      "files": [
+        "tests/integration/cache-lifecycle-acceptance.test.mjs"
+      ],
+      "boundary": "classifier decision cache avoids repeated classification and invalidates on semantic-key change",
+      "assertions": "An exact cache hit avoids the classifier; a changed classifier criterion invalidates the cached decision.",
+      "boundaryTest": {
+        "file": "tests/integration/cache-lifecycle-acceptance.test.mjs",
+        "name": "exact cache hit avoids the classifier and decoy models"
+      },
+      "invariant": {
+        "file": "tests/integration/cache-lifecycle-acceptance.test.mjs",
+        "name": "a changed classifier criterion (semantic key) invalidates the cached decision"
+      },
+      "fault": {
+        "file": "tests/integration/cache-lifecycle-acceptance.test.mjs",
+        "name": "fault control: removing the semantic-key guard turns the named invalidation assertion RED"
+      }
+    },
+    {
+      "id": "classifier-transport",
+      "requirement": "R12",
+      "files": [
+        "tests/integration/classifier-transport-acceptance.test.mjs"
+      ],
+      "boundary": "classifier transports are attempted in order and stop on abort",
+      "assertions": "An HTTP endpoint classifies with one injected request; no minimal-session fallback prompt starts after abort.",
+      "boundaryTest": {
+        "file": "tests/integration/classifier-transport-acceptance.test.mjs",
+        "name": "classifies through the configured HTTP endpoint transport with one injected request"
+      },
+      "invariant": {
+        "file": "tests/integration/classifier-transport-acceptance.test.mjs",
+        "name": "does not start the minimal-session fallback prompt after abort"
+      },
+      "fault": {
+        "file": "tests/integration/classifier-transport-acceptance.test.mjs",
+        "name": "fault control: removing the aborted-session guard starts a forbidden fallback prompt"
+      }
+    },
+    {
+      "id": "command-privacy",
+      "requirement": "R14",
+      "files": [
+        "tests/integration/command-privacy-acceptance.test.mjs"
+      ],
+      "boundary": "debug, metrics, reliability, cache, and probe artifacts stay inside their key allowlists",
+      "assertions": "The debug trace stays inside an explicit key allowlist with no canaries; the pi-native trace is gated on global debug and the TypeSafe trace on both gates.",
+      "boundaryTest": {
+        "file": "tests/integration/command-privacy-acceptance.test.mjs",
+        "name": "keeps the debug trace inside an explicit key allowlist and free of canaries"
+      },
+      "invariant": {
+        "file": "tests/integration/command-privacy-acceptance.test.mjs",
+        "name": "gates the pi-native detailed trace on global debug and the typesafe trace on both gates"
+      },
+      "fault": {
+        "file": "tests/integration/command-privacy-acceptance.test.mjs",
+        "name": "fault control: an undeclared pi-native trace key turns the per-backend allowlist assertion RED"
+      }
+    },
+    {
+      "id": "economic-policy",
+      "requirement": "R10",
+      "files": [
+        "tests/integration/economic-policy-acceptance.test.mjs"
+      ],
+      "boundary": "declared economic policy rejects reserve-equal candidates and treats stale facts as neutral",
+      "assertions": "A candidate whose remaining ratio equals the reserve ratio is rejected; an expired declared fact is a neutral unknown when unknown is ignore.",
+      "boundaryTest": {
+        "file": "tests/integration/economic-policy-acceptance.test.mjs",
+        "name": "rejects a candidate whose remaining ratio equals the reserve ratio"
+      },
+      "invariant": {
+        "file": "tests/integration/economic-policy-acceptance.test.mjs",
+        "name": "treats an expired declared fact as a neutral unknown when unknown is ignore"
+      },
+      "fault": {
+        "file": "tests/integration/economic-policy-acceptance.test.mjs",
+        "name": "fails the named reserve-equality assertion under a hard-filter-bypass fault in an isolated copy"
+      }
+    },
+    {
+      "id": "native-activation-cancellation",
+      "requirement": "R06",
+      "files": [
+        "tests/integration/native-activation-cancel.test.mjs"
+      ],
+      "boundary": "real Pi AgentSession activation cancellation behind a proven deny-all outbound fence",
+      "assertions": "Cancellation, false activation, and throwing activation leave no forbidden dispatch; the named assertion turns RED under a source mutation and is restored GREEN.",
+      "boundaryTest": {
+        "file": "tests/integration/native-activation-cancel.test.mjs",
+        "name": "cancels real AgentSession activation behind a proven deny-all fence"
+      },
+      "invariant": {
+        "file": "tests/integration/native-activation-cancel.test.mjs",
+        "name": "cancels real AgentSession activation behind a proven deny-all fence"
+      },
+      "fault": {
+        "file": "tests/integration/native-activation-cancel.test.mjs",
+        "name": "cancels real AgentSession activation behind a proven deny-all fence"
+      }
+    },
+    {
+      "id": "replay-guard-integrity",
+      "requirement": "R03",
+      "files": [
+        "tests/fixtures/replay-fault-control.mjs"
+      ],
+      "boundary": "replay guard fault proofs anchor the reviewed index.ts and restore it byte-for-byte",
+      "assertions": "Each replay guard proof starts from the declared baseline hash, changes it under mutation, and restores it before the next proof.",
+      "boundaryTest": {
+        "file": "tests/integration/reliability-v2-auto.test.mjs",
+        "name": "proves allowanceRetryBoundaryStillSafe faults the v2 Auto allowance-retry assertion"
+      },
+      "invariant": {
+        "file": "tests/integration/auto-virtual.test.mjs",
+        "name": "anchors the baseline source hash and proves isSideEffectFreeAllowanceFailure faults the output-effect no-replay assertion"
+      },
+      "fault": {
+        "file": "tests/integration/reliability-v2-auto.test.mjs",
+        "name": "proves the v2 Auto alternate limit with a compound lineage fault"
+      }
+    },
+    {
+      "id": "release-package",
+      "requirement": "R13",
+      "files": [
+        "package.json",
+        "scripts/logging-benchmark.ts",
+        "tests/release-package.test.mjs",
+        "tests/router-package.test.mjs"
+      ],
+      "boundary": "packed extension and resolve-only router package stay coherent with the logging benchmark",
+      "assertions": "The package manifest preserves the Pi extension and narrow router subpath; the packed JS API resolves without loader flags; the benchmark runs without leaking canaries.",
+      "boundaryTest": {
+        "file": "tests/release-package.test.mjs",
+        "name": "package manifest preserves the Pi extension and opts into a narrow router subpath"
+      },
+      "invariant": {
+        "file": "tests/router-package.test.mjs",
+        "name": "installs the packed JS API and resolves without loader flags on Node 22.19+"
+      },
+      "fault": {
+        "file": "tests/integration/command-privacy-acceptance.test.mjs",
+        "name": "runs the classifier test and benchmark commands without leaking canaries into artifacts"
+      }
+    },
+    {
+      "id": "docs-and-crap-tooling",
+      "requirement": "R16",
+      "files": [
+        "CHANGELOG.md",
+        "docs/guide/reliability-and-cache.md",
+        "docs/jev-typesafe-architecture.md",
+        "scripts/crap-report.mjs"
+      ],
+      "boundary": "documentation and CRAP reporting stay consistent with the shipped logging and classifier surface",
+      "assertions": "CRAP history records and renders deterministically; the docs describe the shipped recovery window and classifier architecture.",
+      "boundaryTest": {
+        "file": "tests/crap-report.test.mjs",
+        "name": "CRAP formula matches the published metric"
+      },
+      "invariant": {
+        "file": "tests/crap-report.test.mjs",
+        "name": "records append to and read back from a history file"
+      },
+      "fault": {
+        "exception": "Documentation changes are reviewed prose; the CRAP tooling has deterministic unit coverage and no separate source mutation is retained."
+      }
+    },
+    {
+      "id": "acceptance-live-profile",
+      "requirement": "R16",
+      "files": [
+        "scripts/acceptance/profiles/live.mjs"
+      ],
+      "boundary": "live acceptance profile opts in explicitly, sanitizes its environment, and bounds its models",
+      "assertions": "The live profile runs deterministic SDK tests behind an outbound guard and requires an explicit bounded opt-in with exact model allowlists.",
+      "boundaryTest": {
+        "file": "tests/acceptance-live.test.mjs",
+        "name": "runs deterministic SDK tests with a sanitized environment and outbound guard preloaded"
+      },
+      "invariant": {
+        "file": "tests/acceptance-runner.test.mjs",
+        "name": "requires explicit bounded live opt-in and exact model allowlists"
+      },
+      "fault": {
+        "file": "tests/acceptance-runner.test.mjs",
+        "name": "fault control: an undeclared acceptance projection key turns the named allowlist assertion RED"
       }
     }
   ]

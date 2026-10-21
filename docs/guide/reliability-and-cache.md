@@ -137,17 +137,18 @@ Enable local JSONL routing diagnostics in `.pi/bifrost.json`:
 }
 ```
 
-Default file:
+Default layout:
 
 ```text
-.pi/bifrost-debug.jsonl
+.pi/bifrost/logs/<root-session>/main/<run>.jsonl
+.pi/bifrost/logs/<root-session>/subagents/<agent>/<run>.jsonl
 ```
 
 When debug is enabled, lifecycle events include a random run ID, a per-session ID, and—when Pi exposes the exact user-message object—a per-turn ID. These IDs are only for log correlation; they are not Pi session/entry IDs or reliability receipt IDs. Auto retry and continuation events reuse the turn ID. V1 settlement is model-scoped, so its event says `model_only` instead of claiming an exact turn match.
 
-The event stream can show request reason, selection or no-route, reliability admission, known outcome, settlement/release result, renewal failure, and manual/config changes. It is best-effort diagnostic evidence, not a provider request ledger: compare it with the Pi session transcript and provider/tool evidence to determine whether Pi retried or side effects occurred. Abrupt process termination can still lose buffered events.
+The event stream can show request reason, selection or no-route, reliability admission, known outcome, settlement/release result, renewal failure, and manual/config changes. It is best-effort diagnostic evidence, not a provider request ledger: compare it with the Pi session transcript and provider/tool evidence to determine whether Pi retried or side effects occurred. Abrupt process termination can still lose buffered events. If an append stops after a partial write, the sink removes the incomplete record before the next append, deferring that repair when the disk is still failing, so a later record never merges with a damaged prefix.
 
-The default file is `.pi/bifrost-debug.jsonl` under the current working directory. A configured relative path is also resolved from that directory; an absolute path is used as given. Bifrost rotates a file larger than 10 MiB to `.old.jsonl`; inspect both files when the session crosses a rotation. On session shutdown Bifrost requests a bounded flush. Lifecycle fields added for this trace contain only static categories, routing reason, model/tier, and random correlation IDs. Review the full file before sharing it, since other enabled diagnostics may have different detail.
+Session-scoped files are the default: each process run and subagent writes its own file under the configured directory, so concurrent sessions never share a writer. A relative `debug.directory` is resolved from the current working directory; an absolute directory is used as given. Each run file rotates after 10 MiB, keeping `<file>.old`, `<file>.old.1`, and so on up to the configured retention. An explicit `debug.path` instead writes one shared file and is not concurrency-safe across processes. On session shutdown Bifrost requests a bounded flush. Lifecycle fields added for this trace contain only static categories, routing reason, model/tier, and random correlation IDs. Review the full file before sharing it, since other enabled diagnostics may have different detail.
 
 For a useful capture, enable debug before starting a fresh Pi process, note the Pi version and start time, reproduce one issue, then close the session normally so the bounded flush runs. Keep the matching Pi transcript and relevant provider/tool outcome separately; do not include prompts, responses, credentials, or raw provider errors when sharing logs.
 

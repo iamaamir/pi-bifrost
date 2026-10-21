@@ -378,10 +378,13 @@ function targetFiles(argvFiles) {
   if (argvFiles.length > 0) {
     return argvFiles.map((f) => path.resolve(f));
   }
-  return fs
+  const rootFiles = fs
     .readdirSync(".")
-    .filter((f) => f.endsWith(".ts") && !f.endsWith(".d.ts"))
-    .map((f) => path.resolve(f));
+    .filter((f) => f.endsWith(".ts") && !f.endsWith(".d.ts"));
+  const loggingFiles = fs.existsSync("logging")
+    ? fs.readdirSync("logging").filter((f) => f.endsWith(".ts") && !f.endsWith(".d.ts")).map((f) => path.join("logging", f))
+    : [];
+  return [...rootFiles, ...loggingFiles].map((f) => path.resolve(f));
 }
 
 function formatRow(row) {

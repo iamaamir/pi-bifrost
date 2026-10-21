@@ -14,7 +14,7 @@ const child = join(root, "tests", "fixtures", "native-activation-cancel-child.mj
 const guard = join(root, "scripts", "test-outbound-guard.cjs");
 const credentials = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"];
 const DEADLINE_MS = 120_000;
-const PRODUCTION_SHA256 = "14752568bd935068ca5874156bd324f45336dc29bd305523fe6e0ca5973c3303";
+const PRODUCTION_SHA256 = "ec4c4da9720ba975d9634cc397458cd4599b5e68a7f1eae67f3964e11a5256bc";
 const LATE_ABORT_GUARD = `      if (ctx.signal?.aborted) {
         endClassify({ kind: classification.kind, outcome: "aborted" });
         endInput({ outcome: "aborted" });
@@ -229,6 +229,11 @@ it("cancels real AgentSession activation behind a proven deny-all fence", async 
       mkdirSync(mutantDir, { recursive: true });
       for (const file of readdirSync(root)) {
         if (file.endsWith(".ts") || file === "bifrost.json") copyFileSync(join(root, file), join(mutantDir, file));
+      }
+      // index.ts imports ./logging, so the mutant needs those sources too.
+      mkdirSync(join(mutantDir, "logging"), { recursive: true });
+      for (const file of readdirSync(join(root, "logging"))) {
+        if (file.endsWith(".ts")) copyFileSync(join(root, "logging", file), join(mutantDir, "logging", file));
       }
       writeFileSync(join(mutantDir, "index.ts"), source);
       symlinkSync(join(root, "node_modules"), join(mutantDir, "node_modules"));

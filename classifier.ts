@@ -2,6 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { spawn } from "node:child_process";
 import { debug } from "./debug.ts";
+import type { LogIdentityHint } from "./logging/types.ts";
 import { promptWithMinimalSession } from "./session-fallback.ts";
 import { normalizeFailureObservation } from "./failure-observations.ts";
 
@@ -73,6 +74,12 @@ export interface ClassifierOptions {
   fetchImpl?: typeof fetch;
   /** Observe only the status and bounded Retry-After metadata from registry-model responses. */
   onProviderHttpResponse?: (model: Model<Api>, status: number, retryAfter?: string, errorMessage?: string) => void | Promise<void>;
+  /** Capture the session that admitted the classification turn. */
+  identity?: LogIdentityHint;
+}
+
+function traceClassifier(options: ClassifierOptions, event: string, meta?: Record<string, unknown>): void {
+  debug("classifier", event, meta, options.identity ? { identity: options.identity } : undefined);
 }
 
 export function categoryLabel(category: string): string {
@@ -189,11 +196,11 @@ async function classifyWithDirectHttp(
         { cwd: ctx.cwd, systemPrompt, signal: signal ?? ctx.signal },
       );
       if (!fallbackText?.trim()) {
-        debug("classifier", "registry.empty_response", { model: classifierId(classifierModel) });
+        traceClassifier(options, "registry.empty_response", { model: classifierId(classifierModel) });
         return undefined;
       }
       const fallbackResult = extractCategory(fallbackText, categories);
-      debug("classifier", "registry.session_done", {
+      traceClassifier(options, "registry.session_done", {
         model: classifierId(classifierModel),
         outputChars: fallbackText.length,
         tier: fallbackResult,
@@ -202,7 +209,7 @@ async function classifyWithDirectHttp(
     }
 
     const result = extractCategory(content, categories);
-    debug("classifier", "registry.done", {
+    traceClassifier(options, "registry.done", {
       model: classifierId(classifierModel),
       outputChars: content.length,
       tier: result,
@@ -238,7 +245,7 @@ async function classifyWithDirectHttp(
     });
 
     if (!response.ok) {
-      debug("classifier", "http.error", { status: response.status });
+      traceClassifier(options, "http.error", { status: response.status });
       console.error(`[bifrost] classifier HTTP request failed (status ${response.status})`);
       return undefined;
     }
@@ -248,12 +255,12 @@ async function classifyWithDirectHttp(
     };
     const content = data.choices?.[0]?.message?.content?.trim();
     if (!content) {
-      debug("classifier", "http.empty_response", { outputPresent: false });
+      traceClassifier(options, "http.empty_response", { outputPresent: false });
       return undefined;
     }
 
     const result = extractCategory(content, categories);
-    debug("classifier", "http.done", {
+    traceClassifier(options, "http.done", {
       model: classifierId(classifierModel),
       outputChars: content.length,
       tier: result,
@@ -275,7 +282,7 @@ async function classifyWithSubprocess(
   // Subprocess only works with registry models (needs provider/id for --model).
   if (classifierModel.kind !== "registry") return undefined;
   const model = classifierModel.model;
-  debug("classifier", "subprocess.start", { model: `${model.provider}/${model.id}` });
+  traceClassifier(options, "subprocess.start", { model: `${model.provider}/${model.id}` });
 
   const systemPrompt = options.systemPrompt ?? DEFAULT_SYSTEM_PROMPT;
   const userPrompt = classificationPrompt(categories, prompt);
@@ -358,7 +365,7 @@ async function classifyWithSubprocess(
         finish(undefined);
         return;
       }
-      debug("classifier", "subprocess.error", {
+      traceClassifier(options, "subprocess.error", {
         model: `${model.provider}/${model.id}`,
         errorCategory: "process_error",
       });
@@ -372,7 +379,7 @@ async function classifyWithSubprocess(
         return;
       }
       if (code !== 0) {
-        debug("classifier", "subprocess.error", {
+        traceClassifier(options, "subprocess.error", {
           model: `${model.provider}/${model.id}`,
           exitCode: code,
           stderrPresent: stderrChars > 0,
@@ -383,7 +390,7 @@ async function classifyWithSubprocess(
         return;
       }
       const result = extractCategory(stdout, categories);
-      debug("classifier", "subprocess.done", {
+      traceClassifier(options, "subprocess.done", {
         model: `${model.provider}/${model.id}`,
         outputChars: stdout.trim().length,
         tier: result,

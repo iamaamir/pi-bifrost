@@ -15,7 +15,7 @@ import {
   extractCategory,
 } from "../classifier.ts";
 import { createPipeline } from "../classification-pipeline.ts";
-import { flushDebug, setupDebug } from "../debug.ts";
+import { bindDebugSession, flushDebug, setupDebug } from "../debug.ts";
 import { makeModel } from "./helpers.ts";
 
 async function captureClassifierLogs(run: () => Promise<unknown>): Promise<{ result: unknown; debugText: string; stderrText: string }> {
@@ -27,7 +27,7 @@ async function captureClassifierLogs(run: () => Promise<unknown>): Promise<{ res
   console.error = (...values: unknown[]) => { stderr.push(values.map(String).join(" ")); };
   try {
     const result = await run();
-    await flushDebug();
+    await flushDebug(5_000);
     return { result, debugText: readFileSync(path, "utf8"), stderrText: stderr.join("\n") };
   } finally {
     console.error = originalError;
@@ -273,6 +273,32 @@ describe("classifier", () => {
     const event = classifierEvents(logs.debugText).find((row) => row.event === "registry.done");
     assert.equal(event?.outputChars, 8);
     assert.equal(Object.hasOwn(event ?? {}, "raw"), false);
+  });
+
+  it("attributes prompt transport traces to the captured classifier identity", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "bifrost-classifier-identity-"));
+    const path = join(directory, "debug.jsonl");
+    try {
+      setupDebug({ enabled: true, path }, directory);
+      bindDebugSession({ getHeader: () => ({ id: "session-b" }) });
+      const result = await classifyWithLLM({
+        cwd: process.cwd(),
+        modelRegistry: {
+          streamSimple: () => ({ result: async () => ({ content: [{ type: "text", text: "frontier" }] }) }),
+        },
+      } as never, { kind: "registry", model: makeModel("fixture", "classifier") }, ["frontier"], "request", {
+        method: "direct",
+        identity: { sessionId: "session-a" },
+      });
+      await flushDebug(1_000);
+      const entries = readFileSync(path, "utf8").split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line));
+      assert.equal(result, "frontier");
+      assert.ok(entries.length > 0, "transport traces must be logged");
+      assert.equal(entries.every((entry) => entry.session_id === "session-a"), true);
+    } finally {
+      setupDebug({ enabled: false, path }, directory);
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("does not log a configured HTTP endpoint when returning a classifier tier", async () => {

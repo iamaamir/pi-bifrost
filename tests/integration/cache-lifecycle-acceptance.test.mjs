@@ -556,6 +556,10 @@ describe("cache lifecycle acceptance", { timeout: 600_000, concurrency: 1 }, () 
       for (const file of readdirSync(ROOT)) {
         if (file.endsWith(".ts") || file === "schema.json" || file === "package.json") copyFileSync(join(ROOT, file), join(copy, file));
       }
+      mkdirSync(join(copy, "logging"), { recursive: true });
+      for (const file of readdirSync(join(ROOT, "logging"))) {
+        if (file.endsWith(".ts")) copyFileSync(join(ROOT, "logging", file), join(copy, "logging", file));
+      }
       symlinkSync(join(ROOT, "node_modules"), join(copy, "node_modules"));
       writeFileSync(join(copy, "cache.ts"), mutated);
 

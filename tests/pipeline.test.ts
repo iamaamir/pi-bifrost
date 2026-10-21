@@ -1,10 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildRouteDecisionSummary, createPipeline, type PipelineDeps } from "../classification-pipeline.ts";
-import { debug, setupDebug } from "../debug.ts";
+import { bindDebugSession, debug, flushDebug, setupDebug } from "../debug.ts";
 import { makeClassifierModel } from "./helpers.ts";
 
 function deps(overrides: Partial<PipelineDeps> = {}): PipelineDeps {
@@ -239,6 +239,60 @@ describe("classification-pipeline", () => {
       assert.equal(await readFile(logPath, "utf8"), baseline);
     } finally {
       setupDebug({ enabled: false, path: logPath }, directory);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("attributes async classification diagnostics to the session that started the turn", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "bifrost-pipeline-identity-"));
+    try {
+      setupDebug({ enabled: true }, directory);
+      bindDebugSession({ getHeader: () => ({ id: "session-a" }) });
+
+      let releaseDirect!: (value: { tier: string; backend: "typesafe" }) => void;
+      const direct = new Promise<{ tier: string; backend: "typesafe" }>((resolve) => {
+        releaseDirect = resolve;
+      });
+      const pipeline = createPipeline(deps({
+        classifyDirect: () => direct,
+        regexRules: [{ pattern: "defer", model: "frontier" }],
+      }));
+
+      const classified = pipeline.classify("defer", undefined, {
+        identity: { sessionId: "session-a" },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // Another session becomes current while classification is still awaiting
+      // its transport; the measurement and result belong to session A.
+      bindDebugSession({ getHeader: () => ({ id: "session-b" }) });
+      releaseDirect({ tier: "frontier", backend: "typesafe" });
+      assert.equal((await classified).kind, "classified");
+      await flushDebug(1_000);
+
+      const root = join(directory, ".pi", "bifrost", "logs");
+      const entries = await readdir(root, { recursive: true, withFileTypes: true });
+      const files = entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+        .map((entry) => join(entry.parentPath, entry.name));
+      const rows: Array<Record<string, unknown> & { file: string }> = [];
+      for (const file of files) {
+        for (const line of (await readFile(file, "utf8")).split("\n")) {
+          if (line.trim()) rows.push({ ...JSON.parse(line), file });
+        }
+      }
+      const pipelineRows = rows.filter((row) => row.module === "pipeline");
+      assert.ok(pipelineRows.length > 0, "classification diagnostics must be logged");
+      assert.equal(
+        pipelineRows.every((row) => row.session_id === "session-a"),
+        true,
+        `all pipeline diagnostics must stay with session A: ${JSON.stringify(pipelineRows)}`,
+      );
+      assert.equal(pipelineRows.some((row) => row.entryType === "measure"), true);
+      assert.equal(pipelineRows.some((row) => row.event === "result"), true);
+      assert.equal(files.some((file) => file.includes("session-b")), false);
+    } finally {
+      setupDebug({ enabled: false }, directory);
       await rm(directory, { recursive: true, force: true });
     }
   });

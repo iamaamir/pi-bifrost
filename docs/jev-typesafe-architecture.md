@@ -276,10 +276,17 @@ Detailed TypeSafe trace requires both flags:
 }
 ```
 
-Trace file:
+Trace files (default):
 
 ```text
-.pi/bifrost-debug.jsonl
+.pi/bifrost/logs/<root-session-id>/main/<run-id>.jsonl
+.pi/bifrost/logs/<root-session-id>/subagents/<agent-id>/<run-id>.jsonl
+```
+
+An explicit `debug.path` writes one shared file instead of session-scoped files:
+
+```json
+{ "debug": { "enabled": true, "path": ".pi/bifrost-debug.jsonl" } }
 ```
 
 TypeSafe events include:
@@ -303,7 +310,7 @@ failure
 finish
 ```
 
-Trace includes correlation ID, attempt, endpoint, status, decoded tier, confidence, retry/failure outcome, and timing. Detailed debug remains metadata-only: raw prompts, request bodies, provider responses, external error text, API keys, and authorization headers are never persisted.
+Trace includes correlation ID, attempt, status, decoded tier, confidence, retry/failure outcome, and timing. Endpoint URLs are treated as potentially sensitive and are not persisted. Detailed debug remains metadata-only: raw prompts, request bodies, provider responses, external error text, API keys, and authorization headers are never persisted.
 
 ## Operational traps
 

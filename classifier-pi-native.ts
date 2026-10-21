@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import type { AuthOperationOptions, ClassifierApi, ClassifierContext, ClassifierModel, ClassifierResult, ModelsClassifierOptions } from "@earendil-works/pi-ai";
 import type { ReliabilityStore } from "./reliability-store.ts";
 import { debug as bifrostDebug } from "./debug.ts";
+import type { LogIdentityHint } from "./logging/types.ts";
 import type { TypeSafeObservation, TypeSafeOutcome } from "./classifier-metrics.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, type ClassificationJudgment, type ClassifierRequest } from "./classifier-backends.ts";
 import { abortableDelay, criterionText, finite, sleep } from "./classifier-semantics.ts";
@@ -169,6 +170,7 @@ export function createPiNativeClassifier(options: PiNativeOptions) {
     request: ClassifierRequest,
     signal?: AbortSignal,
     onObservation?: (observation: TypeSafeObservation) => void,
+    identity?: LogIdentityHint,
   ): Promise<PiNativeJudgment | undefined> {
     const startedAt = performance.now();
     const deadline = startedAt + timeoutMs;
@@ -179,7 +181,14 @@ export function createPiNativeClassifier(options: PiNativeOptions) {
     const timer = setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), timeoutMs);
     const traceId = randomUUID();
     const trace = (event: string, meta: Record<string, unknown> = {}) => {
-      if (options.debug) bifrostDebug(CLASSIFIER_BACKEND_IDS.piNative, event, { trace_id: traceId, model: options.model, ...meta });
+      if (options.debug) {
+        bifrostDebug(
+          CLASSIFIER_BACKEND_IDS.piNative,
+          event,
+          { trace_id: traceId, model: options.model, ...meta },
+          identity ? { identity } : undefined,
+        );
+      }
     };
     trace("start", { tiers: request.tiers, prompt_length: request.prompt.length, timeout_ms: timeoutMs, max_attempts: maxAttempts });
     let attempts = 0;

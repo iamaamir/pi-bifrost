@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { readStoredCredential } from "@earendil-works/pi-coding-agent";
 import type { ReliabilityStore } from "./reliability-store.ts";
 import { debug as bifrostDebug } from "./debug.ts";
+import type { LogIdentityHint } from "./logging/types.ts";
 import type { TypeSafeObservation, TypeSafeOutcome } from "./classifier-metrics.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_CREDENTIAL_KEY, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassificationJudgment, type ClassifierRequest } from "./classifier-backends.ts";
 import { abortableDelay, criterionText, finite, sleep } from "./classifier-semantics.ts";
@@ -203,12 +204,20 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
     input: TypeSafeInput,
     signal?: AbortSignal,
     onObservation?: (observation: TypeSafeObservation) => void,
+    identity?: LogIdentityHint,
   ): Promise<TypeSafeJudgment | undefined> {
     const activeSignal = signal ?? options.signal;
     const startedAt = performance.now();
     const traceId = `ts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const trace = (event: string, meta: Record<string, unknown> = {}) => {
-      if (options.debug) bifrostDebug(CLASSIFIER_BACKEND_IDS.typesafe, event, { trace_id: traceId, model: TYPESAFE_MODEL, ...meta });
+      if (options.debug) {
+        bifrostDebug(
+          CLASSIFIER_BACKEND_IDS.typesafe,
+          event,
+          { trace_id: traceId, model: TYPESAFE_MODEL, ...meta },
+          identity ? { identity } : undefined,
+        );
+      }
     };
     trace("start", { tiers: input.tiers, prompt_length: input.prompt.length, timeout_ms: timeoutMs, max_attempts: maxAttempts });
     let attempts = 0;

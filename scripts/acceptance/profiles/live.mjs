@@ -125,6 +125,13 @@ function clonePluginSources(root, pluginDir) {
   mkdirSync(pluginDir, { recursive: true, mode: 0o700 });
   for (const name of readdirSync(root)) {
     if (name.endsWith(".ts")) copyFileSync(join(root, name), join(pluginDir, name));
+    if (name === "logging") {
+      const target = join(pluginDir, "logging");
+      mkdirSync(target, { recursive: true, mode: 0o700 });
+      for (const file of readdirSync(join(root, "logging"))) {
+        if (file.endsWith(".ts")) copyFileSync(join(root, "logging", file), join(target, file));
+      }
+    }
   }
   symlinkSync(join(root, "node_modules"), join(pluginDir, "node_modules"), "dir");
 }

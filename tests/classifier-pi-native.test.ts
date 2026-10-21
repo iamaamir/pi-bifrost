@@ -6,7 +6,7 @@ import { createPiNativeClassifier, decodePiNativeJudgment, type PiClassifierRegi
 import { ReliabilityStore, type ReliabilityIo } from "../reliability-store.ts";
 import { emptyReliabilityState, type ReliabilityState } from "../reliability.ts";
 import type { TypeSafeObservation } from "../classifier-metrics.ts";
-import { setupDebug } from "../debug.ts";
+import { bindDebugSession, flushDebug, setupDebug } from "../debug.ts";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -153,6 +153,24 @@ describe("pi-native classifier transport", () => {
       const finish = records.find((entry) => entry.module === "pi-native" && entry.event === "finish");
       assert.equal(finish?.model, "typesafe/jev-latest");
       assert.doesNotMatch(readFileSync(path, "utf8"), /secret-token/);
+    } finally {
+      setupDebug({ enabled: false, path }, dir);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("attributes transport traces to the captured classifier identity", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bifrost-native-identity-"));
+    const path = join(dir, "trace.jsonl");
+    try {
+      setupDebug({ enabled: true, path }, dir);
+      bindDebugSession({ getHeader: () => ({ id: "session-b" }) });
+      const h = harness({ listed: [model()], results: [answer()] });
+      await createPiNativeClassifier({ registry: h.registry, debug: true })(request, undefined, undefined, { sessionId: "session-a" });
+      await flushDebug(1_000);
+      const entries = readFileSync(path, "utf8").split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line));
+      assert.ok(entries.length > 0, "transport traces must be logged");
+      assert.equal(entries.every((entry) => entry.session_id === "session-a"), true);
     } finally {
       setupDebug({ enabled: false, path }, dir);
       rmSync(dir, { recursive: true, force: true });

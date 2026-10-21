@@ -35,7 +35,7 @@ const EXTENSION = join(ROOT, "index.ts");
 const OUTBOUND_GUARD = join(ROOT, "scripts", "test-outbound-guard.cjs");
 
 /** Production index.ts hash that the fault proof must leave byte-identical. */
-const PRODUCTION_INDEX_SHA256 = "14752568bd935068ca5874156bd324f45336dc29bd305523fe6e0ca5973c3303";
+const PRODUCTION_INDEX_SHA256 = "ec4c4da9720ba975d9634cc397458cd4599b5e68a7f1eae67f3964e11a5256bc";
 
 // ── synthetic canaries ──────────────────────────────────────────
 // Distinct shapes so a leak is unambiguous, and words that survive cache
@@ -60,6 +60,7 @@ const RAW_LEAK_MARKERS = [...CANARIES];
 // one structured nested value, checked separately for sensitive content.
 const DEBUG_KEY_ALLOWLIST = new Set([
   "ts", "module", "event", "entryType", "duration_ms", "_meta_error",
+  "level", "root_session_id", "session_id", "run_id", "process_id", "agent_id", "parent_agent_id",
   "run_correlation_id", "session_correlation_id", "turn_correlation_id",
   "pattern_run_id", "subagent_run_id",
   "extensionDir", "processId", "runtimeVersion", "routingMode", "reliabilityMode",
@@ -94,7 +95,10 @@ const SENSITIVE_KEYS = new Set([
 // TypeSafe service URL addressed by the gated `request` row; that row is only
 // reachable once a credential exists, so it is declared here rather than
 // exercised by the missing-credential witness.
-const DEBUG_BASE_KEYS = ["ts", "module", "event", "entryType", "pattern_run_id", "subagent_run_id", "_meta_error"];
+const DEBUG_BASE_KEYS = [
+  "ts", "module", "event", "entryType", "pattern_run_id", "subagent_run_id", "_meta_error",
+  "level", "root_session_id", "session_id", "run_id", "process_id", "agent_id", "parent_agent_id",
+];
 const PI_NATIVE_TRACE_KEYS = new Set([
   ...DEBUG_BASE_KEYS,
   "trace_id", "model", "tiers", "prompt_length", "timeout_ms", "max_attempts",
@@ -403,8 +407,19 @@ function assertNoCanaries(text, label) {
   }
 }
 
+function debugArtifact(project) {
+  const legacy = artifact(project, "bifrost-debug.jsonl");
+  if (legacy !== undefined) return legacy;
+  const root = join(project, "bifrost", "logs");
+  if (!existsSync(root)) return undefined;
+  const files = readdirSync(root, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"));
+  if (files.length === 0) return undefined;
+  return files.map((entry) => readFileSync(join(entry.parentPath, entry.name), "utf8")).join("");
+}
+
 function debugRows(project) {
-  const raw = artifact(project, "bifrost-debug.jsonl");
+  const raw = debugArtifact(project);
   if (raw === undefined) return [];
   return raw.split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
@@ -537,7 +552,7 @@ async function debugProjectionScenario(extension) {
       // Close inside the body so Pi's exit flush completes before the artifact
       // is read; scenario cleanup stays idempotent for the same session.
       await rpc.close(env.home);
-      raw = artifact(env.project, "bifrost-debug.jsonl") ?? "";
+      raw = debugArtifact(env.project) ?? "";
     },
   });
   try {
@@ -546,7 +561,7 @@ async function debugProjectionScenario(extension) {
     assert.equal(promptRows.length, 1, `exactly one debug prompt record; trace was:\n${raw}`);
     assert.deepEqual(
       Object.keys(promptRows[0]).sort(),
-      ["entryType", "event", "length", "module", "ts"],
+      ["entryType", "event", "length", "level", "module", "process_id", "root_session_id", "run_id", "session_id", "ts"],
       "debug prompt projection must stay content-free",
     );
     assertNoCanaries(raw, "debug trace");
@@ -635,7 +650,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
         sessions.push(rpc);
         await rpc.userTurn(CANARY_PROMPT);
         await rpc.close(env.home);
-        const raw = artifact(env.project, "bifrost-debug.jsonl");
+        const raw = debugArtifact(env.project);
         assertNoCanaries(raw, "debug trace");
         const rows = debugRowsFrom(raw);
         assert.ok(rows.length > 0, "debug trace must contain events");
@@ -845,7 +860,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
         for (const row of report) {
           for (const key of Object.keys(row)) assert.equal(allowed.has(key), true, `probe field outside allowlist: ${key}`);
         }
-        assertNoCanaries(artifact(env.project, "bifrost-debug.jsonl"), "probe debug trace");
+        assertNoCanaries(debugArtifact(env.project), "probe debug trace");
       },
     });
 
@@ -905,6 +920,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
         await rpc.userTurn(CANARY_PROMPT);
         await rpc.close(env.home);
         assert.equal(existsSync(join(env.project, "bifrost-debug.jsonl")), false, "disabled debug must write no trace artifact");
+        assert.equal(debugArtifact(env.project), undefined, "disabled debug must write no session trace");
       },
     });
     // typesafe: global on but typesafe.debug off -> no typesafe rows.
@@ -950,7 +966,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
         for (const row of typesafe) {
           assert.equal(sensitiveStringKeys(row).length, 0, "typesafe trace must not carry sensitive string channels");
         }
-        assertNoCanaries(artifact(env.project, "bifrost-debug.jsonl"), "typesafe debug trace");
+        assertNoCanaries(debugArtifact(env.project), "typesafe debug trace");
       },
     });
   });
@@ -981,6 +997,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
           const text = artifact(env.project, name);
           if (text !== undefined) assertNoCanaries(text, name);
         }
+        assertNoCanaries(debugArtifact(env.project), "session debug trace");
       },
     });
   });
@@ -989,9 +1006,12 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
     const sourcePath = join(ROOT, "index.ts");
     const original = readFileSync(sourcePath, "utf8");
     assert.equal(sha256(original), PRODUCTION_INDEX_SHA256, "production index.ts must match the recorded baseline before the proof");
-    const anchor = 'debug("input", "prompt", { length: promptText.length });';
+    const anchor = 'trace("input", "prompt", { length: promptText.length });';
     assert.ok(original.includes(anchor), "debug prompt projection anchor must exist");
-    const mutated = original.replace(anchor, 'debug("input", "prompt", { length: promptText.length, prompt: promptText });');
+    // Inject an undeclared key the global redactor does not own (matching the
+    // pi-native fault control's convention): the named key-list assertion must
+    // be what trips, proving it has teeth rather than leaning on redaction.
+    const mutated = original.replace(anchor, 'trace("input", "prompt", { length: promptText.length, leaked_prompt: promptText });');
     assert.notEqual(mutated, original, "debug projection mutation must apply");
     assert.notEqual(sha256(mutated), PRODUCTION_INDEX_SHA256, "mutation must be a real source change");
 
@@ -1003,6 +1023,10 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
         if (entry.endsWith(".ts") || ["schema.json", "package.json"].includes(entry)) {
           copyFileSync(join(ROOT, entry), join(scratch, entry));
         }
+      }
+      mkdirSync(join(scratch, "logging"), { recursive: true });
+      for (const entry of readdirSync(join(ROOT, "logging"))) {
+        if (entry.endsWith(".ts")) copyFileSync(join(ROOT, "logging", entry), join(scratch, "logging", entry));
       }
       symlinkSync(join(ROOT, "node_modules"), join(scratch, "node_modules"));
       writeFileSync(join(scratch, "index.ts"), mutated);
@@ -1051,6 +1075,10 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
           copyFileSync(join(ROOT, entry), join(scratch, entry));
         }
       }
+      mkdirSync(join(scratch, "logging"), { recursive: true });
+      for (const entry of readdirSync(join(ROOT, "logging"))) {
+        if (entry.endsWith(".ts")) copyFileSync(join(ROOT, "logging", entry), join(scratch, "logging", entry));
+      }
       symlinkSync(join(ROOT, "node_modules"), join(scratch, "node_modules"));
       writeFileSync(join(scratch, "classifier-pi-native.ts"), mutated);
 
@@ -1091,6 +1119,10 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
           if (entry.endsWith(".ts") || ["schema.json", "package.json"].includes(entry)) {
             copyFileSync(join(ROOT, entry), join(scratch, entry));
           }
+        }
+        mkdirSync(join(scratch, "logging"), { recursive: true });
+        for (const entry of readdirSync(join(ROOT, "logging"))) {
+          if (entry.endsWith(".ts")) copyFileSync(join(ROOT, "logging", entry), join(scratch, "logging", entry));
         }
         symlinkSync(join(ROOT, "node_modules"), join(scratch, "node_modules"));
 
@@ -1166,6 +1198,10 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
           if (entry.endsWith(".ts") || ["schema.json", "package.json"].includes(entry)) {
             copyFileSync(join(ROOT, entry), join(scratch, entry));
           }
+        }
+        mkdirSync(join(scratch, "logging"), { recursive: true });
+        for (const entry of readdirSync(join(ROOT, "logging"))) {
+          if (entry.endsWith(".ts")) copyFileSync(join(ROOT, "logging", entry), join(scratch, "logging", entry));
         }
         symlinkSync(join(ROOT, "node_modules"), join(scratch, "node_modules"));
 

@@ -138,7 +138,7 @@ describe("direct classifier degradation at the registered Auto route", () => {
       fetchMode = "success";
       await route(routeRequest(), ctx);
       assert.equal(externalRequests, 2);
-      await flushDebug();
+      await flushDebug(5_000);
       assert.equal(promptRequests, 2, "a successful direct classifier no longer uses the prompt fallback");
       assert.ok(notifications.some(({ message }) => /typesafe classifier recovered/.test(message)));
       notifications.length = 0;
@@ -147,7 +147,7 @@ describe("direct classifier degradation at the registered Auto route", () => {
       assert.equal(externalRequests, 3);
       assert.equal(promptRequests, 2);
       assert.equal(notifications.filter(({ type }) => type === "warning").length, 0, "a healthy classifier does not emit a degradation warning");
-      await flushDebug();
+      await flushDebug(5_000);
       const events = readFileSync(join(cwd, ".pi", "degradation.jsonl"), "utf8")
         .trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
 
@@ -172,7 +172,7 @@ describe("direct classifier degradation at the registered Auto route", () => {
       assert.equal(serialized.includes("SECRET_PROMPT_SENTINEL"), false);
       assert.equal(serialized.includes("test-only-key"), false);
     } finally {
-      await flushDebug();
+      await flushDebug(5_000);
       globalThis.fetch = previousFetch;
       Date.now = previousNow;
       process.chdir(previousCwd);
@@ -280,7 +280,7 @@ describe("direct classifier degradation at the registered Auto route", () => {
       assert.equal(promptRequests, 4);
       assert.equal(notifications.filter(({ type }) => type === "warning").length, 2);
 
-      await flushDebug();
+      await flushDebug(5_000);
       const events = readFileSync(join(cwd, ".pi", "budget.jsonl"), "utf8")
         .trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
       const expiries = events.filter((event) => event.module === "classifier" && event.event === "budget_expired");
@@ -289,7 +289,7 @@ describe("direct classifier degradation at the registered Auto route", () => {
       assert.ok(events.some((event) => event.module === "classifier" && event.event === "budget_recovered"));
       assert.equal(JSON.stringify(events).includes("BUDGET_PROMPT_SENTINEL"), false);
     } finally {
-      await flushDebug();
+      await flushDebug(5_000);
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
@@ -389,7 +389,7 @@ describe("direct classifier degradation at the registered Auto route", () => {
       assert.equal(promptRequests, 2);
       assert.equal(notifications.filter(({ type }) => type === "warning").length, 1, "the same direct-plus-deadline state is deduplicated");
 
-      await flushDebug();
+      await flushDebug(5_000);
       const events = readFileSync(join(cwd, ".pi", "mixed-deadline.jsonl"), "utf8")
         .trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
       const expiries = events.filter((event) => event.module === "classifier" && event.event === "budget_expired");
@@ -400,7 +400,7 @@ describe("direct classifier degradation at the registered Auto route", () => {
       assert.equal(serialized.includes("MIXED_DEADLINE_PROMPT_SENTINEL"), false);
       assert.equal(serialized.includes("SECRET"), false);
     } finally {
-      await flushDebug();
+      await flushDebug(5_000);
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

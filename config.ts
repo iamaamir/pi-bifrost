@@ -5,6 +5,9 @@
 import type { RoutingStrategy, RouteRule } from "./routing.ts";
 import type { CacheOptions } from "./cache.ts";
 import type { DebugConfig } from "./debug.ts";
+import { isLogLevel } from "./logging/severity.ts";
+import { isOverflowPolicyName } from "./logging/overflow-policy.ts";
+import { DEFAULT_MAX_BYTES } from "./logging/types.ts";
 import type { ReliabilityConfig } from "./reliability.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend, type TierCriterion } from "./classifier-backends.ts";
 import { emptyEconomicSnapshot, publishEconomicObservation, validateEconomicPolicy, type EconomicSignal, type ReservePolicy } from "./economic-signals.ts";
@@ -674,6 +677,88 @@ export function validateConfig(
     }
   }
 
+  const debugRaw = (config as unknown as Record<string, unknown>).debug;
+  if (debugRaw !== undefined) {
+    if (!criterionObject(debugRaw)) {
+      issues.push({ severity: "error", code: "config.debug_invalid", path: "debug", message: "debug must be an object." });
+    } else {
+      const debug = debugRaw as DebugConfig;
+      if (debug.enabled !== undefined && typeof debug.enabled !== "boolean") {
+        issues.push({ severity: "error", code: "config.debug_invalid", path: "debug.enabled", message: "debug.enabled must be a boolean." });
+      }
+      if (debug.path !== undefined && (typeof debug.path !== "string" || debug.path.trim().length === 0 || debug.path.includes("\0"))) {
+        issues.push({ severity: "error", code: "config.debug_path_invalid", path: "debug.path", message: "debug.path must be a non-empty path without NUL bytes." });
+      }
+      if (debug.level !== undefined && !isLogLevel(debug.level)) {
+        issues.push({ severity: "error", code: "config.debug_level_invalid", path: "debug.level", message: "debug.level must be trace, debug, info, warn, or error." });
+      }
+      if (debug.scope !== undefined && debug.scope !== "session" && debug.scope !== "file") {
+        issues.push({ severity: "error", code: "config.debug_scope_invalid", path: "debug.scope", message: "debug.scope must be session or file." });
+      }
+      if (debug.path !== undefined && debug.scope === "session") {
+        issues.push({ severity: "warning", code: "config.debug_path_precedence", path: "debug.scope", message: "debug.path wins over debug.scope session; the explicit file remains the destination." });
+      }
+      if (debug.directory !== undefined && (typeof debug.directory !== "string" || debug.directory.trim().length === 0 || debug.directory.includes("\0"))) {
+        issues.push({ severity: "error", code: "config.debug_directory_invalid", path: "debug.directory", message: "debug.directory must be a non-empty path without NUL bytes." });
+      }
+      const queueRaw = debugRaw.queue;
+      if (queueRaw !== undefined) {
+        if (!criterionObject(queueRaw)) {
+          issues.push({ severity: "error", code: "config.debug_queue_invalid", path: "debug.queue", message: "debug.queue must be an object." });
+        } else {
+          if (queueRaw.maxEntries !== undefined && (!Number.isInteger(queueRaw.maxEntries) || (queueRaw.maxEntries as number) < 1 || (queueRaw.maxEntries as number) > 100_000)) {
+            issues.push({ severity: "error", code: "config.debug_queue_invalid", path: "debug.queue.maxEntries", message: "debug.queue.maxEntries must be an integer from 1 to 100000." });
+          }
+          if (queueRaw.maxBytes !== undefined && (!Number.isInteger(queueRaw.maxBytes) || (queueRaw.maxBytes as number) < 1_024 || (queueRaw.maxBytes as number) > 64 * 1024 * 1024)) {
+            issues.push({ severity: "error", code: "config.debug_queue_invalid", path: "debug.queue.maxBytes", message: "debug.queue.maxBytes must be an integer from 1024 to 67108864." });
+          }
+          if (queueRaw.overflowPolicy !== undefined && !isOverflowPolicyName(queueRaw.overflowPolicy)) {
+            issues.push({ severity: "error", code: "config.debug_queue_invalid", path: "debug.queue.overflowPolicy", message: "debug.queue.overflowPolicy must be severity-first, drop-oldest, or drop-newest." });
+          }
+        }
+      }
+      const drainRaw = debugRaw.drain;
+      if (drainRaw !== undefined) {
+        if (!criterionObject(drainRaw)) {
+          issues.push({ severity: "error", code: "config.debug_drain_invalid", path: "debug.drain", message: "debug.drain must be an object." });
+        } else {
+          if (drainRaw.intervalMs !== undefined && (!Number.isInteger(drainRaw.intervalMs) || (drainRaw.intervalMs as number) < 1 || (drainRaw.intervalMs as number) > 60_000)) {
+            issues.push({ severity: "error", code: "config.debug_drain_invalid", path: "debug.drain.intervalMs", message: "debug.drain.intervalMs must be an integer from 1 to 60000." });
+          }
+          if (drainRaw.maxBatchBytes !== undefined && (!Number.isInteger(drainRaw.maxBatchBytes) || (drainRaw.maxBatchBytes as number) < 1_024 || (drainRaw.maxBatchBytes as number) > 64 * 1024 * 1024)) {
+            issues.push({ severity: "error", code: "config.debug_drain_invalid", path: "debug.drain.maxBatchBytes", message: "debug.drain.maxBatchBytes must be an integer from 1024 to 67108864." });
+          } else if (drainRaw.maxBatchBytes !== undefined) {
+            const queueLimit = criterionObject(queueRaw)
+              && Number.isInteger(queueRaw.maxBytes)
+              && (queueRaw.maxBytes as number) >= 1_024
+              && (queueRaw.maxBytes as number) <= 64 * 1024 * 1024
+                ? queueRaw.maxBytes as number
+                : DEFAULT_MAX_BYTES;
+            if ((drainRaw.maxBatchBytes as number) > queueLimit) {
+              issues.push({ severity: "error", code: "config.debug_drain_invalid", path: "debug.drain.maxBatchBytes", message: "debug.drain.maxBatchBytes must not exceed debug.queue.maxBytes." });
+            }
+          }
+        }
+      }
+      const sinkRaw = debugRaw.sink;
+      if (sinkRaw !== undefined) {
+        if (!criterionObject(sinkRaw)) {
+          issues.push({ severity: "error", code: "config.debug_sink_invalid", path: "debug.sink", message: "debug.sink must be an object." });
+        } else {
+          if (sinkRaw.type !== undefined && sinkRaw.type !== "async-file") {
+            issues.push({ severity: "error", code: "config.debug_sink_invalid", path: "debug.sink.type", message: "debug.sink.type must be async-file." });
+          }
+          if (sinkRaw.maxFileSizeMB !== undefined && (typeof sinkRaw.maxFileSizeMB !== "number" || !Number.isFinite(sinkRaw.maxFileSizeMB) || sinkRaw.maxFileSizeMB <= 0 || sinkRaw.maxFileSizeMB > 1_024)) {
+            issues.push({ severity: "error", code: "config.debug_sink_invalid", path: "debug.sink.maxFileSizeMB", message: "debug.sink.maxFileSizeMB must be a positive number no greater than 1024." });
+          }
+          if (sinkRaw.rotatedFiles !== undefined && (!Number.isInteger(sinkRaw.rotatedFiles) || (sinkRaw.rotatedFiles as number) < 0 || (sinkRaw.rotatedFiles as number) > 10)) {
+            issues.push({ severity: "error", code: "config.debug_sink_invalid", path: "debug.sink.rotatedFiles", message: "debug.sink.rotatedFiles must be an integer from 0 to 10." });
+          }
+        }
+      }
+    }
+  }
+
   const probe = config.probe;
   if (probe?.concurrency !== undefined && (!Number.isInteger(probe.concurrency) || probe.concurrency < 1)) {
     issues.push({
@@ -784,6 +869,14 @@ export function mergeConfig(
   }
   merged.cache = mergeObj(base.cache, override.cache);
   merged.debug = mergeObj(base.debug, override.debug);
+  if (merged.debug) {
+    merged.debug = {
+      ...merged.debug,
+      queue: mergeObj(base.debug?.queue, override.debug?.queue),
+      drain: mergeObj(base.debug?.drain, override.debug?.drain),
+      sink: mergeObj(base.debug?.sink, override.debug?.sink),
+    };
+  }
   merged.reliability = mergeObj(base.reliability, override.reliability);
   merged.probe = mergeObj(base.probe, override.probe);
   return merged;

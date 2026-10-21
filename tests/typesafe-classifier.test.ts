@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setupDebug } from "../debug.ts";
+import { bindDebugSession, flushDebug, setupDebug } from "../debug.ts";
 import {
   TYPESAFE_MODEL,
   TYPESAFE_SYSTEMONE_URL,
@@ -291,12 +291,40 @@ describe("TypeSafe classifier", () => {
         fetchImpl: async () => { throw new Error("transport-error-sentinel"); },
       });
       await classifier({ prompt: "prompt-sentinel", tiers: ["general"], criteria: { general: "criteria-sentinel" } });
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await flushDebug(1_000);
       const trace = readFileSync(path, "utf8");
       assert.doesNotMatch(trace, /prompt-sentinel|criteria-sentinel|api-key-sentinel|transport-error-sentinel/);
       assert.match(trace, /"event":"transport_error"/);
       assert.match(trace, /"category":"network"/);
     } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("attributes transport traces to the captured classifier identity", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-typesafe-identity-"));
+    const path = join(cwd, "trace.jsonl");
+    try {
+      setupDebug({ enabled: true, path }, cwd);
+      bindDebugSession({ getHeader: () => ({ id: "session-b" }) });
+      const classifier = createTypeSafeClassifier({
+        apiKey: "key",
+        debug: true,
+        maxAttempts: 1,
+        fetchImpl: async () => new Response(JSON.stringify(payload()), { status: 200 }),
+      });
+      await classifier(
+        { prompt: "x", tiers: ["general"], criteria: { general: "normal" } },
+        undefined,
+        undefined,
+        { sessionId: "session-a" },
+      );
+      await flushDebug(1_000);
+      const entries = readFileSync(path, "utf8").split("\n").filter((line) => line.trim()).map((line) => JSON.parse(line));
+      assert.ok(entries.length > 0, "transport traces must be logged");
+      assert.equal(entries.every((entry) => entry.session_id === "session-a"), true);
+    } finally {
+      setupDebug({ enabled: false, path }, cwd);
       rmSync(cwd, { recursive: true, force: true });
     }
   });

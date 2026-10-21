@@ -290,7 +290,12 @@ export interface PipelineDeps<MClassifier extends { readonly id: string } = { re
   /** Query cache. Returns tier or undefined. */
   readonly cacheLookup: (text: string) => string | undefined;
   /** Optional direct backend (typesafe or pi-native) attempted before the prompt classifier. */
-  readonly classifyDirect?: (text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<DirectClassifierOutput>;
+  readonly classifyDirect?: (
+    text: string,
+    tiers: readonly string[],
+    signal?: AbortSignal,
+    identity?: { readonly sessionId: string },
+  ) => Promise<DirectClassifierOutput>;
   /** Classifier targets in priority order. Empty array = skip LLM. */
   readonly classifierModels: readonly ClassifierModelRef<MClassifier>[];
   /** Invoke the LLM classifier for a single model. Returns tier or undefined. */
@@ -299,6 +304,7 @@ export interface PipelineDeps<MClassifier extends { readonly id: string } = { re
     text: string,
     tiers: readonly string[],
     signal?: AbortSignal,
+    identity?: { readonly sessionId: string },
   ) => Promise<ClassifierOutput | undefined>;
   /** Regex routing rules. First match wins. */
   readonly regexRules: readonly RouteRule[];
@@ -311,7 +317,11 @@ export interface PipelineDeps<MClassifier extends { readonly id: string } = { re
 // ── Pipeline interface ─────────────────────────────────────────
 
 export interface ClassificationPipeline {
-  readonly classify: (text: string, signal?: AbortSignal, options?: { readonly offline?: boolean }) => Promise<ClassificationResult>;
+  readonly classify: (
+    text: string,
+    signal?: AbortSignal,
+    options?: { readonly offline?: boolean; readonly identity?: { readonly sessionId: string } },
+  ) => Promise<ClassificationResult>;
   /** Cheap local check used to preserve explicit rule ownership before recovery routing. */
   readonly matchRule: (text: string) => string | undefined;
 }
@@ -344,19 +354,36 @@ export function createPipeline<MClassifier extends { readonly id: string } = { r
     module: string,
     event: string,
     meta?: Record<string, unknown>,
+    identity?: { readonly sessionId: string },
   ): void => {
-    if (deps.instrumentation !== "none") debug(module, event, meta);
+    if (deps.instrumentation !== "none") debug(module, event, meta, identity ? { identity } : undefined);
   };
-  const measureDebug = (module: string, event: string) => {
+  const measureDebug = (
+    module: string,
+    event: string,
+    identity?: { readonly sessionId: string },
+  ) => {
     if (deps.instrumentation === "none") return (_meta?: Record<string, unknown>) => {};
-    return debugMeasure(module, event);
+    return debugMeasure(module, event, identity ? { identity } : undefined);
   };
 
   // Compile rules once at pipeline construction — no per-turn regex building.
   // Per-rule testing preserves rule-order match precedence exactly.
   const regexRules = compileRules(rawRegexRules);
 
-  async function classify(text: string, signal?: AbortSignal, options?: { readonly offline?: boolean }): Promise<ClassificationResult> {
+  async function classify(
+    text: string,
+    signal?: AbortSignal,
+    options?: { readonly offline?: boolean; readonly identity?: { readonly sessionId: string } },
+  ): Promise<ClassificationResult> {
+    // Capture identity at admission: classification awaits classifier
+    // transports, so the process-global binding may belong to another session
+    // by the time a measurement or result event is emitted.
+    const identity = options?.identity;
+    const emit = (module: string, event: string, meta?: Record<string, unknown>): void =>
+      emitDebug(module, event, meta, identity);
+    const measure = (module: string, event: string) =>
+      measureDebug(module, event, identity);
     const startedAt = performance.now();
     const deadlineAt = totalTimeoutValid && totalTimeoutMs !== undefined ? startedAt + totalTimeoutMs : undefined;
     let runController: AbortController | undefined;
@@ -367,7 +394,7 @@ export function createPipeline<MClassifier extends { readonly id: string } = { r
     const markOutcome = (outcome: ClassificationOutcome): void => {
       if (classificationOutcome === outcome) return;
       classificationOutcome = outcome;
-      emitDebug("pipeline", outcome === "deadline" ? "classifier.deadline" : "classifier.aborted", {
+      emit("pipeline", outcome === "deadline" ? "classifier.deadline" : "classifier.aborted", {
         elapsed_ms: Math.round(performance.now() - startedAt),
       });
     };
@@ -456,11 +483,11 @@ export function createPipeline<MClassifier extends { readonly id: string } = { r
     // Stage 1: pre-check regex for direct model references only.
     // Runs before tiers check — direct bindings work even with zero tiers.
     {
-      const endPre = measureDebug("pipeline", "regex_pre");
+      const endPre = measure("pipeline", "regex_pre");
       const pre = classifyCompiled(text, regexRules);
       endPre({ match: !!pre, tier: pre });
       if (pre && pre.includes("/") && !tiers.includes(pre)) {
-        emitDebug("pipeline", "result", { source: "regex", tier: pre, direct: true });
+        emit("pipeline", "result", { source: "regex", tier: pre, direct: true });
         return { kind: "classified", tier: pre, source: "regex" };
       }
     }
@@ -468,17 +495,17 @@ export function createPipeline<MClassifier extends { readonly id: string } = { r
     if (tiers.length === 0) return { kind: "unclassified" };
 
     // Stage 2: cache lookup
-    const endCache = measureDebug("pipeline", "cache");
+    const endCache = measure("pipeline", "cache");
     const cached = cacheLookup(text);
     endCache({ hit: !!cached });
     if (cached && tiers.includes(cached)) {
-      emitDebug("pipeline", "result", { source: "cache", tier: cached });
+      emit("pipeline", "result", { source: "cache", tier: cached });
       return { kind: "classified", tier: cached, source: "cache" };
     }
 
     // Stage 3: optional direct classifier (typesafe or pi-native), then prompt fallback.
     if (!options?.offline && classifyDirect && classificationOutcome !== "deadline" && !disableExternalForInvalidTimeout) {
-      const endDirect = measureDebug("pipeline", "direct.attempt");
+      const endDirect = measure("pipeline", "direct.attempt");
       let directMeasured = false;
       const finishDirect = (meta?: Record<string, unknown>): void => {
         if (directMeasured) return;
@@ -486,7 +513,7 @@ export function createPipeline<MClassifier extends { readonly id: string } = { r
         endDirect(meta);
       };
       try {
-        const attempt = await invokeExternal((attemptSignal) => classifyDirect(text, tiers, attemptSignal));
+        const attempt = await invokeExternal((attemptSignal) => classifyDirect(text, tiers, attemptSignal, identity));
         if (attempt.status !== "completed") finishDirect({ outcome: attempt.status });
         if (attempt.status === "aborted") return stop("aborted");
         if (attempt.status === "deadline") markOutcome("deadline");
@@ -501,12 +528,12 @@ export function createPipeline<MClassifier extends { readonly id: string } = { r
           finishDirect({ tier, backend: judgment?.backend, confidence: judgment?.confidence });
         }
         if (judgment && tiers.includes(judgment.tier)) {
-          emitDebug("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model, confidence: judgment.confidence });
+          emit("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model, confidence: judgment.confidence });
           return withOutcome({ kind: "classified", tier: judgment.tier, source: "classifier", judgment }, "none");
         }
       } catch {
         finishDirect({ outcome: signal?.aborted ? "aborted" : "error" });
-        emitDebug("pipeline", "direct.error", { aborted: signal?.aborted ?? false });
+        emit("pipeline", "direct.error", { aborted: signal?.aborted ?? false });
       }
       if (signal?.aborted) return stop("aborted");
     }
@@ -514,7 +541,7 @@ export function createPipeline<MClassifier extends { readonly id: string } = { r
     // Existing prompt classifier — try each model in priority order.
     for (const model of options?.offline || disableExternalForInvalidTimeout ? [] : classifierModels) {
       if (classificationOutcome === "deadline") break;
-      const endLLM = measureDebug("pipeline", "classifier.attempt");
+      const endLLM = measure("pipeline", "classifier.attempt");
       let llmMeasured = false;
       const finishLLM = (meta?: Record<string, unknown>): void => {
         if (llmMeasured) return;
@@ -522,7 +549,7 @@ export function createPipeline<MClassifier extends { readonly id: string } = { r
         endLLM(meta);
       };
       try {
-        const attempt = await invokeExternal((attemptSignal) => classifyWithLLM(model, text, tiers, attemptSignal));
+        const attempt = await invokeExternal((attemptSignal) => classifyWithLLM(model, text, tiers, attemptSignal, identity));
         if (attempt.status !== "completed") finishLLM({ outcome: attempt.status });
         if (attempt.status === "aborted") return stop("aborted");
         if (attempt.status === "deadline") {
@@ -536,12 +563,12 @@ export function createPipeline<MClassifier extends { readonly id: string } = { r
         const tier = judgment?.tier;
         finishLLM({ model: modelId, tier, backend: judgment?.backend, confidence: judgment?.confidence });
         if (judgment && tiers.includes(judgment.tier)) {
-          emitDebug("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model ?? modelId, confidence: judgment.confidence });
+          emit("pipeline", "result", { source: "classifier", tier, backend: judgment.backend, model: judgment.model ?? modelId, confidence: judgment.confidence });
           return withOutcome({ kind: "classified", tier: judgment.tier, source: "classifier", judgment: { ...judgment, model: judgment.model ?? modelId } }, "prompt", judgment.model ?? modelId);
         }
       } catch {
         finishLLM({ outcome: signal?.aborted ? "aborted" : "error" });
-        emitDebug("pipeline", "classifier.error", { category: "classifier_failure" });
+        emit("pipeline", "classifier.error", { category: "classifier_failure" });
         console.error("[bifrost] classifier model failed");
       }
       if (signal?.aborted) return stop("aborted");
@@ -550,24 +577,24 @@ export function createPipeline<MClassifier extends { readonly id: string } = { r
     if (signal?.aborted) return stop("aborted");
 
     // Stage 4: regex rules
-    const endRegex = measureDebug("pipeline", "regex");
+    const endRegex = measure("pipeline", "regex");
     const regex = classifyCompiled(text, regexRules);
     endRegex({ match: !!regex, tier: regex });
     if (regex) {
       if (tiers.includes(regex)) {
         // Tier name match — route through strategy.
-        emitDebug("pipeline", "result", { source: "regex", tier: regex });
+        emit("pipeline", "result", { source: "regex", tier: regex });
         return withOutcome({ kind: "classified", tier: regex, source: "regex" }, "regex");
       }
       if (regex.includes("/")) {
         // Direct model reference (e.g. "opencode-go/glm-5.1" in rule).
-        emitDebug("pipeline", "result", { source: "regex", tier: regex, direct: true });
+        emit("pipeline", "result", { source: "regex", tier: regex, direct: true });
         return withOutcome({ kind: "classified", tier: regex, source: "regex" }, "regex");
       }
     }
 
     // Stage 4: default fallback
-    emitDebug("pipeline", "result", { source: "fallback", tier: defaultTier });
+    emit("pipeline", "result", { source: "fallback", tier: defaultTier });
     if (defaultTier) {
       return withOutcome({ kind: "fallback", tier: defaultTier }, "default");
     }

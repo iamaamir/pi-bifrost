@@ -51,7 +51,16 @@ describe("automatic first-run setup", () => {
         criteria: { quick: "PRIVATE_EXTENSION_CRITERION_CANARY_91ca" },
       },
       cache: { enabled: true, maxEntries: 333, threshold: 0.88, ttlHours: 48, path: ".pi/custom-cache.jsonl" },
-      debug: { enabled: false, path: ".pi/custom-debug.jsonl" },
+      debug: {
+        enabled: false,
+        path: ".pi/custom-debug.jsonl",
+        level: "warn",
+        scope: "session",
+        directory: ".pi/custom-logs",
+        queue: { maxEntries: 500, maxBytes: 65_536, overflowPolicy: "drop-oldest" },
+        drain: { intervalMs: 100, maxBatchBytes: 16_384 },
+        sink: { type: "async-file", maxFileSizeMB: 4, rotatedFiles: 2 },
+      },
       reliability: { enabled: true, stateVersion: 2, cooldownMinutes: 45, failureThreshold: 4, path: ".pi/custom-reliability.json" },
       probe: { concurrency: 3, timeoutMs: 12_000 },
       models: {},
@@ -73,6 +82,10 @@ describe("automatic first-run setup", () => {
     });
     assert.deepEqual(saved.cache, extensionSettings.cache);
     assert.deepEqual(saved.debug, extensionSettings.debug);
+    (extensionSettings.debug as Record<string, unknown>).privateSetting = "PRIVATE_DEBUG_CANARY_2f0a";
+    const reprojected = serializeBootstrapConfig(extensionSettings, "quick", { quick: ["fixture/verified"], general: [], frontier: [] }).debug as Record<string, unknown>;
+    assert.equal(Object.hasOwn(reprojected, "privateSetting"), false);
+    delete (extensionSettings.debug as Record<string, unknown>).privateSetting;
     assert.deepEqual(saved.reliability, extensionSettings.reliability);
     assert.deepEqual(saved.probe, extensionSettings.probe);
     assert.deepEqual(saved.categoryStrategies, extensionSettings.categoryStrategies);

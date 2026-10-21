@@ -41,7 +41,14 @@ function installPackedPackage(cache, consumer) {
 
 function installedRouterFiles(consumer) {
   const packageRoot = join(consumer, "node_modules", "pi-bifrost");
-  const routerFiles = readdirSync(join(packageRoot, "dist", "router")).map((name) => `dist/router/${name}`);
+  const routerEntry = join(packageRoot, "dist", "router");
+  const routerFiles = readdirSync(routerEntry, { withFileTypes: true })
+    .flatMap((entry) => entry.isFile()
+      ? [`dist/router/${entry.name}`]
+      : entry.name === "logging"
+        ? readdirSync(join(routerEntry, "logging")).filter((name) => name.endsWith(".js") || name.endsWith(".d.ts")).map((name) => `dist/router/logging/${name}`)
+        : [])
+    .filter((path) => path.endsWith(".js") || path.endsWith(".d.ts"));
   return { packageRoot, routerFiles };
 }
 
@@ -107,6 +114,9 @@ describe("packed experimental router consumer", () => {
       const { packageRoot, routerFiles } = installedRouterFiles(consumer);
       const archivePaths = packed.files.map((file) => file.path);
       const rootSources = readdirSync(process.cwd()).filter((path) => path.endsWith(".ts"));
+      const loggingSources = readdirSync(join(process.cwd(), "logging"))
+        .filter((path) => path.endsWith(".ts"))
+        .map((path) => `logging/${path}`);
       assert.deepEqual(packageJsonOf(packageRoot).exports["./router"], {
         types: "./dist/router/router.d.ts",
         import: "./dist/router/router.js",
@@ -115,10 +125,11 @@ describe("packed experimental router consumer", () => {
       assert.deepEqual(packageJsonOf(packageRoot).pi.extensions, ["./index.ts"], "the Pi extension entry stays unchanged");
       assert.ok(readFileSync(join(packageRoot, "index.ts"), "utf8"));
       assertOptionalPiPeers(packageRoot);
-      for (const required of [...rootSources, ...routerFiles, "bifrost.json", "schema.json", "package.json", "README.md", "CHANGELOG.md", "LICENSE", "docs/router-api.md"]) {
+      for (const required of [...rootSources, ...loggingSources, ...routerFiles, "bifrost.json", "schema.json", "package.json", "README.md", "CHANGELOG.md", "LICENSE", "docs/router-api.md"]) {
         assert.ok(archivePaths.includes(required), `release archive missing ${required}`);
       }
-      assert.ok(archivePaths.every((path) => path.endsWith(".ts") && !path.includes("/")
+      assert.ok(archivePaths.every((path) => (path.endsWith(".ts") && !path.includes("/"))
+        || (path.startsWith("logging/") && path.endsWith(".ts"))
         || ["bifrost.json", "schema.json", "README.md", "CHANGELOG.md", "LICENSE", "package.json", "docs/router-api.md"].includes(path)
         || routerFiles.includes(path)
         || path.startsWith("examples/")), "release contains files outside source, router API, and examples allowlists");

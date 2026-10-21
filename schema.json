@@ -337,7 +337,7 @@
     },
     "DebugConfig": {
       "type": "object",
-      "description": "Structured debug logging. Appends JSONL lines to a file for performance analysis and troubleshooting. Disabled by default.",
+      "description": "Bounded, session-scoped structured logging. JSONL records are written asynchronously and dropped under pressure; logging never blocks routing. Disabled by default.",
       "additionalProperties": false,
       "properties": {
         "enabled": {
@@ -347,7 +347,49 @@
         },
         "path": {
           "type": "string",
-          "description": "Custom path for the debug log file. Default: .pi/bifrost-debug.jsonl"
+          "description": "Explicit shared log file. When set it wins over session scoping and writes one file for the process. Default without a path: session-scoped files under .pi/bifrost/logs/."
+        },
+        "level": {
+          "type": "string",
+          "enum": ["trace", "debug", "info", "warn", "error"],
+          "default": "debug",
+          "description": "Minimum severity to record."
+        },
+        "scope": {
+          "type": "string",
+          "enum": ["session", "file"],
+          "default": "session",
+          "description": "session writes one run file per session/agent; file writes the shared default file. An explicit path always wins."
+        },
+        "directory": {
+          "type": "string",
+          "description": "Session log root. Default: .pi/bifrost/logs"
+        },
+        "queue": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maxEntries": { "type": "integer", "minimum": 1, "maximum": 100000, "default": 1000, "description": "Maximum admitted entries, including in-flight writes." },
+            "maxBytes": { "type": "integer", "minimum": 1024, "maximum": 67108864, "default": 1048576, "description": "Maximum admitted payload bytes, including in-flight writes." },
+            "overflowPolicy": { "type": "string", "enum": ["severity-first", "drop-oldest", "drop-newest"], "default": "severity-first", "description": "Admission policy when the bounded queue is full." }
+          }
+        },
+        "drain": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "intervalMs": { "type": "integer", "minimum": 1, "maximum": 60000, "default": 50, "description": "Batching interval in milliseconds." },
+            "maxBatchBytes": { "type": "integer", "minimum": 1024, "maximum": 67108864, "default": 65536, "description": "Payload size that triggers an early flush." }
+          }
+        },
+        "sink": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": { "type": "string", "enum": ["async-file"], "default": "async-file" },
+            "maxFileSizeMB": { "type": "number", "exclusiveMinimum": 0, "maximum": 1024, "default": 10, "description": "Rotate a run file after it exceeds this size." },
+            "rotatedFiles": { "type": "integer", "minimum": 0, "maximum": 10, "default": 3, "description": "Rotated files retained per run file. 0 disables rotation." }
+          }
         }
       }
     },

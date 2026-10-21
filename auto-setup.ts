@@ -39,6 +39,22 @@ function projectKnownFields(source: unknown, keys: readonly string[]): PlainReco
   return Object.keys(result).length ? result : undefined;
 }
 
+function projectDebug(source: unknown): PlainRecord | undefined {
+  const record = plainRecord(source);
+  if (!record) return undefined;
+  const result = projectKnownFields(record, ["enabled", "path", "level", "scope", "directory"]) ?? {};
+  const nested: Array<[string, readonly string[]]> = [
+    ["queue", ["maxEntries", "maxBytes", "overflowPolicy"]],
+    ["drain", ["intervalMs", "maxBatchBytes"]],
+    ["sink", ["type", "maxFileSizeMB", "rotatedFiles"]],
+  ];
+  for (const [key, keys] of nested) {
+    const projected = projectKnownFields(record[key], keys);
+    if (projected) result[key] = projected;
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
 function projectClassifier(source: unknown): PlainRecord | undefined {
   const record = plainRecord(source);
   if (!record) return undefined;
@@ -98,7 +114,7 @@ export function serializeBootstrapConfig(
   for (const [key, value] of [
     ["classifier", projectClassifier(source.classifier)],
     ["cache", projectKnownFields(source.cache, ["enabled", "maxEntries", "threshold", "ttlHours", "path"])],
-    ["debug", projectKnownFields(source.debug, ["enabled", "path"])],
+    ["debug", projectDebug(source.debug)],
     ["reliability", projectKnownFields(source.reliability, [
       "enabled", "stateVersion", "cooldownOnAllowanceExhausted", "allowanceCooldownScope", "retryOnAllowanceExhausted",
       "failureThreshold", "windowMinutes", "cooldownMinutes", "path",

@@ -10,7 +10,7 @@ test("package manifest preserves the Pi extension and opts into a narrow router 
     import: "./dist/router/router.js",
   });
   assert.deepEqual(pkg.exports["./*"], "./*", "legacy package subpaths stay mapped");
-  for (const included of ["*.ts", "dist/router/", "bifrost.json", "schema.json", "examples/", "docs/router-api.md"]) {
+  for (const included of ["*.ts", "logging/", "dist/router/", "bifrost.json", "schema.json", "examples/", "docs/router-api.md"]) {
     assert.ok(pkg.files.includes(included), `package files must include ${included}`);
   }
   assert.equal(pkg.files.includes("scripts/"), false);
