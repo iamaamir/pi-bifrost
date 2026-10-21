@@ -39,6 +39,53 @@
         "file": "tests/tooling-config.test.mjs",
         "name": "the credential-persistence check rejects a checkout that omits the setting"
       }
+    },
+    {
+      "id": "performance-tooling",
+      "requirement": "R16",
+      "files": [
+        "scripts/bench.mjs",
+        "scripts/profile.mjs",
+        "scripts/perf-workload.mjs",
+        ".gitignore",
+        "tests/performance-tooling.test.mjs"
+      ],
+      "boundary": "the real deterministic workload process, Hyperfine report parsing, and profile command construction",
+      "assertions": "The workload reports the same checksum on repeat runs and selects the expected model; benchmark plans use the committed workload with an exported JSON report; profile plans write one artifact with a relative name; a missing Hyperfine binary exits 2 with an install hint; the workload is allowlisted and Knip does not treat the optional host tool as an npm dependency.",
+      "boundaryTest": {
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "the deterministic routing workload reports a stable checksum"
+      },
+      "invariant": {
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "builds Hyperfine plans for allowlisted workloads"
+      },
+      "fault": {
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "reports a missing Hyperfine binary as unavailable"
+      }
+    },
+    {
+      "id": "developer-tooling-guide",
+      "requirement": "R16",
+      "files": [
+        "docs/dev-tooling.md",
+        "AGENTS.md"
+      ],
+      "boundary": "the developer guide and agent guide read as repository files and checked against package.json and committed config paths",
+      "assertions": "Every npm script named in the guide exists; every named tool configuration file exists; the agent guide links to the guide and the doctor command; the drift checker rejects an unknown script.",
+      "boundaryTest": {
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "every npm script named in the developer guide exists"
+      },
+      "invariant": {
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "the developer guide names the committed tool configuration files"
+      },
+      "fault": {
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "the command drift check reports an unknown npm script"
+      }
     }
   ]
 }

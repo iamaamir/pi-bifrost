@@ -85,7 +85,11 @@
     "check:secrets": "node scripts/toolbox.mjs secrets",
     "check:secrets:history": "node scripts/toolbox.mjs secrets-history",
     "check:deps": "node scripts/toolbox.mjs deps",
-    "toolbox:doctor": "node scripts/toolbox.mjs doctor"
+    "toolbox:doctor": "node scripts/toolbox.mjs doctor",
+    "bench": "node scripts/bench.mjs route",
+    "bench:projection": "node scripts/bench.mjs projection",
+    "profile:cpu": "node scripts/profile.mjs cpu",
+    "profile:heap": "node scripts/profile.mjs heap"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
