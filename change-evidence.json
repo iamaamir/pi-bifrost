@@ -28,7 +28,7 @@
       }
     },
     {
-      "id": "toolbox-dead-code-and-structure",
+      "id": "static-analysis-and-security-config",
       "requirement": "R16",
       "files": [
         "knip.jsonc",
@@ -41,21 +41,36 @@
         "rule-tests/no-process-exit-in-extension-test.yml",
         "rule-tests/no-focused-or-skipped-test-javascript-test.yml",
         "rule-tests/no-focused-or-skipped-test-typescript-test.yml",
-        ".github/workflows/static-analysis.yml"
+        ".github/workflows/static-analysis.yml",
+        ".github/workflows/security-audit.yml",
+        ".github/workflows/verification.yml",
+        ".github/workflows/acceptance-report.yml",
+        ".github/workflows/report-publisher-checks.yml",
+        "tests/verification-workflow.test.mjs",
+        "tests/tooling-config.test.mjs",
+        ".gitleaks.toml",
+        ".semgrepignore",
+        "renovate.json",
+        "semgrep/bifrost-no-eval.yml",
+        "semgrep/bifrost-no-shell-true.yml",
+        "semgrep/bifrost-no-tls-verification-disable.yml",
+        "tests/semgrep/targets/bifrost-no-eval.js",
+        "tests/semgrep/targets/bifrost-no-shell-true.js",
+        "tests/semgrep/targets/bifrost-no-tls-verification-disable.js"
       ],
-      "boundary": "committed ast-grep rule fixtures plus the shared runner's parsing of Knip, Semgrep, actionlint, gitleaks, and OSV output",
-      "assertions": "All committed ast-grep rules pass four valid/invalid fixture suites; every Knip issue kind flattens to a finding; absent external tools produce exit code 2 and an install hint; the workflow runs architecture, dead-code, and structural checks on pull requests.",
+      "boundary": "committed ast-grep rules and fixtures, Semgrep rules and fixtures, Gitleaks config, Renovate policy, and workflow YAML",
+      "assertions": "Ast-grep rules pass their fixtures; Semgrep rule IDs match fixture names with valid and invalid examples; the secret allowlist is rule-scoped; every action is pinned and every checkout isolates credentials; the scheduled audit runs every scanner.",
       "boundaryTest": {
-        "file": "tests/toolbox.test.mjs",
-        "name": "the committed ast-grep rules pass their own valid and invalid fixtures"
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the committed Semgrep rules and fixtures share exact rule identifiers and file names"
       },
       "invariant": {
-        "file": "tests/toolbox.test.mjs",
-        "name": "parses every Knip issue kind into one flat finding list"
+        "file": "tests/tooling-config.test.mjs",
+        "name": "every checkout disables credential persistence"
       },
       "fault": {
-        "file": "tests/toolbox.test.mjs",
-        "name": "reports unavailable tools with install hints instead of a false pass"
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the credential-persistence check rejects a checkout that omits the setting"
       }
     }
   ]

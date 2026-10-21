@@ -1,0 +1,10 @@
+# Intentional rule fixtures live here and are exercised by `semgrep --test`.
+tests/semgrep/
+
+# Generated and vendored output is not reviewed source.
+node_modules/
+dist/
+coverage/
+screenshots/
+reports/
+evidence/

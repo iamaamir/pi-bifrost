@@ -247,7 +247,7 @@ export function runAstGrep(runTool) {
   };
 }
 
-const CHECKS = {
+export const CHECKS = {
   arch: {
     tool: "depcruise",
     summary: "Architecture boundaries (dependency-cruiser)",
