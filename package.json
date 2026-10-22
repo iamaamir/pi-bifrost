@@ -68,6 +68,7 @@
     "test:ui:agent-tui": "bash scripts/ui-smoke-agent-tui.sh",
     "test:ui:reliability": "bash scripts/ui-reliability-fake-provider.sh",
     "verify:release": "node scripts/verify-release.mjs",
+    "check:issue-refs": "node scripts/check-issue-refs.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "benchmark:jev": "node --experimental-strip-types scripts/jev-benchmark.ts",
