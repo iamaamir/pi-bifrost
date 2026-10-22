@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { checkReferences, extractCitedPaths, parseArgs, report } from "../scripts/check-issue-refs.mjs";
+import { checkReferences, extractCitedPaths, parseArgs, report, resolveRef } from "../scripts/check-issue-refs.mjs";
 
 function fixtureRoot() {
   const root = mkdtempSync(join(tmpdir(), "bifrost-issue-refs-"));
@@ -39,6 +39,20 @@ describe("cited path extraction", () => {
       "docs/tracker-workflow.md",
       "roadmap-next.md",
     ]);
+  });
+
+  it("finds workflow, shell, python and text files", () => {
+    const body = "See `.github/workflows/missing.yml`, `scripts/release.sh`, `tools/check.py` and notes.txt.";
+    assert.deepEqual(extractCitedPaths(body), [
+      ".github/workflows/missing.yml",
+      "notes.txt",
+      "scripts/release.sh",
+      "tools/check.py",
+    ]);
+  });
+
+  it("checks an unlisted extension once the token is already path-shaped", () => {
+    assert.deepEqual(extractCitedPaths("Committed in scripts/tool.ps1 today."), ["scripts/tool.ps1"]);
   });
 });
 
@@ -95,5 +109,39 @@ describe("reference checks", () => {
     });
     const missing = report(results, { write: () => true });
     assert.deepEqual(missing, [{ path: "AGENTS.md", local: true, remote: false }]);
+  });
+
+  it("reports a cited workflow file that is remote-only as missing", () => {
+    const results = checkReferences([".github/workflows/missing.yml"], {
+      root: fixtureRoot(),
+      remoteExists: () => true,
+    });
+    assert.deepEqual(report(results, { write: () => true }), [
+      { path: ".github/workflows/missing.yml", local: false, remote: true },
+    ]);
+  });
+});
+
+describe("ref resolution", () => {
+  it("asks the selected repository for its default branch", () => {
+    const asked = [];
+    const ref = resolveRef({
+      repo: "owner/other",
+      offline: false,
+      query: (target) => {
+        asked.push(target);
+        return "master";
+      },
+    });
+    assert.equal(ref, "master");
+    assert.deepEqual(asked, ["owner/other"]);
+  });
+
+  it("prefers an explicit ref and needs no query offline", () => {
+    const query = () => {
+      throw new Error("must not query");
+    };
+    assert.equal(resolveRef({ repo: "owner/repo", offline: false, explicitRef: "v2", query }), "v2");
+    assert.equal(resolveRef({ repo: "owner/repo", offline: true, query }), "");
   });
 });

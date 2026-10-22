@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Check that repository paths cited in issue bodies are readable by someone who
 // only sees the remote. Each cited path must exist in the working tree and on
-// the default branch.
+// the default branch of the repository being checked.
 //
 // Usage:
 //   node scripts/check-issue-refs.mjs <issue-number> [more...]
@@ -13,12 +13,32 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const REPO = "iamaamir/pi-bifrost";
-const CITED_PATH = /(?<![\w/.-])((?:[\w.-]+\/)*[\w.-]+\.(?:md|mjs|cjs|js|ts|json))(?![\w/-])/g;
+
+// Extensions used by tracked files in this repository. The second alternative
+// below catches any other extension once the token already looks like a path,
+// so a cited file type outside this list is still checked rather than skipped.
+const KNOWN_EXTENSIONS = [
+  "md", "mdx", "mjs", "cjs", "js", "jsx", "ts", "tsx", "json", "jsonl",
+  "yml", "yaml", "toml", "ini", "sh", "bash", "py", "html", "css", "svg",
+  "txt", "cfg", "conf",
+].join("|");
+
+const CITED_PATH = new RegExp(
+  [
+    String.raw`(?<![\w/.-])`,
+    String.raw`(`,
+    String.raw`(?:[\w.-]+/)*[\w.-]+\.(?:${KNOWN_EXTENSIONS})`,
+    String.raw`|(?:[\w.-]+/)+[\w.-]+\.[A-Za-z0-9]{1,8}`,
+    String.raw`)`,
+    String.raw`(?![-\w/])`,
+  ].join(""),
+  "g",
+);
 
 /**
  * Extract deduplicated repository paths cited in an issue body.
- * Bare extensions, provider/model identifiers and prose are not paths.
+ * Bare extensions, provider/model identifiers, version numbers and host names
+ * are not repository paths.
  */
 export function extractCitedPaths(body) {
   const paths = new Set();
@@ -40,6 +60,17 @@ export function checkReferences(paths, { root = REPO_ROOT, remoteExists = null }
     local: existsSync(join(root, path)),
     remote: remoteExists ? Boolean(remoteExists(path)) : null,
   }));
+}
+
+/**
+ * Pick the branch to probe. An explicit ref wins, offline needs none, and
+ * otherwise the default branch is resolved for the repository being checked —
+ * not for the checkout, which may be a different repository.
+ */
+export function resolveRef({ repo, offline, explicitRef = null, query }) {
+  if (offline) return "";
+  if (explicitRef) return explicitRef;
+  return query(repo);
 }
 
 /** Print the result table and return the references that are not readable. */
@@ -99,9 +130,12 @@ function main(argv) {
   const { issues, offline } = parsed;
 
   const repo = process.env.BIFROST_TRACKER_REPO ?? gh(["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]);
-  const ref = offline
-    ? ""
-    : parsed.ref ?? gh(["repo", "view", "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]);
+  const ref = resolveRef({
+    repo,
+    offline,
+    explicitRef: parsed.ref,
+    query: (target) => gh(["repo", "view", target, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]),
+  });
   if (!offline && !ref) {
     process.stderr.write("the default branch could not be resolved; rerun with --offline to check the working tree only\n");
     return 2;

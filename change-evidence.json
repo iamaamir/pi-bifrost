@@ -51,6 +51,64 @@
         "file": "tests/performance-tooling.test.mjs",
         "name": "the command drift check reports an unknown npm script"
       }
+    },
+    {
+      "id": "issue-refs-check",
+      "requirement": "R16",
+      "files": [
+        "scripts/check-issue-refs.mjs",
+        "tests/check-issue-refs.test.mjs"
+      ],
+      "boundary": "Prompt-free CLI over real issue bodies with a gh-backed remote probe; tests inject the probe and a temporary working root, so no network, credential or repository state is required.",
+      "assertions": "Cited paths are extracted from prose without version numbers, host names or provider identifiers; each cited path is classified present or missing locally and on the selected branch; the process exits non-zero when any cited path is unreadable; an offline run never reports a remote verdict.",
+      "boundaryTest": {
+        "file": "tests/check-issue-refs.test.mjs",
+        "name": "reports local presence and remote presence independently"
+      },
+      "invariant": {
+        "file": "tests/check-issue-refs.test.mjs",
+        "name": "returns only the references that are not readable everywhere"
+      },
+      "fault": {
+        "file": "tests/check-issue-refs.test.mjs",
+        "name": "treats a remote miss as missing even when the file is local"
+      }
+    },
+    {
+      "id": "issue-refs-cli-entry",
+      "requirement": "R16",
+      "files": [
+        "package.json"
+      ],
+      "boundary": "Developer and CI entry point for the reference check; the alias owns no behavior beyond invoking the checked script.",
+      "assertions": "The check:issue-refs alias resolves to scripts/check-issue-refs.mjs and package.json stays valid JSON.",
+      "boundaryTest": {
+        "exception": "A script alias has no boundary of its own; the script and its tests are declared by issue-refs-check."
+      },
+      "invariant": {
+        "exception": "No state or invariant is owned by a package.json script alias."
+      },
+      "fault": {
+        "exception": "Injecting a fault into an alias would duplicate issue-refs-check's tests without adding a distinct assertion."
+      }
+    },
+    {
+      "id": "tracker-workflow-doc",
+      "requirement": "R16",
+      "files": [
+        "docs/tracker-workflow.md"
+      ],
+      "boundary": "Documentation only. Every command it records was executed against this repository before it was written down.",
+      "assertions": "The document names the authoritative read paths, native blocking edges, sub-issue attachment, staged bulk edits and the citation rule.",
+      "boundaryTest": {
+        "exception": "Documentation-only file; there is no executable boundary to exercise."
+      },
+      "invariant": {
+        "exception": "Documentation-only file; it owns no state or invariant."
+      },
+      "fault": {
+        "exception": "Documentation-only file; there is no implementation to fault-inject."
+      }
     }
   ]
 }
