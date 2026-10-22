@@ -1,26 +1,26 @@
 {
   "schemaVersion": 1,
-  "base": "774b1bbdc932059d542d2b95b5b914d9c99aab2c",
+  "base": "de28fcc3966a58499834a22ebdbfdd707181d792",
   "contracts": [
     {
-      "id": "native-auto-missing-route-fault",
-      "requirement": "R06",
+      "id": "manual-workflow-caller-context",
+      "requirement": "R16",
       "files": [
-        "tests/integration/auto-missing-route-fault.test.mjs"
+        "tests/acceptance-runner.test.mjs"
       ],
-      "boundary": "Real native Pi CLI with production Bifrost Auto: after a successful warmup, an explicitly terminal tier references a missing target. It must not dispatch the previous healthy physical model. This is not virtual registration activation-false/throw or nonstreaming cancellation proof.",
-      "assertions": "Owned pristine GREEN; bypass explicit-boundary checks in both sticky and fallback callers; same native request-counter assertion RED; byte-identical restored GREEN. All creation-time owned groups close and are absent before scratch reclaim.",
+      "boundary": "Real workflow acceptance CLI through sanitized gate with owned single-commit and merge-parent topologies under push and manual events",
+      "assertions": "Push event.before and PR delivery base remain authoritative; manual/local fixture uses declared predecessor, wrong bases and lost context/selection fail named assertions, exact restoration returns GREEN",
       "boundaryTest": {
-        "file": "tests/integration/auto-missing-route-fault.test.mjs",
-        "name": "proves missing Auto targets cannot escape an explicit boundary through sticky or fallback dispatch"
+        "file": "tests/acceptance-runner.test.mjs",
+        "name": "merged-push checkout runs the actual workflow caller with event.before"
       },
       "invariant": {
-        "file": "tests/integration/auto-missing-route-fault.test.mjs",
-        "name": "proves missing Auto targets cannot escape an explicit boundary through sticky or fallback dispatch"
+        "file": "tests/acceptance-runner.test.mjs",
+        "name": "single-commit checkout runs the actual workflow caller without inventing an intermediate"
       },
       "fault": {
-        "file": "tests/integration/auto-missing-route-fault.test.mjs",
-        "name": "proves missing Auto targets cannot escape an explicit boundary through sticky or fallback dispatch"
+        "file": "tests/acceptance-runner.test.mjs",
+        "name": "merged-push checkout runs the actual workflow caller with event.before"
       }
     }
   ]
