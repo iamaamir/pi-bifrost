@@ -1,0 +1,6 @@
+id: no-console-log-in-extension
+valid:
+  - 'console.error("bifrost: diagnostic");'
+  - 'ctx.ui.setStatus("bifrost-state", "auto");'
+invalid:
+  - 'console.log("bifrost", decision);'

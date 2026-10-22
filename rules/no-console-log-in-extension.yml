@@ -1,0 +1,11 @@
+id: no-console-log-in-extension
+language: TypeScript
+severity: error
+message: >-
+  console.log writes to Pi's terminal stream and corrupts the host UI. Use
+  console.error for diagnostics or ctx.ui.setStatus("bifrost-state", ...) for
+  visible state. Repository scripts under scripts/ are exempt.
+rule:
+  pattern: console.log($$$ARGS)
+files:
+  - "/*.ts"
