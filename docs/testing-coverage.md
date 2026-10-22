@@ -24,6 +24,10 @@ The existing deterministic acceptance run checks each test reference against its
 
 For a local run, set `BIFROST_EVIDENCE_BASE` to the full base SHA and run `npm run acceptance`. CI reads the PR base from the GitHub event instead. Acceptance records the declaration in its result, alongside the existing start/end revision and source fingerprints. The declaration does not embed its own commit SHA, which would change whenever the declaration is committed.
 
+After merging a published base into a branch, rebind and check the declaration with `node scripts/acceptance/evidence-rebind.mjs <base-ref> --apply`. The helper resolves the base as a real commit, validates that it is an ancestor of HEAD, rewrites the declaration's `base` when `--apply` is given, and reports every declared file that is outside the candidate diff and every changed file that is undeclared. It checks the candidate-diff structure only; the acceptance run still validates named test references against real test events.
+
+Take a merge through its local checks after committing it. The workflow-acceptance tests compute the merge predecessor from committed history, and the candidate-stable gate refuses a dirty working tree, so an uncommitted merge fails them misleadingly.
+
 The validator checks declared test execution, not semantic adequacy. An independent reviewer must judge contract completeness, assertions, fault controls and exception rationales on the exact head. A declaration is not an approval. This change does not activate automatic merging or alter branch protection. Push and manual runs without an explicit base retain the existing release gates. The PR workflow must first be adopted before this requirement is operational; existing PRs are not modified by this local implementation.
 
 ## Release feature map

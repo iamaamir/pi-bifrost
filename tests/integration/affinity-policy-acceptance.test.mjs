@@ -22,9 +22,10 @@ import { makeModel } from "../helpers.ts";
 import bifrostExtension from "../../index.ts";
 import { resolveConfiguredTier } from "../../routing.ts";
 import { buildRouteDecisionSummary } from "../../classification-pipeline.ts";
+import { REPLAY_GUARD_BASELINE_SHA256 } from "../fixtures/replay-fault-control.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const PRODUCTION_INDEX_SHA256 = "14752568bd935068ca5874156bd324f45336dc29bd305523fe6e0ca5973c3303";
+const PRODUCTION_INDEX_SHA256 = REPLAY_GUARD_BASELINE_SHA256;
 const SELECTION_CANDIDATES_GUARD = "const selectionCandidates = targetPool.selectionCandidates ?? targetPool.healthyCandidates;";
 const SELECTION_CANDIDATES_MUTANT = "const selectionCandidates = targetPool.candidates ?? targetPool.selectionCandidates ?? targetPool.healthyCandidates;";
 
