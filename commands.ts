@@ -1574,7 +1574,8 @@ export function renderTracePreview(trace: BifrostTracePreview): string[] {
     if (!pool) return;
     lines.push(`${label}: ${pool.tier} (${pool.strategy})`);
     for (const candidate of pool.candidates) {
-      lines.push(`  ${candidate.status}: ${candidate.model}${candidate.exclusion ? ` (${candidate.exclusion})` : ""}`);
+      const evidence = candidate.exclusionEvidence?.map(({ code, source }) => `${code} from ${source}`).join(", ");
+      lines.push(`  ${candidate.status}: ${candidate.model}${candidate.exclusion ? ` (${candidate.exclusion})` : ""}${evidence ? `; evidence: ${evidence}` : ""}`);
     }
   };
   if (trace.explicitBoundary && trace.attempted) {

@@ -70,6 +70,30 @@
       "fault": {
         "exception": "The helper is a deterministic structure check over its own inputs with no production behavior to mutate; assertion sensitivity is established by executed mutation checks against the helper in this change — dropping the changedNotDeclared recording turns 2 cases RED, ignoring the declarationMatches factor in the status verdict turns 1 case RED, writing before structural validation turns the no-disk-write case RED, and dropping the rewritten-byte-size guard turns the cap-refusal case RED — plus the CLI fault case above."
       }
+    },
+    {
+      "id": "r01-exclusion-evidence",
+      "requirement": "R01",
+      "files": [
+        "classification-pipeline.ts",
+        "commands.ts",
+        "tests/integration/decision-parity-acceptance.test.mjs",
+        "tests/routing.test.ts"
+      ],
+      "boundary": "Pinned Pi runtime and offline preview, plus installed resolve-only API, all expose the same stable exclusion code and evidence source; fake provider verifies text preview output without outbound requests.",
+      "assertions": "Reliability and economic exclusions carry typed evidence sources; eligible candidates carry no exclusion evidence; all three surfaces match; text preview renders the source; routing still selects only eligible candidates.",
+      "boundaryTest": {
+        "file": "tests/integration/decision-parity-acceptance.test.mjs",
+        "name": "keeps selected, excluded, fallback, and no-route decisions aligned across all three surfaces"
+      },
+      "invariant": {
+        "file": "tests/routing.test.ts",
+        "name": "preserves structured exclusions, fallback strategy, and selection without prompt text"
+      },
+      "fault": {
+        "file": "tests/routing.test.ts",
+        "name": "preserves structured exclusions, fallback strategy, and selection without prompt text"
+      }
     }
   ]
 }

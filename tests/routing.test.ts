@@ -297,14 +297,25 @@ describe("routing", () => {
       const reliability = recordModelFailure(
         emptyReliabilityState(), "fixture/b", reliabilityConfig, now, "dispatch", "timeout",
       );
-      const result = resolveConfiguredTier(ctx, "restricted", {
-        models: { restricted: ["fixture/a", "fixture/b"] }, strategy: "first",
-      }, reliability, reliabilityConfig, now, { policy: reservePolicy, snapshot }).resolution;
+      const routeConfig = { models: { restricted: ["fixture/a", "fixture/b"] }, strategy: "first" as const };
+      const result = resolveConfiguredTier(ctx, "restricted", routeConfig, reliability, reliabilityConfig, now, {
+        policy: reservePolicy, snapshot,
+      }).resolution;
 
       assert.equal(result.selected, undefined);
       assert.equal(result.primary.economic?.[0]?.evaluation.disposition, "rejected");
       assert.deepEqual(result.primary.skipped.map(({ key, reason }) => ({ key, reason })), [
         { key: "fixture/b", reason: "open_circuit" },
+      ]);
+      const summary = buildRouteDecisionSummary({ kind: "classified", tier: "restricted", source: "regex" }, {
+        resolution: result,
+        options: buildTierResolutionOptions("restricted", routeConfig),
+      });
+      assert.deepEqual(summary.requested?.candidates.map(({ model, exclusionEvidence }) => ({ model, exclusionEvidence })), [
+        { model: "fixture/a", exclusionEvidence: [{ code: "economic_reserve", source: "economic_snapshot" }] },
+        { model: "fixture/b", exclusionEvidence: [
+          { code: "open_circuit", source: "reliability_state" },
+        ] },
       ]);
       assert.equal(result.fallbackReason, "requested_tier_unhealthy");
     });
@@ -1060,7 +1071,12 @@ describe("routing", () => {
 
       assert.equal(summary.outcome, "selected");
       assert.deepEqual(summary.requested?.candidates, [
-        { model: "fixture/blocked", status: "excluded", exclusion: "open_circuit" },
+        {
+          model: "fixture/blocked",
+          status: "excluded",
+          exclusion: "open_circuit",
+          exclusionEvidence: [{ code: "open_circuit", source: "reliability_state" }],
+        },
       ]);
       assert.equal(summary.requested?.strategy, "largest_context");
       assert.equal(summary.fallback?.tier, "quick");

@@ -62,10 +62,19 @@ export type ClassificationResult =
   | { readonly kind: "fallback"; readonly tier: string; readonly classificationOutcome?: ClassificationOutcome; readonly classifierAttempt?: ClassifierAttemptSummary }
   | { readonly kind: "unclassified"; readonly classificationOutcome?: ClassificationOutcome; readonly classifierAttempt?: ClassifierAttemptSummary };
 
+export type RouteDecisionExclusionCode = SkippedCandidate["reason"] | "economic_reserve";
+export type RouteDecisionEvidenceSource = "reliability_state" | "economic_snapshot";
+
+export interface RouteDecisionExclusionEvidence {
+  readonly code: RouteDecisionExclusionCode;
+  readonly source: RouteDecisionEvidenceSource;
+}
+
 export interface RouteDecisionCandidate {
   readonly model: string;
   readonly status: "eligible" | "excluded";
-  readonly exclusion?: SkippedCandidate["reason"] | "economic_reserve";
+  readonly exclusion?: RouteDecisionExclusionCode;
+  readonly exclusionEvidence?: readonly RouteDecisionExclusionEvidence[];
   readonly reserve?: {
     readonly disposition: string;
     readonly wouldReject: boolean;
@@ -156,10 +165,15 @@ function summarizePool(
       const exclusion = exclusions.get(model);
       const reserve = reserveEvaluations.get(model);
       const hardExcluded = reserve?.mode === "policy" && reserve.disposition === "rejected";
+      const exclusionEvidence = [
+        ...(exclusion ? [{ code: exclusion, source: "reliability_state" as const }] : []),
+        ...(hardExcluded ? [{ code: "economic_reserve" as const, source: "economic_snapshot" as const }] : []),
+      ];
       return {
         model,
-        status: exclusion || hardExcluded ? "excluded" : "eligible",
+        status: exclusionEvidence.length > 0 ? "excluded" : "eligible",
         ...(exclusion ? { exclusion } : hardExcluded ? { exclusion: "economic_reserve" as const } : {}),
+        ...(exclusionEvidence.length > 0 ? { exclusionEvidence } : {}),
         ...(reserve ? {
           reserve: {
             disposition: reserve.disposition,

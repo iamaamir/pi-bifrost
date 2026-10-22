@@ -141,7 +141,9 @@ function semanticProjection(decision) {
     tier: value.tier,
     strategy: value.strategy,
     patterns: value.patterns,
-    candidates: value.candidates.map(({ model: key, status, exclusion }) => ({ model: key, status, exclusion: exclusion ?? null })),
+    candidates: value.candidates.map(({ model: key, status, exclusion, exclusionEvidence }) => ({
+      model: key, status, exclusion: exclusion ?? null, exclusionEvidence: exclusionEvidence ?? [],
+    })),
   });
   return {
     outcome: decision.outcome,
@@ -162,6 +164,7 @@ function candidateProjection(candidate) {
     model: candidate.model,
     status: candidate.status,
     exclusion: candidate.exclusion ?? null,
+    exclusionEvidence: candidate.exclusionEvidence ?? [],
     reserve: candidate.reserve
       ? {
         disposition: candidate.reserve.disposition,
@@ -439,6 +442,9 @@ describe("runtime, preview, and installed router semantic parity", { concurrency
     assert.equal(previewFallbackRun.code, 0, previewFallbackRun.stderr);
     assert.equal(previewFallbackRun.violations, "");
     const previewFallback = readPreviewDecision(previewFallbackRun);
+    const previewTextRun = await runPi(fixture, "/bifrost preview --offline --trace parity-fallback task");
+    assert.equal(previewTextRun.code, 0, previewTextRun.stderr);
+    assert.match(`${previewTextRun.stderr}\n${previewTextRun.stdout}`, /evidence: open_circuit from reliability_state/);
 
     const runtimeNoRouteRun = await runPi(fixture, "parity-no-route task");
     assert.equal(runtimeNoRouteRun.code, 0, runtimeNoRouteRun.stderr);
@@ -454,6 +460,9 @@ describe("runtime, preview, and installed router semantic parity", { concurrency
     assert.deepEqual(generationCalls.map((item) => item.model), ["ready"], "only the selected fallback route may generate");
     assert.equal(runtimeFallback.selected, "fake/ready");
     assert.equal(runtimeFallback.requested?.candidates[0]?.exclusion, "open_circuit");
+    assert.deepEqual(runtimeFallback.requested?.candidates[0]?.exclusionEvidence, [
+      { code: "open_circuit", source: "reliability_state" },
+    ]);
     assert.equal(runtimeFallback.fallback?.tier, "general");
     assert.equal(runtimeNoRoute.outcome, "unresolved");
 
@@ -496,6 +505,7 @@ describe("runtime, preview, and installed router semantic parity", { concurrency
         selected: "fake/beta", selectedTier: "fallback", fallbackReason: "requested_tier_excluded",
         requested: {
           model: "fake/alpha", status: "excluded", exclusion: "economic_reserve",
+          exclusionEvidence: [{ code: "economic_reserve", source: "economic_snapshot" }],
           reserve: { disposition: "rejected", wouldReject: true, reasons: ["reserve_reached"] },
         },
       },
@@ -504,7 +514,7 @@ describe("runtime, preview, and installed router semantic parity", { concurrency
         mode: "policy", remaining: 0.9,
         selected: "fake/alpha", selectedTier: "primary", fallbackReason: null,
         requested: {
-          model: "fake/alpha", status: "eligible", exclusion: null,
+          model: "fake/alpha", status: "eligible", exclusion: null, exclusionEvidence: [],
           reserve: { disposition: "admitted", wouldReject: false, reasons: ["above_reserve"] },
         },
       },
@@ -513,7 +523,7 @@ describe("runtime, preview, and installed router semantic parity", { concurrency
         mode: "observe", remaining: 0.1,
         selected: "fake/alpha", selectedTier: "primary", fallbackReason: null,
         requested: {
-          model: "fake/alpha", status: "eligible", exclusion: null,
+          model: "fake/alpha", status: "eligible", exclusion: null, exclusionEvidence: [],
           reserve: { disposition: "observed", wouldReject: true, reasons: ["reserve_reached"] },
         },
       },
@@ -618,6 +628,7 @@ describe("runtime, preview, and installed router semantic parity", { concurrency
       economicProjection(excluded.decision).requested.candidates.find((candidate) => candidate.model === "fake/beta"),
       {
         model: "fake/beta", status: "excluded", exclusion: "economic_reserve",
+        exclusionEvidence: [{ code: "economic_reserve", source: "economic_snapshot" }],
         reserve: { disposition: "rejected", wouldReject: true, reasons: ["reserve_reached"] },
       },
       "the excluded anchor is reported as a reserve exclusion",
