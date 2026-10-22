@@ -126,7 +126,7 @@ export function writeEvidenceManifest(root, manifest) {
   // Land the rewrite through a same-directory temp file so a crash mid-write
   // cannot leave the tracked declaration truncated.
   const tempPath = `${path}.rebind-${process.pid}.tmp`;
-  writeFileSync(tempPath, contents);
+  writeFileSync(tempPath, contents, { flag: "wx" });
   try {
     renameSync(tempPath, path);
   } catch (error) {

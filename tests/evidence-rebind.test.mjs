@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -207,7 +207,28 @@ describe("evidence rebind helper", () => {
       }
     });
 
-    it("never reaches disk when the rebinding is structurally invalid", () => {
+    it("does not follow a pre-existing temporary symlink while rebinding", () => {
+    const { root, head } = initRepo();
+    const outside = mkdtempSync(join(tmpdir(), "evidence-rebind-target-"));
+    const victim = join(outside, "victim");
+    const tempPath = join(root, `change-evidence.json.rebind-${process.pid}.tmp`);
+    const original = readFileSync(join(root, "change-evidence.json"), "utf8");
+    try {
+      writeFileSync(victim, "untouched\\n");
+      symlinkSync(victim, tempPath);
+      assert.throws(
+        () => writeEvidenceManifest(root, rebindedManifest(readDeclaration(root), head)),
+        { code: "EEXIST" },
+      );
+      assert.equal(readFileSync(victim, "utf8"), "untouched\\n");
+      assert.equal(readFileSync(join(root, "change-evidence.json"), "utf8"), original);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("never reaches disk when the rebinding is structurally invalid", () => {
       const { root, base, head } = initRepo();
       try {
         const broken = readDeclaration(root);
