@@ -1,26 +1,76 @@
 {
   "schemaVersion": 1,
-  "base": "774b1bbdc932059d542d2b95b5b914d9c99aab2c",
+  "base": "de28fcc3966a58499834a22ebdbfdd707181d792",
   "contracts": [
     {
-      "id": "native-auto-missing-route-fault",
-      "requirement": "R06",
+      "id": "toolbox-architecture-boundaries",
+      "requirement": "R16",
       "files": [
-        "tests/integration/auto-missing-route-fault.test.mjs"
+        ".dependency-cruiser.cjs",
+        "scripts/toolbox.mjs",
+        "tests/toolbox.test.mjs",
+        "package.json",
+        "package-lock.json"
       ],
-      "boundary": "Real native Pi CLI with production Bifrost Auto: after a successful warmup, an explicitly terminal tier references a missing target. It must not dispatch the previous healthy physical model. This is not virtual registration activation-false/throw or nonstreaming cancellation proof.",
-      "assertions": "Owned pristine GREEN; bypass explicit-boundary checks in both sticky and fallback callers; same native request-counter assertion RED; byte-identical restored GREEN. All creation-time owned groups close and are absent before scratch reclaim.",
+      "boundary": "dependency-cruiser graph over the shipped root modules, including an isolated fixture with a stubbed Pi package",
+      "assertions": "A runtime host-SDK import from router.ts is reported as router-no-runtime-host-sdk; the committed type-only import is accepted; removing the type-only allowance turns the accepted fixture red; findings carry rule, file, and edge; a missing tool is reported as unavailable with an install hint instead of a pass.",
       "boundaryTest": {
-        "file": "tests/integration/auto-missing-route-fault.test.mjs",
-        "name": "proves missing Auto targets cannot escape an explicit boundary through sticky or fallback dispatch"
+        "file": "tests/toolbox.test.mjs",
+        "name": "rejects a runtime host-SDK import in the resolve-only router and accepts the type-only form"
       },
       "invariant": {
-        "file": "tests/integration/auto-missing-route-fault.test.mjs",
-        "name": "proves missing Auto targets cannot escape an explicit boundary through sticky or fallback dispatch"
+        "file": "tests/toolbox.test.mjs",
+        "name": "projects dependency-cruiser violations with rule and edge"
       },
       "fault": {
-        "file": "tests/integration/auto-missing-route-fault.test.mjs",
-        "name": "proves missing Auto targets cannot escape an explicit boundary through sticky or fallback dispatch"
+        "file": "tests/toolbox.test.mjs",
+        "name": "the type-only allowance is load-bearing: removing it turns the passing fixture red"
+      }
+    },
+    {
+      "id": "static-analysis-and-security-config",
+      "requirement": "R16",
+      "files": [
+        "knip.jsonc",
+        "sgconfig.yml",
+        "rules/no-console-log-in-extension.yml",
+        "rules/no-process-exit-in-extension.yml",
+        "rules/no-focused-or-skipped-test-javascript.yml",
+        "rules/no-focused-or-skipped-test-typescript.yml",
+        "rule-tests/no-console-log-in-extension-test.yml",
+        "rule-tests/no-process-exit-in-extension-test.yml",
+        "rule-tests/no-focused-or-skipped-test-javascript-test.yml",
+        "rule-tests/no-focused-or-skipped-test-typescript-test.yml",
+        ".github/workflows/static-analysis.yml",
+        ".github/workflows/security-audit.yml",
+        ".github/workflows/verification.yml",
+        ".github/workflows/acceptance-report.yml",
+        ".github/workflows/report-publisher-checks.yml",
+        "tests/verification-workflow.test.mjs",
+        "tests/tooling-config.test.mjs",
+        ".gitleaks.toml",
+        ".semgrepignore",
+        "renovate.json",
+        "semgrep/bifrost-no-eval.yml",
+        "semgrep/bifrost-no-shell-true.yml",
+        "semgrep/bifrost-no-tls-verification-disable.yml",
+        "tests/semgrep/targets/bifrost-no-eval.js",
+        "tests/semgrep/targets/bifrost-no-shell-true.js",
+        "tests/semgrep/targets/bifrost-no-tls-verification-disable.js"
+      ],
+      "boundary": "committed ast-grep rules and fixtures, Semgrep rules and fixtures, Gitleaks config, Renovate policy, and workflow YAML",
+      "assertions": "Ast-grep rules pass their fixtures; Semgrep rule IDs match fixture names with valid and invalid examples; the secret allowlist is rule-scoped; every action is pinned and every checkout isolates credentials; the scheduled audit runs every scanner.",
+      "boundaryTest": {
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the committed Semgrep rules and fixtures share exact rule identifiers and file names"
+      },
+      "invariant": {
+        "file": "tests/tooling-config.test.mjs",
+        "name": "every checkout disables credential persistence"
+      },
+      "fault": {
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the credential-persistence check rejects a checkout that omits the setting"
       }
     }
   ]

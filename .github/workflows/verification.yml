@@ -48,15 +48,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - run: python -m pip install Pillow==12.3.0
@@ -110,7 +111,7 @@ jobs:
 
       - name: Upload CRAP trend history
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: crap-history-${{ github.event.pull_request.head.sha || github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/crap-history.jsonl
@@ -119,28 +120,28 @@ jobs:
 
       - name: Upload failure logs and UI screenshots
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: verification-failure-${{ github.event.pull_request.head.sha || github.sha }}
           path: screenshots/
           if-no-files-found: ignore
       - name: Upload candidate-bound manifest
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: verification-manifest-${{ github.event.pull_request.head.sha || github.sha }}
           path: screenshots/verification/**/result.json
           if-no-files-found: ignore
       - name: Upload acceptance evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: acceptance-evidence-${{ github.event.pull_request.head.sha || github.sha }}
           path: screenshots/acceptance/**
           if-no-files-found: ignore
       - name: Upload candidate-bound Markdown report
         if: always() && github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ci-report-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ steps.acceptance.outputs.report-markdown }}
@@ -148,7 +149,7 @@ jobs:
           retention-days: 7
       - name: Upload candidate-bound publisher data
         if: always() && github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: acceptance-report-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ steps.acceptance.outputs.report-data }}
@@ -164,8 +165,9 @@ jobs:
 
       - name: Check out the proposed merge
         if: github.event_name == 'pull_request'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           ref: ${{ github.ref }}
           fetch-depth: 0
       - name: Install proposed merge dependencies
@@ -177,7 +179,7 @@ jobs:
         run: npm run acceptance:deterministic
       - name: Upload merge-result evidence
         if: always() && github.event_name == 'pull_request' && (steps.merge-acceptance.outcome == 'success' || steps.merge-acceptance.outcome == 'failure')
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: merge-result-evidence-${{ github.sha }}
           path: |
@@ -221,7 +223,7 @@ jobs:
           NODE
       - name: Upload final candidate report
         if: always() && github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: final-ci-report-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/bifrost-final-report/ci-report.md
@@ -239,8 +241,10 @@ jobs:
       CAMPAIGN_REPEATS: ${{ inputs.campaign_repeats || '3' }}
       CAMPAIGN_SEED: ${{ inputs.campaign_seed || '1729' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
@@ -277,7 +281,7 @@ jobs:
           npm run test:integration
       - name: Upload campaign evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: verification-campaign-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/bifrost-campaign/
@@ -300,8 +304,10 @@ jobs:
           - "1.0.1"
           - "1.3.0"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
@@ -309,6 +315,9 @@ jobs:
       - name: Install the pinned Pi version without editing tracked dependency files
         env:
           PI_VERSION: ${{ matrix.pi }}
+        # zizmor: ignore[adhoc-packages] The matrix intentionally installs an
+        # alternate Pi version without touching the tracked lockfile, then
+        # verifies the tree is unchanged.
         run: |
           # Keep the baseline's locked transitive packages from npm ci.
           if [ "$PI_VERSION" != "1.0.1" ]; then
@@ -340,7 +349,7 @@ jobs:
           tests/integration/native-tool-continuation.test.mjs
       - name: Upload compatibility evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: pi-compatibility-${{ matrix.pi }}-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/pi-compatibility-versions.json
@@ -357,8 +366,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
@@ -368,7 +379,7 @@ jobs:
         run: npx stryker run --concurrency 2 --maxConcurrentTestRunners 2 --fileLogLevel info
       - name: Upload mutation report and log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: mutation-experiment-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: |
