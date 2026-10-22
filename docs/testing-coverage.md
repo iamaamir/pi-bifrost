@@ -10,6 +10,8 @@ When a user reports a failure, keep their error shape and sequence in a regressi
 
 Some contracts need a different boundary. The resolve-only API uses an installed-package consumer test. File-system faults, lease races, and exact deadline boundaries use deterministic lower-level tests as well as the Pi happy and failure paths. State this distinction in review. Do not call these tests Pi E2E.
 
+Two local provider fixtures exist. `scripts/fake-provider-server.mjs` is an HTTP server. Use it to check transport behavior: HTTP status codes, `retry-after`, stream failures, and full `pi` CLI runs. Pi's `fauxProvider` runs in-process. Use it to check dispatch identity, because it reports an exact `callCount` and the exact model argument. Reach it through `tests/fixtures/faux-harness.mjs`. That harness runs a fixture child behind the outbound guard with a credential-scrubbed environment, then opens a real AgentSession with the real Bifrost extension.
+
 Before review, run `npm run verify:release` on a clean, frozen candidate. Attach its result manifest to the reviewed revision. If source changes during the run, rerun the full command on the final candidate. Partial reruns do not replace a failed manifest. The reviewer checks this map against the changed behavior and checks that assertions can fail for the reported regression.
 
 ## Per-change executed evidence
@@ -36,7 +38,7 @@ The requirement IDs come from [the PRD](../PRD.md). These rows name test boundar
 | R02: physical default, Auto, pin and off | [Physical controls](../tests/integration/legacy-behavior.test.mjs); [Auto dispatch](../tests/integration/auto-virtual.test.mjs) | Registered input and manual-control tests |
 | R03: bounded recovery and no unsafe replay | [V1/V2 Auto recovery](../tests/integration/reliability-v2-auto.test.mjs); [HTTP 402 acceptance](../tests/integration/release-acceptance.test.mjs) | Tool, output, queue, cancellation and ownership guards |
 | R04: chat-model pools | [Fresh catalog setup and background probe completion](../tests/integration/auto-virtual.test.mjs); [init probe regressions](../tests/integration/init-regression.test.mjs) | Pinned Pi catalog contract and model-type tests; all-failed background warning and no-write checks; image routing is deferred |
-| R05: strict fallback | [Physical no-route](../tests/integration/legacy-behavior.test.mjs); [Auto boundary and reserve rejection](../tests/integration/auto-virtual.test.mjs) | Ordered fallback and requirement propagation tests |
+| R05: strict fallback | [Physical no-route](../tests/integration/legacy-behavior.test.mjs); [Auto boundary and reserve rejection](../tests/integration/auto-virtual.test.mjs); [provider scope dispatch](../tests/integration/provider-scope-acceptance.test.mjs) | Ordered fallback and requirement propagation tests; provider-scope intersection and per-tier scope tests |
 | R06: stop before unsafe generation | Physical and Auto no-route cases above | Activation, cancellation and late-result tests |
 | R07: offline inspection and validation | [Command acceptance](../tests/integration/command-policy-acceptance.test.mjs); [offline preview and invalid-source rejection](../tests/integration/preview-offline-acceptance.test.mjs) | Config diagnostics and inspection projections |
 | R08: durable model and provider pauses | [V2 leases and recovery](../tests/integration/reliability-v2-auto.test.mjs); [physical 402 and restart](../tests/integration/release-acceptance.test.mjs); [scope reload](../tests/integration/command-policy-acceptance.test.mjs) | Lease ownership, half-open recovery and both scope-reload directions |
@@ -48,7 +50,7 @@ The requirement IDs come from [the PRD](../PRD.md). These rows name test boundar
 | R14: private diagnostics | Command acceptance and Pi UI notices | Debug projection, secret and prompt-content tests |
 | R15: reviewed membership changes | [Pi reconciliation and init](../tests/integration/command-policy-acceptance.test.mjs); [init probe regressions](../tests/integration/init-regression.test.mjs) | Ownership, stale inventory, concurrent edits, preserved settings, successful-only pools, recent probe reuse, forced probes, and exact backup tests |
 | R16: repeatable release checks | [Verification runner](../scripts/verify-release.mjs), guarded Pi suites and UI scenarios | Routing corpus, runner failure and source-change tests |
-| R17: custom tiers and neutral defaults | Physical and Auto routing cases above | Config, schema, generated defaults and strategy tests |
+| R17: custom tiers and neutral defaults | Physical and Auto routing cases above | Config, schema, generated defaults, provider-scope validation and strategy tests |
 
 ## Manual-session regressions
 

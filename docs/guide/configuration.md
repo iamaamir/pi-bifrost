@@ -56,6 +56,33 @@ For `frontier`, Bifrost tries `frontier`, then `general`, then `quick`; it stops
 
 Configuration sources must be regular files of at most 10,000,000 bytes. Read-only symlinks to regular files are supported. Managed writes keep their existing symlink protection. Oversized sources are rejected, not truncated.
 
+### Provider routing scope (schema version 2)
+
+`routingScope` is a hard provider allowlist for Bifrost-controlled routing. It is an eligibility filter, not a preference: no strategy, affinity anchor, fallback, or recovery path may select a provider outside the effective scope. It requires `schemaVersion: 2` and does nothing on its own — it only removes candidates that other routing rules would otherwise consider.
+
+```json
+{
+  "schemaVersion": 2,
+  "models": {
+    "quick": ["subscription/quick-model"],
+    "general": ["subscription/general-model", "metered/general-model"]
+  },
+  "routingScope": {
+    "providers": ["subscription", "metered"],
+    "tiers": { "quick": { "providers": ["subscription"] } }
+  }
+}
+```
+
+- Omit `routingScope` to keep the existing v2 behavior unchanged. Omit `providers` inside a scope to add no restriction at that level. Set `providers: []` to deny all providers at that level.
+- `providers` is the global allowlist. `tiers` adds a per-tier allowlist keyed by a configured tier name. A tier allowlist can only narrow the global allowlist; a candidate must satisfy both.
+- Provider ids match exactly against Pi registry provider ids. There are no patterns, wildcards, substring matches, or case folding.
+- Each evaluated pool uses its own tier allowlist: a fallback tier is scoped by the fallback tier's allowlist, not by the tier that failed. The global allowlist applies to every pool, so no fallback can reach a provider outside the global scope.
+- Configuration layers compose by intersection: extension, global, workspace, and project allowlists are intersected, so a later source can only narrow an earlier restriction. Two nonempty allowlists at the same level that share no provider are a conflict. Because that is invalid strict configuration, it is reported as a config error and blocks routing until corrected, like other version-2 policy errors.
+- A direct-model rule that is not a configured tier is governed by the global allowlist only; Bifrost does not invent a tier scope for it.
+
+`routingScope` controls Bifrost's own routing. It does not change Pi's model inventory, model picker, or manual model selection outside Bifrost. `/bifrost preview` and `/bifrost preview --trace` report an excluded candidate as `provider not allowed` with the rejecting level.
+
 ### Economic observations and billing preference (schema version 2)
 
 The optional `economics` namespace starts off when omitted. It accepts provider- or model-scoped facts that you enter in config. Sources must be marked `declared` or `estimated`; Pi does not read billing APIs or account scopes. Use `mode: "observe"` first. It records whether each rule would reject a candidate and leaves selection order and random selection unchanged.

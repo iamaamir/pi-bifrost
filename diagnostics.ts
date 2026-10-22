@@ -103,11 +103,22 @@ const configIssueMap: Readonly<Record<string, { code: string; repair: string }>>
   "config.tier_policy_self_fallback": { code: "config.tier_policy_self_fallback", repair: "Remove the tier from its own fallback list." },
   "config.tier_policy_duplicate_fallback": { code: "config.tier_policy_duplicate_fallback", repair: "List each fallback tier only once." },
   "config.tier_policy_cycle": { code: "config.tier_policy_cycle", repair: "Remove a fallback edge to break the cycle." },
+  "config.routing_scope_requires_v2": { code: "config.routing_scope_requires_v2", repair: "Set schemaVersion to 2 or remove routingScope." },
+  "config.routing_scope_invalid": { code: "config.routing_scope_invalid", repair: "Set routingScope to an object with optional providers and tiers." },
+  "config.routing_scope_unknown_field": { code: "config.routing_scope_unknown_field", repair: "Remove unsupported fields from routingScope." },
+  "config.routing_scope_providers_invalid": { code: "config.routing_scope_providers_invalid", repair: "Set each provider allowlist to an array of provider ids." },
+  "config.routing_scope_provider_invalid": { code: "config.routing_scope_provider_invalid", repair: "Use exact provider ids without surrounding whitespace or \"/\"." },
+  "config.routing_scope_duplicate_provider": { code: "config.routing_scope_duplicate_provider", repair: "List each provider id only once." },
+  "config.routing_scope_tier_invalid": { code: "config.routing_scope_tier_invalid", repair: "Set each tier scope to an object with a providers array." },
+  "config.routing_scope_unknown_tier": { code: "config.routing_scope_unknown_tier", repair: "Use a tier name that exists in models." },
+  "config.routing_scope_conflict": { code: "config.routing_scope_conflict", repair: "Make the global and tier provider allowlists intersect." },
 };
 
 function safeConfigIssuePath(value: unknown): string | undefined {
   if (value === "schemaVersion" || value === "tierPolicies") return value;
   if (value === "tierPolicies.*" || value === "tierPolicies.*.fallbackTiers") return value;
+  if (value === "routingScope" || value === "routingScope.providers" || value === "routingScope.tiers") return value;
+  if (value === "routingScope.tiers.*" || value === "routingScope.tiers.*.providers") return value;
   if (typeof value !== "string" || value.length > 280) return undefined;
   const match = /^tierPolicies\.([A-Za-z0-9_-][A-Za-z0-9._-]{0,127})(?:\.fallbackTiers)?$/.exec(value);
   return match ? value : undefined;

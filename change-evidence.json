@@ -1,26 +1,114 @@
 {
   "schemaVersion": 1,
-  "base": "774b1bbdc932059d542d2b95b5b914d9c99aab2c",
+  "base": "de28fcc3966a58499834a22ebdbfdd707181d792",
   "contracts": [
     {
-      "id": "native-auto-missing-route-fault",
-      "requirement": "R06",
+      "id": "provider-scope-dispatch",
+      "requirement": "R05",
       "files": [
-        "tests/integration/auto-missing-route-fault.test.mjs"
+        "routing-scope.ts",
+        "routing.ts",
+        "classification-pipeline.ts",
+        "tests/routing.test.ts",
+        "tests/routing-scope.test.ts",
+        "tests/integration/provider-scope-acceptance.test.mjs",
+        "tests/fixtures/provider-scope-faux-child.mjs",
+        "tests/fixtures/faux-harness.mjs",
+        "tests/fixtures/native-faux-provider-child.mjs",
+        "tests/integration/native-faux-provider.test.mjs",
+        "docs/testing-coverage.md"
       ],
-      "boundary": "Real native Pi CLI with production Bifrost Auto: after a successful warmup, an explicitly terminal tier references a missing target. It must not dispatch the previous healthy physical model. This is not virtual registration activation-false/throw or nonstreaming cancellation proof.",
-      "assertions": "Owned pristine GREEN; bypass explicit-boundary checks in both sticky and fallback callers; same native request-counter assertion RED; byte-identical restored GREEN. All creation-time owned groups close and are absent before scratch reclaim.",
+      "boundary": "Real native Pi AgentSession dispatch through the production extension with a hard routingScope: a real Auto turn dispatches only the permitted provider, the excluded provider is never called or reached over the network, in both exclude directions, and an empty allowlist dispatches no provider at all. Scope is an eligibility filter applied first in resolveHealthyModel; it never dispatches on its own.",
+      "assertions": "Shared native faux harness: the fenced in-process faux run dispatches the permitted provider with an exact per-provider call count and zero excluded-provider calls in both directions; deny-all dispatches nothing. Unit evidence: scope runs before economic admission, reliability, affinity, and strategy selection; a scoped fallback uses the fallback tier's allowlist while the global allowlist stays request-wide; exclusions report reason provider_not_allowed with the global or tier origin. Compilation fails closed on absent, empty, partially malformed, duplicated, and unknown-field allowlists; the composition helper intersects layers so a later source can only narrow and reports disjoint nonempty allowlists as conflicts.",
       "boundaryTest": {
-        "file": "tests/integration/auto-missing-route-fault.test.mjs",
-        "name": "proves missing Auto targets cannot escape an explicit boundary through sticky or fallback dispatch"
+        "file": "tests/integration/provider-scope-acceptance.test.mjs",
+        "name": "dispatches only to scoped and never reaches fake"
       },
       "invariant": {
-        "file": "tests/integration/auto-missing-route-fault.test.mjs",
-        "name": "proves missing Auto targets cannot escape an explicit boundary through sticky or fallback dispatch"
+        "file": "tests/routing.test.ts",
+        "name": "excludes a provider outside the global allowlist without touching reliability"
       },
       "fault": {
-        "file": "tests/integration/auto-missing-route-fault.test.mjs",
-        "name": "proves missing Auto targets cannot escape an explicit boundary through sticky or fallback dispatch"
+        "file": "tests/routing-scope.test.ts",
+        "name": "treats a present but empty allowlist as deny-all"
+      }
+    },
+    {
+      "id": "provider-scope-config",
+      "requirement": "R17",
+      "files": [
+        "config.ts",
+        "config-load.ts",
+        "schema.json",
+        "auto-setup.ts",
+        "tests/config.test.ts",
+        "tests/config-load.test.ts",
+        "tests/schema.test.ts",
+        "tests/auto-setup.test.ts",
+        "docs/guide/configuration.md",
+        "CHANGELOG.md"
+      ],
+      "boundary": "An optional schema-version-2 routingScope in layered Bifrost configuration: global and per-tier exact provider allowlists validate through the shared config validator on both the Pi path and the Router SDK snapshot path, intersect across config layers so a later source only narrows, and first-use setup preserves an explicit scope without inventing one.",
+      "assertions": "Config validation requires schemaVersion 2, rejects unknown fields, malformed or duplicated providers, and unknown tiers by stable code and path, and reports a tier allowlist that cannot intersect the global allowlist as a strict config error that blocks routing. Layer loading intersects provider allowlists and diagnoses a disjoint override; source-local diagnostics reject an invalid scope with the shared unknown-tier gate. The shipped schema gates routingScope behind schemaVersion 2 and keeps allowlists exact; init/serialize keeps an existing routingScope and drops malformed entries.",
+      "boundaryTest": {
+        "file": "tests/config.test.ts",
+        "name": "accepts a global allowlist and a narrowing tier allowlist"
+      },
+      "invariant": {
+        "file": "tests/config-load.test.ts",
+        "name": "intersects routing scopes across layers and diagnoses a disjoint override"
+      },
+      "fault": {
+        "file": "tests/config.test.ts",
+        "name": "rejects unknown fields, malformed providers, duplicates, and unknown tiers by stable code and path"
+      }
+    },
+    {
+      "id": "provider-scope-projection",
+      "requirement": "R01",
+      "files": [
+        "virtual-routing.ts",
+        "diagnostics.ts",
+        "commands.ts",
+        "tests/diagnostics.test.ts",
+        "tests/bifrost-commands.test.ts"
+      ],
+      "boundary": "Scope rejections stay observable and distinct from reliability and reserve labels: preview and trace render the provider not allowed reason for the new provider_not_allowed and requested_tier_provider_excluded codes, while diagnostics keep the safe field paths for routing-scope config errors.",
+      "assertions": "The preview candidate list labels an excluded provider as provider not allowed and the failure projection reports the fallback reason code; two label sources share one human-readable rendering. Diagnostics map routing-scope issue codes to stable codes and safe field paths (duplicate providers and scope conflicts) without forwarding raw config names.",
+      "boundaryTest": {
+        "file": "tests/bifrost-commands.test.ts",
+        "name": "labels a provider-scope exclusion in the preview candidate list"
+      },
+      "invariant": {
+        "file": "tests/diagnostics.test.ts",
+        "name": "maps routing-scope config issues to stable codes and safe paths"
+      },
+      "fault": {
+        "file": "tests/routing.test.ts",
+        "name": "falls back within the scope and reports the provider exclusion as the reason"
+      }
+    },
+    {
+      "id": "provider-scope-router-api",
+      "requirement": "R13",
+      "files": [
+        "router.ts",
+        "docs/router-api.md",
+        "tests/router.test.ts"
+      ],
+      "boundary": "The resolve-only Router SDK exposes the same scope enforcement at the snapshot boundary: an unsupported scope field is rejected before a route resolves, a global allowlist keeps the exclusion reason, and a fallback pool is scoped by the fallback tier while the global allowlist stays request-wide.",
+      "assertions": "The router enforces a global routing scope without a selection and reports the exclusion; a fallback scoped with its own tier allowlist never borrows the requested tier's restriction; unsupported scope fields fail the snapshot validator; an accepted scope is isolated from later mutation.",
+      "boundaryTest": {
+        "file": "tests/router.test.ts",
+        "name": "enforces a global routing scope and reports the exclusion without a selection"
+      },
+      "invariant": {
+        "file": "tests/router.test.ts",
+        "name": "scopes a fallback with its own tier allowlist, not the requested tier's"
+      },
+      "fault": {
+        "file": "tests/router.test.ts",
+        "name": "rejects an unsupported routing scope field at the snapshot boundary"
       }
     }
   ]

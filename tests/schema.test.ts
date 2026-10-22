@@ -120,6 +120,30 @@ describe("shipped JSON artifacts", () => {
     assert.match(String(property?.description), /tool results/);
   });
 
+  it("requires schemaVersion 2 for routingScope and keeps the allowlists exact", () => {
+    const schema = readJson("schema.json") as Record<string, unknown>;
+    const allOf = schema.allOf as Array<{ if?: { required?: string[] }; then?: { required?: string[]; properties?: { schemaVersion?: { const?: number } } } }>;
+    const gate = allOf.find((item) => item.if?.required?.includes("routingScope"));
+    assert.deepEqual(gate?.then?.required, ["schemaVersion"]);
+    assert.equal(gate?.then?.properties?.schemaVersion?.const, 2);
+
+    const definition = (schema.definitions as {
+      RoutingScope?: {
+        additionalProperties?: boolean;
+        properties?: {
+          providers?: { type?: string; items?: { type?: string; minLength?: number } };
+          tiers?: { additionalProperties?: { required?: string[]; additionalProperties?: boolean; properties?: { providers?: { type?: string } } } };
+        };
+      };
+    }).RoutingScope;
+    assert.equal(definition?.additionalProperties, false);
+    assert.equal(definition?.properties?.providers?.type, "array");
+    assert.equal(definition?.properties?.providers?.items?.minLength, 1);
+    assert.deepEqual(definition?.properties?.tiers?.additionalProperties?.required, ["providers"]);
+    assert.equal(definition?.properties?.tiers?.additionalProperties?.additionalProperties, false);
+    assert.equal(definition?.properties?.tiers?.additionalProperties?.properties?.providers?.type, "array");
+  });
+
   it("keeps checked-in examples parseable", () => {
     for (const path of [
       "bifrost.json",

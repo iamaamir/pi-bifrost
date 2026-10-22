@@ -17,9 +17,11 @@ import {
   mergeConfig,
   validateConfig,
   validateEconomicConfig,
+  validateRoutingScopeConfig,
   validateTierPolicyConfigInternal,
   type BifrostConfig,
 } from "./config.ts";
+import { mergeRoutingScopeConflicts, type RoutingScope } from "./routing-scope.ts";
 
 const MAX_CONFIG_SOURCE_DIAGNOSTICS = 32;
 const MAX_CONFIG_SOURCE_DIAGNOSTIC_CHARS = 192;
@@ -64,6 +66,23 @@ function sourcePolicyDiagnostics(value: Record<string, unknown>): string[] {
   const version = value.schemaVersion;
   if (version !== undefined && version !== 1 && version !== 2) {
     add("schemaVersion is unsupported; supported versions are 1 and 2.");
+  }
+  const routingScope = value.routingScope;
+  if (routingScope !== undefined) {
+    if (version === 1) add("routingScope requires schemaVersion 2.");
+    const sourceTierNames = new Set<string>();
+    if (criterionObject(value.models)) for (const tier of Object.keys(value.models)) sourceTierNames.add(tier);
+    if (criterionObject(routingScope) && criterionObject(routingScope.tiers)) {
+      for (const tier of Object.keys(routingScope.tiers)) sourceTierNames.add(tier);
+    }
+    const scopeIssues = validateRoutingScopeConfig({
+      ...defaultConfig(),
+      schemaVersion: 2,
+      models: Object.fromEntries([...sourceTierNames].map((tier) => [tier, []])),
+      routingScope: routingScope as RoutingScope,
+    }).filter(({ code }) => code?.startsWith("config.routing_scope_")
+      && code !== "config.routing_scope_unknown_tier");
+    if (scopeIssues.length) add("routingScope contains an invalid source-local restriction.");
   }
   const tierPolicies = value.tierPolicies;
   if (tierPolicies !== undefined) {
@@ -204,6 +223,14 @@ function loadConfigLayers(
     const sourceDiagnostics = sourcePolicyDiagnostics(parsed as Record<string, unknown>);
     if (sourceDiagnostics.length) {
       for (const message of sourceDiagnostics) addDiagnostic(layer, `${layer} config ${message}`);
+      continue;
+    }
+    const scopeConflicts = mergeRoutingScopeConflicts(
+      merged.routingScope,
+      (parsed as BifrostConfig).routingScope,
+    );
+    if (scopeConflicts.length) {
+      for (const message of scopeConflicts) addDiagnostic(layer, `${layer} config ${message}`);
       continue;
     }
     sourceFields.push(Object.freeze({ layer, fields: Object.freeze(Object.keys(parsed)) }));

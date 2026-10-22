@@ -36,7 +36,7 @@ export type RouterReliabilityConfig = Pick<ReliabilityConfig,
   "enabled" | "failureThreshold" | "windowMinutes" | "cooldownMinutes">;
 
 type RouterConfigSnapshot = Omit<Pick<BifrostConfig,
-  "schemaVersion" | "tierPolicies" | "default" | "strategy" | "categoryStrategies" | "models" | "rules" | "classifier" | "reliability" | "affinity">,
+  "schemaVersion" | "tierPolicies" | "default" | "strategy" | "categoryStrategies" | "models" | "rules" | "classifier" | "reliability" | "affinity" | "routingScope">,
 "reliability"> & { readonly reliability?: RouterReliabilityConfig };
 
 export interface RouterAffinitySnapshot {
@@ -273,6 +273,10 @@ const routerSnapshotSchema: DataSchema = {
       retryOnAllowanceExhausted: scalar,
     },
     affinity: { mode: scalar, providerAdvisory: scalar },
+    routingScope: {
+      providers: stringArray,
+      tiers: { map: { providers: stringArray } },
+    },
   },
   registry: { knownModels: { array: modelSnapshotSchema }, availableModels: { array: modelSnapshotSchema } },
   now: scalar,
@@ -609,7 +613,7 @@ function checkSnapshot(snapshot: RouterSnapshot): void {
   let configIssues;
   const supportedConfigKeys = new Set([
     "schemaVersion", "tierPolicies", "default", "strategy", "categoryStrategies",
-    "models", "rules", "classifier", "reliability", "affinity",
+    "models", "rules", "classifier", "reliability", "affinity", "routingScope",
   ]);
   if (!snapshot.config || typeof snapshot.config !== "object"
     || Object.keys(snapshot.config).some((key) => !supportedConfigKeys.has(key))) {

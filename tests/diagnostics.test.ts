@@ -244,6 +244,24 @@ describe("offline diagnostics", () => {
     assert.equal(JSON.stringify(unsupportedVersion).includes("99"), false);
   });
 
+  it("maps routing-scope config issues to stable codes and safe paths", () => {
+    const invalidScope = config({
+      routingScope: {
+        providers: ["PRIVATE_PROVIDER_SENTINEL", "PRIVATE_PROVIDER_SENTINEL"],
+        tiers: { restricted: { providers: ["other-secret"] } },
+      },
+    });
+    const report = validateDiagnostics({ config: invalidScope });
+    const duplicate = report.diagnostics.find((issue) => issue.code === "config.routing_scope_duplicate_provider");
+    const conflict = report.diagnostics.find((issue) => issue.code === "config.routing_scope_conflict");
+    assert.equal(duplicate?.path, "routingScope.providers");
+    assert.equal(conflict?.path, "routingScope");
+    assert.notEqual(duplicate?.code, conflict?.code);
+    const serialized = JSON.stringify(report);
+    assert.equal(serialized.includes("PRIVATE_PROVIDER_SENTINEL"), false);
+    assert.equal(serialized.includes("other-secret"), false);
+  });
+
   it("retains the generic legacy diagnostic when a validator issue has no structured metadata", () => {
     const report = validateDiagnostics({ config: config({ classifier: { backend: "PRIVATE_BACKEND_VALUE" } }) });
     assert.ok(report.diagnostics.some((issue) => issue.code === "config.invalid" && issue.severity === "error"));
