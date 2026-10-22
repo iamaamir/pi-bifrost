@@ -1,0 +1,15 @@
+rules:
+  - id: bifrost-no-eval
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Dynamic code evaluation is not allowed in Bifrost. It defeats type
+      checking, can execute prompt-derived text, and has no use in routing,
+      classification, or host adaptation.
+    metadata:
+      category: security
+      confidence: HIGH
+    pattern-either:
+      - pattern: eval(...)
+      - pattern: new Function(...)
+      - pattern: Function(...)

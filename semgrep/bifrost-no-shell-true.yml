@@ -1,0 +1,12 @@
+rules:
+  - id: bifrost-no-shell-true
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Do not spawn child processes through a shell. Shell interpolation of
+      arguments enables command injection from prompt or configuration text;
+      pass an argument array with shell disabled instead.
+    metadata:
+      category: security
+      confidence: HIGH
+    pattern: '{..., shell: true, ...}'

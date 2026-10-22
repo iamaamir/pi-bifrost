@@ -1,0 +1,12 @@
+# Extend the maintained default ruleset. The only addition is a rule-scoped
+# allowlist for synthetic credential canaries that test fixtures use to prove
+# redaction. It deliberately does not allowlist test files for other rules, and
+# a new canary-like secret outside tests still fails the scan.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+[rules.allowlist]
+description = "Synthetic credential canaries in test fixtures; verified non-live on 2026-10-21."
+paths = ['''^tests/''']

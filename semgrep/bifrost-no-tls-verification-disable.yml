@@ -1,0 +1,14 @@
+rules:
+  - id: bifrost-no-tls-verification-disable
+    languages: [typescript, javascript]
+    severity: ERROR
+    message: >-
+      Disabling TLS certificate verification would expose provider credentials
+      and prompts to interception. Fix the certificate chain or endpoint
+      instead.
+    metadata:
+      category: security
+      confidence: HIGH
+    pattern-either:
+      - pattern: '{..., rejectUnauthorized: false, ...}'
+      - pattern: "{..., NODE_TLS_REJECT_UNAUTHORIZED: \"0\", ...}"
