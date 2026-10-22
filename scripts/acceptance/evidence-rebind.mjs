@@ -1,4 +1,4 @@
-import { lstatSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { git } from "./core.mjs";
@@ -17,9 +17,19 @@ function text(value) {
 
 export function loadEvidenceManifest(root) {
   const path = join(root, MANIFEST);
-  const stat = lstatSync(path);
+  let stat;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    throw new Error(`Evidence rebind: cannot read the declaration at ${path}: ${String(error.message).split("\n")[0]}`);
+  }
   requireValue(stat.isFile() && stat.size <= 256 * 1024, "declaration must be a regular file no larger than 256 KiB");
-  const manifest = JSON.parse(readFileSync(path, "utf8"));
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(path, "utf8"));
+  } catch (error) {
+    throw new Error(`Evidence rebind: the declaration at ${path} is not valid JSON: ${String(error.message).split("\n")[0]}`);
+  }
   requireValue(manifest.schemaVersion === 1, "declaration must use schemaVersion 1");
   requireValue(Array.isArray(manifest.contracts) && manifest.contracts.length > 0, "contracts must not be empty");
   return manifest;
@@ -27,7 +37,13 @@ export function loadEvidenceManifest(root) {
 
 /** Resolve a ref to a commit the object database actually contains. */
 export function resolveBaseRef(root, ref) {
-  const sha = git(root, ["rev-parse", "--verify", `${ref}^{commit}`]);
+  let sha;
+  try {
+    sha = git(root, ["rev-parse", "--verify", `${ref}^{commit}`]);
+  } catch (error) {
+    const detail = String(error.stderr ?? error.message).trim().split("\n")[0];
+    throw new Error(`Evidence rebind: the base ref ${ref} does not resolve to a commit: ${detail}`);
+  }
   requireValue(SHA.test(sha), "the rebind base must resolve to a full commit sha");
   return sha;
 }
@@ -36,8 +52,13 @@ export function assertBaseAncestor(root, base) {
   requireValue(SHA.test(base), "a full base commit sha is required");
   try {
     git(root, ["merge-base", "--is-ancestor", base, "HEAD"]);
-  } catch {
-    throw new Error(`Evidence rebind: the base ${base} is not an ancestor of HEAD`);
+  } catch (error) {
+    // merge-base --is-ancestor exits 1 exactly when the relation does not
+    // hold; any other failure is a git-level problem and must keep its cause.
+    if (error?.status === 1) {
+      throw new Error(`Evidence rebind: the base ${base} is not an ancestor of HEAD`);
+    }
+    throw error;
   }
 }
 
@@ -91,37 +112,43 @@ export function rebindedManifest(manifest, base) {
 }
 
 export function writeEvidenceManifest(root, manifest) {
-  requireValue(lstatSync(join(root, MANIFEST)).isFile(), "declaration must exist as a regular file before rebinding");
-  const contents = `${JSON.stringify(manifest, null, 2)}\n`;
   const path = join(root, MANIFEST);
+  requireValue(lstatSync(path).isFile(), "declaration must exist as a regular file before rebinding");
+  const contents = `${JSON.stringify(manifest, null, 2)}\n`;
   try {
     if (readFileSync(path, "utf8") === contents) return false;
   } catch {}
-  writeFileSync(path, contents);
+  // Land the rewrite through a same-directory temp file so a crash mid-write
+  // cannot leave the tracked declaration truncated.
+  const tempPath = `${path}.rebind-${process.pid}.tmp`;
+  writeFileSync(tempPath, contents);
+  try {
+    renameSync(tempPath, path);
+  } catch (error) {
+    unlinkSync(tempPath);
+    throw error;
+  }
   return true;
 }
 
 /**
  * Rebind the per-change declaration to a base and validate the shape the
  * acceptance run will enforce: the base resolves and is an ancestor of HEAD,
- * and declared files exactly cover diff(base, HEAD).
- */
-/**
- * Rebind the per-change declaration to a base and validate the shape the
- * acceptance run will enforce: the base resolves and is an ancestor of HEAD,
  * the declaration names that base, and declared files exactly cover
- * diff(base, HEAD).
+ * diff(base, HEAD). With --apply, the rebinding manifest is validated in
+ * memory before anything is written, so a structurally invalid declaration
+ * never reaches disk.
  */
 export function evaluateEvidenceRebind({ root, baseRef, apply = false }) {
   const base = resolveBaseRef(root, baseRef);
   assertBaseAncestor(root, base);
+  const previous = loadEvidenceManifest(root);
+  const manifest = apply ? rebindedManifest(previous, base) : previous;
+  const problems = evidenceCoverageProblems(manifest, changedFilesForBase(root, base));
   let wrote = false;
   if (apply) {
-    const previous = loadEvidenceManifest(root);
-    wrote = writeEvidenceManifest(root, rebindedManifest(previous, base));
+    wrote = writeEvidenceManifest(root, manifest);
   }
-  const manifest = loadEvidenceManifest(root);
-  const problems = evidenceCoverageProblems(manifest, changedFilesForBase(root, base));
   const declarationMatches = manifest.base === base;
   const status = declarationMatches && problems.notInDiff.length === 0 && problems.changedNotDeclared.length === 0
     ? "passed"
@@ -137,14 +164,16 @@ export function usage() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const apply = process.argv.includes("--apply");
-  const operands = process.argv.slice(2).filter((arg) => arg !== "--apply");
-  if (operands.length > 1) {
+  const args = process.argv.slice(2);
+  const applyFlags = args.filter((arg) => arg === "--apply");
+  const operands = args.filter((arg) => arg !== "--apply");
+  const malformed = operands.length > 1 || applyFlags.length > 1 || operands.some((arg) => arg.startsWith("--"));
+  if (malformed) {
     console.error(usage());
     process.exitCode = 1;
   } else {
     try {
-      const result = evaluateEvidenceRebind({ root: process.cwd(), baseRef: operands[0] ?? "origin/v2", apply });
+      const result = evaluateEvidenceRebind({ root: process.cwd(), baseRef: operands[0] ?? "origin/v2", apply: applyFlags.length === 1 });
       console.log(JSON.stringify(result, null, 2));
       process.exitCode = result.status === "passed" ? 0 : 1;
     } catch (error) {

@@ -11,6 +11,7 @@ import {
   changedFilesForBase,
   evidenceCoverageProblems,
   evaluateEvidenceRebind,
+  loadEvidenceManifest,
   rebindedManifest,
   resolveBaseRef,
   writeEvidenceManifest,
@@ -150,9 +151,31 @@ describe("evidence rebind helper", () => {
           () => assertBaseAncestor(root, orphanCommit(root)),
           /not an ancestor of HEAD/,
         );
+        // A git-level failure is not an ancestry verdict and keeps its cause.
+        assert.throws(
+          () => assertBaseAncestor(mkdtempSync(join(tmpdir(), "evidence-rebind-nogit-")), "a".repeat(40)),
+          (error) => !/not an ancestor of HEAD/.test(error.message) && error.status === 128,
+        );
         assert.throws(() => resolveBaseRef(root, "HEAD~999"), /Needed a single revision|unknown revision|Evidence rebind:/);
         const missing = "f".repeat(40);
-        assert.throws(() => resolveBaseRef(root, missing), /Needed a single revision|unknown revision|ambiguous argument/);
+        assert.throws(() => resolveBaseRef(root, missing), /Needed a single revision|unknown revision|ambiguous argument|Evidence rebind:/);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("wraps declaration read failures with the manifest path", () => {
+      const { root } = initRepo();
+      try {
+        writeFile(root, "change-evidence.json", "{ not json");
+        assert.throws(() => loadEvidenceManifest(root), (error) => {
+          assert.match(error.message, /Evidence rebind: the declaration at .* is not valid JSON/);
+          return true;
+        });
+        assert.throws(() => loadEvidenceManifest(tmpdir()), (error) => {
+          assert.match(error.message, /cannot read the declaration at .*change-evidence\.json/);
+          return true;
+        });
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
@@ -172,15 +195,30 @@ describe("evidence rebind helper", () => {
     it("rewrites only the base commit and stays idempotent", () => {
       const { root, head } = initRepo();
       try {
-        const rebinding = rebindedManifest(readDeclaration(root), head);
-        assert.deepEqual(
-          rebinding.contracts.map((entry) => entry.id),
-          readDeclaration(root).contracts.map((entry) => entry.id),
-          "rebinding keeps every contract",
-        );
+        // An unknown top-level key rides along through the rewrite.
+        const rebinding = rebindedManifest({ ...readDeclaration(root), note: "kept" }, head);
+        assert.equal(rebinding.note, "kept", "rebinding keeps unknown declaration keys");
         assert.equal(writeEvidenceManifest(root, rebinding), true, "the first write lands");
-        assert.equal(readDeclaration(root).base, head);
+        assert.deepEqual(readDeclaration(root), rebinding, "the written file matches the rebinding object exactly");
+        assert.deepEqual(Object.keys(readDeclaration(root)), Object.keys(rebinding), "key order survives the rewrite");
         assert.equal(writeEvidenceManifest(root, rebinding), false, "identical bytes are a no-op");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("never reaches disk when the rebinding is structurally invalid", () => {
+      const { root, base, head } = initRepo();
+      try {
+        const broken = readDeclaration(root);
+        broken.contracts = [contract("a", ["src.mjs"]), contract("b", ["src.mjs"])];
+        writeDeclaration(root, broken);
+        const target = head === base ? git(root, ["rev-parse", "HEAD"]) : head;
+        assert.throws(
+          () => evaluateEvidenceRebind({ root, baseRef: target, apply: true }),
+          /duplicate file coverage: src\.mjs declared by a and b/,
+        );
+        assert.equal(readDeclaration(root).base, base, "a failed apply leaves the on-disk declaration untouched");
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
@@ -254,6 +292,19 @@ describe("evidence rebind helper", () => {
         const unreachable = runCli(root, ["f".repeat(40)]);
         assert.equal(unreachable.code, 1);
         assert.equal(unreachable.stdout, "", "no report is printed for a base that cannot resolve");
+        assert.match(
+          unreachable.stderr,
+          /Evidence rebind: the base ref f{40} does not resolve to a commit: fatal:/,
+          "the prefixed resolution error names the ref and keeps git's cause",
+        );
+
+        const doubledFlag = runCli(root, ["--apply", "--apply"]);
+        assert.equal(doubledFlag.code, 1);
+        assert.match(doubledFlag.stderr, /^usage: node scripts\/acceptance\/evidence-rebind\.mjs/);
+
+        const unknownFlag = runCli(root, ["--flatten"]);
+        assert.equal(unknownFlag.code, 1);
+        assert.match(unknownFlag.stderr, /^usage: node scripts\/acceptance\/evidence-rebind\.mjs/);
 
         const unusable = runCli(root, ["one", "two"]);
         assert.equal(unusable.code, 1);
