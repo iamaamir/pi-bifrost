@@ -6,6 +6,7 @@ import { git } from "./core.mjs";
 const MANIFEST = "change-evidence.json";
 const SHA = /^[a-f0-9]{40}$/;
 const REGEX_REQUIREMENT = /^R(?:0[1-9]|1[0-7])$/;
+const CAP_BYTES = 256 * 1024;
 
 function requireValue(condition, message) {
   if (!condition) throw new Error(`Evidence rebind: ${message}`);
@@ -23,7 +24,7 @@ export function loadEvidenceManifest(root) {
   } catch (error) {
     throw new Error(`Evidence rebind: cannot read the declaration at ${path}: ${String(error.message).split("\n")[0]}`);
   }
-  requireValue(stat.isFile() && stat.size <= 256 * 1024, "declaration must be a regular file no larger than 256 KiB");
+  requireValue(stat.isFile() && stat.size <= CAP_BYTES, "declaration must be a regular file no larger than 256 KiB");
   let manifest;
   try {
     manifest = JSON.parse(readFileSync(path, "utf8"));
@@ -115,6 +116,10 @@ export function writeEvidenceManifest(root, manifest) {
   const path = join(root, MANIFEST);
   requireValue(lstatSync(path).isFile(), "declaration must exist as a regular file before rebinding");
   const contents = `${JSON.stringify(manifest, null, 2)}\n`;
+  // Reformatting can grow the file: refuse a rewrite that would break the
+  // size cap the acceptance validator enforces, before touching the disk.
+  requireValue(Buffer.byteLength(contents) <= CAP_BYTES,
+    `the rewritten declaration would be ${Buffer.byteLength(contents)} bytes; the cap is ${CAP_BYTES}`);
   try {
     if (readFileSync(path, "utf8") === contents) return false;
   } catch {}

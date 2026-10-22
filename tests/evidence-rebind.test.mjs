@@ -224,6 +224,36 @@ describe("evidence rebind helper", () => {
       }
     });
 
+    it("refuses a rewrite that would exceed the size cap and leaves the on-disk file untouched", () => {
+      const { root, base } = initRepo();
+      try {
+        // A compact on-disk declaration under the 256 KiB cap whose pretty
+        // rewrite would land above it (every entry gains indent bytes).
+        const contracts = Array.from({ length: 2700 }, (_, i) => ({
+          id: `c${i}`,
+          requirement: "R16",
+          files: [`c${i}.mjs`],
+          boundary: "b",
+          assertions: "a",
+        }));
+        const onDisk = JSON.stringify({ schemaVersion: 1, base, contracts });
+        const rewriteBytes = Buffer.byteLength(`${JSON.stringify({ ...JSON.parse(onDisk), base }, null, 2)}\n`);
+        const loaded = Buffer.byteLength(onDisk);
+        assert.ok(loaded <= 256 * 1024, `fixture must load under the cap, got ${loaded}`);
+        assert.ok(rewriteBytes > 256 * 1024, `fixture rewrite must exceed the cap, got ${rewriteBytes}`);
+        writeFileSync(join(root, "change-evidence.json"), onDisk);
+
+        assert.throws(
+          () => evaluateEvidenceRebind({ root, baseRef: base, apply: true }),
+          /the rewritten declaration would be \d+ bytes; the cap is 262144/,
+        );
+        assert.equal(readFileSync(join(root, "change-evidence.json"), "utf8"), onDisk,
+          "a refused rewrite leaves the compact declaration untouched");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
     it("validates against the requested base and --apply rebases only the declaration base", () => {
       const { root, base, head } = initRepo();
       try {
