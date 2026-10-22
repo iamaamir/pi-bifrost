@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
-import { checkReferences, extractCitedPaths, parseArgs, report, resolveRef } from "../scripts/check-issue-refs.mjs";
+import { checkReferences, classify, extractCitedPaths, parseArgs, resolveRef } from "../scripts/check-issue-refs.mjs";
 
-function fixtureRoot() {
+function fixtureRoot(files = ["AGENTS.md"]) {
   const root = mkdtempSync(join(tmpdir(), "bifrost-issue-refs-"));
-  writeFileSync(join(root, "AGENTS.md"), "# agents\n");
+  for (const file of files) {
+    const target = join(root, file);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, "fixture\n");
+  }
   return root;
 }
 
@@ -57,68 +61,70 @@ describe("cited path extraction", () => {
 });
 
 describe("argument parsing", () => {
-  it("accepts issue numbers, an explicit ref and offline mode", () => {
+  it("accepts issue numbers, an explicit ref, offline and remote requirements", () => {
     assert.deepEqual(parseArgs(["146", "153", "--ref", "v2", "--offline"]), {
       issues: ["146", "153"],
       offline: true,
       ref: "v2",
+      requireRemote: false,
     });
+    assert.equal(parseArgs(["146", "--require-remote"]).requireRemote, true);
   });
 
-  it("rejects unknown options, non-numeric issues and a missing ref value", () => {
+  it("rejects unknown options, non-numeric issues, a missing ref and contradictory modes", () => {
     assert.match(parseArgs(["--nope", "146"]).error, /unknown option/);
     assert.match(parseArgs(["146", "abc"]).error, /numeric/);
     assert.match(parseArgs(["146", "--ref"]).error, /--ref/);
+    assert.match(parseArgs(["146", "--offline", "--require-remote"]).error, /cannot be combined/);
     assert.match(parseArgs([]).error, /no issue numbers/);
   });
 });
 
 describe("reference checks", () => {
-  it("reports local presence and remote presence independently", () => {
-    const root = fixtureRoot();
+  it("classifies a local-only citation as unpublished and not missing", () => {
     const results = checkReferences(["AGENTS.md", "roadmap-next.md"], {
-      root,
+      root: fixtureRoot(["AGENTS.md", "roadmap-next.md"]),
       remoteExists: (path) => path === "AGENTS.md",
     });
+    const { missing, unpublished, failures } = classify(results);
+    assert.deepEqual(missing, []);
+    assert.deepEqual(unpublished.map((result) => result.path), ["roadmap-next.md"]);
+    assert.deepEqual(failures, []);
+  });
+
+  it("fails a citation that is missing from the working tree", () => {
+    const results = checkReferences(["AGENTS.md", "missing.md"], { root: fixtureRoot() });
+    const { missing, failures } = classify(results);
+    assert.deepEqual(missing.map((result) => result.path), ["missing.md"]);
+    assert.deepEqual(failures.map((result) => result.path), ["missing.md"]);
+  });
+
+  it("fails a local-only citation only when remote publication is required", () => {
+    const results = checkReferences(["roadmap-next.md"], {
+      root: fixtureRoot(["roadmap-next.md"]),
+      remoteExists: () => false,
+    });
+    assert.deepEqual(classify(results).failures, []);
     assert.deepEqual(
-      results.map(({ path, local, remote }) => ({ path, local, remote })),
-      [
-        { path: "AGENTS.md", local: true, remote: true },
-        { path: "roadmap-next.md", local: false, remote: false },
-      ],
+      classify(results, { requireRemote: true }).failures.map((result) => result.path),
+      ["roadmap-next.md"],
     );
   });
 
   it("leaves the remote unknown when no probe is supplied", () => {
-    const [result] = checkReferences(["AGENTS.md"], { root: fixtureRoot() });
-    assert.equal(result.local, true);
-    assert.equal(result.remote, null);
+    const results = checkReferences(["AGENTS.md"], { root: fixtureRoot() });
+    assert.equal(results[0].local, true);
+    assert.equal(results[0].remote, null);
+    assert.deepEqual(classify(results, { requireRemote: true }).failures, []);
   });
 
-  it("returns only the references that are not readable everywhere", () => {
-    const root = fixtureRoot();
-    const results = checkReferences(["AGENTS.md", "missing.md"], { root, remoteExists: () => true });
-    const missing = report(results, { write: () => true });
-    assert.deepEqual(missing, [{ path: "missing.md", local: false, remote: true }]);
-  });
-
-  it("treats a remote miss as missing even when the file is local", () => {
-    const results = checkReferences(["AGENTS.md"], {
-      root: fixtureRoot(),
-      remoteExists: () => false,
-    });
-    const missing = report(results, { write: () => true });
-    assert.deepEqual(missing, [{ path: "AGENTS.md", local: true, remote: false }]);
-  });
-
-  it("reports a cited workflow file that is remote-only as missing", () => {
-    const results = checkReferences([".github/workflows/missing.yml"], {
-      root: fixtureRoot(),
-      remoteExists: () => true,
-    });
-    assert.deepEqual(report(results, { write: () => true }), [
-      { path: ".github/workflows/missing.yml", local: false, remote: true },
-    ]);
+  it("fails a remote-only workflow file as missing from the working tree", () => {
+    const path = ".github/workflows/present.yml";
+    const results = checkReferences([path], { root: fixtureRoot(), remoteExists: () => true });
+    const { missing, unpublished } = classify(results);
+    assert.deepEqual(missing.map((result) => result.path), [path]);
+    assert.deepEqual(unpublished, []);
+    assert.deepEqual(classify(results, { requireRemote: true }).failures.map((r) => r.path), [path]);
   });
 });
 

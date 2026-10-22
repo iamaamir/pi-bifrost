@@ -60,18 +60,18 @@
         "tests/check-issue-refs.test.mjs"
       ],
       "boundary": "Prompt-free CLI over real issue bodies with a gh-backed remote probe; tests inject the probe and a temporary working root, so no network, credential or repository state is required.",
-      "assertions": "Cited paths are extracted from prose without version numbers, host names or provider identifiers; each cited path is classified present or missing locally and on the selected branch; the process exits non-zero when any cited path is unreadable; an offline run never reports a remote verdict.",
+      "assertions": "Cited paths are extracted from prose without version numbers, host names or provider identifiers; a citation missing from the working tree fails; a citation present locally but absent from the selected branch is reported as local-only and fails only under --require-remote; an offline run never reports a remote verdict.",
       "boundaryTest": {
         "file": "tests/check-issue-refs.test.mjs",
-        "name": "reports local presence and remote presence independently"
+        "name": "classifies a local-only citation as unpublished and not missing"
       },
       "invariant": {
         "file": "tests/check-issue-refs.test.mjs",
-        "name": "returns only the references that are not readable everywhere"
+        "name": "fails a citation that is missing from the working tree"
       },
       "fault": {
         "file": "tests/check-issue-refs.test.mjs",
-        "name": "treats a remote miss as missing even when the file is local"
+        "name": "fails a local-only citation only when remote publication is required"
       }
     },
     {

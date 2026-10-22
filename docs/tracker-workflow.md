@@ -69,15 +69,21 @@ Do not skip step 3. A transform that re-read the originals instead of the staged
 
 ## Citation rule
 
-Never cite a document another agent cannot read. Check before publishing:
+A citation must be readable by the agent doing the work. Repository sources are committed by default, but `roadmap-next.md` is deliberately local-only: it is the requirement source for these tickets and is never published.
+
+`node scripts/check-issue-refs.mjs --ref v2 <issue>…` checks every repository path cited in the given issues.
+
+- A path missing from the working tree fails the check.
+- A path present locally but absent from the branch is reported as local-only and does not fail. Add `--require-remote` when a citation must be readable from the remote.
+- `--ref` selects the branch, defaulting to the default branch of the repository being checked. `--offline` checks the working tree only.
+
+To confirm remote presence directly:
 
 ```bash
-gh api repos/iamaamir/pi-bifrost/contents/roadmap-next.md?ref=v2
+gh api repos/iamaamir/pi-bifrost/contents/AGENTS.md?ref=v2
 ```
 
-A 404 means the path is not on that branch. Use `ref=v2` for delivery tickets: the default branch and the delivery branch are not the same repository state here.
-
-`node scripts/check-issue-refs.mjs --ref v2 <issue>…` checks every repository path cited in the given issues, in the working tree and on that branch. Without `--ref` it checks the default branch; with `--offline` it checks the working tree only.
+A 404 means that path is not on that branch.
 
 ## Conventions
 

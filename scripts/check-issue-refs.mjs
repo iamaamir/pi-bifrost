@@ -7,6 +7,12 @@
 //   node scripts/check-issue-refs.mjs <issue-number> [more...]
 //   node scripts/check-issue-refs.mjs --ref v2 <issue-number> [more...]
 //   node scripts/check-issue-refs.mjs --offline <issue-number> [more...]
+//   node scripts/check-issue-refs.mjs --require-remote <issue-number> [more...]
+//
+// Local presence is required. A citation that exists locally but not on the
+// remote branch is reported as unpublished and does not fail, because this
+// project keeps some sources local-only by decision. Pass --require-remote when
+// a citation must be readable from the remote.
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -73,6 +79,17 @@ export function resolveRef({ repo, offline, explicitRef = null, query }) {
   return query(repo);
 }
 
+/**
+ * Split the results into what actually blocks a check. A locally present path
+ * that is absent from the remote is unpublished, not missing; it only fails
+ * when remote publication is required.
+ */
+export function classify(results, { requireRemote = false } = {}) {
+  const missing = results.filter((result) => !result.local);
+  const unpublished = results.filter((result) => result.local && result.remote === false);
+  return { missing, unpublished, failures: requireRemote ? [...missing, ...unpublished] : missing };
+}
+
 /** Print the result table and return the references that are not readable. */
 export function report(results, stream = process.stdout) {
   const width = Math.max(4, ...results.map((result) => result.path.length));
@@ -105,10 +122,12 @@ function remoteProbe(repo, ref) {
 export function parseArgs(argv) {
   const issues = [];
   let offline = false;
+  let requireRemote = false;
   let ref = null;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--offline") offline = true;
+    else if (argument === "--require-remote") requireRemote = true;
     else if (argument === "--ref") {
       ref = argv[index + 1] ?? "";
       index += 1;
@@ -118,7 +137,8 @@ export function parseArgs(argv) {
   if (issues.length === 0) return { error: "no issue numbers supplied" };
   if (issues.some((issue) => !/^\d+$/.test(issue))) return { error: "issue numbers must be numeric" };
   if (ref !== null && ref.trim() === "") return { error: "--ref needs a branch name" };
-  return { issues, offline, ref };
+  if (offline && requireRemote) return { error: "--offline cannot be combined with --require-remote" };
+  return { issues, offline, ref, requireRemote };
 }
 
 function main(argv) {
@@ -127,7 +147,7 @@ function main(argv) {
     process.stderr.write(`usage: node scripts/check-issue-refs.mjs [--ref <branch>] [--offline] <issue-number> [...]\n${parsed.error}\n`);
     return 2;
   }
-  const { issues, offline } = parsed;
+  const { issues, offline, requireRemote } = parsed;
 
   const repo = process.env.BIFROST_TRACKER_REPO ?? gh(["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]);
   const ref = resolveRef({
@@ -150,14 +170,22 @@ function main(argv) {
   const results = checkReferences([...cited].sort(), {
     remoteExists: offline ? null : remoteProbe(repo, ref),
   });
-  const missing = report(results);
+  report(results);
+  const { missing, unpublished, failures } = classify(results, { requireRemote });
 
-  if (missing.length === 0) return 0;
-  const paths = missing.map((result) => result.path).join(", ");
-  process.stderr.write(
-    `\n${missing.length} cited path(s) are not readable from ${repo}@${ref}: ${paths}\n` +
-      "An agent without this working copy cannot follow them.\n",
-  );
+  if (unpublished.length > 0 && !requireRemote) {
+    const paths = unpublished.map((result) => result.path).join(", ");
+    process.stderr.write(
+      `\n${unpublished.length} cited path(s) are local-only and absent from ${repo}@${ref}: ${paths}\n` +
+        "Local sources are allowed; pass --require-remote to treat them as failures.\n",
+    );
+  }
+  if (failures.length === 0) return 0;
+
+  const where = requireRemote ? `not readable from ${repo}@${ref}` : "missing from the working tree";
+  const paths = failures.map((result) => result.path).join(", ");
+  process.stderr.write(`\n${failures.length} cited path(s) ${where}: ${paths}\n`);
+  if (!requireRemote) process.stderr.write("An agent on this checkout cannot follow them.\n");
   return 1;
 }
 
