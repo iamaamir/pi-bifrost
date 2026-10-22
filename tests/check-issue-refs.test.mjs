@@ -58,6 +58,11 @@ describe("cited path extraction", () => {
   it("checks an unlisted extension once the token is already path-shaped", () => {
     assert.deepEqual(extractCitedPaths("Committed in scripts/tool.ps1 today."), ["scripts/tool.ps1"]);
   });
+
+  it("ignores versioned model identifiers that look path-shaped", () => {
+    const body = "Route to opencode-go/glm-5.1 or google/gemini-2.5-pro, not openai/gpt-4o.";
+    assert.deepEqual(extractCitedPaths(body), []);
+  });
 });
 
 describe("argument parsing", () => {

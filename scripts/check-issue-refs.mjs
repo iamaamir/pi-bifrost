@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Check that repository paths cited in issue bodies are readable by someone who
-// only sees the remote. Each cited path must exist in the working tree and on
-// the default branch of the repository being checked.
+// Check that repository paths cited in issue bodies exist. Every cited path
+// must exist in the working tree; whether it is also readable from the default
+// branch of the repository being checked is reported, and only fails under
+// --require-remote.
 //
 // Usage:
 //   node scripts/check-issue-refs.mjs <issue-number> [more...]
@@ -34,7 +35,9 @@ const CITED_PATH = new RegExp(
     String.raw`(?<![\w/.-])`,
     String.raw`(`,
     String.raw`(?:[\w.-]+/)*[\w.-]+\.(?:${KNOWN_EXTENSIONS})`,
-    String.raw`|(?:[\w.-]+/)+[\w.-]+\.[A-Za-z0-9]{1,8}`,
+    // Any other extension, but only when it contains a letter: a model name
+    // such as `opencode-go/glm-5.1` ends in a numeric segment, not a path.
+    String.raw`|(?:[\w.-]+/)+[\w.-]+\.[A-Za-z0-9]{0,7}[A-Za-z][A-Za-z0-9]{0,7}`,
     String.raw`)`,
     String.raw`(?![-\w/])`,
   ].join(""),
