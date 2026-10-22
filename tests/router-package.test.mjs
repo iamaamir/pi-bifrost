@@ -113,15 +113,27 @@ describe("packed experimental router consumer", () => {
       });
       assert.deepEqual(packageJsonOf(packageRoot).exports["./*"], "./*", "legacy package subpaths stay mapped");
       assert.deepEqual(packageJsonOf(packageRoot).pi.extensions, ["./index.ts"], "the Pi extension entry stays unchanged");
+      // The agent skill must be discoverable from the installed package: Pi reads
+      // the declared skill directory, which has to contain a readable SKILL.md.
+      assert.deepEqual(packageJsonOf(packageRoot).pi.skills, ["./skills/configure-bifrost"], "the package declares its agent skill");
+      const installedSkill = join(packageRoot, "skills", "configure-bifrost", "SKILL.md");
+      assert.ok(existsSync(installedSkill), "the installed package ships the agent skill");
+      assert.match(readFileSync(installedSkill, "utf8"), /^---\nname: configure-bifrost\ndescription: /, "the installed skill has loadable frontmatter");
+      assert.ok(existsSync(join(packageRoot, "skills", "configure-bifrost", "references", "configuration-reference.md")));
       assert.ok(readFileSync(join(packageRoot, "index.ts"), "utf8"));
       assertOptionalPiPeers(packageRoot);
-      for (const required of [...rootSources, ...routerFiles, "bifrost.json", "schema.json", "package.json", "README.md", "CHANGELOG.md", "LICENSE", "docs/router-api.md"]) {
+      const agentSkill = [
+        "skills/configure-bifrost/SKILL.md",
+        "skills/configure-bifrost/references/configuration-reference.md",
+      ];
+      for (const required of [...rootSources, ...routerFiles, "bifrost.json", "schema.json", "package.json", "README.md", "CHANGELOG.md", "LICENSE", "docs/router-api.md", ...agentSkill]) {
         assert.ok(archivePaths.includes(required), `release archive missing ${required}`);
       }
       assert.ok(archivePaths.every((path) => path.endsWith(".ts") && !path.includes("/")
         || ["bifrost.json", "schema.json", "README.md", "CHANGELOG.md", "LICENSE", "package.json", "docs/router-api.md"].includes(path)
         || routerFiles.includes(path)
-        || path.startsWith("examples/")), "release contains files outside source, router API, and examples allowlists");
+        || path.startsWith("examples/")
+        || agentSkill.includes(path)), "release contains files outside source, router API, examples, and agent skill allowlists");
       assert.ok(archivePaths.includes("dist/router/router.js"), "the package must contain built JS");
       assert.ok(archivePaths.includes("dist/router/router.d.ts"), "the package must contain API declarations");
       assertNoPackageReferences(packageRoot, routerFiles);

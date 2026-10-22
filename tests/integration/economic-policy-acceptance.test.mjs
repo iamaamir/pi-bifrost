@@ -24,7 +24,7 @@ import { makeModel } from "../helpers.ts";
 import bifrostExtension from "../../index.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const PRODUCTION_INDEX_SHA256 = "14752568bd935068ca5874156bd324f45336dc29bd305523fe6e0ca5973c3303";
+const PRODUCTION_INDEX_SHA256 = "9fe0cfdb833d38dbffc50d1f2deed2d6ecce91b5defe708593069c03c5965041";
 const RESERVE_EQUALITY_GUARD = "remainingRatio <= rule.reserveRatio";
 
 function sha256(text) {
