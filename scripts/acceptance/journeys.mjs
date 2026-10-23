@@ -118,7 +118,7 @@ const journeys = [
   {
     id: "manual-model-selection-pins-session",
     testFile: "tests/integration/legacy-behavior.test.mjs",
-    title: "manual Pi model selection pins the physical model until explicit unpin",
+    title: "manual Pi model selection pins the physical model in physical and Auto modes until explicit unpin",
     requirements: ["R02"],
     boundary: "real pinned-Pi RPC set_model event, explicit unpin command, and fake-provider generation evidence",
   },
