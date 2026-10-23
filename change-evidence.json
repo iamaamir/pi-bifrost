@@ -163,7 +163,6 @@
       "id": "strict-activation-failure-no-generation",
       "requirement": "R05",
       "files": [
-        "docs/acceptance-coverage.md",
         "scripts/acceptance/journeys.mjs"
       ],
       "boundary": "A named pinned-Pi AgentSession journey exercises hard-admission activation failures from the actual host; false and thrown setModel outcomes must keep the user turn unsent and preserve the prior seed model.",
@@ -179,6 +178,27 @@
       "fault": {
         "file": "tests/integration/native-activation-cancel.test.mjs",
         "name": "cancels real AgentSession activation behind a proven deny-all fence"
+      }
+    },
+    {
+      "id": "r02-native-footer-preservation",
+      "requirement": "R02",
+      "files": [
+        "docs/acceptance-coverage.md"
+      ],
+      "boundary": "Pi retains its physical-model footer; Bifrost contributes only its separate bifrost-state status line.",
+      "assertions": "The status helper uses the bifrost-state key, while the pinned-Pi UI smoke asserts the physical model label and separate Bifrost status in startup, dashboard, and classifier-picker captures.",
+      "boundaryTest": {
+        "file": "tests/ux-status.test.ts",
+        "name": "renders Bifrost status line"
+      },
+      "invariant": {
+        "file": "tests/ux-status.test.ts",
+        "name": "renders persistent mode state"
+      },
+      "fault": {
+        "file": "tests/ux-status.test.ts",
+        "name": "renders Bifrost status line"
       }
     }
   ]
