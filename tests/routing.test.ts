@@ -1181,6 +1181,22 @@ describe("routing", () => {
     it("defaults to first", () => {
       assert.equal(getStrategy(undefined, undefined, "economical"), "first");
     });
+
+    it("uses generic strategies for arbitrary custom tier keys across providers", () => {
+      const tier = "team-custom-priority";
+      const ctx = makeCtx([
+        makeModel("provider-a", "expensive", 5),
+        makeModel("provider-b", "cheap", 1),
+      ]);
+      const result = resolveConfiguredTier(ctx, tier, {
+        models: { [tier]: ["provider-a/expensive", "provider-b/cheap"] },
+        strategy: "first",
+        categoryStrategies: { [tier]: "cheapest" },
+      }).resolution;
+
+      assert.equal(result.selectedTier, tier);
+      assert.equal(modelKey(result.selected), "provider-b/cheap");
+    });
   });
 
   describe("classify (regex)", () => {

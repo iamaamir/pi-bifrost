@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { mergeConfig, validateConfig, validateTierPolicyConfig, configHasNoPools, hasClassifierConfigErrors, type BifrostConfig } from "../config.ts";
 import type { RoutingStrategy } from "../routing.ts";
 
@@ -12,6 +13,13 @@ const baseConfig: BifrostConfig = {
     economical: ["model-b"],
   },
 };
+
+describe("public defaults", () => {
+  it("keeps bundled starter pools empty and free of maintainer model IDs", () => {
+    const bundled = JSON.parse(readFileSync(new URL("../bifrost.json", import.meta.url), "utf8"));
+    assert.deepEqual(bundled.models, { quick: [], general: [], frontier: [] });
+  });
+});
 
 describe("configHasNoPools", () => {
   it("detects missing and empty pools, and accepts any configured model", () => {

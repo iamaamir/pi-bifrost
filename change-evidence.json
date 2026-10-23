@@ -181,13 +181,13 @@
       }
     },
     {
-      "id": "r01-r02-r06-r09-r11-r12-acceptance-coverage-map",
+      "id": "r01-r02-r06-r09-r11-r12-r17-acceptance-coverage-map",
       "requirement": "R06",
       "files": [
         "docs/acceptance-coverage.md"
       ],
-      "boundary": "The coverage map records R01 runtime/preview/API semantic parity with typed exclusion evidence, R06 strict no-route/activation/cancellation evidence, R11 affinity overrides and limits, R12 classifier deadline evidence and limits, R02 Pi-owned footer evidence, and R09 atomic reconciliation evidence and remaining limits.",
-      "assertions": "R01 is covered by the named three-surface parity case and structured-exclusion routing test; full phase timings remain a separate ADR 0007 deferral. R06 is covered by named strict physical/Auto boundaries, false/throw activation, late-classifier abort with guard-removal fault, and packed resolve-only smoke. R11 cites real-Pi same-tier/branch behavior and exact explicit-tier/direct-origin resolver tests, while retaining the end-to-end exact-model/continuation gap. R12 cites exact pipeline/transport tests for shared deadlines, cancellation, late-result rejection, and no-retry behavior, while remaining partial for the full pinned-Pi backend-precedence matrix. R02's distinct status key and Pi footer tests remain cited. R09 names real-Pi reviewed-digest reconciliation and exact atomic backups but remains partial for migration/provenance acceptance.",
+      "boundary": "The coverage map records R01 runtime/preview/API parity, R06 strict no-route/cancellation, R11 affinity overrides and limits, R12 classifier deadlines and limits, R17 arbitrary-tier/model-free defaults, R02 Pi-owned footer evidence, and R09 reconciliation evidence and remaining limits.",
+      "assertions": "R01 is covered by the named three-surface parity case and structured-exclusion routing test; full phase timings remain a separate ADR 0007 deferral. R06 is covered by named strict physical/Auto boundaries, false/throw activation, late-classifier abort with guard-removal fault, and packed resolve-only smoke. R11 cites real-Pi same-tier/branch behavior and exact explicit-tier/direct-origin resolver tests, while retaining the end-to-end exact-model/continuation gap. R12 cites exact pipeline/transport tests for shared deadlines, cancellation, late-result rejection, and no-retry behavior, while remaining partial for the full pinned-Pi backend-precedence matrix. R17 is covered by arbitrary custom-tier/provider-neutral strategy and model-free bundled-default checks. R02's distinct status key and Pi footer tests remain cited. R09 names real-Pi reviewed-digest reconciliation and exact atomic backups but remains partial for migration/provenance acceptance.",
       "boundaryTest": {
         "file": "tests/integration/activation-cancellation-acceptance.test.mjs",
         "name": "does not dispatch after a late classifier result"
@@ -202,20 +202,20 @@
       }
     },
     {
-      "id": "r11-explicit-target-support-registration",
-      "requirement": "R11",
+      "id": "r11-r17-acceptance-support-registration",
+      "requirement": "R17",
       "files": [
         "scripts/acceptance.mjs"
       ],
-      "boundary": "Acceptance profile requires the exact pure-resolver test that proves an explicit target origin bypasses affinity retention.",
-      "assertions": "support:r11:explicit-target-origin maps to the existing named routing invariant; no production code or test behavior changes.",
+      "boundary": "Acceptance profile requires exact resolver cases for R11 explicit-target precedence and R17 arbitrary-tier strategy plus model-free defaults.",
+      "assertions": "support:r11:explicit-target-origin maps to the named explicit-origin routing invariant. support:r17:arbitrary-tier-strategy maps to the custom-tier/provider-neutral resolver test, and support:r17:model-free-defaults maps to the bundled starter-pool test. No production behavior changes.",
       "boundaryTest": {
         "file": "tests/routing.test.ts",
-        "name": "does not restore an anchor excluded by preferred-class selection or explicit intent"
+        "name": "uses generic strategies for arbitrary custom tier keys across providers"
       },
       "invariant": {
-        "file": "tests/routing.test.ts",
-        "name": "does not restore an anchor excluded by preferred-class selection or explicit intent"
+        "file": "tests/config.test.ts",
+        "name": "keeps bundled starter pools empty and free of maintainer model IDs"
       },
       "fault": {
         "exception": "Declarative acceptance-profile registration only; production behavior unchanged and no new behavioral assertion introduced."
