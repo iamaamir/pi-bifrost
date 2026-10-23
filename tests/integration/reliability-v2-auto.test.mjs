@@ -2,7 +2,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,13 @@ let fakePort;
 
 function appendBounded(current, chunk) {
   return current.length >= MAX_CAPTURE_CHARS ? current : current + chunk.slice(0, MAX_CAPTURE_CHARS - current.length);
+}
+
+function waitForClose(child, timeoutMs = 10_000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Pi RPC did not close within ${timeoutMs}ms`)), timeoutMs);
+    child.once("close", (...args) => { clearTimeout(timer); resolve(args); });
+  });
 }
 
 function stopChild(child, graceMs = 1_000) {
@@ -93,12 +100,18 @@ function writeFixture({ home, work, port, models, bifrost, retry = { enabled: fa
 function writeOutcomeObserver(work) {
   const extension = join(work, "allowance-outcome-observer.mjs");
   const output = join(work, "allowance-outcome-observer.json");
-  writeFileSync(extension, `import { writeFileSync } from "node:fs";
+  writeFileSync(extension, `import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
 export default function(pi) {
   pi.on("session_shutdown", (_event, ctx) => {
     const branch = ctx.sessionManager.getBranch();
     const messages = branch.filter((entry) => entry.type === "message");
-    const users = messages.filter((entry) => entry.message.role === "user").map((entry) => ({ id: entry.id }));
+    const users = messages.filter((entry) => entry.message.role === "user").map((entry) => {
+      const content = entry.message.content;
+      const text = typeof content === "string" ? content : Array.isArray(content)
+        ? content.filter((part) => part.type === "text").map((part) => part.text).join("") : "";
+      return { id: entry.id, digest: createHash("sha256").update(text).digest("hex") };
+    });
     const assistants = messages.filter((entry) => entry.message.role === "assistant").map((entry) => ({
       id: entry.id, parentId: entry.parentId, provider: entry.message.provider, model: entry.message.model,
       stopReason: entry.message.stopReason,
@@ -112,6 +125,81 @@ export default function(pi) {
   });
 }`);
   return { extension, output };
+}
+
+function startAllowanceBarrierRpc({ home, work, observer, userPrompt = "allowance boundary request" }) {
+  const barrier = join(work, "allowance-settle-barrier");
+  const release = join(work, "allowance-settle-release");
+  const fixture = join(work, "allowance-settle-barrier.mjs");
+  writeFileSync(fixture, `import { existsSync, writeFileSync } from "node:fs";\nimport { setTimeout as delay } from "node:timers/promises";\nexport default function(pi) { pi.on("agent_before_settle", async (_event, ctx) => { const failed = ctx.sessionManager.getBranch().some((entry) => entry.type === "message" && entry.message.role === "assistant" && entry.message.model === "usage-exhausted" && entry.message.stopReason === "error"); if (!failed) return; writeFileSync(${JSON.stringify(barrier)}, "ready"); while (!existsSync(${JSON.stringify(release)})) await delay(5); }); }`);
+  const env = {
+    ...process.env, HOME: home, PI_CODING_AGENT_DIR: join(home, ".pi", "agent"), PI_SKIP_VERSION_CHECK: "1", PI_OFFLINE: "1",
+    NODE_OPTIONS: `--require=${OUTBOUND_GUARD}`,
+    BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${fakePort}`,
+    BIFROST_TEST_NETWORK_VIOLATIONS: join(home, "test-network-violations.log"),
+  };
+  const child = spawn(PI, ["-e", fixture, "-e", EXTENSION, "-e", observer.extension, "--approve", "--mode", "rpc", "--no-session", "--no-tools", "--model", "bifrost/auto"], {
+    cwd: work, env, stdio: ["pipe", "pipe", "pipe"],
+  });
+  const records = [];
+  let output = "";
+  let partial = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    output = appendBounded(output, chunk);
+    const lines = `${partial}${chunk}`.split("\n");
+    partial = lines.pop();
+    for (const line of lines) { try { records.push(JSON.parse(line)); } catch { /* bounded RPC event stream */ } }
+  });
+  child.stderr.on("data", (chunk) => { stderr = appendBounded(stderr, chunk); });
+  const wait = async (description, predicate, timeoutMs = 30_000) => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (predicate()) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.fail(`timed out waiting for ${description}: ${stderr}`);
+  };
+  const write = (command) => new Promise((resolve, reject) => child.stdin.write(
+    `${JSON.stringify(command)}\n`, (error) => error ? reject(error) : resolve(),
+  ));
+  const waitForResponse = async (id) => {
+    await wait(`RPC response ${id}`, () => records.some((record) => record.type === "response" && record.id === id), 10_000);
+    return records.find((record) => record.type === "response" && record.id === id);
+  };
+  const waitForBarrier = () => wait("failed allowance settlement barrier", () => existsSync(barrier));
+  const releaseBarrier = () => writeFileSync(release, "continue");
+  const waitForSettled = () => wait("agent_settled", () => records.some((record) => record.type === "agent_settled"));
+  const close = async () => { child.stdin.end(); await waitForClose(child); };
+  const promptWrite = write({ id: "allowance-prompt", type: "prompt", message: userPrompt });
+  return {
+    child, records, promptWrite, waitForBarrier, write, waitForResponse, releaseBarrier, waitForSettled, close,
+    get output() { return output; }, get stderr() { return stderr; },
+  };
+}
+
+function assertAllowanceBoundaryStopped({ before, after, outcomePath, prompt }) {
+  const requests = after.stats.slice(before.stats.length).filter((entry) => entry.kind === "generation");
+  const promptDigest = createHash("sha256").update(prompt).digest("hex");
+  const failed = requests.filter((entry) => entry.model === "usage-exhausted");
+  assert.equal(failed.length, 1, "the allowance-failed model receives exactly one generation");
+  assert.equal(requests.filter((entry) => entry.model === "healthy" && entry.userMessageDigest === promptDigest).length, 0,
+    "the failed user boundary receives no alternate generation");
+  const outcome = JSON.parse(readFileSync(outcomePath, "utf8"));
+  const originalUsers = outcome.users.filter((entry) => entry.digest === promptDigest);
+  assert.equal(originalUsers.length, 1, "the original user request is not re-enqueued");
+  const originalFailure = outcome.assistants.filter((entry) => entry.model === "usage-exhausted");
+  assert.equal(originalFailure.length, 1);
+  assert.equal(originalFailure[0].parentId, originalUsers[0].id);
+  assert.equal(originalFailure[0].stopReason, "error");
+  assert.equal(originalFailure[0].contentLength, 0);
+}
+
+function assertNoBlockedNetwork(home) {
+  try { assert.equal(readFileSync(join(home, "test-network-violations.log"), "utf8"), ""); }
+  catch (error) { if (error.code !== "ENOENT") throw error; }
 }
 
 function runPi({ home, work, model = "bifrost/auto", messages, extraExtensions = [] }) {
@@ -202,6 +290,163 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
   let server;
   before(async () => { server = await startFakeServer(); fakePort = server.port; });
   after(async () => { if (server?.child) await stopChild(server.child); });
+
+  it("does not dispatch allowance alternate after abort at deterministic pre-settlement barrier", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-allowance-abort-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-allowance-abort-work-"));
+    let child;
+    try {
+      writeFixture({
+        home, work, port: server.port,
+        models: [{ id: "usage-exhausted", reasoning: false }, { id: "healthy", reasoning: false }],
+        bifrost: {
+          enabled: true, default: "quick", strategy: "first", classifier: { enabled: false },
+          models: { quick: ["fake/usage-exhausted"], general: ["fake/healthy"] },
+          reliability: { enabled: true, failureThreshold: 3, cooldownMinutes: 60 },
+        },
+      });
+      const barrier = join(work, "allowance-settle-barrier");
+      const release = join(work, "allowance-settle-release");
+      const fixture = join(work, "allowance-settle-barrier.mjs");
+      writeFileSync(fixture, `import { existsSync, writeFileSync } from "node:fs";\nimport { setTimeout as delay } from "node:timers/promises";\nexport default function(pi) { pi.on("agent_before_settle", async (_event, ctx) => { const failed = ctx.sessionManager.getBranch().some((entry) => entry.type === "message" && entry.message.role === "assistant" && entry.message.model === "usage-exhausted" && entry.message.stopReason === "error"); if (!failed) return; writeFileSync(${JSON.stringify(barrier)}, "ready"); while (!existsSync(${JSON.stringify(release)})) await delay(5); }); }`);
+      const env = {
+        ...process.env, HOME: home, PI_CODING_AGENT_DIR: join(home, ".pi", "agent"), PI_SKIP_VERSION_CHECK: "1", PI_OFFLINE: "1",
+        NODE_OPTIONS: `--require=${OUTBOUND_GUARD}`,
+        BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${fakePort}`,
+        BIFROST_TEST_NETWORK_VIOLATIONS: join(home, "test-network-violations.log"),
+      };
+      const observer = writeOutcomeObserver(work);
+      const before = await fakeStats(server.port);
+      child = spawn(PI, ["-e", fixture, "-e", EXTENSION, "-e", observer.extension, "--approve", "--mode", "rpc", "--no-session", "--no-tools", "--model", "bifrost/auto"], {
+        cwd: work, env, stdio: ["pipe", "pipe", "pipe"],
+      });
+      let output = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => { output += chunk; });
+      child.stderr.on("data", (chunk) => { stderr += chunk; });
+      child.stdin.write(`${JSON.stringify({ id: "allowance-prompt", type: "prompt", message: "one request" })}\n`);
+      const deadline = Date.now() + 30_000;
+      while (!existsSync(barrier) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.ok(existsSync(barrier), `pre-settlement barrier not reached: ${stderr}\n${JSON.stringify((await fakeStats(server.port)).stats.slice(before.stats.length))}\n${output}`);
+      const fixtureFault = process.env.BIFROST_TEST_FAULT_RELEASE_BEFORE_ABORT === "1";
+      if (fixtureFault) writeFileSync(release, "continue");
+      else {
+        await new Promise((resolve, reject) => child.stdin.write(
+          `${JSON.stringify({ id: "allowance-abort", type: "abort" })}\n`,
+          (error) => error ? reject(error) : resolve(),
+        ));
+        // The abort command is queued and flushed; release the barrier so Pi can handle it and finish its idle wait.
+        writeFileSync(release, "continue");
+        const abortDeadline = Date.now() + 10_000;
+        const hasAbortAck = () => output.split("\n").some((line) => { try { const record = JSON.parse(line); return record.id === "allowance-abort" && record.type === "response"; } catch { return false; } });
+        while (!hasAbortAck() && Date.now() < abortDeadline) await new Promise((resolve) => setTimeout(resolve, 10));
+        assert.ok(hasAbortAck(), `Pi RPC did not acknowledge abort: ${stderr}`);
+      }
+      const settleDeadline = Date.now() + 30_000;
+      const hasSettled = () => output.split("\n").some((line) => { try { return JSON.parse(line).type === "agent_settled"; } catch { return false; } });
+      while (!hasSettled() && Date.now() < settleDeadline) await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.ok(hasSettled(), `Pi RPC did not settle: ${stderr}`);
+      child.stdin.end();
+      await waitForClose(child);
+      const after = await fakeStats(server.port);
+      assert.equal((after.attempts["usage-exhausted"] ?? 0) - (before.attempts["usage-exhausted"] ?? 0), 1, `${stderr}\n${JSON.stringify(after.stats.slice(before.stats.length))}\n${output}`);
+      assert.equal((after.attempts.healthy ?? 0) - (before.attempts.healthy ?? 0), 0, "abort at the settlement barrier must suppress alternate dispatch");
+      assert.equal(output.split("\n").filter(Boolean).filter((line) => { try { return JSON.parse(line).type === "agent_settled"; } catch { return false; } }).length, 1,
+        "the failed request settles once without user re-enqueue");
+      const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
+      assert.equal(outcome.userCount, 1, "aborting recovery must not enqueue the user request again");
+      const failed = outcome.assistants.filter((entry) => entry.model === "usage-exhausted");
+      assert.equal(failed.length, 1, "the allowance-failed model has exactly one assistant request");
+      assert.equal(failed[0].stopReason, "error", "the single original request reaches allowance failure");
+      assert.equal(failed[0].contentLength, 0, "the allowance failure is empty before abort");
+      try { assert.equal(readFileSync(join(home, "test-network-violations.log"), "utf8"), ""); }
+      catch (error) { if (error.code !== "ENOENT") throw error; }
+    } finally {
+      if (child && child.exitCode === null) await stopChild(child);
+      rmSync(home, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+
+  it("does not dispatch allowance alternate after manual model selection changes ownership generation", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-allowance-ownership-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-allowance-ownership-work-"));
+    const prompt = "ownership boundary allowance request";
+    let rpc;
+    try {
+      writeFixture({
+        home, work, port: server.port,
+        models: [{ id: "usage-exhausted", reasoning: false }, { id: "healthy", reasoning: false }],
+        bifrost: {
+          enabled: true, default: "quick", strategy: "first", classifier: { enabled: false },
+          models: { quick: ["fake/usage-exhausted"], general: ["fake/healthy"] },
+          reliability: { enabled: true, failureThreshold: 3, cooldownMinutes: 60 },
+        },
+      });
+      const observer = writeOutcomeObserver(work);
+      const before = await fakeStats(server.port);
+      rpc = startAllowanceBarrierRpc({ home, work, observer, userPrompt: prompt });
+      await rpc.promptWrite;
+      await rpc.waitForBarrier();
+      if (process.env.BIFROST_TEST_FAULT_SKIP_OWNERSHIP_CHANGE !== "1") {
+        await rpc.write({ id: "ownership-change", type: "set_model", provider: "fake", modelId: "healthy" });
+        const selected = await rpc.waitForResponse("ownership-change");
+        assert.equal(selected.success, true, JSON.stringify(selected));
+      }
+      rpc.releaseBarrier();
+      await rpc.waitForSettled();
+      await rpc.close();
+      const after = await fakeStats(server.port);
+      assertAllowanceBoundaryStopped({ before, after, outcomePath: observer.output, prompt });
+      assertNoBlockedNetwork(home);
+    } finally {
+      if (rpc?.child.exitCode === null) await stopChild(rpc.child);
+      rmSync(home, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+
+  it("does not dispatch allowance alternate after intervening queued follow-up", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-allowance-queue-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-allowance-queue-work-"));
+    const prompt = "queued boundary allowance request";
+    const queuedPrompt = "general independent queued follow-up request";
+    let rpc;
+    try {
+      writeFixture({
+        home, work, port: server.port,
+        models: [{ id: "usage-exhausted", reasoning: false }, { id: "healthy", reasoning: false }],
+        bifrost: {
+          enabled: true, default: "quick", strategy: "first", classifier: { enabled: false },
+          models: { quick: ["fake/usage-exhausted"], general: ["fake/healthy"] },
+          reliability: { enabled: true, failureThreshold: 1, cooldownMinutes: 60 },
+        },
+      });
+      const observer = writeOutcomeObserver(work);
+      const before = await fakeStats(server.port);
+      rpc = startAllowanceBarrierRpc({ home, work, observer, userPrompt: prompt });
+      await rpc.promptWrite;
+      await rpc.waitForBarrier();
+      if (process.env.BIFROST_TEST_FAULT_SKIP_QUEUED_ACTIVITY !== "1") {
+        await rpc.write({ id: "queued-follow-up", type: "follow_up", message: queuedPrompt });
+        const queued = await rpc.waitForResponse("queued-follow-up");
+        assert.equal(queued.success, true, JSON.stringify(queued));
+        assert.equal(queued.data?.disposition, "queued", JSON.stringify(queued));
+      }
+      rpc.releaseBarrier();
+      await rpc.waitForSettled();
+      await rpc.close();
+      const after = await fakeStats(server.port);
+      assertAllowanceBoundaryStopped({ before, after, outcomePath: observer.output, prompt });
+      assertNoBlockedNetwork(home);
+    } finally {
+      if (rpc?.child.exitCode === null) await stopChild(rpc.child);
+      rmSync(home, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
 
   for (const mode of ["v1", "v2"]) {
     for (const { name, quickModels, shouldRecover } of [
@@ -1272,6 +1517,45 @@ describe("G03 replay guard integrity anchor", () => {
     assert.equal(receipt.phases.green, 0);
     assert.equal(receipt.phases.red, 1);
     assert.equal(receipt.phases.restoredGreen, 0);
+  });
+
+  it("proves abort at the allowance-settlement barrier blocks alternate dispatch", async () => {
+    const proof = FAULT_PROOFS.allowanceAbortBoundary;
+    const sourceHash = createHash("sha256").update(readFileSync(EXTENSION, "utf8")).digest("hex");
+    assert.equal(sourceHash, REPLAY_GUARD_BASELINE_SHA256, "the proof requires the baseline production source");
+
+    const receipt = await runReplayGuardFaultProof({
+      root: ROOT,
+      proof,
+      log: (message) => process.stderr.write(`${message}\n`),
+    });
+    assert.equal(receipt.guard, proof.guard);
+    assert.equal(receipt.testName, proof.testName);
+    assert.equal(receipt.baselineSha256, REPLAY_GUARD_BASELINE_SHA256);
+    assert.equal(receipt.faultInjection, "fixture-env", "the accepted temporary-fixture fault injects no RPC abort in RED phase");
+    assert.equal(receipt.restoredSha256, REPLAY_GUARD_BASELINE_SHA256, "the scratch source remains pristine for this fixture-level fault");
+    assert.equal(receipt.redAssertionMessage, proof.redAssertionMessage);
+    assert.deepEqual(receipt.phases, { copy: "ok", green: 0, red: 1, restoredGreen: 0 });
+  });
+
+  it("proves ownership-generation boundary assertion catches an omitted manual selection", async () => {
+    const proof = FAULT_PROOFS.ownershipGenerationBoundary;
+    const receipt = await runReplayGuardFaultProof({ root: ROOT, proof, log: (message) => process.stderr.write(`${message}\\n`) });
+    assert.equal(receipt.faultInjection, "fixture-env");
+    assert.equal(receipt.baselineSha256, REPLAY_GUARD_BASELINE_SHA256);
+    assert.equal(receipt.restoredSha256, REPLAY_GUARD_BASELINE_SHA256);
+    assert.equal(receipt.redAssertionMessage, proof.redAssertionMessage);
+    assert.deepEqual(receipt.phases, { copy: "ok", green: 0, red: 1, restoredGreen: 0 });
+  });
+
+  it("proves queued-activity boundary assertion catches an omitted follow-up", async () => {
+    const proof = FAULT_PROOFS.queuedActivityBoundary;
+    const receipt = await runReplayGuardFaultProof({ root: ROOT, proof, log: (message) => process.stderr.write(`${message}\\n`) });
+    assert.equal(receipt.faultInjection, "fixture-env");
+    assert.equal(receipt.baselineSha256, REPLAY_GUARD_BASELINE_SHA256);
+    assert.equal(receipt.restoredSha256, REPLAY_GUARD_BASELINE_SHA256);
+    assert.equal(receipt.redAssertionMessage, proof.redAssertionMessage);
+    assert.deepEqual(receipt.phases, { copy: "ok", green: 0, red: 1, restoredGreen: 0 });
   });
 
   it("proves a malformed null-edit lineage faults the v2 Auto recovery assertion", async () => {
