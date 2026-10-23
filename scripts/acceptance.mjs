@@ -352,6 +352,7 @@ async function executeVerificationGate({ root, script, testEvents, artifactDir }
   const result = await runChild(process.execPath, [
     "--test",
     "--experimental-strip-types",
+    ...(script === "test:manifest-evidence" ? ["--test-concurrency=1"] : []),
     `--test-reporter=${reporterPath}`,
     ...(testGate.pattern ? [`--test-name-pattern=${testGate.pattern}`] : []),
     ...testGate.paths,
