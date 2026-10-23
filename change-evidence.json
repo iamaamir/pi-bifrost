@@ -181,24 +181,24 @@
       }
     },
     {
-      "id": "r02-r09-acceptance-coverage-map",
-      "requirement": "R09",
+      "id": "r02-r06-r09-acceptance-coverage-map",
+      "requirement": "R06",
       "files": [
         "docs/acceptance-coverage.md"
       ],
-      "boundary": "The coverage map records exact R09 write, backup, reload, and reconciliation evidence, while preserving R02's Pi-owned footer boundary and its separate Bifrost status line.",
-      "assertions": "R09 names real-Pi reviewed-digest reconciliation and exact atomic backup tests; the map remains partial because migration and layer-provenance acceptance is incomplete. R02 cites the status helper test and pinned-Pi UI smoke assertions for the native model footer and separate status. The bifrost-state key mutation was observed to fail its targeted test.",
+      "boundary": "The coverage map records R06 strict no-route, activation, resolve-only, and late-cancellation evidence; it retains R02's Pi-owned footer evidence and R09's atomic reconciliation evidence and remaining limits.",
+      "assertions": "R06 is marked covered by the named strict physical/Auto boundaries, false/throw activation journey, late-classifier abort support test with guard-removal fault, and packed resolve-only smoke. R02's distinct status key and Pi footer tests remain cited. R09 names real-Pi reviewed-digest reconciliation and exact atomic backups but remains partial for migration/provenance acceptance.",
       "boundaryTest": {
-        "file": "tests/integration/command-policy-acceptance.test.mjs",
-        "name": "applies only a reviewed Pi-command reconciliation digest and preserves manual config"
+        "file": "tests/integration/activation-cancellation-acceptance.test.mjs",
+        "name": "does not dispatch after a late classifier result"
       },
       "invariant": {
-        "file": "tests/reconciliation-store.test.ts",
-        "name": "replaces both files atomically, keeps exact private backups, and preserves config mode"
+        "file": "tests/router-package.test.mjs",
+        "name": "installs the packed JS API and resolves without loader flags on Node 22.19+"
       },
       "fault": {
-        "file": "tests/storage.test.ts",
-        "name": "keeps the old target and cleans its temp after a partial write failure"
+        "file": "tests/integration/activation-cancellation-acceptance.test.mjs",
+        "name": "fault control: removing the late-abort guard allows forbidden late dispatch"
       }
     }
   ]
