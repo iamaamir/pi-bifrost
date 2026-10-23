@@ -212,7 +212,7 @@
         "tests/config-migration.test.ts"
       ],
       "boundary": "The explicit config-migration command previews one selected source, validates its replacement against the merged config, requires a reviewed source-bound digest, creates a private exact-byte backup, then atomically replaces only that source. The pinned-Pi integration journey and command registration are declared in their existing file contracts.",
-      "assertions": "Unversioned and v1 JSON receives only schemaVersion 2; unrelated values and key order are preserved where feasible; malformed/future-version sources are blocked; merged replacement is validated, with existing source-override tests proving invalid layer diagnostics; real-Pi coverage migrates project, workspace, and user sources one at a time and proves unselected layers stay byte-identical; stale source bytes and stale proposal digests cannot overwrite edits; exact backup bytes and private mode are asserted; the active snapshot is not auto-reloaded. Migration-specific failure after backup remains untested.",
+      "assertions": "Unversioned and v1 JSON receives only schemaVersion 2; unrelated values and key order are preserved where feasible; malformed/future-version sources are blocked; merged replacement is validated, with existing source-override tests proving invalid layer diagnostics; real-Pi coverage migrates project, workspace, and user sources one at a time and proves unselected layers stay byte-identical; stale source bytes and stale proposal digests cannot overwrite edits; exact backup bytes and private mode are asserted; atomic replacement failure after backup preserves the original source and reports the recoverable backup; the active snapshot is not auto-reloaded.",
       "boundaryTest": {
         "file": "tests/config-migration.test.ts",
         "name": "backs up exact source bytes before atomic replacement and preserves target mode"
@@ -223,7 +223,7 @@
       },
       "fault": {
         "file": "tests/config-migration.test.ts",
-        "name": "refuses a source changed after preview without creating a backup"
+        "name": "preserves the original and exact private backup when atomic replacement fails after backup"
       }
     },
     {

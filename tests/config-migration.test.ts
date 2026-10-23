@@ -9,6 +9,7 @@ import {
   parseConfigMigrationArgs,
   planConfigMigration,
 } from "../config-migration.ts";
+import { writeTextFileWithOperations } from "../storage.ts";
 
 const directories: string[] = [];
 after(() => { for (const path of directories) rmSync(path, { recursive: true, force: true }); });
@@ -81,6 +82,31 @@ describe("config migration apply", () => {
       models: { quick: [] }, retained: "exact bytes", schemaVersion: 2,
     });
     assert.equal(readdirSync(directory).length, 2);
+  });
+
+  it("preserves the original and exact private backup when atomic replacement fails after backup", () => {
+    const directory = temporaryDirectory();
+    const sourcePath = join(directory, "bifrost.json");
+    const original = Buffer.from('{"models":{"quick":[]}}\n');
+    writeFileSync(sourcePath, original, { mode: 0o640 });
+    const plan = planConfigMigration("project", original);
+    assert.equal(plan.status, "ready");
+    if (plan.status !== "ready") return;
+
+    let failure: unknown;
+    try {
+      applyConfigMigration({ sourcePath, expectedSourceBytes: original, replacementBytes: plan.replacementBytes }, (path, text) =>
+        writeTextFileWithOperations(path, text, { renameSync: () => { throw new Error("injected rename failure"); } }));
+    } catch (error) {
+      failure = error;
+    }
+    assert.ok(failure instanceof ConfigMigrationError);
+    assert.equal(failure.code, "apply_failed");
+    assert.ok(failure.backupPath);
+    assert.deepEqual(readFileSync(failure.backupPath), original);
+    assert.equal(statSync(failure.backupPath).mode & 0o777, 0o600);
+    assert.deepEqual(readFileSync(sourcePath), original, "failed atomic replacement must preserve source bytes");
+    assert.equal(readdirSync(directory).length, 2, "failed replacement must clean its temporary file");
   });
 
   it("refuses a source changed after preview without creating a backup", () => {

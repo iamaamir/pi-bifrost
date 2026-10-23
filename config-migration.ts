@@ -161,11 +161,15 @@ function writeExactBackup(sourcePath: string, sourceBytes: Uint8Array): string {
   }
 }
 
-export function applyConfigMigration(input: {
-  readonly sourcePath: string;
-  readonly expectedSourceBytes: Uint8Array;
-  readonly replacementBytes: Uint8Array;
-}): string {
+export function applyConfigMigration(
+  input: {
+    readonly sourcePath: string;
+    readonly expectedSourceBytes: Uint8Array;
+    readonly replacementBytes: Uint8Array;
+  },
+  // Keep post-backup replacement failures deterministic without filesystem races.
+  replaceConfig: typeof writeTextFile = writeTextFile,
+): string {
   const currentBytes = readConfigMigrationSource(input.sourcePath);
   if (!Buffer.from(input.expectedSourceBytes).equals(currentBytes)) throw new ConfigMigrationError("source_changed");
   const backupPath = writeExactBackup(input.sourcePath, currentBytes);
@@ -174,7 +178,7 @@ export function applyConfigMigration(input: {
     if (!Buffer.from(input.expectedSourceBytes).equals(readConfigMigrationSource(input.sourcePath))) {
       throw new ConfigMigrationError("source_changed", backupPath);
     }
-    writeTextFile(input.sourcePath, Buffer.from(input.replacementBytes).toString("utf8"));
+    replaceConfig(input.sourcePath, Buffer.from(input.replacementBytes).toString("utf8"));
     if (!Buffer.from(input.replacementBytes).equals(readConfigMigrationSource(input.sourcePath))) {
       throw new ConfigMigrationError("apply_failed", backupPath);
     }
