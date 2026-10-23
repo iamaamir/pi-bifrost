@@ -187,7 +187,7 @@
         "docs/acceptance-coverage.md"
       ],
       "boundary": "The coverage map records R06 strict no-route, activation, resolve-only, and late-cancellation evidence; it retains R02's Pi-owned footer evidence and R09's atomic reconciliation evidence and remaining limits.",
-      "assertions": "R06 is marked covered by the named strict physical/Auto boundaries, false/throw activation journey, late-classifier abort support test with guard-removal fault, and packed resolve-only smoke. R02's distinct status key and Pi footer tests remain cited. R09 names real-Pi reviewed-digest reconciliation and exact atomic backups but remains partial for migration/provenance acceptance.",
+      "assertions": "R06 is marked covered by the named strict physical/Auto boundaries, false/throw activation journey, late-classifier abort support test with guard-removal fault, and packed resolve-only smoke. R12 now cites exact pipeline/transport tests for shared deadlines, cancellation, late-result rejection, and no-retry behavior, while remaining partial for the full pinned-Pi backend-precedence matrix. R02's distinct status key and Pi footer tests remain cited. R09 names real-Pi reviewed-digest reconciliation and exact atomic backups but remains partial for migration/provenance acceptance.",
       "boundaryTest": {
         "file": "tests/integration/activation-cancellation-acceptance.test.mjs",
         "name": "does not dispatch after a late classifier result"
