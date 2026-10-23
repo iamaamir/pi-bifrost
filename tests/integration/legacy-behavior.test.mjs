@@ -205,7 +205,7 @@ describe("legacy physical routing regression", { timeout: 240_000, concurrency: 
         models: { quick: ["fake/fast"], frontier: ["fake/strong"] },
       },
     });
-    const rpc = startRpc({ fixture, server, model: "fake/fast", approve: true });
+    const rpc = startRpc({ fixture, server, model: "bifrost/auto", approve: true });
     try {
       const selected = await rpc.setModel("fake", "strong");
       assert.equal(selected?.provider, "fake");

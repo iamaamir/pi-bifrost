@@ -277,8 +277,8 @@
         "tests/fixtures/http-pi-harness.mjs",
         "tests/integration/legacy-behavior.test.mjs"
       ],
-      "boundary": "A real Pi RPC set_model command is a user selection: Bifrost pins the selected physical model for the session, bypasses automatic routing until /bifrost unpin, then resumes the configured physical route.",
-      "assertions": "The set_model response names the requested provider/model; Pi status shows pinned; the next ordinary user prompt produces exactly one generation on that physical model without Bifrost classification or routing; explicit unpin is handled and the next prompt produces exactly one generation on the configured default model. Mutating the manual-selection pin assignment from true to false makes this named test fail. The Pi RPC fixture exposes only the minimal set_model command needed to exercise the host's real model_select event.",
+      "boundary": "A real Pi RPC set_model command switches from explicit bifrost/auto to a user-selected physical model: Bifrost pins that physical model for the session, bypasses automatic routing until /bifrost unpin, then resumes the configured physical route.",
+      "assertions": "The session starts on explicit bifrost/auto; set_model responds with the requested physical provider/model; Pi status shows pinned; the next ordinary user prompt produces exactly one generation on that physical model without Bifrost classification or routing; explicit unpin is handled and the next prompt produces exactly one generation on the configured default model. Mutating the manual-selection pin assignment from true to false makes this named test fail. The Pi RPC fixture exposes only the minimal set_model command needed to exercise the host's real model_select event.",
       "boundaryTest": {
         "file": "tests/integration/legacy-behavior.test.mjs",
         "name": "manual Pi model selection pins the physical model until explicit unpin"
