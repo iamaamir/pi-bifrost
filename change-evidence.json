@@ -133,6 +133,33 @@
         "file": "tests/integration/cache-lifecycle-acceptance.test.mjs",
         "name": "default cache misses prompts with reordered tokens"
       }
+    },
+    {
+      "id": "offline-diagnostics-r07",
+      "requirement": "R07",
+      "files": [
+        "diagnostics.ts",
+        "docs/acceptance-coverage.md",
+        "scripts/acceptance/journeys.mjs",
+        "tests/config.test.ts",
+        "tests/diagnostics.test.ts",
+        "tests/integration/command-policy-acceptance.test.mjs",
+        "tests/schema.test.ts"
+      ],
+      "boundary": "Pinned Pi command acceptance inspects auth, availability, circuits, and unresolved pool references, validates offline, and asserts zero provider/catalog requests.",
+      "assertions": "Offline validation reports unresolved IDs and fallback cycles without echoing private values; unsupported capability enforcement is rejected; inspection projects auth, availability, circuit state, and bounded local registry-refresh age without probes or mutation.",
+      "boundaryTest": {
+        "file": "tests/integration/command-policy-acceptance.test.mjs",
+        "name": "runs inspect, validate, and a direct-rule preview offline without provider requests"
+      },
+      "invariant": {
+        "file": "tests/diagnostics.test.ts",
+        "name": "inspects pool expansions and circuits without route selection, RNG, mutation, or private auth output"
+      },
+      "fault": {
+        "file": "tests/diagnostics.test.ts",
+        "name": "surfaces unsupported capability enforcement with a safe field path"
+      }
     }
   ]
 }

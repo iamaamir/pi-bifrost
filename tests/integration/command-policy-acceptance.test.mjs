@@ -100,7 +100,7 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
         enabled: true,
         default: "general",
         classifier: { enabled: true, backend: "prompt", model: "fake/chat" },
-        models: { general: ["fake/chat"] },
+        models: { general: ["fake/chat", "missing-fragment"] },
         rules: [{ pattern: "POLICY_ACCEPTANCE_DIRECT", model: "fake/chat" }],
         debug: { enabled: true },
         privateMetadata: "private-config-canary",
@@ -122,8 +122,15 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
           const diagnostic = reportJson(result);
           assert.equal(diagnostic.kind, command.includes("inspect") ? "inspection" : "validation");
           if (diagnostic.kind === "inspection") {
-            assert.ok(diagnostic.tiers.some((tier) => tier.candidates.some((candidate) => candidate.model === "fake/chat" && candidate.available === true)));
-          } else assert.equal(diagnostic.diagnostics.filter((entry) => entry.severity === "error").length, 0);
+            const inspected = diagnostic.tiers.flatMap((tier) => tier.candidates).find((candidate) => candidate.model === "fake/chat");
+            assert.equal(inspected?.available, true);
+            assert.equal(inspected?.auth, "configured");
+            assert.equal(inspected?.circuit, "closed");
+          } else {
+            assert.ok(diagnostic.diagnostics.some((entry) => entry.code === "pool.pattern_unresolved" && entry.entryIndex === 1));
+            assert.equal(diagnostic.diagnostics.filter((entry) => entry.severity === "error").length, 0);
+            assert.doesNotMatch(JSON.stringify(diagnostic), /missing-fragment/u);
+          }
         }
         assert.doesNotMatch(`${result.stderr}\n${result.stdout}`, /private-config-canary|synthetic-provider-secret-canary/u);
       }

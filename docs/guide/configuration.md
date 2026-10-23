@@ -159,6 +159,8 @@ First matching step wins; later steps are skipped. A rule naming an exact model 
 
 Classification is enabled by default. On a local-cache miss, the active classifier can receive the current prompt. Set `classifier.enabled` to `false` or run `/bifrost classifier off` to disable the extra classification call. The separate `cache.enabled` setting controls classification-cache use. Its threshold defaults to `1`, which matches ordered normalized prompts only; set it below `1` to opt into fuzzy Jaccard matches. Setting `cache.enabled` to `false` does not clear saved entries; run `/bifrost cache clear` to empty them. The generation provider still receives the prompt.
 
+Capability requirements are advisory-only in this release. `requirements.mode: "enforce"` is rejected because general capability enforcement is not implemented.
+
 Set optional `classifier.totalTimeoutMs` to bound all external classifier work for one request. It accepts an integer from `1` to `60000`; when the budget expires, Bifrost stops classifier calls and continues with local regex/default routing. Caller cancellation stops routing. When omitted, existing backend timeout and retry settings remain in effect. See the [classifier guide](classifiers.md#prompt-classifier) for details.
 
 ## Complete example

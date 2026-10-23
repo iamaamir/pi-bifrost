@@ -38,6 +38,14 @@
       "$ref": "#/definitions/AffinityConfig",
       "description": "Optional explicit affinity override. When absent, the Pi extension retains a proven successful Auto-dispatch anchor within the selected tier; physical selection and the resolve-only API remain off by default. Retention stays inside the final selection pool and does not override hard exclusions. This namespace requires schemaVersion 2."
     },
+    "requirements": {
+      "type": "object",
+      "description": "Capability enforcement is not supported in this release. Only the advisory mode is accepted; do not use requirements to claim that a model capability is enforced.",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string", "enum": ["advisory"], "default": "advisory" }
+      }
+    },
     "enabled": {
       "type": "boolean",
       "description": "Enable or disable routing. When disabled, Bifrost does not switch models for new turns. Pi uses the selected physical model.",

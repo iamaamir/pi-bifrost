@@ -112,6 +112,7 @@ export interface BifrostConfig {
   tierPolicies?: Record<string, TierPolicy>;
   economics?: EconomicConfig;
   affinity?: AffinityConfig;
+  requirements?: { mode?: "advisory" | "enforce" };
   enabled?: boolean;
   default?: string;
   strategy?: RoutingStrategy;
@@ -481,6 +482,13 @@ export function validateConfig(
   config: BifrostConfig,
 ): ConfigIssue[] {
   const issues: ConfigIssue[] = validateTierPolicyConfig(config);
+  const requirementsRaw: unknown = config.requirements;
+  const requirements = criterionObject(requirementsRaw) ? requirementsRaw : undefined;
+  if (requirementsRaw !== undefined && (!requirements
+    || Object.keys(requirements).some((key) => key !== "mode")
+    || (requirements.mode !== undefined && requirements.mode !== "advisory"))) {
+    issues.push({ severity: "error", code: "config.requirements_unsupported", path: "requirements", message: "Capability requirements are advisory-only in this release; remove unsupported fields and do not set mode to enforce." });
+  }
   const modelKeys = Object.keys(config.models ?? {});
   const classifier = config.classifier;
   const totalTimeoutIssue = classifierTotalTimeoutIssue(config);

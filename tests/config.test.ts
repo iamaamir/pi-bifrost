@@ -32,6 +32,14 @@ describe("validateConfig", () => {
     assert.equal(issues.length, 0);
   });
 
+  it("allows advisory requirements and rejects unsupported enforcement or fields", () => {
+    assert.deepEqual(validateConfig({ ...baseConfig, requirements: { mode: "advisory" } }), []);
+    const enforced = validateConfig({ ...baseConfig, requirements: { mode: "enforce" } });
+    assert.ok(enforced.some((issue) => issue.code === "config.requirements_unsupported" && issue.path === "requirements"));
+    const unknown = validateConfig({ ...baseConfig, requirements: { mode: "advisory", capabilities: ["image"] } as never });
+    assert.ok(unknown.some((issue) => issue.code === "config.requirements_unsupported"));
+  });
+
   it("defaults allowance recovery on and validates its explicit opt-out", () => {
     assert.deepEqual(validateConfig({ ...baseConfig, reliability: { retryOnAllowanceExhausted: false } }), []);
     assert.ok(validateConfig({ ...baseConfig, reliability: { retryOnAllowanceExhausted: "yes" } as never })

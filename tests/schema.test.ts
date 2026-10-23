@@ -14,6 +14,16 @@ describe("shipped JSON artifacts", () => {
     assert.ok(schema !== null && typeof schema === "object" && "$schema" in schema);
   });
 
+  it("documents capability requirements as advisory-only in this release", () => {
+    const schema = readJson("schema.json") as {
+      properties?: { requirements?: { additionalProperties?: boolean; properties?: { mode?: { enum?: string[]; default?: string } } } };
+    };
+    const requirements = schema.properties?.requirements;
+    assert.equal(requirements?.additionalProperties, false);
+    assert.deepEqual(requirements?.properties?.mode?.enum, ["advisory"]);
+    assert.equal(requirements?.properties?.mode?.default, "advisory");
+  });
+
   it("requires schemaVersion 2 whenever tierPolicies is present", () => {
     const schema = readJson("schema.json") as {
       allOf?: Array<{

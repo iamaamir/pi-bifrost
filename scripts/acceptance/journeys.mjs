@@ -186,6 +186,13 @@ const journeys = [
     boundary: "real Pi commands and local request counters with outbound network guard",
   },
   {
+    id: "offline-inspection-validation-auth-observability",
+    testFile: "tests/integration/command-policy-acceptance.test.mjs",
+    title: "runs inspect, validate, and a direct-rule preview offline without provider requests",
+    requirements: ["R07"],
+    boundary: "real Pi inspection and validation with observable auth, unresolved model references, and a local outbound-request guard",
+  },
+  {
     id: "classifier-timeout-visible-fallback",
     testFile: "tests/integration/command-policy-acceptance.test.mjs",
     title: "warns on prompt-classifier timeout, falls back locally, then generates on the physical model",
