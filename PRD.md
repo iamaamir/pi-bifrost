@@ -304,7 +304,7 @@ Feature switches are orthogonal named config fields, not one `smartRouting` flag
 
 ## 14. Open decisions and launch blockers
 
-1. **Host classifier inventory:** prove Pi v1.0.1 `getAvailable()` behavior for classifier-typed entries with fake registry and one controlled host test. Source filtering today excludes virtual entries, not all classifier types.
+1. **Host classifier inventory — resolved for Pi v1.0.1:** the controlled AgentSession acceptance test uses a fake classifier provider and proves `getAvailable()` omits classifier-only entries while `getAvailableOfType("classifier")` returns them. Pi still exposes registered virtual models through `getAvailable()`, so Bifrost must keep filtering those from generation pools, probes and init. R04's general capability-observation seam remains incomplete; modality enforcement stays deferred.
 2. **Future capability enforcement:** image input is out of scope. Context/tool/other payload enforcement requires a proven final dispatch veto in both modes; input observations alone are insufficient. Do not infer veto capability from hooks that catch exceptions and continue.
 3. **Account identity:** Pi provider auth APIs are not evidence of selectable multi-account dispatch. Account binding support remains adapter-gated; provider scope cannot impersonate it.
 4. **Strict input preservation:** Pi `handled` stops input before agent processing. TUI editor restoration and non-TUI error visibility need targeted E2E evidence before enabling strict routing; never requeue via sendUserMessage.

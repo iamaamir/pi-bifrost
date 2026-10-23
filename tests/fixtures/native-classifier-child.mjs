@@ -129,7 +129,14 @@ it("routes real AgentSession through Pi-native classifier to a different physica
   assert.ok(initialModel, "distinct initial physical model must be available");
 
   const { default: bifrostExtension } = await import(join(root, "index.ts"));
-  const factories = fault === "no-extension" ? [] : [bifrostExtension];
+  const hostInventory = { chat: undefined, classifiers: undefined };
+  const captureHostInventory = (pi) => {
+    pi.on("before_agent_start", async (_event, ctx) => {
+      hostInventory.chat = ctx.modelRegistry.getAvailable();
+      hostInventory.classifiers = await ctx.modelRegistry.getAvailableOfType("classifier", "fixture-class");
+    });
+  };
+  const factories = [captureHostInventory, ...(fault === "no-extension" ? [] : [bifrostExtension])];
   const resourceLoader = new DefaultResourceLoader({ cwd, agentDir, extensionFactories: factories });
   await resourceLoader.reload();
   ({ session } = await createAgentSession({
@@ -154,6 +161,11 @@ it("routes real AgentSession through Pi-native classifier to a different physica
     console.error = originalError;
   }
 
+  assert.deepEqual(hostInventory.chat?.map(({ provider, id }) => `${provider}/${id}`).sort(), [
+    "bifrost/auto", "faux/physical-capable", "faux/physical-fast", "faux/physical-frontier",
+  ], "Pi getAvailable includes chat and registered virtual models but excludes classifier-only entries");
+  assert.deepEqual(hostInventory.classifiers?.map(({ provider, id }) => `${provider}/${id}`), ["fixture-class/fixture-jev"],
+    "Pi exposes classifier models through getAvailableOfType instead of getAvailable");
   assert.equal(classifyCalls, 1, "native classifier must be invoked exactly once for the first turn");
   assert.equal(seen.length, 1);
   assert.equal(seen[0].provider, "fixture-class");
