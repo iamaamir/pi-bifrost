@@ -118,6 +118,13 @@ export const NAMED_REPLAY_ASSERTIONS = [
   },
   {
     testFile: "tests/integration/reliability-v2-auto.test.mjs",
+    testName: "keeps the failed response's exact null context-edit lineage before Auto recovery",
+    guard: "nullEditLineageV2",
+    mutation: "insert a second null edit before recovery and bypass only the retry-time omission recheck",
+    status: "PROVEN",
+  },
+  {
+    testFile: "tests/integration/reliability-v2-auto.test.mjs",
     testName: "stops after the single alternate allowance attempt in v1 Auto",
     guard: "singleAlternateV1",
     mutation: "compound empty-recovery lineage fault; not individual-guard sensitivity",
@@ -149,6 +156,12 @@ export const FAULT_PROOFS = {
     testName: "retries one zero-effect allowance failure with a configured alternate in v2 Auto",
     redAssertionMessage: "the prepared usage-limit retry was cancelled because the turn changed; no model was dispatched.",
   },
+  nullEditLineageV2: {
+    guard: "nullEditLineageV2",
+    testFile: "tests/integration/reliability-v2-auto.test.mjs",
+    testName: "keeps the failed response's exact null context-edit lineage before Auto recovery",
+    redAssertionMessage: "Pi must place exactly the failed response's null projection edit before the recovered result",
+  },
   autoBoundaryToolSideEffect: {
     guard: "autoBoundaryStillActive",
     testFile: "tests/integration/auto-virtual.test.mjs",
@@ -156,6 +169,18 @@ export const FAULT_PROOFS = {
     redAssertionMessage: "Pi must execute the provider-requested synthetic tool",
   },
 };
+
+// Adds one scratch-only duplicate null edit. The retry-time bypass keeps
+// dispatch alive so the named Pi lineage assertion, not admission, sees RED.
+function corruptNullEditLineage(source) {
+  const edit = "entries: [{ type: \"context_edit\", targetId: pending.assistantEntryId, replacement: null }]";
+  if (source.split(edit).length !== 2) throw new Error("null-edit lineage fault requires one exact return entry");
+  return injectGuardStatement(
+    source.replace(edit, "entries: [{ type: \"context_edit\", targetId: pending.assistantEntryId, replacement: null }, { type: \"context_edit\", targetId: pending.assistantEntryId, replacement: null }]"),
+    "isSideEffectFreeAllowanceFailure",
+    "if (requireCurrentOmitted) return [assistantEntryId];",
+  );
+}
 
 // Restrictive first-retry sensitivity is separate from the compound limit fault.
 FAULT_PROOFS.allowanceRetryBoundaryV1 = {
@@ -196,6 +221,7 @@ export const REPLAY_GUARD_MUTATORS = {
   singleAlternateV2: (source) => permitRepeatedEmptyRecovery(source, true),
   isSideEffectFreeAllowanceFailure: (source) => injectGuardStatement(source, "isSideEffectFreeAllowanceFailure", "return [assistantEntryId];"),
   allowanceRetryBoundaryStillSafe: (source) => injectGuardStatement(source, "allowanceRetryBoundaryStillSafe", "return false;"),
+  nullEditLineageV2: corruptNullEditLineage,
   autoBoundaryStillActive: (source) => injectGuardStatement(source, "autoBoundaryStillActive", "return false;"),
 };
 

@@ -490,6 +490,60 @@ describe("pinned Pi reliability v2 Auto path", { timeout: 360_000, concurrency: 
       }
     });
 
+    if (mode === "v2") {
+      it("keeps the failed response's exact null context-edit lineage before Auto recovery", async () => {
+        const home = mkdtempSync(join(tmpdir(), "bifrost-allowance-lineage-home-"));
+        const work = mkdtempSync(join(tmpdir(), "bifrost-allowance-lineage-work-"));
+        try {
+          writeFixture({
+            home, work, port: server.port,
+            models: [{ id: "usage-exhausted", reasoning: false }, { id: "healthy", reasoning: false }],
+            bifrost: {
+              schemaVersion: 2, enabled: true, default: "quick", strategy: "first", categoryStrategies: { quick: "first" },
+              classifier: { enabled: false }, models: { quick: ["fake/usage-exhausted", "fake/healthy"] },
+              reliability: { enabled: true, stateVersion: 2, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60 },
+            },
+          });
+          const observer = writeOutcomeObserver(work);
+          const before = await fakeStats(server.port);
+          const result = await runPi({
+            home, work, extraExtensions: [observer.extension],
+            messages: ["/bifrost reliability migrate --fresh", "lineage fixture"],
+          });
+          const after = await fakeStats(server.port);
+          assert.equal(result.code, 0, result.stderr);
+          assert.equal((after.attempts["usage-exhausted"] ?? 0) - (before.attempts["usage-exhausted"] ?? 0), 1, result.stderr);
+          assert.equal((after.attempts.healthy ?? 0) - (before.attempts.healthy ?? 0), 1,
+            "the proven empty failure dispatches exactly one alternate");
+          const outcome = JSON.parse(readFileSync(observer.output, "utf8"));
+          assert.equal(outcome.userCount, 1, "recovery must retain one original user boundary");
+          const failed = outcome.assistants.filter((entry) => entry.provider === "fake" && entry.model === "usage-exhausted");
+          assert.equal(failed.length, 1, "the failed response must be unique");
+          assert.equal(failed[0].stopReason, "error", "the unique failed response must remain an error");
+          assert.equal(failed[0].contentLength, 0, "recovery requires an empty failed response");
+          const recovered = outcome.assistants.filter((entry) => entry.provider === "fake" && entry.model === "healthy");
+          assert.equal(recovered.length, 1, "the recovered response must be unique");
+          assert.equal(recovered[0].stopReason, "stop", "the unique recovered response must succeed");
+          const [failedEntry] = failed;
+          const [succeeded] = recovered;
+          assert.equal(failedEntry.parentId, outcome.users[0]?.id, "the failed entry stays on the sole user boundary");
+          const failedIndex = outcome.entries.findIndex((entry) => entry.id === failedEntry.id);
+          const succeededIndex = outcome.entries.findIndex((entry) => entry.id === succeeded.id);
+          assert.ok(failedIndex >= 0 && succeededIndex > failedIndex, JSON.stringify(outcome));
+          assert.deepEqual(outcome.entries.slice(failedIndex + 1, succeededIndex).map((entry) => ({
+            type: entry.type, targetId: entry.targetId,
+          })), [{ type: "context_edit", targetId: failedEntry.id }],
+          "Pi must place exactly the failed response's null projection edit before the recovered result");
+          assert.deepEqual(outcome.contextEdits.filter((entry) => entry.targetId === failedEntry.id), [{
+            targetId: failedEntry.id, isNull: true,
+          }], "the recovery lineage contains one exact null edit for the failed response");
+        } finally {
+          rmSync(home, { recursive: true, force: true });
+          rmSync(work, { recursive: true, force: true });
+        }
+      });
+    }
+
     it(`does not retry an allowance failure when ${mode} Auto recovery is disabled`, async () => {
       const home = mkdtempSync(join(tmpdir(), `bifrost-allowance-off-${mode}-home-`));
       const work = mkdtempSync(join(tmpdir(), `bifrost-allowance-off-${mode}-work-`));
@@ -1218,6 +1272,21 @@ describe("G03 replay guard integrity anchor", () => {
     assert.equal(receipt.phases.green, 0);
     assert.equal(receipt.phases.red, 1);
     assert.equal(receipt.phases.restoredGreen, 0);
+  });
+
+  it("proves a malformed null-edit lineage faults the v2 Auto recovery assertion", async () => {
+    const proof = FAULT_PROOFS.nullEditLineageV2;
+    const sourceHash = createHash("sha256").update(readFileSync(EXTENSION, "utf8")).digest("hex");
+    assert.equal(sourceHash, REPLAY_GUARD_BASELINE_SHA256, "the proof requires the baseline production source");
+
+    const receipt = await runReplayGuardFaultProof({ root: ROOT, proof, log: (message) => process.stderr.write(`${message}\n`) });
+    assert.equal(receipt.guard, proof.guard);
+    assert.equal(receipt.testName, proof.testName);
+    assert.equal(receipt.baselineSha256, REPLAY_GUARD_BASELINE_SHA256);
+    assert.notEqual(receipt.mutantSha256, receipt.baselineSha256, "the boundary fault must change the source hash");
+    assert.equal(receipt.restoredSha256, REPLAY_GUARD_BASELINE_SHA256, "the proof must restore the baseline source");
+    assert.equal(receipt.redAssertionMessage, proof.redAssertionMessage);
+    assert.deepEqual(receipt.phases, { copy: "ok", green: 0, red: 1, restoredGreen: 0 });
   });
 });
 

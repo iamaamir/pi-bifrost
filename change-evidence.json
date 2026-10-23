@@ -32,11 +32,10 @@
         "tests/integration/classifier-transport-acceptance.test.mjs",
         "tests/integration/command-privacy-acceptance.test.mjs",
         "tests/integration/economic-policy-acceptance.test.mjs",
-        "tests/integration/native-activation-cancel.test.mjs",
-        "tests/fixtures/replay-fault-control.mjs"
+        "tests/integration/native-activation-cancel.test.mjs"
       ],
-      "boundary": "The reviewed production index.ts sha256 is declared once in tests/fixtures/replay-fault-control.mjs and the six integration fault gates import that constant, so rebinding the reviewed baseline is a one-file change and no gate can drift to a different reviewed hash.",
-      "assertions": "Each gate's baseline equals the imported REPLAY_GUARD_BASELINE_SHA256; gate proofs still start GREEN on the pristine reviewed source, turn the named assertion RED under the controlled production mutation, restore the source, and record restored GREEN; rebasing the baseline touches exactly one file and all six gates observe the same value. The baseline matches the exact index.ts hash after adding explicit_model origin for exact model rules; the affinity policy tests also assert that resolver origins stay non-affinity-eligible.",
+      "boundary": "The reviewed production index.ts sha256 is declared once in tests/fixtures/replay-fault-control.mjs and the six R16 integration fault gates import that constant, so rebinding the reviewed baseline is a one-file change and no gate can drift to a different reviewed hash.",
+      "assertions": "Each gate's baseline equals the imported REPLAY_GUARD_BASELINE_SHA256; gate proofs still start GREEN on the pristine reviewed source, turn the named assertion RED under the controlled production mutation, restore the source, and record restored GREEN; rebasing the baseline touches exactly one file and all six R16 gates observe the same value. The baseline matches the exact index.ts hash after adding explicit_model origin for exact model rules; the affinity policy tests also assert that resolver origins stay non-affinity-eligible.",
       "boundaryTest": {
         "file": "tests/integration/economic-policy-acceptance.test.mjs",
         "name": "fails the named reserve-equality assertion under a hard-filter-bypass fault in an isolated copy"
@@ -157,48 +156,6 @@
       "fault": {
         "file": "tests/diagnostics.test.ts",
         "name": "surfaces unsupported capability enforcement with a safe field path"
-      }
-    },
-    {
-      "id": "strict-activation-failure-no-generation",
-      "requirement": "R05",
-      "files": [
-        "scripts/acceptance/journeys.mjs"
-      ],
-      "boundary": "A named pinned-Pi AgentSession journey exercises hard-admission activation failures from the actual host; false and thrown setModel outcomes must keep the user turn unsent and preserve the prior seed model.",
-      "assertions": "Both host activation outcomes fail closed without provider callbacks on the stale model; restored source returns the journey green. Capability enforcement remains rejected as unsupported in this release. The shared journey registry also names the R02 manual-model selection, R03 pinned-failure no-unpin/no-replay case, R09 config-migration, and R11 exact-model/continuation cases, whose dedicated assertions are declared by their requirement contracts.",
-      "boundaryTest": {
-        "file": "tests/integration/native-activation-cancel.test.mjs",
-        "name": "cancels real AgentSession activation behind a proven deny-all fence"
-      },
-      "invariant": {
-        "file": "tests/integration/native-activation-cancel.test.mjs",
-        "name": "cancels real AgentSession activation behind a proven deny-all fence"
-      },
-      "fault": {
-        "file": "tests/integration/native-activation-cancel.test.mjs",
-        "name": "cancels real AgentSession activation behind a proven deny-all fence"
-      }
-    },
-    {
-      "id": "r01-r02-r06-r09-r10-r11-r12-r17-acceptance-coverage-map",
-      "requirement": "R06",
-      "files": [
-        "docs/acceptance-coverage.md"
-      ],
-      "boundary": "The coverage map records R01 runtime/preview/API parity, R06 strict no-route/cancellation, R10 economic-signal evidence, R11 affinity overrides and limits, R12 classifier deadlines and limits, R17 arbitrary-tier/model-free defaults, R02 Pi-owned footer evidence, and R09 reconciliation evidence and remaining limits.",
-      "assertions": "R01 is covered by the named three-surface parity case and structured-exclusion routing test; full phase timings remain a separate ADR 0007 deferral. R02 is covered by real-Pi physical/Auto selection, manual model selection with session pin and explicit unpin, /bifrost pin/off, the distinct status key, and footer smoke evidence. R03 evidence now includes v1/v2 bounded empty-effect recovery and opt-out, no replay after output/tool/queued work, a pinned failure that preserves the manual pin and sends no duplicate request, exact-once settled failure accounting, and physical-model tool continuation plus Pi-owned retry stickiness. R03 remains partial pending the full same-user/Auto boundary, ownership-generation, abort, intervening-activity, and exact null-edit lineage matrix end-to-end. R04 now has a controlled Pi host proof that classifier-only entries stay outside getAvailable, plus first-use evidence that Bifrost filters the registered virtual model from probes and generated pools; R04 remains partial because the generalized capability-observation seam is incomplete. Image/modality enforcement remains deferred. R06 is covered by named strict physical/Auto boundaries, false/throw activation, late-classifier abort with guard-removal fault, and packed resolve-only smoke. R09 is covered by one-source real-Pi migration across project/workspace/user layers, stale proposal rejection, exact backups, layer isolation, source-override validation, and injected post-backup replacement failure preserving source plus recovery backup. R10 is covered by tests for explicit reserves, advisory observation, units/windows, expiry, account-scope gating, source provenance, and no hidden fetch; live quota adapters and hard spend guarantees remain deferred by PRD §8. R11 is covered by real-Pi exact-model precedence without anchor replacement, same-model tool continuation without reranking, same-tier/branch behavior, and resolver tests for explicit tier/model origins. R12 cites exact pipeline/transport tests for shared deadlines, cancellation, late-result rejection, and no-retry behavior, while remaining partial for the full pinned-Pi backend-precedence matrix. R17 is covered by arbitrary custom-tier/provider-neutral strategy and model-free bundled-default checks.",
-      "boundaryTest": {
-        "file": "tests/integration/activation-cancellation-acceptance.test.mjs",
-        "name": "does not dispatch after a late classifier result"
-      },
-      "invariant": {
-        "file": "tests/router-package.test.mjs",
-        "name": "installs the packed JS API and resolves without loader flags on Node 22.19+"
-      },
-      "fault": {
-        "file": "tests/integration/activation-cancellation-acceptance.test.mjs",
-        "name": "fault control: removing the late-abort guard allows forbidden late dispatch"
       }
     },
     {
@@ -332,6 +289,30 @@
       },
       "fault": {
         "exception": "Declarative acceptance-profile registration only; production behavior unchanged and no new behavioral assertion introduced."
+      }
+    },
+    {
+      "id": "r03-v2-null-edit-lineage",
+      "requirement": "R03",
+      "files": [
+        "docs/acceptance-coverage.md",
+        "scripts/acceptance/journeys.mjs",
+        "tests/fixtures/replay-fault-control.mjs",
+        "tests/integration/reliability-v2-auto.test.mjs"
+      ],
+      "boundary": "Pinned Pi 1.0.1 Auto dispatch against isolated local fake providers observes the persisted branch after a v2 empty allowance rejection and recovery; no external origin is allowed.",
+      "assertions": "The journey registry names this exact v2 Pi boundary and the coverage map records it while retaining R03's ownership-generation, abort, and intervening-activity limit. The rejected generation is empty and belongs to the sole user boundary; exactly one null context edit targets its exact assistant entry, and that edit is the only persisted branch entry between failure and recovered result. One alternate request succeeds. A scratch-copy fault inserts a second null edit while bypassing only the retry-time omission recheck, so recovery still runs and the named lineage assertion turns RED; restored source returns GREEN without modifying production source.",
+      "boundaryTest": {
+        "file": "tests/integration/reliability-v2-auto.test.mjs",
+        "name": "keeps the failed response's exact null context-edit lineage before Auto recovery"
+      },
+      "invariant": {
+        "file": "tests/integration/reliability-v2-auto.test.mjs",
+        "name": "retries one zero-effect allowance failure with a configured alternate in v2 Auto"
+      },
+      "fault": {
+        "file": "tests/integration/reliability-v2-auto.test.mjs",
+        "name": "proves a malformed null-edit lineage faults the v2 Auto recovery assertion"
       }
     }
   ]

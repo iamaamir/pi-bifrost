@@ -102,6 +102,13 @@ const journeys = [
     boundary: "real Pi v2 Auto path with fake provider 402 responses and synthetic empty-effect boundary",
   },
   {
+    id: "auto-null-edit-lineage-v2",
+    testFile: "tests/integration/reliability-v2-auto.test.mjs",
+    title: "keeps the failed response's exact null context-edit lineage before Auto recovery",
+    requirements: ["R03"],
+    boundary: "real Pi v2 Auto recovery with local fake provider, isolated state, and exact persisted branch-entry lineage",
+  },
+  {
     id: "pi-owned-error-retry-no-bifrost-replay",
     testFile: "tests/integration/reliability-v2-auto.test.mjs",
     title: "reuses one v2 receipt and model across a Pi-owned error retry, without Bifrost replay",
