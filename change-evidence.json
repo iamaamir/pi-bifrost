@@ -181,24 +181,24 @@
       }
     },
     {
-      "id": "r02-native-footer-preservation",
-      "requirement": "R02",
+      "id": "r02-r09-acceptance-coverage-map",
+      "requirement": "R09",
       "files": [
         "docs/acceptance-coverage.md"
       ],
-      "boundary": "Pi retains its physical-model footer; Bifrost contributes only its separate bifrost-state status line.",
-      "assertions": "The status helper uses the bifrost-state key, while the pinned-Pi UI smoke asserts the physical model label and separate Bifrost status in startup, dashboard, and classifier-picker captures.",
+      "boundary": "The coverage map records exact R09 write, backup, reload, and reconciliation evidence, while preserving R02's Pi-owned footer boundary and its separate Bifrost status line.",
+      "assertions": "R09 names real-Pi reviewed-digest reconciliation and exact atomic backup tests; the map remains partial because migration and layer-provenance acceptance is incomplete. R02 cites the status helper test and pinned-Pi UI smoke assertions for the native model footer and separate status. The bifrost-state key mutation was observed to fail its targeted test.",
       "boundaryTest": {
-        "file": "tests/ux-status.test.ts",
-        "name": "renders Bifrost status line"
+        "file": "tests/integration/command-policy-acceptance.test.mjs",
+        "name": "applies only a reviewed Pi-command reconciliation digest and preserves manual config"
       },
       "invariant": {
-        "file": "tests/ux-status.test.ts",
-        "name": "renders persistent mode state"
+        "file": "tests/reconciliation-store.test.ts",
+        "name": "replaces both files atomically, keeps exact private backups, and preserves config mode"
       },
       "fault": {
-        "file": "tests/ux-status.test.ts",
-        "name": "renders Bifrost status line"
+        "file": "tests/storage.test.ts",
+        "name": "keeps the old target and cleans its temp after a partial write failure"
       }
     }
   ]
