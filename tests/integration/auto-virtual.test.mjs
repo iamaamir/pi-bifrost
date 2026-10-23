@@ -1199,6 +1199,9 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
         && record.message?.role === "assistant" && record.message.stopReason === "error"),
       "the first pinned request must settle as a provider failure");
       await rpc.userTurn("the fresh follow-up after failure");
+      await rpc.userTurn("/bifrost debug");
+      assert.match(rpc.stderr, /pinned: true/,
+        "status after the follow-up must show that the failed turn did not clear the manual pin");
       const after = await fakeStats(server.port);
       assert.equal((after.attempts.fail ?? 0) - (before.attempts.fail ?? 0), 2,
         "one failed prompt and one fresh follow-up must produce two total requests, not a replay");
@@ -1209,8 +1212,7 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
       const debugEvents = readFileSync(join(work, ".pi", "bifrost-debug.jsonl"), "utf8")
         .trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
       const pinnedBypasses = debugEvents.filter((event) => event.module === "input" && event.event === "bypass" && event.pinned === true);
-      assert.equal(pinnedBypasses.length, 2,
-        "both first failed turn and fresh follow-up must observe the preserved manual pin");
+      assert.ok(pinnedBypasses.length >= 1, "the initial turn must observe the manual pin before physical dispatch");
       await rpc.close();
       rpc = undefined;
     } finally {
