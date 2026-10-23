@@ -374,6 +374,35 @@ describe("cache lifecycle acceptance", { timeout: 600_000, concurrency: 1 }, () 
     });
   });
 
+  it("skips persisted cache decisions when classifier is disabled", async () => {
+    await scenario({
+      body: async ({ env, sessions }) => {
+        const seeded = startRpc({ home: env.home, work: env.work, extension: env.extension });
+        sessions.push(seeded);
+        await seeded.userTurn(SEED_PROMPT);
+        const entries = readCacheEntries(env.project);
+        assert.equal(entries.length, 1, "enabled classifier should persist one decision");
+        // Force a different valid tier so a stale cache hit is observable.
+        entries[0].category = "quick";
+        writeFileSync(cacheFile(env.project), `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+        const closed = await seeded.close(env.home);
+        assert.equal(closed.closed, true);
+        assert.equal(closed.groupGone, true);
+        assert.equal(closed.violations, "");
+
+        const config = readConfig(env.project);
+        config.classifier.enabled = false;
+        writeConfigObject(env.project, config);
+        const disabled = startRpc({ home: env.home, work: env.work, extension: env.extension });
+        sessions.push(disabled);
+        const before = await stats();
+        await disabled.userTurn(SEED_PROMPT);
+        const after = await stats();
+        assertExactRequestDelta(before, after, { chat: 1, classifier: 0, quick: 0, alt: 0, decoy: 0 }, "disabled classifier ignores the persisted decision");
+      },
+    });
+  });
+
   it("fuzzy cache hit avoids the classifier and an unrelated prompt still misses", async () => {
     assert.ok(FUZZY_SCORE >= THRESHOLD, `fuzzy fixture must be a real hit, score ${FUZZY_SCORE} < ${THRESHOLD}`);
     assert.notEqual(normalize(SEED_PROMPT), normalize(FUZZY_PROMPT), "fuzzy prompt must not normalize identically");

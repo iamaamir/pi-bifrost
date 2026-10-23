@@ -32,7 +32,8 @@
         "tests/integration/classifier-transport-acceptance.test.mjs",
         "tests/integration/command-privacy-acceptance.test.mjs",
         "tests/integration/economic-policy-acceptance.test.mjs",
-        "tests/integration/native-activation-cancel.test.mjs"
+        "tests/integration/native-activation-cancel.test.mjs",
+        "tests/fixtures/replay-fault-control.mjs"
       ],
       "boundary": "The reviewed production index.ts sha256 is declared once in tests/fixtures/replay-fault-control.mjs and the six integration fault gates import that constant, so rebinding the reviewed baseline is a one-file change and no gate can drift to a different reviewed hash.",
       "assertions": "Each gate's baseline equals the imported REPLAY_GUARD_BASELINE_SHA256; gate proofs still start GREEN on the pristine reviewed source, turn the named assertion RED under the controlled production mutation, restore the source, and record restored GREEN; Rebasing the baseline touches exactly one file and all six gates observe the same value.",
@@ -93,6 +94,28 @@
       "fault": {
         "file": "tests/routing.test.ts",
         "name": "preserves structured exclusions, fallback strategy, and selection without prompt text"
+      }
+    },
+    {
+      "id": "classifier-disabled-cache-bypass",
+      "requirement": "R12",
+      "files": [
+        "index.ts",
+        "tests/integration/cache-lifecycle-acceptance.test.mjs"
+      ],
+      "boundary": "Pinned Pi 1.0.1 RPC sessions with the local fake provider: seed a persisted tier decision while classification is enabled, restart with classifier disabled, then observe the dispatched model and outbound-request guard.",
+      "assertions": "A disabled classifier cannot consume a persisted cache decision; the test forces a valid but different cached tier, confirms the normal configured route is used, and confirms no classifier request occurs. The controlled removal of the cacheEnabled classifier gate makes the assertion fail.",
+      "boundaryTest": {
+        "file": "tests/integration/cache-lifecycle-acceptance.test.mjs",
+        "name": "skips persisted cache decisions when classifier is disabled"
+      },
+      "invariant": {
+        "file": "tests/integration/cache-lifecycle-acceptance.test.mjs",
+        "name": "skips persisted cache decisions when classifier is disabled"
+      },
+      "fault": {
+        "file": "tests/integration/cache-lifecycle-acceptance.test.mjs",
+        "name": "skips persisted cache decisions when classifier is disabled"
       }
     }
   ]

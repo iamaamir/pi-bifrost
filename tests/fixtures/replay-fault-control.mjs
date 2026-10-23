@@ -6,12 +6,12 @@
 // and tests/integration/reliability-v2-auto.test.mjs to the production guards
 // in index.ts.
 //
-// GUARD INVENTORY (index.ts, baseline a792cb173317744d12950698009d11c7ea0b39b2):
-//   - isSideEffectFreeAllowanceFailure (exact line 1764) — proves a failed
+// GUARD INVENTORY (index.ts, candidate baseline SHA-256 declared below):
+//   - isSideEffectFreeAllowanceFailure (exact line 1767) — proves a failed
 //     attempt had no output/tool results/queued work before allowance recovery.
-//   - autoBoundaryStillActive (exact line 1707) — confirms the original user
+//   - autoBoundaryStillActive (exact line 1710) — confirms the original user
 //     boundary is still the active turn.
-//   - allowanceRetryBoundaryStillSafe (exact line 2525) — re-checks the boundary
+//   - allowanceRetryBoundaryStillSafe (exact line 2528) — re-checks the boundary
 //     immediately before dispatching the prepared allowance retry.
 //
 // CONTROLLED FAULT PROOF (performed in a disposable scratch copy, never in the
@@ -59,7 +59,7 @@ import { join } from "node:path";
 import { processGroupExists } from "../../scripts/acceptance/core.mjs";
 import { closeTracking, cleanupFailure, detachOwnedHandles, spawnOwned } from "./child-auto-inline-harness.mjs";
 
-export const REPLAY_GUARD_BASELINE_SHA256 = "14752568bd935068ca5874156bd324f45336dc29bd305523fe6e0ca5973c3303";
+export const REPLAY_GUARD_BASELINE_SHA256 = "f9d0dde266d0ea89807adaa3c1885b5ede529f727a1ba09d85a3390b0af50160";
 export const REPLAY_GUARD_FUNCTIONS = [
   "isSideEffectFreeAllowanceFailure",
   "allowanceRetryBoundaryStillSafe",
@@ -69,9 +69,9 @@ export const REPLAY_GUARD_FUNCTIONS = [
 // Guard line anchors are exact against the baseline commit; keep them in sync
 // with index.ts when the guards move.
 export const REPLAY_GUARD_LINES = {
-  autoBoundaryStillActive: 1707,
-  isSideEffectFreeAllowanceFailure: 1764,
-  allowanceRetryBoundaryStillSafe: 2525,
+  autoBoundaryStillActive: 1710,
+  isSideEffectFreeAllowanceFailure: 1767,
+  allowanceRetryBoundaryStillSafe: 2528,
 };
 
 // Each PROVEN pair has an executable fault reaching its exact named assertion.

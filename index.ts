@@ -475,7 +475,7 @@ function buildPipeline(
 ): ClassificationPipeline {
   const tiers = Object.keys(config.models ?? {});
   const cacheCfg = config.cache;
-  const cacheEnabled = classifierCacheEnabled(config, effective.backend);
+  const cacheEnabled = classifierEnabled && classifierCacheEnabled(config, effective.backend);
   const threshold = cacheCfg?.threshold ?? DEFAULT_THRESHOLD;
   const cacheMaxAgeMs = (cacheCfg?.ttlHours ?? DEFAULT_TTL_HOURS) * 60 * 60 * 1000;
 
