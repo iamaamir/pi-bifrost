@@ -179,6 +179,13 @@ const journeys = [
     boundary: "real Pi RPC config reload from malformed startup source to valid saved route",
   },
   {
+    id: "reviewed-config-schema-migration",
+    testFile: "tests/integration/command-policy-acceptance.test.mjs",
+    title: "previews and applies one reviewed schema migration with exact backup and layer isolation",
+    requirements: ["R09"],
+    boundary: "real Pi RPC previews one selected config source, validates the merged replacement, rejects stale digests, and checks exact private backup bytes",
+  },
+  {
     id: "last-good-strict-boundary-survives-invalid-reload",
     testFile: "tests/integration/legacy-behavior.test.mjs",
     title: "keeps the last-good strict boundary after a null project reload and blocks active-model generation",

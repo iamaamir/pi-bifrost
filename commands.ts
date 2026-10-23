@@ -7,6 +7,7 @@ import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
 import type { BifrostConfig, ClassifierConfig } from "./config.ts";
 import { BUNDLED_PUBLIC_INIT_DEFAULTS, DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, MAX_CONFIG_SOURCE_BYTES, PROMPT_ONLY_FIELDS, classifierTotalTimeoutIssue, validateConfig, validateEconomicConfig, validateTierPolicyConfig } from "./config.ts";
 import { loadConfigForReload, loadConfigWithSourceOverride } from "./config-load.ts";
+import { applyConfigMigration, ConfigMigrationError, parseConfigMigrationArgs, planConfigMigration, readConfigMigrationSource } from "./config-migration.ts";
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
 import { buildRouteDecisionSummary, type ClassificationPipeline, type ClassificationResult, type ClassificationSource, type RouteDecisionSummary } from "./classification-pipeline.ts";
@@ -701,6 +702,94 @@ async function handleReconciliationCommand(args: string, ctx: ExtensionContext, 
     clearBifrostWidgets(ctx);
   }
   emitReconciliationReport(ctx, report, request.json);
+}
+
+function emitConfigMigrationReport(ctx: ExtensionContext, report: Record<string, unknown>, json: boolean): void {
+  if (json) {
+    console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(report)}`);
+    return;
+  }
+  const lines = [
+    `Config migration: ${String(report.status)} (${String(report.source)} source).`,
+    ...(typeof report.reason === "string" ? [`No changes made: ${report.reason}.`] : []),
+    ...(typeof report.proposalDigest === "string" ? [`Review digest: ${report.proposalDigest}`] : []),
+    ...(typeof report.backupPath === "string" ? [`Exact backup: ${report.backupPath}`] : []),
+    ...(report.status === "committed" ? ["Run /bifrost reload to activate the migrated configuration."] : []),
+  ];
+  uiOutput(ctx, lines);
+}
+
+async function handleConfigMigrationCommand(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
+  const commandArgs = args.replace(/^config\s+migrate(?:\s+|$)/iu, "");
+  const parsed = parseConfigMigrationArgs(commandArgs);
+  if (!parsed.ok) {
+    log(ctx, "usage: /bifrost config migrate [--source project|workspace|user] [--apply --proposal <digest>] [--json]", "warning");
+    return;
+  }
+  const request = parsed.request;
+  const sourcePath = reconciliationPaths(request.source).configPath;
+  let sourceBytes: Buffer;
+  try { sourceBytes = readConfigMigrationSource(sourcePath); }
+  catch {
+    emitConfigMigrationReport(ctx, { version: 1, source: request.source, status: "blocked", reason: "source_invalid" }, request.json);
+    return;
+  }
+
+  const plan = planConfigMigration(request.source, sourceBytes);
+  if (plan.status === "blocked") {
+    emitConfigMigrationReport(ctx, { version: 1, source: request.source, status: "blocked", reason: plan.reason }, request.json);
+    return;
+  }
+  if (plan.status === "current") {
+    emitConfigMigrationReport(ctx, { version: 1, source: request.source, status: "current" }, request.json);
+    return;
+  }
+
+  const prospective = loadConfigWithSourceOverride(process.cwd(), state.extensionDir, request.source, plan.replacementBytes);
+  if (prospective.diagnostics.length > 0) {
+    emitConfigMigrationReport(ctx, {
+      version: 1, source: request.source, status: "blocked", reason: "merged_config_invalid",
+      validationIssueCount: prospective.diagnostics.length,
+    }, request.json);
+    return;
+  }
+
+  if (!request.apply) {
+    emitConfigMigrationReport(ctx, {
+      version: 1, source: request.source, status: "ready",
+      proposalDigest: plan.proposalDigest,
+      changes: [{ path: "schemaVersion", from: plan.beforeVersion ?? "absent", to: 2 }],
+    }, request.json);
+    return;
+  }
+  if (request.proposalDigest !== plan.proposalDigest) {
+    emitConfigMigrationReport(ctx, { version: 1, source: request.source, status: "blocked", reason: "proposal_mismatch" }, request.json);
+    return;
+  }
+
+  try {
+    const backupPath = applyConfigMigration({ sourcePath, expectedSourceBytes: sourceBytes, replacementBytes: plan.replacementBytes });
+    emitConfigMigrationReport(ctx, {
+      version: 1, source: request.source, status: "committed",
+      proposalDigest: plan.proposalDigest, backupPath,
+      changes: [{ path: "schemaVersion", from: plan.beforeVersion ?? "absent", to: 2 }],
+    }, request.json);
+  } catch (error) {
+    const migrationError = error instanceof ConfigMigrationError ? error : undefined;
+    emitConfigMigrationReport(ctx, {
+      version: 1, source: request.source, status: "blocked",
+      reason: migrationError?.code ?? "apply_failed",
+      ...(migrationError?.backupPath ? { backupPath: migrationError.backupPath } : {}),
+    }, request.json);
+  }
+}
+
+async function handleConfigCommand(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
+  if (/^config\s+migrate(?:\s|$)/iu.test(args.trim())) {
+    await handleConfigMigrationCommand(args, ctx, state);
+    return;
+  }
+  await handleReconciliationCommand(args, ctx, state);
 }
 
 async function handleInit(
@@ -1812,6 +1901,7 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "validate", description: "Validate loaded config and model references", argumentHint: "[--json]", menu: "common" },
   { value: "inspect", description: "Inspect configured models and local health", argumentHint: "[--json]", menu: "common" },
   { value: "config reconcile", description: "Preview or apply exact generated model membership", argumentHint: "[flags]" },
+  { value: "config migrate", description: "Preview or apply an explicit schema migration", argumentHint: "[--source project|workspace|user] [--apply --proposal <digest>]" },
   { value: "reliability", description: "Show provider cooldowns" },
   { value: "reliability reset", description: "Clear one provider cooldown", argumentHint: "--provider <provider-id>" },
   { value: "reliability migrate", description: "Prepare receipt-owned reliability v2", argumentHint: "[--fresh]" },
@@ -2645,7 +2735,7 @@ export function createCommandRouter(
 
     spaced("validate", (args, ctx) => handleDiagnosticsCommand("validate", args, ctx, state)),
     spaced("inspect", (args, ctx) => handleDiagnosticsCommand("inspect", args, ctx, state)),
-    spaced("config", (args, ctx) => handleReconciliationCommand(args, ctx, state)),
+    spaced("config", (args, ctx) => handleConfigCommand(args, ctx, state)),
     spaced("reliability", (args, ctx) => handleReliabilityCommand(args, ctx, state)),
 
     // Providers

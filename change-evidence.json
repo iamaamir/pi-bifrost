@@ -145,7 +145,7 @@
         "tests/schema.test.ts"
       ],
       "boundary": "Pinned Pi command acceptance inspects auth, availability, circuits, and unresolved pool references, validates offline, and asserts zero provider/catalog requests.",
-      "assertions": "Offline validation reports unresolved IDs and fallback cycles without echoing private values; unsupported capability enforcement is rejected; inspection projects auth, availability, circuit state, and bounded local registry-refresh age without probes or mutation.",
+      "assertions": "Offline validation reports unresolved IDs and fallback cycles without echoing private values; unsupported capability enforcement is rejected; inspection projects auth, availability, circuit state, and bounded local registry-refresh age without probes or mutation. The same command-policy test file also contains the separately named R09 reviewed schema-migration journey, declared under the R09 config-migration contract.",
       "boundaryTest": {
         "file": "tests/integration/command-policy-acceptance.test.mjs",
         "name": "runs inspect, validate, and a direct-rule preview offline without provider requests"
@@ -166,7 +166,7 @@
         "scripts/acceptance/journeys.mjs"
       ],
       "boundary": "A named pinned-Pi AgentSession journey exercises hard-admission activation failures from the actual host; false and thrown setModel outcomes must keep the user turn unsent and preserve the prior seed model.",
-      "assertions": "Both host activation outcomes fail closed without provider callbacks on the stale model; restored source returns the journey green. Capability enforcement remains rejected as unsupported in this release.",
+      "assertions": "Both host activation outcomes fail closed without provider callbacks on the stale model; restored source returns the journey green. Capability enforcement remains rejected as unsupported in this release. The shared journey registry also names the reviewed R09 config-migration case, whose dedicated assertions are declared by the R09 config-migration contract.",
       "boundaryTest": {
         "file": "tests/integration/native-activation-cancel.test.mjs",
         "name": "cancels real AgentSession activation behind a proven deny-all fence"
@@ -187,7 +187,7 @@
         "docs/acceptance-coverage.md"
       ],
       "boundary": "The coverage map records R01 runtime/preview/API parity, R06 strict no-route/cancellation, R10 economic-signal evidence, R11 affinity overrides and limits, R12 classifier deadlines and limits, R17 arbitrary-tier/model-free defaults, R02 Pi-owned footer evidence, and R09 reconciliation evidence and remaining limits.",
-      "assertions": "R01 is covered by the named three-surface parity case and structured-exclusion routing test; full phase timings remain a separate ADR 0007 deferral. R06 is covered by named strict physical/Auto boundaries, false/throw activation, late-classifier abort with guard-removal fault, and packed resolve-only smoke. R10 is covered by tests for explicit reserves, advisory observation, units/windows, expiry, account-scope gating, source provenance, and no hidden fetch; live quota adapters and hard spend guarantees remain deferred by PRD §8. R11 cites real-Pi same-tier/branch behavior and exact explicit-tier/direct-origin resolver tests, while retaining the end-to-end exact-model/continuation gap. R12 cites exact pipeline/transport tests for shared deadlines, cancellation, late-result rejection, and no-retry behavior, while remaining partial for the full pinned-Pi backend-precedence matrix. R17 is covered by arbitrary custom-tier/provider-neutral strategy and model-free bundled-default checks. R02's distinct status key and Pi footer tests remain cited. R09 names real-Pi reviewed-digest reconciliation and exact atomic backups but remains partial for migration/provenance acceptance.",
+      "assertions": "R01 is covered by the named three-surface parity case and structured-exclusion routing test; full phase timings remain a separate ADR 0007 deferral. R06 is covered by named strict physical/Auto boundaries, false/throw activation, late-classifier abort with guard-removal fault, and packed resolve-only smoke. R10 is covered by tests for explicit reserves, advisory observation, units/windows, expiry, account-scope gating, source provenance, and no hidden fetch; live quota adapters and hard spend guarantees remain deferred by PRD §8. R11 cites real-Pi same-tier/branch behavior and exact explicit-tier/direct-origin resolver tests, while retaining the end-to-end exact-model/continuation gap. R12 cites exact pipeline/transport tests for shared deadlines, cancellation, late-result rejection, and no-retry behavior, while remaining partial for the full pinned-Pi backend-precedence matrix. R17 is covered by arbitrary custom-tier/provider-neutral strategy and model-free bundled-default checks. R02's distinct status key and Pi footer tests remain cited. R09 now includes the real-Pi reviewed migration journey, exact backup, stale-proposal rejection, source isolation, and existing source-override provenance evidence; later-failure transaction behavior remains an identified gap.",
       "boundaryTest": {
         "file": "tests/integration/activation-cancellation-acceptance.test.mjs",
         "name": "does not dispatch after a late classifier result"
@@ -199,6 +199,31 @@
       "fault": {
         "file": "tests/integration/activation-cancellation-acceptance.test.mjs",
         "name": "fault control: removing the late-abort guard allows forbidden late dispatch"
+      }
+    },
+    {
+      "id": "r09-config-schema-migration",
+      "requirement": "R09",
+      "files": [
+        "config-migration.ts",
+        "docs/guide/commands.md",
+        "docs/terminal-demo.js",
+        "tests/bifrost-commands.test.ts",
+        "tests/config-migration.test.ts"
+      ],
+      "boundary": "The explicit config-migration command previews one selected source, validates its replacement against the merged config, requires a reviewed source-bound digest, creates a private exact-byte backup, then atomically replaces only that source. The pinned-Pi integration journey and command registration are declared in their existing file contracts.",
+      "assertions": "Unversioned and v1 JSON receives only schemaVersion 2; unrelated values and key order are preserved where feasible; malformed/future-version sources are blocked; merged replacement is validated, with existing source-override tests proving invalid layer diagnostics; real-Pi coverage migrates project, workspace, and user sources one at a time and proves unselected layers stay byte-identical; stale source bytes and stale proposal digests cannot overwrite edits; exact backup bytes and private mode are asserted; the active snapshot is not auto-reloaded. Migration-specific failure after backup remains untested.",
+      "boundaryTest": {
+        "file": "tests/config-migration.test.ts",
+        "name": "backs up exact source bytes before atomic replacement and preserves target mode"
+      },
+      "invariant": {
+        "file": "tests/config-migration.test.ts",
+        "name": "changes only schemaVersion, preserving unrelated field order and values"
+      },
+      "fault": {
+        "file": "tests/config-migration.test.ts",
+        "name": "refuses a source changed after preview without creating a backup"
       }
     },
     {
