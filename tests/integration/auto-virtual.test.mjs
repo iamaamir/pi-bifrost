@@ -1175,6 +1175,51 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
     }
   });
 
+  it("keeps a manual pin after failure and never replays the failed user prompt", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-auto-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-auto-work-"));
+    let rpc;
+    try {
+      writeFixture({
+        home, work, port: server.port,
+        models: [{ id: "fast", reasoning: false }, { id: "fail", reasoning: false }],
+        bifrost: {
+          enabled: true, default: "quick", strategy: "first", classifier: { enabled: false },
+          models: { quick: ["fake/fast"], frontier: ["fake/fail"] },
+          reliability: { enabled: true, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60 },
+          debug: { enabled: true, path: ".pi/bifrost-debug.jsonl" },
+        },
+      });
+      rpc = startRpc({ home, work, model: "bifrost/auto" });
+      await rpc.request({ type: "set_model", provider: "fake", modelId: "fail" });
+      const before = await fakeStats(server.port);
+      const firstTurn = rpc.records.length;
+      await rpc.userTurn("the manually pinned user request fails");
+      assert.ok(rpc.records.slice(firstTurn).some((record) => record.type === "message_end"
+        && record.message?.role === "assistant" && record.message.stopReason === "error"),
+      "the first pinned request must settle as a provider failure");
+      await rpc.userTurn("the fresh follow-up after failure");
+      const after = await fakeStats(server.port);
+      assert.equal((after.attempts.fail ?? 0) - (before.attempts.fail ?? 0), 2,
+        "one failed prompt and one fresh follow-up must produce two total requests, not a replay");
+      assert.equal((after.attempts.fast ?? 0) - (before.attempts.fast ?? 0), 0,
+        "failure must not unpin Bifrost and route the follow-up to quick/fast");
+      const generations = after.stats.slice(before.stats.length).filter((item) => item.kind === "generation");
+      assert.deepEqual(generations.map(({ model }) => model), ["fail", "fail"]);
+      const debugEvents = readFileSync(join(work, ".pi", "bifrost-debug.jsonl"), "utf8")
+        .trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      const pinnedBypasses = debugEvents.filter((event) => event.module === "input" && event.event === "bypass" && event.pinned === true);
+      assert.equal(pinnedBypasses.length, 2,
+        "both first failed turn and fresh follow-up must observe the preserved manual pin");
+      await rpc.close();
+      rpc = undefined;
+    } finally {
+      if (rpc) await rpc.close();
+      rmSync(home, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+    }
+  });
+
   it("opens the circuit on failure and visibly degrades to the last dispatched model", async () => {
     const home = mkdtempSync(join(tmpdir(), "bifrost-auto-home-"));
     const work = mkdtempSync(join(tmpdir(), "bifrost-auto-work-"));
@@ -1198,6 +1243,8 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
         "the two user turns must produce two provider attempts; Bifrost must not replay the failed prompt");
       const reliability = JSON.parse(readFileSync(join(work, ".pi", "bifrost-reliability.json"), "utf8"));
       assert.equal(reliability.models["fake/fail-then-ok"].lastFailureSource, "agent_settled");
+      assert.equal(reliability.models["fake/fail-then-ok"].failures.length, 1,
+        "one settled failure must add exactly one reliability failure; the later clean turn must not add another");
     } finally {
       rmSync(home, { recursive: true, force: true });
       rmSync(work, { recursive: true, force: true });

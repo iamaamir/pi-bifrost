@@ -228,6 +228,13 @@ const journeys = [
     boundary: "real pinned Pi transport and synthetic provider registry",
   },
   {
+    id: "pinned-model-remains-pinned-after-failure",
+    testFile: "tests/integration/auto-virtual.test.mjs",
+    title: "keeps a manual pin after failure and never replays the failed user prompt",
+    requirements: ["R03"],
+    boundary: "real Pi physical session with explicit pin, failed generation, fresh follow-up, and fake-provider/reliability evidence",
+  },
+  {
     id: "auto-streamed-output-failure-no-replay",
     testFile: "tests/integration/auto-virtual.test.mjs",
     title: "does not replay a failed Auto turn after the provider emitted output",
@@ -267,8 +274,8 @@ const journeys = [
     id: "explicit-model-and-tool-continuation-affinity",
     testFile: "tests/integration/affinity-lifecycle-acceptance.test.mjs",
     title: "keeps exact model rules above affinity and protocol continuation on its dispatched model",
-    requirements: ["R11"],
-    boundary: "real Pi RPC exact-model rule, successful prior anchor, tool side effect, and same-model protocol continuation",
+    requirements: ["R03", "R11"],
+    boundary: "real Pi RPC exact-model rule, successful prior anchor, tool side effect, and same-model protocol continuation; continuation retains the dispatched physical model",
   },
   {
     id: "bootstrap-registry-price-order-matrix",
