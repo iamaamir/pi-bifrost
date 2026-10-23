@@ -422,9 +422,9 @@ function sensitiveStringKeys(row) {
   return Object.keys(row).filter((key) => SENSITIVE_KEYS.has(key) && typeof row[key] === "string" && row[key].length > 0);
 }
 
-/** Mirrors cache.ts normalize: lowercased, punctuation-flattened, sorted tokens. */
+/** Mirrors cache.ts normalize: lowercased, punctuation-flattened, ordered tokens. */
 function normalize(text) {
-  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").split(" ").filter(Boolean).sort().join(" ");
+  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").split(" ").filter(Boolean).join(" ");
 }
 
 // ── declared persistence key sets (reliability sidecars) ────────

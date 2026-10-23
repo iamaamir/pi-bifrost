@@ -543,7 +543,7 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
         assert.equal(saved.enabled, true);
         assert.equal(saved.strategy, "first");
         assert.deepEqual(saved.categoryStrategies, { quick: "random", general: "first", frontier: "first" });
-        assert.deepEqual(saved.cache, { enabled: true, maxEntries: 500, threshold: 0.88 });
+        assert.deepEqual(saved.cache, { enabled: true, maxEntries: 500, threshold: 1 });
         assert.equal(saved.reliability.enabled, true);
         assert.equal(saved.debug.enabled, false);
 

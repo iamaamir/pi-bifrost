@@ -115,7 +115,10 @@
         "tests/cache.test.ts",
         "tests/classifier-cache-key.test.ts",
         "tests/config-source-override.test.ts",
-        "tests/integration/cache-lifecycle-acceptance.test.mjs"
+        "tests/integration/auto-virtual.test.mjs",
+        "tests/integration/cache-lifecycle-acceptance.test.mjs",
+        "tests/integration/command-privacy-acceptance.test.mjs",
+        "tests/integration/init-regression.test.mjs"
       ],
       "boundary": "Pinned Pi 1.0.1 RPC sessions with the local fake provider verify both cache boundaries: restart with classification disabled after seeding a conflicting persisted tier, and restart with a same-token prompt reordered. Request counters and the outbound guard expose whether either cache decision was reused.",
       "assertions": "A disabled classifier cannot consume a persisted cache decision; the test forces a valid but different cached tier, confirms the configured route is used, and confirms no classifier request occurs. By default, ordered normalized prompts match exactly; reordered prompts miss, legacy unordered-normalization keys are invalidated, and explicit thresholds below 1 retain fuzzy Jaccard matching. Removing the classifierEnabled cache gate or changing the bundled exact-match threshold from 1 to 0.88 makes its corresponding Pi assertion fail.",
