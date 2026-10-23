@@ -249,6 +249,28 @@
       }
     },
     {
+      "id": "r16-ignore-symlinked-dependencies-in-candidate-checkouts",
+      "requirement": "R16",
+      "files": [
+        ".gitignore",
+        "tests/change-evidence.test.mjs"
+      ],
+      "boundary": "Acceptance creates a local node_modules symlink in merged-push checkouts; ignore that dependency path without weakening source-tree cleanliness checks for other files.",
+      "assertions": "The isolated Git test proves the root node_modules symlink is ignored while unrelated source remains visible. Its negative control restores the old directory-only node_modules/ pattern and confirms the symlink returns to git status. Before this change, the actual merged-push caller reported `?? node_modules` and failed candidate-stable; source and revision stability checks remain unchanged.",
+      "boundaryTest": {
+        "file": "tests/change-evidence.test.mjs",
+        "name": "ignores a symlinked node_modules path without hiding other untracked files"
+      },
+      "invariant": {
+        "file": "tests/change-evidence.test.mjs",
+        "name": "ignores a symlinked node_modules path without hiding other untracked files"
+      },
+      "fault": {
+        "file": "tests/change-evidence.test.mjs",
+        "name": "ignores a symlinked node_modules path without hiding other untracked files"
+      }
+    },
+    {
       "id": "r02-manual-model-selection-pins-session",
       "requirement": "R02",
       "files": [
