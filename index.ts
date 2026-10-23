@@ -2836,6 +2836,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             terminalRouteCategory = "disabled_or_pinned";
             throw new Error("Bifrost: virtual auto was disabled or pinned during routing; select a physical model");
           }
+          if (classification.kind !== "unclassified" && classification.tier.includes("/")) {
+            activeRouteOrigin = "explicit_model";
+          }
           if (!forcedTier && state.config !== classificationConfig) {
             terminalRouteCategory = "config_changed_during_route";
             throw new Error("Bifrost: configuration changed during routing; retry the turn");

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -58,7 +58,12 @@ function stopChild(child) {
   });
 }
 
-function makeFixture(port, { affinityMode = "retain-within-tier" } = {}) {
+function makeFixture(port, {
+  affinityMode = "retain-within-tier",
+  modelIds = ["alpha", "beta"],
+  rules = [],
+  randomValues = [0.05, 0.95, 0.95, 0.95],
+} = {}) {
   const home = mkdtempSync(join(tmpdir(), "bifrost-affinity-branch-home-"));
   const work = mkdtempSync(join(tmpdir(), "bifrost-affinity-branch-work-"));
   temporary.push(home, work);
@@ -69,7 +74,7 @@ function makeFixture(port, { affinityMode = "retain-within-tier" } = {}) {
     baseUrl: `http://127.0.0.1:${port}/v1`,
     api: "openai-completions",
     apiKey: "branch-fixture-only",
-    models: ["alpha", "beta"].map((id) => ({ id, reasoning: false })),
+    models: modelIds.map((id) => ({ id, reasoning: false })),
   } } }));
   writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ retry: { enabled: false }, enabledModels: ["fake/*"] }));
   writeFileSync(join(work, ".pi", "bifrost.json"), JSON.stringify({
@@ -80,6 +85,7 @@ function makeFixture(port, { affinityMode = "retain-within-tier" } = {}) {
     categoryStrategies: { quick: "random", general: "first", frontier: "first" },
     classifier: { enabled: false },
     models: { quick: ["fake/alpha", "fake/beta"], frontier: ["fake/beta"] },
+    ...(rules.length > 0 ? { rules } : {}),
     affinity: { mode: affinityMode },
     reliability: { stateVersion: 1 },
     debug: { enabled: true, path: ".pi/bifrost-debug.jsonl" },
@@ -89,7 +95,7 @@ function makeFixture(port, { affinityMode = "retain-within-tier" } = {}) {
     let inputIndex = 0;
     let active = false;
     let draws = 0;
-    const values = [0.05, 0.95, 0.95, 0.95];
+    const values = ${JSON.stringify(randomValues)};
     Math.random = () => {
       if (active) draws += 1;
       return values[Math.min(inputIndex - 1, values.length - 1)] ?? 0.5;
@@ -105,11 +111,37 @@ function makeFixture(port, { affinityMode = "retain-within-tier" } = {}) {
       });
     }
   `);
-  return { home, work, agentDir, rngExtension };
+  let toolExtension;
+  let toolCounter;
+  if (modelIds.includes("tool-then-fail")) {
+    symlinkSync(join(ROOT, "node_modules"), join(work, "node_modules"), "dir");
+    toolExtension = join(work, "affinity-tool-extension.mjs");
+    toolCounter = join(home, "tool-counter.jsonl");
+    writeFileSync(toolExtension, `
+      import { Type } from "@earendil-works/pi-ai";
+      import { appendFileSync } from "node:fs";
+      export default function(pi) {
+        pi.registerTool({
+          name: "acceptance_counter",
+          label: "Acceptance Counter",
+          description: "Record one synthetic test side effect.",
+          parameters: Type.Object({ marker: Type.String() }),
+          execute: async (_id, params) => {
+            appendFileSync(process.env.BIFROST_TEST_TOOL_COUNTER, JSON.stringify({ marker: params.marker }) + "\\n");
+            return { content: [{ type: "text", text: "synthetic counter recorded" }], details: {} };
+          },
+        });
+      }
+    `);
+  }
+  return { home, work, agentDir, rngExtension, toolExtension, toolCounter };
 }
 
-function startRpc({ home, work, port, rngExtension }) {
-  const child = spawn(PI, ["-e", EXTENSION, "-e", rngExtension, "--approve", "--mode", "rpc", "--no-tools", "--model", "bifrost/auto"], {
+function startRpc({ home, work, port, rngExtension, toolExtension, toolCounter }) {
+  const args = ["-e", EXTENSION, "-e", rngExtension, ...(toolExtension ? ["-e", toolExtension] : []), "--approve", "--mode", "rpc"];
+  if (!toolExtension) args.push("--no-tools");
+  args.push("--model", "bifrost/auto");
+  const child = spawn(PI, args, {
     cwd: work,
     stdio: ["pipe", "pipe", "pipe"],
     env: {
@@ -121,6 +153,7 @@ function startRpc({ home, work, port, rngExtension }) {
       NODE_OPTIONS: `--require=${OUTBOUND_GUARD}`,
       BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${port}`,
       BIFROST_TEST_NETWORK_VIOLATIONS: join(home, "network-violations.log"),
+      ...(toolCounter ? { BIFROST_TEST_TOOL_COUNTER: toolCounter } : {}),
     },
   });
   const records = [];
@@ -244,6 +277,8 @@ function routeProjection(work) {
       selectedTier: entry.decision?.selectedTier,
       strategyWinner: entry.decision?.affinity?.strategyWinner,
       affinitySelection: entry.decision?.affinity?.selection,
+      affinityStatus: entry.decision?.affinity?.status,
+      affinityAnchor: entry.decision?.affinity?.anchor?.modelKey,
       affinityMode: entry.decision?.affinity?.mode,
     }));
 }
@@ -256,10 +291,8 @@ describe("Pi RPC branch-local affinity acceptance", { timeout: 120_000, concurre
   it("retains same-tier affinity, bypasses it for another tier, and drops it after an RPC fork", async () => {
     const controlFixture = makeFixture(fakeServer.port, { affinityMode: "off" });
     const controlPi = startRpc({ ...controlFixture, port: fakeServer.port });
-    let controlBefore;
     let controlAfter;
     try {
-      controlBefore = await fakeStats(fakeServer.port);
       await controlPi.prompt("branch-lifecycle control first synthetic turn");
       await controlPi.prompt("branch-lifecycle control second synthetic turn");
       controlAfter = await fakeStats(fakeServer.port);
@@ -346,6 +379,45 @@ describe("Pi RPC branch-local affinity acceptance", { timeout: 120_000, concurre
         mkdirSync(dirname(eventFile), { recursive: true });
         writeFileSync(eventFile, `${JSON.stringify(evidence)}\n`, { flag: "a" });
       }
+      assertNoNetworkViolations(fixture.home);
+    } finally {
+      await pi.close();
+    }
+  });
+
+  it("keeps exact model rules above affinity and protocol continuation on its dispatched model", async () => {
+    const fixture = makeFixture(fakeServer.port, {
+      modelIds: ["alpha", "beta", "tool-then-fail"],
+      randomValues: [0.05, 0.95, 0.05, 0.95],
+      rules: [
+        { pattern: "AFFINITY_EXACT_MODEL", model: "fake/beta" },
+        { pattern: "AFFINITY_TOOL_CONTINUATION", model: "fake/tool-then-fail" },
+      ],
+    });
+    const pi = startRpc({ ...fixture, port: fakeServer.port });
+    const beforeStats = await fakeStats(fakeServer.port);
+    try {
+      await pi.prompt("automatic affinity anchor first turn");
+      await pi.prompt("AFFINITY_EXACT_MODEL explicit target");
+      await pi.prompt("automatic affinity after exact model target");
+      await pi.prompt("AFFINITY_TOOL_CONTINUATION protocol turn");
+      const afterStats = await fakeStats(fakeServer.port);
+      await pi.close();
+
+      const routes = routeProjection(fixture.work);
+      assert.deepEqual(routes.map((route) => route.selected), ["fake/alpha", "fake/beta", "fake/alpha", "fake/tool-then-fail"]);
+      assert.equal(routes[1].affinitySelection, "not_applicable", "an exact model rule bypasses affinity");
+      assert.equal(routes[1].affinityStatus, "not_applicable");
+      assert.equal(routes[2].strategyWinner, "fake/alpha");
+      assert.equal(routes[2].affinityAnchor, "fake/alpha", "exact model dispatch must not replace prior automatic anchor");
+      assert.equal(routes[3].affinitySelection, "not_applicable");
+      assert.equal(routes.length, 4, "tool continuation must not produce a new route decision");
+
+      const attempts = afterStats.stats.slice(beforeStats.stats.length).filter((entry) => entry.kind === "generation").map((entry) => entry.model);
+      assert.deepEqual(attempts, ["alpha", "beta", "alpha", "tool-then-fail", "tool-then-fail"],
+        "the tool continuation must stay on the exact physical model selected for its user turn");
+      const toolCalls = readFileSync(fixture.toolCounter, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      assert.deepEqual(toolCalls, [{ marker: "synthetic" }], "the protocol continuation follows exactly one completed tool side effect");
       assertNoNetworkViolations(fixture.home);
     } finally {
       await pi.close();

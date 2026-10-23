@@ -23,6 +23,7 @@ All notable changes to pi-bifrost are documented here.
 - `classifier.totalTimeoutMs` sets one bounded deadline across classification attempts; existing per-backend limits continue to apply.
 
 ### Fixed
+- Exact model rules now bypass Auto affinity without replacing the prior automatic anchor; tool continuations stay on the physical model selected for the user turn.
 - Config validation rejects `requirements.mode: "enforce"` and unknown capability-requirement fields; this release does not enforce general model capabilities.
 - Invalid schema versions or tier-policy configuration block physical and Auto routing. Reload rejects unreadable, malformed, or non-object config layers and keeps the active config; an exhausted explicit boundary also does not degrade to a previously dispatched model.
 - Managed state writes now use exclusive sibling temporary files and same-directory atomic rename, preserve existing permissions, and never unlink a valid target before replacement. New managed files are private by default; committed-directory sync failures are reported without claiming that the rename was rolled back. Interrupted journaled reconciliation requires explicit stale-lock repair; locks are never stolen automatically.

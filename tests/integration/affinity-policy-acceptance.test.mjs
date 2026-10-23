@@ -269,7 +269,7 @@ describe("G06 affinity policy acceptance", { timeout: 60_000 }, () => {
     assert.deepEqual(observed.draws, off.draws, "observe mode must leave the RNG draw sequence unchanged");
   });
 
-  it("does not retain a quick-tier anchor for another tier, an explicit origin, or a pinned origin", () => {
+  it("does not retain a quick-tier anchor for another tier or explicit tier/model and pinned origins", () => {
     const c = makeModel("fixture", "c");
     const d = makeModel("fixture", "d");
     const otherTier = resolve({ resolveConfiguredTier }, {
@@ -291,6 +291,16 @@ describe("G06 affinity policy acceptance", { timeout: 60_000 }, () => {
     });
     assert.equal(explicit.resolution.affinityObservation.selection, "not_applicable");
     assert.equal(explicit.resolution.affinityObservation.selectedModel, "fixture/b");
+    const explicitModel = resolve({ resolveConfiguredTier }, {
+      config: resolverConfig({ models: { quick: ["fixture/a", "fixture/b"] } }),
+      available: [a, b],
+      anchor: anchorFor("fixture/a"),
+      origin: "explicit_model",
+      tier: "fixture/b",
+      randomValue: 0.9,
+    });
+    assert.equal(explicitModel.resolution.affinityObservation.selection, "not_applicable");
+    assert.equal(explicitModel.resolution.affinityObservation.selectedModel, "fixture/b");
     const pinned = resolve({ resolveConfiguredTier }, {
       config: resolverConfig({ models: { quick: ["fixture/a", "fixture/b"] } }),
       available: [a, b],

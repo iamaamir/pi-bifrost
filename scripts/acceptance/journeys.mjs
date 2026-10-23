@@ -257,6 +257,13 @@ const journeys = [
     requiredEvidenceEvent: "affinity_branch_lifecycle",
   },
   {
+    id: "explicit-model-and-tool-continuation-affinity",
+    testFile: "tests/integration/affinity-lifecycle-acceptance.test.mjs",
+    title: "keeps exact model rules above affinity and protocol continuation on its dispatched model",
+    requirements: ["R11"],
+    boundary: "real Pi RPC exact-model rule, successful prior anchor, tool side effect, and same-model protocol continuation",
+  },
+  {
     id: "bootstrap-registry-price-order-matrix",
     testFile: "tests/integration/auto-bootstrap-selection.test.mjs",
     title: "keeps bootstrap pools stable across registry order, availability, and price metadata",
