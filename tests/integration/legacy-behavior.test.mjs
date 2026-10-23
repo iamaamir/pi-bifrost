@@ -197,6 +197,43 @@ describe("legacy physical routing regression", { timeout: 240_000, concurrency: 
     }
   });
 
+  it("manual Pi model selection pins the physical model until explicit unpin", async () => {
+    const fixture = legacyFixture({
+      models: [{ id: "fast", reasoning: false }, { id: "strong", reasoning: false }],
+      bifrost: {
+        enabled: true, default: "quick", strategy: "first", classifier: { enabled: false },
+        models: { quick: ["fake/fast"], frontier: ["fake/strong"] },
+      },
+    });
+    const rpc = startRpc({ fixture, server, model: "fake/fast", approve: true });
+    try {
+      const selected = await rpc.setModel("fake", "strong");
+      assert.equal(selected?.provider, "fake");
+      assert.equal(selected?.id, "strong");
+      assert.match(rpc.records.filter((record) => record.method === "setStatus").at(-1)?.statusText ?? "", /pinned/,
+        "manual Pi model selection must show Bifrost's session-local pinned status");
+
+      const before = await readStats(server.port);
+      const pinnedTurn = await rpc.prompt("ordinary work after manual model selection");
+      const afterPinned = await readStats(server.port);
+      assert.deepEqual(afterPinned.stats.slice(before.stats.length).map((entry) => [entry.kind, entry.model]),
+        [["generation", "strong"]], "pinned turn must use the manually selected physical model");
+      assert.doesNotMatch(pinnedTurn.stderr, /Bifrost classifying|Bifrost routing to/,
+        "pinned turns must bypass automatic routing");
+
+      const unpin = await rpc.prompt("/bifrost unpin");
+      assert.equal(unpin.response.data?.disposition, "handled");
+      const automaticTurn = await rpc.prompt("ordinary work after explicit unpin");
+      const afterAutomatic = await readStats(server.port);
+      assert.deepEqual(afterAutomatic.stats.slice(afterPinned.stats.length).map((entry) => [entry.kind, entry.model]),
+        [["generation", "fast"]], "unpin must route the next turn through the configured default pool");
+      assert.match(automaticTurn.stderr, /Bifrost routing to fake\/fast/);
+    } finally {
+      await rpc.close({ assertClean: true });
+      fixture.cleanup();
+    }
+  });
+
   it("pin locks the current model for the session (deliberately never persisted)", async () => {
     const fixture = legacyFixture({
       models: [{ id: "fast", reasoning: false }, { id: "strong", reasoning: false }],

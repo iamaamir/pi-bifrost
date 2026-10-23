@@ -116,6 +116,13 @@ const journeys = [
     boundary: "real Pi command and session with local fake provider",
   },
   {
+    id: "manual-model-selection-pins-session",
+    testFile: "tests/integration/legacy-behavior.test.mjs",
+    title: "manual Pi model selection pins the physical model until explicit unpin",
+    requirements: ["R02"],
+    boundary: "real pinned-Pi RPC set_model event, explicit unpin command, and fake-provider generation evidence",
+  },
+  {
     id: "manual-off-disables-router",
     testFile: "tests/integration/legacy-behavior.test.mjs",
     title: "/bifrost off disables routing",

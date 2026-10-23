@@ -166,7 +166,7 @@
         "scripts/acceptance/journeys.mjs"
       ],
       "boundary": "A named pinned-Pi AgentSession journey exercises hard-admission activation failures from the actual host; false and thrown setModel outcomes must keep the user turn unsent and preserve the prior seed model.",
-      "assertions": "Both host activation outcomes fail closed without provider callbacks on the stale model; restored source returns the journey green. Capability enforcement remains rejected as unsupported in this release. The shared journey registry also names the reviewed R09 config-migration and R11 exact-model/continuation cases, whose dedicated assertions are declared by their requirement contracts.",
+      "assertions": "Both host activation outcomes fail closed without provider callbacks on the stale model; restored source returns the journey green. Capability enforcement remains rejected as unsupported in this release. The shared journey registry also names the R02 manual-model selection, R09 config-migration, and R11 exact-model/continuation cases, whose dedicated assertions are declared by their requirement contracts.",
       "boundaryTest": {
         "file": "tests/integration/native-activation-cancel.test.mjs",
         "name": "cancels real AgentSession activation behind a proven deny-all fence"
@@ -187,7 +187,7 @@
         "docs/acceptance-coverage.md"
       ],
       "boundary": "The coverage map records R01 runtime/preview/API parity, R06 strict no-route/cancellation, R10 economic-signal evidence, R11 affinity overrides and limits, R12 classifier deadlines and limits, R17 arbitrary-tier/model-free defaults, R02 Pi-owned footer evidence, and R09 reconciliation evidence and remaining limits.",
-      "assertions": "R01 is covered by the named three-surface parity case and structured-exclusion routing test; full phase timings remain a separate ADR 0007 deferral. R06 is covered by named strict physical/Auto boundaries, false/throw activation, late-classifier abort with guard-removal fault, and packed resolve-only smoke. R09 is covered by one-source real-Pi migration across project/workspace/user layers, stale proposal rejection, exact backups, layer isolation, source-override validation, and injected post-backup replacement failure preserving source plus recovery backup. R10 is covered by tests for explicit reserves, advisory observation, units/windows, expiry, account-scope gating, source provenance, and no hidden fetch; live quota adapters and hard spend guarantees remain deferred by PRD §8. R11 is covered by real-Pi exact-model precedence without anchor replacement, same-model tool continuation without reranking, same-tier/branch behavior, and resolver tests for explicit tier/model origins. R12 cites exact pipeline/transport tests for shared deadlines, cancellation, late-result rejection, and no-retry behavior, while remaining partial for the full pinned-Pi backend-precedence matrix. R17 is covered by arbitrary custom-tier/provider-neutral strategy and model-free bundled-default checks. R02's distinct status key and Pi footer tests remain cited.",
+      "assertions": "R01 is covered by the named three-surface parity case and structured-exclusion routing test; full phase timings remain a separate ADR 0007 deferral. R02 is covered by real-Pi physical/Auto selection, manual model selection with session pin and explicit unpin, /bifrost pin/off, the distinct status key, and footer smoke evidence. R06 is covered by named strict physical/Auto boundaries, false/throw activation, late-classifier abort with guard-removal fault, and packed resolve-only smoke. R09 is covered by one-source real-Pi migration across project/workspace/user layers, stale proposal rejection, exact backups, layer isolation, source-override validation, and injected post-backup replacement failure preserving source plus recovery backup. R10 is covered by tests for explicit reserves, advisory observation, units/windows, expiry, account-scope gating, source provenance, and no hidden fetch; live quota adapters and hard spend guarantees remain deferred by PRD §8. R11 is covered by real-Pi exact-model precedence without anchor replacement, same-model tool continuation without reranking, same-tier/branch behavior, and resolver tests for explicit tier/model origins. R12 cites exact pipeline/transport tests for shared deadlines, cancellation, late-result rejection, and no-retry behavior, while remaining partial for the full pinned-Pi backend-precedence matrix. R17 is covered by arbitrary custom-tier/provider-neutral strategy and model-free bundled-default checks.",
       "boundaryTest": {
         "file": "tests/integration/activation-cancellation-acceptance.test.mjs",
         "name": "does not dispatch after a late classifier result"
@@ -246,6 +246,28 @@
       "fault": {
         "file": "tests/integration/affinity-lifecycle-acceptance.test.mjs",
         "name": "keeps exact model rules above affinity and protocol continuation on its dispatched model"
+      }
+    },
+    {
+      "id": "r02-manual-model-selection-pins-session",
+      "requirement": "R02",
+      "files": [
+        "tests/fixtures/http-pi-harness.mjs",
+        "tests/integration/legacy-behavior.test.mjs"
+      ],
+      "boundary": "A real Pi RPC set_model command is a user selection: Bifrost pins the selected physical model for the session, bypasses automatic routing until /bifrost unpin, then resumes the configured physical route.",
+      "assertions": "The set_model response names the requested provider/model; Pi status shows pinned; the next ordinary user prompt produces exactly one generation on that physical model without Bifrost classification or routing; explicit unpin is handled and the next prompt produces exactly one generation on the configured default model. Mutating the manual-selection pin assignment from true to false makes this named test fail. The Pi RPC fixture exposes only the minimal set_model command needed to exercise the host's real model_select event.",
+      "boundaryTest": {
+        "file": "tests/integration/legacy-behavior.test.mjs",
+        "name": "manual Pi model selection pins the physical model until explicit unpin"
+      },
+      "invariant": {
+        "file": "tests/integration/legacy-behavior.test.mjs",
+        "name": "manual Pi model selection pins the physical model until explicit unpin"
+      },
+      "fault": {
+        "file": "tests/integration/legacy-behavior.test.mjs",
+        "name": "manual Pi model selection pins the physical model until explicit unpin"
       }
     },
     {
