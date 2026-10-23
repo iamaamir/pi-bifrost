@@ -240,7 +240,7 @@
     },
     "CacheConfig": {
       "type": "object",
-      "description": "Fuzzy classification cache. Repeated or similar prompts reuse the cached category instead of calling the classifier again.",
+      "description": "Classification cache. Exact ordered prompt matches are the default; set threshold below 1 to opt into fuzzy reuse.",
       "additionalProperties": false,
       "properties": {
         "enabled": {
@@ -259,8 +259,8 @@
           "type": "number",
           "minimum": 0,
           "maximum": 1,
-          "description": "Jaccard similarity threshold for fuzzy cache matches. 0 = any prompt sharing at least one token with an entry matches (prompts with zero token overlap never match). 1 = only exact token matches.",
-          "default": 0.85
+          "description": "Jaccard threshold for opt-in fuzzy cache matches. Values below 1 enable fuzzy matching; 1 requires an exact ordered normalized prompt match.",
+          "default": 1
         },
         "ttlHours": {
           "type": "number",

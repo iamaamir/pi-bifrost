@@ -43,6 +43,7 @@ All notable changes to pi-bifrost are documented here.
 - Landing page with a Pi-style terminal walkthrough of Auto, failure circuits, classifier choice, routing controls, and a searchable command replay.
 
 ### Changed
+- Classification cache now preserves token order and defaults to exact prompt matches. Set `cache.threshold` below `1` to opt into fuzzy Jaccard matches. The cache semantic key version changes, so existing entries become misses and repopulate safely.
 - When `classifier.backend` is absent, Bifrost now detects Pi-managed TypeSafe credentials first, then `TYPESAFE_API_KEY`, and otherwise uses `prompt`. This can change the classifier for existing configurations that omit the backend. Set `classifier.backend` explicitly to keep the old choice. Detection stays fixed for the extension session and prints its reason on first use.
 - Pi-native classification without `classifier.piNative.model` skips the fuzzy classification cache. A changing catalog cannot reuse a tier chosen by a different classifier model. Set an explicit model id to enable the cache.
 - When auto-detection picks a direct backend (`typesafe` or `pi-native`) but its settings are invalid (for example a missing criterion for a custom tier), Bifrost prints the config errors and keeps prompt classification instead of silently disabling it. An explicit `classifier.backend` still fails closed.

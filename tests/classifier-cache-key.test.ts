@@ -38,6 +38,11 @@ describe("classifier cache semantic key", () => {
     assert.match(first, /^[a-f0-9]{64}$/);
   });
 
+  it("invalidates keys written with unordered prompt normalization", () => {
+    const legacyKey = "legacy-cache-key";
+    assert.notEqual(classifierCacheKey(config("private instruction alpha"), ["quick", "general"]), legacyKey);
+  });
+
   it("changes when TypeSafe credentials become available", () => {
     const typesafe: BifrostConfig = {
       ...config("same"),

@@ -69,7 +69,7 @@ function assertExactRequestDelta(before, after, expected, label) {
 
 // ── fixture ─────────────────────────────────────────────────────
 
-function fixture({ cacheEnabled = true, extension = join(ROOT, "index.ts") } = {}) {
+function fixture({ cacheEnabled = true, cacheThreshold = THRESHOLD, extension = join(ROOT, "index.ts") } = {}) {
   const home = mkdtempSync(join(tmpdir(), "bifrost-cache-lifecycle-home-"));
   const work = mkdtempSync(join(tmpdir(), "bifrost-cache-lifecycle-work-"));
   const agent = join(home, ".pi", "agent");
@@ -93,11 +93,11 @@ function fixture({ cacheEnabled = true, extension = join(ROOT, "index.ts") } = {
     },
   }));
   writeFileSync(join(agent, "settings.json"), JSON.stringify({ retry: { enabled: false }, enabledModels: ["fake/*"] }));
-  writeConfig(project, { cacheEnabled });
+  writeConfig(project, { cacheEnabled, cacheThreshold });
   return { home, work, project, extension, agent };
 }
 
-function env_config(project, { cacheEnabled }) {
+function env_config(project, { cacheEnabled, cacheThreshold }) {
   return {
     path: join(project, "bifrost.json"),
     value: {
@@ -105,13 +105,13 @@ function env_config(project, { cacheEnabled }) {
       default: "general",
       classifier: { enabled: true, backend: "prompt", model: "fake/classifier" },
       models: { general: ["fake/chat"], quick: [`fake/${ALTERNATE_MODEL}`] },
-      cache: { enabled: cacheEnabled, maxEntries: 50, threshold: THRESHOLD, ttlHours: TTL_HOURS },
+      cache: { enabled: cacheEnabled, maxEntries: 50, ...(cacheThreshold === null ? {} : { threshold: cacheThreshold }), ttlHours: TTL_HOURS },
     },
   };
 }
 
-function writeConfig(project, { cacheEnabled }) {
-  const { path, value } = env_config(project, { cacheEnabled });
+function writeConfig(project, { cacheEnabled, cacheThreshold }) {
+  const { path, value } = env_config(project, { cacheEnabled, cacheThreshold });
   writeFileSync(path, JSON.stringify(value, null, 2));
 }
 
@@ -329,7 +329,6 @@ function normalize(text) {
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .split(" ")
     .filter(Boolean)
-    .sort()
     .join(" ");
 }
 
@@ -370,6 +369,32 @@ describe("cache lifecycle acceptance", { timeout: 600_000, concurrency: 1 }, () 
         await rpc.userTurn(SEED_PROMPT);
         const afterSecond = await stats();
         assertExactRequestDelta(afterFirst, afterSecond, { chat: 1, classifier: 0, quick: 0, alt: 0, decoy: 0 }, "exact hit avoids classifier");
+      },
+    });
+  });
+
+  it("default cache misses prompts with reordered tokens", async () => {
+    await scenario({
+      fixtureOptions: { cacheThreshold: null },
+      body: async ({ env, sessions }) => {
+        const seeded = startRpc({ home: env.home, work: env.work, extension: env.extension });
+        sessions.push(seeded);
+        await seeded.userTurn(SEED_PROMPT);
+        const entries = readCacheEntries(env.project);
+        assert.equal(entries.length, 1, "seed turn should persist one classifier decision");
+        entries[0].category = "quick";
+        writeFileSync(cacheFile(env.project), `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`);
+        const closed = await seeded.close(env.home);
+        assert.equal(closed.closed, true);
+        assert.equal(closed.groupGone, true);
+        assert.equal(closed.violations, "");
+
+        const rpc = startRpc({ home: env.home, work: env.work, extension: env.extension });
+        sessions.push(rpc);
+        const before = await stats();
+        await rpc.userTurn("today cache routing the for feature simple a implement please Alpha CANARY");
+        const after = await stats();
+        assertExactRequestDelta(before, after, { chat: 1, classifier: 1, quick: 0, alt: 0, decoy: 0 }, "default exact cache must not reuse reordered prompt");
       },
     });
   });

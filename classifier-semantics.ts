@@ -117,6 +117,7 @@ export function classifierCacheKey(
 ): string {
   const classifier = config.classifier;
   const semantics = JSON.stringify(stableValue({
+    cachePromptNormalizationVersion: 2,
     instructionVersion: CLASSIFIER_INSTRUCTION_VERSION,
     backend: runtime.effectiveBackend ?? classifier?.backend ?? CLASSIFIER_BACKEND_IDS.prompt,
     model: classifier?.model,

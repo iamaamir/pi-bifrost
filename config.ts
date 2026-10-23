@@ -30,7 +30,7 @@ export const BUNDLED_PUBLIC_INIT_DEFAULTS: Readonly<Record<string, unknown>> = O
   strategy: "first",
   categoryStrategies: Object.freeze({ quick: "random", general: "first", frontier: "first" }),
   classifier: Object.freeze({ enabled: true, method: "auto", maxTokens: 20, temperature: 0, fallbackToRegex: true }),
-  cache: Object.freeze({ enabled: true, maxEntries: 500, threshold: 0.88 }),
+  cache: Object.freeze({ enabled: true, maxEntries: 500, threshold: 1 }),
   reliability: Object.freeze({
     enabled: true,
     cooldownOnAllowanceExhausted: true,

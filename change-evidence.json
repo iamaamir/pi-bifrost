@@ -100,22 +100,36 @@
       "id": "classifier-disabled-cache-bypass",
       "requirement": "R12",
       "files": [
+        "CHANGELOG.md",
+        "CONTEXT.md",
+        "PRD.md",
+        "ROADMAP.md",
+        "bifrost.json",
+        "cache.ts",
+        "classifier-semantics.ts",
+        "config.ts",
+        "docs/guide/configuration.md",
         "index.ts",
+        "schema.json",
+        "tests/cache-properties.test.ts",
+        "tests/cache.test.ts",
+        "tests/classifier-cache-key.test.ts",
+        "tests/config-source-override.test.ts",
         "tests/integration/cache-lifecycle-acceptance.test.mjs"
       ],
-      "boundary": "Pinned Pi 1.0.1 RPC sessions with the local fake provider: seed a persisted tier decision while classification is enabled, restart with classifier disabled, then observe the dispatched model and outbound-request guard.",
-      "assertions": "A disabled classifier cannot consume a persisted cache decision; the test forces a valid but different cached tier, confirms the normal configured route is used, and confirms no classifier request occurs. The controlled removal of the cacheEnabled classifier gate makes the assertion fail.",
+      "boundary": "Pinned Pi 1.0.1 RPC sessions with the local fake provider verify both cache boundaries: restart with classification disabled after seeding a conflicting persisted tier, and restart with a same-token prompt reordered. Request counters and the outbound guard expose whether either cache decision was reused.",
+      "assertions": "A disabled classifier cannot consume a persisted cache decision; the test forces a valid but different cached tier, confirms the configured route is used, and confirms no classifier request occurs. By default, ordered normalized prompts match exactly; reordered prompts miss, legacy unordered-normalization keys are invalidated, and explicit thresholds below 1 retain fuzzy Jaccard matching. Removing the classifierEnabled cache gate or changing the bundled exact-match threshold from 1 to 0.88 makes its corresponding Pi assertion fail.",
       "boundaryTest": {
         "file": "tests/integration/cache-lifecycle-acceptance.test.mjs",
         "name": "skips persisted cache decisions when classifier is disabled"
       },
       "invariant": {
-        "file": "tests/integration/cache-lifecycle-acceptance.test.mjs",
-        "name": "skips persisted cache decisions when classifier is disabled"
+        "file": "tests/cache.test.ts",
+        "name": "defaults to ordered exact matching while lower thresholds opt into fuzzy matching"
       },
       "fault": {
         "file": "tests/integration/cache-lifecycle-acceptance.test.mjs",
-        "name": "skips persisted cache decisions when classifier is disabled"
+        "name": "default cache misses prompts with reordered tokens"
       }
     }
   ]
