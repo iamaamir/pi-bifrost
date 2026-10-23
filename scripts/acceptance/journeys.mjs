@@ -151,6 +151,13 @@ const journeys = [
     boundary: "real Pi physical route with local fake provider and zero-generation assertion",
   },
   {
+    id: "strict-activation-failure-no-generation",
+    testFile: "tests/integration/native-activation-cancel.test.mjs",
+    title: "cancels real AgentSession activation behind a proven deny-all fence",
+    requirements: ["R05", "R06"],
+    boundary: "real Pi AgentSession with hard admission; false or thrown activation must leave the turn unsent and preserve the seed model",
+  },
+  {
     id: "malformed-project-config-blocks-startup",
     testFile: "tests/integration/config-startup-acceptance.test.mjs",
     title: "blocks generation when a project config source is malformed",

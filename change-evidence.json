@@ -139,8 +139,6 @@
       "requirement": "R07",
       "files": [
         "diagnostics.ts",
-        "docs/acceptance-coverage.md",
-        "scripts/acceptance/journeys.mjs",
         "tests/config.test.ts",
         "tests/diagnostics.test.ts",
         "tests/integration/command-policy-acceptance.test.mjs",
@@ -159,6 +157,28 @@
       "fault": {
         "file": "tests/diagnostics.test.ts",
         "name": "surfaces unsupported capability enforcement with a safe field path"
+      }
+    },
+    {
+      "id": "strict-activation-failure-no-generation",
+      "requirement": "R05",
+      "files": [
+        "docs/acceptance-coverage.md",
+        "scripts/acceptance/journeys.mjs"
+      ],
+      "boundary": "A named pinned-Pi AgentSession journey exercises hard-admission activation failures from the actual host; false and thrown setModel outcomes must keep the user turn unsent and preserve the prior seed model.",
+      "assertions": "Both host activation outcomes fail closed without provider callbacks on the stale model; restored source returns the journey green. Capability enforcement remains rejected as unsupported in this release.",
+      "boundaryTest": {
+        "file": "tests/integration/native-activation-cancel.test.mjs",
+        "name": "cancels real AgentSession activation behind a proven deny-all fence"
+      },
+      "invariant": {
+        "file": "tests/integration/native-activation-cancel.test.mjs",
+        "name": "cancels real AgentSession activation behind a proven deny-all fence"
+      },
+      "fault": {
+        "file": "tests/integration/native-activation-cancel.test.mjs",
+        "name": "cancels real AgentSession activation behind a proven deny-all fence"
       }
     }
   ]
