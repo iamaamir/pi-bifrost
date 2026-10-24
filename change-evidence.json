@@ -319,8 +319,6 @@
       "id": "r15-unknown-discovery-preserves-config",
       "requirement": "R15",
       "files": [
-        "docs/testing-coverage.md",
-        "scripts/acceptance/journeys.mjs",
         "tests/reconciliation-command-registered.test.ts",
         "tests/reconciliation-command-router.test.ts"
       ],
@@ -337,6 +335,50 @@
       "fault": {
         "file": "tests/reconciliation-command-router.test.ts",
         "name": "fault control: complete-on-refresh-failure turns the named advisory assertion RED in an isolated source copy"
+      }
+    },
+    {
+      "id": "r16-pi-1-4-baseline-and-evidence-preflight",
+      "requirement": "R16",
+      "files": [
+        ".github/workflows/verification.yml",
+        "DEVELOPMENT.md",
+        "docs/verification-campaign.md",
+        "package-lock.json",
+        "package.json",
+        "scripts/verify-release.mjs",
+        "tests/verification-workflow.test.mjs"
+      ],
+      "boundary": "The pull-request workflow performs a read-only declaration preflight before the existing release gates, while the pinned Pi baseline, compatibility matrix, release preflight, and operational docs consistently name Pi 1.4.0.",
+      "assertions": "Evidence preflight checks out the PR head with full history, validates against the PR base without --apply or dependency installation, and blocks PR release gates only when that preflight fails. The compatibility matrix retains explicit 1.3.0 and 1.4.0 pins with isolated installs, while package metadata, lockfile, release preflight, and operator documentation use the 1.4.0 baseline.",
+      "boundaryTest": {
+        "file": "tests/verification-workflow.test.mjs",
+        "name": "evidence preflight runs only on pull requests before release gates"
+      },
+      "invariant": {
+        "file": "tests/verification-workflow.test.mjs",
+        "name": "Pi compatibility uses explicit matrix pins with an isolated install"
+      },
+      "fault": {
+        "exception": "This is CI-workflow, dependency-pin, and documentation configuration; the source-reading boundary and invariant tests fail on incompatible declarations, but no isolated production-source fault applies."
+      }
+    },
+    {
+      "id": "r16-prd-delivery-runbook",
+      "requirement": "R16",
+      "files": [
+        "docs/prd-delivery-plan.md"
+      ],
+      "boundary": "The delivery runbook records the branch's CI recovery state, serial lanes, candidate freeze protocol, and explicit partial-requirement boundaries.",
+      "assertions": "It directs a failed CI run through one-root-cause repair and focused proof, forbids treating partial coverage as closure, and requires a frozen revision for final verification.",
+      "boundaryTest": {
+        "exception": "Operational delivery documentation only; no runtime behavior changes."
+      },
+      "invariant": {
+        "exception": "Operational delivery documentation only; no runtime behavior changes."
+      },
+      "fault": {
+        "exception": "Operational delivery documentation only; no runtime behavior changes."
       }
     }
   ]

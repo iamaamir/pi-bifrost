@@ -112,3 +112,4 @@ Then continue only one lane. Never infer a gate passed from old artifacts or bra
 |---|---|---|---|
 | 2026-10-24 | `905793c` | PR pushed after Pi 1.4.0 baseline plus R15 repair. | CI `release-gates` and report publisher checks queued; local final gates intentionally deferred. |
 | 2026-10-24 | `9b57b9d` | R05/R08 feasibility audit reviewed. | No status-closing Bifrost-only slice exists. Optional R05 tests do not close coverage and are deferred. |
+| 2026-10-24 | `dad67ff` | PR #186 release-gate acceptance failed. | [Verification run 40085083293](https://github.com/iamaamir/pi-bifrost/actions/runs/40085083293) failed because `docs/testing-coverage.md` is declared by both `evidence-rebind-helper` and `r15-unknown-discovery-preserves-config`; remove the duplicate R15 declaration, run focused evidence tests, then return to CI. |
