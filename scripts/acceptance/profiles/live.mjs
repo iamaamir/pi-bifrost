@@ -124,7 +124,9 @@ function onlyAllowedModels(models, allowedKeys) {
 function clonePluginSources(root, pluginDir) {
   mkdirSync(pluginDir, { recursive: true, mode: 0o700 });
   for (const name of readdirSync(root)) {
-    if (name.endsWith(".ts")) copyFileSync(join(root, name), join(pluginDir, name));
+    // schema.json is the structural contract the runtime reads next to its
+    // sources, so an isolated extension copy needs it as well.
+    if (name.endsWith(".ts") || name === "schema.json") copyFileSync(join(root, name), join(pluginDir, name));
   }
   symlinkSync(join(root, "node_modules"), join(pluginDir, "node_modules"), "dir");
 }

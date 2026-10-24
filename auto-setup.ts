@@ -1,7 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { lstatSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { ALL_STRATEGIES, DEFAULT_RULES, type BifrostConfig } from "./config.ts";
+import { ALL_STRATEGIES, DEFAULT_RULES, SUPPORTED_SCHEMA_VERSIONS, type BifrostConfig } from "./config.ts";
 import { guessTier } from "./routing.ts";
 import { isGenerativeModel } from "./virtual-model.ts";
 import { isClassifierBackend } from "./classifier-backends.ts";
@@ -44,7 +44,7 @@ function projectClassifier(source: unknown): PlainRecord | undefined {
   if (!record) return undefined;
   const result = projectKnownFields(record, [
     "enabled", "model", "method", "maxTokens", "temperature", "fallbackToRegex",
-    "totalTimeoutMs", "minConfidence", "fallback", "apiKeyEnv",
+    "totalTimeoutMs", "minConfidence", "fallback",
   ]) ?? {};
   if (typeof record.backend === "string" && isClassifierBackend(record.backend)) result.backend = record.backend;
   if (typeof record.model === "string" || (Array.isArray(record.model) && record.model.every((item) => typeof item === "string"))) {
@@ -53,7 +53,7 @@ function projectClassifier(source: unknown): PlainRecord | undefined {
   if (record.method !== "direct" && record.method !== "subprocess" && record.method !== "auto") delete result.method;
   if (record.fallback !== "prompt" && record.fallback !== "regex") delete result.fallback;
   for (const [key, nestedKeys] of [
-    ["typesafe", ["model", "timeoutMs", "maxAttempts", "debug", "apiKeyEnv"]],
+    ["typesafe", ["model", "timeoutMs", "maxAttempts", "debug"]],
     ["piNative", ["model", "timeoutMs", "maxAttempts"]],
   ] as const) {
     const nested: PlainRecord = projectKnownFields(record[key], nestedKeys) ?? {};
@@ -73,7 +73,7 @@ export function serializeBootstrapConfig(
 ): BifrostConfig {
   const result: PlainRecord = { default: defaultTier, models: generatedModels };
   const strategySet = new Set<string>(ALL_STRATEGIES);
-  if (typeof source.schemaVersion === "number" && Number.isSafeInteger(source.schemaVersion)) result.schemaVersion = source.schemaVersion;
+  if (typeof source.schemaVersion === "number" && SUPPORTED_SCHEMA_VERSIONS.includes(source.schemaVersion as 1 | 2 | 3)) result.schemaVersion = source.schemaVersion;
   if (typeof source.enabled === "boolean") result.enabled = source.enabled;
   if (typeof source.strategy === "string" && strategySet.has(source.strategy)) result.strategy = source.strategy;
   const categoryStrategies = plainRecord(source.categoryStrategies);

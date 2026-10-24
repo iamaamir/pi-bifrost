@@ -370,8 +370,13 @@ function linkInstalledDependencies(source, destination) {
     const destinationPath = join(destination, entry.name);
     if (entry.name.startsWith("@")) {
       mkdirSync(destinationPath, { recursive: true });
-      for (const scoped of readdirSync(sourcePath)) symlinkSync(join(sourcePath, scoped), join(destinationPath, scoped), "dir");
-    } else symlinkSync(sourcePath, destinationPath, "dir");
+      for (const scoped of readdirSync(sourcePath)) {
+        if (!existsSync(join(destinationPath, scoped))) symlinkSync(join(sourcePath, scoped), join(destinationPath, scoped), "dir");
+      }
+    } else if (!existsSync(destinationPath)) {
+      // Packed runtime dependencies are already installed in the consumer.
+      symlinkSync(sourcePath, destinationPath, "dir");
+    }
   }
 }
 
@@ -383,9 +388,25 @@ function installPackedRouter() {
   const packed = JSON.parse(execFileSync("npm", ["pack", "--json", "--cache", cache, "--pack-destination", temp], {
     cwd: ROOT, encoding: "utf8", timeout: 90_000,
   }))[0];
+  // Pack the runtime dependency closure from the local install so the offline
+  // consumer install never needs the registry.
+  const dependencyTarballs = [];
+  const seen = new Set();
+  const queue = Object.keys(JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).dependencies ?? {});
+  while (queue.length > 0) {
+    const name = queue.shift();
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const directory = join(ROOT, "node_modules", ...name.split("/"));
+    for (const dependency of Object.keys(JSON.parse(readFileSync(join(directory, "package.json"), "utf8")).dependencies ?? {})) queue.push(dependency);
+    const dependencyPacked = JSON.parse(execFileSync("npm", ["pack", "--json", "--cache", cache, "--pack-destination", temp, directory], {
+      encoding: "utf8", timeout: 90_000,
+  }))[0];
+    dependencyTarballs.push(join(temp, dependencyPacked.filename));
+  }
   mkdirSync(consumer);
   execFileSync("npm", ["install", "--prefix", consumer, "--cache", cache, "--offline", "--ignore-scripts",
-    "--legacy-peer-deps", "--no-audit", "--no-fund", join(temp, packed.filename)], {
+    "--legacy-peer-deps", "--no-audit", "--no-fund", ...dependencyTarballs, join(temp, packed.filename)], {
     cwd: consumer, encoding: "utf8", stdio: "pipe", timeout: 90_000,
   });
   const modules = join(consumer, "node_modules");

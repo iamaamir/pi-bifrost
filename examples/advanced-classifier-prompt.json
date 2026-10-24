@@ -1,6 +1,6 @@
 {
   "$schema": "../schema.json",
-  "_comment": "TEMPLATE: override the classifier system prompt with detailed task-intent descriptions. Replace model placeholders with your Pi registry models.",
+  "description": "TEMPLATE: override the classifier system prompt with detailed task-intent descriptions. Replace model placeholders with your Pi registry models.",
   "enabled": true,
   "default": "general",
   "strategy": "first",

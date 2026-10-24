@@ -249,7 +249,21 @@ describe("offline diagnostics", () => {
     assert.ok(report.diagnostics.some((issue) => issue.code === "config.invalid" && issue.severity === "error"));
     const serialized = JSON.stringify(report);
     assert.equal(serialized.includes("PRIVATE_BACKEND_VALUE"), false);
-    assert.equal(report.diagnostics.some((issue) => issue.path), false);
+    // Structural findings now travel with the report and name their JSON path;
+    // the offending value itself never reaches the projection.
+    assert.equal(report.diagnostics.some((issue) => issue.path?.includes("PRIVATE_BACKEND_VALUE")), false);
+  });
+
+  it("carries structural schema findings into the validation report and its JSON form", () => {
+    const report = validateDiagnostics({ config: config({ classifier: { bogus: 1 } }) });
+    const structural = report.diagnostics.find((issue) => issue.code === "config.schema_unsupported_field");
+    assert.equal(structural?.severity, "warning", "a structural finding stays a warning; semantic checks own fail-closed outcomes");
+    assert.equal(structural?.path, "classifier.bogus");
+    assert.equal(report.diagnostics.some((issue) => issue.severity === "error" && issue.path === "classifier.bogus"), false,
+      "an unknown field is reported, not treated as an unsafe policy");
+    const serialized = JSON.stringify(report);
+    assert.ok(serialized.includes("classifier.bogus"), "the JSON form must name the offending path");
+    assert.equal(serialized.includes("config.schema_unsupported_field"), true);
   });
 
 });

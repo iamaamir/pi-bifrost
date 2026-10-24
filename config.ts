@@ -218,6 +218,17 @@ export const ALL_STRATEGIES: readonly RoutingStrategy[] = [
   "fastest",
 ];
 
+/** Schema versions Bifrost accepts. Version 3 keeps every version 2 routing
+ * capability and reserves `description` inside dynamically keyed maps. */
+export const SUPPORTED_SCHEMA_VERSIONS = [1, 2, 3] as const;
+
+/** True when the configured schemaVersion is at least `minimum`. An absent or
+ * non-integer version counts as version 1 (legacy behavior). Version 3 keeps
+ * all version 2 features, so gates written as `=== 2` must use this instead. */
+export function schemaVersionAtLeast(version: unknown, minimum: number): boolean {
+  return typeof version === "number" && Number.isInteger(version) && version >= minimum;
+}
+
 export interface ConfigIssue {
   readonly severity: "error" | "warning";
   readonly message: string;
@@ -256,13 +267,13 @@ export function configHasNoPools(config: BifrostConfig): boolean {
 }
 
 export function hasExplicitTierPolicy(config: BifrostConfig, tier: string): boolean {
-  return config.schemaVersion === 2
+  return schemaVersionAtLeast(config.schemaVersion, 2)
     && Object.hasOwn(config.tierPolicies ?? {}, tier)
     && Array.isArray(config.tierPolicies?.[tier]?.fallbackTiers);
 }
 
 export function hasExplicitTierPolicies(config: BifrostConfig): boolean {
-  return config.schemaVersion === 2
+  return schemaVersionAtLeast(config.schemaVersion, 2)
     && Object.values(config.tierPolicies ?? {}).some((policy) => Array.isArray(policy?.fallbackTiers));
 }
 
@@ -295,12 +306,12 @@ export function validateTierPolicyConfigInternal(config: BifrostConfig, maxIssue
   const modelKeys = Object.keys(config.models ?? {});
   const modelKeySet = new Set(modelKeys);
   const schemaVersion = config.schemaVersion;
-  if (schemaVersion !== undefined && schemaVersion !== 1 && schemaVersion !== 2) {
-    policyIssue("config.schema_version_unsupported", "schemaVersion", `Unsupported schemaVersion "${String(schemaVersion)}"; supported versions are 1 and 2.`);
+  if (schemaVersion !== undefined && !SUPPORTED_SCHEMA_VERSIONS.includes(schemaVersion as 1 | 2 | 3)) {
+    policyIssue("config.schema_version_unsupported", "schemaVersion", `Unsupported schemaVersion "${String(schemaVersion)}"; supported versions are 1, 2, and 3.`);
   }
   const tierPolicies = config.tierPolicies as Record<string, unknown> | undefined;
-  if (tierPolicies !== undefined && schemaVersion !== 2) {
-    policyIssue("config.tier_policies_requires_v2", "tierPolicies", "tierPolicies requires schemaVersion 2.");
+  if (tierPolicies !== undefined && !schemaVersionAtLeast(schemaVersion, 2)) {
+    policyIssue("config.tier_policies_requires_v2", "tierPolicies", "tierPolicies requires schemaVersion 2 or later.");
   }
   if (tierPolicies !== undefined && (!tierPolicies || typeof tierPolicies !== "object" || Array.isArray(tierPolicies))) {
     policyIssue("config.tier_policies_invalid", "tierPolicies", "tierPolicies must be an object keyed by configured tier.");
@@ -388,8 +399,8 @@ export function validateEconomicConfig(config: BifrostConfig): ConfigIssue[] {
   const add = (code: string, path: string, message: string): void => {
     issues.push({ severity: "error", code, path, message });
   };
-  if (config.schemaVersion !== 2) {
-    add("config.economics_requires_v2", "economics", "economics requires schemaVersion 2.");
+  if (!schemaVersionAtLeast(config.schemaVersion, 2)) {
+    add("config.economics_requires_v2", "economics", "economics requires schemaVersion 2 or later.");
   }
   if (!criterionObject(raw)) {
     add("config.economics_invalid", "economics", "economics must be an object.");
@@ -605,8 +616,8 @@ export function validateConfig(
       || (affinityRaw.providerAdvisory !== undefined && typeof affinityRaw.providerAdvisory !== "boolean")) {
       issues.push({ severity: "error", code: "config.affinity_invalid", path: "affinity", message: "affinity must contain a supported mode and optional boolean providerAdvisory." });
     }
-    if (config.schemaVersion !== 2) {
-      issues.push({ severity: "error", code: "config.affinity_requires_schema_v2", path: "affinity", message: "affinity requires schemaVersion 2." });
+    if (!schemaVersionAtLeast(config.schemaVersion, 2)) {
+      issues.push({ severity: "error", code: "config.affinity_requires_schema_v2", path: "affinity", message: "affinity requires schemaVersion 2 or later." });
     }
   }
   const reliabilityProblem = (code: string, path: string, message: string): void => {
@@ -622,8 +633,8 @@ export function validateConfig(
     if (stateVersion !== undefined && stateVersion !== 1 && stateVersion !== 2) {
       issues.push({ severity: "error", code: "config.reliability_state_version_unsupported", path: "reliability.stateVersion", message: "reliability.stateVersion must be 1 or 2." });
     }
-    if (stateVersion === 2 && config.schemaVersion !== 2) {
-      issues.push({ severity: "error", code: "config.reliability_state_v2_requires_schema_v2", path: "reliability.stateVersion", message: "reliability.stateVersion 2 requires schemaVersion 2." });
+    if (stateVersion === 2 && !schemaVersionAtLeast(config.schemaVersion, 2)) {
+      issues.push({ severity: "error", code: "config.reliability_state_v2_requires_schema_v2", path: "reliability.stateVersion", message: "reliability.stateVersion 2 requires schemaVersion 2 or later." });
     }
     const observations = reliabilityRecord.observations;
     if (observations !== undefined) {
@@ -671,6 +682,33 @@ export function validateConfig(
     if (!Number.isSafeInteger(windowMinutes) || windowMinutes > 1_000_000
       || !Number.isSafeInteger(cooldownMinutes) || cooldownMinutes > 1_000_000) {
       reliabilityProblem("config.reliability_v2_bounds_invalid", "reliability", "Reliability v2 window and cooldown must be safe whole-minute values no greater than 1000000.");
+    }
+  }
+
+  // schemaVersion 3 reserves `description` inside dynamically keyed maps as
+  // inline metadata. A non-string value cannot be metadata, so it is a
+  // user-defined key that cannot survive the version bump: reject it with a
+  // precise diagnostic instead of reinterpreting or renaming it.
+  if (config.schemaVersion === 3) {
+    const economicsRecord = (config.economics ?? {}) as unknown as Record<string, unknown>;
+    const dynamicMaps: ReadonlyArray<readonly [string, unknown]> = [
+      ["models", config.models],
+      ["categoryStrategies", config.categoryStrategies],
+      ["tierPolicies", config.tierPolicies],
+      ["classifier.criteria", config.classifier?.criteria],
+      ["economics.scopes", economicsRecord.scopes],
+      ["economics.tierOverrides", economicsRecord.tierOverrides],
+      ["economics.sourceOrder", economicsRecord.sourceOrder],
+    ];
+    for (const [mapPath, map] of dynamicMaps) {
+      if (criterionObject(map) && Object.hasOwn(map, "description") && typeof map.description !== "string") {
+        issues.push({
+          severity: "error",
+          code: "config.v3_reserved_description",
+          path: `${mapPath}.description`,
+          message: `schemaVersion 3 reserves ${mapPath}.description as inline metadata; rename the user-defined key or keep schemaVersion 2.`,
+        });
+      }
     }
   }
 

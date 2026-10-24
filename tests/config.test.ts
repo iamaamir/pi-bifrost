@@ -49,7 +49,7 @@ describe("validateConfig", () => {
       tierPolicies: { frontier: { fallbackTiers: [] } },
     });
     assert.ok(legacyPolicy.some((issue) => issue.message.includes("schemaVersion 2")));
-    const unsupported = validateConfig({ ...baseConfig, schemaVersion: 3 });
+    const unsupported = validateConfig({ ...baseConfig, schemaVersion: 4 });
     assert.ok(unsupported.some((issue) => issue.message.includes("Unsupported schemaVersion")));
   });
 

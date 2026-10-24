@@ -18,13 +18,37 @@ function linkInstalledDependencies(source, destination) {
     if (entry.name.startsWith("@")) {
       mkdirSync(destinationPath, { recursive: true });
       for (const scopedPackage of readdirSync(sourcePath)) {
-        if (scopedPackage.startsWith(".")) continue;
+        if (scopedPackage.startsWith(".") || existsSync(join(destinationPath, scopedPackage))) continue;
         symlinkSync(join(sourcePath, scopedPackage), join(destinationPath, scopedPackage), "dir");
       }
-    } else {
+    } else if (!existsSync(destinationPath)) {
+      // The packed install already placed runtime dependencies; only the
+      // host-provided dev dependencies need linking here.
       symlinkSync(sourcePath, destinationPath, "dir");
     }
   }
+}
+
+/** Pack the project's runtime dependency closure from the local install so a
+ * consumer's `--offline` install never needs the registry. */
+function packRuntimeDependencies(cache) {
+  const rootPackage = packageJsonOf(process.cwd());
+  const tarballs = [];
+  const seen = new Set();
+  const queue = Object.keys(rootPackage.dependencies ?? {});
+  while (queue.length > 0) {
+    const name = queue.shift();
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const directory = join(process.cwd(), "node_modules", ...name.split("/"));
+    const manifest = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
+    for (const dependency of Object.keys(manifest.dependencies ?? {})) queue.push(dependency);
+    const packed = JSON.parse(execFileSync("npm", [
+      "pack", "--json", "--cache", cache, "--pack-destination", cache, directory,
+    ], { encoding: "utf8", timeout: 60_000 }))[0];
+    tarballs.push(join(cache, packed.filename));
+  }
+  return tarballs;
 }
 
 /** Install the packed API into a temporary consumer that installs nothing else. */
@@ -34,7 +58,7 @@ function installPackedPackage(cache, consumer) {
   ], { cwd: process.cwd(), encoding: "utf8", timeout: 60_000 }))[0];
   execFileSync("npm", [
     "install", "--prefix", consumer, "--cache", cache, "--offline", "--ignore-scripts",
-    "--no-audit", "--no-fund", join(cache, packed.filename),
+    "--no-audit", "--no-fund", ...packRuntimeDependencies(cache), join(cache, packed.filename),
   ], { cwd: consumer, encoding: "utf8", stdio: "pipe", timeout: 60_000 });
   return packed;
 }
@@ -113,15 +137,27 @@ describe("packed experimental router consumer", () => {
       });
       assert.deepEqual(packageJsonOf(packageRoot).exports["./*"], "./*", "legacy package subpaths stay mapped");
       assert.deepEqual(packageJsonOf(packageRoot).pi.extensions, ["./index.ts"], "the Pi extension entry stays unchanged");
+      // The agent skill must be discoverable from the installed package: Pi reads
+      // the declared skill directory, which has to contain a readable SKILL.md.
+      assert.deepEqual(packageJsonOf(packageRoot).pi.skills, ["./skills/configure-bifrost"], "the package declares its agent skill");
+      const installedSkill = join(packageRoot, "skills", "configure-bifrost", "SKILL.md");
+      assert.ok(existsSync(installedSkill), "the installed package ships the agent skill");
+      assert.match(readFileSync(installedSkill, "utf8"), /^---\nname: configure-bifrost\ndescription: /, "the installed skill has loadable frontmatter");
+      assert.ok(existsSync(join(packageRoot, "skills", "configure-bifrost", "references", "configuration-reference.md")));
       assert.ok(readFileSync(join(packageRoot, "index.ts"), "utf8"));
       assertOptionalPiPeers(packageRoot);
-      for (const required of [...rootSources, ...routerFiles, "bifrost.json", "schema.json", "package.json", "README.md", "CHANGELOG.md", "LICENSE", "docs/router-api.md"]) {
+      const agentSkill = [
+        "skills/configure-bifrost/SKILL.md",
+        "skills/configure-bifrost/references/configuration-reference.md",
+      ];
+      for (const required of [...rootSources, ...routerFiles, "bifrost.json", "schema.json", "package.json", "README.md", "CHANGELOG.md", "LICENSE", "docs/router-api.md", ...agentSkill]) {
         assert.ok(archivePaths.includes(required), `release archive missing ${required}`);
       }
       assert.ok(archivePaths.every((path) => path.endsWith(".ts") && !path.includes("/")
         || ["bifrost.json", "schema.json", "README.md", "CHANGELOG.md", "LICENSE", "package.json", "docs/router-api.md"].includes(path)
         || routerFiles.includes(path)
-        || path.startsWith("examples/")), "release contains files outside source, router API, and examples allowlists");
+        || path.startsWith("examples/")
+        || agentSkill.includes(path)), "release contains files outside source, router API, examples, and agent skill allowlists");
       assert.ok(archivePaths.includes("dist/router/router.js"), "the package must contain built JS");
       assert.ok(archivePaths.includes("dist/router/router.d.ts"), "the package must contain API declarations");
       assertNoPackageReferences(packageRoot, routerFiles);

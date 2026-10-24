@@ -1,3 +1,4 @@
+import { schemaVersionAtLeast } from "./config.ts";
 import { getCircuitState, type ReliabilityConfig, type ReliabilityState } from "./reliability.ts";
 import { isGenerativeModel } from "./virtual-model.ts";
 import { evaluateReserves, type EconomicSnapshot, type ReserveEvaluation, type ReservePolicy } from "./economic-signals.ts";
@@ -358,7 +359,7 @@ export function resolveConfiguredTier<M extends RoutingModelBase>(
   const options = buildTierResolutionOptions(tier, config);
   const routeNow = now ?? Date.now();
   const economicContext = economic ? { ...economic, requestedTier: tier, now: routeNow } : undefined;
-  const policy = config.schemaVersion === 2 ? config.tierPolicies?.[tier] : undefined;
+  const policy = schemaVersionAtLeast(config.schemaVersion, 2) ? config.tierPolicies?.[tier] : undefined;
   const resolution = policy && Array.isArray(policy.fallbackTiers)
     ? resolveWithExplicitTierBoundary(ctx, options, policy.fallbackTiers, config, reliabilityState, reliabilityConfig, routeNow, economicContext, random)
     : resolveModelWithFallback(ctx, { ...options, reliabilityState, reliabilityConfig, now: routeNow, economic: economicContext, random });

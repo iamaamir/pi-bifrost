@@ -14,12 +14,20 @@ import {
   BUNDLED_PUBLIC_INIT_DEFAULTS,
   DEFAULT_RULES,
   MAX_CONFIG_SOURCE_BYTES,
+  SUPPORTED_SCHEMA_VERSIONS,
   mergeConfig,
+  schemaVersionAtLeast,
   validateConfig,
   validateEconomicConfig,
   validateTierPolicyConfigInternal,
   type BifrostConfig,
 } from "./config.ts";
+import {
+  DYNAMIC_CONFIG_MAP_PATHS,
+  stripConfigMetadata,
+  validateConfigSourceStructure,
+  validateEffectiveConfigStructure,
+} from "./config-schema.ts";
 
 const MAX_CONFIG_SOURCE_DIAGNOSTICS = 32;
 const MAX_CONFIG_SOURCE_DIAGNOSTIC_CHARS = 192;
@@ -44,14 +52,27 @@ export function loadConfig(
   return loadConfigForReload(cwd, extensionDir).config;
 }
 
+/** File-backed configuration layers. `effective` never owns a source file, so it cannot appear here. */
+export type ConfigSourceLayer = "extension" | "global" | "workspace" | "project";
+
 export interface ConfigLoadDiagnostic {
-  readonly layer: "extension" | "global" | "workspace" | "project";
+  /** `effective` marks a problem in the merged policy that no single layer owns. */
+  readonly layer: ConfigSourceLayer | "effective";
   readonly message: string;
 }
 
 export interface ConfigLoadResult {
   readonly config: BifrostConfig;
+  /** Problems that leave a layer unusable: routing, reload, and apply stay fail-closed. */
   readonly diagnostics: readonly ConfigLoadDiagnostic[];
+  /**
+   * Path-level schema findings the domain validators own. The value is reported
+   * but the layer still loads, because semantic validation decides whether the
+   * surrounding policy must fail closed (economics, reliability, tier policies)
+   * or degrade safely (an invalid classifier budget disables external
+   * classification while local routing continues).
+   */
+  readonly warnings: readonly ConfigLoadDiagnostic[];
   readonly sourceFields: readonly { readonly layer: ConfigLoadDiagnostic["layer"]; readonly fields: readonly string[] }[];
   readonly publicDefaultFields: readonly string[];
 }
@@ -62,8 +83,8 @@ function sourcePolicyDiagnostics(value: Record<string, unknown>): string[] {
     if (diagnostics.length < 8) diagnostics.push(message.slice(0, MAX_CONFIG_SOURCE_DIAGNOSTIC_CHARS));
   };
   const version = value.schemaVersion;
-  if (version !== undefined && version !== 1 && version !== 2) {
-    add("schemaVersion is unsupported; supported versions are 1 and 2.");
+  if (version !== undefined && !SUPPORTED_SCHEMA_VERSIONS.includes(version as 1 | 2 | 3)) {
+    add("schemaVersion is unsupported; supported versions are 1, 2, and 3.");
   }
   const tierPolicies = value.tierPolicies;
   if (tierPolicies !== undefined) {
@@ -142,6 +163,25 @@ function readBoundedConfigText(path: string): { readonly text?: string; readonly
   }
 }
 
+/** `description` keys inside dynamically keyed maps of one source document,
+ * with the shape each one actually holds. Schema version 3 reserves those
+ * keys as string metadata, so a non-string value is a user-defined key the
+ * layer never opted into reserving. */
+function reservedDescriptionEntries(document: Record<string, unknown>): { readonly path: string; readonly isString: boolean }[] {
+  const entries: { readonly path: string; readonly isString: boolean }[] = [];
+  for (const mapPath of DYNAMIC_CONFIG_MAP_PATHS) {
+    let value: unknown = document;
+    for (const segment of mapPath.split(".")) {
+      if (!criterionObject(value)) { value = undefined; break; }
+      value = value[segment];
+    }
+    if (criterionObject(value) && Object.hasOwn(value, "description")) {
+      entries.push({ path: `${mapPath}.description`, isString: typeof value.description === "string" });
+    }
+  }
+  return entries;
+}
+
 /** Parse and validate each layer before merging; cross-layer references are checked after composition. */
 function loadConfigLayers(
   cwd: string,
@@ -154,8 +194,16 @@ function loadConfigLayers(
       diagnostics.push({ layer, message: message.slice(0, MAX_CONFIG_SOURCE_DIAGNOSTIC_CHARS) });
     }
   };
+  const warnings: ConfigLoadDiagnostic[] = [];
+  const addWarning = (layer: ConfigLoadDiagnostic["layer"], message: string): void => {
+    if (warnings.length < MAX_CONFIG_SOURCE_DIAGNOSTICS) {
+      warnings.push({ layer, message: message.slice(0, MAX_CONFIG_SOURCE_DIAGNOSTIC_CHARS) });
+    }
+  };
   const sourceFields: Array<{ layer: ConfigLoadDiagnostic["layer"]; fields: readonly string[] }> = [];
   const publicDefaultFields: string[] = [];
+  const reportedStructural = new Set<string>();
+  const reservedKeys: Array<{ layer: ConfigLoadDiagnostic["layer"]; declaredVersion: unknown; paths: readonly string[] }> = [];
   let merged = defaultConfig();
   for (const [layer, path] of configLayerPaths(cwd, extensionDir)) {
     let text: string | undefined;
@@ -201,22 +249,72 @@ function loadConfigLayers(
       addDiagnostic(layer, `${layer} config must contain an object.`);
       continue;
     }
-    const sourceDiagnostics = sourcePolicyDiagnostics(parsed as Record<string, unknown>);
+    // Structural validation runs on the document as authored; the runtime
+    // then works from its metadata-stripped semantic view. Path-level issues
+    // are reported as warnings because the domain validators below own the
+    // safety decision: an invalid economic or reliability invariant fails
+    // closed, while an invalid classifier budget degrades to local routing.
+    // An unsupported schemaVersion is different: it decides what every other
+    // key means, so the layer cannot be interpreted at all and is rejected.
+    const structuralIssues = validateConfigSourceStructure(parsed);
+    const masksVersion = structuralIssues.some((issue) => !issue.path || issue.path.split(".")[0] === "schemaVersion");
+    if (masksVersion) {
+      addDiagnostic(layer, `${layer} config schemaVersion is unsupported; supported versions are 1, 2, and 3.`);
+      continue;
+    }
+    for (const issue of structuralIssues) {
+      reportedStructural.add(issue.message);
+      addWarning(layer, `${layer} config: ${issue.message}`);
+    }
+    const source = parsed as Record<string, unknown>;
+    const reserved = reservedDescriptionEntries(source);
+    // A version 3 layer that puts a non-string value on a reserved key cannot
+    // be metadata. Stripping it would delete a tier, rule, or scope before the
+    // semantic check could name it, so the layer stays unusable instead of
+    // routing with the key silently removed.
+    const nonStringReserved = reserved.filter(({ isString }) => !isString);
+    if (source.schemaVersion === 3 && nonStringReserved.length > 0) {
+      addDiagnostic(layer, `${layer} config defines ${nonStringReserved.map(({ path }) => path).join(", ")} as non-string values, which schemaVersion 3 reserves for inline metadata; rename the user-defined key or keep the version that treats it as one.`);
+      continue;
+    }
+    const semantic = stripConfigMetadata(source);
+    reservedKeys.push({ layer, declaredVersion: source.schemaVersion, paths: reserved.map(({ path }) => path) });
+    const sourceDiagnostics = sourcePolicyDiagnostics(semantic);
     if (sourceDiagnostics.length) {
       for (const message of sourceDiagnostics) addDiagnostic(layer, `${layer} config ${message}`);
       continue;
     }
-    sourceFields.push(Object.freeze({ layer, fields: Object.freeze(Object.keys(parsed)) }));
+    sourceFields.push(Object.freeze({ layer, fields: Object.freeze(Object.keys(source)) }));
     if (layer === "extension") {
       publicDefaultFields.push(...Object.keys(BUNDLED_PUBLIC_INIT_DEFAULTS)
-        .filter((key) => Object.hasOwn(parsed, key)
-          && isDeepStrictEqual((parsed as Record<string, unknown>)[key], BUNDLED_PUBLIC_INIT_DEFAULTS[key])));
+        .filter((key) => Object.hasOwn(semantic, key)
+          && isDeepStrictEqual(semantic[key], BUNDLED_PUBLIC_INIT_DEFAULTS[key])));
     }
-    merged = mergeConfig(merged, parsed as BifrostConfig);
+    merged = mergeConfig(merged, semantic as BifrostConfig);
+  }
+  // schemaVersion 3 reserves `description` inside dynamically keyed maps. A
+  // layer that did not itself opt into version 3 may still define such a key
+  // (versions 1 and 2 treat it as a user key, e.g. a tier named
+  // "description"). Merging that layer under version 3 would silently
+  // reinterpret it, so the ambiguity is rejected until the user resolves it.
+  if (schemaVersionAtLeast(merged.schemaVersion, 3)) {
+    for (const entry of reservedKeys) {
+      if (entry.declaredVersion === 3 || entry.paths.length === 0) continue;
+      addDiagnostic(entry.layer, `${entry.layer} config defines ${entry.paths.join(", ")}, which schemaVersion 3 reserves for inline metadata; rename the user-defined key or declare schemaVersion 3 in that layer.`);
+    }
+  }
+  // The effective policy is validated for composition-dependent rules (for
+  // example a version requirement satisfied by a different layer). These are
+  // warnings for the same reason: the domain validators decide the safety
+  // direction. Issues a source layer already reported are not repeated.
+  for (const issue of validateEffectiveConfigStructure(merged)) {
+    if (reportedStructural.has(issue.message)) continue;
+    addWarning("effective", `effective configuration: ${issue.message}`);
   }
   return {
     config: merged,
     diagnostics,
+    warnings,
     sourceFields: Object.freeze(sourceFields),
     publicDefaultFields: Object.freeze(publicDefaultFields),
   };
@@ -242,6 +340,7 @@ export function loadConfigWithSourceOverride(
     return {
       config: defaultConfig(),
       diagnostics: [{ layer: "project", message: "Selected config source is invalid." }],
+      warnings: [],
       sourceFields: Object.freeze([]),
       publicDefaultFields: [],
     };
@@ -266,10 +365,12 @@ function defaultConfig(): BifrostConfig {
   };
 }
 
-function configLayerPaths(
+/** Layer paths in merge order (lowest precedence first). Single source of truth
+ * for which file each source lives in. */
+export function configLayerPaths(
   cwd: string,
   extensionDir: string,
-): Array<readonly [ConfigLoadDiagnostic["layer"], string]> {
+): Array<readonly [ConfigSourceLayer, string]> {
   return [
     ["extension", join(extensionDir, "bifrost.json")],
     ["global", join(getAgentDir(), "bifrost.json")],
