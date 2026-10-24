@@ -24,7 +24,7 @@ export const DEFAULT_TTL_HOURS = 24 * 30;
 export const DEFAULT_CACHE_TTL_MS = DEFAULT_TTL_HOURS * 60 * 60 * 1000;
 
 export const DEFAULT_MAX_ENTRIES = 500;
-export const DEFAULT_THRESHOLD = 0.85;
+export const DEFAULT_THRESHOLD = 1;
 
 let nextSeq = 0;
 
@@ -34,7 +34,6 @@ export function normalize(text: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, " ")
     .split(" ")
     .filter(Boolean)
-    .sort()
     .join(" ");
 }
 
@@ -155,6 +154,7 @@ export function lookupCache(
     const exact = entries.find((entry) => entry.normalized === normalized && usable(entry));
     if (exact) return exact;
   }
+  if (threshold >= 1) return undefined;
 
   const promptTokens = tokenSet(normalized);
   const promptSize = promptTokens.size;

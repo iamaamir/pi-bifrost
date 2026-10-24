@@ -135,6 +135,7 @@ if (terminal) {
     ["validate", "Validate loaded config and model references", "setup", "Checks loaded configuration and local registry references without probing."],
     ["inspect", "Inspect configured models and local status", "debug", "Shows local model availability, auth presence, and reliability circuits."],
     ["config reconcile", "Review generated model membership", "setup", "Previews exact generated-model changes for one source and tier."],
+  ["config migrate", "Review config schema migration", "setup", "Previews one selected config source and applies only a reviewed schema-version change."],
     ["reliability", "Show provider pauses", "debug", "Shows active provider pauses and recovery trials."],
     ["reliability reset", "Clear one provider pause", "debug", "Use --provider with an exact provider ID. Active recovery trials block reset."],
     ["reliability migrate", "Prepare reliability v2 state", "debug", "Prepares receipt-owned reliability v2 state without changing the selected model."],

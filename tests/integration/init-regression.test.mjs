@@ -230,7 +230,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       const config = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
       assert.ok(Object.values(config.models).flat().includes("fake/healthy"));
       assert.equal(Object.values(config.models).flat().includes("fake/credits-exhausted"), false, JSON.stringify({ requests, stdout: result.stdout, stderr: result.stderr, config }));
-      assert.equal(config.cache.threshold, 0.88);
+      assert.equal(config.cache.threshold, 1);
       assert.equal(config.reliability.failureThreshold, 3);
       assert.equal(config.debug.enabled, false);
       assert.equal(config.classifier?.model, "fake/healthy", "fresh init should persist the healthy prompt classifier model with bundled public defaults");
@@ -447,7 +447,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(saved.selectedPrivate, "KEEP_ME");
       assert.equal(saved.cache.enabled, true);
       assert.equal(saved.cache.maxEntries, 500);
-      assert.equal(saved.cache.threshold, 0.88);
+      assert.equal(saved.cache.threshold, 1);
       assert.equal(saved.reliability.failureThreshold, 3);
       assert.equal(saved.debug.enabled, false);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }

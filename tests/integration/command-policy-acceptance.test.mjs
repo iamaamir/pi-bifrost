@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   attemptsDelta,
@@ -100,7 +100,7 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
         enabled: true,
         default: "general",
         classifier: { enabled: true, backend: "prompt", model: "fake/chat" },
-        models: { general: ["fake/chat"] },
+        models: { general: ["fake/chat", "missing-fragment"] },
         rules: [{ pattern: "POLICY_ACCEPTANCE_DIRECT", model: "fake/chat" }],
         debug: { enabled: true },
         privateMetadata: "private-config-canary",
@@ -122,8 +122,15 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
           const diagnostic = reportJson(result);
           assert.equal(diagnostic.kind, command.includes("inspect") ? "inspection" : "validation");
           if (diagnostic.kind === "inspection") {
-            assert.ok(diagnostic.tiers.some((tier) => tier.candidates.some((candidate) => candidate.model === "fake/chat" && candidate.available === true)));
-          } else assert.equal(diagnostic.diagnostics.filter((entry) => entry.severity === "error").length, 0);
+            const inspected = diagnostic.tiers.flatMap((tier) => tier.candidates).find((candidate) => candidate.model === "fake/chat");
+            assert.equal(inspected?.available, true);
+            assert.equal(inspected?.auth, "configured");
+            assert.equal(inspected?.circuit, "closed");
+          } else {
+            assert.ok(diagnostic.diagnostics.some((entry) => entry.code === "pool.pattern_unresolved" && entry.entryIndex === 1));
+            assert.equal(diagnostic.diagnostics.filter((entry) => entry.severity === "error").length, 0);
+            assert.doesNotMatch(JSON.stringify(diagnostic), /missing-fragment/u);
+          }
         }
         assert.doesNotMatch(`${result.stderr}\n${result.stdout}`, /private-config-canary|synthetic-provider-secret-canary/u);
       }
@@ -137,6 +144,73 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
         assert.doesNotMatch(debugLog, /private-config-canary|synthetic-provider-secret-canary/u);
       }
     } finally { env.cleanup(); }
+  });
+
+  it("previews and applies one reviewed schema migration with exact backup and layer isolation", async () => {
+    const original = Buffer.from('{\n  "enabled": true,\n  "default": "general",\n  "classifier": { "enabled": false },\n  "models": { "general": ["fake/chat"] },\n  "retained": { "owner": "handwritten" }\n}\n');
+    const env = fixture({ models: [{ id: "chat" }], initialConfig: original });
+    const workspacePath = join(env.work, "bifrost.json");
+    writeFileSync(workspacePath, original);
+    const userPath = join(env.home, ".pi", "agent", "bifrost.json");
+    const userBytes = Buffer.from('{"enabled":true}\n');
+    mkdirSync(join(env.home, ".pi", "agent"), { recursive: true });
+    writeFileSync(userPath, userBytes);
+    const rpc = startRpc({ fixture: env, server, model: "fake/chat" });
+    try {
+      const beforeStats = await readStats(server.port);
+      const preview = reportJson(await rpc.prompt("/bifrost config migrate --source project --json"));
+      assert.equal(preview.status, "ready", JSON.stringify(preview));
+      assert.deepEqual(preview.changes, [{ path: "schemaVersion", from: "absent", to: 2 }]);
+      assert.equal(typeof preview.proposalDigest, "string");
+      assert.deepEqual(readFileSync(join(env.project, "bifrost.json")), original, "preview must not write source");
+      assert.deepEqual(readFileSync(userPath), userBytes, "project migration must not rewrite user layer");
+
+      const changed = Buffer.from(original.toString("utf8").replace("handwritten", "edited-after-preview"));
+      writeFileSync(join(env.project, "bifrost.json"), changed);
+      const stale = reportJson(await rpc.prompt(`/bifrost config migrate --source project --apply --proposal ${preview.proposalDigest} --json`));
+      assert.equal(stale.status, "blocked");
+      assert.equal(stale.reason, "proposal_mismatch");
+      assert.deepEqual(readFileSync(join(env.project, "bifrost.json")), changed, "stale proposal must not overwrite edits");
+
+      const refreshed = reportJson(await rpc.prompt("/bifrost config migrate --source project --json"));
+      const currentSource = readFileSync(join(env.project, "bifrost.json"));
+      const applied = reportJson(await rpc.prompt(`/bifrost config migrate --source project --apply --proposal ${refreshed.proposalDigest} --json`));
+      assert.equal(applied.status, "committed", JSON.stringify(applied));
+      assert.deepEqual(readFileSync(applied.backupPath), currentSource, "backup must preserve exact selected-source bytes");
+      assert.equal(statSync(applied.backupPath).mode & 0o777, 0o600, "backup must be private");
+      const migrated = JSON.parse(readFileSync(join(env.project, "bifrost.json"), "utf8"));
+      assert.equal(migrated.schemaVersion, 2);
+      assert.deepEqual(migrated.retained, { owner: "edited-after-preview" });
+      assert.deepEqual(readFileSync(workspacePath), original, "project migration must leave workspace layer unchanged");
+      assert.deepEqual(readFileSync(userPath), userBytes, "project migration must leave user layer unchanged");
+
+      for (const [source, path, untouched] of [
+        ["workspace", workspacePath, join(env.project, "bifrost.json")],
+        ["user", userPath, workspacePath],
+      ]) {
+        const beforeSelected = readFileSync(path);
+        const otherLayer = readFileSync(untouched);
+        const layerPreview = reportJson(await rpc.prompt(`/bifrost config migrate --source ${source} --json`));
+        assert.equal(layerPreview.status, "ready", JSON.stringify(layerPreview));
+        assert.deepEqual(readFileSync(path), beforeSelected, `${source} preview must not write source`);
+        const layerApplied = reportJson(await rpc.prompt(`/bifrost config migrate --source ${source} --apply --proposal ${layerPreview.proposalDigest} --json`));
+        assert.equal(layerApplied.status, "committed", JSON.stringify(layerApplied));
+        assert.deepEqual(readFileSync(layerApplied.backupPath), beforeSelected, `${source} backup must match exact source`);
+        assert.equal(JSON.parse(readFileSync(path, "utf8")).schemaVersion, 2);
+        assert.deepEqual(readFileSync(untouched), otherLayer, `${source} migration must not rewrite another layer`);
+      }
+      const afterStats = await readStats(server.port);
+      assert.equal(afterStats.catalogRequests, beforeStats.catalogRequests, "migration must not refresh provider catalogs");
+      assert.deepEqual(afterStats.attempts, beforeStats.attempts, "migration must not generate provider requests");
+    } finally {
+      try {
+        const stopped = await rpc.close();
+        assert.equal(stopped.code, 0);
+        assert.equal(stopped.violations, "");
+      } finally {
+        env.cleanup();
+      }
+    }
   });
 
   it("applies only a reviewed Pi-command reconciliation digest and preserves manual config", async () => {

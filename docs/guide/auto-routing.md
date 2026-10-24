@@ -12,7 +12,7 @@ A tier is a named group of allowed models, such as `quick`, `general`, or `front
 
 Bifrost filters a tier's model pool before it selects a model. Availability checks, reliability circuits, and configured reserve rules can exclude candidates. A reliability circuit blocks a model after observed failures until a controlled recovery trial. A reserve rule can exclude a model based on configured allowance facts. A billing preference can narrow candidates by billing class when enabled. The configured strategy then selects a model.
 
-Auto uses `retain-within-tier` by default. Bifrost keeps one model anchor for each branch. A proven successful automatic Auto user turn sets the anchor. Bifrost retains that model on a later automatic turn only when the current tier's final eligible pool contains it. Otherwise, Bifrost uses the strategy winner. Explicit tier prefixes, direct model bindings, retries, and tool continuations do not retain the anchor.
+Auto uses `retain-within-tier` by default. Bifrost keeps one model anchor for each branch. A proven successful automatic Auto user turn sets the anchor. Bifrost retains that model on a later automatic turn only when the current tier's final eligible pool contains it. Otherwise, Bifrost uses the strategy winner. Explicit tier prefixes and exact model bindings bypass affinity and do not replace the prior anchor. Retries and tool continuations stay on the dispatched physical model without reranking.
 
 ```mermaid
 flowchart TD

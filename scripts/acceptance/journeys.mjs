@@ -6,6 +6,13 @@ import { processGroupExists, terminateProcessGroup, verificationGateEnvironment 
 
 const journeys = [
   {
+    id: "r14-local-artifact-privacy",
+    testFile: "tests/integration/command-privacy-acceptance.test.mjs",
+    title: "keeps the debug trace inside an explicit key allowlist and free of canaries",
+    requirements: ["R14"],
+    boundary: "pinned Pi RPC with isolated fake provider; local filesystem artifact audit",
+  },
+  {
     id: "first-use-held-probe-auto-save",
     testFile: "tests/integration/auto-bootstrap-selection.test.mjs",
     title: "keeps the first turn usable during a held probe, then transfers the same save to Auto",
@@ -28,6 +35,13 @@ const journeys = [
     title: "saves a nonempty verified default and routes from it after restart",
     requirements: ["R04", "R16"],
     boundary: "real Pi RPC and restarted real Pi process with isolated fake provider",
+  },
+  {
+    id: "reconcile-router-refresh-failure-preserves-owned-membership",
+    testFile: "tests/reconciliation-command-router.test.ts",
+    title: "keeps owned memberships when explicit provider discovery fails",
+    requirements: ["R15"],
+    boundary: "production command-router path with deterministic fake registry and exact config-byte snapshot; not Pi registration or Pi E2E",
   },
   {
     id: "normal-init-successful-probes-save-membership",
@@ -102,6 +116,13 @@ const journeys = [
     boundary: "real Pi v2 Auto path with fake provider 402 responses and synthetic empty-effect boundary",
   },
   {
+    id: "auto-null-edit-lineage-v2",
+    testFile: "tests/integration/reliability-v2-auto.test.mjs",
+    title: "keeps the failed response's exact null context-edit lineage before Auto recovery",
+    requirements: ["R03"],
+    boundary: "real Pi v2 Auto recovery with local fake provider, isolated state, and exact persisted branch-entry lineage; config reload and session/branch switches during before-settle are not controlled by this journey",
+  },
+  {
     id: "pi-owned-error-retry-no-bifrost-replay",
     testFile: "tests/integration/reliability-v2-auto.test.mjs",
     title: "reuses one v2 receipt and model across a Pi-owned error retry, without Bifrost replay",
@@ -114,6 +135,13 @@ const journeys = [
     title: "pin locks the current model for the session (deliberately never persisted)",
     requirements: ["R02"],
     boundary: "real Pi command and session with local fake provider",
+  },
+  {
+    id: "manual-model-selection-pins-session",
+    testFile: "tests/integration/legacy-behavior.test.mjs",
+    title: "manual Pi model selection pins the physical model in physical and Auto modes until explicit unpin",
+    requirements: ["R02"],
+    boundary: "real pinned-Pi RPC set_model event, explicit unpin command, and fake-provider generation evidence",
   },
   {
     id: "manual-off-disables-router",
@@ -151,6 +179,13 @@ const journeys = [
     boundary: "real Pi physical route with local fake provider and zero-generation assertion",
   },
   {
+    id: "strict-activation-failure-no-generation",
+    testFile: "tests/integration/native-activation-cancel.test.mjs",
+    title: "cancels real AgentSession activation behind a proven deny-all fence",
+    requirements: ["R05", "R06"],
+    boundary: "real Pi AgentSession with hard admission; false or thrown activation must leave the turn unsent and preserve the seed model",
+  },
+  {
     id: "malformed-project-config-blocks-startup",
     testFile: "tests/integration/config-startup-acceptance.test.mjs",
     title: "blocks generation when a project config source is malformed",
@@ -172,6 +207,13 @@ const journeys = [
     boundary: "real Pi RPC config reload from malformed startup source to valid saved route",
   },
   {
+    id: "reviewed-config-schema-migration",
+    testFile: "tests/integration/command-policy-acceptance.test.mjs",
+    title: "previews and applies one reviewed schema migration with exact backup and layer isolation",
+    requirements: ["R09"],
+    boundary: "real Pi RPC previews one selected config source, validates the merged replacement, rejects stale digests, and checks exact private backup bytes",
+  },
+  {
     id: "last-good-strict-boundary-survives-invalid-reload",
     testFile: "tests/integration/legacy-behavior.test.mjs",
     title: "keeps the last-good strict boundary after a null project reload and blocks active-model generation",
@@ -186,6 +228,13 @@ const journeys = [
     boundary: "real Pi commands and local request counters with outbound network guard",
   },
   {
+    id: "offline-inspection-validation-auth-observability",
+    testFile: "tests/integration/command-policy-acceptance.test.mjs",
+    title: "runs inspect, validate, and a direct-rule preview offline without provider requests",
+    requirements: ["R07"],
+    boundary: "real Pi inspection and validation with observable auth, unresolved model references, and a local outbound-request guard",
+  },
+  {
     id: "classifier-timeout-visible-fallback",
     testFile: "tests/integration/command-policy-acceptance.test.mjs",
     title: "warns on prompt-classifier timeout, falls back locally, then generates on the physical model",
@@ -198,6 +247,13 @@ const journeys = [
     title: "binds physical and Auto turn_end IDs to the exact persisted assistant entry",
     requirements: ["R02", "R03"],
     boundary: "real pinned Pi transport and synthetic provider registry",
+  },
+  {
+    id: "pinned-model-remains-pinned-after-failure",
+    testFile: "tests/integration/auto-virtual.test.mjs",
+    title: "keeps a manual pin after failure and never replays the failed user prompt",
+    requirements: ["R03"],
+    boundary: "real Pi physical session with explicit pin, failed generation, fresh follow-up, and fake-provider/reliability evidence",
   },
   {
     id: "auto-streamed-output-failure-no-replay",
@@ -234,6 +290,13 @@ const journeys = [
     boundary: "real Pi RPC session, native branch fork, fake-provider request stats, and event-level affinity observer",
     evidenceEvents: true,
     requiredEvidenceEvent: "affinity_branch_lifecycle",
+  },
+  {
+    id: "explicit-model-and-tool-continuation-affinity",
+    testFile: "tests/integration/affinity-lifecycle-acceptance.test.mjs",
+    title: "keeps exact model rules above affinity and protocol continuation on its dispatched model",
+    requirements: ["R03", "R11"],
+    boundary: "real Pi RPC exact-model rule, successful prior anchor, tool side effect, and same-model protocol continuation; continuation retains the dispatched physical model",
   },
   {
     id: "bootstrap-registry-price-order-matrix",

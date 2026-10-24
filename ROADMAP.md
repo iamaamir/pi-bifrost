@@ -22,7 +22,7 @@ Features that need an eval harness, persistent analytics, telemetry infra, or up
 ### v0.1 — core router
 - [x] Probe-first init — tests models before writing config.
 - [x] 7 selection strategies — `first`, `cheapest`, `cheapest_input`, `cheapest_output`, `largest_context`, `random`, `fastest`.
-- [x] LLM + regex dual classifier with fuzzy Jaccard cache.
+- [x] LLM + regex dual classifier with exact-by-default cache and opt-in fuzzy Jaccard matching.
 - [x] Direct model bindings — `"model": "provider/id"` rules bypass tier selection. Inline overrides (`frontier ...`, `economical ...`).
 - [x] Performance API debug logging — JSONL, AI-parseable.
 - [x] Strict TypeScript (`tsc --noEmit` clean), npm + GitHub distribution.

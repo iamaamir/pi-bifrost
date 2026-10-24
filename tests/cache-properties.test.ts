@@ -16,7 +16,7 @@ const WORD = fc.constantFrom(...WORDS);
 const RAW_WORDS = fc.array(WORD, { minLength: 1, maxLength: 7 });
 
 function oracleNormalize(text: string): string {
-  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim().split(/\s+/u).filter(Boolean).sort().join(" ");
+  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim().split(/\s+/u).filter(Boolean).join(" ");
 }
 
 function render(words: readonly string[], separators: readonly string[] = []): string {
@@ -51,6 +51,7 @@ function linearLookup(
     && (semanticKey === undefined || entry.semanticKey === semanticKey);
   const exact = entries.find((entry) => entry.normalized === normalized && usable(entry));
   if (exact) return exact;
+  if (threshold >= 1) return undefined;
 
   const promptTokens = tokenSet(normalized);
   if (promptTokens.size === 0) return undefined;
@@ -103,7 +104,7 @@ function config(systemPrompt: string, criteria: Record<string, string>): Bifrost
 }
 
 describe("cache properties", () => {
-  it("normalization is idempotent and supported Unicode tokens ignore order", () => {
+  it("normalization is idempotent and preserves supported Unicode token order", () => {
     assertReplayableProperty(
       fc.property(RAW_WORDS, fc.array(fc.constantFrom(...SEPARATORS), { maxLength: 8 }), (words, separators) => {
         const raw = render(words, separators);
@@ -111,7 +112,7 @@ describe("cache properties", () => {
         const normalized = normalize(raw);
         assert.equal(normalized, oracleNormalize(raw));
         assert.equal(normalize(normalized), normalized);
-        assert.equal(normalize(reordered), normalized);
+        assert.equal(normalize(reordered), oracleNormalize(reordered));
       }),
       0x51ca01,
     );
@@ -188,7 +189,7 @@ describe("cache properties", () => {
           seq,
         }));
         const cap = Math.min(capInput, entries.length);
-        const expected = [...entries, { normalized: "entry new", category: "general", lastUsed: NOW, hits: 1 }]
+        const expected = [...entries, { normalized: "new entry", category: "general", lastUsed: NOW, hits: 1 }]
           .sort((a, b) => b.lastUsed - a.lastUsed || (b.seq ?? 0) - (a.seq ?? 0))
           .slice(0, cap)
           .map((item) => item.normalized);

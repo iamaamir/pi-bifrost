@@ -93,6 +93,7 @@ const REFERENCE_REPAIR = "Check this pool entry against Pi's current model regis
 
 const configIssueMap: Readonly<Record<string, { code: string; repair: string }>> = {
   "config.schema_version_unsupported": { code: "config.schema_version_unsupported", repair: "Set schemaVersion to a supported version." },
+  "config.requirements_unsupported": { code: "config.requirements_unsupported", repair: "Remove capability enforcement or unsupported requirement fields; this release supports advisory mode only." },
   "config.tier_policies_requires_v2": { code: "config.tier_policies_requires_v2", repair: "Set schemaVersion to 2 or remove tierPolicies." },
   "config.tier_policies_invalid": { code: "config.tier_policies_invalid", repair: "Set tierPolicies to an object keyed by configured tier." },
   "config.tier_policy_invalid": { code: "config.tier_policy_invalid", repair: "Set each tier policy to an object with a fallbackTiers array." },
@@ -106,7 +107,7 @@ const configIssueMap: Readonly<Record<string, { code: string; repair: string }>>
 };
 
 function safeConfigIssuePath(value: unknown): string | undefined {
-  if (value === "schemaVersion" || value === "tierPolicies") return value;
+  if (value === "schemaVersion" || value === "tierPolicies" || value === "requirements") return value;
   if (value === "tierPolicies.*" || value === "tierPolicies.*.fallbackTiers") return value;
   if (typeof value !== "string" || value.length > 280) return undefined;
   const match = /^tierPolicies\.([A-Za-z0-9_-][A-Za-z0-9._-]{0,127})(?:\.fallbackTiers)?$/.exec(value);

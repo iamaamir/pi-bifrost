@@ -44,7 +44,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  evidence-preflight:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Validate change evidence declaration
+        run: node scripts/acceptance/evidence-rebind.mjs "${{ github.event.pull_request.base.sha }}"
+
   release-gates:
+    needs: evidence-preflight
+    if: always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -287,7 +304,7 @@ jobs:
   # Pi compatibility matrix: pinned baseline and current Pi, installed into
   # node_modules only (no tracked package or lock edit, no credentials), with
   # real native SDK, process, package-consumer, and typecheck checks. The
-  # pinned verify-release preflight still demands 1.0.1 and is deliberately not
+  # pinned verify-release preflight still demands 1.4.0 and is deliberately not
   # used as an alternate-version oracle; release-gates keeps running it pinned.
   pi-compatibility:
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.campaign == 'expanded')
@@ -297,8 +314,8 @@ jobs:
       fail-fast: false
       matrix:
         pi:
-          - "1.0.1"
           - "1.3.0"
+          - "1.4.0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -311,7 +328,7 @@ jobs:
           PI_VERSION: ${{ matrix.pi }}
         run: |
           # Keep the baseline's locked transitive packages from npm ci.
-          if [ "$PI_VERSION" != "1.0.1" ]; then
+          if [ "$PI_VERSION" != "1.4.0" ]; then
             npm install --no-save --package-lock=false --no-audit --no-fund \
               "@earendil-works/pi-ai@$PI_VERSION" \
               "@earendil-works/pi-coding-agent@$PI_VERSION"

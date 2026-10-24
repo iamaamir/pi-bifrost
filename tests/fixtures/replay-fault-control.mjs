@@ -6,12 +6,12 @@
 // and tests/integration/reliability-v2-auto.test.mjs to the production guards
 // in index.ts.
 //
-// GUARD INVENTORY (index.ts, baseline a792cb173317744d12950698009d11c7ea0b39b2):
-//   - isSideEffectFreeAllowanceFailure (exact line 1764) — proves a failed
+// GUARD INVENTORY (index.ts, candidate baseline SHA-256 declared below):
+//   - isSideEffectFreeAllowanceFailure (exact line 1767) — proves a failed
 //     attempt had no output/tool results/queued work before allowance recovery.
-//   - autoBoundaryStillActive (exact line 1707) — confirms the original user
+//   - autoBoundaryStillActive (exact line 1710) — confirms the original user
 //     boundary is still the active turn.
-//   - allowanceRetryBoundaryStillSafe (exact line 2525) — re-checks the boundary
+//   - allowanceRetryBoundaryStillSafe (exact line 2528) — re-checks the boundary
 //     immediately before dispatching the prepared allowance retry.
 //
 // CONTROLLED FAULT PROOF (performed in a disposable scratch copy, never in the
@@ -21,8 +21,8 @@
 //      ROOT resolves inside the scratch tree.
 //   2. GREEN   — run the named replay assertion against the pristine copied
 //      index.ts. It must pass (proves the harness and baseline are healthy).
-//   3. MUTATE  — inject one bounded fault (possibly across redundant guards) (see REPLAY_GUARD_MUTATORS). The
-//      mutant hash must differ.
+//   3. MUTATE  — inject a bounded source fault (see REPLAY_GUARD_MUTATORS), or
+//      activate an explicitly declared temporary-fixture fault for that proof.
 //   4. RED     — run the SAME named assertion against the mutant. It must fail
 //      with the meaningful AssertionError message below, NOT a syntax/startup
 //      failure and NOT a timeout that merely printed matching text.
@@ -59,7 +59,7 @@ import { join } from "node:path";
 import { processGroupExists } from "../../scripts/acceptance/core.mjs";
 import { closeTracking, cleanupFailure, detachOwnedHandles, spawnOwned } from "./child-auto-inline-harness.mjs";
 
-export const REPLAY_GUARD_BASELINE_SHA256 = "14752568bd935068ca5874156bd324f45336dc29bd305523fe6e0ca5973c3303";
+export const REPLAY_GUARD_BASELINE_SHA256 = "cfd2a6658c3e5560fdf6a5d549a0be2a5ea9f1efcb933bd8dd84cdee3456e61e";
 export const REPLAY_GUARD_FUNCTIONS = [
   "isSideEffectFreeAllowanceFailure",
   "allowanceRetryBoundaryStillSafe",
@@ -69,9 +69,9 @@ export const REPLAY_GUARD_FUNCTIONS = [
 // Guard line anchors are exact against the baseline commit; keep them in sync
 // with index.ts when the guards move.
 export const REPLAY_GUARD_LINES = {
-  autoBoundaryStillActive: 1707,
-  isSideEffectFreeAllowanceFailure: 1764,
-  allowanceRetryBoundaryStillSafe: 2525,
+  autoBoundaryStillActive: 1710,
+  isSideEffectFreeAllowanceFailure: 1767,
+  allowanceRetryBoundaryStillSafe: 2528,
 };
 
 // Each PROVEN pair has an executable fault reaching its exact named assertion.
@@ -118,6 +118,34 @@ export const NAMED_REPLAY_ASSERTIONS = [
   },
   {
     testFile: "tests/integration/reliability-v2-auto.test.mjs",
+    testName: "does not dispatch allowance alternate after manual model selection changes ownership generation",
+    guard: "ownershipGenerationFixtureControl",
+    mutation: "temporary fixture fault omits RPC set_model; alternate reaches named no-alternate assertion and turns RED",
+    status: "PROVEN",
+  },
+  {
+    testFile: "tests/integration/reliability-v2-auto.test.mjs",
+    testName: "does not dispatch allowance alternate after intervening queued follow-up",
+    guard: "queuedActivityFixtureControl",
+    mutation: "temporary fixture fault omits RPC follow_up; alternate reaches named no-alternate assertion and turns RED",
+    status: "PROVEN",
+  },
+  {
+    testFile: "tests/integration/reliability-v2-auto.test.mjs",
+    testName: "does not dispatch allowance alternate after abort at deterministic pre-settlement barrier",
+    guard: "allowanceAbortFixtureControl",
+    mutation: "scratch fixture fault releases the barrier without sending RPC abort; alternate request makes named no-alternate assertion RED",
+    status: "PROVEN",
+  },
+  {
+    testFile: "tests/integration/reliability-v2-auto.test.mjs",
+    testName: "keeps the failed response's exact null context-edit lineage before Auto recovery",
+    guard: "nullEditLineageV2",
+    mutation: "insert a second null edit before recovery and bypass only the retry-time omission recheck",
+    status: "PROVEN",
+  },
+  {
+    testFile: "tests/integration/reliability-v2-auto.test.mjs",
     testName: "stops after the single alternate allowance attempt in v1 Auto",
     guard: "singleAlternateV1",
     mutation: "compound empty-recovery lineage fault; not individual-guard sensitivity",
@@ -149,6 +177,33 @@ export const FAULT_PROOFS = {
     testName: "retries one zero-effect allowance failure with a configured alternate in v2 Auto",
     redAssertionMessage: "the prepared usage-limit retry was cancelled because the turn changed; no model was dispatched.",
   },
+  allowanceAbortBoundary: {
+    guard: "allowanceAbortFixtureControl",
+    testFile: "tests/integration/reliability-v2-auto.test.mjs",
+    testName: "does not dispatch allowance alternate after abort at deterministic pre-settlement barrier",
+    fixtureFaultEnv: { BIFROST_TEST_FAULT_RELEASE_BEFORE_ABORT: "1" },
+    redAssertionMessage: "abort at the settlement barrier must suppress alternate dispatch",
+  },
+  ownershipGenerationBoundary: {
+    guard: "ownershipGenerationFixtureControl",
+    testFile: "tests/integration/reliability-v2-auto.test.mjs",
+    testName: "does not dispatch allowance alternate after manual model selection changes ownership generation",
+    fixtureFaultEnv: { BIFROST_TEST_FAULT_SKIP_OWNERSHIP_CHANGE: "1" },
+    redAssertionMessage: "the failed user boundary receives no alternate generation",
+  },
+  queuedActivityBoundary: {
+    guard: "queuedActivityFixtureControl",
+    testFile: "tests/integration/reliability-v2-auto.test.mjs",
+    testName: "does not dispatch allowance alternate after intervening queued follow-up",
+    fixtureFaultEnv: { BIFROST_TEST_FAULT_SKIP_QUEUED_ACTIVITY: "1" },
+    redAssertionMessage: "the failed user boundary receives no alternate generation",
+  },
+  nullEditLineageV2: {
+    guard: "nullEditLineageV2",
+    testFile: "tests/integration/reliability-v2-auto.test.mjs",
+    testName: "keeps the failed response's exact null context-edit lineage before Auto recovery",
+    redAssertionMessage: "Pi must place exactly the failed response's null projection edit before the recovered result",
+  },
   autoBoundaryToolSideEffect: {
     guard: "autoBoundaryStillActive",
     testFile: "tests/integration/auto-virtual.test.mjs",
@@ -156,6 +211,18 @@ export const FAULT_PROOFS = {
     redAssertionMessage: "Pi must execute the provider-requested synthetic tool",
   },
 };
+
+// Adds one scratch-only duplicate null edit. The retry-time bypass keeps
+// dispatch alive so the named Pi lineage assertion, not admission, sees RED.
+function corruptNullEditLineage(source) {
+  const edit = "entries: [{ type: \"context_edit\", targetId: pending.assistantEntryId, replacement: null }]";
+  if (source.split(edit).length !== 2) throw new Error("null-edit lineage fault requires one exact return entry");
+  return injectGuardStatement(
+    source.replace(edit, "entries: [{ type: \"context_edit\", targetId: pending.assistantEntryId, replacement: null }, { type: \"context_edit\", targetId: pending.assistantEntryId, replacement: null }]"),
+    "isSideEffectFreeAllowanceFailure",
+    "if (requireCurrentOmitted) return [assistantEntryId];",
+  );
+}
 
 // Restrictive first-retry sensitivity is separate from the compound limit fault.
 FAULT_PROOFS.allowanceRetryBoundaryV1 = {
@@ -196,6 +263,7 @@ export const REPLAY_GUARD_MUTATORS = {
   singleAlternateV2: (source) => permitRepeatedEmptyRecovery(source, true),
   isSideEffectFreeAllowanceFailure: (source) => injectGuardStatement(source, "isSideEffectFreeAllowanceFailure", "return [assistantEntryId];"),
   allowanceRetryBoundaryStillSafe: (source) => injectGuardStatement(source, "allowanceRetryBoundaryStillSafe", "return false;"),
+  nullEditLineageV2: corruptNullEditLineage,
   autoBoundaryStillActive: (source) => injectGuardStatement(source, "autoBoundaryStillActive", "return false;"),
 };
 
@@ -429,8 +497,9 @@ function finalizeScratchLifecycle({ scratch, keepScratch, receipts, ownedGroupsA
 }
 
 /**
- * Execute the full copy-mutate-load-assert-restore fault proof and return a
- * receipt. Every nested run is owned, bounded and group-verified before its
+ * Execute the copy-fault-load-assert-restore proof and return a receipt.
+ * Fault may alter scratch production source or activate a declared test-fixture
+ * fault; every nested run is owned, bounded and group-verified before its
  * result is trusted. The scratch tree is reclaimed only after all owned groups
  * are proven dead; otherwise it is retained with ownership preserved.
  *
@@ -455,7 +524,7 @@ export async function runReplayGuardFaultProof({
     throw new Error(`G03 replay fault proof requires baseline source; index.ts sha256=${originalHash}`);
   }
   const mutate = REPLAY_GUARD_MUTATORS[proof.guard];
-  if (!mutate) throw new Error(`G03 replay fault proof has no mutator for guard ${proof.guard}`);
+  if (!mutate && !proof.fixtureFaultEnv) throw new Error(`G03 replay fault proof has no mutator for guard ${proof.guard}`);
 
   const scratch = createReplayScratchTree(root);
   log(`G03 replay fault proof scratch: ${scratch} (created at proof start)`);
@@ -466,7 +535,17 @@ export async function runReplayGuardFaultProof({
   const captureOwned = (group) => { if (Number.isInteger(group) && group > 0) ownedGroupsAtCreation.add(group); };
   const runPhase = async () => {
     startedRuns += 1;
-    return runAssertion({ scratch, testFile: proof.testFile, testName: proof.testName, ...runOptions, onOwned: captureOwned });
+    const phaseEnv = proof.fixtureFaultEnv
+      ? {
+          ...process.env,
+          ...Object.fromEntries(Object.keys(proof.fixtureFaultEnv).map((key) => [key, ""])),
+          ...(startedRuns === 2 ? proof.fixtureFaultEnv : {}),
+        }
+      : undefined;
+    return runAssertion({
+      scratch, testFile: proof.testFile, testName: proof.testName,
+      ...runOptions, ...(phaseEnv ? { env: phaseEnv } : {}), onOwned: captureOwned,
+    });
   };
   try {
     const { testFile, testName, redAssertionMessage } = proof;
@@ -476,12 +555,17 @@ export async function runReplayGuardFaultProof({
     receipts.push(green);
     assertAssertionGreen(green, "pristine copy");
 
-    // 3. MUTATE.
-    const mutant = mutate(original);
-    const mutantHash = sha256(mutant);
-    if (mutantHash === originalHash) throw new Error("G03 replay fault proof mutation produced no source change");
-    writeFileSync(join(scratch, "index.ts"), mutant);
-    log(`G03 replay fault proof ${proof.guard} mutant sha256=${mutantHash}`);
+    // 3. MUTATE the scratch implementation or inject the declared fixture-only fault.
+    let mutantHash;
+    if (mutate) {
+      const mutant = mutate(original);
+      mutantHash = sha256(mutant);
+      if (mutantHash === originalHash) throw new Error("G03 replay fault proof mutation produced no source change");
+      writeFileSync(join(scratch, "index.ts"), mutant);
+      log(`G03 replay fault proof ${proof.guard} mutant sha256=${mutantHash}`);
+    } else {
+      log(`G03 replay fault proof ${proof.guard} fixture fault env: ${JSON.stringify(proof.fixtureFaultEnv)}`);
+    }
 
     // 4. RED against the mutant.
     const red = await runPhase();
@@ -490,7 +574,7 @@ export async function runReplayGuardFaultProof({
     log(`G03 replay fault proof RED: ${redAssertionMessage}`);
 
     // 5. RESTORE and verify.
-    writeFileSync(join(scratch, "index.ts"), original);
+    if (mutate) writeFileSync(join(scratch, "index.ts"), original);
     const restoredHash = sha256(readFileSync(join(scratch, "index.ts"), "utf8"));
     if (restoredHash !== originalHash) throw new Error(`G03 replay fault proof restore hash mismatch: ${restoredHash}`);
     const restoredGreen = await runPhase();
@@ -507,7 +591,7 @@ export async function runReplayGuardFaultProof({
       testFile,
       testName,
       baselineSha256: originalHash,
-      mutantSha256: mutantHash,
+      ...(mutantHash ? { mutantSha256: mutantHash } : { faultInjection: "fixture-env" }),
       restoredSha256: restoredHash,
       redAssertionMessage,
       scratch,

@@ -1,11 +1,11 @@
 // G09 (P2) — Commands and artifact privacy matrix.
 //
 // This suite seeds synthetic prompt, secret, endpoint, and error canaries and
-// inspects every artifact Bifrost writes (debug trace, classifier metrics,
-// reliability state, runtime mode state, normalized prompt cache, probe
-// report) against an explicit allowlist. It also exercises the two detailed
-// classifier trace gates, classifier opt-out persistence, the probe abort
-// path, and the user-facing classifier test/benchmark commands.
+// inspects local debug, metrics, reliability, runtime, cache, and probe artifacts
+// against explicit schemas. The cache intentionally retains normalized prompt
+// text and is sensitive local user data, not a content-free diagnostic artifact.
+// The suite also checks classifier trace gates, opt-out persistence, aborts, and
+// classifier test/benchmark command artifacts.
 //
 // Boundary: real pinned Pi processes (RPC) against the local fake provider.
 // No live provider calls. The outbound guard proves no non-fixture network
@@ -28,6 +28,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { processGroupExists, terminateProcessGroup } from "../../scripts/acceptance/core.mjs";
 import { startFakeProviderServer } from "../fixtures/http-pi-harness.mjs";
+import { REPLAY_GUARD_BASELINE_SHA256 } from "../fixtures/replay-fault-control.mjs";
+import { reliabilityV2Config } from "../../runtime-reliability-v2.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PI = join(ROOT, "node_modules", ".bin", "pi");
@@ -35,7 +37,7 @@ const EXTENSION = join(ROOT, "index.ts");
 const OUTBOUND_GUARD = join(ROOT, "scripts", "test-outbound-guard.cjs");
 
 /** Production index.ts hash that the fault proof must leave byte-identical. */
-const PRODUCTION_INDEX_SHA256 = "14752568bd935068ca5874156bd324f45336dc29bd305523fe6e0ca5973c3303";
+const PRODUCTION_INDEX_SHA256 = REPLAY_GUARD_BASELINE_SHA256;
 
 // ── synthetic canaries ──────────────────────────────────────────
 // Distinct shapes so a leak is unambiguous, and words that survive cache
@@ -57,7 +59,7 @@ const RAW_LEAK_MARKERS = [...CANARIES];
 // assertion. This set is deliberately not a claim about the other Bifrost
 // subsystems: the pi-native and TypeSafe detailed traces are governed by their
 // own declared per-backend sets below, and the route `decision` payload is the
-// one structured nested value, checked separately for sensitive content.
+// one structured nested value, checked against its recursive exact schema below.
 const DEBUG_KEY_ALLOWLIST = new Set([
   "ts", "module", "event", "entryType", "duration_ms", "_meta_error",
   "run_correlation_id", "session_correlation_id", "turn_correlation_id",
@@ -191,8 +193,8 @@ function piEnvironment(home, extension) {
 
 // ── owned RPC session ───────────────────────────────────────────
 
-function startRpc({ home, work, extension = EXTENSION }) {
-  const child = spawn(PI, ["-e", extension, "--mode", "rpc", "--no-session", "--no-tools", "--model", "fake/chat"], {
+function startRpc({ home, work, extension = EXTENSION, model = "fake/chat" }) {
+  const child = spawn(PI, ["-e", extension, "--mode", "rpc", "--no-session", "--no-tools", "--model", model], {
     cwd: work,
     stdio: ["pipe", "pipe", "pipe"],
     env: piEnvironment(home, extension),
@@ -409,6 +411,12 @@ function debugRows(project) {
   return raw.split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
+function assertDebugDecisionRows(raw) {
+  const rows = debugRowsFrom(raw).filter((row) => row.event === "route_decision" && row.decision !== undefined);
+  assert.ok(rows.length > 0, "debug trace must contain a route-decision summary");
+  for (const row of rows) assertRouteDecisionSummary(row.decision, `${row.module}/${row.event}.decision`);
+}
+
 function sha256(text) {
   return createHash("sha256").update(text).digest("hex");
 }
@@ -421,17 +429,16 @@ function sensitiveStringKeys(row) {
   return Object.keys(row).filter((key) => SENSITIVE_KEYS.has(key) && typeof row[key] === "string" && row[key].length > 0);
 }
 
-/** Mirrors cache.ts normalize: lowercased, punctuation-flattened, sorted tokens. */
+/** Mirrors cache.ts normalize: lowercased, punctuation-flattened, ordered tokens. */
 function normalize(text) {
-  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").split(" ").filter(Boolean).sort().join(" ");
+  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").split(" ").filter(Boolean).join(" ");
 }
 
 // ── declared persistence key sets (reliability sidecars) ────────
-// Bifrost writes two independent reliability sidecars. Every object either can
-// persist has a declared key set, and the free-form marker strings are pinned to
-// their documented witness values, so a text-carrying field cannot hide behind a
-// keys-only check. These sets are derived from reliability.ts, reliability-v2.ts
-// and runtime-reliability-v2.ts and must change deliberately with them.
+// Bifrost writes three independent reliability sidecars. Every object either can
+// persist has a declared key set and validated values, so text-carrying fields
+// cannot hide behind a keys-only check. These sets derive from v1, provider and
+// v2 state implementations and must change deliberately with them.
 
 const RELIABILITY_ARTIFACT_KEYS = ["models", "version"];
 const RELIABILITY_RECORD_KEYS = new Set([
@@ -463,9 +470,238 @@ function stringValues(value, found = []) {
 
 function assertNoCanaryValues(value, label) {
   const values = stringValues(value);
+  const keys = [];
+  const collectKeys = (item) => {
+    if (Array.isArray(item)) for (const child of item) collectKeys(child);
+    else if (item && typeof item === "object") {
+      for (const [key, child] of Object.entries(item)) { keys.push(key); collectKeys(child); }
+    }
+  };
+  collectKeys(value);
   for (const marker of RAW_LEAK_MARKERS) {
-    assert.equal(values.some((text) => text.includes(marker)), false, `${label} must not carry canary ${marker} in any string value`);
+    assert.equal(values.some((text) => text.includes(marker)) || keys.some((key) => key.includes(marker)), false,
+      `${label} must not carry canary ${marker} in a string value or key`);
   }
+}
+
+function assertExactKeys(record, required, optional = [], label) {
+  assert.ok(record && typeof record === "object" && !Array.isArray(record), `${label} must be an object`);
+  const allowed = new Set([...required, ...optional]);
+  for (const key of required) assert.equal(Object.hasOwn(record, key), true, `${label}: missing key ${key}`);
+  for (const key of Object.keys(record)) assert.equal(allowed.has(key), true, `${label}: unexpected key ${key}`);
+}
+
+const V2_STATE_KEYS = ["version", "revision", "scopes", "dispatches", "settledOutcomes"];
+const V2_SCOPE_KEYS = ["generation", "failures"];
+const V2_SCOPE_OPTIONAL_KEYS = ["openUntil", "cooldownMultiplier", "lease"];
+const V2_LEASE_KEYS = ["ownerToken", "dispatchId", "outcomeId", "leaseId", "generation", "expiresAt", "maxExpiresAt"];
+const V2_DISPATCH_KEYS = ["ownerToken", "dispatchId", "outcomeId", "admittedAt", "proofUntil", "scopes"];
+const V2_DISPATCH_OPTIONAL_KEYS = ["settledAt", "settledKind"];
+const V2_SCOPE_RECEIPT_KEYS = ["scopeKey", "modelKey", "generation"];
+const V2_SCOPE_RECEIPT_OPTIONAL_KEYS = ["leaseId", "expiresAt", "maxExpiresAt"];
+const V2_OUTCOME_KEYS = ["expiresAt"];
+const V2_OUTCOME_OPTIONAL_KEYS = ["observation"];
+const V2_OBSERVATION_KEYS = ["modelKey", "category", "categoryEvidence", "observedAt", "source"];
+const V2_OBSERVATION_OPTIONAL_KEYS = ["retryAt"];
+const V2_CATEGORIES = new Set(["rate_limit", "allowance_exhausted", "authentication", "billing_denied", "overload", "transport", "model_unavailable", "invalid_request", "capability_mismatch", "context_limit", "tool_protocol", "activation_failed", "unknown"]);
+const V2_CATEGORY_EVIDENCE = new Set(["structured", "http_status", "text_heuristic", "unknown"]);
+
+function assertStringArray(value, label) {
+  assert.ok(Array.isArray(value), `${label} must be an array`);
+  for (const [index, entry] of value.entries()) assertBoundedString(entry, `${label}[${index}]`);
+}
+
+function assertDecisionPool(pool, label) {
+  assertExactKeys(pool, ["tier", "strategy", "patterns", "candidates"], ["billingPreference"], label);
+  assertBoundedString(pool.tier, `${label}.tier`);
+  assertBoundedString(pool.strategy, `${label}.strategy`);
+  assertStringArray(pool.patterns, `${label}.patterns`);
+  assert.ok(Array.isArray(pool.candidates), `${label}.candidates must be an array`);
+  for (const [index, candidate] of pool.candidates.entries()) {
+    const path = `${label}.candidates[${index}]`;
+    assertExactKeys(candidate, ["model", "status"], ["exclusion", "exclusionEvidence", "reserve"], path);
+    assertBoundedString(candidate.model, `${path}.model`);
+    assert.ok(["eligible", "excluded"].includes(candidate.status));
+    if (candidate.exclusion !== undefined) assertBoundedString(candidate.exclusion, `${path}.exclusion`);
+    if (candidate.exclusionEvidence !== undefined) {
+      assert.ok(Array.isArray(candidate.exclusionEvidence));
+      for (const [evidenceIndex, evidence] of candidate.exclusionEvidence.entries()) {
+        assertExactKeys(evidence, ["code", "source"], [], `${path}.exclusionEvidence[${evidenceIndex}]`);
+        assertBoundedString(evidence.code, `${path}.exclusionEvidence[${evidenceIndex}].code`);
+        assertBoundedString(evidence.source, `${path}.exclusionEvidence[${evidenceIndex}].source`);
+      }
+    }
+    if (candidate.reserve !== undefined) {
+      assertExactKeys(candidate.reserve, ["disposition", "wouldReject", "reasons"], [], `${path}.reserve`);
+      assertBoundedString(candidate.reserve.disposition, `${path}.reserve.disposition`);
+      assert.equal(typeof candidate.reserve.wouldReject, "boolean");
+      assertStringArray(candidate.reserve.reasons, `${path}.reserve.reasons`);
+    }
+  }
+  if (pool.billingPreference !== undefined) {
+    const pref = pool.billingPreference;
+    assertExactKeys(pref, ["mode", "preferredClass", "eligibleCount", "preferredCount", "selectionCount", "candidates"], [], `${label}.billingPreference`);
+    for (const key of ["mode", "preferredClass"]) assertBoundedString(pref[key], `${label}.billingPreference.${key}`);
+    for (const key of ["eligibleCount", "preferredCount", "selectionCount"]) assert.ok(Number.isSafeInteger(pref[key]) && pref[key] >= 0);
+    assert.ok(Array.isArray(pref.candidates));
+    for (const [index, trace] of pref.candidates.entries()) {
+      const tracePath = `${label}.billingPreference.candidates[${index}]`;
+      assertExactKeys(trace, ["model", "billingClass", "sourceAliases", "authorities", "freshness", "effect"], [], tracePath);
+      for (const key of ["model", "billingClass", "freshness", "effect"]) assertBoundedString(trace[key], `${tracePath}.${key}`);
+      assertStringArray(trace.sourceAliases, `${tracePath}.sourceAliases`);
+      assertStringArray(trace.authorities, `${tracePath}.authorities`);
+    }
+  }
+}
+
+function assertRouteDecisionSummary(decision, label = "decision") {
+  assertExactKeys(decision, ["version", "kind", "outcome", "classification"], ["error", "requested", "fallback", "attempted", "explicitBoundary", "selectedTier", "selected", "selectedStrategy", "fallbackReason", "classificationOutcome", "classifierAttempt", "affinity"], label);
+  assert.equal(decision.version, 1);
+  assert.equal(decision.kind, "route-decision");
+  assert.ok(["selected", "unresolved", "unclassified", "usage", "config_invalid"].includes(decision.outcome));
+  if (decision.error !== undefined) assert.ok(["usage", "config_invalid"].includes(decision.error));
+  const classification = decision.classification;
+  assertExactKeys(classification, ["source"], ["tier", "classifier"], `${label}.classification`);
+  assert.ok(["cache", "classifier", "regex", "inline", "fallback", "unclassified"].includes(classification.source));
+  if (classification.tier !== undefined) assertBoundedString(classification.tier, `${label}.classification.tier`);
+  if (classification.classifier !== undefined) {
+    assertExactKeys(classification.classifier, ["backend"], ["model", "confidence"], `${label}.classification.classifier`);
+    assertBoundedString(classification.classifier.backend, `${label}.classification.classifier.backend`);
+    if (classification.classifier.model !== undefined) assertBoundedString(classification.classifier.model, `${label}.classification.classifier.model`);
+    if (classification.classifier.confidence !== undefined) assert.ok(Number.isFinite(classification.classifier.confidence));
+  }
+  for (const key of ["requested", "fallback"]) if (decision[key] !== undefined) assertDecisionPool(decision[key], `${label}.${key}`);
+  if (decision.attempted !== undefined) {
+    assert.ok(Array.isArray(decision.attempted));
+    for (const [index, pool] of decision.attempted.entries()) assertDecisionPool(pool, `${label}.attempted[${index}]`);
+  }
+  if (decision.explicitBoundary !== undefined) assert.equal(typeof decision.explicitBoundary, "boolean");
+  for (const key of ["selectedTier", "selected", "selectedStrategy", "fallbackReason"]) if (decision[key] !== undefined) assertBoundedString(decision[key], `${label}.${key}`);
+  if (decision.classificationOutcome !== undefined) assert.ok(["deadline", "aborted"].includes(decision.classificationOutcome));
+  if (decision.classifierAttempt !== undefined) {
+    const attempt = decision.classifierAttempt;
+    assertExactKeys(attempt, ["backend", "outcome", "fallbackKind"], ["model", "circuitOpenUntil", "fallbackModel"], `${label}.classifierAttempt`);
+    for (const key of ["backend", "outcome", "fallbackKind"]) assertBoundedString(attempt[key], `${label}.classifierAttempt.${key}`);
+    for (const key of ["model", "fallbackModel"]) if (attempt[key] !== undefined) assertBoundedString(attempt[key], `${label}.classifierAttempt.${key}`);
+    if (attempt.circuitOpenUntil !== undefined) assertTimestamp(attempt.circuitOpenUntil, `${label}.classifierAttempt.circuitOpenUntil`);
+  }
+  if (decision.affinity !== undefined) {
+    const affinity = decision.affinity;
+    assertExactKeys(affinity, ["version", "status", "snapshotAsOf", "mode", "selection"], ["modeSource", "anchor", "baseStrategyWinner", "baseStrategyComparison", "sameProviderCandidateAvailable", "strategyWinner", "selectedModel", "selectedTier"], `${label}.affinity`);
+    assert.equal(affinity.version, 1);
+    for (const key of ["status", "mode", "selection"]) assertBoundedString(affinity[key], `${label}.affinity.${key}`);
+    assertTimestamp(affinity.snapshotAsOf, `${label}.affinity.snapshotAsOf`);
+    for (const key of ["modeSource", "baseStrategyWinner", "baseStrategyComparison", "strategyWinner", "selectedModel", "selectedTier"]) if (affinity[key] !== undefined) assertBoundedString(affinity[key], `${label}.affinity.${key}`);
+    if (affinity.sameProviderCandidateAvailable !== undefined) assert.equal(typeof affinity.sameProviderCandidateAvailable, "boolean");
+    if (affinity.anchor !== undefined) {
+      assertExactKeys(affinity.anchor, ["modelKey", "provider", "lastSuccessfulDispatchAt", "ageMs"], [], `${label}.affinity.anchor`);
+      assertBoundedString(affinity.anchor.modelKey, `${label}.affinity.anchor.modelKey`);
+      assertBoundedString(affinity.anchor.provider, `${label}.affinity.anchor.provider`);
+      assertTimestamp(affinity.anchor.lastSuccessfulDispatchAt, `${label}.affinity.anchor.lastSuccessfulDispatchAt`);
+      assert.ok(Number.isFinite(affinity.anchor.ageMs) && affinity.anchor.ageMs >= 0);
+    }
+  }
+  assertNoCanaryValues(decision, label);
+}
+
+function assertBoundedString(value, label, maxLength = 256) {
+  assert.equal(typeof value, "string", `${label} must be a string`);
+  assert.ok(value.length > 0 && value.length <= maxLength, `${label} must be nonempty and bounded`);
+  assert.doesNotMatch(value, /[\x00-\x1f\x7f]/u, `${label} must not contain control characters`);
+}
+
+function assertTimestamp(value, label) {
+  assert.equal(Number.isSafeInteger(value), true, `${label} must be a safe integer timestamp`);
+  assert.ok(value >= 0 && value <= 8_640_000_000_000_000, `${label} must be within the supported epoch range`);
+}
+
+const V2_MODEL_KEY = /^[A-Za-z0-9][A-Za-z0-9._:+@-]*\/[A-Za-z0-9][A-Za-z0-9._:+@/-]*$/u;
+const V2_OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+
+function assertV2ModelKey(value, label) {
+  assert.equal(typeof value, "string", `${label} must be a string`);
+  assert.match(value, V2_MODEL_KEY, `${label} must match production model-key schema`);
+}
+
+function assertV2OpaqueId(value, label) {
+  assert.equal(typeof value, "string", `${label} must be a string`);
+  assert.match(value, V2_OPAQUE_ID, `${label} must match production opaque-ID schema`);
+}
+
+function assertV2ModelScopeKey(value, label) {
+  assert.equal(typeof value, "string", `${label} must be a string`);
+  const encoded = /^model:(\d+):(.+)$/u.exec(value);
+  assert.ok(encoded, `${label} must encode a model scope`);
+  assert.equal(Number(encoded[1]), encoded[2].length, `${label} model-key length prefix must match`);
+  assertV2ModelKey(encoded[2], `${label} model key`);
+}
+
+/** Persisted v2 model-circuit state: production schema, configured capacity, and no text canaries. */
+function assertReliabilityV2Artifact(text) {
+  assert.equal(typeof text, "string", "bifrost-reliability-v2.json must exist");
+  assert.ok(Buffer.byteLength(text) <= 32 * 1024 * 1024, "v2 reliability artifact must stay within production 32 MiB read limit");
+  const state = JSON.parse(text);
+  assertExactKeys(state, V2_STATE_KEYS, [], "v2 reliability state");
+  assert.equal(state.version, 2);
+  assert.ok(Number.isSafeInteger(state.revision) && state.revision >= 0);
+  for (const key of ["scopes", "dispatches", "settledOutcomes"]) {
+    assert.ok(state[key] && typeof state[key] === "object" && !Array.isArray(state[key]), `v2 ${key} must be a record`);
+  }
+  for (const [scopeKey, scope] of Object.entries(state.scopes)) {
+    assertV2ModelScopeKey(scopeKey, "v2 scope map key");
+    assertExactKeys(scope, V2_SCOPE_KEYS, V2_SCOPE_OPTIONAL_KEYS, `v2 scopes[${scopeKey}]`);
+    assert.ok(Number.isSafeInteger(scope.generation) && scope.generation >= 0);
+    assert.ok(Array.isArray(scope.failures) && scope.failures.length <= 10_000,
+      "v2 failure history must stay within production MAX_FAILURE_TIMESTAMPS");
+    for (const [index, time] of scope.failures.entries()) assertTimestamp(time, `v2 scopes[${scopeKey}].failures[${index}]`);
+    if (scope.openUntil !== undefined) assertTimestamp(scope.openUntil, `v2 scopes[${scopeKey}].openUntil`);
+    if (scope.cooldownMultiplier !== undefined) assert.ok(Number.isFinite(scope.cooldownMultiplier) && scope.cooldownMultiplier >= 1);
+    if (scope.lease !== undefined) {
+      assertExactKeys(scope.lease, V2_LEASE_KEYS, [], `v2 scopes[${scopeKey}].lease`);
+      for (const key of ["ownerToken", "dispatchId", "outcomeId", "leaseId"]) assertV2OpaqueId(scope.lease[key], `v2 scope lease ${key}`);
+      assert.ok(Number.isSafeInteger(scope.lease.generation) && scope.lease.generation >= 0);
+      assertTimestamp(scope.lease.expiresAt, "v2 scope lease expiresAt");
+      assertTimestamp(scope.lease.maxExpiresAt, "v2 scope lease maxExpiresAt");
+    }
+  }
+  const runtimeLimits = reliabilityV2Config();
+  assert.ok(Object.keys(state.dispatches).length <= runtimeLimits.maxDispatchReceipts);
+  assert.ok(Object.keys(state.settledOutcomes).length <= runtimeLimits.maxDedupEntries);
+  for (const [id, receipt] of Object.entries(state.dispatches)) {
+    assertV2OpaqueId(id, "v2 dispatch map key");
+    assertExactKeys(receipt, V2_DISPATCH_KEYS, V2_DISPATCH_OPTIONAL_KEYS, `v2 dispatches[${id}]`);
+    for (const key of ["ownerToken", "dispatchId", "outcomeId"]) assertV2OpaqueId(receipt[key], `v2 dispatch ${key}`);
+    assert.equal(receipt.dispatchId, id, "dispatch map key must match receipt dispatchId");
+    for (const key of ["admittedAt", "proofUntil", ...(receipt.settledAt === undefined ? [] : ["settledAt"])]) assertTimestamp(receipt[key], `v2 dispatch ${key}`);
+    if (receipt.settledKind !== undefined) assert.ok(["success", "failure", "cancelled"].includes(receipt.settledKind));
+    assert.ok(Array.isArray(receipt.scopes) && receipt.scopes.length > 0);
+    for (const [index, ref] of receipt.scopes.entries()) {
+      assertExactKeys(ref, V2_SCOPE_RECEIPT_KEYS, V2_SCOPE_RECEIPT_OPTIONAL_KEYS, `v2 dispatches[${id}].scopes[${index}]`);
+      assertV2ModelScopeKey(ref.scopeKey, "v2 scope receipt scopeKey");
+      assertV2ModelKey(ref.modelKey, "v2 scope receipt modelKey");
+      assert.equal(ref.scopeKey, `model:${ref.modelKey.length}:${ref.modelKey}`);
+      assert.ok(Number.isSafeInteger(ref.generation) && ref.generation >= 0);
+      for (const key of ["expiresAt", "maxExpiresAt"]) if (ref[key] !== undefined) assertTimestamp(ref[key], `v2 scope receipt ${key}`);
+      if (ref.leaseId !== undefined) assertV2OpaqueId(ref.leaseId, "v2 scope receipt leaseId");
+    }
+  }
+  for (const [id, outcome] of Object.entries(state.settledOutcomes)) {
+    assertV2OpaqueId(id, "v2 outcome map key");
+    assertExactKeys(outcome, V2_OUTCOME_KEYS, V2_OUTCOME_OPTIONAL_KEYS, `v2 settledOutcomes[${id}]`);
+    assertTimestamp(outcome.expiresAt, `v2 settledOutcomes[${id}].expiresAt`);
+    if (outcome.observation !== undefined) {
+      const observation = outcome.observation;
+      assertExactKeys(observation, V2_OBSERVATION_KEYS, V2_OBSERVATION_OPTIONAL_KEYS, `v2 settledOutcomes[${id}].observation`);
+      assertV2ModelKey(observation.modelKey, "v2 observation modelKey");
+      assert.ok(V2_CATEGORIES.has(observation.category), "v2 observation category must be enumerated");
+      assert.ok(V2_CATEGORY_EVIDENCE.has(observation.categoryEvidence), "v2 observation evidence must be enumerated");
+      assertTimestamp(observation.observedAt, "v2 observation observedAt");
+      assert.ok(["runtime", "activation", "probe"].includes(observation.source));
+      if (observation.retryAt !== undefined) assertTimestamp(observation.retryAt, "v2 observation retryAt");
+    }
+  }
+  assertNoCanaryValues(state, "bifrost-reliability-v2.json");
+  return state;
 }
 
 /** Legacy v1 model circuit: exact envelope and exact record key set. */
@@ -508,6 +744,72 @@ function assertProviderReliabilityArtifact(text) {
 }
 
 // ── named redaction assertion (shared by the live case and its fault control) ──
+
+/** Run a real Pi turn and return closed-process debug evidence for nested-summary checks. */
+async function debugDecisionScenario(extension) {
+  let raw;
+  const released = await scenario({
+    fixtureOptions: {
+      extension,
+      config: {
+        enabled: true,
+        default: "general",
+        strategy: "first",
+        classifier: { enabled: false },
+        models: { general: ["fake/chat"] },
+        debug: { enabled: true },
+      },
+    },
+    body: async ({ env, sessions }) => {
+      const rpc = startRpc({ home: env.home, work: env.work, extension });
+      sessions.push(rpc);
+      await rpc.userTurn(CANARY_PROMPT);
+      await rpc.close(env.home);
+      raw = artifact(env.project, "bifrost-debug.jsonl");
+    },
+  });
+  return { raw, released };
+}
+
+/** Run one actual Auto/v2 failure and inspect its persisted state after Pi closes. */
+async function v2ReliabilityScenario(extension) {
+  let state;
+  let raw;
+  const released = await scenario({
+    fixtureOptions: {
+      extension,
+      models: ["chat", "credits-exhausted"],
+      config: {
+        schemaVersion: 2,
+        enabled: true,
+        default: "general",
+        strategy: "first",
+        classifier: { enabled: false },
+        models: { general: ["fake/credits-exhausted"] },
+        reliability: { enabled: true, stateVersion: 2, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 1 },
+        debug: { enabled: true },
+      },
+    },
+    body: async ({ env, sessions }) => {
+      const rpc = startRpc({ home: env.home, work: env.work, extension, model: "bifrost/auto" });
+      sessions.push(rpc);
+      const migrated = await rpc.prompt("/bifrost reliability migrate --fresh");
+      assert.equal(migrated.response.data?.disposition, "handled", "real Pi command must initialize the v2 store");
+      const before = await stats();
+      await rpc.userTurn(CANARY_PROMPT);
+      const after = await stats();
+      assert.equal(attemptDelta(before, after, "credits-exhausted"), 1,
+        `Auto/v2 witness must reach configured fake model; debug: ${artifact(env.project, "bifrost-debug.jsonl") ?? "missing"}`);
+      await rpc.close(env.home);
+      raw = artifact(env.project, "bifrost-reliability-v2.json");
+      state = assertReliabilityV2Artifact(raw);
+      assert.ok(Object.keys(state.dispatches).length > 0, "Auto failure must persist a v2 dispatch receipt");
+      assert.ok(Object.keys(state.scopes).length > 0, "Auto failure must persist a v2 model scope");
+      assert.ok(Object.keys(state.settledOutcomes).length > 0, "Auto failure must persist a bounded settled outcome");
+    },
+  });
+  return { released, raw, state };
+}
 
 /**
  * Run one real Pi turn with debug tracing enabled and assert the debug prompt
@@ -644,7 +946,10 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
             assert.equal(DEBUG_KEY_ALLOWLIST.has(key), true, `debug key outside allowlist: ${key} (${row.module}/${row.event})`);
           }
           assert.deepEqual(sensitiveStringKeys(row), [], `sensitive string channel persisted (${row.module}/${row.event})`);
+          if (row.decision !== undefined) assertRouteDecisionSummary(row.decision, `${row.module}/${row.event}.decision`);
         }
+        const decisionRows = rows.filter((row) => row.event === "route_decision" && row.decision !== undefined);
+        assert.ok(decisionRows.length > 0, "routing trace must witness its nested decision summary");
         const promptRows = rows.filter((row) => row.module === "input" && row.event === "prompt");
         assert.equal(promptRows.length, 1);
         assert.equal(promptRows[0].length, CANARY_PROMPT.length);
@@ -739,6 +1044,12 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
     });
   });
 
+  it("audits bounded redacted reliability v2 state from a real Pi Auto failure", async () => {
+    const { state } = await v2ReliabilityScenario(EXTENSION);
+    assert.ok(Object.values(state.dispatches).some((receipt) => receipt.settledKind === "failure"),
+      "real Auto/v2 failure must leave a settled failure receipt in the audited artifact");
+  });
+
   it("persists the classifier opt-out across restart and suppresses classifier dispatch", async () => {
     await scenario({
       fixtureOptions: {
@@ -775,7 +1086,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
     });
   });
 
-  it("stores normalized prompt words in the cache without the original prompt or secret canary", async () => {
+  it("persists normalized prompt text in the local cache and excludes unnormalized canaries", async () => {
     await scenario({
       fixtureOptions: {
         config: {
@@ -795,10 +1106,10 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
         await rpc.close(env.home);
         const raw = artifact(env.project, "bifrost-cache.jsonl");
         assert.equal(typeof raw, "string", "normalized cache artifact must exist");
-        // The normalized contract persists lowercased, sorted word tokens; the
-        // original casing, punctuation, secret, and endpoint canaries must not
-        // survive. The error canary's words normalize into the allowlisted token
-        // stream and are asserted, not forbidden.
+        // The cache retains lowercased, ordered prompt tokens and can therefore
+        // contain potentially sensitive user text. It is not a content-free trace.
+        // Original casing, punctuation, secret, and endpoint canaries must not
+        // survive; error-canary words remain visible in normalized text.
         assert.equal(raw.includes(PROMPT_CANARY), false, "cache must not persist original prompt casing");
         for (const marker of [SECRET_CANARY, ENDPOINT_CANARY, ERROR_CANARY]) {
           assert.equal(raw.includes(marker), false, `cache must not persist ${marker}`);
@@ -985,6 +1296,55 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
     });
   });
 
+  it("fault controls: nested unknown fields and prompt canaries fail decision schema audit", async () => {
+    const sourcePath = join(ROOT, "index.ts");
+    const original = readFileSync(sourcePath, "utf8");
+    const originalHash = sha256(original);
+    const anchor = `debug("input", "route_decision", {\n          decision: buildRouteDecisionSummary(classification, attempt),\n        });`;
+    assert.ok(original.includes(anchor), "input route-decision projection anchor must exist");
+    const mutants = [
+      {
+        name: "nested unknown key",
+        expected: /unexpected key leaked_nested/u,
+        replacement: `debug("input", "route_decision", {\n          decision: (() => { const summary = buildRouteDecisionSummary(classification, attempt); return { ...summary, leaked_nested: "fault" }; })(),\n        });`,
+      },
+      {
+        name: "nested prompt value",
+        expected: /must not carry canary CANARY_PROMPT_alpaca_7f3d/u,
+        replacement: `debug("input", "route_decision", {\n          decision: (() => { const summary = buildRouteDecisionSummary(classification, attempt); return { ...summary, classification: { ...summary.classification, tier: "CANARY_PROMPT_alpaca_7f3d" } }; })(),\n        });`,
+      },
+    ];
+    for (const mutant of mutants) {
+      const mutated = original.replace(anchor, mutant.replacement);
+      assert.notEqual(mutated, original, `${mutant.name} mutation must apply`);
+      const scratch = mkdtempSync(join(tmpdir(), "bifrost-decision-privacy-fault-"));
+      let released;
+      let proofError;
+      try {
+        for (const entry of readdirSync(ROOT)) {
+          if (entry.endsWith(".ts") || ["schema.json", "package.json"].includes(entry)) {
+            copyFileSync(join(ROOT, entry), join(scratch, entry));
+          }
+        }
+        symlinkSync(join(ROOT, "node_modules"), join(scratch, "node_modules"));
+        writeFileSync(join(scratch, "index.ts"), mutated);
+        const run = await debugDecisionScenario(join(scratch, "index.ts"));
+        released = run.released;
+        try { assertDebugDecisionRows(run.raw); }
+        catch (error) { proofError = error; }
+        if (!ownedCleanupObserved(released)) throw proofError ?? new Error(`${mutant.name} cleanup was not observed safe`);
+        assert.ok(proofError, `${mutant.name} fault must turn the recursive audit RED`);
+        assert.match(String(proofError.message), mutant.expected, `${mutant.name} must fail its named guard`);
+        assert.equal(proofError.name, "AssertionError");
+        assert.equal(sha256(readFileSync(sourcePath, "utf8")), originalHash, "production index.ts must remain unchanged");
+        const restored = await debugDecisionScenario(EXTENSION);
+        assertDebugDecisionRows(restored.raw);
+      } finally {
+        reclaimSourceCopy(scratch, released);
+      }
+    }
+  });
+
   it("fault control: leaking the prompt projection turns the named redaction assertion RED", async () => {
     const sourcePath = join(ROOT, "index.ts");
     const original = readFileSync(sourcePath, "utf8");
@@ -1027,6 +1387,42 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
       // GREEN + restore: the committed source is untouched and still passes.
       assert.equal(sha256(readFileSync(sourcePath, "utf8")), PRODUCTION_INDEX_SHA256, "production source must be unchanged after the proof");
       await debugProjectionScenario(sourcePath);
+    } finally {
+      reclaimSourceCopy(scratch, released);
+    }
+  });
+
+  it("fault control: a canary added to persisted v2 state turns the exact-schema assertion RED", async () => {
+    const sourcePath = join(ROOT, "reliability-v2-store.ts");
+    const original = readFileSync(sourcePath, "utf8");
+    const originalHash = sha256(original);
+    const anchor = "  writeState: writeJsonFile,";
+    assert.ok(original.includes(anchor), "v2 store writer anchor must exist");
+    const mutated = original.replace(anchor,
+      '  writeState(path, state) { writeJsonFile(path, state.dispatches && Object.keys(state.dispatches).length > 0 ? { ...state, prompt: "CANARY_PROMPT_alpaca_7f3d" } : state); },');
+    assert.notEqual(mutated, original, "v2 persistence mutation must apply");
+    assert.notEqual(sha256(mutated), originalHash, "v2 persistence mutation must change source bytes");
+
+    const scratch = mkdtempSync(join(tmpdir(), "bifrost-v2-privacy-fault-"));
+    let released;
+    let proofError;
+    try {
+      for (const entry of readdirSync(ROOT)) {
+        if (entry.endsWith(".ts") || ["schema.json", "package.json"].includes(entry)) {
+          copyFileSync(join(ROOT, entry), join(scratch, entry));
+        }
+      }
+      symlinkSync(join(ROOT, "node_modules"), join(scratch, "node_modules"));
+      writeFileSync(join(scratch, "reliability-v2-store.ts"), mutated);
+      try { ({ released } = await v2ReliabilityScenario(join(scratch, "index.ts"))); }
+      catch (error) { proofError = error; released = error.released; }
+      if (!ownedCleanupObserved(released)) throw proofError ?? new Error("v2 privacy fault cleanup was not observed safe");
+      assert.ok(proofError, "mutant v2 writer must fail the persisted-state audit");
+      assert.match(String(proofError.message), /v2 reliability state: unexpected key prompt/u,
+        "fault must fail recursive exact schema assertion, not startup or unrelated behavior");
+      assert.equal(proofError.name, "AssertionError");
+      assert.equal(sha256(readFileSync(sourcePath, "utf8")), originalHash, "production store source must stay unchanged");
+      await v2ReliabilityScenario(EXTENSION);
     } finally {
       reclaimSourceCopy(scratch, released);
     }

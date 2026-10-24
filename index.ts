@@ -475,7 +475,7 @@ function buildPipeline(
 ): ClassificationPipeline {
   const tiers = Object.keys(config.models ?? {});
   const cacheCfg = config.cache;
-  const cacheEnabled = classifierCacheEnabled(config, effective.backend);
+  const cacheEnabled = classifierEnabled && classifierCacheEnabled(config, effective.backend);
   const threshold = cacheCfg?.threshold ?? DEFAULT_THRESHOLD;
   const cacheMaxAgeMs = (cacheCfg?.ttlHours ?? DEFAULT_TTL_HOURS) * 60 * 60 * 1000;
 
@@ -2835,6 +2835,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           if (!state.enabled || state.pinned) {
             terminalRouteCategory = "disabled_or_pinned";
             throw new Error("Bifrost: virtual auto was disabled or pinned during routing; select a physical model");
+          }
+          if (classification.kind !== "unclassified" && classification.tier.includes("/")) {
+            activeRouteOrigin = "explicit_model";
           }
           if (!forcedTier && state.config !== classificationConfig) {
             terminalRouteCategory = "config_changed_during_route";

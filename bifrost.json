@@ -21,7 +21,7 @@
   "cache": {
     "enabled": true,
     "maxEntries": 500,
-    "threshold": 0.88
+    "threshold": 1
   },
 
   "reliability": {

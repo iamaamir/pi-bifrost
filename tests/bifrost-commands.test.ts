@@ -2552,8 +2552,8 @@ describe("dashboard menu", () => {
     }
   });
 
-  it("offers 24 rows", async () => {
-    assert.equal((await rowsFor()).length, 24);
+it("offers 25 rows", async () => {
+    assert.equal((await rowsFor()).length, 25);
   });
 
   it("keeps the top row actionable in every state combination", async () => {
