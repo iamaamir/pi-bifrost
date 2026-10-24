@@ -48,7 +48,7 @@ flowchart TD
 |---|---|---|
 | Pi 1.4.0 baseline | Pushed in `e61a098` | CI proves compatibility; no compatibility claim before then. |
 | R15 discovery failure | Reviewed in `905793c` | Keep partial: real POSIX denial requires non-root mode-enforcing host. |
-| R05/R08 | Partial | Read-only feasibility audit; implement only a deterministic, configuration-first witness. |
+| R05/R08 | Host/policy-blocked | Audit confirmed no status-closing Bifrost-only witness. R05 needs approved enforcement plus final dispatch veto; R08 needs Pi account binding and account-selectable dispatch. |
 | R12 | Partial | Identify a real existing transport seam before adding coverage. No synthetic transport proof. |
 | R14 | Partial | Identify a real serialization/trace seam before adding coverage. No universal privacy claim. |
 | R03 | Host-blocked | Require Pi lifecycle hook for config/session/branch mutation before recovery settlement. |
@@ -111,3 +111,4 @@ Then continue only one lane. Never infer a gate passed from old artifacts or bra
 | Date | SHA | Event | Evidence / next step |
 |---|---|---|---|
 | 2026-10-24 | `905793c` | PR pushed after Pi 1.4.0 baseline plus R15 repair. | CI `release-gates` and report publisher checks queued; local final gates intentionally deferred. |
+| 2026-10-24 | `9b57b9d` | R05/R08 feasibility audit reviewed. | No status-closing Bifrost-only slice exists. Optional R05 tests do not close coverage and are deferred. |
