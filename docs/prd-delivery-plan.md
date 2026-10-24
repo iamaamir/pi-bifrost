@@ -1,6 +1,6 @@
 # PRD delivery execution plan
 
-**Status:** active — CI pending for `905793ccd7dfa5e744220ceae4b4feabf2824e6f`
+**Status:** active — CI required for current PR branch tip; see PR #186 checks
 
 **Base:** `origin/v2`
 
