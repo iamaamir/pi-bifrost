@@ -44,7 +44,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  evidence-preflight:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Validate change evidence declaration
+        run: node scripts/acceptance/evidence-rebind.mjs "${{ github.event.pull_request.base.sha }}"
+
   release-gates:
+    needs: evidence-preflight
+    if: always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
