@@ -37,6 +37,13 @@ const journeys = [
     boundary: "real Pi RPC and restarted real Pi process with isolated fake provider",
   },
   {
+    id: "reconcile-router-refresh-failure-preserves-owned-membership",
+    testFile: "tests/reconciliation-command-router.test.ts",
+    title: "keeps owned memberships when explicit provider discovery fails",
+    requirements: ["R15"],
+    boundary: "production command-router path with deterministic fake registry and exact config-byte snapshot; not Pi registration or Pi E2E",
+  },
+  {
     id: "normal-init-successful-probes-save-membership",
     testFile: "tests/integration/init-regression.test.mjs",
     title: "probes on ordinary init and saves only successful models",
