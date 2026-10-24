@@ -6,7 +6,6 @@
       "id": "structural-config-contract",
       "requirement": "R07",
       "files": [
-        "CHANGELOG.md",
         "config-load.ts",
         "config-schema.ts",
         "config.ts",
@@ -105,14 +104,7 @@
       "requirement": "R16",
       "files": [
         "scripts/acceptance/profiles/live.mjs",
-        "tests/fixtures/replay-fault-control.mjs",
-        "tests/integration/activation-cancellation-acceptance.test.mjs",
-        "tests/integration/affinity-policy-acceptance.test.mjs",
-        "tests/integration/classifier-transport-acceptance.test.mjs",
-        "tests/integration/command-privacy-acceptance.test.mjs",
-        "tests/integration/decision-parity-acceptance.test.mjs",
-        "tests/integration/economic-policy-acceptance.test.mjs",
-        "tests/integration/native-activation-cancel.test.mjs"
+        "tests/integration/decision-parity-acceptance.test.mjs"
       ],
       "boundary": "Every isolated Pi extension copy used by the native and live acceptance harnesses now carries schema.json next to the TypeScript sources, and the replay guard baseline tracks the current index.ts region.",
       "assertions": "Real AgentSession abort, manual, false, and throw cases still pass with the copied schema. The real v1 output-effect and tool-effect guard faults still reach their named no-replay assertions and restore GREEN on the exact new index hash.",
@@ -134,7 +126,6 @@
       "requirement": "R13",
       "files": [
         "package-lock.json",
-        "package.json",
         "tests/router-package.test.mjs"
       ],
       "boundary": "The resolve-only API now depends on ajv at runtime, so the packed consumer installs the runtime dependency closure offline instead of symlinking only host-provided dev dependencies.",
@@ -150,6 +141,100 @@
       "fault": {
         "file": "tests/router-package.test.mjs",
         "name": "rejects a Pi dependency injected into the actual packed router graph and restores it"
+      }
+    },
+    {
+      "id": "agent-config-tool",
+      "requirement": "R07",
+      "files": [
+        "config-agent.ts",
+        "config-agent-report.ts",
+        "tests/config-agent.test.ts",
+        "tests/integration/config-agent-acceptance.test.mjs"
+      ],
+      "boundary": "The bifrost_config agent tool inspects Pi's real catalog and every config layer, checks a candidate offline, previews bounded route decisions without dispatching, and applies one approved config file atomically through the same reload path as /bifrost reload.",
+      "assertions": "check and preview never write or dispatch; apply writes only after an answered approval, rejects changed candidate bytes, changed selected source, changed layers, changed model inventory, and unsafe sources; the previous config survives a failed write; a saved-but-not-activated write is reported honestly; unknown operations fail closed; config-layer paths come from the shared merge-order helper.",
+      "boundaryTest": {
+        "file": "tests/integration/config-agent-acceptance.test.mjs",
+        "name": "checks, applies through an answered approval, saves one source, and activates it"
+      },
+      "invariant": {
+        "file": "tests/config-agent.test.ts",
+        "name": "compares the effective policy before and after without writing"
+      },
+      "fault": {
+        "file": "tests/config-agent.test.ts",
+        "name": "rejects a proposal whose candidate bytes changed"
+      }
+    },
+    {
+      "id": "agent-skill-packaging",
+      "requirement": "R07",
+      "files": [
+        "package.json",
+        "skills/configure-bifrost/SKILL.md",
+        "skills/configure-bifrost/references/configuration-reference.md",
+        "tests/config-skill.test.ts"
+      ],
+      "boundary": "The skills/configure-bifrost skill and the bifrost_config tool ship inside the pi package and register alongside the extension, with bundled references resolving from the skill directory.",
+      "assertions": "The packed archive contains the skill directory and the extension registration; the skill frontmatter parses, the always-loaded description stays short, bundled references resolve, and the skill names the tool and its safety gates.",
+      "boundaryTest": {
+        "file": "tests/config-skill.test.ts",
+        "name": "is included in the published package"
+      },
+      "invariant": {
+        "file": "tests/config-skill.test.ts",
+        "name": "registers the agent tool alongside the extension"
+      },
+      "fault": {
+        "exception": "Packaging is evidence-shaped by construction: the packed-archive inclusion assertion fails directly when a file is missing from the package file list, so there is no separate production fault to inject."
+      }
+    },
+    {
+      "id": "reviewed-baseline-rerecord",
+      "requirement": "R16",
+      "files": [
+        "tests/fixtures/replay-fault-control.mjs",
+        "tests/integration/activation-cancellation-acceptance.test.mjs",
+        "tests/integration/affinity-policy-acceptance.test.mjs",
+        "tests/integration/classifier-transport-acceptance.test.mjs",
+        "tests/integration/command-privacy-acceptance.test.mjs",
+        "tests/integration/economic-policy-acceptance.test.mjs",
+        "tests/integration/native-activation-cancel.test.mjs"
+      ],
+      "boundary": "The reviewed production baseline sha256 recorded once in tests/fixtures/replay-fault-control.mjs and repeated in six integration fault gates must equal the reviewed committed index.ts, so offline fault proofs copy, mutate, and restore the real source.",
+      "assertions": "Each named fault control starts GREEN on the pristine copy, turns its named assertion RED under the controlled production mutation, restores the source, and records restored GREEN; the baseline constant equals the reviewed index.ts sha256 so no gate refuses the proof.",
+      "boundaryTest": {
+        "file": "tests/integration/command-privacy-acceptance.test.mjs",
+        "name": "fault control: leaking the prompt projection turns the named redaction assertion RED"
+      },
+      "invariant": {
+        "file": "tests/integration/activation-cancellation-acceptance.test.mjs",
+        "name": "fault control: removing the late-abort guard allows forbidden late dispatch"
+      },
+      "fault": {
+        "file": "tests/integration/affinity-policy-acceptance.test.mjs",
+        "name": "fails the named hard-exclusion assertion under a hard-filter-bypass fault in an isolated copy"
+      }
+    },
+    {
+      "id": "release-documentation",
+      "requirement": "R16",
+      "files": [
+        "CHANGELOG.md",
+        "README.md",
+        "docs/testing-coverage.md"
+      ],
+      "boundary": "Release and usage documentation for the goal-driven configuration tool, its skill, and the updated coverage map.",
+      "assertions": "The changelog entry, README goal-first usage section, and the R07 coverage row describe the shipped tool, skill, and safety gates accurately; the description stays consistent with the implemented tool contract.",
+      "boundaryTest": {
+        "exception": "Documentation-only change with no runtime behavior to execute; accuracy is review-verified against the tool contract tests above."
+      },
+      "invariant": {
+        "exception": "Documentation-only change with no runtime behavior to execute; accuracy is review-verified against the tool contract tests above."
+      },
+      "fault": {
+        "exception": "Documentation-only change with no runtime behavior to execute; there is no production fault to inject."
       }
     }
   ]

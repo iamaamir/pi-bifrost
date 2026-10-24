@@ -14,7 +14,7 @@ const child = join(root, "tests", "fixtures", "native-activation-cancel-child.mj
 const guard = join(root, "scripts", "test-outbound-guard.cjs");
 const credentials = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"];
 const DEADLINE_MS = 120_000;
-const PRODUCTION_SHA256 = "80d49f0f555fd4b0a8565ea1f44c7770085b04fffdea37df9688beec933f6a76";
+const PRODUCTION_SHA256 = "0efcc5633ecfc473dfe246c0347f00bf6581c192ddad3354bf64095becc00b08";
 const LATE_ABORT_GUARD = `      if (ctx.signal?.aborted) {
         endClassify({ kind: classification.kind, outcome: "aborted" });
         endInput({ outcome: "aborted" });

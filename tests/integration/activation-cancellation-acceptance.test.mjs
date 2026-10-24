@@ -260,7 +260,7 @@ describe("activation cancellation acceptance", { timeout: 120_000 }, () => {
   });
 
   it("fault control: removing the late-abort guard allows forbidden late dispatch", async () => {
-    const BASELINE_SHA256 = "80d49f0f555fd4b0a8565ea1f44c7770085b04fffdea37df9688beec933f6a76";
+    const BASELINE_SHA256 = "0efcc5633ecfc473dfe246c0347f00bf6581c192ddad3354bf64095becc00b08";
     const sha256 = (text) => createHash("sha256").update(text).digest("hex");
     const original = readFileSync(join(ROOT, "index.ts"), "utf8");
     assert.equal(sha256(original), BASELINE_SHA256,

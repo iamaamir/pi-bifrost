@@ -52,9 +52,12 @@ export function loadConfig(
   return loadConfigForReload(cwd, extensionDir).config;
 }
 
+/** File-backed configuration layers. `effective` never owns a source file, so it cannot appear here. */
+export type ConfigSourceLayer = "extension" | "global" | "workspace" | "project";
+
 export interface ConfigLoadDiagnostic {
   /** `effective` marks a problem in the merged policy that no single layer owns. */
-  readonly layer: "extension" | "global" | "workspace" | "project" | "effective";
+  readonly layer: ConfigSourceLayer | "effective";
   readonly message: string;
 }
 
@@ -362,10 +365,12 @@ function defaultConfig(): BifrostConfig {
   };
 }
 
-function configLayerPaths(
+/** Layer paths in merge order (lowest precedence first). Single source of truth
+ * for which file each source lives in. */
+export function configLayerPaths(
   cwd: string,
   extensionDir: string,
-): Array<readonly [ConfigLoadDiagnostic["layer"], string]> {
+): Array<readonly [ConfigSourceLayer, string]> {
   return [
     ["extension", join(extensionDir, "bifrost.json")],
     ["global", join(getAgentDir(), "bifrost.json")],
