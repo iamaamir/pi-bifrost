@@ -83,14 +83,14 @@ function preflight(root) {
   checkBinary("agent-tui", "AGENT_TUI_BIN");
   let pi;
   try { pi = resolveTestBinary({ envVar: "PI_BIN", name: "pi", root }).path; }
-  catch { throw new Error("Pinned Pi is missing. Install project dependencies or set PI_BIN to Pi 1.0.1."); }
+  catch { throw new Error("Pinned Pi is missing. Install project dependencies or set PI_BIN to Pi 1.4.0."); }
   const version = spawnSync(pi, ["--version"], { encoding: "utf8", timeout: 5000 });
-  if (version.status !== 0 || version.stdout.trim() !== "1.0.1") {
-    throw new Error("Pi 1.0.1 is required. Install the pinned project dependency or set PI_BIN to Pi 1.0.1.");
+  if (version.status !== 0 || version.stdout.trim() !== "1.4.0") {
+    throw new Error("Pi 1.4.0 is required. Install the pinned project dependency or set PI_BIN to Pi 1.4.0.");
   }
   const pillow = spawnSync("python3", ["-c", "import PIL"], { encoding: "utf8", timeout: 5000 });
   if (pillow.status !== 0) throw new Error("Python Pillow is required by test:ui. Install it with `python3 -m pip install Pillow`.");
-  return "Pi 1.0.1, agent-tui, and Python Pillow are available.";
+  return "Pi 1.4.0, agent-tui, and Python Pillow are available.";
 }
 
 function executeGate(root, script) {
@@ -154,7 +154,12 @@ export async function runVerification({
   const sourceHashAtStart = sourceHash(root);
   const results = [];
   let error;
-  const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  let packageJson;
+  try {
+    packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  } catch (parseError) {
+    throw new Error(`Cannot read package scripts: ${parseError instanceof Error ? parseError.message : String(parseError)}`);
+  }
   const missingGates = REQUIRED_GATES.filter(([, script]) => !packageJson.scripts?.[script]).map(([, script]) => script);
 
   const record = async (id, script, index) => {

@@ -148,9 +148,9 @@ test("Pi compatibility uses explicit matrix pins with an isolated install", () =
   const block = jobs["pi-compatibility"];
   const matrix = block.match(/strategy:\n[\t ]*fail-fast[^\n]*\n[\t ]*matrix:\n[\t ]*pi:\n((?:[\t ]+- .+\n)+)/u);
   assert.ok(matrix, "compatibility matrix must declare pi pins");
-  assert.deepEqual([...matrix[1].matchAll(/^[\t ]+- "([^"]+)"$/gmu)].map((entry) => entry[1]), ["1.0.1", "1.3.0"]);
+  assert.deepEqual([...matrix[1].matchAll(/^[\t ]+- "([^"]+)"$/gmu)].map((entry) => entry[1]), ["1.3.0", "1.4.0"]);
   assert.match(block, /npm install --no-save --package-lock=false/u, "install must not edit tracked dependency files");
-  assert.match(block, /if \[ "\$PI_VERSION" != "1\.0\.1" \]; then\n[\s\S]*?npm install[\s\S]*?\n          fi/u, "baseline must retain npm ci locked transitive dependencies");
+  assert.match(block, /if \[ "\$PI_VERSION" != "1\.4\.0" \]; then\n[\s\S]*?npm install[\s\S]*?\n          fi/u, "baseline must retain npm ci locked transitive dependencies");
   assert.match(block, /@earendil-works\/pi-ai@\$PI_VERSION/u);
   assert.match(block, /@earendil-works\/pi-coding-agent@\$PI_VERSION/u);
   assert.doesNotMatch(block, /@(latest|\*|next|beta)/u, "compatibility installs must not float");

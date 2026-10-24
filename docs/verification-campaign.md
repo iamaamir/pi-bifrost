@@ -40,7 +40,7 @@ active cron today, and this branch does not claim one.
 - `reliability`: reliability state machine, filter, and cache replay-control tests.
 - `integration`: `npm run test:integration` (repeat measured; includes concurrency
   and native suites).
-- `pi-compatibility`: both packages at pinned `1.0.1` and `1.3.0`, baseline kept on the `npm ci` lock and the alternate installed
+- `pi-compatibility`: both packages at pinned `1.3.0` and `1.4.0`, baseline kept on the `npm ci` lock and the alternate installed
   into `node_modules` only (`--no-save --package-lock=false`, no credentials),
   with installed-version verification, an unchanged tracked tree, `npm run
   typecheck`, native SDK/process tests, and the installed-package consumer test.
@@ -85,8 +85,8 @@ surviving mutants were caught. Report and file log are uploaded on failure.
 
 ## Compatibility claims
 
-Normal release gates and `verify-release.mjs` keep pinned Pi `1.0.1`. The
-compatibility jobs are separate and run both pinned `1.0.1` and `1.3.0` against
+Normal release gates and `verify-release.mjs` keep pinned Pi `1.4.0`. The
+compatibility jobs are separate and run both pinned `1.3.0` and `1.4.0` against
 real native SDK, process, package-consumer, and typecheck tests. `verify-release`
 is intentionally not used as an alternate-version oracle. This does not make a
 broad compatibility claim beyond those executed checks.
