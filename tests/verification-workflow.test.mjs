@@ -67,10 +67,14 @@ function releaseGateScriptsFrom(source) {
 const jobs = jobBlocks(workflow);
 const CAMPAIGN_JOBS = ["campaign", "pi-compatibility", "mutation-experiment"];
 
-test("release-gates stays unconditional with all seven gates and the report publishers", () => {
+test("release-gates keeps all seven gates and is blocked only by failed PR evidence preflight", () => {
   const block = jobs["release-gates"];
   assert.ok(block, "release-gates job must exist");
-  assert.equal(jobCondition(block), null, "release-gates must not be conditional");
+  assert.match(block, /^ {4}needs: evidence-preflight$/mu);
+  assert.equal(
+    jobCondition(block),
+    "always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')",
+  );
 
   // Seven release gates, checked against both declaring modules.
   assert.deepEqual(requiredGatesFrom(ciReportSource), [
@@ -97,8 +101,21 @@ test("release-gates stays unconditional with all seven gates and the report publ
   assert.match(block, /name: final-ci-report-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
 });
 
+test("evidence preflight runs only on pull requests before release gates", () => {
+  const block = jobs["evidence-preflight"];
+  assert.ok(block, "evidence preflight job must exist");
+  assert.equal(jobCondition(block), "github.event_name == 'pull_request'");
+  assert.match(block, /^ {4}timeout-minutes: 5$/mu);
+  assert.match(block, /uses: actions\/checkout@v4/u);
+  assert.match(block, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/u);
+  assert.match(block, /fetch-depth: 0/u);
+  assert.match(block, /node scripts\/acceptance\/evidence-rebind\.mjs "\$\{\{ github\.event\.pull_request\.base\.sha \}\}"/u);
+  assert.doesNotMatch(block, /--apply/u, "preflight must not rewrite evidence");
+  assert.doesNotMatch(block, /npm (ci|install)/u, "structural preflight must stay fast and read-only");
+});
+
 test("campaign jobs never run on ordinary PR, push, or default manual dispatch", () => {
-  assert.deepEqual(Object.keys(jobs), ["release-gates", "campaign", "pi-compatibility", "mutation-experiment"]);
+  assert.deepEqual(Object.keys(jobs), ["evidence-preflight", "release-gates", "campaign", "pi-compatibility", "mutation-experiment"]);
   const cases = [
     ["pull_request", {}],
     ["push", {}],
