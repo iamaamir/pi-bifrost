@@ -3,7 +3,7 @@
 ## Requirements
 
 - Use Node.js 24, as CI does. It supports `--experimental-strip-types`.
-- Tests use the pinned Pi 1.0.1 dependency.
+- Tests use the pinned Pi 1.4.0 dependency.
 - Python 3 and Pillow are needed for `npm run test:ui`.
 - The project dependencies include `agent-tui` for reliability UI tests.
 
