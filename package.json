@@ -49,6 +49,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "benchmark:jev": "node --experimental-strip-types scripts/jev-benchmark.ts",
+    "command-surface": "node --experimental-strip-types scripts/command-surface.ts",
     "release": "node --experimental-strip-types scripts/release.mjs"
   },
   "peerDependencies": {
