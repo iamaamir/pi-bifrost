@@ -130,3 +130,5 @@ npm run test:ui:reliability
 ## License
 
 [MIT](https://opensource.org/license/mit)
+
+[![Greptile: The War on Bugs](https://www.greptile.com/badge.svg)](https://www.greptile.com/?utm_source=oss_badge&utm_medium=readme&utm_campaign=greptile_for_open_source)
