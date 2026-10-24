@@ -314,6 +314,27 @@
         "file": "tests/integration/reliability-v2-auto.test.mjs",
         "name": "proves a malformed null-edit lineage faults the v2 Auto recovery assertion"
       }
+    },
+    {
+      "id": "r12-pinned-pi-native-deadline-matrix",
+      "requirement": "R12",
+      "files": [
+        "tests/integration/native-classifier.test.mjs"
+      ],
+      "boundary": "Pinned Pi AgentSession invokes explicit Pi-native classifier against a native classifier provider and faux provider exposing physical chat models plus a chat-capable prompt-decoy model. Scenarios run behind a proven deny-all outbound fence.",
+      "assertions": "Native success selects general while configured prompt fallback has zero prompt-decoy requests; an isolated native-miss source mutant triggers exactly one decoy request and dispatches its distinct frontier judgment. Shared total deadline aborts Pi's native classifier signal and defaults to quick; a late frontier result does not alter selection/model or cause another generation. Isolated source-copy deadline/native-abort mutation fails default-tier dispatch assertion.",
+      "boundaryTest": {
+        "file": "tests/integration/native-classifier.test.mjs",
+        "name": "routes real AgentSession through Pi-native classifier behind a proven deny-all fence"
+      },
+      "invariant": {
+        "file": "tests/integration/native-classifier.test.mjs",
+        "name": "routes real AgentSession through Pi-native classifier behind a proven deny-all fence"
+      },
+      "fault": {
+        "file": "tests/integration/native-classifier.test.mjs",
+        "name": "routes real AgentSession through Pi-native classifier behind a proven deny-all fence"
+      }
     }
   ]
 }
