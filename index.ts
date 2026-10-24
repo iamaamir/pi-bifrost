@@ -61,6 +61,9 @@ import {
   shouldRefreshRegistry,
 } from "./ux-status.ts";
 import { waitForRegistryRefresh } from "./registry-refresh.ts";
+import { trackCost, shutdownCostTracking } from "./cost/cost-integration.ts";
+import { persistSessionCost } from "./cost/cost-store.ts";
+import { setupCost } from "./cost/cost-config.ts";
 
 // ── Pipeline builder (composition root) ────────────────────────
 
@@ -223,6 +226,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     setupDebug(bootConfig.debug, process.cwd());
     debug("bifrost", "startup", { extensionDir });
   }
+
+  // Cost tracking initialization
+  setupCost(bootConfig.cost ?? {});
 
   const config = bootConfig;
   const detectionEngine = createDetectionEngine();
@@ -514,11 +520,31 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     clearBifrostWidgets(ctx);
   });
 
+  pi.on("session_shutdown", async (_event, ctx) => {
+    overrideFor(ctx).clear();
+    syncBifrostModeStatus(ctx, state);
+    clearBifrostWidgets(ctx);
+    await shutdownCostTracking(ctx, process.cwd());
+  });
+
+  pi.on("session_compact", async (event, ctx) => {
+    // Log receipt of the session compaction event with its details
+    debug("cost", "session_compact_received", {
+      reason: event.reason,
+      willRetry: event.willRetry,
+    });
+    debug("bifrost", "cost_compaction_checkpoint", { session: ctx.sessionManager });
+    persistSessionCost(ctx.sessionManager, process.cwd()).catch((e: unknown) =>
+      debug("cost", "compaction_save_error", { error: String(e) })
+    );
+  });
+
   pi.on("agent_end", async (event, ctx) => {
     trackerFor(ctx).observe(event.messages);
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
+    trackCost(ctx);
     const settled = trackerFor(ctx).settle();
     // Clear at settle, not agent_end: agent_end handlers can queue fresh work
     // whose input-prepared tiers are still pending. Queued user input drains
