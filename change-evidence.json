@@ -314,6 +314,30 @@
         "file": "tests/integration/native-classifier.test.mjs",
         "name": "routes real AgentSession through Pi-native classifier behind a proven deny-all fence"
       }
+    },
+    {
+      "id": "r15-unknown-discovery-preserves-config",
+      "requirement": "R15",
+      "files": [
+        "docs/testing-coverage.md",
+        "scripts/acceptance/journeys.mjs",
+        "tests/reconciliation-command-registered.test.ts",
+        "tests/reconciliation-command-router.test.ts"
+      ],
+      "boundary": "Production command-router path exercised with deterministic fake registry; explicit refresh throws after prior complete evidence, report is stale/advisory, exact user config bytes remain unchanged, no transaction journal appears. This is command-router-boundary evidence, not Pi registration or Pi E2E; POSIX permission denial remains blocked on an enforcing non-root host.",
+      "assertions": "A failed/unknown provider discovery cannot be interpreted as an empty catalog or authorize deletion; report omits private error text, asserts no removal proposal and removal_suppressed warning, preserves exact config bytes, and writes no journal. A disposable commands.ts source copy changes refresh failure status to complete; the exact advisory assertion must go RED with a removal proposal, then restored copied source must return GREEN. The journey points to this command-router boundary.",
+      "boundaryTest": {
+        "file": "tests/reconciliation-command-router.test.ts",
+        "name": "keeps owned memberships when explicit provider discovery fails"
+      },
+      "invariant": {
+        "file": "tests/reconciliation.test.ts",
+        "name": "does not delete memberships when a disabled source has incomplete inventory"
+      },
+      "fault": {
+        "file": "tests/reconciliation-command-router.test.ts",
+        "name": "fault control: complete-on-refresh-failure turns the named advisory assertion RED in an isolated source copy"
+      }
     }
   ]
 }

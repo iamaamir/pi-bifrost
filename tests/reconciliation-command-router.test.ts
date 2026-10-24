@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, createCommandRouter, type BifrostState } from "../commands.ts";
 import { buildInitOwnershipReceipt } from "../reconciliation-command.ts";
@@ -88,8 +89,53 @@ function jsonReport(lines: readonly string[]): Record<string, unknown> {
   return JSON.parse(line.slice(BIFROST_JSON_PREFIX.length)) as Record<string, unknown>;
 }
 
-describe("registered config reconciliation command", () => {
-  it("is discoverable and previews offline, then applies only the exact reviewed source proposal", async () => {
+async function discoveryFailureScenario(createRouter: typeof createCommandRouter) {
+  return withCwd(async (cwd) => {
+    const configDir = join(cwd, ".pi");
+    fs.mkdirSync(configDir, { recursive: true });
+    const configPath = join(configDir, "bifrost.json");
+    const original = Buffer.from(JSON.stringify({ models: { general: ["openai/retired"] }, custom: true }));
+    fs.writeFileSync(configPath, original);
+    fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify(buildInitOwnershipReceipt({ general: ["openai/retired"] })));
+    const h = makeHarness({
+      evidence: { openai: { status: "complete", refreshedAt: Date.now() } },
+      refresh: async () => { throw new Error("PRIVATE_DISCOVERY_FAILURE"); },
+    });
+    const lines = await captureStderr(() => createRouter(h.state)(
+      "config reconcile --tier general --provider openai --refresh --json",
+      h.ctx,
+    ));
+    return {
+      report: jsonReport(lines),
+      configBytes: fs.readFileSync(configPath),
+      original,
+      journalExists: fs.existsSync(join(configDir, "bifrost-reconcile.journal")),
+    };
+  });
+}
+
+function assertFailedDiscoveryIsAdvisory(report: Record<string, unknown>): void {
+  assert.equal(report.status, "advisory", "failed discovery must remain advisory");
+  assert.equal(report.inventoryStatus, "stale");
+  assert.equal(JSON.stringify(report).includes("PRIVATE_DISCOVERY_FAILURE"), false);
+}
+
+function createCommandSourceCopy(label: string): { directory: string; target: string } {
+  const root = dirname(fileURLToPath(new URL("../commands.ts", import.meta.url)));
+  const directory = fs.mkdtempSync(join(tmpdir(), `bifrost-command-router-${label}-`));
+  for (const entry of fs.readdirSync(root)) {
+    if (entry !== "commands.ts" && entry !== ".git") fs.symlinkSync(join(root, entry), join(directory, entry));
+  }
+  return { directory, target: join(directory, "commands.ts") };
+}
+
+async function loadCommandRouterCopy(target: string, label: string): Promise<typeof createCommandRouter> {
+  const loaded = await import(`${pathToFileURL(target).href}?${label}`) as typeof import("../commands.ts");
+  return loaded.createCommandRouter;
+}
+
+describe("config reconciliation command router", () => {
+  it("is listed in command options and previews offline, then applies only the exact reviewed source proposal", async () => {
     assert.ok(BIFROST_COMMAND_OPTIONS.some((item) => item.value === "config reconcile"));
     await withCwd(async (cwd) => {
       const configDir = join(cwd, ".pi");
@@ -124,6 +170,48 @@ describe("registered config reconciliation command", () => {
       assert.ok(fs.existsSync(String((applied.applyResult as { configBackupPath?: string }).configBackupPath)));
       assert.deepEqual(fs.readFileSync(String((applied.applyResult as { configBackupPath?: string }).configBackupPath)), original);
     });
+  });
+
+  it("keeps owned memberships when explicit provider discovery fails", async () => {
+    const result = await discoveryFailureScenario(createCommandRouter);
+    assertFailedDiscoveryIsAdvisory(result.report);
+    assert.equal((result.report.changes as Array<{ kind: string }>).some(({ kind }) => kind === "remove"), false);
+    assert.ok((result.report.warnings as string[]).includes("removal_suppressed"));
+    assert.deepEqual(result.configBytes, result.original);
+    assert.equal(result.journalExists, false);
+  });
+
+  it("fault control: complete-on-refresh-failure turns the named advisory assertion RED in an isolated source copy", async () => {
+    const sourcePath = new URL("../commands.ts", import.meta.url);
+    const original = fs.readFileSync(sourcePath, "utf8");
+    const staleCatch = '    } catch {\n      setRegistryProviderEvidence(state, request.provider, { status: "stale", refreshedAt: Date.now() });\n    } finally {';
+    assert.equal(original.split(staleCatch).length - 1, 1, "refresh failure catch anchor must be unique");
+    const mutant = original.replace(staleCatch, staleCatch.replace('status: "stale"', 'status: "complete"'));
+    assert.notEqual(mutant, original, "controlled fault must change the production command source");
+
+    const scratch = createCommandSourceCopy("fault-control");
+    try {
+      fs.writeFileSync(scratch.target, mutant);
+      const mutantRouter = await loadCommandRouterCopy(scratch.target, "faulted");
+      const mutantResult = await discoveryFailureScenario(mutantRouter);
+      assert.equal(mutantResult.report.status, "ready", "complete inventory mutation should authorize a removal proposal");
+      assert.ok((mutantResult.report.changes as Array<{ kind: string; modelKey: string; disposition: string }>).some(
+        (change) => change.kind === "remove" && change.modelKey === "openai/retired" && change.disposition === "apply",
+      ));
+      assert.throws(() => assertFailedDiscoveryIsAdvisory(mutantResult.report), /failed discovery must remain advisory/u);
+
+      fs.writeFileSync(scratch.target, original);
+      assert.equal(fs.readFileSync(scratch.target, "utf8"), original, "scratch command source must be restored byte-for-byte");
+      const restoredRouter = await loadCommandRouterCopy(scratch.target, "restored");
+      const restoredResult = await discoveryFailureScenario(restoredRouter);
+      assertFailedDiscoveryIsAdvisory(restoredResult.report);
+      assert.equal((restoredResult.report.changes as Array<{ kind: string }>).some(({ kind }) => kind === "remove"), false);
+      assert.deepEqual(restoredResult.configBytes, restoredResult.original);
+      assert.equal(restoredResult.journalExists, false);
+    } finally {
+      fs.rmSync(scratch.directory, { recursive: true, force: true });
+    }
+    assert.equal(fs.readFileSync(sourcePath, "utf8"), original, "production commands.ts must remain untouched");
   });
 
   it("uses the explicit refresh only for preview and keeps provider errors advisory", async () => {
