@@ -113,7 +113,7 @@ const journeys = [
     testFile: "tests/integration/reliability-v2-auto.test.mjs",
     title: "keeps the failed response's exact null context-edit lineage before Auto recovery",
     requirements: ["R03"],
-    boundary: "real Pi v2 Auto recovery with local fake provider, isolated state, and exact persisted branch-entry lineage",
+    boundary: "real Pi v2 Auto recovery with local fake provider, isolated state, and exact persisted branch-entry lineage; config reload and session/branch switches during before-settle are not controlled by this journey",
   },
   {
     id: "pi-owned-error-retry-no-bifrost-replay",
