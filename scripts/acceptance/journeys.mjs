@@ -6,6 +6,13 @@ import { processGroupExists, terminateProcessGroup, verificationGateEnvironment 
 
 const journeys = [
   {
+    id: "r14-local-artifact-privacy",
+    testFile: "tests/integration/command-privacy-acceptance.test.mjs",
+    title: "keeps the debug trace inside an explicit key allowlist and free of canaries",
+    requirements: ["R14"],
+    boundary: "pinned Pi RPC with isolated fake provider; local filesystem artifact audit",
+  },
+  {
     id: "first-use-held-probe-auto-save",
     testFile: "tests/integration/auto-bootstrap-selection.test.mjs",
     title: "keeps the first turn usable during a held probe, then transfers the same save to Auto",
