@@ -61,10 +61,11 @@
         "auto-setup.ts",
         "commands.ts",
         "index.ts",
-        "tests/auto-setup.test.ts"
+        "tests/auto-setup.test.ts",
+        "tests/reconciliation-command-registered.test.ts"
       ],
       "boundary": "Boot, reload, init, and background setup report the structural findings the domain validators own without stopping routing. An unusable source still blocks generation, init, and reconciliation writes.",
-      "assertions": "Boot prints one [bifrost/config] warning line per structural finding and keeps routing. Reload logs the warnings after installing the configuration. A prospective init write stays blocked by unusable diagnostics. Generated bootstrap configuration carries only supported schema versions and no unsupported classifier field.",
+      "assertions": "Boot prints one [bifrost/config] warning line per structural finding and keeps routing. Reload logs the warnings after installing the configuration. A prospective reconciliation write stays blocked by unusable diagnostics and reports the warnings the proposed source would load with before the user commits it. A prospective init write stays blocked by unusable diagnostics. Generated bootstrap configuration carries only supported schema versions and no unsupported classifier field.",
       "boundaryTest": {
         "file": "tests/integration/config-startup-acceptance.test.mjs",
         "name": "blocks generation when a higher supported schema masks an unsupported lower layer"
@@ -153,7 +154,7 @@
         "tests/integration/config-agent-acceptance.test.mjs"
       ],
       "boundary": "The bifrost_config agent tool inspects Pi's real catalog and every config layer, checks a candidate offline, previews bounded route decisions without dispatching, and applies one approved config file atomically through the same reload path as /bifrost reload.",
-      "assertions": "check and preview never write or dispatch; apply writes only after an answered approval, rejects changed candidate bytes, changed selected source, changed layers, changed model inventory, and unsafe sources; the previous config survives a failed write; a saved-but-not-activated write is reported honestly; unknown operations fail closed; config-layer paths come from the shared merge-order helper.",
+      "assertions": "inspect and check report the same structural warnings boot and reload print, without vetoing a write; inspect names every supported schema version and accepts a version-3 source whose reserved description key never becomes a tier; check and preview never write or dispatch; apply writes only after an answered approval, rejects changed candidate bytes, changed selected source, changed layers, changed model inventory, and unsafe sources; the previous config survives a failed write; a saved-but-not-activated write is reported honestly; unknown operations fail closed; config-layer paths come from the shared merge-order helper.",
       "boundaryTest": {
         "file": "tests/integration/config-agent-acceptance.test.mjs",
         "name": "checks, applies through an answered approval, saves one source, and activates it"
