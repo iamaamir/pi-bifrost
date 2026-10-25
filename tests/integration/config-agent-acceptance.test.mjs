@@ -253,9 +253,22 @@ function startRpc({ home, work, port, timeoutMs = 60_000 }) {
   return { prompt, userTurn, close, get records() { return records; }, get stderr() { return stderr; } };
 }
 
-function jsonReport(output) {
-  const line = `${output.stderr}\n${output.stdout ?? ""}`.split("\n").find((item) => item.startsWith("[bifrost-json] "));
-  assert.ok(line, `expected a bifrost JSON report; stderr was:\n${output.stderr}`);
+// The preview marker is written to the child's stderr, which races the RPC
+// response record arriving on stdout: the snapshot captured when the response
+// landed can predate the marker on a loaded machine (seen only under CI load).
+// Poll the live stderr for the marker with a bounded deadline instead of
+// asserting on the snapshot; the `--json` contract guarantees the line.
+async function jsonReport(preview, liveStderr, deadlineMs = 15_000) {
+  const deadline = Date.now() + deadlineMs;
+  const find = (text) => `${text}\n`.split("\n").find((item) => item.startsWith("[bifrost-json] "));
+  let stderr = preview.stderr;
+  let line = find(stderr);
+  while (!line && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    stderr = liveStderr();
+    line = find(stderr);
+  }
+  assert.ok(line, `expected a bifrost JSON report; stderr was:\n${stderr}`);
   return JSON.parse(line.slice("[bifrost-json] ".length));
 }
 
@@ -290,7 +303,7 @@ describe("config agent tool Pi acceptance", { concurrency: 1, timeout: 180_000 }
       // Activation: the reloaded config decides routes offline. Before the
       // change the default tier was `general`; it must now be `agentrole`.
       const preview = await rpc.prompt("/bifrost preview --json route this prompt e2e");
-      const report = jsonReport(preview);
+      const report = await jsonReport(preview, () => rpc.stderr);
       assert.equal(report.tier, "agentrole", JSON.stringify(report));
       assert.equal(report.source, "fallback", JSON.stringify(report));
 
