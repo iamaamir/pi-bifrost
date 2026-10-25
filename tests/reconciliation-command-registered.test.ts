@@ -154,6 +154,29 @@ describe("registered config reconciliation command", () => {
     });
   });
 
+  it("reports the structural warnings a proposed change would carry", async () => {
+    await withCwd(async (cwd) => {
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(join(configDir, "bifrost.json"), JSON.stringify({
+        enabled: true,
+        models: { general: ["manual/model"] },
+        unsupportedField: 1,
+      }));
+      const h = makeHarness({ evidence: { openai: { status: "complete", refreshedAt: Date.now() } } });
+      const lines = await captureStderr(() => createCommandRouter(h.state)(
+        "config reconcile --tier general --provider openai --json",
+        h.ctx,
+      ));
+      assert.equal(jsonReport(lines).status, "ready");
+      // A prospective change that loads with findings must say so before the
+      // user commits it; the committed path reports them through the reload.
+      const warning = lines.find((line) => line.includes("would load with warnings"));
+      assert.ok(warning, `expected a structural warning line, got: ${lines.join(" | ")}`);
+      assert.match(warning!, /Unsupported configuration field "unsupportedField"/);
+    });
+  });
+
   it("does not steal stale locks and shows the operator repair prerequisite on recovery", async () => {
     await withCwd(async (cwd) => {
       const configDir = join(cwd, ".pi");

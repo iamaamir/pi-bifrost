@@ -15,13 +15,13 @@ import { createRequire } from "node:module";
 import {
   BUNDLED_PUBLIC_INIT_DEFAULTS,
   DEFAULT_RULES,
+  DYNAMIC_CONFIG_MAP_PATHS,
   hasExplicitTierPolicy,
   hasExplicitTierPolicies,
   validateConfig,
   validateTierPolicyConfig,
 } from "../config.ts";
 import {
-  DYNAMIC_CONFIG_MAP_PATHS,
   configSchemaDigest,
   stripConfigMetadata,
   validateConfigSourceStructure,

@@ -229,6 +229,39 @@ export function schemaVersionAtLeast(version: unknown, minimum: number): boolean
   return typeof version === "number" && Number.isInteger(version) && version >= minimum;
 }
 
+/** Dynamically keyed configuration maps. In schemaVersion 3 their `description`
+ * key is reserved inline metadata; in versions 1 and 2 it keeps its original
+ * meaning as a user-defined key. This list is the single definition: the
+ * structural validator and the metadata strip in config-schema.ts import it
+ * from here, so a new map cannot drift between the two.
+ *
+ * Paths use dots; each entry addresses the map itself. Schema.json names the
+ * same maps, which is the one copy a test cannot import. */
+export const DYNAMIC_CONFIG_MAP_PATHS: readonly string[] = Object.freeze([
+  "models",
+  "categoryStrategies",
+  "tierPolicies",
+  "classifier.criteria",
+  "economics.scopes",
+  "economics.tierOverrides",
+  "economics.sourceOrder",
+]);
+
+/** The value one dynamically keyed map holds in a merged configuration. */
+function dynamicConfigMap(config: BifrostConfig, path: string): unknown {
+  const economics = (config.economics ?? {}) as unknown as Record<string, unknown>;
+  switch (path) {
+    case "models": return config.models;
+    case "categoryStrategies": return config.categoryStrategies;
+    case "tierPolicies": return config.tierPolicies;
+    case "classifier.criteria": return config.classifier?.criteria;
+    case "economics.scopes": return economics.scopes;
+    case "economics.tierOverrides": return economics.tierOverrides;
+    case "economics.sourceOrder": return economics.sourceOrder;
+    default: return undefined;
+  }
+}
+
 export interface ConfigIssue {
   readonly severity: "error" | "warning";
   readonly message: string;
@@ -690,17 +723,8 @@ export function validateConfig(
   // user-defined key that cannot survive the version bump: reject it with a
   // precise diagnostic instead of reinterpreting or renaming it.
   if (config.schemaVersion === 3) {
-    const economicsRecord = (config.economics ?? {}) as unknown as Record<string, unknown>;
-    const dynamicMaps: ReadonlyArray<readonly [string, unknown]> = [
-      ["models", config.models],
-      ["categoryStrategies", config.categoryStrategies],
-      ["tierPolicies", config.tierPolicies],
-      ["classifier.criteria", config.classifier?.criteria],
-      ["economics.scopes", economicsRecord.scopes],
-      ["economics.tierOverrides", economicsRecord.tierOverrides],
-      ["economics.sourceOrder", economicsRecord.sourceOrder],
-    ];
-    for (const [mapPath, map] of dynamicMaps) {
+    for (const mapPath of DYNAMIC_CONFIG_MAP_PATHS) {
+      const map = dynamicConfigMap(config, mapPath);
       if (criterionObject(map) && Object.hasOwn(map, "description") && typeof map.description !== "string") {
         issues.push({
           severity: "error",

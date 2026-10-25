@@ -13,6 +13,7 @@ import type { RouteRule } from "./routing.ts";
 import {
   BUNDLED_PUBLIC_INIT_DEFAULTS,
   DEFAULT_RULES,
+  DYNAMIC_CONFIG_MAP_PATHS,
   MAX_CONFIG_SOURCE_BYTES,
   SUPPORTED_SCHEMA_VERSIONS,
   mergeConfig,
@@ -23,7 +24,6 @@ import {
   type BifrostConfig,
 } from "./config.ts";
 import {
-  DYNAMIC_CONFIG_MAP_PATHS,
   stripConfigMetadata,
   validateConfigSourceStructure,
   validateEffectiveConfigStructure,
@@ -31,6 +31,17 @@ import {
 
 const MAX_CONFIG_SOURCE_DIAGNOSTICS = 32;
 const MAX_CONFIG_SOURCE_DIAGNOSTIC_CHARS = 192;
+
+/** `reliability.observations` has its own shape check further down, so the
+ * source-local reliability pass excludes this code to avoid reporting the same
+ * field twice under two different messages. */
+const RELIABILITY_OBSERVATIONS_ISSUE = "config.reliability_observations_invalid";
+
+/** Namespaces a single source layer can be judged on without the other layers'
+ * context; any other issue needs the merged policy and is checked there. */
+function isSourceLocalPolicyIssue(code: string | undefined): boolean {
+  return code?.startsWith("config.affinity_") === true || code?.startsWith("config.reliability_") === true;
+}
 
 function criterionObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -125,8 +136,8 @@ function sourcePolicyDiagnostics(value: Record<string, unknown>): string[] {
     ...(affinity === undefined ? {} : { affinity }),
     ...(reliability === undefined ? {} : { reliability }),
   } as BifrostConfig).filter((issue) => issue.severity === "error"
-    && (issue.code?.startsWith("config.affinity_") || issue.code?.startsWith("config.reliability_"))
-    && issue.code !== "config.reliability_observations_invalid");
+    && isSourceLocalPolicyIssue(issue.code)
+    && issue.code !== RELIABILITY_OBSERVATIONS_ISSUE);
   if (sourceIssues.length) add("affinity or reliability contains an invalid source-local policy.");
   const observations = criterionObject(reliability) ? reliability.observations : undefined;
   if (observations !== undefined && (!criterionObject(observations)

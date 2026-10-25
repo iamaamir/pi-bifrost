@@ -19,6 +19,7 @@ import {
   type ConfigAgentInspectResult,
   type ConfigAgentPreviewResult,
 } from "../config-agent.ts";
+import { SUPPORTED_SCHEMA_VERSIONS } from "../config.ts";
 import { loadConfigForReload } from "../config-load.ts";
 import { makeModel } from "./helpers.ts";
 
@@ -1192,6 +1193,69 @@ describe("confirmation-window races and preview fidelity", () => {
       const previewText = contentOf(await harness.run({ operation: "preview", candidate }));
       assert.match(previewText, /proposalDigest: [0-9a-f]{12}/);
       assert.match(previewText, /catalogDigest: [0-9a-f]{12}/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+});
+
+describe("structural findings reach the agent", () => {
+  // Boot and reload print the findings the domain validators own. The tool is
+  // the surface an agent reads, so it must report them too instead of showing a
+  // clean configuration that the CLI would warn about.
+  it("reports load warnings from inspect and check without vetoing the write", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "a",
+        models: { a: ["alpha/strong"] },
+        tierPolicies: { a: { fallbackTiers: [] } },
+        unsupportedField: 1,
+      });
+      const inspected = detailsOf<ConfigAgentInspectResult>(await harness.run({ operation: "inspect" }));
+      assert.ok(inspected.issues.some((issue) => issue.severity === "warning"
+        && /Unsupported configuration field "unsupportedField"/.test(issue.message)), JSON.stringify(inspected.issues));
+      assert.match(contentOf(await harness.run({ operation: "inspect" })), /Unsupported configuration field/);
+
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", patch: { strategy: "cheapest" } }));
+      assert.equal(checked.status, "ok", checked.issues.map((issue) => issue.message).join("; "));
+      assert.equal(checked.writeEligible, true, "a structural warning must not veto the write");
+      assert.ok(checked.issues.some((issue) => issue.severity === "warning"
+        && /Unsupported configuration field "unsupportedField"/.test(issue.message)), JSON.stringify(checked.issues));
+      assert.ok(checked.diagnostics.every((diagnostic) => !/Unsupported configuration field/.test(diagnostic.message)),
+        "a warnable finding is not a layer-rejecting diagnostic");
+      const checkText = contentOf(await harness.run({ operation: "check", patch: { strategy: "cheapest" } }));
+      assert.match(checkText, /warnings:/, "check renders the warnings it reports");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("names every supported schema version and accepts a version-3 source", async () => {
+    const harness = freshHarness();
+    try {
+      const restriction = detailsOf<ConfigAgentInspectResult>(await harness.run({ operation: "inspect" }))
+        .restrictions.find((entry) => /schema versions/.test(entry));
+      assert.ok(restriction, "inspect must state which schema versions it validates");
+      // Pins the text to the constant: adding a version without naming it fails here.
+      assert.match(restriction!, new RegExp(`schema versions ${SUPPORTED_SCHEMA_VERSIONS.join(", ")};`));
+      assert.doesNotMatch(restriction!, /\b1 and 2\b/);
+
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 3,
+        description: "project policy",
+        default: "a",
+        models: { description: "tier metadata", a: ["alpha/strong"] },
+        tierPolicies: { a: { fallbackTiers: [] } },
+      });
+      const inspected = detailsOf<ConfigAgentInspectResult>(await harness.run({ operation: "inspect" }));
+      assert.equal(inspected.routing.schemaVersion, 3);
+      assert.ok(inspected.issues.every((issue) => !/unsupported schemaVersion/i.test(issue.message)), JSON.stringify(inspected.issues));
+      const tiers = inspected.routing.tiers.map((tier) => tier.tier);
+      assert.equal(tiers.includes("a"), true, "the authored tier survives");
+      assert.equal(tiers.includes("description"), false,
+        "the reserved description key never becomes a tier");
     } finally {
       harness.cleanup();
     }

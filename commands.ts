@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
 import type { BifrostConfig, ClassifierConfig } from "./config.ts";
 import { BUNDLED_PUBLIC_INIT_DEFAULTS, DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, MAX_CONFIG_SOURCE_BYTES, PROMPT_ONLY_FIELDS, classifierTotalTimeoutIssue, schemaVersionAtLeast, validateConfig, validateEconomicConfig, validateTierPolicyConfig } from "./config.ts";
-import { loadConfigForReload, loadConfigWithSourceOverride } from "./config-load.ts";
+import { loadConfigForReload, loadConfigWithSourceOverride, type ConfigLoadDiagnostic } from "./config-load.ts";
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
 import { buildRouteDecisionSummary, type ClassificationPipeline, type ClassificationResult, type ClassificationSource, type RouteDecisionSummary } from "./classification-pipeline.ts";
@@ -569,18 +569,35 @@ function setRegistryProviderEvidence(
   });
 }
 
-function prospectiveConfigInstallable(source: ReconciliationConfigSource, bytes: Uint8Array, state: BifrostState): boolean {
+interface ProspectiveConfigValidation {
+  readonly installable: boolean;
+  /** Structural findings reported as warnings: they never veto a write. */
+  readonly warnings: readonly ConfigLoadDiagnostic[];
+}
+
+function prospectiveConfigValidation(
+  source: ReconciliationConfigSource,
+  bytes: Uint8Array,
+  state: BifrostState,
+): ProspectiveConfigValidation {
   const loaded = loadConfigWithSourceOverride(process.cwd(), state.extensionDir, source, bytes);
   // Schema findings the domain validators own are warnings, so they do not veto
   // a write: an unrecognized field the user already carries must not stop init
   // or a classifier change from being saved. Values that make the policy unsafe
   // are caught by the semantic checks below.
-  if (loaded.diagnostics.length > 0) return false;
+  if (loaded.diagnostics.length > 0) return { installable: false, warnings: loaded.warnings };
   const errors = validateTierPolicyConfig(loaded.config).filter((issue) => issue.severity === "error");
   const validation = validateConfig(loaded.config);
   errors.push(...validation.filter((issue) => issue.severity === "error"
     && (issue.code?.startsWith("config.reliability_") || issue.code?.startsWith("config.affinity_"))));
-  return errors.length === 0 && classifierTotalTimeoutIssue(loaded.config) === undefined;
+  return {
+    installable: errors.length === 0 && classifierTotalTimeoutIssue(loaded.config) === undefined,
+    warnings: loaded.warnings,
+  };
+}
+
+function prospectiveConfigInstallable(source: ReconciliationConfigSource, bytes: Uint8Array, state: BifrostState): boolean {
+  return prospectiveConfigValidation(source, bytes, state).installable;
 }
 
 function reconciliationReportLines(report: ReconciliationCommandReport): string[] {
@@ -690,8 +707,15 @@ async function handleReconciliationCommand(args: string, ctx: ExtensionContext, 
   const registry = request.action === "recover"
     ? reconciliationRegistrySnapshot(ctx, state, "")
     : reconciliationRegistrySnapshot(ctx, state, request.provider);
+  // A planned change that would load with structural warnings must say so
+  // before the user commits it; the committed case reloads, which reports them.
+  let prospectiveWarnings: readonly ConfigLoadDiagnostic[] = [];
   const dependencies = {
-    validateMergedConfig: (selected: ReconciliationConfigSource, bytes: Uint8Array) => prospectiveConfigInstallable(selected, bytes, state),
+    validateMergedConfig: (selected: ReconciliationConfigSource, bytes: Uint8Array) => {
+      const validation = prospectiveConfigValidation(selected, bytes, state);
+      prospectiveWarnings = validation.warnings;
+      return validation.installable;
+    },
     apply: applyReconciliationTransaction,
     recover: recoverReconciliationTransaction,
   };
@@ -699,6 +723,9 @@ async function handleReconciliationCommand(args: string, ctx: ExtensionContext, 
     ? (({ refresh: _refresh, ...previewRequest }) => previewRequest)(request)
     : request;
   const report = runReconciliationCommand(planRequest, { source, registry }, dependencies);
+  if (report.status === "ready" && prospectiveWarnings.length > 0) {
+    log(ctx, `Bifrost config would load with warnings: ${prospectiveWarnings.map(({ message }) => message).join(" ")}`, "warning");
+  }
   if (report.status === "committed") {
     const loaded = loadConfigForReload(process.cwd(), state.extensionDir);
     if (!installReloadedConfig(state, loaded, ctx)) {

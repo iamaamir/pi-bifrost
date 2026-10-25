@@ -21,26 +21,12 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import type { ErrorObject, ValidateFunction } from "ajv";
-import type { ConfigIssue } from "./config.ts";
+import { DYNAMIC_CONFIG_MAP_PATHS, type ConfigIssue } from "./config.ts";
 
 // ajv is CommonJS; this project compiles without esModuleInterop, so the
 // constructor is loaded through require, which returns the class directly.
 type AjvLike = { compile(schema: object): ValidateFunction };
 const AjvConstructor = createRequire(import.meta.url)("ajv") as new (options?: object) => AjvLike;
-
-/** Dynamically keyed configuration maps. In schemaVersion 3 their `description`
- * key is reserved inline metadata; in versions 1 and 2 it keeps its original
- * meaning as a user-defined key. Kept in one list so validation and metadata
- * stripping cannot drift apart. Paths use dots; entries address the map. */
-export const DYNAMIC_CONFIG_MAP_PATHS: readonly string[] = Object.freeze([
-  "models",
-  "categoryStrategies",
-  "tierPolicies",
-  "classifier.criteria",
-  "economics.scopes",
-  "economics.tierOverrides",
-  "economics.sourceOrder",
-]);
 
 /** One dynamically keyed map nests further user-keyed data below it:
  * `economics.tierOverrides.<tier>` maps admission rule IDs, and a rule ID

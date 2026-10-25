@@ -26,6 +26,7 @@ import type { ExtensionContext, ExtensionToolContext, ToolDefinition } from "@ea
 import { configLayerPaths, loadConfigForReload, loadConfigWithSourceOverride, loadRules, type ConfigLoadDiagnostic } from "./config-load.ts";
 import {
   MAX_CONFIG_SOURCE_BYTES,
+  SUPPORTED_SCHEMA_VERSIONS,
   classifierTotalTimeoutIssue,
   validateConfig,
   validateTierPolicyConfig,
@@ -521,18 +522,25 @@ export function checkModelReferences(
 interface LoadedConfig {
   readonly config: BifrostConfig;
   readonly diagnostics: readonly ConfigLoadDiagnostic[];
+  /** Structural findings the domain validators own: boot and reload print
+   * these, so the agent's inspect/check/preview report must carry them too. */
+  readonly warnings: readonly ConfigLoadDiagnostic[];
 }
 
 function effectiveConfig(cwd: string, extensionDir: string): LoadedConfig {
   const loaded = loadConfigForReload(cwd, extensionDir);
-  return { config: loaded.config, diagnostics: loaded.diagnostics };
+  return { config: loaded.config, diagnostics: loaded.diagnostics, warnings: loaded.warnings };
 }
 
 function effectiveDigest(config: BifrostConfig): string {
   return sha256(canonicalJson(config as unknown as Record<string, unknown>));
 }
 
-function issuesOf(config: BifrostConfig, diagnostics: readonly ConfigLoadDiagnostic[]): ConfigAgentIssueSummary[] {
+function issuesOf(
+  config: BifrostConfig,
+  diagnostics: readonly ConfigLoadDiagnostic[],
+  warnings: readonly ConfigLoadDiagnostic[] = [],
+): ConfigAgentIssueSummary[] {
   const issues: ConfigAgentIssueSummary[] = [...validateConfig(config), ...validateTierPolicyConfig(config)]
     .map((issue) => ({
       severity: issue.severity,
@@ -542,7 +550,12 @@ function issuesOf(config: BifrostConfig, diagnostics: readonly ConfigLoadDiagnos
     }));
   const timeout = classifierTotalTimeoutIssue(config);
   if (timeout) issues.push({ severity: timeout.severity, ...(timeout.code ? { code: timeout.code } : {}), ...(timeout.path ? { path: timeout.path } : {}), message: timeout.message });
-  for (const diagnostic of diagnostics) issues.push({ severity: "error", code: "config.source_invalid", message: `${diagnostic.layer} config ${diagnostic.message}` });
+  // Loader messages already name their layer ("project config …"), so they are
+  // reported verbatim rather than re-prefixed. Warnings carry no code: the
+  // de-duplication below keys on the code when present, and distinct structural
+  // findings must not collapse into one line.
+  for (const diagnostic of diagnostics) issues.push({ severity: "error", code: "config.source_invalid", message: diagnostic.message });
+  for (const warning of warnings) issues.push({ severity: "warning", message: warning.message });
   const unique = new Map(issues.map((issue) => [`${issue.severity}:${issue.code ?? issue.message}`, issue]));
   return [...unique.values()];
 }
@@ -749,8 +762,9 @@ export function checkConfigCandidate(input: ConfigAgentCheckInput): ConfigAgentC
   const after: LoadedConfig = {
     config: prospective.config,
     diagnostics: prospective.diagnostics.map(({ layer, message }) => ({ layer, message })),
+    warnings: prospective.warnings.map(({ layer, message }) => ({ layer, message })),
   };
-  const issues = issuesOf(after.config, after.diagnostics);
+  const issues = issuesOf(after.config, after.diagnostics, after.warnings);
   const errors = issues.filter((issue) => issue.severity === "error");
   const references = checkModelReferences(after.config, catalog);
   const beforeModels = new Set(tierModelKeys(before.config));
@@ -878,7 +892,7 @@ export async function previewConfigCandidate(input: ConfigAgentPreviewInput): Pr
       now,
       ...(economic ? { economic } : {}),
     });
-} catch (error) {
+  } catch (error) {
     return {
       ...base,
       status: "blocked",
@@ -1021,6 +1035,14 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
     sourcePath: checked.sourcePath,
     changes: checked.changes,
   };
+  /** Every gate that refuses an already-proposed change has the same shape:
+   * nothing was written, and the agent must re-run check. */
+  const stale = (reason: string, note: string): ConfigAgentApplyResult => ({
+    ...withCheck,
+    status: "stale",
+    reason,
+    notes: [note],
+  });
   if (checked.status !== "ok" || checked.proposalDigest === null || checked.guards === null) {
     return {
       ...withCheck,
@@ -1040,41 +1062,21 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
     };
   }
   if (request.proposalDigest !== checked.proposalDigest) {
-    return {
-      ...withCheck,
-      status: "stale",
-      reason: "the candidate bytes no longer match the checked proposal",
-      notes: ["Nothing was written. Run check again and re-confirm the current proposal."],
-    };
+    return stale("the candidate bytes no longer match the checked proposal", "Nothing was written. Run check again and re-confirm the current proposal.");
   }
   const liveSource = readSelectedSource(cwd, extensionDir, checked.source);
   if (liveSource.readError) {
     return { ...withCheck, status: "rejected", reason: `the selected source ${liveSource.readError}`, notes: ["Nothing was written."] };
   }
   if (sourceDigestText(liveSource.digest) !== sourceDigestText(request.sourceDigest)) {
-    return {
-      ...withCheck,
-      status: "stale",
-      reason: "the selected source changed after this proposal was generated",
-      notes: ["Nothing was written. Run check again against the current source."],
-    };
+    return stale("the selected source changed after this proposal was generated", "Nothing was written. Run check again against the current source.");
   }
   const liveEffective = effectiveConfig(cwd, extensionDir);
   if (effectiveDigest(liveEffective.config) !== request.effectiveDigest) {
-    return {
-      ...withCheck,
-      status: "stale",
-      reason: "another configuration source changed after this proposal was generated",
-      notes: ["Nothing was written. Run check again against the current layers."],
-    };
+    return stale("another configuration source changed after this proposal was generated", "Nothing was written. Run check again against the current layers.");
   }
   if (catalogDigest(catalog) !== request.catalogDigest) {
-    return {
-      ...withCheck,
-      status: "stale",
-      reason: "the model inventory changed after this proposal was generated",
-      notes: ["Nothing was written. Run check and preview again against the current catalog."],
-    };
+    return stale("the model inventory changed after this proposal was generated", "Nothing was written. Run check and preview again against the current catalog.");
   }
 
   let approved: boolean;
@@ -1099,38 +1101,18 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
   // open must not be overwritten by the approved proposal.
   const confirmedSource = readSelectedSource(cwd, extensionDir, checked.source);
   if (confirmedSource.readError) {
-    return {
-      ...withCheck,
-      status: "stale",
-      reason: `the selected source ${confirmedSource.readError}`,
-      notes: ["Nothing was written. Run check again against the current source."],
-    };
+    return stale(`the selected source ${confirmedSource.readError}`, "Nothing was written. Run check again against the current source.");
   }
   if (sourceDigestText(confirmedSource.digest) !== sourceDigestText(request.sourceDigest)) {
-    return {
-      ...withCheck,
-      status: "stale",
-      reason: "the selected source changed while the change was awaiting approval",
-      notes: ["Nothing was written. Run check again against the current source."],
-    };
+    return stale("the selected source changed while the change was awaiting approval", "Nothing was written. Run check again against the current source.");
   }
   const confirmedEffective = effectiveConfig(cwd, extensionDir);
   if (effectiveDigest(confirmedEffective.config) !== request.effectiveDigest) {
-    return {
-      ...withCheck,
-      status: "stale",
-      reason: "another configuration source changed while the change was awaiting approval",
-      notes: ["Nothing was written. Run check again against the current sources."],
-    };
+    return stale("another configuration source changed while the change was awaiting approval", "Nothing was written. Run check again against the current sources.");
   }
   const confirmedCatalog = liveCatalog ? liveCatalog() : catalog;
   if (catalogDigest(confirmedCatalog) !== request.catalogDigest) {
-    return {
-      ...withCheck,
-      status: "stale",
-      reason: "the model inventory changed while the change was awaiting approval",
-      notes: ["Nothing was written. Run check and preview again against the current catalog."],
-    };
+    return stale("the model inventory changed while the change was awaiting approval", "Nothing was written. Run check and preview again against the current catalog.");
   }
 
   try {
@@ -1203,7 +1185,8 @@ export function inspectConfigAgent(input: ConfigAgentInspectInput): ConfigAgentI
   const routeFile = routeFileFor(cwd);
   const restrictions = [
     "Only the user, workspace, and project sources are writable. The bundled extension config is Bifrost's default and is never written.",
-    "Bifrost validates against schema versions 1 and 2; other values are rejected.",
+    `Bifrost validates against schema versions ${SUPPORTED_SCHEMA_VERSIONS.join(", ")}; other values are rejected.`,
+    "Unknown fields, invalid values, and wrong types load with a warning that names the path; they never change routing silently.",
     "A route file takes precedence over config `rules` when it exists.",
     "Economic settings are annotated/declared facts. They do not enforce a spend cap.",
     "Bifrost does not manage provider prompt caches and cannot promise cache reuse.",
@@ -1236,7 +1219,7 @@ export function inspectConfigAgent(input: ConfigAgentInspectInput): ConfigAgentI
     status: "ok",
     layers,
     effectiveConfig: loaded.config as unknown as Record<string, unknown>,
-    issues: issuesOf(loaded.config, loaded.diagnostics),
+    issues: issuesOf(loaded.config, loaded.diagnostics, loaded.warnings),
     diagnostics: loaded.diagnostics,
     routing: routingSummary(loaded.config, cwd),
     restrictions,
@@ -1277,7 +1260,7 @@ function catalogFromContext(ctx: ExtensionContext): ConfigAgentCatalog {
 }
 
 const CONFIG_OBJECT_SCHEMA = Type.Record(Type.String(), Type.Unknown(), {
-  description: "A Bifrost config object. Only supported v2 fields are ever written.",
+  description: "A Bifrost config object. Only fields the shipped schema.json supports are ever written.",
 });
 
 const ConfigAgentParameters = Type.Object({

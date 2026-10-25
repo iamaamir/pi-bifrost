@@ -36,7 +36,7 @@ while it exists; the first file found wins.
 | `categoryStrategies` | `{ tier: strategy }` | every key must exist in the merged `models` |
 | `models` | `{ tier: "provider/id" \| ["provider/id", ...] }` | ordered pool; a bare string is also a fuzzy match on id/provider |
 | `rules` | `[{ pattern, model }]` | first matching pattern wins; `model` is a tier name or a `provider/id` |
-| `tierPolicies` | `{ tier: { fallbackTiers: [...] } }` | schemaVersion 2; `[]` is terminal |
+| `tierPolicies` | `{ tier: { fallbackTiers: [...] } }` | schemaVersion 2 or later; `[]` is terminal |
 | `classifier` | see below | enabled by default in the bundled config |
 | `cache`, `debug`, `probe`, `reliability` | see below | operational, not routing shape |
 
@@ -88,7 +88,7 @@ tier. That is deterministic and needs no model call.
 
 ## Affinity
 
-`affinity.mode`: `off`, `observe`, or `retain-within-tier`. Requires schemaVersion 2.
+`affinity.mode`: `off`, `observe`, or `retain-within-tier`. Requires schemaVersion 2 or later.
 Pi Auto defaults to retaining a proven successful model, but retention stays
 inside the tier that resolved last, is a preference over eligible candidates, and
 does not cross tiers or override hard exclusions. Physical routing and the
