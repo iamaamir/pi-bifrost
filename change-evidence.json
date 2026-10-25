@@ -236,6 +236,28 @@
       "fault": {
         "exception": "Documentation-only change with no runtime behavior to execute; there is no production fault to inject."
       }
+    },
+    {
+      "id": "verification-release-gate-budget",
+      "requirement": "R16",
+      "files": [
+        ".github/workflows/verification.yml",
+        "tests/verification-workflow.test.mjs"
+      ],
+      "boundary": "The release-gates job carries a hard job-level timeout that fits the whole four-stage release sequence (acceptance, CRAP trend refresh, proposed-merge acceptance, report uploads) on the slowest hosted runners; a 45-minute budget killed a fully green run mid-stage.",
+      "assertions": "The workflow suite proves release-gates declares timeout-minutes between 60 and 360 minutes, and a controlled rewrite to 45 minutes turns that named budget assertion red while the seven-gate job contract stays intact.",
+      "boundaryTest": {
+        "file": "tests/verification-workflow.test.mjs",
+        "name": "release-gates keeps a hard budget that fits every release stage"
+      },
+      "invariant": {
+        "file": "tests/verification-workflow.test.mjs",
+        "name": "release-gates stays unconditional with all seven gates and the report publishers"
+      },
+      "fault": {
+        "file": "tests/verification-workflow.test.mjs",
+        "name": "fault control: a 45-minute release-gates budget turns the named budget assertion red"
+      }
     }
   ]
 }
