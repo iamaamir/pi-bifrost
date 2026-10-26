@@ -19,6 +19,10 @@ import {
 import { normalizeFailureObservation } from "../failure-observations.ts";
 
 describe("reliability", () => {
+  it("defaults allowance recovery off", () => {
+    assert.equal(DEFAULT_RELIABILITY.retryOnAllowanceExhausted, false);
+  });
+
   it("opens circuit after threshold failures within window", () => {
     const cfg = {
       ...DEFAULT_RELIABILITY,

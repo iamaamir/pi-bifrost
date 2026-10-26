@@ -322,8 +322,8 @@
         },
         "retryOnAllowanceExhausted": {
           "type": "boolean",
-          "description": "Retry at most once on a different configured model only when reliability and cooldownOnAllowanceExhausted are enabled and Pi proves the failed Auto generation had no assistant content, tool calls, tool results, or other activity. The failed response is omitted from the next model context; the raw transcript remains visible.",
-          "default": true
+"description": "Disabled by default. Set true to retry at most once on a different configured model only when reliability and cooldownOnAllowanceExhausted are enabled and Pi proves the failed Auto generation had no assistant content, tool calls, tool results, or other activity. The failed response is omitted from the next model context; the raw transcript remains visible.",
+          "default": false
         },
         "stateVersion": {
           "type": "integer",

@@ -76,6 +76,8 @@ function writeFixture({ home, work, port, models, bifrost, retry = { enabled: fa
     reliability: {
       ...bifrost.reliability,
       allowanceCooldownScope: bifrost.reliability?.allowanceCooldownScope ?? "model",
+      // These recovery-focused cases explicitly opt in; production defaults off.
+      retryOnAllowanceExhausted: bifrost.reliability?.retryOnAllowanceExhausted ?? true,
     },
   };
   mkdirSync(agent, { recursive: true });

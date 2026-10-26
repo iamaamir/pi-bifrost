@@ -51,7 +51,7 @@ flowchart TD
 | R05/R08 | Host/policy-blocked | Audit confirmed no status-closing Bifrost-only witness. R05 needs approved enforcement plus final dispatch veto; R08 needs Pi account binding and account-selectable dispatch. |
 | R12 | Partial | Identify a real existing transport seam before adding coverage. No synthetic transport proof. |
 | R14 | Partial | Identify a real serialization/trace seam before adding coverage. No universal privacy claim. |
-| R03 | Host-blocked | Require Pi lifecycle hook for config/session/branch mutation before recovery settlement. |
+| R03 | Safer default shipped; host-blocked for future automation | Allowance recovery is opt-in while Pi lacks lifecycle hooks for config/session/branch mutation before settlement. |
 | R04 | Host-blocked | Require typed capability observation contract with provenance. |
 | R13 | Policy-blocked | Require approved stable API compatibility contract. |
 | R16 | Finalization work | Run only after candidate freeze; bind artifacts to final SHA. |
@@ -114,3 +114,4 @@ Then continue only one lane. Never infer a gate passed from old artifacts or bra
 | 2026-10-24 | `9b57b9d` | R05/R08 feasibility audit reviewed. | No status-closing Bifrost-only slice exists. Optional R05 tests do not close coverage and are deferred. |
 | 2026-10-24 | `dad67ff` | PR #186 release-gate acceptance failed. | [Verification run 40085083293](https://github.com/iamaamir/pi-bifrost/actions/runs/40085083293) failed because `docs/testing-coverage.md` is declared by both `evidence-rebind-helper` and `r15-unknown-discovery-preserves-config`; remove the duplicate R15 declaration, run focused evidence tests, then return to CI. |
 | 2026-10-24 | `6ebefae` | PR #186 evidence preflight passed; release gate failed. | [Verification run 40089816484](https://github.com/iamaamir/pi-bifrost/actions/runs/40089816484) passed declaration preflight, then failed because pinned-Pi integration and UI smoke still asserted Pi `1.0.1` after baseline moved to `1.4.0`; align those assertions and rerun focused proof. |
+| 2026-10-26 | uncommitted | R03 allowance-recovery safety decision locked. | Default `reliability.retryOnAllowanceExhausted` to `false`; existing recovery remains explicit opt-in until Pi exposes lifecycle hooks that prove config/session/branch stability through settlement. |

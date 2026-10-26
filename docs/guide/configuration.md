@@ -214,7 +214,7 @@ Full configuration file, `.pi/bifrost.json`:
 
 `reliability.allowanceCooldownScope` defaults to `provider`. A usage or billing rejection then pauses all models with the same Pi provider ID. It does not identify shared billing accounts. Set the value to `model` to pause only the model that returned the rejection. Generic HTTP 429 rate limits remain provider-scoped.
 
-`reliability.enabled: false` disables provider pauses. `reliability.cooldownOnAllowanceExhausted: false` disables usage and billing pauses. `reliability.retryOnAllowanceExhausted: false` disables the one bounded Auto retry but keeps the pause. See [reliability and local cache](reliability-and-cache.md#provider-pauses-are-not-account-checks) for status and reset commands.
+`reliability.enabled: false` disables provider pauses. `reliability.cooldownOnAllowanceExhausted: false` disables usage and billing pauses. `reliability.retryOnAllowanceExhausted` defaults to `false`; set it to `true` to opt in to the one bounded Auto retry while keeping the pause. See [reliability and local cache](reliability-and-cache.md#provider-pauses-are-not-account-checks) for status and reset commands.
 
 ## More examples
 

@@ -95,11 +95,11 @@ To stop using the local cache, add `"cache": { "enabled": false }` inside your e
 
 By default, a usage or billing rejection pauses all models with the same configured Pi provider ID. This applies to Auto and physical routing. It does not identify shared billing accounts. Set `reliability.allowanceCooldownScope` to `model` to limit the pause to one model. See [provider pauses](docs/guide/reliability-and-cache.md#provider-pauses-are-not-account-checks).
 
-Auto can try another allowed model once after a usage or billing rejection. Pi must prove the failed turn was empty and safe to continue. The provider pause still applies when you disable the retry. See [Auto routing](docs/guide/auto-routing.md#recover-from-one-empty-allowance-failure) for the full limits.
+Auto can try another allowed model once after a usage or billing rejection only when `reliability.retryOnAllowanceExhausted` is `true`. Pi must prove the failed turn was empty and safe to continue. The provider pause still applies when you disable the retry. See [Auto routing](docs/guide/auto-routing.md#recover-from-one-empty-allowance-failure) for the full limits.
 
 Bifrost saves model failures locally and can stop using a model for a time. Bifrost does not fetch live usage limits from model services. See the [reliability guide](docs/guide/reliability-and-cache.md) and its [migration steps](docs/guide/reliability-and-cache.md#existing-users-migrate-reliability-state). Model changes can reduce prompt-cache reuse. Providers control cache use and billing. See [provider prompt caching](docs/guide/prompt-caching.md).
 
-Set `reliability.retryOnAllowanceExhausted` to `false` to turn off the one Auto retry. Use `/bifrost reliability` to see active provider pauses. See [all commands](docs/guide/commands.md) for how to reset one provider pause.
+Set `reliability.retryOnAllowanceExhausted` to `true` to opt in to the one Auto retry. Use `/bifrost reliability` to see active provider pauses. See [all commands](docs/guide/commands.md) for how to reset one provider pause.
 
 ## Advanced
 

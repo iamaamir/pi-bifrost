@@ -118,13 +118,13 @@ describe("shipped JSON artifacts", () => {
     assert.match(String(property?.description), /ordinary 429 rate limits use a short provider throttle/);
   });
 
-  it("documents the default-on, bounded zero-effect allowance retry and explicit opt-out", () => {
+  it("documents the opt-in, bounded zero-effect allowance retry", () => {
     const schema = readJson("schema.json") as {
       definitions?: { ReliabilityConfig?: { properties?: { retryOnAllowanceExhausted?: { type?: string; default?: unknown; description?: string } } } };
     };
     const property = schema.definitions?.ReliabilityConfig?.properties?.retryOnAllowanceExhausted;
     assert.equal(property?.type, "boolean");
-    assert.equal(property?.default, true);
+    assert.equal(property?.default, false);
     assert.match(String(property?.description), /at most once/);
     assert.match(String(property?.description), /no assistant content/);
     assert.match(String(property?.description), /tool results/);

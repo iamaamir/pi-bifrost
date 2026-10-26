@@ -114,7 +114,7 @@ Set `affinity.mode` to `off` or `observe` when you want to change Auto retention
 
 ## Recover from one empty allowance failure
 
-Auto can make one attempt on a different configured model after an explicit usage or billing rejection. Text that clearly says a subscription is required or expired also counts as a billing rejection; a generic HTTP 403 does not. This recovery is enabled by default when reliability and allowance cooldown are enabled. Set `reliability.retryOnAllowanceExhausted` to `false` to turn off the retry. The provider pause still applies.
+Auto can make one attempt on a different configured model after an explicit usage or billing rejection. Text that clearly says a subscription is required or expired also counts as a billing rejection; a generic HTTP 403 does not. This recovery is disabled by default. Set `reliability.retryOnAllowanceExhausted` to `true` to opt in. The provider pause still applies.
 
 Pi must prove that every failed attempt from the original user turn was empty and came from the same model. Pi must record a null context edit for each earlier failure. This exact edit omits an empty reply from the next request and keeps it in the transcript. The turn must have no tool calls, tool results, queued messages, aborts, or intervening messages. The session, branch, configuration, and manual-control state must stay unchanged. Pi must finish its own bounded retry first. Unknown or unsafe turns stop without recovery.
 

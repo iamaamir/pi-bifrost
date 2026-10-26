@@ -48,8 +48,8 @@ describe("validateConfig", () => {
     assert.ok(unknown.some((issue) => issue.code === "config.requirements_unsupported"));
   });
 
-  it("defaults allowance recovery on and validates its explicit opt-out", () => {
-    assert.deepEqual(validateConfig({ ...baseConfig, reliability: { retryOnAllowanceExhausted: false } }), []);
+  it("keeps allowance recovery opt-in and validates its explicit setting", () => {
+    assert.deepEqual(validateConfig({ ...baseConfig, reliability: { retryOnAllowanceExhausted: true } }), []);
     assert.ok(validateConfig({ ...baseConfig, reliability: { retryOnAllowanceExhausted: "yes" } as never })
       .some((issue) => issue.code === "config.reliability_allowance_retry_invalid"));
   });
