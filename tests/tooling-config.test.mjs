@@ -34,7 +34,7 @@ function stepBlocks(source) {
 function unpinnedActions(source) {
   const findings = [];
   for (const line of source.split("\n")) {
-    const match = /^\s*(?:-\s+)?uses:\s*(\S+)\s*$/.exec(line);
+    const match = /^\s*(?:-\s+)?uses:\s*(\S+)(?:\s+#.*)?\s*$/.exec(line);
     if (!match) continue;
     const reference = match[1];
     if (reference.startsWith("./") || reference.startsWith("docker://")) continue;
@@ -59,6 +59,7 @@ test("pins every external action reference to a full commit SHA", () => {
 
 test("the pin check reports an unpinned action reference", () => {
   assert.deepEqual(unpinnedActions("      - uses: actions/checkout@v4\n"), ["actions/checkout@v4"]);
+  assert.deepEqual(unpinnedActions("      - uses: actions/checkout@v4 # comment\n"), ["actions/checkout@v4"]);
   assert.deepEqual(unpinnedActions("      - uses: ./local-action\n"), []);
 });
 

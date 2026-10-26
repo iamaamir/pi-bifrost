@@ -65,8 +65,13 @@ function binEnv(extraEnv) {
   };
 }
 
+export function toolExecutable(command, platform = process.platform) {
+  if (platform !== "win32") return command;
+  return TOOLS[command]?.package ? `${command}.cmd` : `${command}.exe`;
+}
+
 function spawnCapture(command, args, { cwd = ROOT, env } = {}) {
-  const executable = process.platform === "win32" ? `${command}.cmd` : command;
+  const executable = toolExecutable(command);
   const result = spawnSync(executable, args, {
     cwd,
     env: binEnv(env),
