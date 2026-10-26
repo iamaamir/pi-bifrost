@@ -68,6 +68,8 @@ export interface ClassifierConfig {
   fallback?: "prompt" | "regex";
 }
 
+import { CostConfig } from "./cost/cost-config.ts";
+
 export interface BifrostConfig {
   enabled?: boolean;
   default?: string;
@@ -80,6 +82,7 @@ export interface BifrostConfig {
   debug?: DebugConfig;
   reliability?: ReliabilityConfig;
   probe?: ProbeConfig;
+  cost?: CostConfig;
 }
 
 export const DEFAULT_RULES: RouteRule[] = [
@@ -196,6 +199,9 @@ export function configHasNoPools(config: BifrostConfig): boolean {
   return Object.values(config.models ?? {}).every((pool) => (Array.isArray(pool) ? pool.every(blank) : blank(pool)));
 }
 
+/**
+ * Find configuration errors specifically related to the classifier.
+ */
 export function classifierConfigErrors(config: BifrostConfig, effectiveBackend?: ClassifierBackend): string[] {
   let checked = config;
   if (effectiveBackend && config.classifier?.backend === undefined) {
@@ -213,6 +219,7 @@ export function classifierConfigErrors(config: BifrostConfig, effectiveBackend?:
     .map((issue) => issue.message);
 }
 
+/** Returns true if the classifier configuration has any error-level issues. */
 export function hasClassifierConfigErrors(config: BifrostConfig, effectiveBackend?: ClassifierBackend): boolean {
   return classifierConfigErrors(config, effectiveBackend).length > 0;
 }
@@ -392,6 +399,9 @@ export function validateConfig(
   return issues;
 }
 
+/**
+ * Utility to read and parse a JSON file, swallowing errors.
+ */
 export function readJson<T>(path: string): T | undefined {
   try {
     return readJsonFile<T>(path);
@@ -417,6 +427,9 @@ function criterionObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+/**
+ * Merge two tier criteria sets. Supports null-based deletion of base criteria.
+ */
 function mergeCriteria(
   base: Record<string, TierCriterion> | undefined,
   override: Record<string, TierCriterion> | undefined,
@@ -480,9 +493,13 @@ export function mergeConfig(
   merged.debug = mergeObj(base.debug, override.debug);
   merged.reliability = mergeObj(base.reliability, override.reliability);
   merged.probe = mergeObj(base.probe, override.probe);
+  merged.cost = mergeObj(base.cost, override.cost);
   return merged;
 }
 
+/**
+ * Load and merge Bifrost configuration from standard discovery paths.
+ */
 export function loadConfig(
   cwd: string,
   extensionDir: string,
@@ -513,6 +530,9 @@ export function loadConfig(
   return merged;
 }
 
+/**
+ * Load routing rules from configuration files or fall back to defaults.
+ */
 export function loadRules(cwd: string, config: BifrostConfig): RouteRule[] {
   const routeFiles = [
     join(cwd, CONFIG_DIR_NAME, "bifrost-routes.json"),
