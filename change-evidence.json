@@ -368,6 +368,26 @@
       }
     },
     {
+      "id": "r12-typesafe-prompt-precedence",
+      "requirement": "R12",
+      "files": [
+        "tests/typesafe-prompt-precedence.test.ts"
+      ],
+      "boundary": "The real direct TypeSafe adapter is composed with the real classification pipeline and an injected prompt-classifier seam.",
+      "assertions": "A valid pinned TypeSafe response selects its tier and makes zero prompt fallback calls. An authentication miss from the same direct adapter reaches exactly one prompt fallback call. This proves direct-adapter/pipeline precedence only; it does not claim a pinned-Pi host TypeSafe transport witness.",
+      "boundaryTest": {
+        "file": "tests/typesafe-prompt-precedence.test.ts",
+        "name": "does not invoke prompt fallback after a successful TypeSafe judgment"
+      },
+      "invariant": {
+        "file": "tests/typesafe-prompt-precedence.test.ts",
+        "name": "invokes prompt fallback once after a TypeSafe miss"
+      },
+      "fault": {
+        "exception": "Test-only evidence addition; production transport behavior is unchanged. The named precedence assertions fail if a direct success falls through or a direct miss does not reach the prompt path once."
+      }
+    },
+    {
       "id": "r14-completed-typesafe-trace",
       "requirement": "R14",
       "files": [
