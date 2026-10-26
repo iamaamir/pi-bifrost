@@ -368,6 +368,8 @@
         "package-lock.json",
         "package.json",
         "scripts/verify-release.mjs",
+        "scripts/ui-smoke.py",
+        "tests/integration/dispatch-identity.test.mjs",
         "tests/verification-workflow.test.mjs"
       ],
       "boundary": "The pull-request workflow performs a read-only declaration preflight before the existing release gates, while the pinned Pi baseline, compatibility matrix, release preflight, and operational docs consistently name Pi 1.4.0.",

@@ -779,8 +779,8 @@ def main() -> int:
     try:
         version = subprocess.run([PI, "--version"], capture_output=True, text=True, timeout=5, check=True).stdout.strip()
         print(f"[ui-smoke] using pinned Pi {version}")
-        if version != "1.0.1":
-            raise AssertionError(f"expected pinned Pi 1.0.1, got {version}")
+        if version != "1.4.0":
+            raise AssertionError(f"expected pinned Pi 1.4.0, got {version}")
         captures = [
         ("startup", True, []),
         ("fresh-physical", True, [(1.0, "quick show fresh setup works\r"), (1.0, "/bifrost inspect\r")], None, [], False, True, False, ["healthy"]),
