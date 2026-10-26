@@ -36,7 +36,6 @@ import { reconcileEconomicSnapshot } from "./economic-config.ts";
 import { findCandidates } from "./routing.ts";
 import { createRouter, type RouterModel, type RouterRegistrySnapshot, type RouterSnapshot } from "./router.ts";
 import { writeTextFile } from "./storage.ts";
-import { reportText, shortDigest } from "./config-agent-report.ts";
 import { isGenerativeModel } from "./virtual-model.ts";
 
 // ── Limits ─────────────────────────────────────────────────────
@@ -313,6 +312,12 @@ function serializeSource(object: Record<string, unknown>): string {
  */
 function sourceDigestText(digest: string | null | undefined): string {
   return digest ?? "absent";
+}
+
+/** Short digest form shared by the approval dialog and the rendered report, so
+ * the value a user approves is recognizably the value check printed. */
+export function shortDigest(digest: string | null): string {
+  return digest === null ? "absent" : digest.slice(0, 12);
 }
 
 // ── Source files ───────────────────────────────────────────────
@@ -1244,6 +1249,9 @@ export interface ConfigAgentToolDeps {
   readonly cwd?: () => string;
   readonly now?: () => number;
   readonly write?: (path: string, text: string) => void;
+  /** Render a result for the model. Injected by the host entry so this module
+   * owns policy and IO only and the presentation module stays a leaf. */
+  readonly render: (result: ConfigAgentToolResult) => string;
 }
 
 function catalogFromContext(ctx: ExtensionContext): ConfigAgentCatalog {
@@ -1393,7 +1401,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
           );
       }
       return {
-        content: [{ type: "text", text: reportText(result) }],
+        content: [{ type: "text", text: deps.render(result) }],
         details: result,
         isError: result.status !== "ok",
       };

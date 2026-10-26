@@ -8,6 +8,7 @@ import type { DebugConfig } from "./debug.ts";
 import type { ReliabilityConfig } from "./reliability.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend, type TierCriterion } from "./classifier-backends.ts";
 import { emptyEconomicSnapshot, publishEconomicObservation, validateEconomicPolicy, type EconomicSignal, type ReservePolicy } from "./economic-signals.ts";
+import { SUPPORTED_SCHEMA_VERSIONS, schemaVersionAtLeast } from "./schema-version.ts";
 
 export { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL } from "./classifier-backends.ts";
 export type { ClassifierBackend, TierCriterion } from "./classifier-backends.ts";
@@ -218,16 +219,10 @@ export const ALL_STRATEGIES: readonly RoutingStrategy[] = [
   "fastest",
 ];
 
-/** Schema versions Bifrost accepts. Version 3 keeps every version 2 routing
- * capability and reserves `description` inside dynamically keyed maps. */
-export const SUPPORTED_SCHEMA_VERSIONS = [1, 2, 3] as const;
-
-/** True when the configured schemaVersion is at least `minimum`. An absent or
- * non-integer version counts as version 1 (legacy behavior). Version 3 keeps
- * all version 2 features, so gates written as `=== 2` must use this instead. */
-export function schemaVersionAtLeast(version: unknown, minimum: number): boolean {
-  return typeof version === "number" && Number.isInteger(version) && version >= minimum;
-}
+// The schema-version primitives live in a leaf module so routing.ts can use the
+// gate without creating a config.ts <-> routing.ts import cycle. They are
+// re-exported here because config.ts is the module configuration callers import.
+export { SUPPORTED_SCHEMA_VERSIONS, schemaVersionAtLeast };
 
 /** Dynamically keyed configuration maps. In schemaVersion 3 their `description`
  * key is reserved inline metadata; in versions 1 and 2 it keeps its original

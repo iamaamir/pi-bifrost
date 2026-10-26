@@ -80,6 +80,7 @@ import { ReliabilityV2Store } from "./reliability-v2-store.ts";
 import { loadRuntimeState, runtimeStatePath, saveRuntimeState, isPassiveModelSelection, createSelfSelectTracker } from "./runtime-state.ts";
 import { createCommandRouter, getBifrostCommandCompletions, reloadBifrostConfig, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.ts";
 import { createBifrostConfigTool } from "./config-agent.ts";
+import { reportText } from "./config-agent-report.ts";
 import { setupDebug, debug, debugMeasure, isDebugEnabled, flushDebug } from "./debug.ts";
 import { parseInlineOverride } from "./inline-override.ts";
 import { BIFROST_AUTO_ID, BIFROST_AUTO_PROVIDER, isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
@@ -3207,6 +3208,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     pi.registerTool(createBifrostConfigTool({
       extensionDir,
       reload: (ctx) => reloadBifrostConfig(state, ctx),
+      render: reportText,
     }));
   }
 

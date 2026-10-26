@@ -1,4 +1,4 @@
-import { schemaVersionAtLeast } from "./config.ts";
+import { schemaVersionAtLeast } from "./schema-version.ts";
 import { getCircuitState, type ReliabilityConfig, type ReliabilityState } from "./reliability.ts";
 import { isGenerativeModel } from "./virtual-model.ts";
 import { evaluateReserves, type EconomicSnapshot, type ReserveEvaluation, type ReservePolicy } from "./economic-signals.ts";

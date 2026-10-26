@@ -19,6 +19,7 @@ import {
   type ConfigAgentInspectResult,
   type ConfigAgentPreviewResult,
 } from "../config-agent.ts";
+import { reportText } from "../config-agent-report.ts";
 import { SUPPORTED_SCHEMA_VERSIONS } from "../config.ts";
 import { loadConfigForReload } from "../config-load.ts";
 import { makeModel } from "./helpers.ts";
@@ -89,6 +90,7 @@ function freshHarness(options: HarnessOptions = {}) {
 
   const tool = createBifrostConfigTool({
     extensionDir,
+    render: reportText,
     reload: () => {
       reloadCalls += 1;
       return reloadResult;

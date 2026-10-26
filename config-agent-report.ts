@@ -2,27 +2,24 @@
  * Model-facing text rendering for the Bifrost configuration tool.
  *
  * Pure functions over the tool's result types: no IO, validation, routing, or
- * writes live here. `config-agent.ts` owns policy and IO and imports
- * `reportText` (and `shortDigest`) from this module; the import from
- * `config-agent.ts` below is type-only, so the runtime dependency stays
- * one-directional.
+ * writes live here, and the dependency runs one way. This module imports the
+ * result types (and the shared `shortDigest`) from `config-agent.ts`; the host
+ * entry passes `reportText` back into the tool as its renderer, so
+ * `config-agent.ts` never imports this module.
  */
-import type {
-  ConfigAgentApplyResult,
-  ConfigAgentChange,
-  ConfigAgentCheckResult,
-  ConfigAgentGuards,
-  ConfigAgentInspectResult,
-  ConfigAgentModel,
-  ConfigAgentPreviewResult,
-  ConfigAgentToolResult,
+import {
+  shortDigest,
+  type ConfigAgentApplyResult,
+  type ConfigAgentChange,
+  type ConfigAgentCheckResult,
+  type ConfigAgentGuards,
+  type ConfigAgentInspectResult,
+  type ConfigAgentModel,
+  type ConfigAgentPreviewResult,
+  type ConfigAgentToolResult,
 } from "./config-agent.ts";
 
 const MAX_REPORT_LINES = 120;
-
-export function shortDigest(digest: string | null): string {
-  return digest === null ? "absent" : digest.slice(0, 12);
-}
 
 // ── Rendering ──────────────────────────────────────────────────
 
