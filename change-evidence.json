@@ -21,6 +21,7 @@
         "tests/semgrep/targets/bifrost-no-eval.js",
         "tests/semgrep/targets/bifrost-no-shell-true.js",
         "tests/semgrep/targets/bifrost-no-tls-verification-disable.js",
+        "tests/toolbox.test.mjs",
         "tests/tooling-config.test.mjs",
         "tests/verification-workflow.test.mjs"
       ],
