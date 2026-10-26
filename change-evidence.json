@@ -83,7 +83,8 @@
       "id": "routing-schema-version-gate",
       "requirement": "R17",
       "files": [
-        "routing.ts"
+        "routing.ts",
+        "schema-version.ts"
       ],
       "boundary": "Explicit tier fallback policies apply under every schema version that supports them (2 and 3) and stay inert under version 1, without changing candidate resolution.",
       "assertions": "A version 3 configuration resolves its declared fallback tier exactly like version 2. The semantic validators keep rejecting unsupported versions, unknown tiers, self-links, and cycles.",
@@ -258,62 +259,6 @@
       "fault": {
         "file": "tests/verification-workflow.test.mjs",
         "name": "fault control: a 45-minute release-gates budget turns the named budget assertion red"
-      }
-    },
-    {
-      "id": "toolbox-architecture-boundaries",
-      "requirement": "R16",
-      "files": [
-        ".dependency-cruiser.cjs",
-        "scripts/toolbox.mjs",
-        "tests/toolbox.test.mjs",
-        "package.json",
-        "package-lock.json"
-      ],
-      "boundary": "dependency-cruiser graph over the shipped root modules, including an isolated fixture with a stubbed Pi package",
-      "assertions": "A runtime host-SDK import from router.ts is reported as router-no-runtime-host-sdk; the committed type-only import is accepted; removing the type-only allowance turns the accepted fixture red; findings carry rule, file, and edge; a missing tool is reported as unavailable with an install hint instead of a pass.",
-      "boundaryTest": {
-        "file": "tests/toolbox.test.mjs",
-        "name": "rejects a runtime host-SDK import in the resolve-only router and accepts the type-only form"
-      },
-      "invariant": {
-        "file": "tests/toolbox.test.mjs",
-        "name": "projects dependency-cruiser violations with rule and edge"
-      },
-      "fault": {
-        "file": "tests/toolbox.test.mjs",
-        "name": "the type-only allowance is load-bearing: removing it turns the passing fixture red"
-      }
-    },
-    {
-      "id": "toolbox-dead-code-and-structure",
-      "requirement": "R16",
-      "files": [
-        "knip.jsonc",
-        "sgconfig.yml",
-        "rules/no-console-log-in-extension.yml",
-        "rules/no-process-exit-in-extension.yml",
-        "rules/no-focused-or-skipped-test-javascript.yml",
-        "rules/no-focused-or-skipped-test-typescript.yml",
-        "rule-tests/no-console-log-in-extension-test.yml",
-        "rule-tests/no-process-exit-in-extension-test.yml",
-        "rule-tests/no-focused-or-skipped-test-javascript-test.yml",
-        "rule-tests/no-focused-or-skipped-test-typescript-test.yml",
-        ".github/workflows/static-analysis.yml"
-      ],
-      "boundary": "committed ast-grep rule fixtures plus the shared runner's parsing of Knip, Semgrep, actionlint, gitleaks, and OSV output",
-      "assertions": "All committed ast-grep rules pass four valid/invalid fixture suites; every Knip issue kind flattens to a finding; absent external tools produce exit code 2 and an install hint; the workflow runs architecture, dead-code, and structural checks on pull requests.",
-      "boundaryTest": {
-        "file": "tests/toolbox.test.mjs",
-        "name": "the committed ast-grep rules pass their own valid and invalid fixtures"
-      },
-      "invariant": {
-        "file": "tests/toolbox.test.mjs",
-        "name": "parses every Knip issue kind into one flat finding list"
-      },
-      "fault": {
-        "file": "tests/toolbox.test.mjs",
-        "name": "reports unavailable tools with install hints instead of a false pass"
       }
     }
   ]
