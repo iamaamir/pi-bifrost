@@ -65,8 +65,13 @@ function binEnv(extraEnv) {
   };
 }
 
+export function toolExecutable(command, platform = process.platform) {
+  if (platform !== "win32") return command;
+  return TOOLS[command]?.package ? `${command}.cmd` : `${command}.exe`;
+}
+
 function spawnCapture(command, args, { cwd = ROOT, env } = {}) {
-  const executable = process.platform === "win32" ? `${command}.cmd` : command;
+  const executable = toolExecutable(command);
   const result = spawnSync(executable, args, {
     cwd,
     env: binEnv(env),
@@ -217,6 +222,8 @@ function gitleaksCommand(history) {
         history ? "git" : "dir",
         "--redact",
         "--no-banner",
+        "--config",
+        ".gitleaks.toml",
         "--report-format",
         "json",
         "--report-path",
@@ -247,7 +254,7 @@ export function runAstGrep(runTool) {
   };
 }
 
-const CHECKS = {
+export const CHECKS = {
   arch: {
     tool: "depcruise",
     summary: "Architecture boundaries (dependency-cruiser)",
@@ -280,7 +287,7 @@ const CHECKS = {
     tool: "semgrep",
     summary: "Repository security rules (Semgrep)",
     command: () => ({
-      args: ["scan", "--config", ".semgrep.yml", "--json", "--quiet", "--metrics=off", "--disable-version-check", "."],
+      args: ["scan", "--config", "semgrep/", "--json", "--quiet", "--metrics=off", "--disable-version-check", "."],
     }),
     parse: parseSemgrep,
   },

@@ -46,6 +46,9 @@ function jobCondition(block) {
 function runsFor(condition, eventName, inputs = {}) {
   if (condition === null) return true;
   const expression = condition.replaceAll("github.event_name", "eventName");
+  // The expression is repository-authored workflow YAML, never prompt or
+  // configuration input. Evaluating it is the point of this test.
+  // nosemgrep: bifrost-no-eval
   return Boolean(new Function("eventName", "inputs", `return (${expression});`)(eventName, inputs));
 }
 

@@ -15,6 +15,7 @@ import {
   parseSemgrep,
   runAstGrep,
   summarizeFindings,
+  toolExecutable,
 } from "../scripts/toolbox.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -107,6 +108,12 @@ test("the committed ast-grep rules pass their own valid and invalid fixtures", (
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
   assert.match(result.stdout, /4 passed; 0 failed/);
+});
+
+test("uses npm command shims and native executables on Windows", () => {
+  assert.equal(toolExecutable("knip", "win32"), "knip.cmd");
+  assert.equal(toolExecutable("actionlint", "win32"), "actionlint.exe");
+  assert.equal(toolExecutable("knip", "linux"), "knip");
 });
 
 test("summarizes findings by descending count then rule name", () => {

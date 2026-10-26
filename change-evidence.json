@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "base": "5771bf370a9391d1c2d14022b40df24c7775ca3c",
+  "base": "e9f87420c73a93e95f8d4cef009aa9fbdef830b3",
   "contracts": [
     {
       "id": "structural-config-contract",
