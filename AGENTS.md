@@ -8,6 +8,7 @@ Before non-trivial work, read:
 2. [`docs/product-philosophy.md`](docs/product-philosophy.md) — product guardrails.
 3. Relevant ADRs in [`docs/adr/`](docs/adr/) — proposed ADRs are not implementation approval.
 4. [`ROADMAP.md`](ROADMAP.md) — priority and deferral context.
+5. [`docs/dev-tooling.md`](docs/dev-tooling.md) — checks, CI, and performance commands. Run `npm run toolbox:doctor` for tool availability.
 
 ## Product boundary
 

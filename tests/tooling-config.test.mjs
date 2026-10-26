@@ -134,7 +134,7 @@ function gitleaksScopeProblems(config) {
   return problems;
 }
 
-test("the secret allowlist is scoped to the generic API key rule under tests", () => {
+test("the secret allowlist is scoped to the generic API key rule and exact values", () => {
   assert.deepEqual(gitleaksScopeProblems(readFileSync(join(root, ".gitleaks.toml"), "utf8")), []);
 });
 

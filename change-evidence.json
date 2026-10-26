@@ -1,43 +1,55 @@
 {
   "schemaVersion": 1,
-  "base": "5771bf370a9391d1c2d14022b40df24c7775ca3c",
+  "base": "e9f87420c73a93e95f8d4cef009aa9fbdef830b3",
   "contracts": [
     {
-      "id": "static-analysis-and-security-config",
+      "id": "performance-tooling",
       "requirement": "R16",
       "files": [
-        ".github/workflows/acceptance-report.yml",
-        ".github/workflows/report-publisher-checks.yml",
-        ".github/workflows/security-audit.yml",
-        ".github/workflows/static-analysis.yml",
-        ".github/workflows/verification.yml",
-        ".gitleaks.toml",
-        ".semgrepignore",
-        "renovate.json",
-        "scripts/toolbox.mjs",
-        "semgrep/bifrost-no-eval.yml",
-        "semgrep/bifrost-no-shell-true.yml",
-        "semgrep/bifrost-no-tls-verification-disable.yml",
-        "tests/semgrep/targets/bifrost-no-eval.js",
-        "tests/semgrep/targets/bifrost-no-shell-true.js",
-        "tests/semgrep/targets/bifrost-no-tls-verification-disable.js",
-        "tests/toolbox.test.mjs",
-        "tests/tooling-config.test.mjs",
-        "tests/verification-workflow.test.mjs"
+        "scripts/bench.mjs",
+        "scripts/profile.mjs",
+        "scripts/perf-workload.mjs",
+        "package.json",
+        ".gitignore",
+        "knip.jsonc",
+        "tests/performance-tooling.test.mjs"
       ],
-      "boundary": "committed ast-grep rules and fixtures, Semgrep rules and fixtures, Gitleaks config, Renovate policy, and workflow YAML",
-      "assertions": "Ast-grep rules pass their fixtures; Semgrep rule IDs match fixture names with valid and invalid examples; the secret allowlist is rule-scoped; every action is pinned and every checkout isolates credentials; the dispatch-only audit runs every scanner.",
+      "boundary": "the real deterministic workload process, Hyperfine report parsing, profile command construction, package command surface, and Knip optional-binary configuration",
+      "assertions": "The workload reports the same checksum on repeat runs and selects the expected model; benchmark plans use the committed allowlisted workload with an exported JSON report; profile plans write one artifact with a relative name; package scripts invoke exact benchmark and profiler entry points; Knip ignores Hyperfine without declaring it as an npm dependency; a missing Hyperfine binary exits 2 with an install hint.",
       "boundaryTest": {
-        "file": "tests/tooling-config.test.mjs",
-        "name": "the committed Semgrep rules and fixtures share exact rule identifiers and file names"
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "the deterministic routing workload reports a stable checksum"
       },
       "invariant": {
-        "file": "tests/tooling-config.test.mjs",
-        "name": "every checkout disables credential persistence"
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "builds Hyperfine plans for allowlisted workloads"
       },
       "fault": {
-        "file": "tests/tooling-config.test.mjs",
-        "name": "the credential-persistence check rejects a checkout that omits the setting"
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "RED-proves the Hyperfine workload allowlist implementation fault in an isolated source copy"
+      }
+    },
+    {
+      "id": "developer-tooling-guide",
+      "requirement": "R16",
+      "files": [
+        "docs/dev-tooling.md",
+        "AGENTS.md",
+        "tests/tooling-config.test.mjs"
+      ],
+      "boundary": "the developer guide and agent guide read as repository files and checked against package.json and committed config paths",
+      "assertions": "Every npm script named in the guide exists; every named tool configuration file exists; the guide describes the full security audit as dispatch-only and correctly scopes its Gitleaks exception to exact synthetic values; the agent guide links to the guide and the doctor command; the drift checker rejects an unknown script.",
+      "boundaryTest": {
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "every npm script named in the developer guide exists"
+      },
+      "invariant": {
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "the developer guide names the committed tool configuration files"
+      },
+      "fault": {
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "the command drift check reports an unknown npm script"
       }
     }
   ]
