@@ -85,6 +85,19 @@ Do not implement speculative Bifrost work.
 
 Each request must have an owner, dependency reference, and acceptance condition before dependent Bifrost work starts.
 
+## Blocked-contract request packets
+
+| Requirement | Owner | Dependency | Requested contract | Acceptance condition |
+|---|---|---|---|---|
+| R03 | Pi maintainer | Pi lifecycle API | Emit session, branch, configuration-reload, and manual-model-control changes before failure settlement. | A pinned-Pi test changes each state at the held settlement barrier and Bifrost cancels recovery. |
+| R04 | Pi maintainer | Pi model capability API | Return typed capability facts with source, provenance, and explicit absence values. | A pinned-Pi test observes supported, unsupported, and absent capabilities without Bifrost inference. |
+| R05 | Pi maintainer and Bifrost owner | Pi dispatch API and approved policy | Provide an enforceable final dispatch veto and approve the policy boundary. | A pinned-Pi test rejects a forbidden final dispatch after routing and reports the reason. |
+| R08 | Pi maintainer | Pi account and dispatch API | Bind a model to an opaque account reference and select an eligible account at dispatch. | A pinned-Pi test selects only an allowed account without treating provider IDs as account IDs. |
+| R13 | Bifrost owner | Public API policy | Approve semver, exports, errors, deprecation period, and support boundary. | A documented approval names each item before stable API code or consumer claims ship. |
+| R15 | CI owner | Linux runner | Provide a non-root runner with a mode-bit-enforcing filesystem. | A CI test denies write access through a mode-0500 directory and records the real failure. |
+
+These packets are not implementation approval. Keep each requirement partial until its acceptance condition passes.
+
 ## Candidate freeze protocol
 
 1. Stop all feature/evidence edits.
