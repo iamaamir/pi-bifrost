@@ -1,0 +1,27 @@
+{
+  // Every root module is a published package subpath: package.json exports
+  // "./*" to "*/", and the `files` allowlist ships "*.ts". Treating them as
+  // entries is therefore the accurate reachability model, not a shortcut.
+  // Knip still reports unused and unlisted dependencies, unlisted binaries,
+  // unresolved imports, and duplicate exports.
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "*.ts",
+    "scripts/**/*.mjs",
+    // Tests spawn helper modules by path, so static import tracing cannot see
+    // their entry status. Listing the whole test tree avoids false orphans.
+    "tests/**/*.ts",
+    "tests/**/*.mjs",
+    "tests/**/*.cjs"
+  ],
+  "project": ["*.ts", "scripts/**/*.mjs", "tests/**/*.ts", "tests/**/*.mjs", "tests/**/*.cjs"],
+  "ignore": ["dist/**", "coverage/**", "screenshots/**", "reports/**", "evidence/**", "docs/**", "examples/**"],
+  "ignoreDependencies": [
+    // Stryker resolves testRunner: "command" to this bundled runner. There is
+    // no import site to trace, and installing it separately would duplicate core.
+    "@stryker-mutator/command-runner"
+  ],
+  // Entry exports are the package's public API, so unused exports are not
+  // actionable here. Unused *files* would also be public subpaths.
+  "includeEntryExports": false
+}

@@ -78,7 +78,18 @@
     "release": "node --experimental-strip-types scripts/release.mjs",
     "acceptance": "node scripts/acceptance.mjs",
     "acceptance:deterministic": "node scripts/acceptance-deterministic.mjs",
-    "acceptance:verify": "node scripts/verify-release.mjs"
+    "acceptance:verify": "node scripts/verify-release.mjs",
+    "check:arch": "node scripts/toolbox.mjs arch",
+    "check:dead-code": "node scripts/toolbox.mjs dead-code",
+    "check:ast": "node scripts/toolbox.mjs ast",
+    "ast:scan": "ast-grep scan --config sgconfig.yml",
+    "ast:test": "ast-grep test --skip-snapshot-tests",
+    "check:actions": "node scripts/toolbox.mjs actions",
+    "check:sast": "node scripts/toolbox.mjs sast",
+    "check:secrets": "node scripts/toolbox.mjs secrets",
+    "check:secrets:history": "node scripts/toolbox.mjs secrets-history",
+    "check:deps": "node scripts/toolbox.mjs deps",
+    "toolbox:doctor": "node scripts/toolbox.mjs doctor"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
@@ -98,13 +109,17 @@
     }
   },
   "devDependencies": {
+    "@ast-grep/cli": "^0.51.0",
     "@earendil-works/pi-ai": "1.0.1",
     "@earendil-works/pi-coding-agent": "1.0.1",
     "@stryker-mutator/core": "^10.0.0",
     "@types/node": "^26.1.1",
     "agent-tui": "^1.1.0",
     "c8": "^12.0.0",
+    "dependency-cruiser": "^18.7.0",
     "fast-check": "4.10.2",
+    "knip": "^6.42.1",
+    "typebox": "1.3.27",
     "typescript": "6.0.3"
   },
   "dependencies": {

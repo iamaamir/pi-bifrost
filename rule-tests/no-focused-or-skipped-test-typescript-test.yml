@@ -1,0 +1,9 @@
+id: no-focused-or-skipped-test-typescript
+valid:
+  - test("routes a turn", () => {});
+  - it("records evidence", () => {});
+invalid:
+  - test.skip("routes a turn", () => {});
+  - it.only("records evidence", () => {});
+  - describe.skip("suite", () => {});
+  - test.todo("later");

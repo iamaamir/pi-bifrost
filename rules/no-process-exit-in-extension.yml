@@ -1,0 +1,10 @@
+id: no-process-exit-in-extension
+language: TypeScript
+severity: error
+message: >-
+  process.exit terminates the Pi host process, not just Bifrost. Return an
+  outcome or throw a bounded error instead. Only repository scripts may exit.
+rule:
+  pattern: process.exit($$$ARGS)
+files:
+  - "/*.ts"
