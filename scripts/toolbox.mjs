@@ -217,6 +217,8 @@ function gitleaksCommand(history) {
         history ? "git" : "dir",
         "--redact",
         "--no-banner",
+        "--config",
+        ".gitleaks.toml",
         "--report-format",
         "json",
         "--report-path",
@@ -280,7 +282,7 @@ export const CHECKS = {
     tool: "semgrep",
     summary: "Repository security rules (Semgrep)",
     command: () => ({
-      args: ["scan", "--config", ".semgrep.yml", "--json", "--quiet", "--metrics=off", "--disable-version-check", "."],
+      args: ["scan", "--config", "semgrep/", "--json", "--quiet", "--metrics=off", "--disable-version-check", "."],
     }),
     parse: parseSemgrep,
   },

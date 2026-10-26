@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "base": "de28fcc3966a58499834a22ebdbfdd707181d792",
+  "base": "5771bf370a9391d1c2d14022b40df24c7775ca3c",
   "contracts": [
     {
       "id": "toolbox-architecture-boundaries",

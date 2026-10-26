@@ -1,9 +1,8 @@
 name: Security audit
 
 on:
-  schedule:
-    # Weekly full-history audit. Pull-request checks stay fast and diff-scoped.
-    - cron: "41 5 * * 1"
+  # GitHub schedules run only from default-branch workflow content. This v2
+  # workflow is dispatch-only until equivalent workflow content lands on main.
   workflow_dispatch:
 
 permissions:

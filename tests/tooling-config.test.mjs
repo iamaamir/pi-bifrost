@@ -128,7 +128,8 @@ function gitleaksScopeProblems(config) {
   if (/^\s*\[allowlist\]\s*$/m.test(config)) problems.push("a top-level allowlist would suppress every rule");
   if (!/^\s*\[\[rules\]\]\s*$/m.test(config)) problems.push("no rule-scoped allowlist");
   if (!/^\s*id = "generic-api-key"\s*$/m.test(config)) problems.push("allowlist must target generic-api-key");
-  if (!/paths = \[\s*'''\^tests\/'''\s*\]/.test(config)) problems.push("allowlist must be scoped to tests");
+  if (!/regexes = \[\s*'''\^sk-live-should-never-print\$'''/.test(config)) problems.push("allowlist must contain the exact synthetic canary");
+  if (/paths\s*=/.test(config)) problems.push("allowlist must not exempt a path");
   return problems;
 }
 
@@ -148,9 +149,9 @@ test("Renovate pins action digests and requires approval for major upgrades", ()
   assert.equal(config.packageRules.some((rule) => rule.matchUpdateTypes?.includes("major") && rule.dependencyDashboardApproval === true), true);
 });
 
-test("the scheduled security audit runs history secrets, full SAST, dependencies, and workflow audits", () => {
+test("the dispatch-only security audit runs history secrets, full SAST, dependencies, and workflow audits", () => {
   const workflow = readFileSync(join(workflowDirectory, "security-audit.yml"), "utf8");
-  assert.match(workflow, /cron:/);
+  assert.doesNotMatch(workflow, /schedule:/);
   assert.match(workflow, /check:secrets:history/);
   assert.match(workflow, /semgrep scan --config semgrep\//);
   assert.match(workflow, /osv-scanner-reusable\.yml@[a-f0-9]{40}/);
