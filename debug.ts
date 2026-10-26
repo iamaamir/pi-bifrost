@@ -23,10 +23,8 @@ let debugPath: string | null = null;
 const maxSizeBytes: number = DEFAULT_MAX_SIZE_MB * 1024 * 1024;
 let startupDone = false;
 const patternRunId = process.env.BIFROST_PATTERN_RUN_ID;
-const subagentRunId = process.env.PI_SUBAGENT_RUN_ID;
 const runCorrelation = {
   ...(patternRunId ? { pattern_run_id: patternRunId } : {}),
-  ...(subagentRunId ? { subagent_run_id: subagentRunId } : {}),
 };
 
 // ── Async write buffer ────────────────────────────────────────────

@@ -589,14 +589,18 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     clearBifrostWidgets(ctx);
     // Passive subagent observation — logged even when routing is disabled,
     // so child-session model usage stays visible in debug logs.
-    if (process.env.PI_SUBAGENT_RUN_ID) {
+    // pi-subagents marks child processes with PI_SUBAGENT_CHILD; nothing ever
+    // sets PI_SUBAGENT_RUN_ID, so this check used to be dead code.
+    if (process.env.PI_SUBAGENT_CHILD === "1") {
       debug("input", "subagent", {
         source: "PI-subagent",
-        agent: process.env.PI_SUBAGENT_CHILD_AGENT,
         model: modelKey(ctx.model),
         thinkingLevel: ctx.thinkingLevel,
-        depth: process.env.PI_SUBAGENT_PARENT_DEPTH,
       });
+      // Subagent children pin their own model per launch (parent routing +
+      // subagents.modelScope). Rerouting one here silently overrides that
+      // choice and trips Pi's subagent model verification.
+      return { action: "continue" };
     }
     if (!state.enabled || state.pinned) {
       debug("input", "bypass", { enabled: state.enabled, pinned: state.pinned });
