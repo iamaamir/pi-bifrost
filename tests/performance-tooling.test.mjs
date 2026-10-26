@@ -5,13 +5,14 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { benchPlan, parseHyperfine } from "../scripts/bench.mjs";
+import { benchPlan, parseArgs, parseHyperfine } from "../scripts/bench.mjs";
 import { profilePlan } from "../scripts/profile.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageManifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const scripts = packageManifest.scripts;
 const knipConfig = readFileSync(join(root, "knip.jsonc"), "utf8");
+const gitleaksConfig = readFileSync(join(root, ".gitleaks.toml"), "utf8");
 const guide = readFileSync(join(root, "docs", "dev-tooling.md"), "utf8");
 
 function workload(iterations) {
@@ -35,6 +36,24 @@ test("the deterministic routing workload reports a stable checksum", () => {
   assert.equal(Number.isFinite(first.elapsedMs), true);
 });
 
+test("the deterministic routing workload rejects an unexpected model selection", () => {
+  const source = readFileSync(join(root, "scripts", "perf-workload.mjs"), "utf8");
+  const anchor = "models: { quick: models.map((model) => `${model.provider}/${model.id}`) },";
+  assert.equal(source.split(anchor).length, 2, "workload model-pool anchor must be unique");
+  const copy = join(root, "scripts", `.perf-workload-fault-${process.pid}-${Date.now()}.mjs`);
+  try {
+    writeFileSync(copy, source.replace(anchor, "models: { quick: [...models].reverse().map((model) => `${model.provider}/${model.id}`) },"));
+    const result = spawnSync(process.execPath, ["--experimental-strip-types", copy, "--iterations", "1"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /unexpected selected model: example\/model-9/u);
+  } finally {
+    rmSync(copy, { force: true });
+  }
+});
+
 function assertHyperfinePlans(buildPlan) {
   const route = buildPlan("route", { runs: 4, warmup: 2, stamp: "stamp" });
   assert.equal(route.artifact.endsWith(join("reports", "bench", "route-stamp.json")), true);
@@ -43,8 +62,9 @@ function assertHyperfinePlans(buildPlan) {
   assert.match(route.hyperfineArgs.at(-1), /perf-workload\.mjs --iterations 200000/u,
     "route plan must use committed deterministic workload");
   const projection = buildPlan("projection", { runs: 2, warmup: 1, stamp: "stamp" });
+  assert.equal(projection.artifact.endsWith(join("reports", "bench", "projection-stamp.json")), true);
   assert.match(projection.hyperfineArgs.at(-1), /provider-projection-benchmark\.mjs/u);
-  assert.match(projection.hyperfineArgs.at(-1), /reports[/\\]bench[/\\]projection-stamp\.json/u);
+  assert.match(projection.hyperfineArgs.at(-1), /reports[/\\]bench[/\\]projection-details-stamp\.json/u);
 }
 
 test("builds Hyperfine plans for allowlisted workloads", () => {
@@ -77,7 +97,7 @@ test("RED-proves the Hyperfine workload allowlist implementation fault in an iso
   }
 });
 
-test("parses Hyperfine 2 summary and legacy flat reports", () => {
+test("parses Hyperfine 2 summary and legacy sample counts", () => {
   const modern = parseHyperfine(JSON.stringify({
     results: [{
       command: "node workload",
@@ -86,10 +106,16 @@ test("parses Hyperfine 2 summary and legacy flat reports", () => {
   }));
   assert.deepEqual(modern, { command: "node workload", runs: 5, meanMs: 1250, stddevMs: 100, minMs: 1100, maxMs: 1400 });
   const legacy = parseHyperfine(JSON.stringify({
-    results: [{ command: "node workload", mean: 0.5, stddev: 0.05, min: 0.45, max: 0.6 }],
+    results: [{ command: "node workload", mean: 0.5, stddev: 0.05, min: 0.45, max: 0.6, times: [0.45, 0.5, 0.55] }],
   }));
+  assert.equal(legacy.runs, 3);
   assert.equal(legacy.meanMs, 500);
   assert.equal(legacy.minMs, 450);
+});
+
+test("rejects missing benchmark option values", () => {
+  assert.throws(() => parseArgs(["--runs"]), /--runs requires a positive integer/u);
+  assert.throws(() => parseArgs(["--warmup"]), /--warmup requires a positive integer/u);
 });
 
 test("rejects malformed Hyperfine reports", () => {
@@ -158,6 +184,12 @@ test("package scripts expose on-demand performance entry points", () => {
 test("Knip treats Hyperfine as an optional host binary", () => {
   assert.equal(Object.hasOwn(packageManifest.devDependencies, "hyperfine"), false);
   assert.match(knipConfig, /"ignoreBinaries"\s*:\s*\[[\s\S]*?"hyperfine"/u);
+});
+
+test("the developer guide documents Gitleaks canaries as value-only", () => {
+  assert.match(gitleaksConfig, /id = "generic-api-key"/u);
+  assert.doesNotMatch(gitleaksConfig, /\bpaths\s*=/u);
+  assert.match(guide, /covers only the `generic-api-key`\s+rule\. It ignores two exact synthetic canary values used by redaction fixtures,\s+regardless of file path\. It does not allowlist other values or rules\./u);
 });
 
 test("the developer guide names the committed tool configuration files", () => {

@@ -32,8 +32,8 @@ export const TARGETS = {
   },
 };
 
-function positiveInteger(raw, fallback, maximum, name) {
-  if (raw === undefined) return fallback;
+function positiveInteger(raw, maximum, name) {
+  if (raw === undefined) throw new Error(`${name} requires a positive integer`);
   if (!/^[1-9][0-9]*$/.test(raw)) throw new Error(`${name} requires a positive integer`);
   const value = Number.parseInt(raw, 10);
   if (value > maximum) throw new Error(`${name} must be at most ${maximum}`);
@@ -46,8 +46,8 @@ export function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--json") options.json = true;
-    else if (argument === "--runs") options.runs = positiveInteger(argv[++index], 10, MAX_RUNS, "--runs");
-    else if (argument === "--warmup") options.warmup = positiveInteger(argv[++index], 3, MAX_WARMUP, "--warmup");
+    else if (argument === "--runs") options.runs = positiveInteger(argv[++index], MAX_RUNS, "--runs");
+    else if (argument === "--warmup") options.warmup = positiveInteger(argv[++index], MAX_WARMUP, "--warmup");
     else if (argument === "--help" || argument === "-h") options.help = true;
     else if (argument.startsWith("-")) throw new Error(`Unknown bench flag: ${argument}`);
     else positional.push(argument);
@@ -73,7 +73,7 @@ export function benchPlan(target, { runs, warmup, stamp }) {
     ...definition.nodeFlags,
     join(ROOT, definition.script),
     ...definition.args,
-    ...(target === "projection" ? [join(ROOT, "reports", "bench", `projection-${stamp}.json`)] : []),
+    ...(target === "projection" ? [join(ROOT, "reports", "bench", `projection-details-${stamp}.json`)] : []),
   ];
   return {
     command,
@@ -99,9 +99,11 @@ export function parseHyperfine(raw) {
   const toMs = (value, unit = "second") => value * (unit === "millisecond" ? 1 : unit === "microsecond" ? 0.001 : 1000);
   const mean = wall ? toMs(wall.mean, wall.unit) : toMs(result.mean);
   if (!Number.isFinite(mean)) throw new Error("hyperfine result has no wall-clock mean");
+  const runs = wall?.count ?? result.times?.length;
+  if (!Number.isInteger(runs) || runs < 1) throw new Error("hyperfine result has no sample count");
   return {
     command: result.command,
-    runs: wall?.count ?? results.length,
+    runs,
     meanMs: Number(mean.toFixed(3)),
     stddevMs: Number((wall ? toMs(wall.stddev, wall.unit) : toMs(result.stddev)).toFixed(3)),
     minMs: Number((wall ? toMs(wall.min, wall.unit) : toMs(result.min)).toFixed(3)),

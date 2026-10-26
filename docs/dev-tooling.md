@@ -69,10 +69,9 @@ one `ok:` example. `npm run check:sast` scans the tree; the CI job also runs
 `semgrep --test`, and the Node tests check that rule names and fixture names
 stay aligned.
 
-The Gitleaks allowlist in `.gitleaks.toml` covers only the `generic-api-key` rule under `tests/`,
-where fixtures use synthetic canaries to prove redaction. It does not
-allowlist other rules or other paths. A new secret-like value anywhere else
-still fails the scan.
+The Gitleaks allowlist in `.gitleaks.toml` covers only the `generic-api-key`
+rule. It ignores two exact synthetic canary values used by redaction fixtures,
+regardless of file path. It does not allowlist other values or rules.
 
 ## Continuous integration
 

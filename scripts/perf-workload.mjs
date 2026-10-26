@@ -41,12 +41,15 @@ const router = createRouter({
   now: 1_000_000,
 });
 
+const expectedSelected = "example/model-0";
 const started = process.hrtime.bigint();
 let checksum = 0;
+let selected;
 for (let index = 0; index < iterations; index += 1) {
   const result = await router.resolve({ prompt: `format file ${index}` });
   if (result.status !== "completed") throw new Error(`unexpected resolve status: ${result.status}`);
-  const selected = result.decision.selected ?? "";
+  selected = result.decision.selected ?? "";
+  if (selected !== expectedSelected) throw new Error(`unexpected selected model: ${selected}`);
   checksum = (checksum + selected.length + selected.charCodeAt(0)) >>> 0;
 }
 const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
@@ -56,5 +59,5 @@ process.stdout.write(`${JSON.stringify({
   iterations,
   checksum,
   elapsedMs: Number(elapsedMs.toFixed(3)),
-  selected: "example/model-0",
+  selected,
 })}\n`);

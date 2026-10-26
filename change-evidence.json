@@ -34,10 +34,11 @@
       "requirement": "R16",
       "files": [
         "docs/dev-tooling.md",
-        "AGENTS.md"
+        "AGENTS.md",
+        "tests/tooling-config.test.mjs"
       ],
       "boundary": "the developer guide and agent guide read as repository files and checked against package.json and committed config paths",
-      "assertions": "Every npm script named in the guide exists; every named tool configuration file exists; the guide describes the full security audit as dispatch-only; the agent guide links to the guide and the doctor command; the drift checker rejects an unknown script.",
+      "assertions": "Every npm script named in the guide exists; every named tool configuration file exists; the guide describes the full security audit as dispatch-only and correctly scopes its Gitleaks exception to exact synthetic values; the agent guide links to the guide and the doctor command; the drift checker rejects an unknown script.",
       "boundaryTest": {
         "file": "tests/performance-tooling.test.mjs",
         "name": "every npm script named in the developer guide exists"
