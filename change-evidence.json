@@ -59,7 +59,7 @@
         "tests/semgrep/targets/bifrost-no-tls-verification-disable.js"
       ],
       "boundary": "committed ast-grep rules and fixtures, Semgrep rules and fixtures, Gitleaks config, Renovate policy, and workflow YAML",
-      "assertions": "Ast-grep rules pass their fixtures; Semgrep rule IDs match fixture names with valid and invalid examples; the secret allowlist is rule-scoped; every action is pinned and every checkout isolates credentials; the scheduled audit runs every scanner.",
+      "assertions": "Ast-grep rules pass their fixtures; Semgrep rule IDs match fixture names with valid and invalid examples; the secret allowlist is rule-scoped; every action is pinned and every checkout isolates credentials; the dispatch-only audit runs every scanner.",
       "boundaryTest": {
         "file": "tests/tooling-config.test.mjs",
         "name": "the committed Semgrep rules and fixtures share exact rule identifiers and file names"
