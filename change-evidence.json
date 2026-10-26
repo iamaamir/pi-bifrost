@@ -1,45 +1,7 @@
 {
   "schemaVersion": 1,
-  "base": "5771bf370a9391d1c2d14022b40df24c7775ca3c",
+  "base": "e9f87420c73a93e95f8d4cef009aa9fbdef830b3",
   "contracts": [
-    {
-      "id": "static-analysis-and-security-config",
-      "requirement": "R16",
-      "files": [
-        ".github/workflows/acceptance-report.yml",
-        ".github/workflows/report-publisher-checks.yml",
-        ".github/workflows/security-audit.yml",
-        ".github/workflows/static-analysis.yml",
-        ".github/workflows/verification.yml",
-        ".gitleaks.toml",
-        ".semgrepignore",
-        "renovate.json",
-        "scripts/toolbox.mjs",
-        "semgrep/bifrost-no-eval.yml",
-        "semgrep/bifrost-no-shell-true.yml",
-        "semgrep/bifrost-no-tls-verification-disable.yml",
-        "tests/semgrep/targets/bifrost-no-eval.js",
-        "tests/semgrep/targets/bifrost-no-shell-true.js",
-        "tests/semgrep/targets/bifrost-no-tls-verification-disable.js",
-        "tests/toolbox.test.mjs",
-        "tests/tooling-config.test.mjs",
-        "tests/verification-workflow.test.mjs"
-      ],
-      "boundary": "committed ast-grep rules and fixtures, Semgrep rules and fixtures, Gitleaks config, Renovate policy, and workflow YAML",
-      "assertions": "Ast-grep rules pass their fixtures; Semgrep rule IDs match fixture names with valid and invalid examples; the secret allowlist is rule-scoped; every action is pinned and every checkout isolates credentials; the dispatch-only audit runs every scanner.",
-      "boundaryTest": {
-        "file": "tests/tooling-config.test.mjs",
-        "name": "the committed Semgrep rules and fixtures share exact rule identifiers and file names"
-      },
-      "invariant": {
-        "file": "tests/tooling-config.test.mjs",
-        "name": "every checkout disables credential persistence"
-      },
-      "fault": {
-        "file": "tests/tooling-config.test.mjs",
-        "name": "the credential-persistence check rejects a checkout that omits the setting"
-      }
-    },
     {
       "id": "performance-tooling",
       "requirement": "R16",
