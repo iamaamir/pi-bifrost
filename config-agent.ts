@@ -932,6 +932,7 @@ export async function previewConfigCandidate(input: ConfigAgentPreviewInput): Pr
     }
   }
 
+  const tierNames = new Set(Object.keys(routerConfig.models ?? {}));
   const cases: ConfigAgentPreviewCase[] = [];
   for (const raw of (request.prompts ?? []).slice(0, MAX_PROMPTS)) {
     if (typeof raw !== "string") continue;
@@ -944,12 +945,18 @@ export async function previewConfigCandidate(input: ConfigAgentPreviewInput): Pr
     const decidedBy: ConfigAgentPreviewCase["decidedBy"] = source === "inline" ? "inline_tier_prefix"
       : source === "regex" ? "regex_rule"
         : decision.outcome === "unclassified" ? "none" : "default_tier";
-    // A regex rule, an inline tier prefix, and (with the classifier off) the default
-    // tier are all decided without a classifier call. Anything else depends on the
-    // live classifier that this offline preview deliberately does not invoke.
-    const confidence: ConfigAgentPreviewCase["confidence"] = decidedBy === "inline_tier_prefix" || decidedBy === "regex_rule"
-      ? "deterministic"
-      : decision.outcome !== "unclassified" && !classifiersCanChangeRoutes ? "deterministic" : "classifier_dependent";
+    // An inline tier prefix is decided before any classification, and a rule that
+    // names a physical model is applied before the pipeline ever calls a classifier,
+    // so both are deterministic. A rule that names a tier only runs after the live
+    // classifier (see classification-pipeline.ts), so with classification enabled
+    // this offline case shows the classifier-free fallback, not the live route.
+    const ruleNamesModel = typeof decision.classification.tier === "string"
+      && decision.classification.tier.includes("/")
+      && !tierNames.has(decision.classification.tier);
+    const confidence: ConfigAgentPreviewCase["confidence"] =
+      decidedBy === "inline_tier_prefix" || (decidedBy === "regex_rule" && ruleNamesModel)
+        ? "deterministic"
+        : decision.outcome !== "unclassified" && !classifiersCanChangeRoutes ? "deterministic" : "classifier_dependent";
     cases.push({
       prompt,
       decidedBy,
@@ -1118,6 +1125,20 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
   const confirmedCatalog = liveCatalog ? liveCatalog() : catalog;
   if (catalogDigest(confirmedCatalog) !== request.catalogDigest) {
     return stale("the model inventory changed while the change was awaiting approval", "Nothing was written. Run check and preview again against the current catalog.");
+  }
+  // The digests above cover one source, the merged result, and the catalog. A
+  // layer that a higher-precedence layer currently masks is invisible to the
+  // merged digest, yet it becomes visible as soon as this change removes the
+  // masking value. Recompose the approved candidate against the live layers and
+  // require the result the user approved, so a masked edit cannot surface here.
+  const recomposed = checkConfigCandidate(input);
+  if (
+    recomposed.status !== "ok"
+    || recomposed.effectiveAfter === null
+    || effectiveDigest(recomposed.effectiveAfter as unknown as BifrostConfig)
+      !== effectiveDigest(checked.effectiveAfter as unknown as BifrostConfig)
+  ) {
+    return stale("the configuration layers no longer compose to the result this proposal was approved with", "Nothing was written. Run check again against the current layers.");
   }
 
   try {

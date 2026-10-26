@@ -464,8 +464,35 @@ describe("preview is offline, deterministic, and non-mutating", () => {
       }));
       const byPrompt = new Map(details.cases.map((entry) => [entry.prompt, entry]));
       assert.equal(byPrompt.get("make the change")?.confidence, "classifier_dependent");
-      assert.equal(byPrompt.get("please review this diff")?.confidence, "deterministic");
+      // A tier regex rule runs only after the live classifier, so an enabled
+      // classifier can replace this tier; the case must not claim certainty.
+      assert.equal(byPrompt.get("please review this diff")?.decidedBy, "regex_rule");
+      assert.equal(byPrompt.get("please review this diff")?.confidence, "classifier_dependent");
       assert.ok(details.notes.some((note) => /classifier/.test(note)));
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("marks a rule that binds a physical model deterministic even with the classifier enabled", async () => {
+    const harness = freshHarness();
+    try {
+      const details = detailsOf<ConfigAgentPreviewResult>(await harness.run({
+        operation: "preview",
+        candidate: {
+          schemaVersion: 2,
+          default: "implement",
+          models: { implement: ["beta/code"], review: ["gamma/review"] },
+          classifier: { enabled: true },
+          rules: [{ pattern: "\\bpin\\b", model: "alpha/strong" }],
+        },
+        prompts: ["pin this file"],
+      }));
+      const pinned = details.cases.find((entry) => entry.prompt === "pin this file");
+      // Routing applies a direct model binding before any classifier call.
+      assert.equal(pinned?.decidedBy, "regex_rule");
+      assert.equal(pinned?.confidence, "deterministic");
+      assert.equal(pinned?.selected, "alpha/strong");
     } finally {
       harness.cleanup();
     }
@@ -1069,6 +1096,38 @@ describe("confirmation-window races and preview fidelity", () => {
       assert.equal(applied.status, "stale");
       assert.match(applied.reason ?? "", /another configuration source changed/);
       assert.equal(harness.readFile(".pi/bifrost.json"), undefined);
+      assert.equal(harness.reloadCalls(), 0);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("rejects the write when a masked layer changes while approval is open", async () => {
+    let hook: (() => void) | undefined = undefined;
+    const harness = freshHarness({ confirmHook: () => hook?.() });
+    try {
+      // The workspace default is masked by the project default, so no merged
+      // digest can show a workspace edit. Removing the project default is
+      // exactly what exposes the workspace value.
+      harness.writeFile("bifrost.json", {
+        schemaVersion: 2,
+        default: "frontier",
+        models: { frontier: ["alpha/strong"], quick: ["alpha/strong"] },
+      });
+      harness.writeFile(".pi/bifrost.json", { schemaVersion: 2, default: "general", models: { general: ["beta/code"] } });
+      const candidate = { schemaVersion: 2, models: { general: ["beta/code"] } };
+      const { details } = await checkedCandidate(harness, { candidate });
+      const approved = details.effectiveAfter?.default;
+      assert.equal(approved, "frontier", "the approved result comes from the masked workspace layer");
+      hook = () => harness.writeFile("bifrost.json", {
+        schemaVersion: 2,
+        default: "quick",
+        models: { frontier: ["alpha/strong"], quick: ["alpha/strong"] },
+      });
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
+      assert.equal(applied.status, "stale");
+      assert.match(applied.reason ?? "", /compose/);
+      assert.match(harness.readFile(".pi/bifrost.json") ?? "", /general/, "the approved source is untouched");
       assert.equal(harness.reloadCalls(), 0);
     } finally {
       harness.cleanup();
