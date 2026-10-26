@@ -1,15 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { benchPlan, parseHyperfine } from "../scripts/bench.mjs";
 import { profilePlan } from "../scripts/profile.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const scripts = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts;
+const packageManifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+const scripts = packageManifest.scripts;
+const knipConfig = readFileSync(join(root, "knip.jsonc"), "utf8");
 const guide = readFileSync(join(root, "docs", "dev-tooling.md"), "utf8");
 
 function workload(iterations) {
@@ -33,15 +35,46 @@ test("the deterministic routing workload reports a stable checksum", () => {
   assert.equal(Number.isFinite(first.elapsedMs), true);
 });
 
-test("builds Hyperfine plans for allowlisted workloads", () => {
-  const route = benchPlan("route", { runs: 4, warmup: 2, stamp: "stamp" });
+function assertHyperfinePlans(buildPlan) {
+  const route = buildPlan("route", { runs: 4, warmup: 2, stamp: "stamp" });
   assert.equal(route.artifact.endsWith(join("reports", "bench", "route-stamp.json")), true);
   assert.equal(route.hyperfineArgs.includes("--export-json"), true);
   assert.equal(route.hyperfineArgs.includes("4"), true);
-  assert.match(route.hyperfineArgs.at(-1), /perf-workload\.mjs --iterations 200000/u);
-  const projection = benchPlan("projection", { runs: 2, warmup: 1, stamp: "stamp" });
+  assert.match(route.hyperfineArgs.at(-1), /perf-workload\.mjs --iterations 200000/u,
+    "route plan must use committed deterministic workload");
+  const projection = buildPlan("projection", { runs: 2, warmup: 1, stamp: "stamp" });
   assert.match(projection.hyperfineArgs.at(-1), /provider-projection-benchmark\.mjs/u);
   assert.match(projection.hyperfineArgs.at(-1), /reports[/\\]bench[/\\]projection-stamp\.json/u);
+}
+
+test("builds Hyperfine plans for allowlisted workloads", () => {
+  assertHyperfinePlans(benchPlan);
+});
+
+test("RED-proves the Hyperfine workload allowlist implementation fault in an isolated source copy", async () => {
+  const source = readFileSync(join(root, "scripts", "bench.mjs"), "utf8");
+  const anchor = 'script: "scripts/perf-workload.mjs",';
+  assert.equal(source.split(anchor).length, 2, "workload allowlist anchor must be unique");
+  const directory = mkdtempSync(join(tmpdir(), "bifrost-bench-fault-"));
+  const copy = join(directory, "bench.mjs");
+  try {
+    assertHyperfinePlans(benchPlan);
+    const mutant = source.replace(anchor, 'script: "scripts/not-allowlisted-workload.mjs",');
+    writeFileSync(copy, mutant);
+    const broken = await import(pathToFileURL(copy).href);
+    assert.throws(() => assertHyperfinePlans(broken.benchPlan), (error) => error?.name === "AssertionError"
+      && /route plan must use committed deterministic workload/u.test(error.message),
+    "mutated implementation must turn named workload assertion RED");
+
+    writeFileSync(copy, source);
+    const restored = await import(`${pathToFileURL(copy).href}?restored`);
+    assertHyperfinePlans(restored.benchPlan);
+    assert.equal(readFileSync(copy, "utf8"), source, "source copy must restore byte-for-byte");
+    assert.equal(readFileSync(join(root, "scripts", "bench.mjs"), "utf8"), source,
+      "committed benchmark implementation must remain untouched");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("parses Hyperfine 2 summary and legacy flat reports", () => {
@@ -112,12 +145,33 @@ test("the command drift check reports an unknown npm script", () => {
   assert.deepEqual(missingScripts("Run `npm run not-a-script`.", scripts), ["not-a-script"]);
 });
 
+test("package scripts expose on-demand performance entry points", () => {
+  assert.deepEqual(Object.fromEntries(["bench", "bench:projection", "profile:cpu", "profile:heap"]
+    .map((name) => [name, scripts[name]])), {
+    bench: "node scripts/bench.mjs route",
+    "bench:projection": "node scripts/bench.mjs projection",
+    "profile:cpu": "node scripts/profile.mjs cpu",
+    "profile:heap": "node scripts/profile.mjs heap",
+  });
+});
+
+test("Knip treats Hyperfine as an optional host binary", () => {
+  assert.equal(Object.hasOwn(packageManifest.devDependencies, "hyperfine"), false);
+  assert.match(knipConfig, /"ignoreBinaries"\s*:\s*\[[\s\S]*?"hyperfine"/u);
+});
+
 test("the developer guide names the committed tool configuration files", () => {
   const paths = [".dependency-cruiser.cjs", "knip.jsonc", "sgconfig.yml", "semgrep/", ".gitleaks.toml", "renovate.json", ".github/workflows/static-analysis.yml"];
   for (const path of paths) {
     assert.equal(guide.includes(path), true, `guide must mention ${path}`);
     assert.equal(existsSync(join(root, path)), true, `${path} must exist`);
   }
+});
+
+test("the developer guide describes the full security audit as dispatch-only", () => {
+  assert.match(guide, /\[`security-audit\.yml`\]\(\.\.\/\.github\/workflows\/security-audit\.yml\) \| Manual dispatch \|/u);
+  assert.match(guide, /The dispatch-only workflow scans\s+everything/u);
+  assert.doesNotMatch(guide, /weekly full-history|full scan weekly|Weekly schedule/u);
 });
 
 test("the agent guide links to the developer tooling guide", () => {

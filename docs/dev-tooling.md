@@ -79,11 +79,11 @@ still fails the scan.
 | Workflow | Trigger | Checks |
 | --- | --- | --- |
 | [`static-analysis.yml`](../.github/workflows/static-analysis.yml) | Pull request, push to `main`/`v2` | architecture, dead code, ast-grep, actionlint, Zizmor, Semgrep (baseline diff), Gitleaks, OSV (diff) |
-| [`security-audit.yml`](../.github/workflows/security-audit.yml) | Weekly schedule, manual | full-history Gitleaks, full Semgrep, full OSV, actionlint, Zizmor |
+| [`security-audit.yml`](../.github/workflows/security-audit.yml) | Manual dispatch | full-history Gitleaks, full Semgrep, full OSV, actionlint, Zizmor |
 | [`verification.yml`](../.github/workflows/verification.yml) | Pull request, push, schedule | existing acceptance, UI, compatibility, and mutation gates |
 
 Pull-request security checks are diff-scoped where the tool supports it, so
-old findings do not block unrelated work. The scheduled workflow scans
+old findings do not block unrelated work. The dispatch-only workflow scans
 everything and fails on any finding.
 
 Actions are pinned to full commit SHAs with a version comment. Checkout steps
@@ -128,8 +128,8 @@ benchmark target.
 | dependency-cruiser | Integrate | Enforces the documented adapter and router seams |
 | Difftastic | On demand | Reviewer choice, not a gate |
 | Semgrep | Integrate | Local rules with self-tests; baseline diff in pull requests |
-| Gitleaks | Integrate | Pull-request scan and weekly full-history scan |
-| OSV-Scanner | Integrate | Diff scan on pull requests, full scan weekly |
+| Gitleaks | Integrate | Pull-request scan and dispatch-only full-history scan |
+| OSV-Scanner | Integrate | Diff scan on pull requests, dispatch-only full scan |
 | GitHub CLI | Reuse | Agent and maintainer environment only |
 | actionlint | Integrate | Fast gate on every workflow change |
 | Zizmor | Integrate | Workflow security, now clean with two documented ignores |

@@ -9,11 +9,13 @@
         "scripts/bench.mjs",
         "scripts/profile.mjs",
         "scripts/perf-workload.mjs",
+        "package.json",
         ".gitignore",
+        "knip.jsonc",
         "tests/performance-tooling.test.mjs"
       ],
-      "boundary": "the real deterministic workload process, Hyperfine report parsing, and profile command construction",
-      "assertions": "The workload reports the same checksum on repeat runs and selects the expected model; benchmark plans use the committed workload with an exported JSON report; profile plans write one artifact with a relative name; a missing Hyperfine binary exits 2 with an install hint; the workload is allowlisted and Knip does not treat the optional host tool as an npm dependency.",
+      "boundary": "the real deterministic workload process, Hyperfine report parsing, profile command construction, package command surface, and Knip optional-binary configuration",
+      "assertions": "The workload reports the same checksum on repeat runs and selects the expected model; benchmark plans use the committed allowlisted workload with an exported JSON report; profile plans write one artifact with a relative name; package scripts invoke exact benchmark and profiler entry points; Knip ignores Hyperfine without declaring it as an npm dependency; a missing Hyperfine binary exits 2 with an install hint.",
       "boundaryTest": {
         "file": "tests/performance-tooling.test.mjs",
         "name": "the deterministic routing workload reports a stable checksum"
@@ -24,7 +26,7 @@
       },
       "fault": {
         "file": "tests/performance-tooling.test.mjs",
-        "name": "reports a missing Hyperfine binary as unavailable"
+        "name": "RED-proves the Hyperfine workload allowlist implementation fault in an isolated source copy"
       }
     },
     {
@@ -35,7 +37,7 @@
         "AGENTS.md"
       ],
       "boundary": "the developer guide and agent guide read as repository files and checked against package.json and committed config paths",
-      "assertions": "Every npm script named in the guide exists; every named tool configuration file exists; the agent guide links to the guide and the doctor command; the drift checker rejects an unknown script.",
+      "assertions": "Every npm script named in the guide exists; every named tool configuration file exists; the guide describes the full security audit as dispatch-only; the agent guide links to the guide and the doctor command; the drift checker rejects an unknown script.",
       "boundaryTest": {
         "file": "tests/performance-tooling.test.mjs",
         "name": "every npm script named in the developer guide exists"
