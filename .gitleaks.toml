@@ -1,0 +1,10 @@
+# Extend the maintained default ruleset. Only exact synthetic credential
+# canaries used by redaction fixtures are allowlisted.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+[rules.allowlist]
+description = "Exact synthetic credential canaries used by redaction fixtures."
+regexes = ['''^sk-live-should-never-print$''', '''^eyJhbGciOiJIUzI1NiJ9\.payload\.signature$''']

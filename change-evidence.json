@@ -1,61 +1,43 @@
 {
   "schemaVersion": 1,
-  "base": "de28fcc3966a58499834a22ebdbfdd707181d792",
+  "base": "5771bf370a9391d1c2d14022b40df24c7775ca3c",
   "contracts": [
     {
-      "id": "toolbox-architecture-boundaries",
+      "id": "static-analysis-and-security-config",
       "requirement": "R16",
       "files": [
-        ".dependency-cruiser.cjs",
+        ".github/workflows/acceptance-report.yml",
+        ".github/workflows/report-publisher-checks.yml",
+        ".github/workflows/security-audit.yml",
+        ".github/workflows/static-analysis.yml",
+        ".github/workflows/verification.yml",
+        ".gitleaks.toml",
+        ".semgrepignore",
+        "renovate.json",
         "scripts/toolbox.mjs",
+        "semgrep/bifrost-no-eval.yml",
+        "semgrep/bifrost-no-shell-true.yml",
+        "semgrep/bifrost-no-tls-verification-disable.yml",
+        "tests/semgrep/targets/bifrost-no-eval.js",
+        "tests/semgrep/targets/bifrost-no-shell-true.js",
+        "tests/semgrep/targets/bifrost-no-tls-verification-disable.js",
         "tests/toolbox.test.mjs",
-        "package.json",
-        "package-lock.json"
+        "tests/tooling-config.test.mjs",
+        "tests/verification-workflow.test.mjs"
       ],
-      "boundary": "dependency-cruiser graph over the shipped root modules, including an isolated fixture with a stubbed Pi package",
-      "assertions": "A runtime host-SDK import from router.ts is reported as router-no-runtime-host-sdk; the committed type-only import is accepted; removing the type-only allowance turns the accepted fixture red; findings carry rule, file, and edge; a missing tool is reported as unavailable with an install hint instead of a pass.",
+      "boundary": "committed ast-grep rules and fixtures, Semgrep rules and fixtures, Gitleaks config, Renovate policy, and workflow YAML",
+      "assertions": "Ast-grep rules pass their fixtures; Semgrep rule IDs match fixture names with valid and invalid examples; the secret allowlist is rule-scoped; every action is pinned and every checkout isolates credentials; the dispatch-only audit runs every scanner.",
       "boundaryTest": {
-        "file": "tests/toolbox.test.mjs",
-        "name": "rejects a runtime host-SDK import in the resolve-only router and accepts the type-only form"
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the committed Semgrep rules and fixtures share exact rule identifiers and file names"
       },
       "invariant": {
-        "file": "tests/toolbox.test.mjs",
-        "name": "projects dependency-cruiser violations with rule and edge"
+        "file": "tests/tooling-config.test.mjs",
+        "name": "every checkout disables credential persistence"
       },
       "fault": {
-        "file": "tests/toolbox.test.mjs",
-        "name": "the type-only allowance is load-bearing: removing it turns the passing fixture red"
-      }
-    },
-    {
-      "id": "toolbox-dead-code-and-structure",
-      "requirement": "R16",
-      "files": [
-        "knip.jsonc",
-        "sgconfig.yml",
-        "rules/no-console-log-in-extension.yml",
-        "rules/no-process-exit-in-extension.yml",
-        "rules/no-focused-or-skipped-test-javascript.yml",
-        "rules/no-focused-or-skipped-test-typescript.yml",
-        "rule-tests/no-console-log-in-extension-test.yml",
-        "rule-tests/no-process-exit-in-extension-test.yml",
-        "rule-tests/no-focused-or-skipped-test-javascript-test.yml",
-        "rule-tests/no-focused-or-skipped-test-typescript-test.yml",
-        ".github/workflows/static-analysis.yml"
-      ],
-      "boundary": "committed ast-grep rule fixtures plus the shared runner's parsing of Knip, Semgrep, actionlint, gitleaks, and OSV output",
-      "assertions": "All committed ast-grep rules pass four valid/invalid fixture suites; every Knip issue kind flattens to a finding; absent external tools produce exit code 2 and an install hint; the workflow runs architecture, dead-code, and structural checks on pull requests.",
-      "boundaryTest": {
-        "file": "tests/toolbox.test.mjs",
-        "name": "the committed ast-grep rules pass their own valid and invalid fixtures"
-      },
-      "invariant": {
-        "file": "tests/toolbox.test.mjs",
-        "name": "parses every Knip issue kind into one flat finding list"
-      },
-      "fault": {
-        "file": "tests/toolbox.test.mjs",
-        "name": "reports unavailable tools with install hints instead of a false pass"
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the credential-persistence check rejects a checkout that omits the setting"
       }
     }
   ]
