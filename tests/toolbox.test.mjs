@@ -13,6 +13,7 @@ import {
   parseKnip,
   parseOsv,
   parseSemgrep,
+  runAstGrep,
   summarizeFindings,
 } from "../scripts/toolbox.mjs";
 
@@ -82,6 +83,19 @@ test("parses ast-grep, Semgrep, actionlint, and OSV output shapes", () => {
   assert.deepEqual(parseOsv(JSON.stringify({
     results: [{ source: { path: "package-lock.json" }, packages: [{ package: { name: "pkg", version: "1.0.0" }, vulnerabilities: [{ id: "GHSA-1" }] }] }],
   })), [{ rule: "GHSA-1", file: "package-lock.json", line: null, message: "pkg@1.0.0:" }]);
+});
+
+test("fails ast checks when scan exits without findings", () => {
+  let calls = 0;
+  const result = runAstGrep(() => {
+    calls += 1;
+    return calls === 1
+      ? { missing: false, status: 0, stdout: "", stderr: "" }
+      : { missing: false, status: 1, stdout: "", stderr: "scan crashed" };
+  });
+  assert.equal(result.status, 1);
+  assert.deepEqual(result.findings, []);
+  assert.match(result.stderr, /scan crashed/);
 });
 
 test("the committed ast-grep rules pass their own valid and invalid fixtures", () => {

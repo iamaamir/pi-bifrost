@@ -230,6 +230,23 @@ function gitleaksCommand(history) {
   };
 }
 
+export function runAstGrep(runTool) {
+  const tests = runTool("ast-grep", ["test", "--skip-snapshot-tests"]);
+  if (tests.missing) return tests;
+  const scan = runTool("ast-grep", ["scan", "--config", "sgconfig.yml", "--json"]);
+  if (scan.missing) return scan;
+  const findings = parseAstGrep(scan.stdout);
+  if (tests.status !== 0) {
+    findings.push({ rule: "ast-grep-rule-tests", file: "rule-tests", line: null, message: tail(tests.stdout || tests.stderr, 2000) });
+  }
+  return {
+    ...scan,
+    status: tests.status !== 0 || scan.status !== 0 || findings.length > 0 ? 1 : 0,
+    findings,
+    stderr: `${tests.stderr ?? ""}${scan.stderr ?? ""}`,
+  };
+}
+
 const CHECKS = {
   arch: {
     tool: "depcruise",
@@ -246,17 +263,7 @@ const CHECKS = {
   ast: {
     tool: "ast-grep",
     summary: "Structural rules and rule self-tests (ast-grep)",
-    run: (runTool) => {
-      const tests = runTool("ast-grep", ["test", "--skip-snapshot-tests"]);
-      if (tests.missing) return tests;
-      const scan = runTool("ast-grep", ["scan", "--config", "sgconfig.yml", "--json"]);
-      if (scan.missing) return scan;
-      const findings = parseAstGrep(scan.stdout);
-      if (tests.status !== 0) {
-        findings.push({ rule: "ast-grep-rule-tests", file: "rule-tests", line: null, message: tail(tests.stdout || tests.stderr, 2000) });
-      }
-      return { ...scan, status: findings.length === 0 ? 0 : 1, findings };
-    },
+    run: runAstGrep,
   },
   actions: {
     tool: "actionlint",
@@ -317,7 +324,7 @@ function executeCheck(name, definition) {
       const result = definition.run((command, args) => spawnCapture(command, args));
       if (result.missing) return unavailable(name, definition);
       const findings = result.findings ?? [];
-      return envelope(name, definition, result.status, findings, started);
+      return envelope(name, definition, result.status, findings, started, result.stderr);
     }
     const plan = definition.command(temp);
     const result = spawnCapture(definition.tool, plan.args);
