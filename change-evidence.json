@@ -368,6 +368,26 @@
       }
     },
     {
+      "id": "r14-completed-typesafe-trace",
+      "requirement": "R14",
+      "files": [
+        "tests/typesafe-classifier.test.ts"
+      ],
+      "boundary": "A deterministic direct TypeSafe classifier with debug enabled receives a successful fake response and writes its local JSONL trace.",
+      "assertions": "The completed trace has exactly start, attempt, request, response, decoded, success, and finish lifecycle events under one random trace ID. It records only routing metadata; prompt, criteria, credential, and response-status-text canaries are absent. This proves the direct adapter trace only, not Pi host serialization or arbitrary multimodal payload privacy.",
+      "boundaryTest": {
+        "file": "tests/typesafe-classifier.test.ts",
+        "name": "records a completed TypeSafe trace without request, response, or credential content"
+      },
+      "invariant": {
+        "file": "tests/typesafe-classifier.test.ts",
+        "name": "records a completed TypeSafe trace without request, response, or credential content"
+      },
+      "fault": {
+        "exception": "Test-only evidence addition; existing direct-classifier implementation is unchanged. The exact lifecycle and canary assertions fail if a completed trace omits an event or retains protected content."
+      }
+    },
+    {
       "id": "r16-pi-1-4-baseline-and-evidence-preflight",
       "requirement": "R16",
       "files": [

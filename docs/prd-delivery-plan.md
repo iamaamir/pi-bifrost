@@ -50,7 +50,7 @@ flowchart TD
 | R15 discovery failure | Reviewed in `905793c` | Keep partial: real POSIX denial requires non-root mode-enforcing host. |
 | R05/R08 | Host/policy-blocked | Audit confirmed no status-closing Bifrost-only witness. R05 needs approved enforcement plus final dispatch veto; R08 needs Pi account binding and account-selectable dispatch. |
 | R12 | Partial | Identify a real existing transport seam before adding coverage. No synthetic transport proof. |
-| R14 | Partial | Identify a real serialization/trace seam before adding coverage. No universal privacy claim. |
+| R14 | Partial; bounded direct evidence added | Direct TypeSafe completed trace is content-free; host-mediated and multimodal serialization remain unproven. |
 | R03 | Safer default shipped; host-blocked for future automation | Allowance recovery is opt-in while Pi lacks lifecycle hooks for config/session/branch mutation before settlement. |
 | R04 | Host-blocked | Require typed capability observation contract with provenance. |
 | R13 | Policy-blocked | Require approved stable API compatibility contract. |

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setupDebug } from "../debug.ts";
+import { flushDebug, setupDebug } from "../debug.ts";
 import {
   TYPESAFE_MODEL,
   TYPESAFE_SYSTEMONE_URL,
@@ -296,6 +296,48 @@ describe("TypeSafe classifier", () => {
       assert.doesNotMatch(trace, /prompt-sentinel|criteria-sentinel|api-key-sentinel|transport-error-sentinel/);
       assert.match(trace, /"event":"transport_error"/);
       assert.match(trace, /"category":"network"/);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("records a completed TypeSafe trace without request, response, or credential content", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-typesafe-success-trace-"));
+    const path = join(cwd, "trace.jsonl");
+    try {
+      setupDebug({ enabled: true, path }, cwd);
+      const classifier = createTypeSafeClassifier({
+        apiKey: "api-key-sentinel",
+        debug: true,
+        maxAttempts: 1,
+        fetchImpl: async () => new Response(JSON.stringify(payload("frontier", 0.92)), {
+          status: 200,
+          statusText: "response-sentinel",
+        }),
+      });
+      const judgment = await classifier({
+        prompt: "prompt-sentinel",
+        tiers: ["quick", "general", "frontier"],
+        criteria: { quick: "criteria-sentinel", general: "normal", frontier: "complex" },
+      });
+      await flushDebug();
+
+      assert.equal(judgment?.tier, "frontier");
+      const traceText = readFileSync(path, "utf8");
+      const trace = traceText.trim().split("\n").map((line) => JSON.parse(line));
+      const events = trace.map((entry) => entry.event);
+      assert.deepEqual(events, ["start", "attempt", "request", "response", "decoded", "success", "finish"]);
+      assert.equal(new Set(trace.map((entry) => entry.trace_id)).size, 1);
+      assert.deepEqual(trace.at(-1), {
+        ...trace.at(-1),
+        event: "finish",
+        outcome: "success",
+        attempts: 1,
+        tier: "frontier",
+        confidence: 0.92,
+      });
+      assert.equal(trace.find((entry) => entry.event === "decoded")?.valid, true);
+      assert.doesNotMatch(traceText, /prompt-sentinel|criteria-sentinel|api-key-sentinel|response-sentinel/);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
