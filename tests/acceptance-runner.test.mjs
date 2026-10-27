@@ -683,6 +683,7 @@ describe("acceptance runner boundary", () => {
         cleanupVerified = cleanupVerified && result.processCleanupFailed === false;
         assert.equal(result.processCleanupFailed, false, "actual caller owned cleanup must be proven before source-copy reclaim");
         assert.ok([0, 1].includes(result.status), "timeout or signal is not valid caller fault evidence");
+        assert.ok(Date.now() <= deadline, "actual caller proof exceeded its overall deadline");
         return result;
       } catch (error) {
         cleanupVerified = false;

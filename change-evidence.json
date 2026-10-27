@@ -3,7 +3,7 @@
   "base": "67485613b6e394834c7919925ba9560a3762eaf9",
   "contracts": [
     {
-      "id": "manual-workflow-caller-context",
+      "id": "push-workflow-caller-context",
       "requirement": "R16",
       "files": [
         "tests/acceptance-runner.test.mjs"
