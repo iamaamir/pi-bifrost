@@ -106,7 +106,7 @@ test("evidence preflight runs only on pull requests before release gates", () =>
   assert.ok(block, "evidence preflight job must exist");
   assert.equal(jobCondition(block), "github.event_name == 'pull_request'");
   assert.match(block, /^ {4}timeout-minutes: 5$/mu);
-  assert.match(block, /uses: actions\/checkout@v4/u);
+  assert.match(block, /uses: actions\/checkout@[0-9a-f]{40} # v4/u);
   assert.match(block, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/u);
   assert.match(block, /fetch-depth: 0/u);
   assert.match(block, /node scripts\/acceptance\/evidence-rebind\.mjs "\$\{\{ github\.event\.pull_request\.base\.sha \}\}"/u);
