@@ -363,7 +363,13 @@ function installAutoSafetyConfig({ home, work, port, models, quick, general, hea
     categoryStrategies: { quick: "first", general: "first", frontier: "first" },
     classifier: { enabled: false },
     models: { quick, general: general ?? [healthy], frontier: [] },
-    ...(stateVersion === 2 ? { reliability: { stateVersion: 2, failureThreshold: 1, windowMinutes: 10, cooldownMinutes: 1 } } : {}),
+    reliability: {
+      ...(stateVersion === 2 ? { stateVersion: 2 } : {}),
+      retryOnAllowanceExhausted: true,
+      failureThreshold: 1,
+      windowMinutes: 10,
+      cooldownMinutes: 1,
+    },
     ...(debug ? { debug: { enabled: true, path: ".pi/bifrost-debug.jsonl" } } : {}),
   }));
 }
