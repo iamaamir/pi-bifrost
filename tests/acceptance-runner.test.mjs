@@ -629,7 +629,20 @@ describe("acceptance runner boundary", () => {
     }
     symlinkSync(realpathSync(join(root, "node_modules")), join(checkout, "node_modules"), "dir");
     const predecessor = JSON.parse(readFileSync(join(checkout, "change-evidence.json"), "utf8")).base;
-    git("add", "--", "scripts/merge-controller.mjs", "scripts/acceptance.mjs", "scripts/acceptance/core.mjs", "tests/integration/fake-provider-ownership.test.mjs", "tests/merge-controller.test.mjs", "tests/acceptance-runner.test.mjs", "change-evidence.json");
+    // Own the declaration too: contributor witnesses may recursively select
+    // this caller proof. A unique fixture witness still detects lost selection.
+    const witnessFile = "tests/workflow-caller-fixture.test.mjs";
+    const witnessName = "owned workflow declaration witness";
+    writeFileSync(join(checkout, witnessFile), 'import { test } from "node:test"; import assert from "node:assert/strict";\ntest(' + JSON.stringify(witnessName) + ', () => assert.equal(process.env.GITHUB_EVENT_NAME, "push"));\n');
+    const fixtureFiles = [...git("diff", "--name-only", "--no-renames", predecessor).split("\n").filter((file) => file && file !== "change-evidence.json"), witnessFile];
+    writeFileSync(join(checkout, "change-evidence.json"), JSON.stringify({ schemaVersion: 1, base: predecessor, contracts: [{
+      id: "owned-workflow-caller", requirement: "R16", files: fixtureFiles,
+      boundary: "owned actual workflow caller declaration", assertions: "Exact selected witness and event context reach the real validator",
+      boundaryTest: { file: witnessFile, name: witnessName },
+      invariant: { file: "tests/change-evidence.test.mjs", name: "event-driven push and pull request bases fail closed despite competing env" },
+      fault: { file: "tests/change-evidence.test.mjs", name: "fault control: selecting HEAD parent instead of event.before turns push base RED" },
+    }] }, null, 2) + "\n");
+    git("add", "--", "scripts/merge-controller.mjs", "scripts/acceptance.mjs", "scripts/acceptance/core.mjs", "tests/integration/fake-provider-ownership.test.mjs", "tests/merge-controller.test.mjs", "tests/acceptance-runner.test.mjs", "change-evidence.json", witnessFile);
     const merged = execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit-tree", git("write-tree"), "-p", predecessor, ...(topology === "multi" ? ["-p", head] : [])], {
       cwd: checkout, input: "synthetic merged push\n", encoding: "utf8",
     }).trim();
@@ -650,23 +663,27 @@ describe("acceptance runner boundary", () => {
     const launcher = join(directory, "gate-launcher.mjs");
     writeFileSync(launcher, [
       'import { spawnSync } from "node:child_process";',
+      'import assert from "node:assert/strict";',
       `import { verificationGateEnvironment } from ${JSON.stringify(pathToFileURL(join(checkout, "scripts/acceptance/core.mjs")).href)};`,
       `const { env } = verificationGateEnvironment({ root: ${JSON.stringify(checkout)}, artifactDir: ${JSON.stringify(join(directory, "gate-artifacts"))}, script: "test" });`,
+      'assert.equal(env.GITHUB_EVENT_NAME, process.argv[2], "the unit gate must preserve the actual event context");',
+      `assert.equal(env.GITHUB_EVENT_PATH, ${JSON.stringify(eventPath)}, "the unit gate must preserve the actual event payload");`,
       'const result = spawnSync(process.execPath, ["--test", "--test-name-pattern=workflow acceptance CLI records actual-predecessor change evidence with bounded gates", "tests/acceptance-runner.test.mjs"], { env, stdio: "inherit", timeout: ' + JSON.stringify(CALLER_PHASE_BUDGET_MS) + ' });',
       'process.exit(result.status ?? 1);',
     ].join("\n"));
     // The submitted gate environment, not a direct synthetic child environment,
     // must carry the push payload into the real unit caller.
-    const runCallerTest = async () => {
+    const runCallerTest = async (eventName = "push") => {
       try {
         const remainingMs = deadline - Date.now();
         assert.ok(remainingMs > 0, "actual caller proof must stay inside its overall deadline");
-        const result = await runChild(process.execPath, [launcher], {
-          cwd: checkout, env, timeoutMs: Math.min(CALLER_PHASE_BUDGET_MS + 5_000, remainingMs),
+        const result = await runChild(process.execPath, [launcher, eventName], {
+          cwd: checkout, env: { ...env, GITHUB_EVENT_NAME: eventName }, timeoutMs: Math.min(CALLER_PHASE_BUDGET_MS + 5_000, remainingMs),
         });
         cleanupVerified = cleanupVerified && result.processCleanupFailed === false;
         assert.equal(result.processCleanupFailed, false, "actual caller owned cleanup must be proven before source-copy reclaim");
         assert.ok([0, 1].includes(result.status), "timeout or signal is not valid caller fault evidence");
+        assert.ok(Date.now() <= deadline, "actual caller proof exceeded its overall deadline");
         return result;
       } catch (error) {
         cleanupVerified = false;
@@ -685,7 +702,7 @@ describe("acceptance runner boundary", () => {
     writeFileSync(corePath, coreSource.replace(contextKeys, ""));
     const contextRed = await runCallerTest();
     assert.notEqual(contextRed.status, 0, contextRed.stdout + contextRed.stderr);
-    assert.match(contextRed.stdout, /the declaration base must be the actual merge predecessor/);
+    assert.match(contextRed.stdout + contextRed.stderr, /the unit gate must preserve the actual event context/);
     writeFileSync(corePath, coreSource);
     assert.equal(readFileSync(corePath, "utf8"), coreSource);
 
@@ -780,9 +797,8 @@ describe("acceptance runner boundary", () => {
     const root = process.cwd();
     const manifest = JSON.parse(readFileSync(join(root, "change-evidence.json"), "utf8"));
     const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
-    // On a merged push checkout origin/v2 may already equal HEAD. Only the
-    // real push payload records the historic predecessor; local PR proof uses
-    // the current delivery merge base instead.
+    // Push uses its delivery predecessor; local caller proof uses its current
+    // delivery merge base before exercising the real validator with wrong bases.
     const predecessor = process.env.GITHUB_EVENT_NAME === "push"
       ? JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8")).before
       : git("merge-base", "origin/v2", "HEAD");
