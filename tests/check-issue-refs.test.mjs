@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
-import { checkReferences, classify, extractCitedPaths, parseArgs, resolveRef } from "../scripts/check-issue-refs.mjs";
+import { checkReferences, classify, extractCitedPaths, parseArgs, remoteProbe, resolveRef } from "../scripts/check-issue-refs.mjs";
 
 function fixtureRoot(files = ["AGENTS.md"]) {
   const root = mkdtempSync(join(tmpdir(), "bifrost-issue-refs-"));
@@ -65,7 +66,7 @@ describe("cited path extraction", () => {
   });
 
   it("ignores Markdown code blocks and traversal paths", () => {
-    const body = "```text\nscripts/\n+└── check-issue-refs.mjs\n```\nRead ../outside.md and `AGENTS.md`.";
+    const body = "```text\nscripts/\n+└── check-issue-refs.mjs\n```\n~~~text\ntests/check-issue-refs.test.mjs\n~~~\nRead ../outside.md and `AGENTS.md`.";
     assert.deepEqual(extractCitedPaths(body), ["AGENTS.md"]);
   });
 });
@@ -132,6 +133,22 @@ describe("reference checks", () => {
     );
   });
 
+  it("RED-proves local-only citations do not fail without --require-remote", async () => {
+    const sourcePath = fileURLToPath(new URL("../scripts/check-issue-refs.mjs", import.meta.url));
+    const source = readFileSync(sourcePath, "utf8");
+    const anchor = "failures: requireRemote ? [...missing, ...unpublished] : missing";
+    assert.equal(source.split(anchor).length, 2, "classify fault anchor must be unique");
+    const mutant = join(tmpdir(), `bifrost-issue-refs-fault-${process.pid}-${Date.now()}.mjs`);
+    writeFileSync(mutant, source.replace(anchor, "failures: [...missing, ...unpublished]"));
+    try {
+      const module = await import(pathToFileURL(mutant).href);
+      const results = [{ path: "roadmap-next.md", local: true, remote: false }];
+      assert.throws(() => assert.deepEqual(module.classify(results).failures, []), assert.AssertionError);
+    } finally {
+      rmSync(mutant, { force: true });
+    }
+  });
+
   it("leaves the remote unknown when no probe is supplied", () => {
     const results = checkReferences(["AGENTS.md"], { root: fixtureRoot() });
     assert.equal(results[0].local, true);
@@ -146,6 +163,18 @@ describe("reference checks", () => {
     assert.deepEqual(missing.map((result) => result.path), [path]);
     assert.deepEqual(unpublished, []);
     assert.deepEqual(classify(results, { requireRemote: true }).failures.map((r) => r.path), [path]);
+  });
+});
+
+describe("remote probe", () => {
+  it("treats only a confirmed 404 as an absent remote path", () => {
+    const failure = (status) => () => {
+      const error = new Error(`HTTP ${status}`);
+      error.stderr = `gh: response (HTTP ${status})`;
+      throw error;
+    };
+    assert.equal(remoteProbe("owner/repo", "v2", failure(404))("AGENTS.md"), false);
+    assert.throws(() => remoteProbe("owner/repo", "v2", failure(502))("AGENTS.md"), /HTTP 502/u);
   });
 });
 

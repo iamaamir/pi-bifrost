@@ -51,7 +51,7 @@ const CITED_PATH = new RegExp(
  */
 export function extractCitedPaths(body) {
   const paths = new Set();
-  const prose = String(body).replace(/^```[\s\S]*?^```\s*$/gm, "");
+  const prose = String(body).replace(/^(?:```|~~~)[\s\S]*?^(?:```|~~~)\s*$/gm, "");
   for (const match of prose.matchAll(CITED_PATH)) {
     // A sentence-ending period is punctuation, not part of the path.
     const path = match[1].replace(/^\.\//, "").replace(/\.+$/, "");
@@ -119,12 +119,12 @@ function gh(args) {
   return execFileSync("gh", args, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-function remoteProbe(repo, ref) {
+export function remoteProbe(repo, ref, request = (args) => execFileSync("gh", args, {
+  stdio: ["ignore", "ignore", "pipe"],
+})) {
   return (path) => {
     try {
-      execFileSync("gh", ["api", `repos/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`], {
-        stdio: "ignore",
-      });
+      request(["api", `repos/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`]);
       return true;
     } catch (error) {
       if (/\bHTTP 404\b/u.test(String(error.stderr ?? error.message))) return false;

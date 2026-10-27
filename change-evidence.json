@@ -21,7 +21,7 @@
       },
       "fault": {
         "file": "tests/check-issue-refs.test.mjs",
-        "name": "fails a local-only citation only when remote publication is required"
+        "name": "RED-proves local-only citations do not fail without --require-remote"
       }
     },
     {
