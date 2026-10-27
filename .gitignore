@@ -16,3 +16,6 @@ docs/adr/*
 reports/
 .stryker-tmp/
 evidence/
+
+*.cpuprofile
+*.heapprofile

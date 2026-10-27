@@ -21,6 +21,11 @@
     // no import site to trace, and installing it separately would duplicate core.
     "@stryker-mutator/command-runner"
   ],
+  "ignoreBinaries": [
+    // Optional host tool for on-demand benchmarks, documented in
+    // docs/dev-tooling.md. It is not an npm dependency by design.
+    "hyperfine"
+  ],
   // Entry exports are the package's public API, so unused exports are not
   // actionable here. Unused *files* would also be public subpaths.
   "includeEntryExports": false
