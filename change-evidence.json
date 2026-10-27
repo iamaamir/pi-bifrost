@@ -285,6 +285,7 @@
         "reliability.ts",
         "scripts/acceptance/journeys.mjs",
         "tests/fixtures/replay-fault-control.mjs",
+        "tests/integration/release-acceptance.test.mjs",
         "tests/integration/reliability-v2-auto.test.mjs",
         "tests/reliability.test.ts",
         "tests/reliability-v2-runtime.test.ts"
