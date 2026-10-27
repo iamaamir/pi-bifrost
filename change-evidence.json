@@ -5,9 +5,7 @@
     {
       "id": "push-workflow-caller-context",
       "requirement": "R16",
-      "files": [
-        "tests/acceptance-runner.test.mjs"
-      ],
+      "files": [],
       "boundary": "Real workflow acceptance CLI through a sanitized gate with owned single-commit and merge-parent push topologies",
       "assertions": "Push event.before remains authoritative; wrong bases and lost context or declaration selection fail named assertions, and exact restoration returns GREEN",
       "boundaryTest": {
