@@ -56,12 +56,11 @@
       "files": [
         "classification-pipeline.ts",
         "routing.ts",
-        "commands.ts",
         "tests/integration/decision-parity-acceptance.test.mjs",
         "tests/routing.test.ts"
       ],
       "boundary": "Pinned Pi runtime and offline preview, plus installed resolve-only API, all expose the same stable exclusion code and evidence source; fake provider verifies text preview output without outbound requests.",
-      "assertions": "Reliability, economic, virtual-model, classifier-model, and unresolved configured-pattern exclusions carry typed evidence sources; eligible candidates carry no exclusion evidence; all three surfaces match; text preview renders the source; routing still selects only eligible candidates.",
+      "assertions": "Reliability, economic, virtual-model, classifier-model, and unresolved configured-pattern exclusions carry typed evidence sources; eligible candidates carry no exclusion evidence; all three surfaces match; text preview renders the source; routing still selects only eligible candidates. The shared commands.ts change is owned by the R09 migration contract.",
       "boundaryTest": {
         "file": "tests/integration/decision-parity-acceptance.test.mjs",
         "name": "keeps selected, excluded, fallback, and no-route decisions aligned across all three surfaces"
@@ -120,11 +119,10 @@
         "diagnostics.ts",
         "tests/config.test.ts",
         "tests/diagnostics.test.ts",
-        "tests/integration/command-policy-acceptance.test.mjs",
         "tests/schema.test.ts"
       ],
       "boundary": "Pinned Pi command acceptance inspects auth, availability, circuits, and unresolved pool references, validates offline, and asserts zero provider/catalog requests.",
-      "assertions": "Offline validation reports unresolved IDs and fallback cycles without echoing private values; unsupported capability enforcement is rejected; inspection projects auth, availability, circuit state, bounded local registry-refresh age, and configured economic source freshness/provenance without probes or mutation or allowance values. The same command-policy test file also contains the separately named R09 reviewed schema-migration journey, declared under the R09 config-migration contract.",
+      "assertions": "Offline validation reports unresolved IDs and fallback cycles without echoing private values; unsupported capability enforcement is rejected; inspection projects auth, availability, circuit state, bounded local registry-refresh age, and configured economic source freshness/provenance without probes or mutation or allowance values. The shared command-policy test file is owned by the R09 config-migration contract and also contains the named R07 offline diagnostics journey.",
       "boundaryTest": {
         "file": "tests/integration/command-policy-acceptance.test.mjs",
         "name": "runs inspect, validate, and a direct-rule preview offline without provider requests"
@@ -143,12 +141,14 @@
       "requirement": "R09",
       "files": [
         "config-migration.ts",
+        "commands.ts",
+        "tests/integration/command-policy-acceptance.test.mjs",
         "docs/guide/commands.md",
         "docs/terminal-demo.js",
         "tests/bifrost-commands.test.ts",
         "tests/config-migration.test.ts"
       ],
-      "boundary": "The explicit config-migration command previews one selected source, validates its replacement against the merged config, requires a reviewed source-bound digest, creates a private exact-byte backup, then atomically replaces only that source. The pinned-Pi integration journey and command registration are declared in their existing file contracts.",
+      "boundary": "The explicit config-migration command previews one selected source, validates its replacement against the merged config, requires a reviewed source-bound digest, creates a private exact-byte backup, then atomically replaces only that source. The shared commands and pinned-Pi integration files also carry R01 preview and R07 offline-diagnostic evidence, respectively.",
       "assertions": "Unversioned and v1 JSON receives only schemaVersion 2; unrelated values and key order are preserved where feasible; malformed/future-version sources are blocked; merged replacement is validated against reload's tier, reliability, affinity, and classifier timeout checks; the real-Pi migration journey blocks invalid timeout settings on preview and apply without writing, and an isolated restoration of the old diagnostics-only check makes that assertion fail; existing source-override tests prove invalid layer diagnostics; real-Pi coverage migrates project, workspace, and user sources one at a time and proves unselected layers stay byte-identical; stale source bytes and stale proposal digests cannot overwrite edits; exact backup bytes and private mode are asserted; atomic replacement failure after backup preserves the original source and reports the recoverable backup; the active snapshot is not auto-reloaded.",
       "boundaryTest": {
         "file": "tests/config-migration.test.ts",
