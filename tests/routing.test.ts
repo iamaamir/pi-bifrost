@@ -682,6 +682,24 @@ describe("routing", () => {
       assert.deepEqual(findCandidates(ctx, "classifier"), []);
     });
 
+    it("reports registry exclusions and unresolved patterns in route decisions", () => {
+      const virtual = { ...makeModel("bifrost", "auto"), api: "pi-virtual" } as ReturnType<typeof makeModel>;
+      const classifier = { ...makeModel("fixture", "classifier"), type: "classifier" } as never;
+      const routeConfig = { models: { restricted: ["bifrost/auto", "fixture/classifier", "fixture/missing"] }, strategy: "first" as const };
+      const resolved = resolveConfiguredTier(makeCtx([virtual, classifier] as never), "restricted", routeConfig).resolution;
+      const summary = buildRouteDecisionSummary({ kind: "classified", tier: "restricted", source: "regex" }, {
+        resolution: resolved,
+        options: buildTierResolutionOptions("restricted", routeConfig),
+      });
+      assert.deepEqual(summary.requested?.candidates, [
+        { model: "bifrost/auto", status: "excluded", exclusion: "virtual_model", exclusionEvidence: [{ code: "virtual_model", source: "registry_snapshot" }] },
+        { model: "fixture/classifier", status: "excluded", exclusion: "classifier_model", exclusionEvidence: [{ code: "classifier_model", source: "registry_snapshot" }] },
+      ]);
+      assert.deepEqual(summary.requested?.unresolvedPatterns, [
+        { pattern: "fixture/missing", exclusion: "model_unavailable", exclusionEvidence: [{ code: "model_unavailable", source: "registry_snapshot" }] },
+      ]);
+    });
+
     it("returns multiple models for an array", () => {
       const ctx = makeCtx([
         makeModel("anthropic", "claude-opus", 15),

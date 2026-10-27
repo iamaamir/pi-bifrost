@@ -109,43 +109,75 @@ function modelLowerMatches(m: RoutingModelBase, lower: string): boolean {
   return meta.lowerId.includes(lower) || meta.lowerProvider.includes(lower);
 }
 
+export type CandidateDiscoveryExclusion = {
+  readonly model: string;
+  readonly reason: "virtual_model" | "classifier_model";
+};
+
+export type UnresolvedCandidatePattern = {
+  readonly pattern: string;
+  readonly reason: "model_unavailable" | "pattern_unavailable";
+};
+
+function findCandidatePool<M extends RoutingModelBase>(
+  ctx: RoutingHostContext<M>,
+  pattern: string | string[] | undefined,
+): {
+  readonly candidates: M[];
+  readonly exclusions: readonly CandidateDiscoveryExclusion[];
+  readonly unresolved: readonly UnresolvedCandidatePattern[];
+} {
+  if (!pattern) return { candidates: [], exclusions: [], unresolved: [] };
+
+  const candidates: M[] = [];
+  const exclusions: CandidateDiscoveryExclusion[] = [];
+  const unresolved: UnresolvedCandidatePattern[] = [];
+  const seen = new Set<string>();
+  const seenExclusions = new Set<string>();
+  const patterns = Array.isArray(pattern) ? pattern : [pattern];
+  // Resolve once — avoid N getAvailable() calls for N substring patterns.
+  const available = ctx.modelRegistry.getAvailable();
+  const recordModel = (model: M): void => {
+    const key = modelKey(model);
+    if (isGenerativeModel(model)) {
+      if (!seen.has(key)) {
+        seen.add(key);
+        candidates.push(model);
+      }
+      return;
+    }
+    if (!seenExclusions.has(key)) {
+      seenExclusions.add(key);
+      exclusions.push({ model: key, reason: model.type === "classifier" ? "classifier_model" : "virtual_model" });
+    }
+  };
+
+  for (const p of patterns) {
+    if (p.includes("/")) {
+      const [provider, ...idParts] = p.split("/");
+      const model = ctx.modelRegistry.find(provider!, idParts.join("/"));
+      if (model) recordModel(model);
+      else unresolved.push({ pattern: p, reason: "model_unavailable" });
+      continue;
+    }
+    const lower = p.toLowerCase();
+    let matched = false;
+    for (const model of available) {
+      if (!modelLowerMatches(model, lower)) continue;
+      matched = true;
+      recordModel(model);
+    }
+    if (!matched) unresolved.push({ pattern: p, reason: "pattern_unavailable" });
+  }
+
+  return { candidates, exclusions, unresolved };
+}
+
 export function findCandidates<M extends RoutingModelBase>(
   ctx: RoutingHostContext<M>,
   pattern: string | string[] | undefined,
 ): M[] {
-  if (!pattern) return [];
-
-  const candidates: M[] = [];
-  const seen = new Set<string>();
-  const patterns = Array.isArray(pattern) ? pattern : [pattern];
-  // Resolve once — avoid N getAvailable() calls for N substring patterns.
-  const available = ctx.modelRegistry.getAvailable();
-
-  for (const p of patterns) {
-    if (p.includes("/")) {
-      const model = findOneModel(ctx, p);
-      if (model) {
-        const key = modelKey(model);
-        if (!seen.has(key)) {
-          seen.add(key);
-          candidates.push(model);
-        }
-      }
-    } else {
-      const lower = p.toLowerCase();
-      for (const m of available) {
-        // Match test first — modelKey/dedup only run for actual matches.
-        if (!isGenerativeModel(m) || !modelLowerMatches(m, lower)) continue;
-        const key = modelKey(m);
-        if (!seen.has(key)) {
-          seen.add(key);
-          candidates.push(m);
-        }
-      }
-    }
-  }
-
-  return candidates;
+  return findCandidatePool(ctx, pattern).candidates;
 }
 
 /** First element achieving the minimum score — matches stable-sort[0] tie-breaking.
@@ -214,6 +246,8 @@ export interface HealthyModelResolution<M extends RoutingModelBase = RoutingMode
   selectionCandidates?: M[];
   billingPreference?: BillingPreferenceProjection;
   skipped: SkippedCandidate[];
+  discoveryExclusions: readonly CandidateDiscoveryExclusion[];
+  unresolvedPatterns: readonly UnresolvedCandidatePattern[];
   economic?: readonly EconomicCandidateEvaluation[];
 }
 
@@ -433,7 +467,8 @@ export function resolveHealthyModel<M extends RoutingModelBase>(
   economic?: EconomicRouteContext & { readonly evaluatedTier: string },
   random: () => number = Math.random,
 ): HealthyModelResolution<M> {
-  const configuredCandidates = findCandidates(ctx, pattern);
+  const pool = findCandidatePool(ctx, pattern);
+  const configuredCandidates = pool.candidates;
   const economicEvaluations = economic?.policy.admission.length
     ? configuredCandidates.map((candidate): EconomicCandidateEvaluation => {
       const key = modelKey(candidate);
@@ -464,6 +499,8 @@ export function resolveHealthyModel<M extends RoutingModelBase>(
       candidates: configuredCandidates,
       healthyCandidates: candidates,
       skipped: [],
+      discoveryExclusions: pool.exclusions,
+      unresolvedPatterns: pool.unresolved,
       ...(economicEvaluations ? { economic: economicEvaluations } : {}),
     };
   }
@@ -489,6 +526,8 @@ export function resolveHealthyModel<M extends RoutingModelBase>(
     candidates: configuredCandidates,
     healthyCandidates,
     skipped,
+    discoveryExclusions: pool.exclusions,
+    unresolvedPatterns: pool.unresolved,
     ...(economicEvaluations ? { economic: economicEvaluations } : {}),
   };
 }

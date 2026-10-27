@@ -60,7 +60,7 @@
         "tests/routing.test.ts"
       ],
       "boundary": "Pinned Pi runtime and offline preview, plus installed resolve-only API, all expose the same stable exclusion code and evidence source; fake provider verifies text preview output without outbound requests.",
-      "assertions": "Reliability and economic exclusions carry typed evidence sources; eligible candidates carry no exclusion evidence; all three surfaces match; text preview renders the source; routing still selects only eligible candidates.",
+      "assertions": "Reliability, economic, virtual-model, classifier-model, and unresolved configured-pattern exclusions carry typed evidence sources; eligible candidates carry no exclusion evidence; all three surfaces match; text preview renders the source; routing still selects only eligible candidates.",
       "boundaryTest": {
         "file": "tests/integration/decision-parity-acceptance.test.mjs",
         "name": "keeps selected, excluded, fallback, and no-route decisions aligned across all three surfaces"
@@ -123,7 +123,7 @@
         "tests/schema.test.ts"
       ],
       "boundary": "Pinned Pi command acceptance inspects auth, availability, circuits, and unresolved pool references, validates offline, and asserts zero provider/catalog requests.",
-      "assertions": "Offline validation reports unresolved IDs and fallback cycles without echoing private values; unsupported capability enforcement is rejected; inspection projects auth, availability, circuit state, and bounded local registry-refresh age without probes or mutation. The same command-policy test file also contains the separately named R09 reviewed schema-migration journey, declared under the R09 config-migration contract.",
+      "assertions": "Offline validation reports unresolved IDs and fallback cycles without echoing private values; unsupported capability enforcement is rejected; inspection projects auth, availability, circuit state, bounded local registry-refresh age, and configured economic source freshness/provenance without probes or mutation or allowance values. The same command-policy test file also contains the separately named R09 reviewed schema-migration journey, declared under the R09 config-migration contract.",
       "boundaryTest": {
         "file": "tests/integration/command-policy-acceptance.test.mjs",
         "name": "runs inspect, validate, and a direct-rule preview offline without provider requests"
