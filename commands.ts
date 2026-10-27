@@ -1664,6 +1664,10 @@ export function renderTracePreview(trace: BifrostTracePreview): string[] {
       const evidence = candidate.exclusionEvidence?.map(({ code, source }) => `${code} from ${source}`).join(", ");
       lines.push(`  ${candidate.status}: ${candidate.model}${candidate.exclusion ? ` (${candidate.exclusion})` : ""}${evidence ? `; evidence: ${evidence}` : ""}`);
     }
+    for (const entry of pool.unresolvedPatterns ?? []) {
+      const evidence = entry.exclusionEvidence.map(({ code, source }) => `${code} from ${source}`).join(", ");
+      lines.push(`  excluded: ${entry.pattern} (${entry.exclusion}); evidence: ${evidence}`);
+    }
   };
   if (trace.explicitBoundary && trace.attempted) {
     lines.push("fallback boundary: explicit");

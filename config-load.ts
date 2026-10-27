@@ -97,16 +97,18 @@ function sourcePolicyDiagnostics(value: Record<string, unknown>): string[] {
   }
   const affinity = value.affinity;
   const reliability = value.reliability;
+  const requirements = value.requirements;
   const sourceIssues = validateConfig({
     ...defaultConfig(),
     schemaVersion: 2,
     models: {},
     ...(affinity === undefined ? {} : { affinity }),
     ...(reliability === undefined ? {} : { reliability }),
+    ...(requirements === undefined ? {} : { requirements }),
   } as BifrostConfig).filter((issue) => issue.severity === "error"
-    && (issue.code?.startsWith("config.affinity_") || issue.code?.startsWith("config.reliability_"))
+    && (issue.code?.startsWith("config.affinity_") || issue.code?.startsWith("config.reliability_") || issue.code === "config.requirements_unsupported")
     && issue.code !== "config.reliability_observations_invalid");
-  if (sourceIssues.length) add("affinity or reliability contains an invalid source-local policy.");
+  if (sourceIssues.length) add("affinity, reliability, or requirements contains an invalid or unsupported source-local policy.");
   const observations = criterionObject(reliability) ? reliability.observations : undefined;
   if (observations !== undefined && (!criterionObject(observations)
     || Object.keys(observations).some((key) => key !== "enabled")

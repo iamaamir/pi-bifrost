@@ -39,7 +39,7 @@ describe("classifier cache semantic key", () => {
   });
 
   it("invalidates keys written with unordered prompt normalization", () => {
-    const legacyKey = "legacy-cache-key";
+    const legacyKey = "20ca1b5fb50ff561c09ac4a56fcdb53dfa9b49fbed7420d07bc72278027b009a"; // Base implementation, same fixture.
     assert.notEqual(classifierCacheKey(config("private instruction alpha"), ["quick", "general"]), legacyKey);
   });
 

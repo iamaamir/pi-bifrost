@@ -144,12 +144,30 @@ function startRpc({ home, work }) {
     if (closed === undefined) { child.kill("SIGKILL"); await childClosed; }
     assert.equal(closed, 0, stderr);
   }
-  return { prompt, close, get stderr() { return stderr; } };
+  return { prompt, close, get stderr() { return stderr; }, get records() { return records; } };
 }
 
 describe("startup config source acceptance", { timeout: 60_000, concurrency: 1 }, () => {
   before(async () => { const ready = await startFakeServer(); server = ready.child; port = ready.port; });
   after(() => server?.kill("SIGTERM"));
+
+  it("blocks generation when capability enforcement is unsupported", async () => {
+    const paths = fixture();
+    try {
+      writeFileSync(join(paths.work, ".pi", "bifrost.json"), JSON.stringify({ schemaVersion: 2, requirements: { mode: "enforce" } }));
+      const before = await stats();
+      const result = await runPi(paths);
+      const requests = (await stats()).stats.slice(before.stats.length);
+      assert.deepEqual(requests, [], `unsupported enforcement must block generation: ${JSON.stringify(requests)}\n${result.stderr}`);
+      assert.match(result.stderr, /advisory-only|unsupported/u);
+      const rpc = startRpc(paths);
+      try {
+        const beforeAuto = await stats();
+        await rpc.prompt("synthetic blocked Auto request");
+        assert.deepEqual((await stats()).stats.slice(beforeAuto.stats.length), [], "unsupported enforcement must also block Auto");
+      } finally { await rpc.close(); }
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
 
   it("blocks generation when a project config source is malformed", async () => {
     const paths = fixture();
@@ -178,6 +196,21 @@ describe("startup config source acceptance", { timeout: 60_000, concurrency: 1 }
     } finally { rmSync(paths.root, { recursive: true, force: true }); }
   });
 
+  it("blocks unsupported enforcement even when a higher layer is advisory", async () => {
+    const paths = fixture();
+    try {
+      writeFileSync(join(paths.work, "bifrost.json"), JSON.stringify({
+        schemaVersion: 2, enabled: true, default: "general", models: { general: ["fake/healthy"] },
+        classifier: { enabled: false }, requirements: { mode: "enforce" },
+      }));
+      writeFileSync(join(paths.work, ".pi", "bifrost.json"), JSON.stringify({ schemaVersion: 2, requirements: { mode: "advisory" } }));
+      const before = await stats();
+      const result = await runPi(paths);
+      assert.deepEqual((await stats()).stats.slice(before.stats.length), [], "higher advisory layer must not mask unsupported enforcement");
+      assert.match(result.stderr, /unsupported/u);
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
   it("blocks generation when a higher supported schema masks an unsupported lower layer", async () => {
     const paths = fixture();
     try {
@@ -196,6 +229,25 @@ describe("startup config source acceptance", { timeout: 60_000, concurrency: 1 }
         `unsupported workspace schema must prevent probes, classification, and generation; got ${JSON.stringify(requests)}\n${result.stderr}`);
       assert.match(result.stderr, /workspace config schemaVersion is unsupported/u);
     } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
+  it("rejects unsupported enforcement on reload and retains the last valid configuration", async () => {
+    const paths = fixture();
+    const projectConfigPath = join(paths.work, ".pi", "bifrost.json");
+    writeFileSync(projectConfigPath, JSON.stringify({ schemaVersion: 2 }));
+    const rpc = startRpc(paths);
+    try {
+      await rpc.prompt("synthetic initial request");
+      writeFileSync(projectConfigPath, JSON.stringify({ schemaVersion: 2, requirements: { mode: "enforce" } }));
+      await rpc.prompt("/bifrost reload");
+      assert.match(JSON.stringify(rpc.records), /reload rejected|unsupported/u);
+      const before = await stats();
+      await rpc.prompt("synthetic last-good request");
+      assert.equal((await stats()).stats.slice(before.stats.length).filter((item) => item.kind === "generation").length, 1);
+    } finally {
+      await rpc.close();
+      rmSync(paths.root, { recursive: true, force: true });
+    }
   });
 
   it("allows routing after reload repairs a malformed startup source", async () => {

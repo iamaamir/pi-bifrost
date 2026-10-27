@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
+import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, buildTracePreview, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, renderTracePreview, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
 import { makeModel, makePiClassifierModel, makeRegistry } from "./helpers.ts";
 import { createPipeline } from "../classification-pipeline.ts";
 import { DEFAULT_THRESHOLD, lookupCache, touchCacheEntry, updateCache, type CacheEntry } from "../cache.ts";
@@ -14,6 +14,22 @@ import { emptyReliabilityV2State } from "../reliability-v2.ts";
 import { buildInitOwnershipReceipt } from "../reconciliation-command.ts";
 import { REGISTRY_REFRESH_TTL_MS } from "../ux-status.ts";
 import { loadConfigForReload } from "../config-load.ts";
+
+it("renders missing configured entries in text route traces", () => {
+  const trace = buildTracePreview({
+    version: 1, kind: "route-decision", outcome: "unresolved", classification: { source: "regex" },
+    requested: {
+      tier: "general", strategy: "first", patterns: ["fake/missing", "fuzzy"], candidates: [],
+      unresolvedPatterns: [
+        { pattern: "fake/missing", exclusion: "model_unavailable", exclusionEvidence: [{ code: "model_unavailable", source: "registry_snapshot" }] },
+        { pattern: "fuzzy", exclusion: "pattern_unavailable", exclusionEvidence: [{ code: "pattern_unavailable", source: "registry_snapshot" }] },
+      ],
+    },
+  }, false);
+  const text = renderTracePreview(trace).join("\n");
+  assert.match(text, /fake\/missing.*model_unavailable.*registry_snapshot/u);
+  assert.match(text, /fuzzy.*pattern_unavailable.*registry_snapshot/u);
+});
 
 function writeRecentProbeCache(path: string, results: unknown): void {
   writeFileSync(path, JSON.stringify(results));

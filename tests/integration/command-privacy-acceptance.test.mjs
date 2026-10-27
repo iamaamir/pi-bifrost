@@ -512,7 +512,7 @@ function assertStringArray(value, label) {
 }
 
 function assertDecisionPool(pool, label) {
-  assertExactKeys(pool, ["tier", "strategy", "patterns", "candidates"], ["billingPreference"], label);
+  assertExactKeys(pool, ["tier", "strategy", "patterns", "candidates"], ["billingPreference", "unresolvedPatterns"], label);
   assertBoundedString(pool.tier, `${label}.tier`);
   assertBoundedString(pool.strategy, `${label}.strategy`);
   assertStringArray(pool.patterns, `${label}.patterns`);
@@ -536,6 +536,21 @@ function assertDecisionPool(pool, label) {
       assertBoundedString(candidate.reserve.disposition, `${path}.reserve.disposition`);
       assert.equal(typeof candidate.reserve.wouldReject, "boolean");
       assertStringArray(candidate.reserve.reasons, `${path}.reserve.reasons`);
+    }
+  }
+  if (pool.unresolvedPatterns !== undefined) {
+    assert.ok(Array.isArray(pool.unresolvedPatterns));
+    for (const [index, entry] of pool.unresolvedPatterns.entries()) {
+      const path = `${label}.unresolvedPatterns[${index}]`;
+      assertExactKeys(entry, ["pattern", "exclusion", "exclusionEvidence"], [], path);
+      assertBoundedString(entry.pattern, `${path}.pattern`);
+      assert.ok(["model_unavailable", "pattern_unavailable"].includes(entry.exclusion));
+      assert.ok(Array.isArray(entry.exclusionEvidence) && entry.exclusionEvidence.length > 0);
+      for (const [evidenceIndex, evidence] of entry.exclusionEvidence.entries()) {
+        assertExactKeys(evidence, ["code", "source"], [], `${path}.exclusionEvidence[${evidenceIndex}]`);
+        assert.equal(evidence.code, entry.exclusion);
+        assert.equal(evidence.source, "registry_snapshot");
+      }
     }
   }
   if (pool.billingPreference !== undefined) {
@@ -928,7 +943,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
             // classifier must record the status without persisting the URL.
             endpoint: `http://127.0.0.1:${server.port}/v1/${ENDPOINT_CANARY}`,
           },
-          models: { general: ["fake/chat"] },
+          models: { general: ["fake/chat", "fake/missing"] },
           debug: { enabled: true },
         },
       },
@@ -950,6 +965,11 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
         }
         const decisionRows = rows.filter((row) => row.event === "route_decision" && row.decision !== undefined);
         assert.ok(decisionRows.length > 0, "routing trace must witness its nested decision summary");
+        const missingDecision = decisionRows.find((row) => row.decision.requested?.unresolvedPatterns?.some((entry) => entry.pattern === "fake/missing"))?.decision;
+        assert.ok(missingDecision, "trace must include missing-pattern evidence");
+        const mutated = structuredClone(missingDecision);
+        mutated.requested.unresolvedPatterns[0].leaked_nested = "fault";
+        assert.throws(() => assertRouteDecisionSummary(mutated), /unexpected key leaked_nested/u);
         const promptRows = rows.filter((row) => row.module === "input" && row.event === "prompt");
         assert.equal(promptRows.length, 1);
         assert.equal(promptRows[0].length, CANARY_PROMPT.length);

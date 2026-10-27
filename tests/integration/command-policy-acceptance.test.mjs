@@ -134,6 +134,9 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
         }
         assert.doesNotMatch(`${result.stderr}\n${result.stdout}`, /private-config-canary|synthetic-provider-secret-canary/u);
       }
+      const trace = await runPi({ fixture: env, server, args: ["--no-session", "-p", "/bifrost preview --offline --trace ordinary task"] });
+      assertOffline(trace);
+      assert.match(`${trace.stderr}\n${trace.stdout}`, /missing-fragment.*pattern_unavailable.*registry_snapshot/u);
       const afterStats = await readStats(server.port);
       assert.deepEqual(afterStats.attempts, beforeStats.attempts, `commands made provider attempts:\n${commandOutputs.join("\n")}`);
       assert.deepEqual(afterStats.stats, beforeStats.stats, `commands made provider requests:\n${commandOutputs.join("\n")}`);
@@ -172,6 +175,14 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
         assert.equal(rejected.status, "blocked");
         assert.equal(rejected.reason, "merged_config_invalid");
         assert.deepEqual(readFileSync(join(env.project, "bifrost.json")), invalid, "invalid migration must not write source");
+      }
+      const unsupported = Buffer.from(original.toString("utf8").replace('"enabled": true,', '"enabled": true, "requirements": { "mode": "enforce" },'));
+      writeFileSync(join(env.project, "bifrost.json"), unsupported);
+      for (const suffix of ["", ` --apply --proposal ${preview.proposalDigest}`]) {
+        const rejected = reportJson(await rpc.prompt(`/bifrost config migrate --source project${suffix} --json`));
+        assert.equal(rejected.status, "blocked");
+        assert.equal(rejected.reason, "merged_config_invalid");
+        assert.deepEqual(readFileSync(join(env.project, "bifrost.json")), unsupported);
       }
       writeFileSync(join(env.project, "bifrost.json"), original);
 
