@@ -67,14 +67,20 @@ function releaseGateScriptsFrom(source) {
 const jobs = jobBlocks(workflow);
 const CAMPAIGN_JOBS = ["campaign", "pi-compatibility", "mutation-experiment"];
 
-test("release-gates keeps all seven gates and is blocked only by failed PR evidence preflight", () => {
-  const block = jobs["release-gates"];
+function assertPreflightGate(block) {
   assert.ok(block, "release-gates job must exist");
   assert.match(block, /^ {4}needs: evidence-preflight$/mu);
-  assert.equal(
-    jobCondition(block),
-    "always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')",
-  );
+  assert.equal(jobCondition(block), "${{ !cancelled() }}");
+  assert.match(block, /name: Require successful PR evidence preflight\n\s+if: github\.event_name == 'pull_request' && needs\.evidence-preflight\.result != 'success'\n\s+run: exit 1\n\s+- uses: actions\/checkout@/u);
+  assert.match(block, /name: Refresh CRAP trend history\n\s+if: always\(\) && \(github\.event_name != 'pull_request' \|\| needs\.evidence-preflight\.result == 'success'\)/u);
+}
+
+test("release-gates fails closed on failed PR evidence preflight", () => {
+  const block = jobs["release-gates"];
+  assertPreflightGate(block);
+  const bypass = block.replace("${{ !cancelled() }}", "always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')");
+  assert.throws(() => assertPreflightGate(bypass), "old skipped-required-check bypass must fail the assertion");
+  assert.throws(() => assertPreflightGate(block.replace("run: exit 1", "run: exit 0")), "disabled preflight failure must fail the assertion");
 
   // Seven release gates, checked against both declaring modules.
   assert.deepEqual(requiredGatesFrom(ciReportSource), [
@@ -95,7 +101,7 @@ test("release-gates keeps all seven gates and is blocked only by failed PR evide
   assert.match(block, /id: acceptance\n/u);
   assert.match(block, /run: npm run acceptance\n/u);
   assert.match(block, /run: npm run acceptance:deterministic\n/u);
-  assert.match(block, /if: always\(\) && github\.event_name == 'pull_request'\n/u);
+  assert.match(block, /if: always\(\) && github\.event_name == 'pull_request' && needs\.evidence-preflight\.result == 'success'\n/u);
   assert.match(block, /name: ci-report-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
   assert.match(block, /name: acceptance-report-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
   assert.match(block, /name: final-ci-report-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);

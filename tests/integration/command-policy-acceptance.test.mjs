@@ -165,6 +165,16 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
       assert.deepEqual(readFileSync(join(env.project, "bifrost.json")), original, "preview must not write source");
       assert.deepEqual(readFileSync(userPath), userBytes, "project migration must not rewrite user layer");
 
+      const invalid = Buffer.from(original.toString("utf8").replace('"enabled": false', '"enabled": false, "totalTimeoutMs": 0'));
+      writeFileSync(join(env.project, "bifrost.json"), invalid);
+      for (const suffix of ["", ` --apply --proposal ${preview.proposalDigest}`]) {
+        const rejected = reportJson(await rpc.prompt(`/bifrost config migrate --source project${suffix} --json`));
+        assert.equal(rejected.status, "blocked");
+        assert.equal(rejected.reason, "merged_config_invalid");
+        assert.deepEqual(readFileSync(join(env.project, "bifrost.json")), invalid, "invalid migration must not write source");
+      }
+      writeFileSync(join(env.project, "bifrost.json"), original);
+
       const changed = Buffer.from(original.toString("utf8").replace("handwritten", "edited-after-preview"));
       writeFileSync(join(env.project, "bifrost.json"), changed);
       const stale = reportJson(await rpc.prompt(`/bifrost config migrate --source project --apply --proposal ${preview.proposalDigest} --json`));

@@ -745,11 +745,9 @@ async function handleConfigMigrationCommand(args: string, ctx: ExtensionContext,
     return;
   }
 
-  const prospective = loadConfigWithSourceOverride(process.cwd(), state.extensionDir, request.source, plan.replacementBytes);
-  if (prospective.diagnostics.length > 0) {
+  if (!prospectiveConfigInstallable(request.source, plan.replacementBytes, state)) {
     emitConfigMigrationReport(ctx, {
       version: 1, source: request.source, status: "blocked", reason: "merged_config_invalid",
-      validationIssueCount: prospective.diagnostics.length,
     }, request.json);
     return;
   }

@@ -98,7 +98,7 @@
         "tests/integration/cache-lifecycle-acceptance.test.mjs",
         "tests/integration/init-regression.test.mjs"
       ],
-      "boundary": "Pinned Pi 1.0.1 RPC sessions with the local fake provider verify both cache boundaries: restart with classification disabled after seeding a conflicting persisted tier, and restart with a same-token prompt reordered. Request counters and the outbound guard expose whether either cache decision was reused.",
+      "boundary": "Pinned Pi 1.4.0 RPC sessions with the local fake provider verify both cache boundaries: restart with classification disabled after seeding a conflicting persisted tier, and restart with a same-token prompt reordered. Request counters and the outbound guard expose whether either cache decision was reused.",
       "assertions": "A disabled classifier cannot consume a persisted cache decision; the test forces a valid but different cached tier, confirms the configured route is used, and confirms no classifier request occurs. By default, ordered normalized prompts match exactly; reordered prompts miss, legacy unordered-normalization keys are invalidated, and explicit thresholds below 1 retain fuzzy Jaccard matching. Removing the classifierEnabled cache gate or changing the bundled exact-match threshold from 1 to 0.88 makes its corresponding Pi assertion fail. The shared index.ts change also marks direct model rules as explicit_model affinity origin so they neither consume nor replace an automatic anchor; R11's exact-model and continuation tests are declared by the R11 contract. The shared auto-virtual integration file also proves a manually pinned failure is neither replayed nor unpinned: after a distinct follow-up, `/bifrost debug` still reports `pinned: true`. It also proves an ordinary settled failure increments reliability exactly once; those R03 cases are registered separately. PRD §14's Pi 1.0.1 classifier-inventory blocker is resolved by the controlled host evidence declared under R04; virtual models still require Bifrost-side exclusion.",
       "boundaryTest": {
         "file": "tests/integration/cache-lifecycle-acceptance.test.mjs",
@@ -149,7 +149,7 @@
         "tests/config-migration.test.ts"
       ],
       "boundary": "The explicit config-migration command previews one selected source, validates its replacement against the merged config, requires a reviewed source-bound digest, creates a private exact-byte backup, then atomically replaces only that source. The pinned-Pi integration journey and command registration are declared in their existing file contracts.",
-      "assertions": "Unversioned and v1 JSON receives only schemaVersion 2; unrelated values and key order are preserved where feasible; malformed/future-version sources are blocked; merged replacement is validated, with existing source-override tests proving invalid layer diagnostics; real-Pi coverage migrates project, workspace, and user sources one at a time and proves unselected layers stay byte-identical; stale source bytes and stale proposal digests cannot overwrite edits; exact backup bytes and private mode are asserted; atomic replacement failure after backup preserves the original source and reports the recoverable backup; the active snapshot is not auto-reloaded.",
+      "assertions": "Unversioned and v1 JSON receives only schemaVersion 2; unrelated values and key order are preserved where feasible; malformed/future-version sources are blocked; merged replacement is validated against reload's tier, reliability, affinity, and classifier timeout checks; the real-Pi migration journey blocks invalid timeout settings on preview and apply without writing, and an isolated restoration of the old diagnostics-only check makes that assertion fail; existing source-override tests prove invalid layer diagnostics; real-Pi coverage migrates project, workspace, and user sources one at a time and proves unselected layers stay byte-identical; stale source bytes and stale proposal digests cannot overwrite edits; exact backup bytes and private mode are asserted; atomic replacement failure after backup preserves the original source and reports the recoverable backup; the active snapshot is not auto-reloaded.",
       "boundaryTest": {
         "file": "tests/config-migration.test.ts",
         "name": "backs up exact source bytes before atomic replacement and preserves target mode"
@@ -236,7 +236,7 @@
         "tests/auto-bootstrap-runtime.test.ts",
         "tests/fixtures/native-classifier-child.mjs"
       ],
-      "boundary": "Pi 1.0.1 AgentSession with a fake classifier provider observes the actual host ModelRegistry inventory; a separate registered-hook harness exercises virtual filtering during first-use probes and pool generation.",
+      "boundary": "Pi 1.4.0 AgentSession with a fake classifier provider observes the actual host ModelRegistry inventory; a separate registered-hook harness exercises virtual filtering during first-use probes and pool generation.",
       "assertions": "The controlled host sees bifrost/auto and physical chat models through getAvailable(), but sees the classifier-only model only through getAvailableOfType(\"classifier\"). First-use probing and generated starter pools contain only the physical chat model after Bifrost filters the registered virtual entry; the classifier remains in its typed catalog. The PRD §14 host-inventory blocker is resolved. R04 stays partial until a generalized typed capability-observation seam is implemented; image and modality enforcement remain explicitly deferred.",
       "boundaryTest": {
         "file": "tests/integration/native-classifier.test.mjs",
@@ -291,7 +291,7 @@
         "tests/reliability.test.ts",
         "tests/reliability-v2-runtime.test.ts"
       ],
-      "boundary": "Pinned Pi 1.0.1 Auto dispatch against isolated local fake providers observes the persisted branch after a v2 empty allowance rejection and recovery; no external origin is allowed. Config reload and session/branch switches are not proven at the before-settle gap through pinned Pi RPC.",
+      "boundary": "Pinned Pi 1.4.0 Auto dispatch against isolated local fake providers observes the persisted branch after a v2 empty allowance rejection and recovery; no external origin is allowed. Config reload and session/branch switches are not proven at the before-settle gap through pinned Pi RPC.",
       "assertions": "Allowance recovery is disabled by default and requires `reliability.retryOnAllowanceExhausted: true`; recovery-focused fixture cases opt in explicitly. The journey registry names this exact v2 Pi boundary and the coverage map records its limits. The rejected generation is empty and belongs to the sole user boundary; exactly one null context edit targets its exact assistant entry, and that edit is the only persisted branch entry between failure and recovered result. Pinned-Pi RPC cases also prove queued/flushed abort before barrier release, manual model selection changing ownership generation, and queued intervening activity each suppresses recovery. A pinned-Pi probe attempted RPC new_session at the held before-settle barrier but got no response within 10 seconds; /bifrost reload enters the input queue and cannot mutate config generation before settlement. No handler-only substitute or session/branch mutation claim is made. Existing scratch-only faults make the supported no-alternate or lineage assertion RED; restored source returns GREEN without modifying production source.",
       "boundaryTest": {
         "file": "tests/integration/reliability-v2-auto.test.mjs",
@@ -404,7 +404,7 @@
         "tests/verification-workflow.test.mjs"
       ],
       "boundary": "The pull-request workflow performs a read-only declaration preflight before the existing release gates, while the pinned Pi baseline, compatibility matrix, release preflight, and operational docs consistently name Pi 1.4.0.",
-      "assertions": "Evidence preflight checks out the PR head with full history, validates against the PR base without --apply or dependency installation, and blocks PR release gates only when that preflight fails. The compatibility matrix retains explicit 1.3.0 and 1.4.0 pins with isolated installs, while package metadata, lockfile, release preflight, and operator documentation use the 1.4.0 baseline.",
+      "assertions": "Evidence preflight checks out the PR head with full history and validates against the PR base without --apply or dependency installation. A failed PR preflight fails the required release-gates job rather than skipping it; cancellation remains supported. The compatibility matrix retains explicit 1.3.0 and 1.4.0 pins with isolated installs, while package metadata, lockfile, release preflight, and operator documentation use the 1.4.0 baseline.",
       "boundaryTest": {
         "file": "tests/verification-workflow.test.mjs",
         "name": "evidence preflight runs only on pull requests before release gates"
@@ -414,7 +414,8 @@
         "name": "Pi compatibility uses explicit matrix pins with an isolated install"
       },
       "fault": {
-        "exception": "This is CI-workflow, dependency-pin, and documentation configuration; the source-reading boundary and invariant tests fail on incompatible declarations, but no isolated production-source fault applies."
+        "file": "tests/verification-workflow.test.mjs",
+        "name": "release-gates fails closed on failed PR evidence preflight"
       }
     },
     {
