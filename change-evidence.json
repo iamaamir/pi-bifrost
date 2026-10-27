@@ -1,55 +1,63 @@
 {
   "schemaVersion": 1,
-  "base": "e9f87420c73a93e95f8d4cef009aa9fbdef830b3",
+  "base": "7382500b6f2cfbf16f48c2b0a88e6b85e792f1f4",
   "contracts": [
     {
-      "id": "performance-tooling",
+      "id": "issue-refs-check",
       "requirement": "R16",
       "files": [
-        "scripts/bench.mjs",
-        "scripts/profile.mjs",
-        "scripts/perf-workload.mjs",
-        "package.json",
-        ".gitignore",
-        "knip.jsonc",
-        "tests/performance-tooling.test.mjs"
+        "scripts/check-issue-refs.mjs",
+        "tests/check-issue-refs.test.mjs"
       ],
-      "boundary": "the real deterministic workload process, Hyperfine report parsing, profile command construction, package command surface, and Knip optional-binary configuration",
-      "assertions": "The workload reports the same checksum on repeat runs and selects the expected model; benchmark plans use the committed allowlisted workload with an exported JSON report; profile plans write one artifact with a relative name; package scripts invoke exact benchmark and profiler entry points; Knip ignores Hyperfine without declaring it as an npm dependency; a missing Hyperfine binary exits 2 with an install hint.",
+      "boundary": "Prompt-free CLI over real issue bodies with a gh-backed remote probe; tests inject the probe and a temporary working root, so no network, credential or repository state is required.",
+      "assertions": "Cited paths are extracted from prose without version numbers, host names or provider identifiers; a citation missing from the working tree fails; a citation present locally but absent from the selected branch is reported as local-only and fails only under --require-remote; an offline run never reports a remote verdict.",
       "boundaryTest": {
-        "file": "tests/performance-tooling.test.mjs",
-        "name": "the deterministic routing workload reports a stable checksum"
+        "file": "tests/check-issue-refs.test.mjs",
+        "name": "classifies a local-only citation as unpublished and not missing"
       },
       "invariant": {
-        "file": "tests/performance-tooling.test.mjs",
-        "name": "builds Hyperfine plans for allowlisted workloads"
+        "file": "tests/check-issue-refs.test.mjs",
+        "name": "fails a citation that is missing from the working tree"
       },
       "fault": {
-        "file": "tests/performance-tooling.test.mjs",
-        "name": "RED-proves the Hyperfine workload allowlist implementation fault in an isolated source copy"
+        "file": "tests/check-issue-refs.test.mjs",
+        "name": "RED-proves local-only citations do not fail without --require-remote"
       }
     },
     {
-      "id": "developer-tooling-guide",
+      "id": "issue-refs-cli-entry",
       "requirement": "R16",
       "files": [
-        "docs/dev-tooling.md",
-        "AGENTS.md",
-        "tests/tooling-config.test.mjs"
+        "package.json"
       ],
-      "boundary": "the developer guide and agent guide read as repository files and checked against package.json and committed config paths",
-      "assertions": "Every npm script named in the guide exists; every named tool configuration file exists; the guide describes the full security audit as dispatch-only and correctly scopes its Gitleaks exception to exact synthetic values; the agent guide links to the guide and the doctor command; the drift checker rejects an unknown script.",
+      "boundary": "Developer and CI entry point for the reference check; the alias owns no behavior beyond invoking the checked script.",
+      "assertions": "The check:issue-refs alias resolves to scripts/check-issue-refs.mjs and package.json stays valid JSON.",
       "boundaryTest": {
-        "file": "tests/performance-tooling.test.mjs",
-        "name": "every npm script named in the developer guide exists"
+        "exception": "A script alias has no boundary of its own; the script and its tests are declared by issue-refs-check."
       },
       "invariant": {
-        "file": "tests/performance-tooling.test.mjs",
-        "name": "the developer guide names the committed tool configuration files"
+        "exception": "No state or invariant is owned by a package.json script alias."
       },
       "fault": {
-        "file": "tests/performance-tooling.test.mjs",
-        "name": "the command drift check reports an unknown npm script"
+        "exception": "Injecting a fault into an alias would duplicate issue-refs-check's tests without adding a distinct assertion."
+      }
+    },
+    {
+      "id": "tracker-workflow-doc",
+      "requirement": "R16",
+      "files": [
+        "docs/tracker-workflow.md"
+      ],
+      "boundary": "Documentation only. Every command it records was executed against this repository before it was written down.",
+      "assertions": "The document names the authoritative read paths, native blocking edges, sub-issue attachment, staged bulk edits and the citation rule.",
+      "boundaryTest": {
+        "exception": "Documentation-only file; there is no executable boundary to exercise."
+      },
+      "invariant": {
+        "exception": "Documentation-only file; it owns no state or invariant."
+      },
+      "fault": {
+        "exception": "Documentation-only file; there is no implementation to fault-inject."
       }
     }
   ]
