@@ -65,9 +65,9 @@ describe("cited path extraction", () => {
     assert.deepEqual(extractCitedPaths(body), []);
   });
 
-  it("ignores Markdown code blocks and traversal paths", () => {
-    const body = "```text\nscripts/\n+└── check-issue-refs.mjs\n```\n~~~text\ntests/check-issue-refs.test.mjs\n~~~\nRead ../outside.md and `AGENTS.md`.";
-    assert.deepEqual(extractCitedPaths(body), ["AGENTS.md"]);
+  it("ignores Markdown tree entries and traversal paths while retaining fenced citations", () => {
+    const body = "```text\nscripts/\n+└── check-issue-refs.mjs\ndocs/required-source.md\n```\n~~~text\ntests/\n+└── check-issue-refs.test.mjs\n~~~\nRead ../outside.md and `AGENTS.md`.";
+    assert.deepEqual(extractCitedPaths(body), ["AGENTS.md", "docs/required-source.md"]);
   });
 });
 

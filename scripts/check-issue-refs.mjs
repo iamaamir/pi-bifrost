@@ -51,7 +51,7 @@ const CITED_PATH = new RegExp(
  */
 export function extractCitedPaths(body) {
   const paths = new Set();
-  const prose = String(body).replace(/^(?:```|~~~)[\s\S]*?^(?:```|~~~)\s*$/gm, "");
+  const prose = String(body).replace(/^[^\r\n]*[├└│][^\r\n]*$/gm, "");
   for (const match of prose.matchAll(CITED_PATH)) {
     // A sentence-ending period is punctuation, not part of the path.
     const path = match[1].replace(/^\.\//, "").replace(/\.+$/, "");
