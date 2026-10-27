@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "base": "67485613b6e394834c7919925ba9560a3762eaf9",
+  "base": "8a6a49a6b76f7be174aaaa8e9fb7393187663540",
   "contracts": [
     {
       "id": "push-workflow-caller-context",
@@ -307,7 +307,8 @@
         "scripts/acceptance/journeys.mjs",
         "tests/fixtures/replay-fault-control.mjs",
         "tests/integration/reliability-v2-auto.test.mjs",
-        "tests/reliability.test.ts"
+        "tests/reliability.test.ts",
+        "tests/reliability-v2-runtime.test.ts"
       ],
       "boundary": "Pinned Pi 1.0.1 Auto dispatch against isolated local fake providers observes the persisted branch after a v2 empty allowance rejection and recovery; no external origin is allowed. Config reload and session/branch switches are not proven at the before-settle gap through pinned Pi RPC.",
       "assertions": "Allowance recovery is disabled by default and requires `reliability.retryOnAllowanceExhausted: true`; recovery-focused fixture cases opt in explicitly. The journey registry names this exact v2 Pi boundary and the coverage map records its limits. The rejected generation is empty and belongs to the sole user boundary; exactly one null context edit targets its exact assistant entry, and that edit is the only persisted branch entry between failure and recovered result. Pinned-Pi RPC cases also prove queued/flushed abort before barrier release, manual model selection changing ownership generation, and queued intervening activity each suppresses recovery. A pinned-Pi probe attempted RPC new_session at the held before-settle barrier but got no response within 10 seconds; /bifrost reload enters the input queue and cannot mutate config generation before settlement. No handler-only substitute or session/branch mutation claim is made. Existing scratch-only faults make the supported no-alternate or lineage assertion RED; restored source returns GREEN without modifying production source.",
