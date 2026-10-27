@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
@@ -63,6 +63,11 @@ describe("cited path extraction", () => {
     const body = "Route to opencode-go/glm-5.1 or google/gemini-2.5-pro, not openai/gpt-4o.";
     assert.deepEqual(extractCitedPaths(body), []);
   });
+
+  it("ignores Markdown code blocks and traversal paths", () => {
+    const body = "```text\nscripts/\n+└── check-issue-refs.mjs\n```\nRead ../outside.md and `AGENTS.md`.";
+    assert.deepEqual(extractCitedPaths(body), ["AGENTS.md"]);
+  });
 });
 
 describe("argument parsing", () => {
@@ -102,6 +107,17 @@ describe("reference checks", () => {
     const { missing, failures } = classify(results);
     assert.deepEqual(missing.map((result) => result.path), ["missing.md"]);
     assert.deepEqual(failures.map((result) => result.path), ["missing.md"]);
+  });
+
+  it("does not accept a path outside the repository root", () => {
+    const root = fixtureRoot();
+    const outside = join(dirname(root), "outside.md");
+    writeFileSync(outside, "outside\n");
+    try {
+      assert.equal(checkReferences(["../outside.md"], { root })[0].local, false);
+    } finally {
+      rmSync(outside, { force: true });
+    }
   });
 
   it("fails a local-only citation only when remote publication is required", () => {

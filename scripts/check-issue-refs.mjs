@@ -15,8 +15,8 @@
 // project keeps some sources local-only by decision. Pass --require-remote when
 // a citation must be readable from the remote.
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -51,11 +51,21 @@ const CITED_PATH = new RegExp(
  */
 export function extractCitedPaths(body) {
   const paths = new Set();
-  for (const match of String(body).matchAll(CITED_PATH)) {
+  const prose = String(body).replace(/^```[\s\S]*?^```\s*$/gm, "");
+  for (const match of prose.matchAll(CITED_PATH)) {
     // A sentence-ending period is punctuation, not part of the path.
-    paths.add(match[1].replace(/^\.\//, "").replace(/\.+$/, ""));
+    const path = match[1].replace(/^\.\//, "").replace(/\.+$/, "");
+    if (path.split("/").every((part) => part && part !== "." && part !== "..")) paths.add(path);
   }
   return [...paths].sort();
+}
+
+function isRepositoryPath(root, path) {
+  if (!existsSync(join(root, path))) return false;
+  const rootPath = realpathSync(root);
+  const candidate = realpathSync(join(root, path));
+  const relativePath = relative(rootPath, candidate);
+  return relativePath === "" || (!relativePath.startsWith(`..${sep}`) && relativePath !== ".." && !isAbsolute(relativePath));
 }
 
 /**
@@ -66,7 +76,7 @@ export function extractCitedPaths(body) {
 export function checkReferences(paths, { root = REPO_ROOT, remoteExists = null } = {}) {
   return paths.map((path) => ({
     path,
-    local: existsSync(join(root, path)),
+    local: isRepositoryPath(root, path),
     remote: remoteExists ? Boolean(remoteExists(path)) : null,
   }));
 }
@@ -116,8 +126,9 @@ function remoteProbe(repo, ref) {
         stdio: "ignore",
       });
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (/\bHTTP 404\b/u.test(String(error.stderr ?? error.message))) return false;
+      throw error;
     }
   };
 }
@@ -170,9 +181,15 @@ function main(argv) {
     for (const path of extractCitedPaths(body)) cited.add(path);
   }
 
-  const results = checkReferences([...cited].sort(), {
-    remoteExists: offline ? null : remoteProbe(repo, ref),
-  });
+  let results;
+  try {
+    results = checkReferences([...cited].sort(), {
+      remoteExists: offline ? null : remoteProbe(repo, ref),
+    });
+  } catch (error) {
+    process.stderr.write(`remote check failed: ${error.message}\n`);
+    return 2;
+  }
   report(results);
   const { missing, unpublished, failures } = classify(results, { requireRemote });
 
