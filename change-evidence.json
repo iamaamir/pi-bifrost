@@ -55,6 +55,7 @@
       "requirement": "R01",
       "files": [
         "classification-pipeline.ts",
+        "routing.ts",
         "commands.ts",
         "tests/integration/decision-parity-acceptance.test.mjs",
         "tests/routing.test.ts"
