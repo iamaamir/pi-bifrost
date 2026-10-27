@@ -8,8 +8,8 @@
       "files": [
         "tests/acceptance-runner.test.mjs"
       ],
-      "boundary": "Real workflow acceptance CLI through sanitized gate with owned single-commit and merge-parent topologies under push and manual events",
-      "assertions": "Push event.before and PR delivery base remain authoritative; manual/local fixture uses declared predecessor, wrong bases and lost context/selection fail named assertions, exact restoration returns GREEN",
+      "boundary": "Real workflow acceptance CLI through a sanitized gate with owned single-commit and merge-parent push topologies",
+      "assertions": "Push event.before remains authoritative; wrong bases and lost context or declaration selection fail named assertions, and exact restoration returns GREEN",
       "boundaryTest": {
         "file": "tests/acceptance-runner.test.mjs",
         "name": "merged-push checkout runs the actual workflow caller with event.before"

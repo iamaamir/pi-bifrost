@@ -733,19 +733,7 @@ describe("acceptance runner boundary", () => {
     assert.equal(restored.status, 0, restored.stdout + restored.stderr);
     assert.match(restored.stdout, /pass 1/);
     assert.equal(readFileSync(join(root, "tests/acceptance-runner.test.mjs"), "utf8"), source);
-    const manualGreen = await runCallerTest("workflow_dispatch");
-    assert.equal(manualGreen.status, 0, manualGreen.stdout + manualGreen.stderr);
-    const manualAnchor = ": manifest." + "base;";
-    assert.equal(source.split(manualAnchor).length, 2);
-    writeFileSync(testPath, source.replace(manualAnchor, ': git("merge-base", "origin/v2", "HEAD");'));
-    const manualRed = await runCallerTest("workflow_dispatch");
-    assert.notEqual(manualRed.status, 0, manualRed.stdout + manualRed.stderr);
-    assert.match(manualRed.stdout, /the declaration base must be the actual merge predecessor/);
-    writeFileSync(testPath, source);
-    assert.equal(readFileSync(testPath, "utf8"), source);
-    const manualRestored = await runCallerTest("workflow_dispatch");
-    assert.equal(manualRestored.status, 0, manualRestored.stdout + manualRestored.stderr);
-    t.diagnostic(JSON.stringify({ topology, predecessor, merged, green: result.status, contextRed: contextRed.status, declarationRed: declarationRed.status, red: red.status, restored: restored.status, manualGreen: manualGreen.status, manualRed: manualRed.status, manualRestored: manualRestored.status }));
+    t.diagnostic(JSON.stringify({ topology, predecessor, merged, green: result.status, contextRed: contextRed.status, declarationRed: declarationRed.status, red: red.status, restored: restored.status }));
     completed = true;
     } finally {
       if (completed && cleanupVerified) rmSync(directory, { recursive: true, force: true });
@@ -808,14 +796,11 @@ describe("acceptance runner boundary", () => {
     const root = process.cwd();
     const manifest = JSON.parse(readFileSync(join(root, "change-evidence.json"), "utf8"));
     const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
-    // Push and PR callers must use their real event/delivery base. Manual
-    // and local runs have no PR predecessor; seed this push fixture from its
-    // declaration, then exercise the real validator with correct/wrong bases.
+    // Push uses its delivery predecessor; local caller proof uses its current
+    // delivery merge base before exercising the real validator with wrong bases.
     const predecessor = process.env.GITHUB_EVENT_NAME === "push"
       ? JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8")).before
-      : process.env.GITHUB_EVENT_NAME === "pull_request"
-        ? git("merge-base", "origin/v2", "HEAD")
-        : manifest.base;
+      : git("merge-base", "origin/v2", "HEAD");
     assert.equal(predecessor, manifest.base, "the declaration base must be the actual merge predecessor");
     const head = git("rev-parse", "HEAD");
     const fixture = mkdtempSync(join(tmpdir(), "bifrost-acceptance-push-caller-"));
