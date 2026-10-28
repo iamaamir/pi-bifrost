@@ -107,10 +107,12 @@
       "requirement": "R16",
       "files": [
         "scripts/acceptance/profiles/live.mjs",
+        "tests/fixtures/http-pi-harness.mjs",
+        "tests/integration/command-policy-acceptance.test.mjs",
         "tests/integration/decision-parity-acceptance.test.mjs"
       ],
       "boundary": "Every isolated Pi extension copy used by the native and live acceptance harnesses now carries schema.json next to the TypeScript sources, and the replay guard baseline tracks the current index.ts region.",
-      "assertions": "Real AgentSession abort, manual, false, and throw cases still pass with the copied schema. The real v1 output-effect and tool-effect guard faults still reach their named no-replay assertions and restore GREEN on the exact new index hash.",
+      "assertions": "Real AgentSession abort, manual, false, and throw cases still pass with the copied schema. Migration and reconciliation command tests wait for a complete current-turn JSON report, not an earlier report or a racing RPC response; a missing report times out. The real v1 output-effect and tool-effect guard faults still reach their named no-replay assertions and restore GREEN on the exact new index hash.",
       "boundaryTest": {
         "file": "tests/integration/native-activation-cancel.test.mjs",
         "name": "cancels real AgentSession activation behind a proven deny-all fence"
