@@ -98,10 +98,14 @@ def run():
                 wait(lambda s, expected=(current + 1, total): page(s) == expected, "next rendered page")
             raise AssertionError("review did not end")
 
+        def start_case():
+            ui.send(master, "/approval-case")
+            wait(lambda s: "/approval-case" in s, "command in editor")
+            ui.send(master, "\r")
+
         try:
-            # Startup may include terminal capability queries; wait before typing command.
-            time.sleep(2)
-            ui.send(master, "/approval-case\r")
+            wait(lambda s: "Bifrost" in s and "healthy" in s, "Pi startup")
+            start_case()
             wait(lambda s: "Apply this Bifrost configuration?" in s, "approval surface")
             ui.send(master, "\r")
             time.sleep(0.2)
@@ -120,7 +124,7 @@ def run():
             assert json.loads(result.read_text())["status"] == "declined"
             assert source.read_text() == original
             result.unlink()
-            ui.send(master, "/approval-case\r")
+            start_case()
             wait(lambda s: page(s)[0] == 1, "second review")
             traverse()
             # Shrinking to a tiny terminal must revoke final-page approval.
