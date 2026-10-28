@@ -14,6 +14,16 @@ describe("shipped JSON artifacts", () => {
     assert.ok(schema !== null && typeof schema === "object" && "$schema" in schema);
   });
 
+  it("documents capability requirements as advisory-only in this release", () => {
+    const schema = readJson("schema.json") as {
+      properties?: { requirements?: { additionalProperties?: boolean; properties?: { mode?: { enum?: string[]; default?: string } } } };
+    };
+    const requirements = schema.properties?.requirements;
+    assert.equal(requirements?.additionalProperties, false);
+    assert.deepEqual(requirements?.properties?.mode?.enum, ["advisory"]);
+    assert.equal(requirements?.properties?.mode?.default, "advisory");
+  });
+
   it("requires schemaVersion 2 or later whenever tierPolicies is present", () => {
     const schema = readJson("schema.json") as {
       properties?: { schemaVersion?: { enum?: number[] } };
@@ -112,13 +122,13 @@ describe("shipped JSON artifacts", () => {
     assert.match(String(property?.description), /ordinary 429 rate limits use a short provider throttle/);
   });
 
-  it("documents the default-on, bounded zero-effect allowance retry and explicit opt-out", () => {
+  it("documents the opt-in, bounded zero-effect allowance retry", () => {
     const schema = readJson("schema.json") as {
       definitions?: { ReliabilityConfig?: { properties?: { retryOnAllowanceExhausted?: { type?: string; default?: unknown; description?: string } } } };
     };
     const property = schema.definitions?.ReliabilityConfig?.properties?.retryOnAllowanceExhausted;
     assert.equal(property?.type, "boolean");
-    assert.equal(property?.default, true);
+    assert.equal(property?.default, false);
     assert.match(String(property?.description), /at most once/);
     assert.match(String(property?.description), /no assistant content/);
     assert.match(String(property?.description), /tool results/);

@@ -58,7 +58,7 @@ Configuration sources must be regular files of at most 10,000,000 bytes. Read-on
 
 ### Structural contract and inline descriptions
 
-The `schema.json` shipped with Bifrost is the authoritative structural contract: it defines every supported field, its type, its allowed values, and its constraints. Every configuration source is validated against it on load, reload, and prospective apply. Unknown fields, invalid enum values, and wrong types are reported with a diagnostic naming the offending path, so no key becomes active silently. A finding that makes a source unusable — an unsupported `schemaVersion`, or a reserved `description` key that a version upgrade would reinterpret — rejects that source and stops routing until it is fixed. Other structural findings load as warnings, because the semantic validators decide the safe outcome for their namespace: an invalid economic or reliability invariant fails closed, while an invalid classifier budget disables classification and keeps local routing. Cross-field rules — tier references, fallback cycles, classifier constraints, economic and reliability invariants — stay with Bifrost's semantic validators, which run on the merged effective policy.
+The `schema.json` shipped with Bifrost is the authoritative structural contract: it defines every supported field, its type, its allowed values, and its constraints. Every configuration source is validated against it on load, reload, and prospective apply. A source nested more than 128 levels is rejected before validation. Unknown fields, invalid enum values, and wrong types are reported with a diagnostic naming the offending path, so no key becomes active silently. A finding that makes a source unusable — an unsupported `schemaVersion`, or a reserved `description` key that a version upgrade would reinterpret — rejects that source and stops routing until it is fixed. Other structural findings load as warnings, because the semantic validators decide the safe outcome for their namespace: an invalid economic or reliability invariant fails closed, while an invalid classifier budget disables classification and keeps local routing. Cross-field rules — tier references, fallback cycles, classifier constraints, economic and reliability invariants — stay with Bifrost's semantic validators, which run on the merged effective policy.
 
 You can annotate any object-valued section with an optional `description` string. Descriptions are metadata: they explain why a configuration exists and never affect routing, classification, eligibility, economics, reliability, or fallback decisions. Bifrost strips them at the load boundary, so no routing subsystem can mistake one for a tier or policy, and they are preserved in the files you author. The same structural findings appear in `/bifrost validate` and its JSON output, as warnings alongside the semantic ones.
 
@@ -176,7 +176,9 @@ For a normal message with routing on and nothing pinned, routing considers:
 
 First matching step wins; later steps are skipped. A rule naming an exact model wins before the cache and classifiers; a rule naming a tier is checked after them. Reliability filtering and strategy selection happen after a tier is resolved.
 
-Classification is enabled by default. On a local-cache miss, the active classifier can receive the current prompt. Set `classifier.enabled` to `false` or run `/bifrost classifier off` to disable the extra classification call. The separate `cache.enabled` setting controls classification-cache use. Setting it to `false` does not clear saved entries; run `/bifrost cache clear` to empty them. The generation provider still receives the prompt.
+Classification is enabled by default. On a local-cache miss, the active classifier can receive the current prompt. Set `classifier.enabled` to `false` or run `/bifrost classifier off` to disable the extra classification call. The separate `cache.enabled` setting controls classification-cache use. Its threshold defaults to `1`, which matches ordered normalized prompts only; set it below `1` to opt into fuzzy Jaccard matches. Setting `cache.enabled` to `false` does not clear saved entries; run `/bifrost cache clear` to empty them. The generation provider still receives the prompt.
+
+Capability requirements are advisory-only in this release. `requirements.mode: "enforce"` is rejected because general capability enforcement is not implemented.
 
 Set optional `classifier.totalTimeoutMs` to bound all external classifier work for one request. It accepts an integer from `1` to `60000`; when the budget expires, Bifrost stops classifier calls and continues with local regex/default routing. Caller cancellation stops routing. When omitted, existing backend timeout and retry settings remain in effect. See the [classifier guide](classifiers.md#prompt-classifier) for details.
 
@@ -215,7 +217,7 @@ Full configuration file, `.pi/bifrost.json`:
   "cache": {
     "enabled": true,
     "maxEntries": 500,
-    "threshold": 0.85
+    "threshold": 1
   },
   "reliability": {
     "enabled": true,
@@ -231,7 +233,7 @@ Full configuration file, `.pi/bifrost.json`:
 
 `reliability.allowanceCooldownScope` defaults to `provider`. A usage or billing rejection then pauses all models with the same Pi provider ID. It does not identify shared billing accounts. Set the value to `model` to pause only the model that returned the rejection. Generic HTTP 429 rate limits remain provider-scoped.
 
-`reliability.enabled: false` disables provider pauses. `reliability.cooldownOnAllowanceExhausted: false` disables usage and billing pauses. `reliability.retryOnAllowanceExhausted: false` disables the one bounded Auto retry but keeps the pause. See [reliability and local cache](reliability-and-cache.md#provider-pauses-are-not-account-checks) for status and reset commands.
+`reliability.enabled: false` disables provider pauses. `reliability.cooldownOnAllowanceExhausted: false` disables usage and billing pauses. `reliability.retryOnAllowanceExhausted` defaults to `false`; set it to `true` to opt in to the one bounded Auto retry while keeping the pause. See [reliability and local cache](reliability-and-cache.md#provider-pauses-are-not-account-checks) for status and reset commands.
 
 ## More examples
 

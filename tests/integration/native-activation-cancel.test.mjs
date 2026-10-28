@@ -8,13 +8,14 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { it } from "node:test";
 import { processGroupExists, terminateProcessGroup } from "../../scripts/acceptance/core.mjs";
+import { REPLAY_GUARD_BASELINE_SHA256 } from "../fixtures/replay-fault-control.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const child = join(root, "tests", "fixtures", "native-activation-cancel-child.mjs");
 const guard = join(root, "scripts", "test-outbound-guard.cjs");
 const credentials = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"];
 const DEADLINE_MS = 120_000;
-const PRODUCTION_SHA256 = "a60d8b9cead960127973414a3a68a8f5dc6e4868316eb895fc1a98029a9c387e";
+const PRODUCTION_SHA256 = REPLAY_GUARD_BASELINE_SHA256;
 const LATE_ABORT_GUARD = `      if (ctx.signal?.aborted) {
         endClassify({ kind: classification.kind, outcome: "aborted" });
         endInput({ outcome: "aborted" });

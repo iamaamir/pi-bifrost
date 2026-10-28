@@ -22,9 +22,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 import { makeModel } from "../helpers.ts";
 import bifrostExtension from "../../index.ts";
+import { REPLAY_GUARD_BASELINE_SHA256 } from "../fixtures/replay-fault-control.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const PRODUCTION_INDEX_SHA256 = "a60d8b9cead960127973414a3a68a8f5dc6e4868316eb895fc1a98029a9c387e";
+const PRODUCTION_INDEX_SHA256 = REPLAY_GUARD_BASELINE_SHA256;
 const RESERVE_EQUALITY_GUARD = "remainingRatio <= rule.reserveRatio";
 
 function sha256(text) {

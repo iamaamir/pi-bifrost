@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,27 @@ function input() {
       boundaryTest: { ...ref }, invariant: { ...ref }, fault: { ...ref } }] },
     testEvents: [{ type: "test:complete", ...ref, passed: true }] };
 }
+
+test("ignores a symlinked node_modules path without hiding other untracked files", () => {
+  const root = mkdtempSync(join(tmpdir(), "bifrost-node-modules-ignore-"));
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  try {
+    git("init", "-q");
+    writeFileSync(join(root, ".gitignore"), readFileSync(join(process.cwd(), ".gitignore"), "utf8"));
+    mkdirSync(join(root, "dependency-target"));
+    symlinkSync(join(root, "dependency-target"), join(root, "node_modules"), "dir");
+    writeFileSync(join(root, "source.ts"), "source");
+
+    const ignoredStatus = git("status", "--porcelain=v1", "--untracked-files=all");
+    assert.doesNotMatch(ignoredStatus, /node_modules/);
+    assert.match(ignoredStatus, /source\.ts/);
+    assert.match(git("check-ignore", "-v", "--", "node_modules"), /\.gitignore:1:node_modules/);
+
+    writeFileSync(join(root, ".gitignore"), readFileSync(join(root, ".gitignore"), "utf8").replace("node_modules\n", "node_modules/\n"));
+    assert.match(git("status", "--porcelain=v1", "--untracked-files=all"), /node_modules/,
+      "the old directory-only pattern must expose a symlink as untracked source noise");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("accepts executed contract evidence and explicit dimension exceptions", () => {
   const data = input();

@@ -153,6 +153,7 @@ function renderPreview(result: ConfigAgentPreviewResult): string {
     `proposal: ${shortDigest(result.proposalDigest)}`,
     `network: ${result.network}; prompt execution: ${result.promptExecution}`,
   ];
+  for (const issue of result.issues) lines.push(`  ${issue.severity}: ${issue.message}`);
   if (result.status !== "ok") {
     for (const note of result.notes) lines.push(`  ${note}`);
     lines.push("-------------------------------------------");

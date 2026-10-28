@@ -183,10 +183,10 @@ export function stripConfigMetadata(source: Record<string, unknown>): Record<str
     const result: Record<string, unknown> = {};
     // Descending into a tier of `economics.tierOverrides` lands in its
     // rule-ID map; the tier itself is still a key of the reserved map.
-    const childrenAreRuleIds = inRuleIdMap || NESTED_RULE_ID_MAP_PARENTS.includes(path);
+    const childrenAreRuleIds = NESTED_RULE_ID_MAP_PARENTS.includes(path);
     for (const [key, entry] of Object.entries(value)) {
       if (key === "description" && !inRuleIdMap && !(version < 3 && DYNAMIC_CONFIG_MAP_PATHS.includes(path))) continue;
-      result[key] = walk(entry, path ? `${path}.${key}` : key, childrenAreRuleIds);
+      Object.defineProperty(result, key, { value: walk(entry, path ? `${path}.${key}` : key, childrenAreRuleIds), enumerable: true, writable: true, configurable: true });
     }
     return result;
   };

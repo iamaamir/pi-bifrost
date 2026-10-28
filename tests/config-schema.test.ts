@@ -63,6 +63,33 @@ function issuePaths(issues: readonly { readonly path?: string; readonly code?: s
 }
 
 describe("config schema contract", () => {
+  it("preserves a user-defined __proto__ tier when stripping metadata", () => {
+    const source = JSON.parse('{"schemaVersion":2,"models":{"__proto__":["fake/chat"]}}') as Record<string, unknown>;
+    const models = stripConfigMetadata(source).models as Record<string, unknown>;
+    assert.equal(Object.hasOwn(models, "__proto__"), true);
+    assert.deepEqual(models["__proto__"], ["fake/chat"]);
+    withTree(({ cwd, extensionDir }) => {
+      const path = join(cwd, ".pi", "bifrost.json");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, '{"schemaVersion":2,"default":"__proto__","models":{"__proto__":["fake/chat"]}}');
+      const loaded = loadConfigForReload(cwd, extensionDir);
+      assert.deepEqual(loaded.diagnostics, []);
+      assert.ok(loaded.config.models);
+      assert.equal(Object.hasOwn(loaded.config.models, "__proto__"), true);
+      assert.deepEqual(loaded.config.models.__proto__, ["fake/chat"]);
+    });
+  });
+
+  it("rejects deeply nested configuration as a source diagnostic", () => {
+    withTree(({ cwd, extensionDir }) => {
+      const path = join(cwd, ".pi", "bifrost.json");
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, '{"unknown":' + '{"x":'.repeat(5000) + '0' + '}'.repeat(5000) + '}');
+      const result = loadConfigForReload(cwd, extensionDir);
+      assert.ok(result.diagnostics.some((issue) => /nesting depth/u.test(issue.message)));
+    });
+  });
+
   it("loads the installed schema once and exposes a stable content digest", () => {
     const digest = configSchemaDigest();
     assert.match(digest, /^[0-9a-f]{64}$/u);
@@ -101,6 +128,26 @@ describe("config schema contract", () => {
     assert.deepEqual(validateEffectiveConfigStructure({ schemaVersion: 2, ...tierPoliciesLayer }), []);
     assert.ok(validateEffectiveConfigStructure({ schemaVersion: 2, economics: { mode: "observe" } })
       .some((issue) => issue.code === "config.schema_missing_field"), "incomplete economics stays rejected");
+  });
+
+  it("accepts and strips descriptions in economic objects without deleting rule IDs", () => {
+    const source = {
+      schemaVersion: 3,
+      economics: {
+        mode: "observe",
+        preference: { description: "preference note", billingClass: "free" },
+        scopes: { demo: { description: "scope note", kind: "model", model: "fake/chat" } },
+        sources: [{ description: "source note", id: "source", scopeRef: "demo", authority: "declared" }],
+        admission: [{ description: "admission note", id: "description", scopeRef: "demo", windowId: "window", reserveRatio: 0.1, unknown: "ignore" }],
+        tierOverrides: { general: { description: { description: "override note", reserveRatio: 0.2 } } },
+        observations: [{ description: "observation note", sourceId: "source", scopeRef: "demo", billing: "free", observedAt: 1, expiresAt: 2, revision: 1, windows: [{ description: "window note", id: "window", period: { description: "period note", id: "p", sequence: 1 }, unit: "requests", remaining: 1 }] }],
+      },
+    };
+    assert.deepEqual(validateConfigSourceStructure(source), []);
+    const stripped = stripConfigMetadata(source);
+    const economics = stripped.economics as typeof source.economics;
+    assert.deepEqual(economics.tierOverrides.general.description, { reserveRatio: 0.2 });
+    assert.equal(JSON.stringify(economics).includes(" note"), false);
   });
 
   it("accepts inline descriptions in every supported section and strips them at the load boundary", () => {

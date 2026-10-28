@@ -1293,6 +1293,19 @@ describe("structural findings reach the agent", () => {
     }
   });
 
+  it("renders warnings and errors in candidate previews", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", { schemaVersion: 2, default: "a", models: { a: ["alpha/strong"] }, unsupportedField: 1 });
+      const warning = contentOf(await harness.run({ operation: "preview", patch: { strategy: "cheapest" } }));
+      assert.match(warning, /warning:.*Unsupported configuration field "unsupportedField"/u);
+      const rejected = contentOf(await harness.run({ operation: "preview", candidate: { schemaVersion: 99 } }));
+      assert.match(rejected, /error:.*schemaVersion/u);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("names every supported schema version and accepts a version-3 source", async () => {
     const harness = freshHarness();
     try {

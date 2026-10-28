@@ -203,7 +203,7 @@ describe("pinned Pi dispatch identity evidence", { timeout: 180_000, concurrency
   });
 
   it("binds physical and Auto turn_end IDs to the exact persisted assistant entry", async () => {
-    assert.equal(await readPinnedPiVersion(), "1.0.1");
+    assert.equal(await readPinnedPiVersion(), "1.4.0");
 
     for (const model of ["fake/healthy", "bifrost/auto"]) {
       const home = mkdtempSync(join(tmpdir(), "bifrost-dispatch-home-"));

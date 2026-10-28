@@ -10,6 +10,7 @@ import { makeModel } from "../helpers.ts";
 import bifrostExtension from "../../index.ts";
 import { TYPE_SAFE_API_KEY_ENV } from "../../classifier-backends.ts";
 import { BIFROST_AUTO_ID, BIFROST_AUTO_PROVIDER } from "../../virtual-model.ts";
+import { REPLAY_GUARD_BASELINE_SHA256 } from "../fixtures/replay-fault-control.mjs";
 
 function strictConfig(overrides = {}) {
   return {
@@ -260,7 +261,7 @@ describe("activation cancellation acceptance", { timeout: 120_000 }, () => {
   });
 
   it("fault control: removing the late-abort guard allows forbidden late dispatch", async () => {
-    const BASELINE_SHA256 = "a60d8b9cead960127973414a3a68a8f5dc6e4868316eb895fc1a98029a9c387e";
+    const BASELINE_SHA256 = REPLAY_GUARD_BASELINE_SHA256;
     const sha256 = (text) => createHash("sha256").update(text).digest("hex");
     const original = readFileSync(join(ROOT, "index.ts"), "utf8");
     assert.equal(sha256(original), BASELINE_SHA256,

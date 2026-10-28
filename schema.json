@@ -55,6 +55,14 @@
       "$ref": "#/definitions/AffinityConfig",
       "description": "Optional explicit affinity override. When absent, the Pi extension retains a proven successful Auto-dispatch anchor within the selected tier; physical selection and the resolve-only API remain off by default. Retention stays inside the final selection pool and does not override hard exclusions. This namespace requires schemaVersion 2."
     },
+    "requirements": {
+      "type": "object",
+      "description": "Capability enforcement is not supported in this release. Only the advisory mode is accepted; do not use requirements to claim that a model capability is enforced.",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string", "enum": ["advisory"], "default": "advisory" }
+      }
+    },
     "enabled": {
       "type": "boolean",
       "description": "Enable or disable routing. When disabled, Bifrost does not switch models for new turns. Pi uses the selected physical model.",
@@ -278,7 +286,7 @@
     },
     "CacheConfig": {
       "type": "object",
-      "description": "Fuzzy classification cache. Repeated or similar prompts reuse the cached category instead of calling the classifier again.",
+      "description": "Classification cache. Exact ordered prompt matches are the default; set threshold below 1 to opt into fuzzy reuse.",
       "additionalProperties": false,
       "properties": {
         "description": {
@@ -301,8 +309,8 @@
           "type": "number",
           "minimum": 0,
           "maximum": 1,
-          "description": "Jaccard similarity threshold for fuzzy cache matches. 0 = any prompt sharing at least one token with an entry matches (prompts with zero token overlap never match). 1 = only exact token matches.",
-          "default": 0.85
+          "description": "Jaccard threshold for opt-in fuzzy cache matches. Values below 1 enable fuzzy matching; 1 requires an exact ordered normalized prompt match.",
+          "default": 1
         },
         "ttlHours": {
           "type": "number",
@@ -360,8 +368,8 @@
         },
         "retryOnAllowanceExhausted": {
           "type": "boolean",
-          "description": "Retry at most once on a different configured model only when reliability and cooldownOnAllowanceExhausted are enabled and Pi proves the failed Auto generation had no assistant content, tool calls, tool results, or other activity. The failed response is omitted from the next model context; the raw transcript remains visible.",
-          "default": true
+"description": "Disabled by default. Set true to retry at most once on a different configured model only when reliability and cooldownOnAllowanceExhausted are enabled and Pi proves the failed Auto generation had no assistant content, tool calls, tool results, or other activity. The failed response is omitted from the next model context; the raw transcript remains visible.",
+          "default": false
         },
         "stateVersion": {
           "type": "integer",
@@ -438,6 +446,7 @@
           "required": ["billingClass"],
           "description": "Optional preference among final eligible candidates in the already selected tier. It does not exclude candidates or override a direct model selection. Requires fresh explicit billing facts; unknown or conflicting facts remain neutral.",
           "properties": {
+            "description": { "type": "string" },
             "billingClass": { "type": "string", "enum": ["subscription", "metered", "free"] }
           }
         },
@@ -446,8 +455,8 @@
           "maxProperties": 64,
           "additionalProperties": {
             "oneOf": [
-              { "type": "object", "required": ["kind", "model"], "additionalProperties": false, "properties": { "kind": { "const": "model" }, "model": { "type": "string", "minLength": 1, "maxLength": 256 } } },
-              { "type": "object", "required": ["kind", "provider"], "additionalProperties": false, "properties": { "kind": { "const": "provider" }, "provider": { "type": "string", "minLength": 1, "maxLength": 128 } } },
+              { "type": "object", "required": ["kind", "model"], "additionalProperties": false, "properties": { "description": { "type": "string" }, "kind": { "const": "model" }, "model": { "type": "string", "minLength": 1, "maxLength": 256 } } },
+              { "type": "object", "required": ["kind", "provider"], "additionalProperties": false, "properties": { "description": { "type": "string" }, "kind": { "const": "provider" }, "provider": { "type": "string", "minLength": 1, "maxLength": 128 } } },
               { "$ref": "#/definitions/V3MetadataDescription" }
             ]
           }
@@ -460,6 +469,7 @@
             "properties": {
               "id": { "type": "string", "minLength": 1, "maxLength": 64 },
               "scopeRef": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "description": { "type": "string" },
               "authority": { "type": "string", "enum": ["declared", "estimated"], "description": "A static fact entered by the user; it is not authoritative provider billing data." }
             }
           }
@@ -473,19 +483,20 @@
               "id": { "type": "string", "minLength": 1, "maxLength": 128 },
               "scopeRef": { "type": "string", "minLength": 1, "maxLength": 64 },
               "windowId": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "description": { "type": "string" },
               "reserveRatio": { "type": "number", "minimum": 0, "maximum": 1 },
               "unknown": { "type": "string", "enum": ["block", "ignore"] }
             }
           }
         },
-        "tierOverrides": { "type": "object", "additionalProperties": { "oneOf": [ { "type": "object", "additionalProperties": { "type": "object", "additionalProperties": false, "properties": { "reserveRatio": { "type": "number", "minimum": 0, "maximum": 1 }, "unknown": { "type": "string", "enum": ["block", "ignore"] } } } }, { "$ref": "#/definitions/V3MetadataDescription" } ] } },
+        "tierOverrides": { "type": "object", "additionalProperties": { "oneOf": [ { "type": "object", "additionalProperties": { "type": "object", "additionalProperties": false, "properties": { "description": { "type": "string" }, "reserveRatio": { "type": "number", "minimum": 0, "maximum": 1 }, "unknown": { "type": "string", "enum": ["block", "ignore"] } } } }, { "$ref": "#/definitions/V3MetadataDescription" } ] } },
         "observations": {
           "type": "array", "maxItems": 64,
           "description": "User-entered static observations only. Values are local evidence and must be refreshed by the user; no provider adapter is invoked.",
           "items": {
             "type": "object", "required": ["sourceId", "scopeRef", "billing", "observedAt", "expiresAt", "revision", "windows"], "additionalProperties": false,
             "properties": {
-              "sourceId": { "type": "string" }, "scopeRef": { "type": "string" },
+              "description": { "type": "string" }, "sourceId": { "type": "string" }, "scopeRef": { "type": "string" },
               "billing": { "type": "string", "enum": ["subscription", "metered", "free", "unknown"] },
               "observedAt": { "type": "integer", "minimum": 0 }, "expiresAt": { "type": "integer", "minimum": 0 }, "revision": { "type": "integer", "minimum": 0 },
               "windows": { "type": "array", "maxItems": 16, "items": { "$ref": "#/definitions/EconomicWindow" } }
@@ -508,7 +519,8 @@
       "type": "object", "required": ["id", "period", "unit", "remaining"], "additionalProperties": false,
       "properties": {
         "id": { "type": "string" },
-        "period": { "type": "object", "required": ["id", "sequence"], "additionalProperties": false, "properties": { "id": { "type": "string" }, "sequence": { "type": "integer", "minimum": 0 } } },
+        "description": { "type": "string" },
+        "period": { "type": "object", "required": ["id", "sequence"], "additionalProperties": false, "properties": { "description": { "type": "string" }, "id": { "type": "string" }, "sequence": { "type": "integer", "minimum": 0 } } },
         "unit": { "type": "string", "enum": ["requests", "tokens", "credits", "ratio", "currency"] },
         "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
         "remaining": { "type": "number", "minimum": 0 },

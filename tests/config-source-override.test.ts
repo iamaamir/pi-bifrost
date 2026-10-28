@@ -125,7 +125,7 @@ describe("config source override loading", () => {
     withConfigTree(({ cwd, extensionDir }) => {
       const defaults = BUNDLED_PUBLIC_INIT_DEFAULTS;
       writeJson(join(extensionDir, "bifrost.json"), {
-        cache: { threshold: 0.88, maxEntries: 500, enabled: true },
+        cache: { threshold: 1, maxEntries: 500, enabled: true },
         classifier: { fallbackToRegex: true, temperature: 0, maxTokens: 20, method: "auto", enabled: true },
         customNote: "private extension setting",
       });

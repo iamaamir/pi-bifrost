@@ -1,4 +1,4 @@
-import { classifyCompiled, compileRules, type RouteRule, type RoutingModelBase, type RoutedModelResolution, type RoutingStrategy, type SkippedCandidate, type TierResolutionOptions } from "./routing.ts";
+import { classifyCompiled, compileRules, type CandidateDiscoveryExclusion, type RouteRule, type RoutingModelBase, type RoutedModelResolution, type RoutingStrategy, type SkippedCandidate, type TierResolutionOptions, type UnresolvedCandidatePattern } from "./routing.ts";
 import { debug, debugMeasure } from "./debug.ts";
 import { CLASSIFIER_BACKEND_IDS, type ClassificationJudgment, type ClassifierOutput, type ClassifierBackend } from "./classifier-backends.ts";
 import type { EconomicCandidateEvaluation } from "./routing.ts";
@@ -62,10 +62,19 @@ export type ClassificationResult =
   | { readonly kind: "fallback"; readonly tier: string; readonly classificationOutcome?: ClassificationOutcome; readonly classifierAttempt?: ClassifierAttemptSummary }
   | { readonly kind: "unclassified"; readonly classificationOutcome?: ClassificationOutcome; readonly classifierAttempt?: ClassifierAttemptSummary };
 
+export type RouteDecisionExclusionCode = SkippedCandidate["reason"] | CandidateDiscoveryExclusion["reason"] | UnresolvedCandidatePattern["reason"] | "economic_reserve";
+export type RouteDecisionEvidenceSource = "reliability_state" | "economic_snapshot" | "registry_snapshot";
+
+export interface RouteDecisionExclusionEvidence {
+  readonly code: RouteDecisionExclusionCode;
+  readonly source: RouteDecisionEvidenceSource;
+}
+
 export interface RouteDecisionCandidate {
   readonly model: string;
   readonly status: "eligible" | "excluded";
-  readonly exclusion?: SkippedCandidate["reason"] | "economic_reserve";
+  readonly exclusion?: RouteDecisionExclusionCode;
+  readonly exclusionEvidence?: readonly RouteDecisionExclusionEvidence[];
   readonly reserve?: {
     readonly disposition: string;
     readonly wouldReject: boolean;
@@ -78,6 +87,11 @@ export interface RouteDecisionPool {
   readonly strategy: RoutingStrategy;
   readonly patterns: readonly string[];
   readonly candidates: readonly RouteDecisionCandidate[];
+  readonly unresolvedPatterns?: readonly {
+    readonly pattern: string;
+    readonly exclusion: UnresolvedCandidatePattern["reason"];
+    readonly exclusionEvidence: readonly RouteDecisionExclusionEvidence[];
+  }[];
   readonly billingPreference?: {
     readonly mode: "observe" | "policy";
     readonly preferredClass: string;
@@ -142,6 +156,8 @@ function summarizePool(
   pattern: string | readonly string[] | undefined,
   candidates: RoutedModelResolution["primary"]["candidates"],
   skipped: readonly SkippedCandidate[],
+  discoveryExclusions: readonly CandidateDiscoveryExclusion[],
+  unresolvedPatterns: readonly UnresolvedCandidatePattern[],
   economic?: readonly EconomicCandidateEvaluation[],
   billingPreference?: BillingPreferenceProjection,
 ): RouteDecisionPool {
@@ -151,15 +167,21 @@ function summarizePool(
     tier,
     strategy,
     patterns: pattern === undefined ? [] : Array.isArray(pattern) ? [...pattern] : [pattern],
-    candidates: candidates.map((candidate) => {
+    candidates: [
+      ...candidates.map((candidate) => {
       const model = `${candidate.provider}/${candidate.id}`;
       const exclusion = exclusions.get(model);
       const reserve = reserveEvaluations.get(model);
       const hardExcluded = reserve?.mode === "policy" && reserve.disposition === "rejected";
+      const exclusionEvidence = [
+        ...(exclusion ? [{ code: exclusion, source: "reliability_state" as const }] : []),
+        ...(hardExcluded ? [{ code: "economic_reserve" as const, source: "economic_snapshot" as const }] : []),
+      ];
       return {
         model,
-        status: exclusion || hardExcluded ? "excluded" : "eligible",
+        status: exclusionEvidence.length > 0 ? "excluded" as const : "eligible" as const,
         ...(exclusion ? { exclusion } : hardExcluded ? { exclusion: "economic_reserve" as const } : {}),
+        ...(exclusionEvidence.length > 0 ? { exclusionEvidence } : {}),
         ...(reserve ? {
           reserve: {
             disposition: reserve.disposition,
@@ -169,6 +191,20 @@ function summarizePool(
         } : {}),
       };
     }),
+      ...discoveryExclusions.map(({ model, reason }) => ({
+        model,
+        status: "excluded" as const,
+        exclusion: reason,
+        exclusionEvidence: [{ code: reason, source: "registry_snapshot" as const }],
+      })),
+    ],
+    ...(unresolvedPatterns.length > 0 ? {
+      unresolvedPatterns: unresolvedPatterns.map(({ pattern, reason }) => ({
+        pattern,
+        exclusion: reason,
+        exclusionEvidence: [{ code: reason, source: "registry_snapshot" as const }],
+      })),
+    } : {}),
     ...(billingPreference ? {
       billingPreference: {
         mode: billingPreference.mode,
@@ -233,6 +269,8 @@ export function buildRouteDecisionSummary<M extends RoutingModelBase>(
         options.requestedPattern,
         resolution.primary.candidates,
         resolution.primary.skipped,
+        resolution.primary.discoveryExclusions,
+        resolution.primary.unresolvedPatterns,
         resolution.primary.economic,
         resolution.primary.billingPreference,
       ),
@@ -243,6 +281,8 @@ export function buildRouteDecisionSummary<M extends RoutingModelBase>(
           options.defaultPattern,
           resolution.fallback.candidates,
           resolution.fallback.skipped,
+          resolution.fallback.discoveryExclusions,
+          resolution.fallback.unresolvedPatterns,
           resolution.fallback.economic,
           resolution.fallback.billingPreference,
         ),
@@ -260,6 +300,8 @@ export function buildRouteDecisionSummary<M extends RoutingModelBase>(
       attempt.pattern,
       attempt.resolution.candidates,
       attempt.resolution.skipped,
+      attempt.resolution.discoveryExclusions,
+      attempt.resolution.unresolvedPatterns,
       attempt.resolution.economic,
       attempt.resolution.billingPreference,
     ));

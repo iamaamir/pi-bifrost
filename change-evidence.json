@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "base": "7382500b6f2cfbf16f48c2b0a88e6b85e792f1f4",
+  "base": "61617654ac5b919fa4a3ddee20174b77c0ac9d87",
   "contracts": [
     {
       "id": "structural-config-contract",
@@ -16,7 +16,7 @@
         "tests/diagnostics.test.ts"
       ],
       "boundary": "Every configuration source layer and the merged effective policy are structurally validated against the shipped schema.json on load, reload, boot, and prospective apply. Findings name the offending path, and only a finding that makes a source unusable rejects the layer.",
-      "assertions": "Unknown fields, invalid enum values, and wrong types produce config.schema_unsupported_field, config.schema_enum, and config.schema_type diagnostics at the exact path. A partial layer may defer schemaVersion conditionals that the effective configuration enforces. A schema copy that adds a field accepts what the installed schema still rejects, so acceptance follows schema.json instead of duplicated code. categoryStrategies keeps its strategy enum for every key, so a per-tier typo still produces a finding while the version 3 metadata key accepts free text. The offline validation report and its JSON form carry the same structural findings as warnings with the offending path.",
+      "assertions": "Unknown fields, invalid enum values, and wrong types produce config.schema_unsupported_field, config.schema_enum, and config.schema_type diagnostics at the exact path. Deeply nested sources fail with a bounded diagnostic, and metadata stripping preserves a user-defined __proto__ tier. A partial layer may defer schemaVersion conditionals that the effective configuration enforces. A schema copy that adds a field accepts what the installed schema still rejects, so acceptance follows schema.json instead of duplicated code. categoryStrategies keeps its strategy enum for every key, so a per-tier typo still produces a finding while the version 3 metadata key accepts free text. The offline validation report and its JSON form carry the same structural findings as warnings with the offending path.",
       "boundaryTest": {
         "file": "tests/config-schema.test.ts",
         "name": "rejects unsupported fields, invalid values, and wrong types in source layers"
@@ -40,7 +40,7 @@
         "tests/schema.test.ts"
       ],
       "boundary": "Inline description metadata is valid in fixed-shape sections under every supported schema version and inside dynamically keyed maps under schemaVersion 3. It is preserved in the authored file and stripped before routing.",
-      "assertions": "A loaded configuration contains no description key or text. Described and undescribed configurations load to identical routing policy. A version 2 tier named description keeps its pools. An ambiguous version 3 upgrade fails closed with a diagnostic naming models.description. A version 3 layer that puts a non-string value on a reserved key is rejected instead of being stripped, so routing never continues with the key silently deleted. Admission rule IDs one level below economics.tierOverrides keep their meaning in every version and reach routing unchanged.",
+      "assertions": "A loaded configuration contains no description key or text. Described and undescribed configurations load to identical routing policy. A version 2 tier named description keeps its pools. An ambiguous version 3 upgrade fails closed with a diagnostic naming models.description. A version 3 layer that puts a non-string value on a reserved key is rejected instead of being stripped, so routing never continues with the key silently deleted. Admission rule IDs one level below economics.tierOverrides keep their meaning in every version and reach routing unchanged. Economic scopes, sources, preferences, admissions, observations, windows, and periods accept descriptions that are stripped before routing.",
       "boundaryTest": {
         "file": "tests/config-schema.test.ts",
         "name": "accepts inline descriptions in every supported section and strips them at the load boundary"
@@ -62,7 +62,7 @@
         "commands.ts",
         "index.ts",
         "tests/auto-setup.test.ts",
-        "tests/reconciliation-command-registered.test.ts"
+        "tests/reconciliation-command-router.test.ts"
       ],
       "boundary": "Boot, reload, init, and background setup report the structural findings the domain validators own without stopping routing. An unusable source still blocks generation, init, and reconciliation writes.",
       "assertions": "Boot prints one [bifrost/config] warning line per structural finding and keeps routing. Reload logs the warnings after installing the configuration. A prospective reconciliation write stays blocked by unusable diagnostics and reports the warnings the proposed source would load with before the user commits it. A prospective init write stays blocked by unusable diagnostics. Generated bootstrap configuration carries only supported schema versions and no unsupported classifier field.",
@@ -155,7 +155,7 @@
         "tests/integration/config-agent-acceptance.test.mjs"
       ],
       "boundary": "The bifrost_config agent tool inspects Pi's real catalog and every config layer, checks a candidate offline, previews bounded route decisions without dispatching, and applies one approved config file atomically through the same reload path as /bifrost reload.",
-      "assertions": "inspect and check report the same structural warnings boot and reload print, without vetoing a write; inspect names every supported schema version and accepts a version-3 source whose reserved description key never becomes a tier; check and preview never write or dispatch; apply writes only after an answered approval, rejects changed candidate bytes, changed selected source, changed layers, changed model inventory, and unsafe sources; the previous config survives a failed write; a saved-but-not-activated write is reported honestly; unknown operations fail closed; config-layer paths come from the shared merge-order helper.",
+      "assertions": "inspect, check, and preview report structural warnings without vetoing a write; rejected previews also show their errors; inspect names every supported schema version and accepts a version-3 source whose reserved description key never becomes a tier; check and preview never write or dispatch; apply writes only after an answered approval, rejects changed candidate bytes, changed selected source, changed layers, changed model inventory, and unsafe sources; the previous config survives a failed write; a saved-but-not-activated write is reported honestly; unknown operations fail closed; config-layer paths come from the shared merge-order helper.",
       "boundaryTest": {
         "file": "tests/integration/config-agent-acceptance.test.mjs",
         "name": "checks, applies through an answered approval, saves one source, and activates it"
@@ -198,10 +198,6 @@
       "files": [
         "tests/fixtures/replay-fault-control.mjs",
         "tests/integration/activation-cancellation-acceptance.test.mjs",
-        "tests/integration/affinity-policy-acceptance.test.mjs",
-        "tests/integration/classifier-transport-acceptance.test.mjs",
-        "tests/integration/command-privacy-acceptance.test.mjs",
-        "tests/integration/economic-policy-acceptance.test.mjs",
         "tests/integration/native-activation-cancel.test.mjs"
       ],
       "boundary": "The reviewed production baseline sha256 recorded once in tests/fixtures/replay-fault-control.mjs and repeated in six integration fault gates must equal the reviewed committed index.ts, so offline fault proofs copy, mutate, and restore the real source.",
@@ -254,7 +250,7 @@
       },
       "invariant": {
         "file": "tests/verification-workflow.test.mjs",
-        "name": "release-gates stays unconditional with all seven gates and the report publishers"
+        "name": "release-gates fails closed on failed PR evidence preflight"
       },
       "fault": {
         "file": "tests/verification-workflow.test.mjs",

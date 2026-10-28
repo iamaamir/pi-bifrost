@@ -172,6 +172,7 @@ function config(mode = "v1") {
       windowMinutes: 5,
       cooldownMinutes: 60,
       allowanceCooldownScope: "provider",
+      retryOnAllowanceExhausted: true,
       ...(mode === "v2" ? { stateVersion: 2 } : {}),
     },
   };

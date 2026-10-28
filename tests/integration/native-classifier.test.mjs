@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { execPath } from "node:process";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -256,13 +256,13 @@ it("routes real AgentSession through Pi-native classifier behind a proven deny-a
     assert.match(denyAllAttempts, /blocked UDP datagram to 127\.0\.0\.1/);
 
     let runCounter = 0;
-    async function runChild(extraEnv) {
+    async function runChild(extraEnv, childPath = child) {
       runCounter += 1;
       const runScratch = join(scratch, `run-${runCounter}`);
       mkdirSync(runScratch, { recursive: true });
       writeFileSync(violations, "");
       cleanupSafe = false;
-      const result = await runNode(["--test", "--experimental-strip-types", child], { cwd: root, env: { ...childEnv, BIFROST_NATIVE_CLASSIFIER_SCRATCH: runScratch, ...extraEnv }, timeoutMs: 90000 });
+      const result = await runNode(["--test", "--experimental-strip-types", childPath], { cwd: root, env: { ...childEnv, BIFROST_NATIVE_CLASSIFIER_SCRATCH: runScratch, ...extraEnv }, timeoutMs: 90000 });
       cleanupSafe = result.groupTerminated === true;
       return result;
     }
@@ -270,6 +270,50 @@ it("routes real AgentSession through Pi-native classifier behind a proven deny-a
     const green = await runChild({});
     assert.equal(green.status, 0, `${green.stdout}\n${green.stderr}`);
     assert.equal(readFileSync(violations, "utf8"), "", "native classifier AgentSession made blocked outbound attempt");
+
+    const precedence = await runChild({ BIFROST_NATIVE_CLASSIFIER_SCENARIO: "backend-precedence" });
+    assert.equal(precedence.status, 0, `${precedence.stdout}\n${precedence.stderr}`);
+    assert.equal(readFileSync(violations, "utf8"), "", "backend precedence scenario made blocked outbound attempt");
+
+    const deadline = await runChild({ BIFROST_NATIVE_CLASSIFIER_SCENARIO: "deadline-late" });
+    assert.equal(deadline.status, 0, `${deadline.stdout}\n${deadline.stderr}`);
+    assert.equal(readFileSync(violations, "utf8"), "", "deadline scenario made blocked outbound attempt");
+
+    const faultRoot = join(scratch, "late-result-fault-source");
+    cpSync(root, faultRoot, { recursive: true, filter: (source) => !source.includes("/.git") && !source.includes("/node_modules") && !source.includes("/coverage") });
+    symlinkSync(join(root, "node_modules"), join(faultRoot, "node_modules"));
+    const pipelinePath = join(faultRoot, "classification-pipeline.ts");
+    const nativePath = join(faultRoot, "classifier-pi-native.ts");
+    const originalPipeline = readFileSync(pipelinePath, "utf8");
+    const originalNative = readFileSync(nativePath, "utf8");
+    const faultyPipeline = originalPipeline
+      .replace("const abort = () => finish({ status: \"aborted\" });", "const abort = () => {};" )
+      .replace("if (classificationOutcome === \"deadline\" || (deadlineAt !== undefined && performance.now() >= deadlineAt)) {", "if (false) {")
+      .replace("      }\n      if (signal?.aborted) return stop(\"aborted\");\n    }\n\n    // Existing prompt classifier", "      }\n    }\n\n    // Existing prompt classifier");
+    const faultyNative = originalNative
+      .replace("result = await abortableResult(options.registry.classify(resolved.model, context, { signal: controller.signal }), controller.signal);", "result = await options.registry.classify(resolved.model, context, { signal: controller.signal });")
+      .replace("        if (signal?.aborted) return finish(\"aborted\");\n        if (controller.signal.aborted) {\n          recordFailure(\"timeout\");\n          return finish(\"timeout\");\n        }\n\n        if (result?.stopReason === \"aborted\")", "        if (result?.stopReason === \"aborted\")");
+    assert.notEqual(faultyPipeline, originalPipeline, "controlled late-result fault must mutate pipeline deadline guards");
+    assert.notEqual(faultyNative, originalNative, "controlled late-result fault must bypass native abort guards");
+    writeFileSync(pipelinePath, faultyPipeline);
+    writeFileSync(nativePath, faultyNative);
+    const lateFault = await runChild({ BIFROST_NATIVE_CLASSIFIER_SCENARIO: "deadline-late" }, join(faultRoot, "tests/fixtures/native-classifier-child.mjs"));
+    assert.notEqual(lateFault.status, 0, `late-result mutant must fail Pi dispatch assertions\n${lateFault.stdout}\n${lateFault.stderr}`);
+    assert.match(`${lateFault.stdout}\n${lateFault.stderr}`, /deadline fallback dispatches configured default tier/, "mutant must fail intended dispatch assertion, not startup");
+
+    writeFileSync(nativePath, originalNative);
+    const nativeMissMutant = originalNative.replace(
+      "const judgment = decodePiNativeJudgment(result, request.tiers, 0, resolved.id);",
+      "const judgment = undefined;",
+    );
+    assert.notEqual(nativeMissMutant, originalNative, "precedence mutant must force native classification miss");
+    writeFileSync(nativePath, nativeMissMutant);
+    const precedenceFault = await runChild(
+      { BIFROST_NATIVE_CLASSIFIER_SCENARIO: "backend-precedence-mutant" },
+      join(faultRoot, "tests/fixtures/native-classifier-child.mjs"),
+    );
+    assert.equal(precedenceFault.status, 0, `${precedenceFault.stdout}\n${precedenceFault.stderr}`);
+    assert.match(precedenceFault.stdout, /pass 1/, "native-miss mutant must prove prompt-decoy fallback assertions");
 
     for (const fault of ["wrong-tier", "disabled", "no-extension"]) {
       const red = await runChild({ BIFROST_NATIVE_CLASSIFIER_FAULT: fault });

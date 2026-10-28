@@ -31,6 +31,18 @@ import {
 
 const MAX_CONFIG_SOURCE_DIAGNOSTICS = 32;
 const MAX_CONFIG_SOURCE_DIAGNOSTIC_CHARS = 192;
+const MAX_CONFIG_NESTING_DEPTH = 128;
+
+function exceedsConfigNestingDepth(value: unknown): boolean {
+  const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+  while (pending.length > 0) {
+    const current = pending.pop()!;
+    if (!current.value || typeof current.value !== "object") continue;
+    if (current.depth > MAX_CONFIG_NESTING_DEPTH) return true;
+    for (const child of Object.values(current.value)) pending.push({ value: child, depth: current.depth + 1 });
+  }
+  return false;
+}
 
 /** `reliability.observations` has its own shape check further down, so the
  * source-local reliability pass excludes this code to avoid reporting the same
@@ -40,7 +52,9 @@ const RELIABILITY_OBSERVATIONS_ISSUE = "config.reliability_observations_invalid"
 /** Namespaces a single source layer can be judged on without the other layers'
  * context; any other issue needs the merged policy and is checked there. */
 function isSourceLocalPolicyIssue(code: string | undefined): boolean {
-  return code?.startsWith("config.affinity_") === true || code?.startsWith("config.reliability_") === true;
+  return code?.startsWith("config.affinity_") === true
+    || code?.startsWith("config.reliability_") === true
+    || code === "config.requirements_unsupported";
 }
 
 function criterionObject(value: unknown): value is Record<string, unknown> {
@@ -129,16 +143,18 @@ function sourcePolicyDiagnostics(value: Record<string, unknown>): string[] {
   }
   const affinity = value.affinity;
   const reliability = value.reliability;
+  const requirements = value.requirements;
   const sourceIssues = validateConfig({
     ...defaultConfig(),
     schemaVersion: 2,
     models: {},
     ...(affinity === undefined ? {} : { affinity }),
     ...(reliability === undefined ? {} : { reliability }),
+    ...(requirements === undefined ? {} : { requirements }),
   } as BifrostConfig).filter((issue) => issue.severity === "error"
     && isSourceLocalPolicyIssue(issue.code)
     && issue.code !== RELIABILITY_OBSERVATIONS_ISSUE);
-  if (sourceIssues.length) add("affinity or reliability contains an invalid source-local policy.");
+  if (sourceIssues.length) add("affinity, reliability, or requirements contains an invalid or unsupported source-local policy.");
   const observations = criterionObject(reliability) ? reliability.observations : undefined;
   if (observations !== undefined && (!criterionObject(observations)
     || Object.keys(observations).some((key) => key !== "enabled")
@@ -258,6 +274,10 @@ function loadConfigLayers(
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       addDiagnostic(layer, `${layer} config must contain an object.`);
+      continue;
+    }
+    if (exceedsConfigNestingDepth(parsed)) {
+      addDiagnostic(layer, `${layer} config exceeds the nesting depth limit of ${MAX_CONFIG_NESTING_DEPTH}.`);
       continue;
     }
     // Structural validation runs on the document as authored; the runtime

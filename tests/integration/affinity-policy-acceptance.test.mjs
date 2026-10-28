@@ -22,9 +22,10 @@ import { makeModel } from "../helpers.ts";
 import bifrostExtension from "../../index.ts";
 import { resolveConfiguredTier } from "../../routing.ts";
 import { buildRouteDecisionSummary } from "../../classification-pipeline.ts";
+import { REPLAY_GUARD_BASELINE_SHA256 } from "../fixtures/replay-fault-control.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const PRODUCTION_INDEX_SHA256 = "a60d8b9cead960127973414a3a68a8f5dc6e4868316eb895fc1a98029a9c387e";
+const PRODUCTION_INDEX_SHA256 = REPLAY_GUARD_BASELINE_SHA256;
 const SELECTION_CANDIDATES_GUARD = "const selectionCandidates = targetPool.selectionCandidates ?? targetPool.healthyCandidates;";
 const SELECTION_CANDIDATES_MUTANT = "const selectionCandidates = targetPool.candidates ?? targetPool.selectionCandidates ?? targetPool.healthyCandidates;";
 
@@ -268,7 +269,7 @@ describe("G06 affinity policy acceptance", { timeout: 60_000 }, () => {
     assert.deepEqual(observed.draws, off.draws, "observe mode must leave the RNG draw sequence unchanged");
   });
 
-  it("does not retain a quick-tier anchor for another tier, an explicit origin, or a pinned origin", () => {
+  it("does not retain a quick-tier anchor for another tier or explicit tier/model and pinned origins", () => {
     const c = makeModel("fixture", "c");
     const d = makeModel("fixture", "d");
     const otherTier = resolve({ resolveConfiguredTier }, {
@@ -290,6 +291,16 @@ describe("G06 affinity policy acceptance", { timeout: 60_000 }, () => {
     });
     assert.equal(explicit.resolution.affinityObservation.selection, "not_applicable");
     assert.equal(explicit.resolution.affinityObservation.selectedModel, "fixture/b");
+    const explicitModel = resolve({ resolveConfiguredTier }, {
+      config: resolverConfig({ models: { quick: ["fixture/a", "fixture/b"] } }),
+      available: [a, b],
+      anchor: anchorFor("fixture/a"),
+      origin: "explicit_model",
+      tier: "fixture/b",
+      randomValue: 0.9,
+    });
+    assert.equal(explicitModel.resolution.affinityObservation.selection, "not_applicable");
+    assert.equal(explicitModel.resolution.affinityObservation.selectedModel, "fixture/b");
     const pinned = resolve({ resolveConfiguredTier }, {
       config: resolverConfig({ models: { quick: ["fixture/a", "fixture/b"] } }),
       available: [a, b],

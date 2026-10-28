@@ -24,6 +24,10 @@ The existing deterministic acceptance run checks each test reference against its
 
 For a local run, set `BIFROST_EVIDENCE_BASE` to the full base SHA and run `npm run acceptance`. CI reads the PR base from the GitHub event instead. Acceptance records the declaration in its result, alongside the existing start/end revision and source fingerprints. The declaration does not embed its own commit SHA, which would change whenever the declaration is committed.
 
+After merging a published base into a branch, rebind and check the declaration with `node scripts/acceptance/evidence-rebind.mjs <base-ref> --apply`. The helper resolves the base as a real commit, validates that it is an ancestor of HEAD, rewrites the declaration's `base` when `--apply` is given, and reports every declared file that is outside the candidate diff and every changed file that is undeclared. It checks the candidate-diff structure only; the acceptance run still validates named test references against real test events.
+
+Take a merge through its local checks after committing it. The workflow-acceptance tests compute the merge predecessor from committed history, and the candidate-stable gate refuses a dirty working tree, so an uncommitted merge fails them misleadingly.
+
 The validator checks declared test execution, not semantic adequacy. An independent reviewer must judge contract completeness, assertions, fault controls and exception rationales on the exact head. A declaration is not an approval. This change does not activate automatic merging or alter branch protection. Push and manual runs without an explicit base retain the existing release gates. The PR workflow must first be adopted before this requirement is operational; existing PRs are not modified by this local implementation.
 
 ## Release feature map
@@ -45,8 +49,8 @@ The requirement IDs come from [the PRD](../PRD.md). These rows name test boundar
 | R11: retention within a tier | [Native-turn retention and prefix selection](../tests/integration/reliability-v2-auto.test.mjs) | Branch-local ownership and affinity tests |
 | R12: bounded classification and visible fallback | [Timeout notice followed by generation](../tests/integration/command-policy-acceptance.test.mjs) | Shared budget, pending callbacks, abort and notice-deduplication tests |
 | R13: resolve-only API | [Installed consumer](../tests/router-package.test.mjs) | Router API contract and immutable snapshot tests |
-| R14: private diagnostics | Command acceptance and Pi UI notices | Debug projection, secret and prompt-content tests |
-| R15: reviewed membership changes | [Pi reconciliation and init](../tests/integration/command-policy-acceptance.test.mjs); [init probe regressions](../tests/integration/init-regression.test.mjs) | Ownership, stale inventory, concurrent edits, preserved settings, successful-only pools, recent probe reuse, forced probes, and exact backup tests |
+| R14: private diagnostics | Pi fake-provider audit of local debug/metrics/v1-provider-v2 reliability/runtime/probe artifacts; command and UI notices | Recursive decision-summary schema, persistence field/value bounds, prompt/secret canaries, and fault controls. Normalized prompt cache intentionally retains potentially sensitive user text; completed TypeSafe/native detailed traces remain partial. |
+| R15: reviewed membership changes | [Pi reconciliation and init](../tests/integration/command-policy-acceptance.test.mjs); [init probe regressions](../tests/integration/init-regression.test.mjs) | Ownership, stale inventory, concurrent edits, preserved settings, successful-only pools, recent probe reuse, forced probes, exact backups; command-router fake-registry coverage proves thrown/unknown discovery preserves exact config bytes and includes isolated source-copy fault control (not Pi registration or Pi E2E) |
 | R16: repeatable release checks | [Verification runner](../scripts/verify-release.mjs), guarded Pi suites and UI scenarios | Routing corpus, runner failure and source-change tests |
 | R17: custom tiers and neutral defaults | Physical and Auto routing cases above | Config, schema, generated defaults and strategy tests |
 

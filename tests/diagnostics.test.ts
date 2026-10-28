@@ -66,6 +66,20 @@ describe("offline diagnostics", () => {
     }
   });
 
+  it("reports fallback cycles with a static path", () => {
+    const cyclic = config({
+      models: { restricted: ["fixture/allowed"], general: ["fixture/other"] },
+      tierPolicies: {
+        restricted: { fallbackTiers: ["general"] },
+        general: { fallbackTiers: ["restricted"] },
+      },
+    });
+    const report = validateDiagnostics({ config: cyclic });
+    assert.ok(report.diagnostics.some((issue) => issue.code === "config.tier_policy_cycle"
+      && issue.severity === "error" && issue.path === "tierPolicies.*.fallbackTiers"));
+    assert.doesNotMatch(JSON.stringify(report), /fixture\/other/u);
+  });
+
   it("inspects pool expansions and circuits without route selection, RNG, mutation, or private auth output", () => {
     const candidate = makeModel("fixture", "allowed");
     const counters = { reads: 0, forbidden: 0 };
@@ -207,6 +221,13 @@ describe("offline diagnostics", () => {
     assert.deepEqual(report.tiers[0]?.candidates, []);
     assert.equal("bifrostLastRefreshAgeMs" in report.registry, false);
     assert.deepEqual(report.diagnostics, []);
+  });
+
+  it("surfaces unsupported capability enforcement with a safe field path", () => {
+    const report = validateDiagnostics({ config: config({ requirements: { mode: "enforce" } }) });
+    assert.ok(report.diagnostics.some((issue) => issue.code === "config.requirements_unsupported"
+      && issue.severity === "error" && issue.path === "requirements"));
+    assert.doesNotMatch(JSON.stringify(report), /image|PRIVATE/u);
   });
 
   it("reports missing registry without touching provider operations", () => {
