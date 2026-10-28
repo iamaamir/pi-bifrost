@@ -44,10 +44,31 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  evidence-preflight:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Validate change evidence declaration
+        run: node scripts/acceptance/evidence-rebind.mjs "${{ github.event.pull_request.base.sha }}"
+
   release-gates:
+    needs: evidence-preflight
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      - name: Require successful PR evidence preflight
+        if: github.event_name == 'pull_request' && needs.evidence-preflight.result != 'success'
+        run: exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
@@ -73,7 +94,7 @@ jobs:
           BIFROST_CI_REPORT_SERVER_URL: ${{ github.server_url }}
         run: npm run acceptance
       - name: Refresh CRAP trend history
-        if: always()
+        if: always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')
         env:
           CRAP_HISTORY: ${{ runner.temp }}/crap-history.jsonl
         run: |
@@ -86,7 +107,7 @@ jobs:
           node scripts/crap-report.mjs --record --history "$CRAP_HISTORY"
 
       - name: Attach CRAP history to report data
-        if: always()
+        if: always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')
         env:
           REPORT_DATA: ${{ steps.acceptance.outputs.report-data }}
           CRAP_HISTORY: ${{ runner.temp }}/crap-history.jsonl
@@ -110,7 +131,7 @@ jobs:
           NODE
 
       - name: Upload CRAP trend history
-        if: always()
+        if: always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: crap-history-${{ github.event.pull_request.head.sha || github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
@@ -126,21 +147,21 @@ jobs:
           path: screenshots/
           if-no-files-found: ignore
       - name: Upload candidate-bound manifest
-        if: always()
+        if: always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: verification-manifest-${{ github.event.pull_request.head.sha || github.sha }}
           path: screenshots/verification/**/result.json
           if-no-files-found: ignore
       - name: Upload acceptance evidence
-        if: always()
+        if: always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: acceptance-evidence-${{ github.event.pull_request.head.sha || github.sha }}
           path: screenshots/acceptance/**
           if-no-files-found: ignore
       - name: Upload candidate-bound Markdown report
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && needs.evidence-preflight.result == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ci-report-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
@@ -148,7 +169,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload candidate-bound publisher data
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && needs.evidence-preflight.result == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: acceptance-report-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
@@ -156,7 +177,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Preserve report data across checkouts
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && needs.evidence-preflight.result == 'success'
         env:
           REPORT_DATA: ${{ steps.acceptance.outputs.report-data }}
         run: |
@@ -188,7 +209,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Render final candidate report
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && needs.evidence-preflight.result == 'success'
         env:
           REPORT_INPUT: ${{ runner.temp }}/bifrost-report-input/report-data.json
           REPORT_OUTPUT: ${{ runner.temp }}/bifrost-final-report/ci-report.md
@@ -222,7 +243,7 @@ jobs:
           if (process.env.RELEASE_RESULT === 'success' && confidence.state !== 'VERIFIED CHECKS') process.exitCode = 1;
           NODE
       - name: Upload final candidate report
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && needs.evidence-preflight.result == 'success'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: final-ci-report-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
@@ -291,7 +312,7 @@ jobs:
   # Pi compatibility matrix: pinned baseline and current Pi, installed into
   # node_modules only (no tracked package or lock edit, no credentials), with
   # real native SDK, process, package-consumer, and typecheck checks. The
-  # pinned verify-release preflight still demands 1.0.1 and is deliberately not
+  # pinned verify-release preflight still demands 1.4.0 and is deliberately not
   # used as an alternate-version oracle; release-gates keeps running it pinned.
   pi-compatibility:
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.campaign == 'expanded')
@@ -301,8 +322,8 @@ jobs:
       fail-fast: false
       matrix:
         pi:
-          - "1.0.1"
           - "1.3.0"
+          - "1.4.0"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -320,7 +341,7 @@ jobs:
         # verifies the tree is unchanged.
         run: |
           # Keep the baseline's locked transitive packages from npm ci.
-          if [ "$PI_VERSION" != "1.0.1" ]; then
+          if [ "$PI_VERSION" != "1.4.0" ]; then
             npm install --no-save --package-lock=false --no-audit --no-fund \
               "@earendil-works/pi-ai@$PI_VERSION" \
               "@earendil-works/pi-coding-agent@$PI_VERSION"

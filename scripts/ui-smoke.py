@@ -278,8 +278,8 @@ class Screen:
 
     def draw(self, path: Path) -> None:
         font = load_font(18)
-        cell_w = max(10, font.getbbox("M")[2] - font.getbbox("M")[0] + 1)
-        cell_h = max(18, font.getbbox("Ag")[3] - font.getbbox("Ag")[1] + 4)
+        cell_w = int(max(10, font.getbbox("M")[2] - font.getbbox("M")[0] + 1))
+        cell_h = int(max(18, font.getbbox("Ag")[3] - font.getbbox("Ag")[1] + 4))
         margin = 12
         img = Image.new("RGB", (self.width * cell_w + margin * 2, self.height * cell_h + margin * 2), (8, 8, 8))
         draw = ImageDraw.Draw(img)
@@ -381,7 +381,7 @@ def start_fake_provider() -> tuple[subprocess.Popen[str], int]:
         raise
 
 
-def stop_process(proc: subprocess.Popen[object]) -> None:
+def stop_process(proc: subprocess.Popen[str]) -> None:
     if proc.poll() is not None:
         return
     proc.terminate()
@@ -498,7 +498,8 @@ def spawn_pi(log_path: Path, cwd: Path, agent_dir: Path, provider: str = "fake",
 
     master, slave = pty.openpty()
     set_winsize(master, HEIGHT, WIDTH)
-    env = pi_test_environment(agent_dir.parent.parent, agent_dir, int(FAKE_PORT))
+    assert FAKE_PORT is not None
+    env = pi_test_environment(agent_dir.parent.parent, agent_dir, FAKE_PORT)
     env.update({
         "PI_TUI_WRITE_LOG": str(log_path),
         "TERM": "xterm-256color",
@@ -779,8 +780,8 @@ def main() -> int:
     try:
         version = subprocess.run([PI, "--version"], capture_output=True, text=True, timeout=5, check=True).stdout.strip()
         print(f"[ui-smoke] using pinned Pi {version}")
-        if version != "1.0.1":
-            raise AssertionError(f"expected pinned Pi 1.0.1, got {version}")
+        if version != "1.4.0":
+            raise AssertionError(f"expected pinned Pi 1.4.0, got {version}")
         captures = [
         ("startup", True, []),
         ("fresh-physical", True, [(1.0, "quick show fresh setup works\r"), (1.0, "/bifrost inspect\r")], None, [], False, True, False, ["healthy"]),
@@ -815,6 +816,7 @@ def main() -> int:
                 "categoryStrategies": {"general": "first"},
                 "classifier": {"enabled": False},
                 "models": {"general": ["fake/usage-exhausted", "fake-backup/healthy"]},
+                "reliability": {"retryOnAllowanceExhausted": True},
             },
         ),
         ("dashboard", True, [(1.0, "/bifrost\r")]),

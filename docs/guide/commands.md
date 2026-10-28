@@ -16,6 +16,7 @@
 | `/bifrost validate` | Check the active loaded configuration and local registry references; run `/bifrost reload` after editing config files |
 | `/bifrost inspect` | Show configured model availability, auth presence, and local reliability circuits without routing, classifying, or probing |
 | `/bifrost config reconcile` | Preview exact generated model membership for one selected config source, tier, and provider; apply only with the reviewed digest |
+| `/bifrost config migrate` | Preview schema-version migration for one config source; apply only with the reviewed digest and exact backup |
 | `/bifrost reliability migrate` | Prepare migrated reliability state; see the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state) |
 | `/bifrost reliability` | Show active provider pauses and recovery trials |
 | `/bifrost reliability reset` | Clear one provider pause and its trial state with `--provider <exact-id>`. Model reliability records stay unchanged. |
@@ -122,6 +123,17 @@ Edit the relevant `bifrost.json`, then run:
 ```text
 /bifrost reload
 ```
+
+### Migrate a config schema
+
+Migration is preview-only by default. It updates only the selected file's `schemaVersion` to `2`, validates the full merged configuration, and preserves unrelated values and key order while normalizing JSON formatting. Apply requires the digest from the latest preview; stale edits are rejected. Before atomic replacement, Bifrost creates a private exact-byte backup beside the source. It does not rewrite other layers or auto-reload the active snapshot.
+
+```text
+/bifrost config migrate --source project
+/bifrost config migrate --source project --apply --proposal <digest>
+```
+
+Use `--source workspace` for `bifrost.json` in the current directory or `--source user` for `getAgentDir()/bifrost.json`. Add `--json` to emit one `[bifrost-json] ` report line. After a successful migration, run `/bifrost reload` to activate the new config version.
 
 ### Reconcile generated model membership
 

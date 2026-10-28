@@ -478,6 +478,26 @@ export function startRpc({ fixture, server, model = "fake/fast", port, violation
     return prompt(message, { settle: true });
   }
 
+  async function setModel(provider, modelId) {
+    const id = `http-rpc-model-${records.length}-${Date.now()}`;
+    const deadline = Date.now() + timeoutMs;
+    child.stdin.write(`${JSON.stringify({ id, type: "set_model", provider, modelId })}\n`);
+    let index = records.length;
+    while (Date.now() < deadline) {
+      while (index < records.length) {
+        const record = records[index++];
+        if (record.id === id && record.type === "response") {
+          assert.equal(record.success, true, JSON.stringify(record));
+          return record.data;
+        }
+      }
+      assert.ifError(spawnError);
+      if (closeInfo) throw new Error(`Pi RPC exited before setting model: ${provider}/${modelId}`);
+      await waitForActivity(deadline);
+    }
+    throw new Error(`Pi RPC timed out setting model: ${provider}/${modelId}`);
+  }
+
   async function close({ assertClean = false } = {}) {
     closePromise ??= (async () => {
       child.stdin.end();
@@ -500,7 +520,7 @@ export function startRpc({ fixture, server, model = "fake/fast", port, violation
     return closePromise;
   }
 
-  return { prompt, userTurn, close, records, get stderr() { return stderr; } };
+  return { prompt, userTurn, setModel, close, records, get stderr() { return stderr; } };
 }
 
 // ── Provider stats ──────────────────────────────────────────────

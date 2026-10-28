@@ -12,7 +12,7 @@ import { loadConfigForReload } from "../config-load.ts";
 import { TYPE_SAFE_API_KEY_ENV } from "../classifier-backends.ts";
 import { ReliabilityV2Store } from "../reliability-v2-store.ts";
 import { BIFROST_AUTO_ID, BIFROST_AUTO_PROVIDER } from "../virtual-model.ts";
-import { makeModel } from "./helpers.ts";
+import { makeModel, makePiClassifierModel } from "./helpers.ts";
 
 type Hook = (event: any, ctx: ExtensionContext) => Promise<unknown>;
 const flushImmediate = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -47,6 +47,8 @@ function freshHarness(auto = false, persistedRuntimeState?: { enabled: boolean; 
   let availableReads = 0;
   let refreshCalls = 0;
   let probeRequests = 0;
+  const probedModels: string[] = [];
+  let classifierModels: unknown[] = [];
   let selected: string | undefined;
   let routeDefinition: VirtualModelDefinition | undefined;
   let confirmCalls = 0;
@@ -91,8 +93,11 @@ function freshHarness(auto = false, persistedRuntimeState?: { enabled: boolean; 
       find: (provider: string, id: string) => models.find((item) => item.provider === provider && item.id === id),
       getProviderAuthStatus: () => ({ configured: false }),
       refresh: async () => { refreshCalls += 1; return { refreshed: [], errors: new Map() }; },
-      ...(deferProbe ? { streamSimple: () => {
+      getModelsOfType: () => classifierModels,
+      getAvailableOfType: async () => classifierModels,
+      ...(deferProbe ? { streamSimple: (probeModel: Model<Api>) => {
         probeRequests += 1;
+        probedModels.push(`${probeModel.provider}/${probeModel.id}`);
         onProbeStarted();
         return { result: () => deferredProbe };
       } } : {}),
@@ -135,6 +140,8 @@ function freshHarness(auto = false, persistedRuntimeState?: { enabled: boolean; 
     handlers,
     model,
     setAvailable: (next: Model<Api>[]) => { models = next; },
+    setClassifierModels: (next: unknown[]) => { classifierModels = next; },
+    probeModels: () => [...probedModels],
     autoModel,
     branch,
     routeDefinition: () => routeDefinition,
@@ -196,6 +203,29 @@ describe("automatic setup through registered Pi hooks", () => {
       assert.equal(reloaded.default, "quick");
       assert.deepEqual(reloaded.models?.quick, ["fixture/quick"]);
       assert.equal(validateConfig(reloaded).some((issue) => issue.severity === "error"), false);
+    } finally { harness.cleanup(); }
+  });
+
+  it("excludes virtual and classifier-typed models from first-use probes and generated pools", async () => {
+    const harness = freshHarness(false, undefined, true);
+    const classifier = makePiClassifierModel("typesafe", "jev-latest");
+    harness.setAvailable([harness.model, harness.autoModel as Model<Api>]);
+    harness.setClassifierModels([classifier]);
+    try {
+      const typedClassifiers = await harness.ctx.modelRegistry.getAvailableOfType("classifier", "typesafe");
+      assert.deepEqual(typedClassifiers.map((model) => `${model.provider}/${model.id}`), ["typesafe/jev-latest"]);
+      await harness.handlers.get("session_start")!({}, harness.ctx);
+      await harness.probeStarted;
+      assert.deepEqual(harness.probeModels(), ["fixture/quick"],
+        "first-use probing must filter registered virtual models and use the host's chat-only available catalog");
+      harness.completeProbe();
+      await flushImmediate();
+      await flushImmediate();
+      const generated = JSON.parse(readFileSync(join(process.cwd(), ".pi", "bifrost.json"), "utf8"));
+      assert.deepEqual(Object.values(generated.models).flat(), ["fixture/quick"],
+        "generated starter pools must not contain virtual or classifier-only entries");
+      const report = JSON.parse(readFileSync(join(process.cwd(), ".pi", "bifrost-probe.json"), "utf8"));
+      assert.deepEqual(report.map((result: { status: string }) => result.status), ["ok"]);
     } finally { harness.cleanup(); }
   });
 

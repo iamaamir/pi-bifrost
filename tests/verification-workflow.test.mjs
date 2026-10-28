@@ -67,10 +67,20 @@ function releaseGateScriptsFrom(source) {
 const jobs = jobBlocks(workflow);
 const CAMPAIGN_JOBS = ["campaign", "pi-compatibility", "mutation-experiment"];
 
-test("release-gates stays unconditional with all seven gates and the report publishers", () => {
-  const block = jobs["release-gates"];
+function assertPreflightGate(block) {
   assert.ok(block, "release-gates job must exist");
-  assert.equal(jobCondition(block), null, "release-gates must not be conditional");
+  assert.match(block, /^ {4}needs: evidence-preflight$/mu);
+  assert.equal(jobCondition(block), "${{ !cancelled() }}");
+  assert.match(block, /name: Require successful PR evidence preflight\n\s+if: github\.event_name == 'pull_request' && needs\.evidence-preflight\.result != 'success'\n\s+run: exit 1\n\s+- uses: actions\/checkout@/u);
+  assert.match(block, /name: Refresh CRAP trend history\n\s+if: always\(\) && \(github\.event_name != 'pull_request' \|\| needs\.evidence-preflight\.result == 'success'\)/u);
+}
+
+test("release-gates fails closed on failed PR evidence preflight", () => {
+  const block = jobs["release-gates"];
+  assertPreflightGate(block);
+  const bypass = block.replace("${{ !cancelled() }}", "always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')");
+  assert.throws(() => assertPreflightGate(bypass), "old skipped-required-check bypass must fail the assertion");
+  assert.throws(() => assertPreflightGate(block.replace("run: exit 1", "run: exit 0")), "disabled preflight failure must fail the assertion");
 
   // Seven release gates, checked against both declaring modules.
   assert.deepEqual(requiredGatesFrom(ciReportSource), [
@@ -91,14 +101,27 @@ test("release-gates stays unconditional with all seven gates and the report publ
   assert.match(block, /id: acceptance\n/u);
   assert.match(block, /run: npm run acceptance\n/u);
   assert.match(block, /run: npm run acceptance:deterministic\n/u);
-  assert.match(block, /if: always\(\) && github\.event_name == 'pull_request'\n/u);
+  assert.match(block, /if: always\(\) && github\.event_name == 'pull_request' && needs\.evidence-preflight\.result == 'success'\n/u);
   assert.match(block, /name: ci-report-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
   assert.match(block, /name: acceptance-report-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
   assert.match(block, /name: final-ci-report-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
 });
 
+test("evidence preflight runs only on pull requests before release gates", () => {
+  const block = jobs["evidence-preflight"];
+  assert.ok(block, "evidence preflight job must exist");
+  assert.equal(jobCondition(block), "github.event_name == 'pull_request'");
+  assert.match(block, /^ {4}timeout-minutes: 5$/mu);
+  assert.match(block, /uses: actions\/checkout@[0-9a-f]{40} # v4/u);
+  assert.match(block, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/u);
+  assert.match(block, /fetch-depth: 0/u);
+  assert.match(block, /node scripts\/acceptance\/evidence-rebind\.mjs "\$\{\{ github\.event\.pull_request\.base\.sha \}\}"/u);
+  assert.doesNotMatch(block, /--apply/u, "preflight must not rewrite evidence");
+  assert.doesNotMatch(block, /npm (ci|install)/u, "structural preflight must stay fast and read-only");
+});
+
 test("campaign jobs never run on ordinary PR, push, or default manual dispatch", () => {
-  assert.deepEqual(Object.keys(jobs), ["release-gates", "campaign", "pi-compatibility", "mutation-experiment"]);
+  assert.deepEqual(Object.keys(jobs), ["evidence-preflight", "release-gates", "campaign", "pi-compatibility", "mutation-experiment"]);
   const cases = [
     ["pull_request", {}],
     ["push", {}],
@@ -151,9 +174,9 @@ test("Pi compatibility uses explicit matrix pins with an isolated install", () =
   const block = jobs["pi-compatibility"];
   const matrix = block.match(/strategy:\n[\t ]*fail-fast[^\n]*\n[\t ]*matrix:\n[\t ]*pi:\n((?:[\t ]+- .+\n)+)/u);
   assert.ok(matrix, "compatibility matrix must declare pi pins");
-  assert.deepEqual([...matrix[1].matchAll(/^[\t ]+- "([^"]+)"$/gmu)].map((entry) => entry[1]), ["1.0.1", "1.3.0"]);
+  assert.deepEqual([...matrix[1].matchAll(/^[\t ]+- "([^"]+)"$/gmu)].map((entry) => entry[1]), ["1.3.0", "1.4.0"]);
   assert.match(block, /npm install --no-save --package-lock=false/u, "install must not edit tracked dependency files");
-  assert.match(block, /if \[ "\$PI_VERSION" != "1\.0\.1" \]; then\n[\s\S]*?npm install[\s\S]*?\n          fi/u, "baseline must retain npm ci locked transitive dependencies");
+  assert.match(block, /if \[ "\$PI_VERSION" != "1\.4\.0" \]; then\n[\s\S]*?npm install[\s\S]*?\n          fi/u, "baseline must retain npm ci locked transitive dependencies");
   assert.match(block, /@earendil-works\/pi-ai@\$PI_VERSION/u);
   assert.match(block, /@earendil-works\/pi-coding-agent@\$PI_VERSION/u);
   assert.doesNotMatch(block, /@(latest|\*|next|beta)/u, "compatibility installs must not float");

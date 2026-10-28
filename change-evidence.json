@@ -1,26 +1,441 @@
 {
   "schemaVersion": 1,
-  "base": "67485613b6e394834c7919925ba9560a3762eaf9",
+  "base": "8a6a49a6b76f7be174aaaa8e9fb7393187663540",
   "contracts": [
     {
-      "id": "push-workflow-caller-context",
+      "id": "production-baseline-single-source",
       "requirement": "R16",
       "files": [
-        "tests/acceptance-runner.test.mjs"
+        "tests/integration/activation-cancellation-acceptance.test.mjs",
+        "tests/integration/affinity-policy-acceptance.test.mjs",
+        "tests/integration/classifier-transport-acceptance.test.mjs",
+        "tests/integration/command-privacy-acceptance.test.mjs",
+        "tests/integration/economic-policy-acceptance.test.mjs",
+        "tests/integration/native-activation-cancel.test.mjs"
       ],
-      "boundary": "Real workflow acceptance CLI through a sanitized gate with owned single-commit and merge-parent push topologies",
-      "assertions": "Push event.before remains authoritative; wrong bases and lost context or declaration selection fail named assertions, and exact restoration returns GREEN",
+      "boundary": "The reviewed production index.ts sha256 is declared once in tests/fixtures/replay-fault-control.mjs and the six R16 integration fault gates import that constant, so rebinding the reviewed baseline is a one-file change and no gate can drift to a different reviewed hash.",
+      "assertions": "Each gate's baseline equals the imported REPLAY_GUARD_BASELINE_SHA256; gate proofs still start GREEN on the pristine reviewed source, turn the named assertion RED under the controlled production mutation, restore the source, and record restored GREEN; rebasing the baseline touches exactly one file and all six R16 gates observe the same value. The baseline matches the exact index.ts hash after adding explicit_model origin for exact model rules; the affinity policy tests also assert that resolver origins stay non-affinity-eligible. The privacy audit also validates exact nested keys for unresolved-pattern registry evidence and exercises a missing configured model in a real Pi trace.",
       "boundaryTest": {
-        "file": "tests/acceptance-runner.test.mjs",
-        "name": "merged-push checkout runs the actual workflow caller with event.before"
+        "file": "tests/integration/economic-policy-acceptance.test.mjs",
+        "name": "fails the named reserve-equality assertion under a hard-filter-bypass fault in an isolated copy"
       },
       "invariant": {
-        "file": "tests/acceptance-runner.test.mjs",
-        "name": "single-commit checkout runs the actual workflow caller without inventing an intermediate"
+        "file": "tests/integration/command-privacy-acceptance.test.mjs",
+        "name": "fault control: leaking the prompt projection turns the named redaction assertion RED"
       },
       "fault": {
-        "file": "tests/acceptance-runner.test.mjs",
-        "name": "merged-push checkout runs the actual workflow caller with event.before"
+        "file": "tests/integration/affinity-policy-acceptance.test.mjs",
+        "name": "fails the named hard-exclusion assertion under a hard-filter-bypass fault in an isolated copy"
+      }
+    },
+    {
+      "id": "evidence-rebind-helper",
+      "requirement": "R16",
+      "files": [
+        "scripts/acceptance/evidence-rebind.mjs",
+        "tests/evidence-rebind.test.mjs",
+        "docs/testing-coverage.md"
+      ],
+      "boundary": "One local command rebinds the per-change declaration to a reviewed base and validates the shape the acceptance run enforces: the base resolves to a real commit, is an ancestor of HEAD, matches the declaration's base field, and declared files exactly cover diff(base, HEAD). The helper never connects to the network and never edits anything but the declaration file.",
+      "assertions": "resolveBaseRef uses --verify so a ref that names no commit in the object database fails with a prefixed message; a base outside HEAD's ancestry fails with a named detail while unrelated git failures keep their cause; --apply validates the rebinding manifest in memory before anything is written, so a structurally invalid declaration never reaches disk; --apply rewrites only the declaration base in place, once, landing the bytes through a same-directory temp file rename, refuses a rewrite whose bytes would exceed the 256 KiB cap the validator enforces without touching the on-disk declaration, and is idempotent; coverage reports file set differences in both directions without guessing; the CLI exits 0 with a report only when the declaration matches the requested base and its file list exactly covers the candidate diff, exits 1 with a report naming each uncovered file, exits 1 without a report when the base cannot resolve or operands are malformed, and prints usage on malformed operands; validation without --apply never writes.",
+      "boundaryTest": {
+        "file": "tests/evidence-rebind.test.mjs",
+        "name": "exits 0 with the passed report and exits 1 on a stale diff report"
+      },
+      "invariant": {
+        "file": "tests/evidence-rebind.test.mjs",
+        "name": "validates against the requested base and --apply rebases only the declaration base"
+      },
+      "fault": {
+        "exception": "The helper is a deterministic structure check over its own inputs with no production behavior to mutate; assertion sensitivity is established by executed mutation checks against the helper in this change — dropping the changedNotDeclared recording turns 2 cases RED, ignoring the declarationMatches factor in the status verdict turns 1 case RED, writing before structural validation turns the no-disk-write case RED, and dropping the rewritten-byte-size guard turns the cap-refusal case RED — plus the CLI fault case above."
+      }
+    },
+    {
+      "id": "r01-exclusion-evidence",
+      "requirement": "R01",
+      "files": [
+        "classification-pipeline.ts",
+        "routing.ts",
+        "tests/integration/decision-parity-acceptance.test.mjs",
+        "tests/routing.test.ts"
+      ],
+      "boundary": "Pinned Pi runtime and offline preview, plus installed resolve-only API, all expose the same stable exclusion code and evidence source; fake provider verifies text preview output without outbound requests.",
+      "assertions": "Reliability, economic, virtual-model, classifier-model, and unresolved configured-pattern exclusions carry typed evidence sources; eligible candidates carry no exclusion evidence; all three surfaces match; text preview renders missing exact and fuzzy patterns with their reason and source; routing still selects only eligible candidates. The shared commands.ts change is owned by the R09 migration contract.",
+      "boundaryTest": {
+        "file": "tests/integration/decision-parity-acceptance.test.mjs",
+        "name": "keeps selected, excluded, fallback, and no-route decisions aligned across all three surfaces"
+      },
+      "invariant": {
+        "file": "tests/routing.test.ts",
+        "name": "preserves structured exclusions, fallback strategy, and selection without prompt text"
+      },
+      "fault": {
+        "file": "tests/routing.test.ts",
+        "name": "preserves structured exclusions, fallback strategy, and selection without prompt text"
+      }
+    },
+    {
+      "id": "classifier-disabled-cache-bypass",
+      "requirement": "R12",
+      "files": [
+        "CHANGELOG.md",
+        "CONTEXT.md",
+        "PRD.md",
+        "ROADMAP.md",
+        "bifrost.json",
+        "cache.ts",
+        "classifier-semantics.ts",
+        "config.ts",
+        "docs/guide/configuration.md",
+        "index.ts",
+        "schema.json",
+        "tests/cache-properties.test.ts",
+        "tests/cache.test.ts",
+        "tests/classifier-cache-key.test.ts",
+        "tests/config-source-override.test.ts",
+        "tests/integration/auto-virtual.test.mjs",
+        "tests/integration/cache-lifecycle-acceptance.test.mjs",
+        "tests/integration/init-regression.test.mjs"
+      ],
+      "boundary": "Pinned Pi 1.4.0 RPC sessions with the local fake provider verify both cache boundaries: restart with classification disabled after seeding a conflicting persisted tier, and restart with a same-token prompt reordered. Request counters and the outbound guard expose whether either cache decision was reused.",
+      "assertions": "A disabled classifier cannot consume a persisted cache decision; the test forces a valid but different cached tier, confirms the configured route is used, and confirms no classifier request occurs. By default, ordered normalized prompts match exactly; reordered prompts miss, legacy unordered-normalization keys are invalidated, and explicit thresholds below 1 retain fuzzy Jaccard matching. The legacy semantic key fixture comes from the base implementation; removing the normalization version makes its assertion fail. Removing the classifierEnabled cache gate or changing the bundled exact-match threshold from 1 to 0.88 makes its corresponding Pi assertion fail. The shared index.ts change also marks direct model rules as explicit_model affinity origin so they neither consume nor replace an automatic anchor; R11's exact-model and continuation tests are declared by the R11 contract. The shared auto-virtual integration file also proves a manually pinned failure is neither replayed nor unpinned: after a distinct follow-up, `/bifrost debug` still reports `pinned: true`. It also proves an ordinary settled failure increments reliability exactly once; those R03 cases are registered separately. PRD §14's Pi 1.0.1 classifier-inventory blocker is resolved by the controlled host evidence declared under R04; virtual models still require Bifrost-side exclusion.",
+      "boundaryTest": {
+        "file": "tests/integration/cache-lifecycle-acceptance.test.mjs",
+        "name": "skips persisted cache decisions when classifier is disabled"
+      },
+      "invariant": {
+        "file": "tests/cache.test.ts",
+        "name": "defaults to ordered exact matching while lower thresholds opt into fuzzy matching"
+      },
+      "fault": {
+        "file": "tests/integration/cache-lifecycle-acceptance.test.mjs",
+        "name": "default cache misses prompts with reordered tokens"
+      }
+    },
+    {
+      "id": "offline-diagnostics-r07",
+      "requirement": "R07",
+      "files": [
+        "diagnostics.ts",
+        "tests/config.test.ts",
+        "tests/diagnostics.test.ts",
+        "tests/schema.test.ts"
+      ],
+      "boundary": "Pinned Pi command acceptance inspects auth, availability, circuits, and unresolved pool references, validates offline, and asserts zero provider/catalog requests.",
+      "assertions": "Offline validation reports unresolved IDs and fallback cycles without echoing private values; unsupported capability enforcement is rejected; inspection projects auth, availability, circuit state, bounded local registry-refresh age, and configured economic source freshness/provenance without probes or mutation or allowance values. The shared command-policy test file is owned by the R09 config-migration contract and also contains the named R07 offline diagnostics journey.",
+      "boundaryTest": {
+        "file": "tests/integration/command-policy-acceptance.test.mjs",
+        "name": "runs inspect, validate, and a direct-rule preview offline without provider requests"
+      },
+      "invariant": {
+        "file": "tests/diagnostics.test.ts",
+        "name": "inspects pool expansions and circuits without route selection, RNG, mutation, or private auth output"
+      },
+      "fault": {
+        "file": "tests/diagnostics.test.ts",
+        "name": "surfaces unsupported capability enforcement with a safe field path"
+      }
+    },
+    {
+      "id": "r09-config-schema-migration",
+      "requirement": "R09",
+      "files": [
+        "config-migration.ts",
+        "config-load.ts",
+        "commands.ts",
+        "tests/integration/command-policy-acceptance.test.mjs",
+        "tests/integration/config-startup-acceptance.test.mjs",
+        "docs/guide/commands.md",
+        "docs/terminal-demo.js",
+        "tests/bifrost-commands.test.ts",
+        "tests/config-migration.test.ts"
+      ],
+      "boundary": "The explicit config-migration command previews one selected source, validates its replacement against the merged config, requires a reviewed source-bound digest, creates a private exact-byte backup, then atomically replaces only that source. Unsupported capability enforcement is rejected as an invalid source before physical or Auto routing, reload, or migration. The shared commands and pinned-Pi integration files also carry R01 preview and R07 offline-diagnostic evidence, respectively.",
+      "assertions": "Unversioned and v1 JSON receives only schemaVersion 2; unrelated values and key order are preserved where feasible; malformed/future-version sources are blocked; merged replacement is validated against reload's tier, reliability, affinity, capability-requirements, and classifier timeout checks; pinned Pi tests assert unsupported enforcement blocks physical and Auto generation and reload retains the last valid configuration; the real-Pi migration journey blocks invalid timeout settings on preview and apply without writing, and an isolated restoration of the old diagnostics-only check makes that assertion fail; existing source-override tests prove invalid layer diagnostics; real-Pi coverage migrates project, workspace, and user sources one at a time and proves unselected layers stay byte-identical; stale source bytes and stale proposal digests cannot overwrite edits; exact backup bytes and private mode are asserted; atomic replacement failure after backup preserves the original source and reports the recoverable backup; the active snapshot is not auto-reloaded.",
+      "boundaryTest": {
+        "file": "tests/config-migration.test.ts",
+        "name": "backs up exact source bytes before atomic replacement and preserves target mode"
+      },
+      "invariant": {
+        "file": "tests/config-migration.test.ts",
+        "name": "changes only schemaVersion, preserving unrelated field order and values"
+      },
+      "fault": {
+        "file": "tests/config-migration.test.ts",
+        "name": "preserves the original and exact private backup when atomic replacement fails after backup"
+      }
+    },
+    {
+      "id": "r11-exact-model-continuation-affinity",
+      "requirement": "R11",
+      "files": [
+        "docs/guide/auto-routing.md",
+        "tests/integration/affinity-lifecycle-acceptance.test.mjs"
+      ],
+      "boundary": "An exact model rule has explicit-model affinity origin, bypasses retention and anchor updates, while a tool continuation stays on the original physical model without a new route selection.",
+      "assertions": "The pinned-Pi journey starts with a successful automatic anchor, dispatches an exact model rule despite that anchor, confirms a subsequent automatic turn still uses the prior anchor, then executes one tool side effect and proves the continuation reaches only the selected model with no extra route decision. Resolver tests assert explicit model origin is not affinity-eligible; fault mutation removing the runtime explicit-model origin assignment makes the named Pi assertion fail. The shared replay-fault baseline hash matches the exact index.ts source.",
+      "boundaryTest": {
+        "file": "tests/integration/affinity-lifecycle-acceptance.test.mjs",
+        "name": "keeps exact model rules above affinity and protocol continuation on its dispatched model"
+      },
+      "invariant": {
+        "file": "tests/integration/affinity-policy-acceptance.test.mjs",
+        "name": "does not retain a quick-tier anchor for another tier or explicit tier/model and pinned origins"
+      },
+      "fault": {
+        "file": "tests/integration/affinity-lifecycle-acceptance.test.mjs",
+        "name": "keeps exact model rules above affinity and protocol continuation on its dispatched model"
+      }
+    },
+    {
+      "id": "r16-ignore-symlinked-dependencies-in-candidate-checkouts",
+      "requirement": "R16",
+      "files": [
+        ".gitignore",
+        "tests/change-evidence.test.mjs"
+      ],
+      "boundary": "Acceptance creates a local node_modules symlink in merged-push checkouts; ignore that dependency path without weakening source-tree cleanliness checks for other files.",
+      "assertions": "The isolated Git test proves the root node_modules symlink is ignored while unrelated source remains visible. Its negative control restores the old directory-only node_modules/ pattern and confirms the symlink returns to git status. Before this change, the actual merged-push caller reported `?? node_modules` and failed candidate-stable; source and revision stability checks remain unchanged.",
+      "boundaryTest": {
+        "file": "tests/change-evidence.test.mjs",
+        "name": "ignores a symlinked node_modules path without hiding other untracked files"
+      },
+      "invariant": {
+        "file": "tests/change-evidence.test.mjs",
+        "name": "ignores a symlinked node_modules path without hiding other untracked files"
+      },
+      "fault": {
+        "file": "tests/change-evidence.test.mjs",
+        "name": "ignores a symlinked node_modules path without hiding other untracked files"
+      }
+    },
+    {
+      "id": "r02-manual-model-selection-pins-session",
+      "requirement": "R02",
+      "files": [
+        "tests/fixtures/http-pi-harness.mjs",
+        "tests/integration/legacy-behavior.test.mjs"
+      ],
+      "boundary": "A real Pi RPC set_model command switches from physical mode and explicit bifrost/auto to a user-selected physical model: Bifrost pins that model for the session, bypasses automatic routing until /bifrost unpin, then resumes the configured physical route.",
+      "assertions": "The session starts once in physical mode and once on explicit bifrost/auto; set_model responds with the requested physical provider/model; Pi status shows pinned; the next ordinary user prompt produces exactly one generation on that model without Bifrost classification or routing; explicit unpin is handled and the next prompt produces exactly one generation on the configured default model in both modes. Mutating the manual-selection pin assignment from true to false makes this named test fail. The Pi RPC fixture exposes only the minimal set_model command needed to exercise the host's real model_select event.",
+      "boundaryTest": {
+        "file": "tests/integration/legacy-behavior.test.mjs",
+        "name": "manual Pi model selection pins the physical model in physical and Auto modes until explicit unpin"
+      },
+      "invariant": {
+        "file": "tests/integration/legacy-behavior.test.mjs",
+        "name": "manual Pi model selection pins the physical model in physical and Auto modes until explicit unpin"
+      },
+      "fault": {
+        "file": "tests/integration/legacy-behavior.test.mjs",
+        "name": "manual Pi model selection pins the physical model in physical and Auto modes until explicit unpin"
+      }
+    },
+    {
+      "id": "r04-host-classifier-inventory",
+      "requirement": "R04",
+      "files": [
+        "tests/auto-bootstrap-runtime.test.ts",
+        "tests/fixtures/native-classifier-child.mjs"
+      ],
+      "boundary": "Pi 1.4.0 AgentSession with a fake classifier provider observes the actual host ModelRegistry inventory; a separate registered-hook harness exercises virtual filtering during first-use probes and pool generation.",
+      "assertions": "The controlled host sees bifrost/auto and physical chat models through getAvailable(), but sees the classifier-only model only through getAvailableOfType(\"classifier\"). First-use probing and generated starter pools contain only the physical chat model after Bifrost filters the registered virtual entry; the classifier remains in its typed catalog. The PRD §14 host-inventory blocker is resolved. R04 stays partial until a generalized typed capability-observation seam is implemented; image and modality enforcement remain explicitly deferred.",
+      "boundaryTest": {
+        "file": "tests/integration/native-classifier.test.mjs",
+        "name": "routes real AgentSession through Pi-native classifier behind a proven deny-all fence"
+      },
+      "invariant": {
+        "file": "tests/auto-bootstrap-runtime.test.ts",
+        "name": "excludes virtual and classifier-typed models from first-use probes and generated pools"
+      },
+      "fault": {
+        "file": "tests/discovery-properties.test.ts",
+        "name": "matches independent ordered expansion, exact identities and kind exclusion"
+      }
+    },
+    {
+      "id": "r10-r11-r17-acceptance-support-registration",
+      "requirement": "R10",
+      "files": [
+        "scripts/acceptance.mjs"
+      ],
+      "boundary": "Acceptance profile requires exact R03/R04 failure and host-inventory evidence, plus economic, affinity-origin, arbitrary-tier, and model-free-default supporting tests.",
+      "assertions": "R10 reserve and signal tests are registered with R10 requirements instead of being mislabeled R11. R04 registers Pi host classifier inventory, virtual/bootstrap exclusion, candidate-kind filtering, classifier catalog separation, chat-only init pools, and advisory requirements. support:r03:settled-failure-once maps to the real-Pi failure-settlement count assertion. support:r11:explicit-target-origin maps to the named explicit-origin routing invariant. support:r17:arbitrary-tier-strategy maps to the custom-tier/provider-neutral resolver test, and support:r17:model-free-defaults maps to the bundled starter-pool test. The focused manifest evidence test gate runs exact witness files serially to prevent concurrent builds from racing on the shared dist/router output. Existing R14 acceptance registrations include the bounded real Pi Auto/v2 state audit, v2 canary fault, recursive nested decision faults, and the explicit partial boundary for completed classifier traces. No production behavior changes.",
+      "boundaryTest": {
+        "file": "tests/routing.test.ts",
+        "name": "uses generic strategies for arbitrary custom tier keys across providers"
+      },
+      "invariant": {
+        "file": "tests/config.test.ts",
+        "name": "keeps bundled starter pools empty and free of maintainer model IDs"
+      },
+      "fault": {
+        "exception": "Declarative acceptance-profile registration only; production behavior unchanged and no new behavioral assertion introduced."
+      }
+    },
+    {
+      "id": "r03-v2-null-edit-lineage",
+      "requirement": "R03",
+      "files": [
+        "README.md",
+        "docs/acceptance-coverage.md",
+        "docs/adr/0023-bounded-allowance-recovery.md",
+        "docs/guide/prompt-caching.md",
+        "docs/guide/reliability-and-cache.md",
+        "docs/guide/troubleshooting.md",
+        "docs/index.html",
+        "docs/llms.txt",
+        "reliability.ts",
+        "scripts/acceptance/journeys.mjs",
+        "tests/fixtures/replay-fault-control.mjs",
+        "tests/integration/release-acceptance.test.mjs",
+        "tests/integration/reliability-v2-auto.test.mjs",
+        "tests/reliability.test.ts",
+        "tests/reliability-v2-runtime.test.ts"
+      ],
+      "boundary": "Pinned Pi 1.4.0 Auto dispatch against isolated local fake providers observes the persisted branch after a v2 empty allowance rejection and recovery; no external origin is allowed. Config reload and session/branch switches are not proven at the before-settle gap through pinned Pi RPC.",
+      "assertions": "Allowance recovery is disabled by default and requires `reliability.retryOnAllowanceExhausted: true`; recovery-focused fixture cases opt in explicitly. The journey registry names this exact v2 Pi boundary and the coverage map records its limits. The rejected generation is empty and belongs to the sole user boundary; exactly one null context edit targets its exact assistant entry, and that edit is the only persisted branch entry between failure and recovered result. Pinned-Pi RPC cases also prove queued/flushed abort before barrier release, manual model selection changing ownership generation, and queued intervening activity each suppresses recovery. A pinned-Pi probe attempted RPC new_session at the held before-settle barrier but got no response within 10 seconds; /bifrost reload enters the input queue and cannot mutate config generation before settlement. No handler-only substitute or session/branch mutation claim is made. Existing scratch-only faults make the supported no-alternate or lineage assertion RED; restored source returns GREEN without modifying production source.",
+      "boundaryTest": {
+        "file": "tests/integration/reliability-v2-auto.test.mjs",
+        "name": "keeps the failed response's exact null context-edit lineage before Auto recovery"
+      },
+      "invariant": {
+        "file": "tests/integration/reliability-v2-auto.test.mjs",
+        "name": "retries one zero-effect allowance failure with a configured alternate in v2 Auto"
+      },
+      "fault": {
+        "file": "tests/integration/reliability-v2-auto.test.mjs",
+        "name": "proves a malformed null-edit lineage faults the v2 Auto recovery assertion"
+      }
+    },
+    {
+      "id": "r12-pinned-pi-native-deadline-matrix",
+      "requirement": "R12",
+      "files": [
+        "tests/integration/native-classifier.test.mjs"
+      ],
+      "boundary": "Pinned Pi AgentSession invokes explicit Pi-native classifier against a native classifier provider and faux provider exposing physical chat models plus a chat-capable prompt-decoy model. Scenarios run behind a proven deny-all outbound fence.",
+      "assertions": "Native success selects general while configured prompt fallback has zero prompt-decoy requests; an isolated native-miss source mutant triggers exactly one decoy request and dispatches its distinct frontier judgment. Shared total deadline aborts Pi's native classifier signal and defaults to quick; a late frontier result does not alter selection/model or cause another generation. Isolated source-copy deadline/native-abort mutation fails default-tier dispatch assertion.",
+      "boundaryTest": {
+        "file": "tests/integration/native-classifier.test.mjs",
+        "name": "routes real AgentSession through Pi-native classifier behind a proven deny-all fence"
+      },
+      "invariant": {
+        "file": "tests/integration/native-classifier.test.mjs",
+        "name": "routes real AgentSession through Pi-native classifier behind a proven deny-all fence"
+      },
+      "fault": {
+        "file": "tests/integration/native-classifier.test.mjs",
+        "name": "routes real AgentSession through Pi-native classifier behind a proven deny-all fence"
+      }
+    },
+    {
+      "id": "r15-unknown-discovery-preserves-config",
+      "requirement": "R15",
+      "files": [
+        "tests/reconciliation-command-registered.test.ts",
+        "tests/reconciliation-command-router.test.ts"
+      ],
+      "boundary": "Production command-router path exercised with deterministic fake registry; explicit refresh throws after prior complete evidence, report is stale/advisory, exact user config bytes remain unchanged, no transaction journal appears. This is command-router-boundary evidence, not Pi registration or Pi E2E; POSIX permission denial remains blocked on an enforcing non-root host.",
+      "assertions": "A failed/unknown provider discovery cannot be interpreted as an empty catalog or authorize deletion; report omits private error text, asserts no removal proposal and removal_suppressed warning, preserves exact config bytes, and writes no journal. A disposable commands.ts source copy changes refresh failure status to complete; the exact advisory assertion must go RED with a removal proposal, then restored copied source must return GREEN. The journey points to this command-router boundary.",
+      "boundaryTest": {
+        "file": "tests/reconciliation-command-router.test.ts",
+        "name": "keeps owned memberships when explicit provider discovery fails"
+      },
+      "invariant": {
+        "file": "tests/reconciliation.test.ts",
+        "name": "does not delete memberships when a disabled source has incomplete inventory"
+      },
+      "fault": {
+        "file": "tests/reconciliation-command-router.test.ts",
+        "name": "fault control: complete-on-refresh-failure turns the named advisory assertion RED in an isolated source copy"
+      }
+    },
+    {
+      "id": "r12-typesafe-prompt-precedence",
+      "requirement": "R12",
+      "files": [
+        "tests/typesafe-prompt-precedence.test.ts"
+      ],
+      "boundary": "The real direct TypeSafe adapter is composed with the real classification pipeline and an injected prompt-classifier seam.",
+      "assertions": "A valid pinned TypeSafe response selects its tier and makes zero prompt fallback calls. An authentication miss from the same direct adapter reaches exactly one prompt fallback call. This proves direct-adapter/pipeline precedence only; it does not claim a pinned-Pi host TypeSafe transport witness.",
+      "boundaryTest": {
+        "file": "tests/typesafe-prompt-precedence.test.ts",
+        "name": "does not invoke prompt fallback after a successful TypeSafe judgment"
+      },
+      "invariant": {
+        "file": "tests/typesafe-prompt-precedence.test.ts",
+        "name": "invokes prompt fallback once after a TypeSafe miss"
+      },
+      "fault": {
+        "exception": "Test-only evidence addition; production transport behavior is unchanged. The named precedence assertions fail if a direct success falls through or a direct miss does not reach the prompt path once."
+      }
+    },
+    {
+      "id": "r14-completed-typesafe-trace",
+      "requirement": "R14",
+      "files": [
+        "tests/typesafe-classifier.test.ts"
+      ],
+      "boundary": "A deterministic direct TypeSafe classifier with debug enabled receives a successful fake response and writes its local JSONL trace.",
+      "assertions": "The completed trace has exactly start, attempt, request, response, decoded, success, and finish lifecycle events under one random trace ID. It records only routing metadata; prompt, criteria, credential, and response-status-text canaries are absent. This proves the direct adapter trace only, not Pi host serialization or arbitrary multimodal payload privacy.",
+      "boundaryTest": {
+        "file": "tests/typesafe-classifier.test.ts",
+        "name": "records a completed TypeSafe trace without request, response, or credential content"
+      },
+      "invariant": {
+        "file": "tests/typesafe-classifier.test.ts",
+        "name": "records a completed TypeSafe trace without request, response, or credential content"
+      },
+      "fault": {
+        "exception": "Test-only evidence addition; existing direct-classifier implementation is unchanged. The exact lifecycle and canary assertions fail if a completed trace omits an event or retains protected content."
+      }
+    },
+    {
+      "id": "r16-pi-1-4-baseline-and-evidence-preflight",
+      "requirement": "R16",
+      "files": [
+        ".github/workflows/verification.yml",
+        "DEVELOPMENT.md",
+        "docs/verification-campaign.md",
+        "package-lock.json",
+        "package.json",
+        "scripts/verify-release.mjs",
+        "scripts/ui-smoke.py",
+        "tests/integration/dispatch-identity.test.mjs",
+        "tests/verification-workflow.test.mjs"
+      ],
+      "boundary": "The pull-request workflow performs a read-only declaration preflight before the existing release gates, while the pinned Pi baseline, compatibility matrix, release preflight, and operational docs consistently name Pi 1.4.0.",
+      "assertions": "Evidence preflight checks out the PR head with full history and validates against the PR base without --apply or dependency installation. A failed PR preflight fails the required release-gates job rather than skipping it; cancellation remains supported. The compatibility matrix retains explicit 1.3.0 and 1.4.0 pins with isolated installs, while package metadata, lockfile, release preflight, and operator documentation use the 1.4.0 baseline.",
+      "boundaryTest": {
+        "file": "tests/verification-workflow.test.mjs",
+        "name": "evidence preflight runs only on pull requests before release gates"
+      },
+      "invariant": {
+        "file": "tests/verification-workflow.test.mjs",
+        "name": "Pi compatibility uses explicit matrix pins with an isolated install"
+      },
+      "fault": {
+        "file": "tests/verification-workflow.test.mjs",
+        "name": "release-gates fails closed on failed PR evidence preflight"
+      }
+    },
+    {
+      "id": "r16-prd-delivery-runbook",
+      "requirement": "R16",
+      "files": [
+        "docs/prd-delivery-plan.md"
+      ],
+      "boundary": "The delivery runbook records the branch's CI recovery state, serial lanes, candidate freeze protocol, and explicit partial-requirement boundaries.",
+      "assertions": "It directs a failed CI run through one-root-cause repair and focused proof, forbids treating partial coverage as closure, and requires a frozen revision for final verification.",
+      "boundaryTest": {
+        "exception": "Operational delivery documentation only; no runtime behavior changes."
+      },
+      "invariant": {
+        "exception": "Operational delivery documentation only; no runtime behavior changes."
+      },
+      "fault": {
+        "exception": "Operational delivery documentation only; no runtime behavior changes."
       }
     }
   ]

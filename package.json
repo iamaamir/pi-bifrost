@@ -111,8 +111,8 @@
   },
   "devDependencies": {
     "@ast-grep/cli": "^0.51.0",
-    "@earendil-works/pi-ai": "1.0.1",
-    "@earendil-works/pi-coding-agent": "1.0.1",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
     "@stryker-mutator/core": "^10.0.0",
     "@types/node": "^26.1.1",
     "agent-tui": "^1.1.0",

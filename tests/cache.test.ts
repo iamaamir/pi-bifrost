@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  DEFAULT_THRESHOLD,
   normalize,
   lookupCache,
   touchCacheEntry,
@@ -15,9 +16,9 @@ import {
 
 describe("cache", () => {
   describe("normalize", () => {
-    it("lowercases, strips punctuation, sorts tokens", () => {
+    it("lowercases and strips punctuation while preserving token order", () => {
       assert.equal(normalize("Hello, World!"), "hello world");
-      assert.equal(normalize("  Plan   the architecture? "), "architecture plan the");
+      assert.equal(normalize("  Plan   the architecture? "), "plan the architecture");
     });
 
     it("returns empty string for empty input", () => {
@@ -57,6 +58,15 @@ describe("cache", () => {
       assert.equal(result!.category, "economical");
       assert.equal(entries[0].hits, 5);
       assert.equal(entries[0].lastUsed, 1);
+    });
+
+    it("defaults to ordered exact matching while lower thresholds opt into fuzzy matching", () => {
+      const entries = [
+        { normalized: normalize("dogs bite people"), category: "cached", lastUsed: Date.now(), hits: 0 },
+      ];
+      assert.equal(DEFAULT_THRESHOLD, 1);
+      assert.equal(lookupCache(entries, "people bite dogs", DEFAULT_THRESHOLD), undefined);
+      assert.equal(lookupCache(entries, "people bite dogs", 0.5)?.category, "cached");
     });
 
     it("returns entry for fuzzy match above threshold", () => {

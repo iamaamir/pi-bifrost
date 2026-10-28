@@ -12,7 +12,7 @@ export interface ReliabilityConfig {
   allowanceCooldownScope?: "provider" | "model";
   /** Open a cooldown immediately for a normalized allowance-exhaustion failure. */
   cooldownOnAllowanceExhausted?: boolean;
-  /** Retry one proven side-effect-free Auto generation on a different configured model after allowance exhaustion. */
+  /** Opt in to one proven side-effect-free Auto generation retry on a different configured model after allowance exhaustion. */
   retryOnAllowanceExhausted?: boolean;
   failureThreshold?: number;
   windowMinutes?: number;
@@ -49,7 +49,7 @@ export const DEFAULT_RELIABILITY: Required<Omit<ReliabilityConfig, "path" | "sta
   enabled: true,
   cooldownOnAllowanceExhausted: true,
   allowanceCooldownScope: "provider",
-  retryOnAllowanceExhausted: true,
+  retryOnAllowanceExhausted: false,
   failureThreshold: 3,
   windowMinutes: 5,
   cooldownMinutes: 60,

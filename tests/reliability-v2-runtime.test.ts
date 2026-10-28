@@ -14,7 +14,7 @@ import { TYPE_SAFE_API_KEY_ENV } from "../classifier-backends.ts";
 import { CLASSIFIER_BACKEND_IDS } from "../classifier-backends.ts";
 import { makeModel, makePiClassifierModel } from "./helpers.ts";
 
-async function runAllowanceRuntime({ reloadOptOut = false, reloadAllowanceScope, failedContent = [], toolResults = [], priorToolHistory = false, rejectSettlement = false, interveneDuringSettlement = false, routeAfterPrepare = false, reloadAfterPrepare = false, inlineQuick = false, poolExhausted = false, dispatchPreparedRetry = false, retryDisabled = false, stateVersion = 2, repeatPrefixOnRetry = false, mismatchedPrefixOnRetry = false, directRuleOnRetry = false, initialFallback = false }: {
+async function runAllowanceRuntime({ reloadOptOut = false, reloadAllowanceScope, failedContent = [], toolResults = [], priorToolHistory = false, rejectSettlement = false, interveneDuringSettlement = false, routeAfterPrepare = false, reloadAfterPrepare = false, inlineQuick = false, poolExhausted = false, dispatchPreparedRetry = false, retryEnabled = false, retryDisabled = false, stateVersion = 2, repeatPrefixOnRetry = false, mismatchedPrefixOnRetry = false, directRuleOnRetry = false, initialFallback = false }: {
   reloadOptOut?: boolean;
   reloadAllowanceScope?: "provider" | "model";
   failedContent?: unknown[];
@@ -27,6 +27,7 @@ async function runAllowanceRuntime({ reloadOptOut = false, reloadAllowanceScope,
   inlineQuick?: boolean;
   poolExhausted?: boolean;
   dispatchPreparedRetry?: boolean;
+  retryEnabled?: boolean;
   retryDisabled?: boolean;
   stateVersion?: 1 | 2;
   repeatPrefixOnRetry?: boolean;
@@ -52,7 +53,7 @@ async function runAllowanceRuntime({ reloadOptOut = false, reloadAllowanceScope,
       ? { quick: initialFallback ? ["opencode/unavailable"] : poolExhausted ? ["opencode/go", "opencode/sibling"] : ["opencode/go", "opencode/sibling", "other/quick"], general: ["third/general"] }
       : { quick: routeAfterPrepare || reloadAfterPrepare ? ["fixture/allowed", "fixture/alternate"] : ["fixture/allowed"] },
     reliability: { stateVersion, failureThreshold: 3, windowMinutes: 10, cooldownMinutes: 1,
-      allowanceCooldownScope: inlineQuick ? "provider" : "model", ...(retryDisabled ? { retryOnAllowanceExhausted: false } : {}) },
+      allowanceCooldownScope: inlineQuick ? "provider" : "model", ...(retryEnabled ? { retryOnAllowanceExhausted: true } : retryDisabled ? { retryOnAllowanceExhausted: false } : {}) },
     rules: directRuleOnRetry ? [{ pattern: "^summary$", model: "direct/bound" }] : [],
   } as const;
   const configPath = join(configDir, "bifrost.json");
@@ -281,7 +282,7 @@ describe("reliability v2 registered Auto runtime", () => {
 
   it("recovers a quick-prefixed subscription denial once within the quick provider pool", async () => {
     for (const stateVersion of [1, 2] as const) {
-      const recovered = await runAllowanceRuntime({ inlineQuick: true, dispatchPreparedRetry: true, stateVersion, repeatPrefixOnRetry: true });
+      const recovered = await runAllowanceRuntime({ inlineQuick: true, dispatchPreparedRetry: true, retryEnabled: true, stateVersion, repeatPrefixOnRetry: true });
       assert.ok(recovered.beforeSettle, `stateVersion ${stateVersion} accepts the exact subscription-required denial`);
       assert.equal((recovered.retryModel as { provider: string; id: string } | undefined)?.provider, "other");
       assert.equal((recovered.retryModel as { provider: string; id: string } | undefined)?.id, "quick");
@@ -304,7 +305,7 @@ describe("reliability v2 registered Auto runtime", () => {
 
   it("keeps an explicit quick recovery inside quick when stripped text matches a direct-model rule", async () => {
     for (const stateVersion of [1, 2] as const) {
-      const recovered = await runAllowanceRuntime({ inlineQuick: true, dispatchPreparedRetry: true, repeatPrefixOnRetry: true, directRuleOnRetry: true, stateVersion });
+      const recovered = await runAllowanceRuntime({ inlineQuick: true, dispatchPreparedRetry: true, retryEnabled: true, repeatPrefixOnRetry: true, directRuleOnRetry: true, stateVersion });
       assert.ok(recovered.beforeSettle, `stateVersion ${stateVersion} should prepare the bounded recovery`);
       assert.equal((recovered.retryModel as { provider: string; id: string } | undefined)?.provider, "other");
       assert.equal((recovered.retryModel as { provider: string; id: string } | undefined)?.id, "quick",
@@ -314,7 +315,7 @@ describe("reliability v2 registered Auto runtime", () => {
 
   it("cancels a prepared explicit quick recovery when the same user boundary forces another tier", async () => {
     for (const stateVersion of [1, 2] as const) {
-      const changedTier = await runAllowanceRuntime({ inlineQuick: true, dispatchPreparedRetry: true, mismatchedPrefixOnRetry: true, stateVersion });
+      const changedTier = await runAllowanceRuntime({ inlineQuick: true, dispatchPreparedRetry: true, retryEnabled: true, mismatchedPrefixOnRetry: true, stateVersion });
       assert.ok(changedTier.beforeSettle, `stateVersion ${stateVersion} should prepare the original quick recovery`);
       assert.match(String(changedTier.routeError), /prepared usage-limit retry was cancelled because the requested tier changed/);
       if (stateVersion === 2) assert.equal(Object.keys(changedTier.state!.dispatches).length, 1,
@@ -338,14 +339,14 @@ describe("reliability v2 registered Auto runtime", () => {
   });
 
   it("stops a prepared retry after new branch activity instead of routing normally", async () => {
-    const { state, beforeSettle, routeError } = await runAllowanceRuntime({ routeAfterPrepare: true });
+    const { state, beforeSettle, routeError } = await runAllowanceRuntime({ routeAfterPrepare: true, retryEnabled: true });
     assert.ok(beforeSettle, "the original safe boundary prepares the alternate");
     assert.match(String(routeError), /prepared usage-limit retry was cancelled/);
     assert.equal(Object.keys(state!.dispatches).length, 1, "the stale continuation does not admit a second model");
   });
 
   it("stops a prepared retry after reload disables recovery instead of routing normally", async () => {
-    const { state, beforeSettle, routeError } = await runAllowanceRuntime({ reloadAfterPrepare: true });
+    const { state, beforeSettle, routeError } = await runAllowanceRuntime({ reloadAfterPrepare: true, retryEnabled: true });
     assert.ok(beforeSettle, "the original safe boundary prepares the alternate");
     assert.match(String(routeError), /prepared usage-limit retry was cancelled/);
     assert.equal(Object.keys(state!.dispatches).length, 1, "the reloaded route does not admit another model");
