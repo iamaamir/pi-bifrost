@@ -82,6 +82,7 @@ function assertOptionalPiPeers(packageRoot) {
   assert.deepEqual(packageJson.peerDependenciesMeta, {
     "@earendil-works/pi-ai": { optional: true },
     "@earendil-works/pi-coding-agent": { optional: true },
+    "@earendil-works/pi-tui": { optional: true },
   }, "Pi packages must remain optional peers");
 }
 
