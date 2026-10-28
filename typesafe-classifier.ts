@@ -13,6 +13,8 @@ export const DEFAULT_TYPESAFE_TIMEOUT_MS = 3_000;
 export const DEFAULT_TYPESAFE_MAX_ATTEMPTS = 2;
 const MAX_TYPESAFE_TIMEOUT_MS = 60_000;
 const MAX_TYPESAFE_ATTEMPTS = 3;
+/** Cap the materialized decode buffer; classification needs kilobytes, not megabytes. */
+const MAX_RESPONSE_BODY_BYTES = 1_048_576;
 export const TYPESAFE_MIN_CONFIDENCE = 0.8;
 
 /** @deprecated Use `ClassifierRequest`. Kept for the benchmark and provider seam. */
@@ -148,6 +150,11 @@ async function readResponseJson(response: Response, signal: AbortSignal): Promis
       if (result.done) break;
       chunks.push(result.value);
       total += result.value.byteLength;
+      // Bound the decode buffer: a hostile or stuck provider endpoint must
+      // degrade to a classifier miss instead of growing the RSS without limit.
+      if (total > MAX_RESPONSE_BODY_BYTES) {
+        throw new Error(`provider response exceeds the bounded decode budget (${MAX_RESPONSE_BODY_BYTES} bytes)`);
+      }
     }
   } catch (error) {
     try { await reader.cancel(); } catch { /* cleanup only */ }

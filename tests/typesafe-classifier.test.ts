@@ -100,8 +100,32 @@ describe("TypeSafe classifier", () => {
     assert.doesNotMatch(JSON.stringify([...slow, ...fast, ...shared]), /slow prompt|fast prompt/);
   });
 
-  it("reports circuit-open evidence per call without issuing a request", async () => {
-    const key = `classifier/typesafe/${TYPESAFE_MODEL}`;
+  it("treats an oversized response body as an invalid response", async () => {
+    // The decoder must bound how much provider body it materializes; a padded
+    // payload that exceeds the budget is a decode miss, not a classification.
+    const observations: TypeSafeObservation[] = [];
+    let chunksLeft = 20;
+    const oversized = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (chunksLeft-- > 0) {
+          controller.enqueue(new TextEncoder().encode(" ".repeat(64 * 1024)));
+          return;
+        }
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(payload())));
+        controller.close();
+      },
+    }));
+    const classifier = createTypeSafeClassifier({
+      apiKey: "key",
+      fetchImpl: async () => oversized,
+      observe: (observation) => observations.push(observation),
+    });
+    const result = await classifier({ prompt: "hello", tiers: ["quick", "general", "frontier"], criteria });
+    assert.equal(result, undefined);
+    assert.equal(observations[0]?.outcome, "invalid_response");
+  });
+
+  it("reports circuit-open evidence per call without issuing a request", async () => {    const key = `classifier/typesafe/${TYPESAFE_MODEL}`;
     const now = Date.now();
     const reliability = new ReliabilityStore({
       cwd: "/tmp",
