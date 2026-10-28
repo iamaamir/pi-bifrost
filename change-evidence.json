@@ -13,10 +13,11 @@
         "docs/guide/configuration.md",
         "schema.json",
         "tests/config-schema.test.ts",
-        "tests/diagnostics.test.ts"
+        "tests/diagnostics.test.ts",
+        "tests/integration/config-startup-acceptance.test.mjs"
       ],
       "boundary": "Every configuration source layer and the merged effective policy are structurally validated against the shipped schema.json on load, reload, boot, and prospective apply. Findings name the offending path, and only a finding that makes a source unusable rejects the layer.",
-      "assertions": "Unknown fields, invalid enum values, and wrong types produce config.schema_unsupported_field, config.schema_enum, and config.schema_type diagnostics at the exact path. Deeply nested sources fail with a bounded diagnostic, and metadata stripping preserves a user-defined __proto__ tier. A partial layer may defer schemaVersion conditionals that the effective configuration enforces. A schema copy that adds a field accepts what the installed schema still rejects, so acceptance follows schema.json instead of duplicated code. categoryStrategies keeps its strategy enum for every key, so a per-tier typo still produces a finding while the version 3 metadata key accepts free text. The offline validation report and its JSON form carry the same structural findings as warnings with the offending path.",
+      "assertions": "Unknown fields, invalid enum values, and wrong types produce config.schema_unsupported_field, config.schema_enum, and config.schema_type diagnostics at the exact path. Deeply nested sources fail with a bounded diagnostic and no generation, and metadata stripping preserves and routes a user-defined __proto__ tier. A partial layer may defer schemaVersion conditionals that the effective configuration enforces. A schema copy that adds a field accepts what the installed schema still rejects, so acceptance follows schema.json instead of duplicated code. categoryStrategies keeps its strategy enum for every key, so a per-tier typo still produces a finding while the version 3 metadata key accepts free text. The offline validation report and its JSON form carry the same structural findings as warnings with the offending path.",
       "boundaryTest": {
         "file": "tests/config-schema.test.ts",
         "name": "rejects unsupported fields, invalid values, and wrong types in source layers"

@@ -151,6 +151,30 @@ describe("startup config source acceptance", { timeout: 60_000, concurrency: 1 }
   before(async () => { const ready = await startFakeServer(); server = ready.child; port = ready.port; });
   after(() => server?.kill("SIGTERM"));
 
+  it("rejects deeply nested config before generation", async () => {
+    const paths = fixture();
+    try {
+      writeFileSync(join(paths.work, ".pi", "bifrost.json"), '{"unknown":' + '{"x":'.repeat(5000) + '0' + '}'.repeat(5000) + '}');
+      const before = await stats();
+      const result = await runPi(paths);
+      assert.deepEqual((await stats()).stats.slice(before.stats.length), [], "deep config must not generate");
+      assert.match(result.stderr, /nesting depth/u);
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
+  it("routes a configured __proto__ tier without treating it as metadata", async () => {
+    const paths = fixture();
+    try {
+      writeFileSync(join(paths.work, ".pi", "bifrost.json"), '{"schemaVersion":2,"default":"__proto__","models":{"__proto__":["fake/healthy"]}}');
+      const before = await stats();
+      const result = await runPi(paths);
+      const requests = (await stats()).stats.slice(before.stats.length).filter((item) => item.kind === "generation");
+      assert.equal(requests.length, 1, result.stderr);
+      assert.equal(requests[0].model, "healthy");
+      assert.doesNotMatch(result.stderr, /unknown default|config.*error/iu);
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
   it("blocks generation when capability enforcement is unsupported", async () => {
     const paths = fixture();
     try {
