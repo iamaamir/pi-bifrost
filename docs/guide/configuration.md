@@ -65,6 +65,7 @@ You can annotate any object-valued section with an optional `description` string
 ```json
 {
   "$schema": "./schema.json",
+  "schemaVersion": 3,
   "description": "Project routing policy for coding agents.",
   "models": {
     "description": "Define the available model tiers and their eligible models.",
