@@ -153,7 +153,7 @@ describe("shipped JSON artifacts", () => {
     assert.equal(definition?.additionalProperties, false);
     assert.equal(definition?.properties?.providers?.type, "array");
     assert.equal(definition?.properties?.providers?.items?.minLength, 1);
-    assert.deepEqual(definition?.properties?.tiers?.additionalProperties?.required, ["providers"]);
+    assert.equal(definition?.properties?.tiers?.additionalProperties?.required, undefined, "omitted tier providers impose no restriction");
     assert.equal(definition?.properties?.tiers?.additionalProperties?.additionalProperties, false);
     assert.equal(definition?.properties?.tiers?.additionalProperties?.properties?.providers?.type, "array");
   });
