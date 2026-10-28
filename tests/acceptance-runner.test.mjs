@@ -793,7 +793,7 @@ describe("acceptance runner boundary", () => {
     t.diagnostic(JSON.stringify({ sourceSha256: sha256Text(source), faultSha256: sha256Text(mutant), restoredSha256: sha256Text(readFileSync(target, "utf8")), phases: ["GREEN", "named selection AssertionError RED", "restored GREEN"] }));
   });
 
-  it("workflow acceptance CLI records actual-predecessor change evidence with bounded gates", { timeout: CALLER_PHASE_BUDGET_MS }, (t) => {
+  it("workflow acceptance CLI records actual-predecessor change evidence with bounded gates", { timeout: 3 * CALLER_PHASE_BUDGET_MS + 30_000 }, (t) => {
     const root = process.cwd();
     const manifest = JSON.parse(readFileSync(join(root, "change-evidence.json"), "utf8"));
     const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
@@ -840,12 +840,14 @@ describe("acceptance runner boundary", () => {
       writeFileSync(eventPath, JSON.stringify({ before, after: head, ref: "refs/heads/v2" }));
       if (competingBase) env.BIFROST_EVIDENCE_BASE = competingBase;
       else delete env.BIFROST_EVIDENCE_BASE;
+      const startedAt = Date.now();
       const result = spawnSync(process.execPath, ["--import", join(fixture, "loader.mjs"), script, "--profile", "deterministic"], {
         cwd: root,
         env,
         encoding: "utf8",
-        timeout: 110_000,
+        timeout: CALLER_PHASE_BUDGET_MS,
       });
+      assert.equal(result.error, undefined, `caller failed: ${result.error?.code ?? "unknown"}; status=${result.status}; signal=${result.signal}; elapsed=${Date.now() - startedAt}ms`);
       const evidenceLine = (result.stdout ?? "").match(/^Evidence: (.+)$/m)?.[1];
       assert.ok(evidenceLine, result.stderr + result.stdout);
       const evidencePath = join(root, evidenceLine);

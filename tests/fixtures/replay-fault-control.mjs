@@ -7,11 +7,11 @@
 // in index.ts.
 //
 // GUARD INVENTORY (index.ts, candidate baseline SHA-256 declared below):
-//   - isSideEffectFreeAllowanceFailure (exact line 1767) — proves a failed
+//   - isSideEffectFreeAllowanceFailure (exact line 1775) — proves a failed
 //     attempt had no output/tool results/queued work before allowance recovery.
-//   - autoBoundaryStillActive (exact line 1710) — confirms the original user
+//   - autoBoundaryStillActive (exact line 1718) — confirms the original user
 //     boundary is still the active turn.
-//   - allowanceRetryBoundaryStillSafe (exact line 2528) — re-checks the boundary
+//   - allowanceRetryBoundaryStillSafe (exact line 2536) — re-checks the boundary
 //     immediately before dispatching the prepared allowance retry.
 //
 // CONTROLLED FAULT PROOF (performed in a disposable scratch copy, never in the
@@ -59,7 +59,7 @@ import { join } from "node:path";
 import { processGroupExists } from "../../scripts/acceptance/core.mjs";
 import { closeTracking, cleanupFailure, detachOwnedHandles, spawnOwned } from "./child-auto-inline-harness.mjs";
 
-export const REPLAY_GUARD_BASELINE_SHA256 = "334f376e519404faf6155941e01c54bdebcf93edd29c349f2d145333a442b02e";
+export const REPLAY_GUARD_BASELINE_SHA256 = "7cb412c2c8b13e6408da528041f3507b9c1abb4b884544d61c10bcfd42c9e04a";
 export const REPLAY_GUARD_FUNCTIONS = [
   "isSideEffectFreeAllowanceFailure",
   "allowanceRetryBoundaryStillSafe",
@@ -69,9 +69,9 @@ export const REPLAY_GUARD_FUNCTIONS = [
 // Guard line anchors are exact against the baseline commit; keep them in sync
 // with index.ts when the guards move.
 export const REPLAY_GUARD_LINES = {
-  autoBoundaryStillActive: 1710,
-  isSideEffectFreeAllowanceFailure: 1767,
-  allowanceRetryBoundaryStillSafe: 2528,
+  autoBoundaryStillActive: 1718,
+  isSideEffectFreeAllowanceFailure: 1775,
+  allowanceRetryBoundaryStillSafe: 2536,
 };
 
 // Each PROVEN pair has an executable fault reaching its exact named assertion.

@@ -5,8 +5,8 @@ import { constants, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, open
 import { dirname, join } from "node:path";
 import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
 import type { BifrostConfig, ClassifierConfig } from "./config.ts";
-import { BUNDLED_PUBLIC_INIT_DEFAULTS, DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, MAX_CONFIG_SOURCE_BYTES, PROMPT_ONLY_FIELDS, classifierTotalTimeoutIssue, validateConfig, validateEconomicConfig, validateTierPolicyConfig } from "./config.ts";
-import { loadConfigForReload, loadConfigWithSourceOverride } from "./config-load.ts";
+import { BUNDLED_PUBLIC_INIT_DEFAULTS, DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, MAX_CONFIG_SOURCE_BYTES, PROMPT_ONLY_FIELDS, classifierTotalTimeoutIssue, schemaVersionAtLeast, validateConfig, validateEconomicConfig, validateTierPolicyConfig } from "./config.ts";
+import { loadConfigForReload, loadConfigWithSourceOverride, type ConfigLoadDiagnostic } from "./config-load.ts";
 import { applyConfigMigration, ConfigMigrationError, parseConfigMigrationArgs, planConfigMigration, readConfigMigrationSource } from "./config-migration.ts";
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
@@ -161,7 +161,11 @@ function installReloadedConfig(
     log(ctx, `Bifrost config reload rejected: ${loaded.diagnostics.map(({ message }) => message).join(" ")}`, "error");
     return false;
   }
-  return installConfigIfTierPoliciesValid(state, loaded.config, ctx, true);
+  const installed = installConfigIfTierPoliciesValid(state, loaded.config, ctx, true);
+  if (installed && loaded.warnings.length > 0) {
+    log(ctx, `Bifrost config loaded with warnings: ${loaded.warnings.map(({ message }) => message).join(" ")}`, "warning");
+  }
+  return installed;
 }
 
 export function log(
@@ -566,14 +570,35 @@ function setRegistryProviderEvidence(
   });
 }
 
-function prospectiveConfigInstallable(source: ReconciliationConfigSource, bytes: Uint8Array, state: BifrostState): boolean {
+interface ProspectiveConfigValidation {
+  readonly installable: boolean;
+  /** Structural findings reported as warnings: they never veto a write. */
+  readonly warnings: readonly ConfigLoadDiagnostic[];
+}
+
+function prospectiveConfigValidation(
+  source: ReconciliationConfigSource,
+  bytes: Uint8Array,
+  state: BifrostState,
+): ProspectiveConfigValidation {
   const loaded = loadConfigWithSourceOverride(process.cwd(), state.extensionDir, source, bytes);
-  if (loaded.diagnostics.length > 0) return false;
+  // Schema findings the domain validators own are warnings, so they do not veto
+  // a write: an unrecognized field the user already carries must not stop init
+  // or a classifier change from being saved. Values that make the policy unsafe
+  // are caught by the semantic checks below.
+  if (loaded.diagnostics.length > 0) return { installable: false, warnings: loaded.warnings };
   const errors = validateTierPolicyConfig(loaded.config).filter((issue) => issue.severity === "error");
   const validation = validateConfig(loaded.config);
   errors.push(...validation.filter((issue) => issue.severity === "error"
     && (issue.code?.startsWith("config.reliability_") || issue.code?.startsWith("config.affinity_"))));
-  return errors.length === 0 && classifierTotalTimeoutIssue(loaded.config) === undefined;
+  return {
+    installable: errors.length === 0 && classifierTotalTimeoutIssue(loaded.config) === undefined,
+    warnings: loaded.warnings,
+  };
+}
+
+function prospectiveConfigInstallable(source: ReconciliationConfigSource, bytes: Uint8Array, state: BifrostState): boolean {
+  return prospectiveConfigValidation(source, bytes, state).installable;
 }
 
 function reconciliationReportLines(report: ReconciliationCommandReport): string[] {
@@ -683,8 +708,15 @@ async function handleReconciliationCommand(args: string, ctx: ExtensionContext, 
   const registry = request.action === "recover"
     ? reconciliationRegistrySnapshot(ctx, state, "")
     : reconciliationRegistrySnapshot(ctx, state, request.provider);
+  // A planned change that would load with structural warnings must say so
+  // before the user commits it; the committed case reloads, which reports them.
+  let prospectiveWarnings: readonly ConfigLoadDiagnostic[] = [];
   const dependencies = {
-    validateMergedConfig: (selected: ReconciliationConfigSource, bytes: Uint8Array) => prospectiveConfigInstallable(selected, bytes, state),
+    validateMergedConfig: (selected: ReconciliationConfigSource, bytes: Uint8Array) => {
+      const validation = prospectiveConfigValidation(selected, bytes, state);
+      prospectiveWarnings = validation.warnings;
+      return validation.installable;
+    },
     apply: applyReconciliationTransaction,
     recover: recoverReconciliationTransaction,
   };
@@ -692,6 +724,9 @@ async function handleReconciliationCommand(args: string, ctx: ExtensionContext, 
     ? (({ refresh: _refresh, ...previewRequest }) => previewRequest)(request)
     : request;
   const report = runReconciliationCommand(planRequest, { source, registry }, dependencies);
+  if (report.status === "ready" && prospectiveWarnings.length > 0) {
+    log(ctx, `Bifrost config would load with warnings: ${prospectiveWarnings.map(({ message }) => message).join(" ")}`, "warning");
+  }
   if (report.status === "committed") {
     const loaded = loadConfigForReload(process.cwd(), state.extensionDir);
     if (!installReloadedConfig(state, loaded, ctx)) {
@@ -1017,7 +1052,7 @@ async function handleInit(
   const targetLayer = source.source === "project" ? "project" : source.source === "workspace" ? "workspace" : "global";
   const targetLayerIndex = layerOrder.indexOf(targetLayer);
   const inheritedFields = new Set(configLayers.sourceFields
-    .filter(({ layer }) => layer !== "extension" && layerOrder.indexOf(layer) < targetLayerIndex)
+    .filter(({ layer }) => layer !== "extension" && layer !== "effective" && layerOrder.indexOf(layer) < targetLayerIndex)
     .flatMap(({ fields }) => fields));
   const extensionFields = configLayers.sourceFields.find(({ layer }) => layer === "extension")?.fields ?? [];
   for (const key of extensionFields) {
@@ -2015,7 +2050,7 @@ async function handleReliabilityCommand(args: string, ctx: ExtensionContext, sta
   const stateVersion = state.config.reliability?.stateVersion;
   const reliabilityConfigErrors = validateConfig(state.config).filter((issue) => issue.severity === "error" && issue.code?.startsWith("config.reliability_"));
   if (reliabilityConfigErrors.length > 0 || !state.reliabilityV2ConfigValid
-    || (stateVersion === 2 && state.config.schemaVersion !== 2)) {
+    || (stateVersion === 2 && !schemaVersionAtLeast(state.config.schemaVersion, 2))) {
     log(ctx, "Repair the reliability settings and validate the config before preparing the v2 sidecar.", "error");
     return;
   }
@@ -2664,6 +2699,44 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
 
 // ── Route table ─────────────────────────────────────────────
 
+/**
+ * Re-read every config layer and install the result through Bifrost's runtime
+ * reload path. Shared by `/bifrost reload` and by an approved agent apply, so
+ * both activate a saved configuration exactly the same way.
+ */
+export function reloadBifrostConfig(state: BifrostState, ctx: ExtensionContext): boolean {
+  const done = debugMeasure("command", "reload");
+  const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
+  if (!installReloadedConfig(state, loadedConfig, ctx)) {
+    done({ accepted: false });
+    return false;
+  }
+  // Re-init debug — user may have updated debug config since startup.
+  setupDebug(state.config.debug ?? { enabled: false }, process.cwd());
+  const runtimeState = loadRuntimeState(runtimeStatePath(process.cwd()), {
+    enabled: state.config.enabled ?? true,
+    pinned: false,
+    classifierEnabled: state.config.classifier?.enabled ?? true,
+  });
+  state.enabled = runtimeState.enabled;
+  state.classifierEnabled = runtimeState.classifierEnabled;
+  state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path), (state.config.cache?.ttlHours ?? 720) * 60 * 60 * 1000);
+  state.reliabilityStore.reload(state.config.reliability, process.cwd());
+  state.classifierMetricsStore.reload({
+    cwd: process.cwd(),
+    enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
+  });
+  syncBifrostModeStatus(ctx, state);
+  clearBifrostWidgets(ctx);
+  done();
+  debug("command", "reloaded", {
+    enabled: state.enabled,
+    classifierEnabled: state.classifierEnabled,
+    tiers: Object.keys(state.config.models ?? {}).join(","),
+  });
+  return true;
+}
+
 export function createCommandRouter(
   state: BifrostState,
 ): (args: string, ctx: ExtensionContext) => Promise<void> {
@@ -2703,35 +2776,7 @@ export function createCommandRouter(
       log(ctx, "Bifrost unpinned");
     }),
     exact("reload", (_, ctx) => {
-      const done = debugMeasure("command", "reload");
-      const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
-      if (!installReloadedConfig(state, loadedConfig, ctx)) {
-        done({ accepted: false });
-        return;
-      }
-      // Re-init debug — user may have updated debug config since startup.
-      setupDebug(state.config.debug ?? { enabled: false }, process.cwd());
-      const runtimeState = loadRuntimeState(runtimeStatePath(process.cwd()), {
-        enabled: state.config.enabled ?? true,
-        pinned: false,
-        classifierEnabled: state.config.classifier?.enabled ?? true,
-      });
-      state.enabled = runtimeState.enabled;
-      state.classifierEnabled = runtimeState.classifierEnabled;
-      state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path), (state.config.cache?.ttlHours ?? 720) * 60 * 60 * 1000);
-      state.reliabilityStore.reload(state.config.reliability, process.cwd());
-      state.classifierMetricsStore.reload({
-        cwd: process.cwd(),
-        enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
-      });
-      syncBifrostModeStatus(ctx, state);
-      clearBifrostWidgets(ctx);
-      done();
-      debug("command", "reloaded", {
-        enabled: state.enabled,
-        classifierEnabled: state.classifierEnabled,
-        tiers: Object.keys(state.config.models ?? {}).join(","),
-      });
+      if (!reloadBifrostConfig(state, ctx)) return;
       log(ctx, "Bifrost config reloaded");
     }),
 

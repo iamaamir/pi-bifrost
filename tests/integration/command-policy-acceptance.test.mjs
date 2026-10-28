@@ -149,6 +149,18 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
     } finally { env.cleanup(); }
   });
 
+  it("waits for a new JSON report instead of accepting a previous turn's report", async () => {
+    const env = fixture({ models: [{ id: "chat" }] });
+    const rpc = startRpc({ fixture: env, server, model: "fake/chat", timeoutMs: 2_000, jsonReports: true });
+    try {
+      const first = reportJson(await rpc.prompt("/bifrost config migrate --source project --json"));
+      assert.ok(first.status);
+      await assert.rejects(rpc.prompt("/bifrost reload", { expectedStderr: "[bifrost-json] " }), /timed out waiting for JSON report/);
+    } finally {
+      try { await rpc.close(); } finally { env.cleanup(); }
+    }
+  });
+
   it("previews and applies one reviewed schema migration with exact backup and layer isolation", async () => {
     const original = Buffer.from('{\n  "enabled": true,\n  "default": "general",\n  "classifier": { "enabled": false },\n  "models": { "general": ["fake/chat"] },\n  "retained": { "owner": "handwritten" }\n}\n');
     const env = fixture({ models: [{ id: "chat" }], initialConfig: original });
@@ -158,7 +170,7 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
     const userBytes = Buffer.from('{"enabled":true}\n');
     mkdirSync(join(env.home, ".pi", "agent"), { recursive: true });
     writeFileSync(userPath, userBytes);
-    const rpc = startRpc({ fixture: env, server, model: "fake/chat" });
+    const rpc = startRpc({ fixture: env, server, model: "fake/chat", jsonReports: true });
     try {
       const beforeStats = await readStats(server.port);
       const preview = reportJson(await rpc.prompt("/bifrost config migrate --source project --json"));
@@ -176,13 +188,15 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
         assert.equal(rejected.reason, "merged_config_invalid");
         assert.deepEqual(readFileSync(join(env.project, "bifrost.json")), invalid, "invalid migration must not write source");
       }
-      const unsupported = Buffer.from(original.toString("utf8").replace('"enabled": true,', '"enabled": true, "requirements": { "mode": "enforce" },'));
-      writeFileSync(join(env.project, "bifrost.json"), unsupported);
-      for (const suffix of ["", ` --apply --proposal ${preview.proposalDigest}`]) {
-        const rejected = reportJson(await rpc.prompt(`/bifrost config migrate --source project${suffix} --json`));
-        assert.equal(rejected.status, "blocked");
-        assert.equal(rejected.reason, "merged_config_invalid");
-        assert.deepEqual(readFileSync(join(env.project, "bifrost.json")), unsupported);
+      for (const requirements of [{ mode: "enforce" }, { description: { mode: "enforce" } }]) {
+        const unsupported = Buffer.from(original.toString("utf8").replace('"enabled": true,', `"enabled": true, "requirements": ${JSON.stringify(requirements)},`));
+        writeFileSync(join(env.project, "bifrost.json"), unsupported);
+        for (const suffix of ["", ` --apply --proposal ${preview.proposalDigest}`]) {
+          const rejected = reportJson(await rpc.prompt(`/bifrost config migrate --source project${suffix} --json`));
+          assert.equal(rejected.status, "blocked");
+          assert.equal(rejected.reason, "merged_config_invalid");
+          assert.deepEqual(readFileSync(join(env.project, "bifrost.json")), unsupported);
+        }
       }
       writeFileSync(join(env.project, "bifrost.json"), original);
 
@@ -241,7 +255,7 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
       initialConfig: original,
       ownership: writeFixtureReceipt(["fake/old"]),
     });
-    const rpc = startRpc({ fixture: env, server, model: "fake/new" });
+    const rpc = startRpc({ fixture: env, server, model: "fake/new", jsonReports: true });
     try {
       const beforeStats = await readStats(server.port);
       const previewOutput = await rpc.prompt("/bifrost config reconcile --tier general --provider fake --refresh --json");

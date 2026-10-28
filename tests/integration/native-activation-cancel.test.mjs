@@ -229,7 +229,7 @@ it("cancels real AgentSession activation behind a proven deny-all fence", async 
       const mutantDir = join(scratch, `mutant-${mutantCounter}-${label}`);
       mkdirSync(mutantDir, { recursive: true });
       for (const file of readdirSync(root)) {
-        if (file.endsWith(".ts") || file === "bifrost.json") copyFileSync(join(root, file), join(mutantDir, file));
+        if (file.endsWith(".ts") || file === "bifrost.json" || file === "schema.json") copyFileSync(join(root, file), join(mutantDir, file));
       }
       writeFileSync(join(mutantDir, "index.ts"), source);
       symlinkSync(join(root, "node_modules"), join(mutantDir, "node_modules"));

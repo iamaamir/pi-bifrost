@@ -68,7 +68,7 @@ describe("automatic first-run setup", () => {
     assert.deepEqual(saved.models, { quick: ["fixture/verified"], general: [], frontier: [] });
     assert.deepEqual(saved.classifier, {
       enabled: true, backend: "prompt", model: "fixture/classifier", method: "auto", maxTokens: 20,
-      temperature: 0, fallbackToRegex: true, totalTimeoutMs: 15_000, apiKeyEnv: "BIFROST_TEST_CLASSIFIER_KEY_NAME",
+      temperature: 0, fallbackToRegex: true, totalTimeoutMs: 15_000,
       typesafe: { model: "jev-test", timeoutMs: 250, maxAttempts: 3, debug: false, metrics: { enabled: true } },
     });
     assert.deepEqual(saved.cache, extensionSettings.cache);

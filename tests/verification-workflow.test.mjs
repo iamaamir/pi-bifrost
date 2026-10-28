@@ -67,6 +67,24 @@ function releaseGateScriptsFrom(source) {
 const jobs = jobBlocks(workflow);
 const CAMPAIGN_JOBS = ["campaign", "pi-compatibility", "mutation-experiment"];
 
+/**
+ * The hard job-level budget of the release-gates job. GitHub enforces the
+ * ceiling, and a green run must fit all four stages (acceptance, CRAP trend
+ * refresh, proposed-merge acceptance, report uploads) inside the budget on
+ * the slowest hosted runners observed; a 45-minute budget killed a fully
+ * green run mid-stage.
+ */
+function releaseGateBudget(source) {
+  const block = jobBlocks(source)["release-gates"];
+  assert.ok(block, "release-gates job must exist");
+  const bound = block.match(/^ {4}timeout-minutes: (\d+)$/mu);
+  assert.ok(bound, "release-gates must set timeout-minutes");
+  const minutes = Number(bound[1]);
+  assert.ok(minutes >= 60 && minutes <= 360,
+    `release-gates budget must stay hard-bound between 60 and 360 minutes, got ${minutes}`);
+  return minutes;
+}
+
 function assertPreflightGate(block) {
   assert.ok(block, "release-gates job must exist");
   assert.match(block, /^ {4}needs: evidence-preflight$/mu);
@@ -78,6 +96,7 @@ function assertPreflightGate(block) {
 test("release-gates fails closed on failed PR evidence preflight", () => {
   const block = jobs["release-gates"];
   assertPreflightGate(block);
+  releaseGateBudget(workflow);
   const bypass = block.replace("${{ !cancelled() }}", "always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')");
   assert.throws(() => assertPreflightGate(bypass), "old skipped-required-check bypass must fail the assertion");
   assert.throws(() => assertPreflightGate(block.replace("run: exit 1", "run: exit 0")), "disabled preflight failure must fail the assertion");
@@ -185,6 +204,18 @@ test("Pi compatibility uses explicit matrix pins with an isolated install", () =
   assert.match(block, /tests\/router-package\.test\.mjs/u, "installed-package consumer test must run");
   assert.match(block, /tests\/integration\/native-classifier\.test\.mjs/u, "native SDK/process tests must run");
   assert.doesNotMatch(block, /verify:release/u, "the pinned verify-release preflight is not an alternate-version oracle");
+});
+
+test("release-gates keeps a hard budget that fits every release stage", () => {
+  assert.ok(releaseGateBudget(workflow) >= 60,
+    "release-gates must budget at least 60 minutes for the four release stages");
+});
+
+test("fault control: a 45-minute release-gates budget turns the named budget assertion red", () => {
+  const shrunk = workflow.replace(/(^ {2}release-gates:$[\s\S]*?^ {4}timeout-minutes: )60/mu, "$145");
+  assert.notEqual(shrunk, workflow, "the fault must rewrite the release-gates budget");
+  assert.throws(() => releaseGateBudget(shrunk),
+    /release-gates budget must stay hard-bound between 60 and 360 minutes/u);
 });
 
 test("every campaign job keeps a hard job-level bound", () => {

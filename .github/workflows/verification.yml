@@ -64,7 +64,7 @@ jobs:
     needs: evidence-preflight
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Require successful PR evidence preflight
         if: github.event_name == 'pull_request' && needs.evidence-preflight.result != 'success'

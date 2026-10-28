@@ -8,6 +8,7 @@
     "bifrost.json",
     "schema.json",
     "examples/",
+    "skills/configure-bifrost/",
     "docs/router-api.md",
     "CHANGELOG.md"
   ],
@@ -45,6 +46,9 @@
   "pi": {
     "extensions": [
       "./index.ts"
+    ],
+    "skills": [
+      "./skills/configure-bifrost"
     ],
     "minPiVersion": "1.0.1",
     "image": "https://iamaamir.github.io/pi-bifrost/social-card.png"
@@ -94,13 +98,17 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-ai": {
       "optional": true
     },
     "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
       "optional": true
     }
   },
@@ -113,6 +121,7 @@
     "@ast-grep/cli": "^0.51.0",
     "@earendil-works/pi-ai": "1.4.0",
     "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
     "@stryker-mutator/core": "^10.0.0",
     "@types/node": "^26.1.1",
     "agent-tui": "^1.1.0",
@@ -122,5 +131,8 @@
     "knip": "^6.42.1",
     "typebox": "1.3.27",
     "typescript": "6.0.3"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0"
   }
 }

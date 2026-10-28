@@ -378,7 +378,8 @@ export function runPi({ fixture, server, args = [], port, violationLog, timeoutM
  *     writes a correlated prompt and waits for its `response`; auto-confirms any
  *     `confirm` UI request; when `settle` is true and the turn started, also
  *     waits for `agent_settled`. Resolves `{ response, records, stderr }` where
- *     `records` is this turn's stdout slice.
+ *     `records` is this turn's stdout slice. With `jsonReports: true`, commands
+ *     containing `--json` also wait for a complete Bifrost JSON line on stderr.
  *   userTurn(message)      prompt(message, { settle: true })
  *   close({ assertClean }) ends stdin, waits for close, terminates the owned
  *                          group if needed, and returns
@@ -387,7 +388,7 @@ export function runPi({ fixture, server, args = [], port, violationLog, timeoutM
  *                          recorded network violations.
  *   stderr / records       live stderr text / every parsed record so far.
  */
-export function startRpc({ fixture, server, model = "fake/fast", port, violationLog, timeoutMs = RPC_DEADLINE_MS, inherit = false, env, approve = false, extraArgs = [] }) {
+export function startRpc({ fixture, server, model = "fake/fast", port, violationLog, timeoutMs = RPC_DEADLINE_MS, inherit = false, env, approve = false, extraArgs = [], jsonReports = false }) {
   const home = fixture?.home;
   const work = fixture?.work;
   const resolvedPort = port ?? server?.port ?? fixture?.port;
@@ -442,7 +443,7 @@ export function startRpc({ fixture, server, model = "fake/fast", port, violation
     stderr: stderr.slice(stderrStart),
   });
 
-  async function prompt(message, { settle = true } = {}) {
+  async function prompt(message, { settle = true, expectedStderr } = {}) {
     const id = `http-rpc-${records.length}-${Date.now()}`;
     const start = records.length;
     const stderrStart = stderr.length;
@@ -451,6 +452,18 @@ export function startRpc({ fixture, server, model = "fake/fast", port, violation
     let index = start;
     let response;
     let awaitingSettle = false;
+    async function finishTurn(result) {
+      const marker = expectedStderr ?? (jsonReports && /(?:^|\s)--json(?:\s|$)/u.test(message) ? "[bifrost-json] " : undefined);
+      if (marker) {
+        while (!stderr.slice(stderrStart).split("\n").slice(0, -1).some((line) => line.startsWith(marker))) {
+          assert.ifError(spawnError);
+          if (closeInfo) throw new Error(`Pi RPC exited before JSON report: ${message}`);
+          if (Date.now() >= deadline) throw new Error(`Pi RPC timed out waiting for JSON report: ${message}`);
+          await waitForActivity(deadline);
+        }
+      }
+      return turnResult(start, stderrStart, result);
+    }
     while (Date.now() < deadline) {
       while (index < records.length) {
         const record = records[index++];
@@ -460,12 +473,12 @@ export function startRpc({ fixture, server, model = "fake/fast", port, violation
         }
         if (record.id === id && record.type === "response") {
           assert.equal(record.success, true, JSON.stringify(record));
-          if (!settle || record.data?.disposition !== "started") return turnResult(start, stderrStart, record);
+          if (!settle || record.data?.disposition !== "started") return finishTurn(record);
           response = record;
           awaitingSettle = true;
           continue;
         }
-        if (awaitingSettle && record.type === "agent_settled") return turnResult(start, stderrStart, response);
+        if (awaitingSettle && record.type === "agent_settled") return finishTurn(response);
       }
       assert.ifError(spawnError);
       if (closeInfo) throw new Error(`Pi RPC exited before responding: ${message}`);

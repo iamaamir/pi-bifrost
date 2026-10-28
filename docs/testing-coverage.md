@@ -42,7 +42,7 @@ The requirement IDs come from [the PRD](../PRD.md). These rows name test boundar
 | R04: chat-model pools | [Fresh catalog setup and background probe completion](../tests/integration/auto-virtual.test.mjs); [init probe regressions](../tests/integration/init-regression.test.mjs) | Pinned Pi catalog contract and model-type tests; all-failed background warning and no-write checks; image routing is deferred |
 | R05: strict fallback | [Physical no-route](../tests/integration/legacy-behavior.test.mjs); [Auto boundary and reserve rejection](../tests/integration/auto-virtual.test.mjs) | Ordered fallback and requirement propagation tests |
 | R06: stop before unsafe generation | Physical and Auto no-route cases above | Activation, cancellation and late-result tests |
-| R07: offline inspection and validation | [Command acceptance](../tests/integration/command-policy-acceptance.test.mjs); [offline preview and invalid-source rejection](../tests/integration/preview-offline-acceptance.test.mjs) | Config diagnostics and inspection projections |
+| R07: offline inspection and validation | [Command acceptance](../tests/integration/command-policy-acceptance.test.mjs); [offline preview and invalid-source rejection](../tests/integration/preview-offline-acceptance.test.mjs) | Config diagnostics and inspection projections; [agent configuration tool contract](../tests/config-agent.test.ts) and [skill packaging/registration](../tests/config-skill.test.ts) |
 | R08: durable model and provider pauses | [V2 leases and recovery](../tests/integration/reliability-v2-auto.test.mjs); [physical 402 and restart](../tests/integration/release-acceptance.test.mjs); [scope reload](../tests/integration/command-policy-acceptance.test.mjs) | Lease ownership, half-open recovery and both scope-reload directions |
 | R09: safe reload and storage | [Invalid physical reload](../tests/integration/legacy-behavior.test.mjs); [startup source validation and repair](../tests/integration/config-startup-acceptance.test.mjs); [reload UI](../scripts/ui-smoke.py) | Atomic storage, compare-and-swap, journal and invalid-config tests |
 | R10: declared economic policy | [Reserve rejection](../tests/integration/auto-virtual.test.mjs); [billing preference dispatch](../tests/integration/command-policy-acceptance.test.mjs) | Signal units, freshness, conflicts and unknown-value tests; live quota fetching is deferred |
@@ -67,6 +67,23 @@ The first-use background scenarios check that the first response returns before 
 The audit repair adds finite branch checks. Source tests cover every on-disk layer and every prospective edit target, unsupported versions, intrinsic policy errors, legitimate partial overrides, last-good reload, bounded reads and deep graphs. Init tests cover normal and forced runs across fresh, existing-empty and unchanged-owned targets. They check exact source bytes, inherited private settings, later edits and fresh classifier use. The background restart case checks that a surviving model makes the saved default usable. Offline tests use an enabled classifier and an unmatched prompt; a direct-rule-only case cannot prove offline classification.
 
 Provider projection tests require one state snapshot per nonempty decision and zero for an empty catalog. They check pause semantics, cross-revision consistency and failed reads. The performance script compares the actual pinned baseline export with the current export across memory and durable-file fixtures; each case checks identical projected state. Latency measurements are evidence, not timing assertions in unit tests.
+
+## Configuration approval regression
+
+`tests/integration/config-approval-tui.test.mjs` starts pinned Pi in an isolated
+PTY and drives the production tool through a test command. It checks sequential
+review, early Apply refusal, cancellation, tiny viewports, resize reset, and the
+exact saved source. The fixture performs no generation and substitutes reload
+success, so this test does not prove model-issued tool dispatch or activation.
+It uses the existing Python/Pillow screen harness and outbound network guard.
+An isolated production copy restores the old `ctx.ui.confirm` path and fails
+the same early-write assertion. The original files remain unchanged.
+
+`tests/integration/config-agent-acceptance.test.mjs` covers model-issued check
+and apply in real Pi RPC mode. It proves apply returns `approval_required`,
+preserves source bytes, and leaves offline preview available. Unit tests cover
+exact escaped values, cell wrapping, cancellation, queued input, and stale
+source, catalog, and layer guards.
 
 ## Limits
 

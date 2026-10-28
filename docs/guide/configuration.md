@@ -56,6 +56,26 @@ For `frontier`, Bifrost tries `frontier`, then `general`, then `quick`; it stops
 
 Configuration sources must be regular files of at most 10,000,000 bytes. Read-only symlinks to regular files are supported. Managed writes keep their existing symlink protection. Oversized sources are rejected, not truncated.
 
+### Structural contract and inline descriptions
+
+The `schema.json` shipped with Bifrost is the authoritative structural contract: it defines every supported field, its type, its allowed values, and its constraints. Every configuration source is validated against it on load, reload, and prospective apply. A source nested more than 128 levels is rejected before validation. Unknown fields, invalid enum values, and wrong types are reported with a diagnostic naming the offending path, so no key becomes active silently. A finding that makes a source unusable — an unsupported `schemaVersion`, or a reserved `description` key that a version upgrade would reinterpret — rejects that source and stops routing until it is fixed. Other structural findings load as warnings, because the semantic validators decide the safe outcome for their namespace: an invalid economic or reliability invariant fails closed, while an invalid classifier budget disables classification and keeps local routing. Cross-field rules — tier references, fallback cycles, classifier constraints, economic and reliability invariants — stay with Bifrost's semantic validators, which run on the merged effective policy.
+
+You can annotate any object-valued section with an optional `description` string. Descriptions are metadata: they explain why a configuration exists and never affect routing, classification, eligibility, economics, reliability, or fallback decisions. Bifrost strips them at the load boundary, so no routing subsystem can mistake one for a tier or policy, and they are preserved in the files you author. The same structural findings appear in `/bifrost validate` and its JSON output, as warnings alongside the semantic ones.
+
+```json
+{
+  "$schema": "./schema.json",
+  "schemaVersion": 3,
+  "description": "Project routing policy for coding agents.",
+  "models": {
+    "description": "Define the available model tiers and their eligible models.",
+    "quick": ["provider/cheap"]
+  }
+}
+```
+
+Inside dynamically keyed maps — `models`, `categoryStrategies`, `tierPolicies`, `classifier.criteria`, `economics.scopes`, `economics.tierOverrides`, `economics.sourceOrder` — a key named `description` has always been a possible user-defined key (for example a tier named `description`). Versions 1 and 2 keep that meaning unchanged. Schema version 3 keeps every version 2 capability and additionally reserves `description` in those maps as inline metadata, which makes the syntax above unambiguous. A version 3 configuration whose dynamically keyed `description` holds a non-string value — or a layer that did not opt into version 3 while the effective version is 3 — is rejected with a precise diagnostic; rename the user-defined key or stay on your current version. Descriptions are optional under every supported version. Keys one level below `economics.tierOverrides` are admission rule IDs in every version, so a rule named `description` keeps its meaning and its reserve override.
+
 ### Economic observations and billing preference (schema version 2)
 
 The optional `economics` namespace starts off when omitted. It accepts provider- or model-scoped facts that you enter in config. Sources must be marked `declared` or `estimated`; Pi does not read billing APIs or account scopes. Use `mode: "observe"` first. It records whether each rule would reject a candidate and leaves selection order and random selection unchanged.
@@ -70,7 +90,7 @@ Billing class comes only from a fresh explicit declared or estimated signal, not
 
 In the Pi extension, Auto uses `retain-within-tier` when the `affinity` namespace is absent. It keeps a proven successful Auto model only when that model remains in the chosen tier's final selection pool. Physical selection stays off by default. The resolve-only API also stays off when affinity is omitted; it uses only the mode explicitly passed in its config.
 
-The optional `affinity` namespace requires `schemaVersion: 2` and overrides the Pi defaults. Set `{"schemaVersion":2,"affinity":{"mode":"off"}}` to opt out in Auto, or use `mode: "observe"` to report the proven anchor without changing selection. `/bifrost inspect` and `/bifrost preview --trace` show the effective mode and whether it comes from the Auto default, physical default, or config. Init keeps writing the existing version-1 config shape and does not add the affinity namespace.
+The optional `affinity` namespace requires `schemaVersion: 2` or later and overrides the Pi defaults. Set `{"schemaVersion":2,"affinity":{"mode":"off"}}` to opt out in Auto, or use `mode: "observe"` to report the proven anchor without changing selection. `/bifrost inspect` and `/bifrost preview --trace` show the effective mode and whether it comes from the Auto default, physical default, or config. Init keeps writing the existing version-1 config shape and does not add the affinity namespace.
 
 In Pi, Bifrost creates the anchor only from a proven successful Auto user turn and keeps it in memory for the session. The mode source is `auto_default` when the Auto-only default applies and `config` when an explicit namespace sets it. Physical routing with no namespace reports `physical_default` and does not retain the Auto anchor. If no anchor is available, the summary reports `locality_unknown`. `providerAdvisory: true` adds only whether the pool contains a candidate from the anchor provider.
 

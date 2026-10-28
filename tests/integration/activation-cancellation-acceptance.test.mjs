@@ -281,7 +281,7 @@ describe("activation cancellation acceptance", { timeout: 120_000 }, () => {
     const copyDir = join(scratch, "src");
     mkdirSync(copyDir, { recursive: true });
     for (const file of readdirSync(ROOT)) {
-      if (file.endsWith(".ts")) copyFileSync(join(ROOT, file), join(copyDir, file));
+      if (file.endsWith(".ts") || file === "schema.json") copyFileSync(join(ROOT, file), join(copyDir, file));
     }
     writeFileSync(join(copyDir, "index.ts"), mutantSource);
     symlinkSync(join(ROOT, "node_modules"), join(copyDir, "node_modules"));
