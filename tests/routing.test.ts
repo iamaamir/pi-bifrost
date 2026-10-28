@@ -22,6 +22,7 @@ import {
   type TierResolutionConfig,
 } from "../routing.ts";
 import { emptyReliabilityState, recordModelFailure, DEFAULT_RELIABILITY } from "../reliability.ts";
+import { DEFAULT_RULES } from "../config.ts";
 import { makeCtx, makeModel, withoutCost } from "./helpers.ts";
 import { emptyEconomicSnapshot, hasHardEconomicAdmission, publishEconomicObservation, type EconomicSignal, type ReservePolicy } from "../economic-signals.ts";
 
@@ -898,6 +899,14 @@ describe("routing", () => {
       }
     });
 
+    it("keeps the injectable random seam total when it returns 1", () => {
+      // Injected rng beyond [0,1) must not produce undefined (LOB-unbounded
+      // selection). 1 * length floors to length — clamp to the last candidate.
+      const a = makeModel("a", "a", 0, 0);
+      const b = makeModel("b", "b", 0, 0);
+      assert.equal(modelKey(selectModel([a, b], "random", () => 1)), "b/b");
+    });
+
     it("keeps candidate order for fastest and metric ties", () => {
       const first = makeModel("a", "first", 2, 3, 128_000);
       const second = makeModel("b", "second", 2, 3, 128_000);
@@ -1232,6 +1241,28 @@ describe("routing", () => {
       ];
       assert.equal(classify("bar foo", rules), "first");
       assert.equal(classifyCompiled("bar foo", compileRules(rules)), "first");
+    });
+
+    it("drops rule patterns whose backtracking explodes on a small canary", () => {
+      // Security regression: a repo-provided rule with nested quantifiers
+      // hangs the host event loop synchronously before the message is sent.
+      // compileRules must drop the rule (fail closed to later rules/default)
+      // instead of shipping a pattern that cannot run within a bounded budget.
+      const compiled = compileRules([
+        { pattern: "^(a+)+$", model: "quick" },
+        { pattern: "hello", model: "general" },
+      ]);
+      assert.deepEqual(compiled.map((rule) => rule.model), ["general"]);
+    });
+
+    it("parity path drops the same catastrophic pattern", () => {
+      const rules = [{ pattern: "^(a+)+$", model: "quick" }];
+      assert.equal(classify("a".repeat(24) + "b", rules), undefined);
+      assert.equal(classifyCompiled("a".repeat(24) + "b", compileRules(rules)), undefined);
+    });
+
+    it("still compiles every shipped default rule", () => {
+      assert.equal(compileRules(DEFAULT_RULES).length, DEFAULT_RULES.length);
     });
   });
 });

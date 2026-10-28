@@ -4,6 +4,7 @@ import { isGenerativeModel } from "./virtual-model.ts";
 import { evaluateReserves, type EconomicSnapshot, type ReserveEvaluation, type ReservePolicy } from "./economic-signals.ts";
 import { projectBillingPreference, type BillingPreferenceProjection } from "./economic-preferences.ts";
 import { observeAffinity, type AffinityAnchor, type AffinityMode, type AffinityRouteObservation, type PiAffinityModeSource } from "./affinity.ts";
+import { performance } from "node:perf_hooks";
 
 export type RoutingStrategy =
   | "first"
@@ -218,7 +219,9 @@ export function selectModel<M extends RoutingModelBase>(
       // Descending sort picks the first maximum under stable tie-breaking.
       return minBy(candidates, (m) => -modelContextSize(m));
     case "random":
-      return candidates[Math.floor(random() * candidates.length)];
+      // Clamp so injectable rng values outside [0,1) stay on the last
+      // candidate instead of selecting undefined past the end.
+      return candidates[Math.min(candidates.length - 1, Math.floor(random() * candidates.length))];
     default:
       // "first", "fastest" — list order is assumed meaningful.
       return candidates[0];
@@ -712,6 +715,7 @@ export function classify(text: string, rules: readonly RouteRule[]): string | un
   for (const rule of rules) {
     try {
       const re = new RegExp(rule.pattern, "i");
+      if (patternExceedsBacktrackingBudget(rule.pattern, re)) continue;
       if (re.test(text)) return rule.model;
     } catch (err) {
       console.error(`[bifrost] invalid regex "${rule.pattern}": ${err}`);
@@ -726,12 +730,57 @@ export interface CompiledRule {
   readonly model: string;
 }
 
-/** Compile rules ahead of time; invalid patterns are logged once and dropped. */
+// Rule patterns can arrive from any configuration source, but every match runs
+// synchronously on the host event loop, so a pattern that genuinely backtracks
+// without bound must be rejected at compile time. Canary subjects grow
+// gradually; benign patterns stay in microseconds on every canary, while
+// nested-quantifier / repeated-group shapes trip the per-canary budget on a
+// mid-size subject (2-style growth trips ~len 22, Fibonacci-alternation growth
+// ~len 32) and pay at most the cheap canaries plus the first tripped one as a
+// one-time compile cost — instead of an unbounded hang on every message. The
+// budget check runs after each canary completes, so a tripping canary's own
+// cost is always paid (worst measured here: ~25 ms); canaries beyond the
+// measured trip points would only raise that floor, so the ladder stops at 32.
+// Residual limit: shapes whose explosion onset sits beyond the longest canary
+// still pass (documented, not fixable, by a black-box budget).
+const BACKTRACKING_BUDGET_MS = 10;
+const BACKTRACKING_CANARIES = [
+  "a".repeat(10) + "b",
+  "a".repeat(14) + "b",
+  "a".repeat(18) + "b",
+  "a".repeat(20) + "b",
+  "a".repeat(22) + "b",
+  "a".repeat(24) + "b",
+  "ab".repeat(11) + "c",
+  "1".repeat(21) + "x",
+  "a".repeat(28) + "b",
+  "a".repeat(32) + "b",
+];
+
+function patternExceedsBacktrackingBudget(pattern: string, re: RegExp): boolean {
+  const started = performance.now();
+  try {
+    for (const canary of BACKTRACKING_CANARIES) {
+      re.test(canary);
+      if (performance.now() - started > BACKTRACKING_BUDGET_MS) {
+        console.error(`[bifrost] rejecting rule pattern with unbounded backtracking: "${pattern}"`);
+        return true;
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+/** Compile rules ahead of time; invalid and unbounded patterns are logged once and dropped. */
 export function compileRules(rules: readonly RouteRule[]): CompiledRule[] {
   const compiled: CompiledRule[] = [];
   for (const rule of rules) {
     try {
-      compiled.push({ re: new RegExp(rule.pattern, "i"), model: rule.model });
+      const re = new RegExp(rule.pattern, "i");
+      if (patternExceedsBacktrackingBudget(rule.pattern, re)) continue;
+      compiled.push({ re, model: rule.model });
     } catch (err) {
       console.error(`[bifrost] invalid regex "${rule.pattern}": ${err}`);
     }
