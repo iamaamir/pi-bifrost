@@ -187,7 +187,7 @@
         "tests/config-skill.test.ts"
       ],
       "boundary": "The skills/configure-bifrost skill and the bifrost_config tool ship inside the pi package and register alongside the extension, with bundled references resolving from the skill directory.",
-      "assertions": "The packed archive contains the skill directory and the extension registration; the skill frontmatter parses, the always-loaded description stays short, bundled references resolve, and the skill names the tool and its safety gates.",
+      "assertions": "The packed archive contains the skill directory and the extension registration; the skill frontmatter parses, the always-loaded description stays short, bundled references resolve, and the skill names the tool and its safety gates. The approval component's Pi TUI import is declared as an optional host peer and pinned for development.",
       "boundaryTest": {
         "file": "tests/config-skill.test.ts",
         "name": "is included in the published package"
