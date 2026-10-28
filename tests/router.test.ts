@@ -370,7 +370,7 @@ describe("experimental resolve-only router", () => {
     assert.equal(result.decision.outcome, "unresolved");
     assert.equal(result.decision.selected, undefined);
     assert.deepEqual(result.decision.requested?.candidates, [
-      { model: "fixture/quick-model", status: "excluded", exclusion: "provider_not_allowed", scope: "global" },
+      { model: "fixture/quick-model", status: "excluded", exclusion: "provider_not_allowed", scope: "global", exclusionEvidence: [{ code: "provider_not_allowed", source: "config_snapshot" }] },
     ]);
   });
 
@@ -395,7 +395,7 @@ describe("experimental resolve-only router", () => {
     assert.deepEqual(result.decision.attempted?.map((pool) => pool.tier), ["quick", "general"]);
     // The requested tier's own allowlist excludes its pool...
     assert.deepEqual(result.decision.attempted?.[0]?.candidates, [
-      { model: "fixture/quick-model", status: "excluded", exclusion: "provider_not_allowed", scope: "tier" },
+      { model: "fixture/quick-model", status: "excluded", exclusion: "provider_not_allowed", scope: "tier", exclusionEvidence: [{ code: "provider_not_allowed", source: "config_snapshot" }] },
     ]);
     // ...but the fallback pool is scoped by the fallback tier alone, so it stays eligible.
     assert.deepEqual(result.decision.attempted?.[1]?.candidates, [
