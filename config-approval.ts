@@ -102,16 +102,20 @@ export async function approveConfig(
 ): Promise<boolean> {
   if (!ctx.hasUI || ctx.mode !== "tui" || signal?.aborted) return false;
   let cancel: (() => void) | undefined;
+  let resize: (() => void) | undefined;
   try {
     const approved = await ctx.ui.custom<boolean>((tui, _theme, _keys, done) => {
       cancel = () => done(false);
       signal?.addEventListener("abort", cancel, { once: true });
       const viewer = new ConfigApproval(title, message, () => tui.terminal, done, () => tui.requestRender());
+      resize = () => viewer.invalidate();
+      process.stdout.on("resize", resize);
       if (signal?.aborted) cancel();
       return viewer;
     }, { overlay: true, overlayOptions: { width: "100%", maxHeight: "100%", anchor: "top-left", margin: { right: 1, bottom: 1 } } });
     return approved === true && !signal?.aborted;
   } finally {
     if (cancel) signal?.removeEventListener("abort", cancel);
+    if (resize) process.stdout.off("resize", resize);
   }
 }

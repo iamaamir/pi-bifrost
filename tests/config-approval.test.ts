@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { ConfigApproval, wrapApprovalLines } from "../config-approval.ts";
+import { approveConfig, ConfigApproval, wrapApprovalLines } from "../config-approval.ts";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 function fixture() {
   const size = { columns: 40, rows: 8 };
@@ -56,6 +57,33 @@ describe("configuration approval viewport", () => {
     assert.match(f.render()[0]!, /review 1\//);
     f.viewer.handleInput("a");
     assert.deepEqual(f.results, []);
+  });
+
+  it("invalidates approval on resize events even if dimensions return before rendering", async () => {
+    const size = { columns: 40, rows: 8 };
+    const outcomes: boolean[] = [];
+    const before = process.stdout.listenerCount("resize");
+    const ctx = {
+      hasUI: true,
+      mode: "tui",
+      ui: { custom: async (factory: Function) => {
+        const viewer = factory({ terminal: size, requestRender() {} }, {}, {}, (value: boolean) => outcomes.push(value)) as ConfigApproval;
+        for (let i = 0; i < 100; i++) {
+          if (viewer.render(40).at(-1)?.includes("a Apply")) break;
+          viewer.handleInput("n");
+        }
+        size.rows = 9;
+        process.stdout.emit("resize");
+        size.rows = 8;
+        process.stdout.emit("resize");
+        viewer.handleInput("a");
+        assert.deepEqual(outcomes, [], "resize events must invalidate the prior review");
+        assert.match(viewer.render(40)[0]!, /review 1\//);
+        return false;
+      } },
+    } as unknown as ExtensionContext;
+    assert.equal(await approveConfig(ctx, "title", Array(20).fill("change").join("\n")), false);
+    assert.equal(process.stdout.listenerCount("resize"), before);
   });
 
   it("fails closed in tiny viewports and cancels at every stage", () => {
