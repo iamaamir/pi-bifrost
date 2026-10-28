@@ -80,6 +80,23 @@ describe("config schema contract", () => {
     });
   });
 
+  it("rejects unsupported requirements before metadata can erase them", () => {
+    withTree(({ cwd, extensionDir }) => {
+      writeJson(join(cwd, "bifrost.json"), { requirements: { description: { mode: "enforce" } } });
+      writeJson(join(cwd, ".pi", "bifrost.json"), { requirements: { mode: "advisory" } });
+      const result = loadConfigForReload(cwd, extensionDir);
+      assert.ok(result.diagnostics.some((issue) => issue.layer === "workspace" && /requirements/u.test(issue.message)));
+    });
+  });
+
+  it("does not strip non-string metadata before strict policy validation", () => {
+    withTree(({ cwd, extensionDir }) => {
+      writeJson(join(cwd, ".pi", "bifrost.json"), { schemaVersion: 2, tierPolicies: { general: { fallbackTiers: [], description: { unsupported: true } } } });
+      const result = loadConfigForReload(cwd, extensionDir);
+      assert.ok(result.diagnostics.some((issue) => /tierPolicies/u.test(issue.message)));
+    });
+  });
+
   it("rejects deeply nested configuration as a source diagnostic", () => {
     withTree(({ cwd, extensionDir }) => {
       const path = join(cwd, ".pi", "bifrost.json");

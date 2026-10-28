@@ -235,6 +235,18 @@ describe("startup config source acceptance", { timeout: 60_000, concurrency: 1 }
     } finally { rmSync(paths.root, { recursive: true, force: true }); }
   });
 
+  it("blocks unsupported requirement fields hidden under metadata names", async () => {
+    const paths = fixture();
+    try {
+      writeFileSync(join(paths.work, "bifrost.json"), JSON.stringify({ requirements: { description: { mode: "enforce" } } }));
+      writeFileSync(join(paths.work, ".pi", "bifrost.json"), JSON.stringify({ requirements: { mode: "advisory" } }));
+      const before = await stats();
+      const result = await runPi(paths);
+      assert.deepEqual((await stats()).stats.slice(before.stats.length), [], "unsupported authored requirements must block generation");
+      assert.match(result.stderr, /unsupported/u);
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
   it("blocks generation when a higher supported schema masks an unsupported lower layer", async () => {
     const paths = fixture();
     try {

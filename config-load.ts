@@ -33,7 +33,7 @@ const MAX_CONFIG_SOURCE_DIAGNOSTICS = 32;
 const MAX_CONFIG_SOURCE_DIAGNOSTIC_CHARS = 192;
 const MAX_CONFIG_NESTING_DEPTH = 128;
 
-function exceedsConfigNestingDepth(value: unknown): boolean {
+export function exceedsConfigNestingDepth(value: unknown): boolean {
   const pending: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
   while (pending.length > 0) {
     const current = pending.pop()!;
@@ -310,7 +310,8 @@ function loadConfigLayers(
     }
     const semantic = stripConfigMetadata(source);
     reservedKeys.push({ layer, declaredVersion: source.schemaVersion, paths: reserved.map(({ path }) => path) });
-    const sourceDiagnostics = sourcePolicyDiagnostics(semantic);
+    // Requirements have no metadata fields; validate their authored keys before stripping.
+    const sourceDiagnostics = sourcePolicyDiagnostics({ ...semantic, ...(Object.hasOwn(source, "requirements") ? { requirements: source.requirements } : {}) });
     if (sourceDiagnostics.length) {
       for (const message of sourceDiagnostics) addDiagnostic(layer, `${layer} config ${message}`);
       continue;

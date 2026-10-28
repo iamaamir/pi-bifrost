@@ -23,7 +23,7 @@ import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionContext, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { configLayerPaths, loadConfigForReload, loadConfigWithSourceOverride, loadRules, type ConfigLoadDiagnostic } from "./config-load.ts";
+import { configLayerPaths, exceedsConfigNestingDepth, loadConfigForReload, loadConfigWithSourceOverride, loadRules, type ConfigLoadDiagnostic } from "./config-load.ts";
 import {
   MAX_CONFIG_SOURCE_BYTES,
   SUPPORTED_SCHEMA_VERSIONS,
@@ -690,6 +690,7 @@ function planCandidate(
     for (const key of remove) delete nextSource[key];
     for (const [key, value] of Object.entries(patch ?? {})) nextSource[key] = value;
   }
+  if (exceedsConfigNestingDepth(base) || exceedsConfigNestingDepth(nextSource)) return fail("configuration exceeds the nesting depth limit");
   const changes = diffFields(base, nextSource);
   if (changes.length === 0) return fail("the selected source already matches this proposal");
   return {
@@ -996,12 +997,7 @@ export interface ConfigAgentApplyInput extends ConfigAgentCheckInput {
   readonly liveCatalog?: () => ConfigAgentCatalog;
 }
 
-function compactValue(value: unknown): string {
-  const text = canonicalJson(value);
-  return text.length <= 120 ? text : `${text.slice(0, 117)}...`;
-}
-
-function approvalMessage(checked: ConfigAgentCheckResult): string {
+function approvalMessage(checked: ConfigAgentCheckResult): string | null {
   const lines = [
     `Source: ${checked.source} (${checked.sourcePath})`,
     `Proposal: ${shortDigest(checked.proposalDigest)}`,
@@ -1009,12 +1005,10 @@ function approvalMessage(checked: ConfigAgentCheckResult): string {
       ? "Changes: none"
       : `Changes: ${checked.changes.map((change) => `${change.kind} ${change.field}`).join(", ")}`,
   ];
-  // Values stay on the dialog so the user sees what they approve; check's
-  // report carries the full detail for anything this dialog does not fit.
   for (const change of checked.changes) {
-    if (change.kind === "add") lines.push(`  ${change.field}: ${compactValue(change.after)}`);
-    else if (change.kind === "remove") lines.push(`  ${change.field}: ${compactValue(change.before)} (removed)`);
-    else lines.push(`  ${change.field}: ${compactValue(change.before)} -> ${compactValue(change.after)}`);
+    if (change.kind === "add") lines.push(`  ${change.field}: ${canonicalJson(change.after)}`);
+    else if (change.kind === "remove") lines.push(`  ${change.field}: ${canonicalJson(change.before)} (removed)`);
+    else lines.push(`  ${change.field}: ${canonicalJson(change.before)} -> ${canonicalJson(change.after)}`);
   }
   const tiers = checked.routingAfter?.tiers ?? [];
   if (tiers.length > 0) {
@@ -1022,8 +1016,8 @@ function approvalMessage(checked: ConfigAgentCheckResult): string {
     for (const tier of tiers) lines.push(`  ${tier.tier} (${tier.strategy}): ${tier.pool.join(", ") || "empty"}`);
   }
   lines.push("No other config source is modified.");
-  lines.push("Full before/after detail: run check with this candidate.");
-  return lines.join("\n").slice(0, MAX_APPROVAL_MESSAGE_CHARS);
+  const message = lines.join("\n");
+  return message.length <= MAX_APPROVAL_MESSAGE_CHARS ? message : null;
 }
 
 export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promise<ConfigAgentApplyResult> {
@@ -1091,9 +1085,13 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
     return stale("the model inventory changed after this proposal was generated", "Nothing was written. Run check and preview again against the current catalog.");
   }
 
+  const message = approvalMessage(checked);
+  if (message === null) {
+    return { ...withCheck, status: "rejected", reason: "the full change is too large to show for approval", notes: ["Nothing was written. Make a smaller change or edit the config manually."] };
+  }
   let approved: boolean;
   try {
-    approved = await confirm("Apply this Bifrost configuration?", approvalMessage(checked));
+    approved = await confirm("Apply this Bifrost configuration?", message);
   } catch {
     approved = false;
   }

@@ -188,13 +188,15 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
         assert.equal(rejected.reason, "merged_config_invalid");
         assert.deepEqual(readFileSync(join(env.project, "bifrost.json")), invalid, "invalid migration must not write source");
       }
-      const unsupported = Buffer.from(original.toString("utf8").replace('"enabled": true,', '"enabled": true, "requirements": { "mode": "enforce" },'));
-      writeFileSync(join(env.project, "bifrost.json"), unsupported);
-      for (const suffix of ["", ` --apply --proposal ${preview.proposalDigest}`]) {
-        const rejected = reportJson(await rpc.prompt(`/bifrost config migrate --source project${suffix} --json`));
-        assert.equal(rejected.status, "blocked");
-        assert.equal(rejected.reason, "merged_config_invalid");
-        assert.deepEqual(readFileSync(join(env.project, "bifrost.json")), unsupported);
+      for (const requirements of [{ mode: "enforce" }, { description: { mode: "enforce" } }]) {
+        const unsupported = Buffer.from(original.toString("utf8").replace('"enabled": true,', `"enabled": true, "requirements": ${JSON.stringify(requirements)},`));
+        writeFileSync(join(env.project, "bifrost.json"), unsupported);
+        for (const suffix of ["", ` --apply --proposal ${preview.proposalDigest}`]) {
+          const rejected = reportJson(await rpc.prompt(`/bifrost config migrate --source project${suffix} --json`));
+          assert.equal(rejected.status, "blocked");
+          assert.equal(rejected.reason, "merged_config_invalid");
+          assert.deepEqual(readFileSync(join(env.project, "bifrost.json")), unsupported);
+        }
       }
       writeFileSync(join(env.project, "bifrost.json"), original);
 

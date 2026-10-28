@@ -266,6 +266,21 @@ describe("agent-facing configuration inspection", () => {
 });
 
 describe("candidate validation reuses Bifrost semantics", () => {
+  it("rejects deeply nested candidates and source files without throwing", async () => {
+    const harness = freshHarness();
+    try {
+      let nested: unknown = 0;
+      for (let i = 0; i < 5000; i++) nested = { child: nested };
+      for (const operation of ["check", "preview", "apply"]) {
+        const result = detailsOf<{ status: string; reason?: string }>(await harness.run({ operation, candidate: { nested } }));
+        assert.notEqual(result.status, "ok");
+      }
+      harness.writeFile(".pi/bifrost.json", '{"nested":' + '{"child":'.repeat(5000) + '0' + '}'.repeat(5000) + '}');
+      const result = detailsOf<{ status: string }>(await harness.run({ operation: "check", candidate: { enabled: false } }));
+      assert.notEqual(result.status, "ok");
+      assert.equal(harness.confirmations().length, 0);
+    } finally { harness.cleanup(); }
+  });
   it("rejects an unknown default tier and writes nothing", async () => {
     const harness = freshHarness();
     try {
@@ -593,6 +608,24 @@ describe("apply requires approval, matching digests, and proves the result", () 
     default: "fast",
     models: { fast: ["beta/code"], deep: ["alpha/strong"] },
   };
+
+  it("shows complete changes for approval and rejects proposals too large to show", async () => {
+    const harness = freshHarness();
+    try {
+      const visible = { ...candidate, description: "x".repeat(130) + "visible-end" };
+      const checked = await checkedCandidate(harness, { candidate: visible });
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(checked.details, { candidate: visible })));
+      assert.equal(applied.status, "ok");
+      assert.match(harness.confirmations()[0]?.message ?? "", /visible-end/);
+      const tooLarge = { ...candidate, description: "y".repeat(5000) + "hidden-end" };
+      const largeCheck = await checkedCandidate(harness, { candidate: tooLarge });
+      const rejected = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(largeCheck.details, { candidate: tooLarge })));
+      assert.notEqual(rejected.status, "ok");
+      assert.equal(rejected.applied, false);
+      assert.equal(harness.confirmations().length, 1);
+      assert.doesNotMatch(harness.readFile(".pi/bifrost.json") ?? "", /hidden-end/);
+    } finally { harness.cleanup(); }
+  });
 
   it("writes the approved candidate and verifies the reload", async () => {
     const harness = freshHarness();

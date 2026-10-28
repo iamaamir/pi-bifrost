@@ -85,7 +85,8 @@ The agent reads Pi's real model list and your config files. It builds a candidat
 policy, checks it, previews routes offline, and explains the tradeoffs. It shows
 the exact changes. Nothing is written before you agree, and one config file is
 written atomically. The agent does not change how Bifrost routes; it only writes
-the configuration you approve.
+the configuration you approve. If the full change cannot fit in the approval dialog,
+the tool writes nothing. Make a smaller change or edit the config manually.
 
 You can also ask for the single tool directly. It has four operations: `inspect`,
 `check`, `preview`, and `apply`. See [the skill](skills/configure-bifrost/SKILL.md).
