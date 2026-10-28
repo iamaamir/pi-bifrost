@@ -23,12 +23,12 @@ it("routes real AgentSession request to configured physical faux model behind pr
       models: [{ id: "physical-fast", reasoning: false }, { id: "physical-capable", reasoning: true }],
       response: "native faux response",
     }],
-    // The host's explicitly selected physical model is what must survive a
-    // child turn without a run id, so the session starts on the expected model.
-    startModel: (runtime) => runtime.getModel("faux", expectedModel),
+    // Parent routing must switch models; a child must retain this starting model.
+    startModel: (runtime) => runtime.getModel("faux", "physical-fast"),
   });
   try {
     assert.deepEqual((await harness.runtime.getAvailable("faux")).map(({ id }) => id), ["physical-fast", "physical-capable"]);
+    assert.equal(harness.session.model.id, "physical-fast");
     await harness.session.prompt("native faux dispatch marker");
     assert.equal(harness.session.getLastAssistantText(), "native faux response");
     assert.equal(harness.session.model.provider, "faux");
