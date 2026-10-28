@@ -68,6 +68,23 @@ The audit repair adds finite branch checks. Source tests cover every on-disk lay
 
 Provider projection tests require one state snapshot per nonempty decision and zero for an empty catalog. They check pause semantics, cross-revision consistency and failed reads. The performance script compares the actual pinned baseline export with the current export across memory and durable-file fixtures; each case checks identical projected state. Latency measurements are evidence, not timing assertions in unit tests.
 
+## Configuration approval regression
+
+`tests/integration/config-approval-tui.test.mjs` starts pinned Pi in an isolated
+PTY and drives the production tool through a test command. It checks sequential
+review, early Apply refusal, cancellation, tiny viewports, resize reset, and the
+exact saved source. The fixture performs no generation and substitutes reload
+success, so this test does not prove model-issued tool dispatch or activation.
+It uses the existing Python/Pillow screen harness and outbound network guard.
+An isolated production copy restores the old `ctx.ui.confirm` path and fails
+the same early-write assertion. The original files remain unchanged.
+
+`tests/integration/config-agent-acceptance.test.mjs` covers model-issued check
+and apply in real Pi RPC mode. It proves apply returns `approval_required`,
+preserves source bytes, and leaves offline preview available. Unit tests cover
+exact escaped values, cell wrapping, cancellation, queued input, and stale
+source, catalog, and layer guards.
+
 ## Limits
 
 Fake providers prove Bifrost's supported behavior. They do not prove account access, live provider limits, billing accuracy, or compatibility with a different Pi version. Keep the final live-provider acceptance check separate. No coverage claim includes deferred image routing, automatic live quota lookup, or thinking-level policy.

@@ -154,22 +154,27 @@
       "files": [
         "config-agent.ts",
         "config-agent-report.ts",
+        "config-approval.ts",
+        "scripts/test-config-approval-tui.py",
         "tests/config-agent.test.ts",
+        "tests/config-approval.test.ts",
+        "tests/fixtures/config-approval-extension.ts",
+        "tests/integration/config-approval-tui.test.mjs",
         "tests/integration/config-agent-acceptance.test.mjs"
       ],
-      "boundary": "The bifrost_config agent tool inspects Pi's real catalog and every config layer, checks a candidate offline, previews bounded route decisions without dispatching, and applies one approved config file atomically through the same reload path as /bifrost reload.",
-      "assertions": "inspect, check, and preview report structural warnings without vetoing a write; rejected previews also show their errors; inspect names every supported schema version and accepts a version-3 source whose reserved description key never becomes a tier; check and preview never write or dispatch; candidate and existing source nesting are bounded before recursive diffing; apply shows complete changes in the approval dialog or refuses oversized proposals, writes only after an answered approval, and rejects changed candidate bytes, changed selected source, changed layers, changed model inventory, and unsafe sources; the previous config survives a failed write; a saved-but-not-activated write is reported honestly; unknown operations fail closed; config-layer paths come from the shared merge-order helper.",
+      "boundary": "The bifrost_config agent tool inspects Pi's catalog and layers, checks and previews offline, and applies one TUI-reviewed source atomically. Real pinned Pi PTY coverage drives the production tool from a fixture command and substitutes reload success; it proves host rendering and persistence, not model dispatch or reload activation. Real Pi RPC coverage uses a scripted fake provider and proves check works and apply refuses without writing. Both boundaries use isolated state and an outbound guard.",
+      "assertions": "inspect, check, and preview report structural warnings without vetoing a write; rejected previews also show their errors; inspect names every supported schema version and accepts a version-3 source whose reserved description key never becomes a tier; check and preview never write or dispatch; candidate and existing source nesting are bounded before recursive diffing; TUI apply shows exact escaped changes in viewport-sized pages, requires sequential rendered traversal and explicit final Apply, resets review on resize, refuses tiny viewports and proposals above 4000 characters, and writes nothing on Escape, abort, or UI failure; RPC apply returns approval_required without any approval dialog while check and preview remain usable; apply writes only after approval, and rejects changed candidate bytes, changed selected source, changed layers, changed model inventory, and unsafe sources; the previous config survives a failed write; a saved-but-not-activated write is reported honestly; unknown operations fail closed; config-layer paths come from the shared merge-order helper.",
       "boundaryTest": {
-        "file": "tests/integration/config-agent-acceptance.test.mjs",
-        "name": "checks, applies through an answered approval, saves one source, and activates it"
+        "file": "tests/integration/config-approval-tui.test.mjs",
+        "name": "requires complete paged approval in real pinned Pi across viewport resize"
       },
       "invariant": {
         "file": "tests/config-agent.test.ts",
         "name": "compares the effective policy before and after without writing"
       },
       "fault": {
-        "file": "tests/config-agent.test.ts",
-        "name": "rejects a proposal whose candidate bytes changed"
+        "file": "tests/integration/config-approval-tui.test.mjs",
+        "name": "detects the original non-scrollable confirmation fault in an isolated Pi copy"
       }
     },
     {

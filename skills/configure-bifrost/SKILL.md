@@ -46,10 +46,13 @@ goal needs something Bifrost does not do, say so.
    `bifrost_config` with `{"operation":"apply", ...}` and pass back the
    `proposalDigest`, `sourceDigest`, `effectiveDigest`, and `catalogDigest`
    printed under "apply digests" by check or preview — copy them exactly,
-   character for character. The tool asks for approval again in the Pi UI and
-   refuses if any input changed. Never apply without the user's agreement, and
-   never after the check reported an error. Without an interactive session the
-   tool fails closed and writes nothing.
+   character for character. The tool requires paged review in Pi's terminal UI
+   and refuses if any input changed. The user advances with `n`, returns with
+   `p`, and presses `a` on the final page to apply. Escape cancels.
+   Never apply without the user's agreement or after check reports an error. RPC and other
+   non-TUI sessions return `approval_required` without writing. In that case,
+   ask the user to re-check and approve in a TUI session. Keep the proposal
+   unchanged and do not bypass this gate with shell tools.
 
 `check`, `preview`, and `apply` all take the same candidate form:
 

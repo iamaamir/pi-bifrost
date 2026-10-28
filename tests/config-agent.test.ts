@@ -20,6 +20,7 @@ import {
   type ConfigAgentPreviewResult,
 } from "../config-agent.ts";
 import { reportText } from "../config-agent-report.ts";
+import type { ConfigApproval } from "../config-approval.ts";
 import { SUPPORTED_SCHEMA_VERSIONS } from "../config.ts";
 import { loadConfigForReload } from "../config-load.ts";
 import { makeModel } from "./helpers.ts";
@@ -28,6 +29,9 @@ interface HarnessOptions {
   readonly available?: readonly Model<Api>[];
   readonly knownOnly?: readonly Model<Api>[];
   readonly hasUI?: boolean;
+  readonly mode?: "tui" | "rpc";
+  readonly uiError?: boolean;
+  readonly signal?: AbortSignal;
   readonly confirm?: boolean;
   readonly reload?: boolean;
   readonly write?: (path: string, text: string) => void;
@@ -75,13 +79,25 @@ function freshHarness(options: HarnessOptions = {}) {
 
   const ctx = {
     cwd,
-    mode: "tui",
+    mode: options.mode ?? "tui",
     get hasUI() { return hasUI; },
     ui: {
-      confirm: (title: string, message: string) => {
-        confirmations.push({ title, message });
+      custom: async (factory: Parameters<ExtensionToolContext["ui"]["custom"]>[0]) => {
+        if (options.uiError) throw new Error("UI unavailable");
+        let result: unknown;
+        const viewer = await factory(
+          { terminal: { columns: 80, rows: 24 }, requestRender() {} } as never,
+          {} as never, {} as never, (value) => { result = value; },
+        ) as ConfigApproval;
+        confirmations.push({ title: viewer.title, message: viewer.message });
         options.confirmHook?.();
-        return confirmResult;
+        for (let i = 0; i < 1000 && result === undefined; i++) {
+          viewer.render(80);
+          viewer.handleInput(confirmResult ? "a" : "\x1b");
+          if (result === undefined) viewer.handleInput("n");
+        }
+        assert.notEqual(result, undefined, "approval driver must finish");
+        return result;
       },
       notify: () => {},
     },
@@ -126,7 +142,7 @@ function freshHarness(options: HarnessOptions = {}) {
     reloadCalls: () => reloadCalls,
     projectConfigPath: () => join(cwd, ".pi", "bifrost.json"),
     run: (params: Record<string, unknown>) =>
-      tool.execute("call-1", params as unknown as ToolParams, undefined, undefined, ctx),
+      tool.execute("call-1", params as unknown as ToolParams, options.signal, undefined, ctx),
     cleanup: () => {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -647,8 +663,8 @@ describe("apply requires approval, matching digests, and proves the result", () 
       assert.equal(confirmations.length, 1);
       assert.equal(confirmations[0]?.title, "Apply this Bifrost configuration?");
       assert.match(confirmations[0]?.message ?? "", /Source: project/);
-      assert.match(confirmations[0]?.message ?? "", /replace models/);
-      assert.match(confirmations[0]?.message ?? "", /deep \(first\): alpha\/strong/);
+      assert.match(confirmations[0]?.message ?? "", /replace "models"/);
+      assert.match(confirmations[0]?.message ?? "", /"deep" \("first"\): \["alpha\/strong"\]/);
       assert.match(confirmations[0]?.message ?? "", /No other config source is modified/);
 
       const stored = JSON.parse(harness.readFile(".pi/bifrost.json") ?? "{}") as Record<string, unknown>;
@@ -671,6 +687,64 @@ describe("apply requires approval, matching digests, and proves the result", () 
     } finally {
       harness.cleanup();
     }
+  });
+
+  it("refuses RPC apply but keeps check and preview available", async () => {
+    const harness = freshHarness({ mode: "rpc" });
+    try {
+      const { details } = await checkedCandidate(harness, { candidate });
+      assert.equal(details.status, "ok");
+      const preview = detailsOf<ConfigAgentPreviewResult>(await harness.run({ operation: "preview", candidate }));
+      assert.equal(preview.status, "ok");
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
+      assert.equal(applied.status, "approval_required");
+      assert.equal(applied.applied, false);
+      assert.equal(harness.confirmations().length, 0);
+      assert.equal(harness.reloadCalls(), 0);
+      assert.equal(harness.readFile(".pi/bifrost.json"), undefined);
+    } finally { harness.cleanup(); }
+  });
+
+  it("writes nothing when approval is aborted before or during review", async () => {
+    for (const timing of ["before", "during"]) {
+      const abort = new AbortController();
+      const harness = freshHarness({ signal: abort.signal, confirmHook: () => abort.abort() });
+      try {
+        const { details } = await checkedCandidate(harness, { candidate });
+        if (timing === "before") abort.abort();
+        const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
+        assert.equal(applied.status, "declined");
+        assert.equal(harness.reloadCalls(), 0);
+        assert.equal(harness.readFile(".pi/bifrost.json"), undefined);
+      } finally { harness.cleanup(); }
+    }
+  });
+
+  it("writes nothing when custom approval fails", async () => {
+    const harness = freshHarness({ uiError: true });
+    try {
+      const { details } = await checkedCandidate(harness, { candidate });
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
+      assert.equal(applied.status, "declined");
+      assert.equal(harness.readFile(".pi/bifrost.json"), undefined);
+    } finally { harness.cleanup(); }
+  });
+
+  it("shows exact whitespace and control values as reversible ASCII JSON", async () => {
+    const harness = freshHarness();
+    try {
+      const description = " leading  space\t\n\r\x1b[2J\u202e\u200b界😀 trailing ";
+      const value = { ...candidate, description };
+      const { details } = await checkedCandidate(harness, { candidate: value });
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate: value })));
+      assert.equal(applied.status, "ok");
+      const message = harness.confirmations()[0]!.message;
+      assert.doesNotMatch(message, /[^\x20-\x7e\n]/);
+      const line = message.split("\n").find((row) => row.startsWith('  "description": '))!;
+      assert.equal(JSON.parse(line.slice('  "description": '.length)), description);
+      assert.match(line, /\\u0020/);
+      assert.equal(JSON.parse(harness.readFile(".pi/bifrost.json")!).description, description);
+    } finally { harness.cleanup(); }
   });
 
   it("writes nothing when the user declines", async () => {
@@ -1265,7 +1339,7 @@ describe("confirmation-window races and preview fidelity", () => {
       const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
       assert.equal(applied.status, "ok");
       const dialog = harness.confirmations()[0]?.message ?? "";
-      assert.match(dialog, /replace tierPolicies/, "the change kind and field stay");
+      assert.match(dialog, /replace "tierPolicies"/, "the change kind and field stay");
       assert.match(dialog, /fallbackTiers/, "the changed value path is visible");
       assert.match(dialog, /"review"/, "the value the user approved away is visible");
       assert.match(dialog, /->/, "before and after are separated");

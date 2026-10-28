@@ -85,8 +85,16 @@ The agent reads Pi's real model list and your config files. It builds a candidat
 policy, checks it, previews routes offline, and explains the tradeoffs. It shows
 the exact changes. Nothing is written before you agree, and one config file is
 written atomically. The agent does not change how Bifrost routes; it only writes
-the configuration you approve. If the full change cannot fit in the approval dialog,
-the tool writes nothing. Make a smaller change or edit the config manually.
+the configuration you approve. Apply requires Pi's terminal UI (TUI). Read each
+page with `n`, return with `p`, then press `a` to apply on the final page.
+Escape cancels. Resizing restarts the review. Terminals smaller than 40 columns
+or 8 rows cannot approve.
+
+The review uses JSON escapes for whitespace, controls, and non-ASCII characters
+so values remain exact. Proposals above the 4,000-character review limit are
+rejected. RPC sessions can inspect, check, and preview, but apply returns
+`approval_required`: Pi's RPC protocol cannot prove that clients display every
+change. Use a TUI session to check and approve the proposal again.
 
 You can also ask for the single tool directly. It has four operations: `inspect`,
 `check`, `preview`, and `apply`. See [the skill](skills/configure-bifrost/SKILL.md).

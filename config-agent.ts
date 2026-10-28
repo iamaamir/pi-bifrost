@@ -37,6 +37,7 @@ import { findCandidates } from "./routing.ts";
 import { createRouter, type RouterModel, type RouterRegistrySnapshot, type RouterSnapshot } from "./router.ts";
 import { writeTextFile } from "./storage.ts";
 import { isGenerativeModel } from "./virtual-model.ts";
+import { approveConfig } from "./config-approval.ts";
 
 // ── Limits ─────────────────────────────────────────────────────
 
@@ -997,23 +998,28 @@ export interface ConfigAgentApplyInput extends ConfigAgentCheckInput {
   readonly liveCatalog?: () => ConfigAgentCatalog;
 }
 
+/** ASCII JSON escapes make whitespace, controls, and bidi/zero-width text unambiguous. */
+function approvalJson(value: unknown): string {
+  return canonicalJson(value).replace(/[^\x21-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 function approvalMessage(checked: ConfigAgentCheckResult): string | null {
   const lines = [
-    `Source: ${checked.source} (${checked.sourcePath})`,
+    `Source: ${checked.source} (${approvalJson(checked.sourcePath)})`,
     `Proposal: ${shortDigest(checked.proposalDigest)}`,
     checked.changes.length === 0
       ? "Changes: none"
-      : `Changes: ${checked.changes.map((change) => `${change.kind} ${change.field}`).join(", ")}`,
+      : `Changes: ${checked.changes.map((change) => `${change.kind} ${approvalJson(change.field)}`).join(", ")}`,
   ];
   for (const change of checked.changes) {
-    if (change.kind === "add") lines.push(`  ${change.field}: ${canonicalJson(change.after)}`);
-    else if (change.kind === "remove") lines.push(`  ${change.field}: ${canonicalJson(change.before)} (removed)`);
-    else lines.push(`  ${change.field}: ${canonicalJson(change.before)} -> ${canonicalJson(change.after)}`);
+    if (change.kind === "add") lines.push(`  ${approvalJson(change.field)}: ${approvalJson(change.after)}`);
+    else if (change.kind === "remove") lines.push(`  ${approvalJson(change.field)}: ${approvalJson(change.before)} (removed)`);
+    else lines.push(`  ${approvalJson(change.field)}: ${approvalJson(change.before)} -> ${approvalJson(change.after)}`);
   }
   const tiers = checked.routingAfter?.tiers ?? [];
   if (tiers.length > 0) {
     lines.push("Tiers after the change:");
-    for (const tier of tiers) lines.push(`  ${tier.tier} (${tier.strategy}): ${tier.pool.join(", ") || "empty"}`);
+    for (const tier of tiers) lines.push(`  ${approvalJson(tier.tier)} (${approvalJson(tier.strategy)}): ${approvalJson(tier.pool)}`);
   }
   lines.push("No other config source is modified.");
   const message = lines.join("\n");
@@ -1361,7 +1367,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
     promptSnippet: "Configure Bifrost routing from the user's goal without hand-editing JSON",
     parameters: ConfigAgentParameters,
     executionMode: "sequential",
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const operation = params.operation as ConfigAgentOperation;
       const request = readRequest(params);
       const cwd = cwdOf();
@@ -1385,7 +1391,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
           result = await previewConfigCandidate({ ...input, now: nowOf() });
           break;
         case "apply": {
-          if (!ctx.hasUI) {
+          if (!ctx.hasUI || ctx.mode !== "tui") {
             result = {
               operation: "apply",
               status: "approval_required",
@@ -1397,14 +1403,14 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
               changes: [],
               effectiveConfig: null,
               routing: null,
-              reason: "this session has no interactive confirmation, so Bifrost refuses to write configuration",
+              reason: "configuration approval requires Pi TUI; RPC clients cannot prove complete proposal visibility",
               notes: ["Nothing was written. Show the user the proposal and ask them to apply it in an interactive Pi session."],
             };
             break;
           }
           result = await applyConfigCandidate({
             ...input,
-            confirm: (title, message) => ctx.ui.confirm(title, message),
+            confirm: (title, message) => approveConfig(ctx, title, message, signal),
             reload: () => deps.reload(ctx),
             liveCatalog: () => catalogFromContext(ctx),
             ...(deps.write ? { write: deps.write } : {}),

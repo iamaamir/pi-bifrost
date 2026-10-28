@@ -1,16 +1,15 @@
 // Pi E2E acceptance for the agent-facing `bifrost_config` tool.
 //
 // Boundary: real pinned Pi in RPC mode, the shipped extension, a fake provider
-// whose model is scripted to call the tool, and the extension-UI confirmation
-// sub-protocol. This proves the full write path end to end: check (no write),
-// an answered approval dialog, the saved project source, reload activation, and
-// no outbound network beyond the local fixture. Live providers and credentials
+// whose model is scripted to call the tool. This proves RPC check stays usable,
+// apply fails closed without an approval UI, and preview retains the old route.
+// No outbound network beyond the local fixture. Live providers and credentials
 // are excluded; the outbound guard fences everything else off.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { after, before, describe, it } from "node:test";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -277,34 +276,26 @@ describe("config agent tool Pi acceptance", { concurrency: 1, timeout: 180_000 }
   before(async () => { port = await startFakeProvider(); });
   after(async () => { await new Promise((resolve) => server?.close(resolve)); });
 
-  it("checks, applies through an answered approval, saves one source, and activates it", async () => {
+  it("checks in RPC but refuses apply without a complete-review host contract", async () => {
     const env = fixture(port);
     const rpc = startRpc({ ...env, port });
     try {
-      const confirmBefore = rpc.records.filter((record) => record.type === "extension_ui_request").length;
+      const savedPath = join(env.work, ".pi", "bifrost.json");
+      const before = readFileSync(savedPath, "utf8");
       await rpc.userTurn("please configure my routing e2e-config-agent-marker");
 
       // The scripted sequence ran: check first, then apply with copied digests.
       assert.deepEqual([...new Set(scripted)].sort(), ["apply", "check", "final"].sort(), `scripted turns: ${JSON.stringify(scripted)}`);
 
-      // The approval dialog was surfaced over the extension-UI protocol.
-      const dialogs = rpc.records.filter((record) => record.type === "extension_ui_request");
-      assert.ok(dialogs.length > confirmBefore, "apply must ask for approval in the client");
-      assert.ok(dialogs.some((record) => /Apply this Bifrost configuration/u.test(JSON.stringify(record))), `dialogs: ${JSON.stringify(dialogs)}\napply report: ${lastApplyReport ?? "(none)"}`);
+      const dialogs = rpc.records.filter((record) => record.type === "extension_ui_request" && ["confirm", "select", "editor", "custom"].includes(record.method));
+      assert.deepEqual(dialogs, [], "RPC apply must not request a weaker approval");
+      assert.match(lastApplyReport ?? "", /approval_required/);
+      assert.equal(readFileSync(savedPath, "utf8"), before, "RPC apply must preserve exact source bytes");
 
-      // Saved state: exactly one source changed, to the merged proposal.
-      const savedPath = join(env.work, ".pi", "bifrost.json");
-      assert.ok(existsSync(savedPath), "apply must persist the project source");
-      const saved = JSON.parse(readFileSync(savedPath, "utf8"));
-      assert.equal(saved.default, "agentrole");
-      assert.deepEqual(saved.models, PATCH.models);
-      assert.equal(saved.classifier.enabled, false);
-
-      // Activation: the reloaded config decides routes offline. Before the
-      // change the default tier was `general`; it must now be `agentrole`.
+      // Offline inspection remains available and the old policy stays active.
       const preview = await rpc.prompt("/bifrost preview --json route this prompt e2e");
       const report = await jsonReport(preview, () => rpc.stderr);
-      assert.equal(report.tier, "agentrole", JSON.stringify(report));
+      assert.equal(report.tier, "general", JSON.stringify(report));
       assert.equal(report.source, "fallback", JSON.stringify(report));
 
       const closed = await rpc.close();
