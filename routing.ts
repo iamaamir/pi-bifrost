@@ -958,22 +958,24 @@ function patternHasSuperlinearShape(pattern: string): boolean {
   return false;
 }
 
-// Patterns already rejected, so the per-message classify() path neither
-// re-scans nor repeats the diagnostic for the same configured rule.
-const rejectedPatterns = new Set<string>();
+// Verdicts by pattern text, so the per-message classify() path neither re-scans
+// nor re-probes a configured rule and a rejection is reported once per process.
+const patternVerdicts = new Map<string, boolean>();
 
 /**
  * True when a rule pattern must be dropped: either the structural scan names a
  * superlinear shape without executing anything, or a canary probe over-runs the
  * budget twice (once to measure, once to rule out a scheduler stall).
  *
- * The verdict is remembered per pattern text, so a rejected rule is reported
- * once per process instead of on every classified message.
+ * The verdict depends only on the pattern text, so it is remembered: a rejected
+ * rule is reported once per process instead of on every classified message, and
+ * an accepted rule does not re-run the canary ladder per message either.
  */
 function patternExceedsBacktrackingBudget(pattern: string, re: RegExp): boolean {
-  if (rejectedPatterns.has(pattern)) return true;
+  const decided = patternVerdicts.get(pattern);
+  if (decided !== undefined) return decided;
   const reject = (): true => {
-    rejectedPatterns.add(pattern);
+    patternVerdicts.set(pattern, true);
     console.error(`[bifrost] rejecting rule pattern with unbounded backtracking: "${pattern}"`);
     return true;
   };
@@ -992,6 +994,7 @@ function patternExceedsBacktrackingBudget(pattern: string, re: RegExp): boolean 
   } catch {
     return false;
   }
+  patternVerdicts.set(pattern, false);
   return false;
 }
 

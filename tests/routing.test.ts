@@ -1515,6 +1515,27 @@ describe("routing", () => {
       assert.equal(classifyCompiled("a".repeat(24) + "b", compileRules(rules)), undefined);
     });
 
+    it("does not re-probe an accepted rule on every classify call", () => {
+      // classify() runs per message; an accepted configured rule must not pay
+      // the canary ladder again on the next prompt.
+      const originalNow = performance.now;
+      let reads = 0;
+      try {
+        performance.now = () => {
+          reads += 1;
+          return originalNow.call(performance);
+        };
+        const rules = [{ pattern: "deployment rollback checklist", model: "quick" }];
+        classify("a deployment rollback checklist", rules);
+        const afterFirst = reads;
+        assert.ok(afterFirst > 0, "the first call must probe the canaries");
+        classify("a deployment rollback checklist", rules);
+        assert.equal(reads, afterFirst, "a cached verdict must not probe again");
+      } finally {
+        performance.now = originalNow;
+      }
+    });
+
     it("reports a rejected rule once across repeated classify calls", () => {
       // classify() runs per message, so a rejected configured rule must be
       // diagnosed once instead of logging on every classified prompt.
