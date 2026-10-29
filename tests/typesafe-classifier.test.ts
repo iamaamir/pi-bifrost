@@ -125,7 +125,8 @@ describe("TypeSafe classifier", () => {
     assert.equal(observations[0]?.outcome, "invalid_response");
   });
 
-  it("reports circuit-open evidence per call without issuing a request", async () => {    const key = `classifier/typesafe/${TYPESAFE_MODEL}`;
+  it("reports circuit-open evidence per call without issuing a request", async () => {
+    const key = `classifier/typesafe/${TYPESAFE_MODEL}`;
     const now = Date.now();
     const reliability = new ReliabilityStore({
       cwd: "/tmp",
