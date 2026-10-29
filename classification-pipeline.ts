@@ -63,7 +63,7 @@ export type ClassificationResult =
   | { readonly kind: "unclassified"; readonly classificationOutcome?: ClassificationOutcome; readonly classifierAttempt?: ClassifierAttemptSummary };
 
 export type RouteDecisionExclusionCode = SkippedCandidate["reason"] | CandidateDiscoveryExclusion["reason"] | UnresolvedCandidatePattern["reason"] | "economic_reserve";
-export type RouteDecisionEvidenceSource = "reliability_state" | "economic_snapshot" | "registry_snapshot";
+export type RouteDecisionEvidenceSource = "reliability_state" | "economic_snapshot" | "registry_snapshot" | "config_snapshot";
 
 export interface RouteDecisionExclusionEvidence {
   readonly code: RouteDecisionExclusionCode;
@@ -74,6 +74,7 @@ export interface RouteDecisionCandidate {
   readonly model: string;
   readonly status: "eligible" | "excluded";
   readonly exclusion?: RouteDecisionExclusionCode;
+  readonly scope?: SkippedCandidate["scope"];
   readonly exclusionEvidence?: readonly RouteDecisionExclusionEvidence[];
   readonly reserve?: {
     readonly disposition: string;
@@ -162,6 +163,8 @@ function summarizePool(
   billingPreference?: BillingPreferenceProjection,
 ): RouteDecisionPool {
   const exclusions = new Map(skipped.map((candidate) => [candidate.key, candidate.reason]));
+  const scopes = new Map(skipped.flatMap((candidate) => candidate.scope === undefined
+    ? [] : [[candidate.key, candidate.scope] as const]));
   const reserveEvaluations = new Map((economic ?? []).map(({ key, evaluation }) => [key, evaluation]));
   return {
     tier,
@@ -171,16 +174,18 @@ function summarizePool(
       ...candidates.map((candidate) => {
       const model = `${candidate.provider}/${candidate.id}`;
       const exclusion = exclusions.get(model);
+      const scope = scopes.get(model);
       const reserve = reserveEvaluations.get(model);
       const hardExcluded = reserve?.mode === "policy" && reserve.disposition === "rejected";
       const exclusionEvidence = [
-        ...(exclusion ? [{ code: exclusion, source: "reliability_state" as const }] : []),
+        ...(exclusion ? [{ code: exclusion, source: exclusion === "provider_not_allowed" ? "config_snapshot" as const : "reliability_state" as const }] : []),
         ...(hardExcluded ? [{ code: "economic_reserve" as const, source: "economic_snapshot" as const }] : []),
       ];
       return {
         model,
         status: exclusionEvidence.length > 0 ? "excluded" as const : "eligible" as const,
         ...(exclusion ? { exclusion } : hardExcluded ? { exclusion: "economic_reserve" as const } : {}),
+        ...(scope ? { scope } : {}),
         ...(exclusionEvidence.length > 0 ? { exclusionEvidence } : {}),
         ...(reserve ? {
           reserve: {
