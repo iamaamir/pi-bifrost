@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { performance } from "node:perf_hooks";
 import {
   buildRouteDecisionSummary,
   type ClassificationResult,
@@ -901,10 +902,20 @@ describe("routing", () => {
 
     it("keeps the injectable random seam total when it returns 1", () => {
       // Injected rng beyond [0,1) must not produce undefined (LOB-unbounded
-      // selection). 1 * length floors to length — clamp to the last candidate.
+      // selection). Values outside [0,1) route to the last candidate.
       const a = makeModel("a", "a", 0, 0);
       const b = makeModel("b", "b", 0, 0);
       assert.equal(modelKey(selectModel([a, b], "random", () => 1)), "b/b");
+      assert.equal(modelKey(selectModel([a, b], "random", () => -1)), "b/b");
+      assert.equal(modelKey(selectModel([a, b], "random", () => NaN)), "b/b");
+      assert.equal(modelKey(selectModel([a, b], "random", () => 0.999999)), "b/b");
+    });
+
+    it("keeps the injectable random seam inside [0,1) on the first candidate", () => {
+      const a = makeModel("a", "a", 0, 0);
+      const b = makeModel("b", "b", 0, 0);
+      assert.equal(modelKey(selectModel([a, b], "random", () => 0.4)), "a/a");
+      assert.equal(modelKey(selectModel([a, b], "random", () => 0.75)), "b/b");
     });
 
     it("keeps candidate order for fastest and metric ties", () => {
@@ -1263,6 +1274,62 @@ describe("routing", () => {
 
     it("still compiles every shipped default rule", () => {
       assert.equal(compileRules(DEFAULT_RULES).length, DEFAULT_RULES.length);
+    });
+
+    it("rejects lookahead-anchored catastrophic patterns without paying the long probe", () => {
+      // A lookaround can keep every earlier canary cheap and detonate the guard's
+      // own longest probe, so the probe loop must not be the only defense:
+      // this includes the nested-quantifier test even past lookahead guards.
+      const started = performance.now();
+      const compiled = compileRules([
+        { pattern: "^(?=a{26}b)(a+)+$", model: "quick" },
+        { pattern: "^(?=a{32}b)(a+)+$", model: "quick" },
+      ]);
+      assert.deepEqual(compiled, []);
+      assert.ok(performance.now() - started < 250, "rejection must not pay a long probe");
+    });
+
+    it("rejects deterministic-free catastrophic alternations without exec", () => {
+      // (a|aa)+ explodes through branch prefix-overlap, not nested quantifiers.
+      const compiled = compileRules([
+        { pattern: "^((a|aa)+)b", model: "quick" },
+        { pattern: "^(a+)+$", model: "quick" },
+        { pattern: "(?:ab?)+c", model: "quick" },
+      ]);
+      assert.deepEqual(compiled, []);
+    });
+
+    it("keeps benign quantified rules that shuttle variable tokens safely", () => {
+      // Fixed-length repetition and non-overlapping alternations must survive
+      // the structural filter untouched.
+      const compiled = compileRules([
+        { pattern: "(\\d{2}:\\d{2})*", model: "quick" },
+        { pattern: "class(?:room|rooms)?", model: "quick" },
+        { pattern: "(foo|bar)+", model: "quick" },
+        { pattern: "(a|b|c)+", model: "quick" },
+      ]);
+      assert.equal(compiled.length, 4);
+    });
+
+    it("a scheduling pause does not drop a benign rule", () => {
+      // One elapsed-time sample can include a scheduler stall; before rejecting,
+      // the budget must re-measure the same canary so a one-shot pause is not
+      // misread as backtracking.
+      const originalNow = performance.now;
+      let reads = 0;
+      try {
+        performance.now = () => {
+          reads += 1;
+          // First two reads bracket the first probe with a 1000 ms stall.
+          if (reads === 2) return 1000;
+          if (reads === 1) return 0;
+          return 1000 + reads * 0.1;
+        };
+        const compiled = compileRules([{ pattern: "hello world", model: "quick" }]);
+        assert.equal(compiled.length, 1);
+      } finally {
+        performance.now = originalNow;
+      }
     });
   });
 });
