@@ -42,7 +42,7 @@ def run():
         agent = home / ".pi/agent"
         agent.mkdir(parents=True)
         (work / ".pi").mkdir(parents=True)
-        original = json.dumps({"enabled": False, "default": "general", "models": {"general": ["fake/healthy"]}, "classifier": {"enabled": False}})
+        original = json.dumps({"schemaVersion": 2, "enabled": False, "default": "general", "models": {"general": ["fake/healthy"]}, "classifier": {"enabled": True}, "rules": [{"pattern": "review", "model": "general"}, {"pattern": "planning", "model": "general"}]})
         source = work / ".pi/bifrost.json"
         source.write_text(original)
         (agent / "models.json").write_text(json.dumps({"providers": {"fake": {"baseUrl": "http://127.0.0.1:1/v1", "api": "openai-completions", "apiKey": "fixture-only", "models": [{"id": "healthy", "contextWindow": 8192, "maxTokens": 128}]}}}))
@@ -81,13 +81,13 @@ def run():
             assert not result.exists(), "approval finished before explicit final Apply"
 
         def page(text):
-            found = re.search(r"Bifrost review (\d+)/(\d+)", text)
+            found = re.search(r"(?:Bifrost summary|Full exact change) (\d+)/(\d+)", text)
             return (int(found[1]), int(found[2])) if found else (0, 0)
 
-        def traverse():
+        def traverse(label):
             seen = []
             for _ in range(100):
-                text = wait(lambda s: page(s)[0] > 0, "review page")
+                text = wait(lambda s: page(s)[0] > 0, f"{label} page")
                 current, total = page(text)
                 seen.append(text)
                 unchanged()
@@ -96,7 +96,7 @@ def run():
                     return "\n".join(seen)
                 ui.send(master, "n")
                 wait(lambda s, expected=(current + 1, total): page(s) == expected, "next rendered page")
-            raise AssertionError("review did not end")
+            raise AssertionError(f"{label} review did not end")
 
         def start_case():
             ui.send(master, "/approval-case")
@@ -110,23 +110,37 @@ def run():
             ui.send(master, "\r")
             time.sleep(0.2)
             unchanged()
-            initial = wait(lambda s: page(s)[0] > 0, "first review")
+            initial = wait(lambda s: page(s)[0] > 0, "summary")
             assert page(initial)[0] == 1 and page(initial)[1] > 1, initial
+            assert "TOOL-GENERATED SUMMARY" in initial, initial
             assert "HIDDEN_LAST_CHANGE" not in initial, initial
-            ui.send(master, "a\r")
+            summary = traverse("summary")
+            summary_text = summary.replace("\n", "")
+            assert "Source classifier: ENABLED → DISABLED" in summary_text, f"summary omits classifier transition: {summary}"
+            assert "Source RULES CHANGED: 2 → 1; 2 removed, 1 added" in summary_text, summary
+            assert "REMOVED rule:" in summary_text and "planning" in summary_text, summary
+            assert "SOURCE MODEL POOLS CHANGED:" in summary_text and "review" in summary_text, summary
+            assert "SOURCE FALLBACKS CHANGED:" in summary_text and "general" in summary_text, summary
+            ui.send(master, "d")
+            wait(lambda s: "Full exact change 1/" in s, "exact review")
+            ui.send(master, "a")
             time.sleep(0.2)
             unchanged()
-            # Cancel is never approval, even after the final page was displayed.
-            seen = traverse()
-            assert "HIDDEN_LAST_CHANGE" in seen.replace("\n", ""), seen
+            seen = traverse("exact")
+            exact = seen
+            assert "description" in exact, seen
+            value = "".join(re.findall(r"x{2,}|HIDDEN_LAST_CHANGE", exact))
+            assert value == "x" * 6_000 + "HIDDEN_LAST_CHANGE", f"captured exact value has {value.count('x')} x chars and suffix={value.endswith('HIDDEN_LAST_CHANGE')}"
             ui.send(master, "\x1b")
             wait(lambda _: result.exists(), "cancel result")
             assert json.loads(result.read_text())["status"] == "declined"
             assert source.read_text() == original
             result.unlink()
             start_case()
-            wait(lambda s: page(s)[0] == 1, "second review")
-            traverse()
+            wait(lambda s: page(s)[0] == 1, "second summary")
+            ui.send(master, "d")
+            wait(lambda s: "Full exact change 1/" in s, "second exact review")
+            traverse("exact")
             # Shrinking to a tiny terminal must revoke final-page approval.
             width, height = 35, 6
             ui.set_winsize(master, height, width)
@@ -138,21 +152,39 @@ def run():
             width, height = 40, 9
             ui.set_winsize(master, height, width)
             os.kill(child.pid, signal.SIGWINCH)
-            wait(lambda s: page(s)[0] == 1, "resize reset")
-            ui.send(master, "a")
-            time.sleep(0.2)
-            unchanged()
-            seen = traverse()
-            assert "HIDDEN_LAST_CHANGE" in seen.replace("\n", ""), seen
+            wait(lambda s: "Bifrost summary 1/" in s, "resize resets to summary")
+            ui.send(master, "d")
+            wait(lambda s: "Full exact change 1/" in s, "exact view after resize")
+            seen = traverse("exact")
+            exact = seen
+            value = "".join(re.findall(r"x{2,}|HIDDEN_LAST_CHANGE", exact))
+            assert value == "x" * 6_000 + "HIDDEN_LAST_CHANGE", "full changed value must be inspectable"
             ui.send(master, "a")
             wait(lambda _: result.exists(), "apply result")
             assert json.loads(result.read_text())["status"] == "ok"
             saved = json.loads(source.read_text())
             expected = json.loads(original)
             expected["description"] = "x" * 6_000 + "HIDDEN_LAST_CHANGE"
+            expected.update({
+                "schemaVersion": 2,
+                "classifier": {"enabled": False},
+                "models": {"general": ["fake/healthy"], "review": ["fake/healthy"]},
+                "rules": [{"pattern": "review", "model": "review"}],
+                "tierPolicies": {"general": {"fallbackTiers": []}},
+            })
             assert saved == expected
+            result.unlink()
+            source.write_text(original)
+            start_case()
+            wait(lambda s: "Bifrost summary 1/" in s, "summary approval path")
+            summary = traverse("summary")
+            assert "Source classifier: ENABLED" in summary, summary
+            ui.send(master, "a")
+            wait(lambda _: result.exists(), "summary Apply result")
+            assert json.loads(result.read_text())["status"] == "ok"
+            assert json.loads(source.read_text()) == expected
             ui.assert_no_network_violations(home)
-            print("PASS: pinned Pi paged review, early Apply refusal, cancel, tiny viewport, resize reset, exact write")
+            print("PASS: pinned Pi summary apply, exact full-value review, early Apply refusal, cancel, resize reset, exact write")
         finally:
             child.terminate()
             try:

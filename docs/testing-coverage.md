@@ -73,23 +73,31 @@ Provider projection tests require one state snapshot per nonempty decision and z
 ## Configuration approval regression
 
 `tests/integration/config-approval-tui.test.mjs` starts pinned Pi in an isolated
-PTY and drives the production tool through a test command. A 6,000-character
-proposal checks sequential review beyond the former 4,000-character rejection,
-including its hidden final change, early Apply refusal, cancellation, tiny
-viewports, resize reset, and the exact single saved source. The reviewer caps
-approval text at 2,000,000 characters and wraps by grapheme in linear passes;
-proposals beyond that bound fail closed. The fixture performs no generation
-and substitutes reload success, so this test does not prove model-issued tool
-dispatch or activation.
-It uses the existing Python/Pillow screen harness and outbound network guard.
-An isolated production copy restores the old `ctx.ui.confirm` path and fails
-the same early-write assertion. The original files remain unchanged.
+PTY and drives the production tool through a test command. It checks a
+TOOL-GENERATED summary can be explicitly applied, classifier disablement,
+removed/replaced rules, model-pool and fallback changes are visible, and the
+optional exact view displays the entire 6,000-character value plus final suffix
+across sequential pages before apply. It also checks early
+Apply refusal in exact view, cancellation, tiny viewports, resize reset, and one
+exact saved source. An isolated production copy omits classifier impact from the
+summary and fails the real-Pi display assertion. The fixture performs no model
+generation and substitutes reload success, so it does not prove model-issued
+tool dispatch or activation. It uses the existing Python/Pillow screen harness
+and outbound network guard.
+
+The reviewer caps approval text at 2,000,000 characters and wraps by grapheme;
+proposals beyond that bound fail closed. Apply-from-summary does not assert that
+the user read every exact value. `tests/config-agent.test.ts` checks summary
+counts and change highlights for classifier, removed rules, model pools, and
+fallbacks, plus unchanged stale-input guards. `tests/config-approval.test.ts`
+checks sequential summary/exact pages, cancellation, resize, and terminal
+wrapping.
 
 `tests/integration/config-agent-acceptance.test.mjs` covers model-issued check
 and apply in real Pi RPC mode. It proves apply returns `approval_required`,
-preserves source bytes, and leaves offline preview available. Unit tests cover
-exact escaped values, cell wrapping, cancellation, queued input, and stale
-source, catalog, and layer guards.
+preserves source bytes, and leaves offline preview available. Current Pi
+ExtensionUIContext exposes no file-open API; Bifrost reports that limit and the
+saved path instead of launching an external editor or filling a scratch buffer.
 
 ## Limits
 

@@ -992,7 +992,7 @@ export async function previewConfigCandidate(input: ConfigAgentPreviewInput): Pr
 
 export interface ConfigAgentApplyInput extends ConfigAgentCheckInput {
   /** Must return true only after the user explicitly approved this exact proposal. */
-  readonly confirm: (title: string, message: string) => Promise<boolean> | boolean;
+  readonly confirm: (title: string, summary: string, details: string) => Promise<boolean> | boolean;
   readonly write?: (path: string, text: string) => void;
   readonly reload: () => boolean;
   /** Re-derives the model inventory when apply revalidates after approval. */
@@ -1004,7 +1004,7 @@ function approvalJson(value: unknown): string {
   return canonicalJson(value).replace(/[^\x21-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 
-function approvalMessage(checked: ConfigAgentCheckResult): string | null {
+function approvalDetails(checked: ConfigAgentCheckResult): string | null {
   const lines = [
     `Source: ${checked.source} (${approvalJson(checked.sourcePath)})`,
     `Proposal: ${shortDigest(checked.proposalDigest)}`,
@@ -1025,6 +1025,102 @@ function approvalMessage(checked: ConfigAgentCheckResult): string | null {
   lines.push("No other config source is modified.");
   const message = lines.join("\n");
   return message.length <= MAX_APPROVAL_MESSAGE_CHARS ? message : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isPlainRecord(value) ? value : {};
+}
+
+function approvalValue(value: unknown): string {
+  if (value === undefined) return "(not set)";
+  const text = approvalJson(value);
+  return text.length <= 180 ? text : `${text.slice(0, 177)}... (see full exact change)`;
+}
+
+function approvalList(values: readonly string[], limit: number): string {
+  const shown = values.slice(0, limit).join(", ");
+  return values.length > limit ? `${shown}, … ${values.length - limit} more (see full exact change)` : shown;
+}
+
+function summarizeRules(label: string, beforeValue: unknown, afterValue: unknown, lines: string[]): void {
+  const before = Array.isArray(beforeValue) ? beforeValue : [];
+  const after = Array.isArray(afterValue) ? afterValue : [];
+  if (canonicalJson(before) === canonicalJson(after)) return;
+  const afterSet = new Set(after.map(canonicalJson));
+  const beforeSet = new Set(before.map(canonicalJson));
+  const removed = before.filter((rule) => !afterSet.has(canonicalJson(rule)));
+  const added = after.filter((rule) => !beforeSet.has(canonicalJson(rule)));
+  lines.push(`${label} RULES CHANGED: ${before.length} → ${after.length}; ${removed.length} removed, ${added.length} added.`);
+  for (const rule of removed.slice(0, 6)) lines.push(`  REMOVED rule: ${approvalValue(rule)}`);
+  if (removed.length > 6) lines.push(`  … ${removed.length - 6} more removed rules; inspect full exact change.`);
+  for (const rule of added.slice(0, 6)) lines.push(`  Added rule: ${approvalValue(rule)}`);
+  if (added.length > 6) lines.push(`  … ${added.length - 6} more added rules; inspect full exact change.`);
+}
+
+function summarizeMapChanges(label: string, beforeValue: unknown, afterValue: unknown, lines: string[]): void {
+  const before = asRecord(beforeValue);
+  const after = asRecord(afterValue);
+  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+    .filter((key) => canonicalJson(before[key]) !== canonicalJson(after[key])).sort();
+  if (keys.length === 0) return;
+  lines.push(`${label} CHANGED: ${keys.length} entry/entries.`);
+  for (const key of keys.slice(0, 8)) lines.push(`  ${approvalValue(key)}: ${approvalValue(before[key])} → ${approvalValue(after[key])}`);
+  if (keys.length > 8) lines.push(`  … ${keys.length - 8} more; inspect full exact change.`);
+}
+
+function approvalSummary(checked: ConfigAgentCheckResult): string {
+  const counts = { add: 0, replace: 0, remove: 0 };
+  for (const change of checked.changes) counts[change.kind] += 1;
+  const lines = [
+    "TOOL-GENERATED SUMMARY — concise view; not the full config.",
+    `Source: ${checked.source} (${approvalJson(checked.sourcePath)})`,
+    `Proposal: ${shortDigest(checked.proposalDigest)}`,
+    `Source fields: ${counts.add} added, ${counts.replace} replaced, ${counts.remove} removed.`,
+    `Changed fields: ${approvalList(checked.changes.map((change) => approvalValue(change.field)), 20) || "none"}`,
+  ];
+  const removedFields = checked.changes.filter((change) => change.kind === "remove").map((change) => approvalValue(change.field));
+  if (removedFields.length > 0) lines.push(`REMOVED source fields: ${approvalList(removedFields, 20)}`);
+
+  const before = asRecord(checked.effectiveBefore);
+  const after = asRecord(checked.effectiveAfter);
+  const classifierChange = checked.changes.find((change) => change.field === "classifier");
+  if (classifierChange) {
+    if (classifierChange.kind === "remove") lines.push("REMOVED source classifier field; inherited classifier settings will apply.");
+    else {
+      const wasEnabled = asRecord(classifierChange.before).enabled !== false;
+      const isEnabled = asRecord(classifierChange.after).enabled !== false;
+      lines.push(`Source classifier: ${wasEnabled ? "ENABLED" : "DISABLED"} → ${isEnabled ? "ENABLED" : "DISABLED"}${wasEnabled && !isEnabled ? " — classification is being turned off" : ""}`);
+    }
+  }
+  const beforeClassifier = asRecord(before.classifier);
+  const afterClassifier = asRecord(after.classifier);
+  if (canonicalJson(beforeClassifier) !== canonicalJson(afterClassifier)) {
+    const wasEnabled = beforeClassifier.enabled !== false;
+    const isEnabled = afterClassifier.enabled !== false;
+    lines.push(`Effective classifier: ${wasEnabled ? "ENABLED" : "DISABLED"} → ${isEnabled ? "ENABLED" : "DISABLED"}${wasEnabled && !isEnabled ? " — classification is being turned off" : ""}`);
+  } else if (classifierChange) lines.push("Effective classifier enablement does not change.");
+
+  const rulesChange = checked.changes.find((change) => change.field === "rules");
+  if (rulesChange) summarizeRules("Source", rulesChange.before, rulesChange.after, lines);
+  summarizeRules("Effective", before.rules, after.rules, lines);
+
+  const modelsChange = checked.changes.find((change) => change.field === "models");
+  if (modelsChange) summarizeMapChanges("SOURCE MODEL POOLS", modelsChange.before, modelsChange.after, lines);
+  summarizeMapChanges("EFFECTIVE MODEL POOLS", before.models, after.models, lines);
+
+  const policiesChange = checked.changes.find((change) => change.field === "tierPolicies");
+  if (policiesChange) {
+    const policyMap = (value: unknown): Record<string, unknown> => Object.fromEntries(
+      Object.entries(asRecord(value)).map(([tier, policy]) => [tier, asRecord(policy).fallbackTiers]),
+    );
+    summarizeMapChanges("SOURCE FALLBACKS", policyMap(policiesChange.before), policyMap(policiesChange.after), lines);
+  }
+  const policyMap = (value: unknown): Record<string, unknown> => Object.fromEntries(
+    Object.entries(asRecord(value)).map(([tier, policy]) => [tier, asRecord(policy).fallbackTiers]),
+  );
+  summarizeMapChanges("EFFECTIVE FALLBACKS", policyMap(before.tierPolicies), policyMap(after.tierPolicies), lines);
+  lines.push("This summary is computed from the checked candidate. Choose Full exact change to inspect every value before applying.");
+  return lines.join("\n");
 }
 
 export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promise<ConfigAgentApplyResult> {
@@ -1092,13 +1188,13 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
     return stale("the model inventory changed after this proposal was generated", "Nothing was written. Run check and preview again against the current catalog.");
   }
 
-  const message = approvalMessage(checked);
+  const message = approvalDetails(checked);
   if (message === null) {
     return { ...withCheck, status: "rejected", reason: "the full change is too large to show for approval", notes: ["Nothing was written. Make a smaller change or edit the config manually."] };
   }
   let approved: boolean;
   try {
-    approved = await confirm("Apply this Bifrost configuration?", message);
+    approved = await confirm("Apply this Bifrost configuration?", approvalSummary(checked), message);
   } catch {
     approved = false;
   }
@@ -1411,7 +1507,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
           }
           result = await applyConfigCandidate({
             ...input,
-            confirm: (title, message) => approveConfig(ctx, title, message, signal),
+            confirm: (title, summary, details) => approveConfig(ctx, title, summary, details, signal),
             reload: () => deps.reload(ctx),
             liveCatalog: () => catalogFromContext(ctx),
             ...(deps.write ? { write: deps.write } : {}),
@@ -1425,6 +1521,12 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
             "project",
             "",
           );
+      }
+      if (result.operation === "apply" && result.applied && ctx.mode === "tui") {
+        result = {
+          ...result,
+          notes: [...result.notes, "Pi does not expose an extension API to open saved files in its editor; open the saved path manually if needed."],
+        };
       }
       return {
         content: [{ type: "text", text: deps.render(result) }],

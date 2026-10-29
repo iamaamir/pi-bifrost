@@ -7,8 +7,9 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 function fixture() {
   const size = { columns: 40, rows: 8 };
   const results: boolean[] = [];
-  const message = Array.from({ length: 23 }, (_, i) => `change-${i}`).join("\n");
-  const viewer = new ConfigApproval("Exact proposal", message, () => size, (v) => results.push(v), () => {});
+  const summary = Array.from({ length: 23 }, (_, i) => `summary-${i}`).join("\n");
+  const details = Array.from({ length: 23 }, (_, i) => `change-${i}`).join("\n");
+  const viewer = new ConfigApproval("Exact proposal", summary, details, () => size, (v) => results.push(v), () => {});
   const render = () => viewer.render(size.columns);
   return { size, results, viewer, render };
 }
@@ -20,10 +21,10 @@ function traverse(f: ReturnType<typeof fixture>) {
     seen.push(...lines);
     assert.ok(lines.length <= f.size.rows);
     assert.ok(lines.every((line) => visibleWidth(line) <= f.size.columns));
-    if (lines.at(-1)?.includes("a Apply")) return seen;
+    if (lines.at(-1)?.includes("a Apply | d Details")) return seen;
     f.viewer.handleInput("n");
   }
-  throw new Error("review did not reach final page");
+  throw new Error("summary review did not reach final page");
 }
 
 describe("configuration approval viewport", () => {
@@ -35,10 +36,20 @@ describe("configuration approval viewport", () => {
     assert.deepEqual(f.results, []);
     f.viewer.handleInput("n");
     for (let i = 0; i < 100; i++) f.viewer.handleInput("n");
-    assert.match(f.render()[0]!, /review 2\//, "queued keys cannot skip unrendered pages");
+    assert.match(f.render()[0]!, /summary 2\//, "queued keys cannot skip unrendered summary pages");
     const seen = traverse(f).join("\n");
-    assert.match(seen, /change-22/);
+    assert.match(seen, /summary-22/);
     assert.deepEqual(f.results, []);
+    f.viewer.handleInput("d");
+    assert.match(f.render()[0]!, /Full exact change 1\//);
+    const exact = [];
+    for (let i = 0; i < 100; i++) {
+      const lines = f.render();
+      exact.push(...lines);
+      if (lines.at(-1)?.includes("a Apply | p Prev")) break;
+      f.viewer.handleInput("n");
+    }
+    assert.match(exact.join("\n"), /change-22/);
     f.viewer.handleInput("a");
     assert.deepEqual(f.results, [true]);
   });
@@ -49,12 +60,12 @@ describe("configuration approval viewport", () => {
     f.size.rows = 10;
     f.viewer.handleInput("a");
     assert.deepEqual(f.results, []);
-    assert.match(f.render()[0]!, /review 1\//);
+    assert.match(f.render()[0]!, /summary 1\//);
     f.viewer.handleInput("a");
     assert.deepEqual(f.results, []);
     traverse(f);
     f.size.columns = 45;
-    assert.match(f.render()[0]!, /review 1\//);
+    assert.match(f.render()[0]!, /summary 1\//);
     f.viewer.handleInput("a");
     assert.deepEqual(f.results, []);
   });
@@ -78,11 +89,11 @@ describe("configuration approval viewport", () => {
         process.stdout.emit("resize");
         viewer.handleInput("a");
         assert.deepEqual(outcomes, [], "resize events must invalidate the prior review");
-        assert.match(viewer.render(40)[0]!, /review 1\//);
+        assert.match(viewer.render(40)[0]!, /summary 1\//);
         return false;
       } },
     } as unknown as ExtensionContext;
-    assert.equal(await approveConfig(ctx, "title", Array(20).fill("change").join("\n")), false);
+    assert.equal(await approveConfig(ctx, "title", "summary", Array(20).fill("change").join("\n")), false);
     assert.equal(process.stdout.listenerCount("resize"), before);
   });
 

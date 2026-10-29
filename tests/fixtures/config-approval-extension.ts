@@ -19,7 +19,14 @@ export default function (pi: ExtensionAPI) {
       const toolContext: ExtensionToolContext = {
         ...ctx, tools: [], executeTool: async () => { throw new Error("Nested tools are not part of this fixture"); },
       };
-      const patch = { description: "x".repeat(6_000) + "HIDDEN_LAST_CHANGE" };
+      const patch = {
+        schemaVersion: 2,
+        description: "x".repeat(6_000) + "HIDDEN_LAST_CHANGE",
+        classifier: { enabled: false },
+        models: { general: ["fake/healthy"], review: ["fake/healthy"] },
+        rules: [{ pattern: "review", model: "review" }],
+        tierPolicies: { general: { fallbackTiers: [] } },
+      };
       const checked = await tool.execute("check", { operation: "check", patch }, undefined, undefined, toolContext);
       const details = checked.details as ConfigAgentCheckResult;
       if (details.status !== "ok" || !details.guards || !details.proposalDigest) throw new Error(reportText(details));

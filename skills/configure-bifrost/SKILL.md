@@ -27,11 +27,17 @@ goal needs something Bifrost does not do, say so.
    inventory is long, repeat inspect with `"provider": "<id>"` to list one
    provider's models, and page further with `"offset": 40`, then `80`, and so
    on; the filter and offset only narrow what is reported.
-3. **Compose the smallest policy that meets the goal.** See
+3. **Preserve existing policy while composing.** See
    [references/configuration-reference.md](references/configuration-reference.md)
-   for the fields, strategies, and worked examples. Prefer few tiers and
-   explicit pools; add classifier, economics, affinity, or reliability only when
-   the goal needs them.
+   for the fields, strategies, and worked examples. Start from the current
+   effective config; keep existing tiers, rules, classifier settings, and
+   fallback policies unless the goal requires changing them. `patch` merges only
+   top-level keys: changing `models`, `rules`, `classifier`, or `tierPolicies`
+   replaces that whole value in the selected source. Before changing one of
+   those fields, read that source file (using the inspected path) and carry
+   forward its unrelated entries. Do not flatten inherited settings from other
+   layers into the selected source unless the user asks. Prefer a focused patch
+   over a complete `candidate`.
 4. **Check the candidate.** Call `bifrost_config` with
    `{"operation":"check", ...}`. Fix every reported error. Read the reported
    warnings, pool references, and `newlyEligibleModels` before showing anything
@@ -39,16 +45,24 @@ goal needs something Bifrost does not do, say so.
 5. **Preview routing outcomes.** Call `bifrost_config` with
    `{"operation":"preview", ...}` and 2–5 representative prompts drawn from the
    user's real work. Preview is offline: it sends nothing anywhere.
-6. **Explain the proposal in a few lines.** Model assignments per role or tier,
-   the tradeoffs you chose, and the honest limits. No JSON dump unless the user
-   asks.
+6. **Explain impact and tradeoffs.** Name changed tiers and model pools, rule
+   additions/removals, classifier changes, and fallback changes. Explain why
+   each removal or broad behavior change is necessary. If any existing setting
+   must be replaced, say so before approval. Do not present a summary as the
+   complete config or claim unchanged policy when values changed. No JSON dump
+   unless the user asks.
 7. **Ask, then apply.** Get explicit approval in the conversation, then call
    `bifrost_config` with `{"operation":"apply", ...}` and pass back the
    `proposalDigest`, `sourceDigest`, `effectiveDigest`, and `catalogDigest`
    printed under "apply digests" by check or preview — copy them exactly,
-   character for character. The tool requires paged review in Pi's terminal UI
-   and refuses if any input changed. The user advances with `n`, returns with
-   `p`, and presses `a` on the final page to apply. Escape cancels.
+   character for character. The tool shows its tool-generated impact summary
+   first. The user may apply that summary explicitly with `a`, or choose `d` to
+   inspect every exact change page before applying. State clearly that summary
+   approval does not mean the user inspected every value. The exact view is
+   sequential; `n` advances, `p` returns, `b` returns to summary, and `a` applies
+   from the final exact page. Escape cancels. The dialog reports changes/removals
+   derived from the checked candidate; if the summary flags classifier, rules,
+   model pools, or fallbacks, explain those impacts in conversation too.
    Never apply without the user's agreement or after check reports an error. RPC and other
    non-TUI sessions return `approval_required` without writing. In that case,
    ask the user to re-check and approve in a TUI session. Keep the proposal
@@ -147,9 +161,13 @@ Not covered: Bifrost cannot cap spending; the metered preference is advisory.
 Apply to .pi/bifrost.json? (adds models, default, rules, schemaVersion)
 ```
 
-After a successful apply, state that the configuration is active, or that
-`/bifrost reload` is required, and name the tier prefixes or rules the user can
-use per turn.
+After a successful apply, state that the configuration is saved and active, or
+that `/bifrost reload` is required, and name the tier prefixes or rules the user
+can use per turn. Offer to open the saved file only when the host exposes a
+real open-file API; do not use a scratch editor, shell command, or inferred
+capability as a substitute. Current Pi extension UI exposes text editing but
+no API for opening a config path, so report the saved path instead of claiming
+it was opened.
 
 ## Do not
 

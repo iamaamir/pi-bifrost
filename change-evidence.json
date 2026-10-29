@@ -3,29 +3,32 @@
   "base": "82a035e8aa79ca73f0e9beed6ae63b7ac3350f02",
   "contracts": [
     {
-      "id": "large-config-approval",
+      "id": "config-approval-summary-and-exact-review",
       "requirement": "R07",
       "files": [
         "config-agent.ts",
         "config-approval.ts",
         "docs/testing-coverage.md",
         "scripts/test-config-approval-tui.py",
+        "skills/configure-bifrost/SKILL.md",
         "tests/config-agent.test.ts",
-        "tests/fixtures/config-approval-extension.ts"
+        "tests/config-approval.test.ts",
+        "tests/fixtures/config-approval-extension.ts",
+        "tests/integration/config-approval-tui.test.mjs"
       ],
-      "boundary": "A complete proposal larger than the former 4,000-character limit is reviewed in sequential pages in real pinned Pi, with explicit final Apply, resize/cancel fail-closed behavior, and exactly one saved source. Oversized proposals beyond the hard review bound are rejected before approval.",
-      "assertions": "A 6,000-character value and its final hidden suffix appear during traversal before Apply; early Apply, cancellation, tiny viewports, resize reset, and exact single-source persistence are checked in isolated Pi. Unit tests accept a 5,000-character proposal, reject a proposal beyond the 2,000,000-character review bound, retain stale guards, and verify Unicode/whitespace wrapping. Mutating the bound back to 4,000 makes the exact large-proposal invariant test fail.",
+      "boundary": "Real pinned Pi TUI offers a concise tool-generated summary or a user-selected sequential exact review before one guarded write. Summary explicitly identifies classifier disablement, removed/replaced rules, model-pool changes, and fallback changes; exact review displays the full 6,000-character value and suffix. Summary Apply is explicit; exact-view Apply is gated to its final rendered page. Resize and cancellation fail closed.",
+      "assertions": "Unit tests check summary counts and classifier/rule/model-pool/fallback deltas; summary and exact pager traversal, Unicode wrapping, cancellation, resize invalidation, stale source/effective/catalog guards, one write, reload, and TUI-unavailable behavior. Real Pi PTY test traverses and checks classifier, rule removals, model-pool and fallback changes in the summary, selects exact review, confirms early exact Apply writes nothing, verifies the entire repeated value across rendered pages, cancels safely, applies exact after resize reset, and separately applies from the final summary page. Isolated Pi fault copy removes the classifier-impact summary line and must fail the real-Pi display assertion. Current Pi has no ExtensionUIContext file-open API; unsupported behavior is reported instead of fabricating an open action.",
       "boundaryTest": {
         "file": "tests/integration/config-approval-tui.test.mjs",
         "name": "requires complete paged approval in real pinned Pi across viewport resize"
       },
       "invariant": {
         "file": "tests/config-agent.test.ts",
-        "name": "shows complete large changes for approval and rejects proposals beyond the review bound"
+        "name": "summarizes classifier, rule, model-pool, and fallback changes from the checked candidate"
       },
       "fault": {
-        "file": "tests/config-agent.test.ts",
-        "name": "shows complete large changes for approval and rejects proposals beyond the review bound"
+        "file": "tests/integration/config-approval-tui.test.mjs",
+        "name": "detects a faulty summary that hides classifier disablement in an isolated Pi copy"
       }
     }
   ]
