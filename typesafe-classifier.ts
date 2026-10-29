@@ -155,13 +155,14 @@ async function readResponseJson(response: Response, signal: AbortSignal): Promis
     while (true) {
       const result = await Promise.race([reader.read(), aborted]);
       if (result.done) break;
-      chunks.push(result.value);
-      total += result.value.byteLength;
-      // Bound the decode buffer: a hostile or stuck provider endpoint must
-      // degrade to a classifier miss instead of growing the RSS without limit.
-      if (total > MAX_RESPONSE_BODY_BYTES) {
+      // Bound the decode buffer before retaining the chunk: a hostile or stuck
+      // provider endpoint must degrade to a classifier miss instead of growing
+      // the RSS past the budget, even when one chunk is larger than it.
+      if (total + result.value.byteLength > MAX_RESPONSE_BODY_BYTES) {
         throw new Error(`provider response exceeds the bounded decode budget (${MAX_RESPONSE_BODY_BYTES} bytes)`);
       }
+      chunks.push(result.value);
+      total += result.value.byteLength;
     }
   } catch (error) {
     try { await Promise.race([reader.cancel(), aborted]); } catch { /* cleanup only */ }
