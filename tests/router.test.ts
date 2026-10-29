@@ -446,7 +446,7 @@ describe("experimental resolve-only router", () => {
     });
     const router = createRouter(accepted);
     accepted.config.routingScope!.providers![0] = "mutated";
-    accepted.config.routingScope!.tiers!.quick.providers[0] = "mutated";
+    accepted.config.routingScope!.tiers!.quick.providers![0] = "mutated";
     const result = await router.resolve({ prompt: "request" });
     assert.equal(result.status, "completed");
     if (result.status === "completed") assert.equal(result.decision.selected, "fixture/quick-model");

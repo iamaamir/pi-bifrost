@@ -169,6 +169,29 @@ describe("startup config source acceptance", { timeout: 60_000, concurrency: 1 }
     } finally { rmSync(paths.root, { recursive: true, force: true }); }
   });
 
+  it("keeps a prototype-named tier deny-all restriction across layers", async () => {
+    const paths = fixture();
+    try {
+      const workspace = join(paths.work, "bifrost.json");
+      const project = join(paths.work, ".pi", "bifrost.json");
+      writeFileSync(workspace, '{"schemaVersion":2,"default":"__proto__","models":{"__proto__":["fake/healthy"]},"classifier":{"enabled":false}}');
+      writeFileSync(project, JSON.stringify({ routingScope: { providers: ["fake"] } }));
+      const beforeAllowed = await stats();
+      const allowed = await runPi(paths);
+      assert.equal((await stats()).stats.slice(beforeAllowed.stats.length).filter((entry) => entry.kind === "generation").length, 1, `unrestricted tier must generate\n${allowed.stderr}`);
+      writeFileSync(workspace, '{"schemaVersion":2,"default":"__proto__","models":{"__proto__":["fake/healthy"]},"classifier":{"enabled":false},"routingScope":{"tiers":{"__proto__":{"providers":[]}}}}');
+      const before = await stats();
+      const result = await runPi(paths);
+      assert.deepEqual((await stats()).stats.slice(before.stats.length), [], `physical generation must remain blocked\n${result.stderr}`);
+      const rpc = startRpc(paths);
+      try {
+        const beforeAuto = await stats();
+        await rpc.prompt("synthetic denied Auto request");
+        assert.deepEqual((await stats()).stats.slice(beforeAuto.stats.length), [], "Auto generation must remain blocked");
+      } finally { await rpc.close(); }
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
   it("does not degrade a fresh Auto turn to the previous model after scope narrows", async () => {
     const paths = fixture();
     const project = join(paths.work, ".pi", "bifrost.json");

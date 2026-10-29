@@ -22,6 +22,12 @@ describe("routing scope", () => {
       assert.equal(compileRoutingScope({ tiers: {} }), undefined);
     });
 
+    it("does not restrict a tier whose providers field is omitted", () => {
+      const scope = { tiers: { quick: {} } } as unknown as RoutingScope;
+      assert.deepEqual(checkProviderScope(compileRoutingScope(scope), "openai", { tier: "quick" }), { allowed: true });
+      assert.deepEqual(checkProviderScope(compileRoutingScope({ tiers: { quick: { providers: [] } } }), "openai", { tier: "quick" }), { allowed: false, origin: "tier" });
+    });
+
     it("compiles global and tier allowlists into sets", () => {
       const compiled = compileRoutingScope({
         providers: ["anthropic", "openai-codex"],
@@ -111,6 +117,14 @@ describe("routing scope", () => {
   });
 
   describe("mergeRoutingScope", () => {
+    it("retains deny-all restrictions for prototype-named tiers across layers", () => {
+      for (const tier of ["__proto__", "constructor"]) {
+        const base = JSON.parse(`{"tiers":{"${tier}":{"providers":[]}}}`) as RoutingScope;
+        const merged = mergeRoutingScope(base, { providers: ["allowed"] });
+        assert.ok(Object.hasOwn(merged!.tiers!, tier));
+        assert.deepEqual(checkProviderScope(compileRoutingScope(merged), "allowed", { tier }), { allowed: false, origin: "tier" });
+      }
+    });
     it("returns the other layer untouched when one side is absent", () => {
       const scope: RoutingScope = { providers: ["anthropic"] };
       assert.deepEqual(mergeRoutingScope(undefined, scope), scope);

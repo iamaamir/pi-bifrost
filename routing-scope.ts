@@ -12,7 +12,7 @@
 // only narrow a hard restriction. It can never widen one.
 
 export interface RoutingScopeTier {
-  providers: string[];
+  providers?: string[];
 }
 
 /** User-facing `routingScope` configuration shape. */
@@ -69,7 +69,7 @@ export function compileRoutingScope(
   const rawTiers = scope.tiers;
   if (rawTiers && typeof rawTiers === "object" && !Array.isArray(rawTiers)) {
     for (const [tier, entry] of Object.entries(rawTiers)) {
-      if (!entry || typeof entry !== "object") continue;
+      if (!entry || typeof entry !== "object" || entry.providers === undefined) continue;
       tiers.set(tier, toProviderSet(entry.providers));
     }
   }
@@ -147,7 +147,7 @@ export function mergeRoutingScopeConflicts(
   const overrideTiers = override.tiers;
   if (overrideTiers && typeof overrideTiers === "object") {
     for (const tier of Object.keys(overrideTiers)) {
-      const baseEntry = base.tiers?.[tier];
+      const baseEntry = base.tiers && Object.hasOwn(base.tiers, tier) ? base.tiers[tier] : undefined;
       const overrideEntry = overrideTiers[tier];
       if (disjointNonEmpty(baseEntry?.providers, overrideEntry?.providers)) {
         conflicts.push(`routingScope.tiers.${tier}.providers conflicts with a lower configuration layer; the provider allowlists do not intersect.`);
@@ -197,14 +197,13 @@ function mergeScopeTiers(
   if (base === undefined && override === undefined) return undefined;
   const merged: Record<string, RoutingScopeTier> = {};
   for (const tier of new Set([...Object.keys(base ?? {}), ...Object.keys(override ?? {})])) {
-    const baseEntry = base?.[tier];
-    const overrideEntry = override?.[tier];
-    if (baseEntry === undefined || overrideEntry === undefined) {
-      merged[tier] = baseEntry ?? overrideEntry!;
-      continue;
-    }
-    const providers = intersectAllowlist(baseEntry.providers, overrideEntry.providers);
-    merged[tier] = providers === undefined ? { ...baseEntry } : { providers };
+    const baseEntry = base && Object.hasOwn(base, tier) ? base[tier] : undefined;
+    const overrideEntry = override && Object.hasOwn(override, tier) ? override[tier] : undefined;
+    const providers = baseEntry && overrideEntry ? intersectAllowlist(baseEntry.providers, overrideEntry.providers) : undefined;
+    const entry = baseEntry && overrideEntry
+      ? (providers === undefined ? { ...baseEntry } : { providers })
+      : (baseEntry ?? overrideEntry!);
+    Object.defineProperty(merged, tier, { value: entry, enumerable: true, configurable: true, writable: true });
   }
   return merged;
 }
