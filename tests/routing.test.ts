@@ -1515,6 +1515,23 @@ describe("routing", () => {
       assert.equal(classifyCompiled("a".repeat(24) + "b", compileRules(rules)), undefined);
     });
 
+    it("reports a rejected rule once across repeated classify calls", () => {
+      // classify() runs per message, so a rejected configured rule must be
+      // diagnosed once instead of logging on every classified prompt.
+      const messages: string[] = [];
+      const originalError = console.error;
+      console.error = (...values: unknown[]) => { messages.push(values.map(String).join(" ")); };
+      try {
+        const rules = [{ pattern: "^(zz+)+$", model: "quick" }];
+        assert.equal(classify("zzzzzzzzzzzzzzzzzzzzzzzzc", rules), undefined);
+        assert.equal(classify("zzzzzzzzzzzzzzzzzzzzzzzzc", rules), undefined);
+      } finally {
+        console.error = originalError;
+      }
+      const reported = messages.filter((line) => line.includes("rejecting rule pattern"));
+      assert.deepEqual(reported, ['[bifrost] rejecting rule pattern with unbounded backtracking: "^(zz+)+$"']);
+    });
+
     it("still compiles every shipped default rule", () => {
       assert.equal(compileRules(DEFAULT_RULES).length, DEFAULT_RULES.length);
     });
