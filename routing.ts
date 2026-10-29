@@ -199,6 +199,12 @@ function minBy<T>(items: readonly T[], score: (item: T) => number): T | undefine
   return best;
 }
 
+/**
+ * Pick one candidate for the configured strategy.
+ *
+ * Total for every strategy: an empty list yields undefined and every other
+ * input, including rng values outside [0, 1) and NaN, yields a candidate.
+ */
 export function selectModel<M extends RoutingModelBase>(
   candidates: M[],
   strategy: RoutingStrategy,
@@ -859,6 +865,34 @@ function classifyQuantifier(pattern: string, position: number): QuantifierKind {
 }
 
 /**
+ * First character of a group's body, after its opening syntax.
+ *
+ * The `?` that introduces `(?:`, `(?=`, `(?!`, `(?<=`, `(?<!`, `(?<name>`,
+ * `(?>`, or inline flags is group syntax, not an optional quantifier, and it is
+ * not part of the branch text used for overlap detection. Returns undefined for
+ * constructs this textual scan does not model, which keeps the scan permissive.
+ */
+function groupBodyStart(pattern: string, open: number): number | undefined {
+  const next = open + 1;
+  if (pattern[next] !== "?") return next;
+  for (const prefix of ["?:", "?=", "?!", "?>"] as const) {
+    if (pattern.startsWith(prefix, next)) return next + 2;
+  }
+  for (const prefix of ["?<=", "?<!"] as const) {
+    if (pattern.startsWith(prefix, next)) return next + 3;
+  }
+  if (pattern.startsWith("?<", next)) {
+    const close = pattern.indexOf(">", next + 2);
+    return close === -1 ? undefined : close + 1;
+  }
+  // Inline flags: (?i:...) or (?im-s:...).
+  const colon = pattern.indexOf(":", next + 1);
+  return colon !== -1 && /^[a-zA-Z-]*$/.test(pattern.slice(next + 1, colon))
+    ? colon + 1
+    : undefined;
+}
+
+/**
  * Textual detection of superlinear shapes; no regular expression executes.
  * True for a group repeated without a finishing bound whose body carries a
  * variable quantifier, or whose alternation splits a subject ambiguously
@@ -887,7 +921,10 @@ function patternHasSuperlinearShape(pattern: string): boolean {
         i = end;
         continue;
       }
-      frames.push({ branches: [], branchStart: i + 1, bodyVarQuant: false });
+      const bodyStart = groupBodyStart(pattern, i);
+      if (bodyStart === undefined) return false;
+      frames.push({ branches: [], branchStart: bodyStart, bodyVarQuant: false });
+      i = bodyStart - 1;
       continue;
     }
     if (ch === "|" && frames.length > 0) {
@@ -921,6 +958,11 @@ function patternHasSuperlinearShape(pattern: string): boolean {
   return false;
 }
 
+/**
+ * True when a rule pattern must be dropped: either the structural scan names a
+ * superlinear shape without executing anything, or a canary probe over-runs the
+ * budget twice (once to measure, once to rule out a scheduler stall).
+ */
 function patternExceedsBacktrackingBudget(pattern: string, re: RegExp): boolean {
   if (patternHasSuperlinearShape(pattern)) {
     console.error(`[bifrost] rejecting rule pattern with unbounded backtracking: "${pattern}"`);

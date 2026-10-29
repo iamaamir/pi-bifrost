@@ -1550,8 +1550,13 @@ describe("routing", () => {
         { pattern: "class(?:room|rooms)?", model: "quick" },
         { pattern: "(foo|bar)+", model: "quick" },
         { pattern: "(a|b|c)+", model: "quick" },
+        // The `?` that opens a noncapturing group is group syntax, not an
+        // optional quantifier, so a repeated noncapturing group is as safe as
+        // its capturing equivalent and must survive the structural scan.
+        { pattern: "(?:foo)+", model: "quick" },
+        { pattern: "(?:foo|bar)+", model: "quick" },
       ]);
-      assert.equal(compiled.length, 4);
+      assert.equal(compiled.length, 6);
     });
 
     it("a scheduling pause does not drop a benign rule", () => {
