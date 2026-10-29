@@ -277,6 +277,32 @@ describe("TypeSafe classifier", () => {
     assert.deepEqual(outcomes, ["timeout"]);
   });
 
+  it("does not let a stuck body cancellation outlive the classification signal", async () => {
+    // A custom fetchImpl can return a teed response whose other branch stays
+    // open, so reader.cancel() never settles. Cleanup stays bounded by the
+    // same abort signal instead of holding the classification call open.
+    let requestSignal: AbortSignal | undefined;
+    const outcomes: string[] = [];
+    const body = new ReadableStream<Uint8Array>({
+      cancel: () => new Promise<void>(() => {}),
+    });
+    const classifier = createTypeSafeClassifier({
+      apiKey: "key",
+      timeoutMs: 50,
+      maxAttempts: 1,
+      observe: ({ outcome }) => outcomes.push(outcome),
+      fetchImpl: async (_url, init) => {
+        requestSignal = init?.signal ?? undefined;
+        return new Response(body, { status: 200 });
+      },
+    });
+    const started = performance.now();
+    assert.equal(await classifier({ prompt: "x", tiers: ["general"], criteria: { general: "normal" } }), undefined);
+    assert.ok(performance.now() - started < 2_000, "cancellation must not outlive the aborted signal");
+    assert.equal(requestSignal?.aborted, true);
+    assert.deepEqual(outcomes, ["timeout"]);
+  });
+
   it("abandons a half-open trial when caller aborts", async () => {
     const key = `classifier/typesafe/${TYPESAFE_MODEL}`;
     const now = Date.now();

@@ -132,6 +132,13 @@ async function cancelResponseBody(response: Response | undefined): Promise<void>
   }
 }
 
+/**
+ * Decode a streamed response body under a byte budget and the caller's signal.
+ *
+ * Over-budget bodies and aborts both reject, and cleanup never outlives those
+ * bounds: a reader whose cancellation stays pending is raced against the same
+ * abort promise, so a custom fetch cannot hold the classifier call open.
+ */
 async function readResponseJson(response: Response, signal: AbortSignal): Promise<unknown> {
   if (!response.body) return response.json();
   const reader = response.body.getReader();
@@ -157,7 +164,7 @@ async function readResponseJson(response: Response, signal: AbortSignal): Promis
       }
     }
   } catch (error) {
-    try { await reader.cancel(); } catch { /* cleanup only */ }
+    try { await Promise.race([reader.cancel(), aborted]); } catch { /* cleanup only */ }
     throw error;
   } finally {
     signal.removeEventListener("abort", abort);
