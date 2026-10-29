@@ -20,6 +20,7 @@
 //   fixtureChildEnv({...})       minimal guarded env for a child process
 //   fenceProbeScript({...})      HTTP/HTTPS/TCP/UDP outbound-fence probe source
 //   assertFenceBlocked(...)      prove the fence rejected every transport
+//   assertOutboundFence(...)     run the probe in an owned child and assert it
 //   assertNoViolations(...)      prove a child made zero outbound attempts
 //   runOwnedNode(args, options)  bounded detached process-group runner; returns
 //                                { status, signal, stdout, stderr,
@@ -275,6 +276,29 @@ export function assertFenceBlocked(violations, patterns = [
   const text = readFileSync(violations, "utf8");
   for (const pattern of patterns) assert.match(text, pattern);
   return text;
+}
+
+/**
+ * Run the fence probe in an owned child and require the recorded violations.
+ * Drivers call this once before running any fixture child.
+ */
+export async function assertOutboundFence({
+  env,
+  violations,
+  allowedUrl,
+  blockedPort,
+  expectAllowedText,
+  patterns = [
+    /blocked fetch to/,
+    /blocked socket connection to/,
+    /blocked UDP datagram to/,
+  ],
+}) {
+  writeFileSync(violations, "");
+  const probe = await runOwnedNode(["-e", fenceProbeScript({ allowedUrl, blockedPort, expectAllowedText })], { cwd: REPO_ROOT, env });
+  assert.equal(probe.deadlineExceeded, false, `${probe.stdout}\n${probe.stderr}`);
+  assert.equal(probe.status, 0, `${probe.stdout}\n${probe.stderr}`);
+  return assertFenceBlocked(violations, patterns);
 }
 
 /** Run a fixture child under `node --test` and require a clean exit. */

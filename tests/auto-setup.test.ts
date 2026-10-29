@@ -79,6 +79,29 @@ describe("automatic first-run setup", () => {
     assert.deepEqual(saved.rules, extensionSettings.rules);
   });
 
+  it("preserves explicit routing scopes in generated project config and drops malformed entries", () => {
+    const saved = serializeBootstrapConfig({
+      models: {},
+      routingScope: {
+        providers: ["anthropic", "openai"],
+        tiers: { quick: { providers: ["openai"] }, general: { providers: ["anthropic", 7] as unknown as string[] } },
+      },
+    }, "quick", { quick: ["fixture/verified"], general: [], frontier: [] });
+    assert.deepEqual(saved.routingScope, {
+      providers: ["anthropic", "openai"],
+      tiers: { quick: { providers: ["openai"] } },
+    });
+
+    const malformed = serializeBootstrapConfig({
+      models: {},
+      routingScope: { providers: ["anthropic", 7] as unknown as string[] },
+    }, "quick", { quick: ["fixture/verified"], general: [], frontier: [] });
+    assert.equal(Object.hasOwn(malformed, "routingScope"), false);
+
+    const empty = serializeBootstrapConfig({ models: {}, routingScope: {} }, "quick", { quick: ["fixture/verified"], general: [], frontier: [] });
+    assert.equal(Object.hasOwn(empty, "routingScope"), false);
+  });
+
   it("allows valid enabled runtime preferences and fails closed on off or invalid preferences", () => {
     const root = mkdtempSync(join(tmpdir(), "bifrost-runtime-bootstrap-"));
     const path = join(root, "bifrost-state.json");

@@ -480,6 +480,24 @@ describe("preview is offline, deterministic, and non-mutating", () => {
     }
   });
 
+  it("honors provider scope in version 2 and 3 previews", async () => {
+    const harness = freshHarness();
+    try {
+      for (const schemaVersion of [2, 3]) {
+        for (const providers of [["beta"], []]) {
+          const details = detailsOf<ConfigAgentPreviewResult>(await harness.run({
+            operation: "preview",
+            candidate: { schemaVersion, default: "work", models: { work: ["alpha/strong", "beta/code"] }, routingScope: { providers }, classifier: { enabled: false } },
+            prompts: ["work make a change"],
+          }));
+          assert.equal(details.status, "ok");
+          assert.equal(details.tiers.find((tier) => tier.tier === "work")?.selected, providers.length ? "beta/code" : undefined);
+          assert.equal(details.cases[0]?.selected, providers.length ? "beta/code" : undefined);
+        }
+      }
+    } finally { harness.cleanup(); }
+  });
+
   it("marks classifier-dependent cases when the candidate enables the classifier", async () => {
     const harness = freshHarness();
     try {
