@@ -93,10 +93,11 @@
       "files": [
         "package.json",
         "package-lock.json",
-        "tests/router-package.test.mjs"
+        "tests/router-package.test.mjs",
+        "CHANGELOG.md"
       ],
       "boundary": "The shipped dependency chain resolves known vulnerable transitive versions: fast-uri 3.1.8 (four open GHSAs reachable through the ajv-based schema validation) is bumped to the patched 3.1.9, and transitive undici is forced through the existing overrides mechanism to ^8.12.2 (npm's own fix path was a semver-major bump of the host agent package, which stays out of scope).",
-      "assertions": "npm audit reports zero vulnerabilities on the resolved tree and osv-scanner passes the repository deps gate. The resolve-only API still installs into a clean consumer without Pi packages, compiles the strict declaration graph, runs both examples, and resolves without loader flags on Node 22.19+ after the bump and the override.",
+      "assertions": "npm audit reports zero vulnerabilities on the resolved tree and osv-scanner passes the repository deps gate. The resolve-only API still installs into a clean consumer without Pi packages, compiles the strict declaration graph, runs both examples, and resolves without loader flags on Node 22.19+ after the bump and the override. The unreleased changelog records the security-facing effect of these bumps, including the limit of the override to this package's own install tree.",
       "boundaryTest": {
         "file": "tests/router-package.test.mjs",
         "name": "compiles and runs the shipped examples in a clean standalone consumer with no Pi packages installed"
