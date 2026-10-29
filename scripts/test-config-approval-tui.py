@@ -149,7 +149,7 @@ def run():
             assert json.loads(result.read_text())["status"] == "ok"
             saved = json.loads(source.read_text())
             expected = json.loads(original)
-            expected["description"] = "x" * 900 + "HIDDEN_LAST_CHANGE"
+            expected["description"] = "x" * 6_000 + "HIDDEN_LAST_CHANGE"
             assert saved == expected
             ui.assert_no_network_violations(home)
             print("PASS: pinned Pi paged review, early Apply refusal, cancel, tiny viewport, resize reset, exact write")

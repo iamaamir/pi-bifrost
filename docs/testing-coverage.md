@@ -73,10 +73,14 @@ Provider projection tests require one state snapshot per nonempty decision and z
 ## Configuration approval regression
 
 `tests/integration/config-approval-tui.test.mjs` starts pinned Pi in an isolated
-PTY and drives the production tool through a test command. It checks sequential
-review, early Apply refusal, cancellation, tiny viewports, resize reset, and the
-exact saved source. The fixture performs no generation and substitutes reload
-success, so this test does not prove model-issued tool dispatch or activation.
+PTY and drives the production tool through a test command. A 6,000-character
+proposal checks sequential review beyond the former 4,000-character rejection,
+including its hidden final change, early Apply refusal, cancellation, tiny
+viewports, resize reset, and the exact single saved source. The reviewer caps
+approval text at 2,000,000 characters and wraps by grapheme in linear passes;
+proposals beyond that bound fail closed. The fixture performs no generation
+and substitutes reload success, so this test does not prove model-issued tool
+dispatch or activation.
 It uses the existing Python/Pillow screen harness and outbound network guard.
 An isolated production copy restores the old `ctx.ui.confirm` path and fails
 the same early-write assertion. The original files remain unchanged.

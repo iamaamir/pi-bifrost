@@ -4,15 +4,23 @@ import { matchesKey, sliceByColumn, visibleWidth } from "@earendil-works/pi-tui"
 /** Preserve every cell, including leading/trailing whitespace; never word-wrap values. */
 export function wrapApprovalLines(text: string, width: number): string[] {
   if (!Number.isInteger(width) || width < 2) throw new Error("Approval width must be at least two cells");
+  const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
   return text.split("\n").flatMap((line) => {
     const lines: string[] = [];
-    while (visibleWidth(line) > width) {
-      const part = sliceByColumn(line, 0, width, true);
-      if (!part) throw new Error("Approval text cannot fit the viewport");
-      lines.push(part);
-      line = line.slice(part.length);
+    let part = "";
+    let cells = 0;
+    for (const { segment } of segmenter.segment(line)) {
+      const segmentWidth = visibleWidth(segment);
+      if (cells + segmentWidth > width) {
+        if (!part) throw new Error("Approval text cannot fit the viewport");
+        lines.push(part);
+        part = "";
+        cells = 0;
+      }
+      part += segment;
+      cells += segmentWidth;
     }
-    return [...lines, line];
+    return [...lines, part];
   });
 }
 

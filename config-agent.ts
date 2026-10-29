@@ -43,7 +43,8 @@ import { approveConfig } from "./config-approval.ts";
 
 const MAX_PROMPTS = 8;
 const MAX_PROMPT_CHARS = 2_000;
-const MAX_APPROVAL_MESSAGE_CHARS = 4_000;
+// Bound approval text sent to the terminal; larger complete diffs fail closed.
+const MAX_APPROVAL_MESSAGE_CHARS = 2_000_000;
 
 // ── Public types ───────────────────────────────────────────────
 

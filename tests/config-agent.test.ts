@@ -643,7 +643,7 @@ describe("apply requires approval, matching digests, and proves the result", () 
     models: { fast: ["beta/code"], deep: ["alpha/strong"] },
   };
 
-  it("shows complete changes for approval and rejects proposals too large to show", async () => {
+  it("shows complete large changes for approval and rejects proposals beyond the review bound", async () => {
     const harness = freshHarness();
     try {
       const visible = { ...candidate, description: "x".repeat(130) + "visible-end" };
@@ -651,12 +651,18 @@ describe("apply requires approval, matching digests, and proves the result", () 
       const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(checked.details, { candidate: visible })));
       assert.equal(applied.status, "ok");
       assert.match(harness.confirmations()[0]?.message ?? "", /visible-end/);
-      const tooLarge = { ...candidate, description: "y".repeat(5000) + "hidden-end" };
-      const largeCheck = await checkedCandidate(harness, { candidate: tooLarge });
-      const rejected = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(largeCheck.details, { candidate: tooLarge })));
-      assert.notEqual(rejected.status, "ok");
+      const large = { ...candidate, description: "y".repeat(5_000) + "visible-end" };
+      const largeCheck = await checkedCandidate(harness, { candidate: large });
+      const largeApplied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(largeCheck.details, { candidate: large })));
+      assert.equal(largeApplied.status, "ok");
+      assert.match(harness.confirmations()[1]?.message ?? "", /visible-end/);
+
+      const tooLarge = { ...candidate, description: "z".repeat(2_000_000) + "hidden-end" };
+      const boundedCheck = await checkedCandidate(harness, { candidate: tooLarge });
+      const rejected = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(boundedCheck.details, { candidate: tooLarge })));
+      assert.equal(rejected.status, "rejected");
       assert.equal(rejected.applied, false);
-      assert.equal(harness.confirmations().length, 1);
+      assert.equal(harness.confirmations().length, 2);
       assert.doesNotMatch(harness.readFile(".pi/bifrost.json") ?? "", /hidden-end/);
     } finally { harness.cleanup(); }
   });
