@@ -1,140 +1,79 @@
 {
   "schemaVersion": 1,
-  "base": "61617654ac5b919fa4a3ddee20174b77c0ac9d87",
+  "base": "9678ddeeba2cf9d33cc59f94233a73c71829c196",
   "contracts": [
     {
-      "id": "structural-config-contract",
-      "requirement": "R07",
-      "files": [
-        "config-load.ts",
-        "config-schema.ts",
-        "config.ts",
-        "diagnostics.ts",
-        "docs/guide/configuration.md",
-        "schema.json",
-        "tests/config-schema.test.ts",
-        "tests/diagnostics.test.ts",
-        "tests/integration/config-startup-acceptance.test.mjs"
-      ],
-      "boundary": "Every configuration source layer and the merged effective policy are structurally validated against the shipped schema.json on load, reload, boot, and prospective apply. Findings name the offending path, and only a finding that makes a source unusable rejects the layer.",
-      "assertions": "Unknown fields, invalid enum values, and wrong types produce config.schema_unsupported_field, config.schema_enum, and config.schema_type diagnostics at the exact path. Deeply nested sources fail with a bounded diagnostic and no generation, metadata stripping preserves and routes a user-defined __proto__ tier, and authored unsupported requirement fields fail closed before metadata removal even when a higher layer is advisory; migration preview and apply also reject them. A partial layer may defer schemaVersion conditionals that the effective configuration enforces. A schema copy that adds a field accepts what the installed schema still rejects, so acceptance follows schema.json instead of duplicated code. categoryStrategies keeps its strategy enum for every key, so a per-tier typo still produces a finding while the version 3 metadata key accepts free text. The offline validation report and its JSON form carry the same structural findings as warnings with the offending path.",
-      "boundaryTest": {
-        "file": "tests/config-schema.test.ts",
-        "name": "rejects unsupported fields, invalid values, and wrong types in source layers"
-      },
-      "invariant": {
-        "file": "tests/config-schema.test.ts",
-        "name": "validates partial layers without in-document version requirements and enforces them on the effective config"
-      },
-      "fault": {
-        "file": "tests/config-schema.test.ts",
-        "name": "makes schema edits, not code edits, decide what is accepted"
-      }
-    },
-    {
-      "id": "inline-description-metadata",
-      "requirement": "R17",
-      "files": [
-        "examples/advanced-classifier-prompt.json",
-        "examples/task-aware-routing.json",
-        "tests/config.test.ts",
-        "tests/schema.test.ts"
-      ],
-      "boundary": "Inline description metadata is valid in fixed-shape sections under every supported schema version and inside dynamically keyed maps under schemaVersion 3. It is preserved in the authored file and stripped before routing.",
-      "assertions": "A loaded configuration contains no description key or text. Described and undescribed configurations load to identical routing policy. A version 2 tier named description keeps its pools. An ambiguous version 3 upgrade fails closed with a diagnostic naming models.description. A version 3 layer that puts a non-string value on a reserved key is rejected instead of being stripped, so routing never continues with the key silently deleted. Admission rule IDs one level below economics.tierOverrides keep their meaning in every version and reach routing unchanged. Economic scopes, sources, preferences, admissions, observations, windows, and periods accept descriptions that are stripped before routing.",
-      "boundaryTest": {
-        "file": "tests/config-schema.test.ts",
-        "name": "accepts inline descriptions in every supported section and strips them at the load boundary"
-      },
-      "invariant": {
-        "file": "tests/config-schema.test.ts",
-        "name": "does not change effective routing when descriptions are added or removed"
-      },
-      "fault": {
-        "file": "tests/config-schema.test.ts",
-        "name": "keeps a user-defined description key meaning under versions 1 and 2"
-      }
-    },
-    {
-      "id": "boot-and-reload-warning-surface",
-      "requirement": "R09",
-      "files": [
-        "auto-setup.ts",
-        "commands.ts",
-        "index.ts",
-        "tests/auto-setup.test.ts",
-        "tests/reconciliation-command-router.test.ts"
-      ],
-      "boundary": "Boot, reload, init, and background setup report the structural findings the domain validators own without stopping routing. An unusable source still blocks generation, init, and reconciliation writes.",
-      "assertions": "Boot prints one [bifrost/config] warning line per structural finding and keeps routing. Reload logs the warnings after installing the configuration. A prospective reconciliation write stays blocked by unusable diagnostics and reports the warnings the proposed source would load with before the user commits it. A prospective init write stays blocked by unusable diagnostics. Generated bootstrap configuration carries only supported schema versions and no unsupported classifier field.",
-      "boundaryTest": {
-        "file": "tests/integration/config-startup-acceptance.test.mjs",
-        "name": "blocks generation when a higher supported schema masks an unsupported lower layer"
-      },
-      "invariant": {
-        "file": "tests/config-schema.test.ts",
-        "name": "merges description-bearing layers and reports structural layer findings"
-      },
-      "fault": {
-        "file": "tests/integration/config-startup-acceptance.test.mjs",
-        "name": "blocks generation when a project config source is malformed"
-      }
-    },
-    {
-      "id": "routing-schema-version-gate",
-      "requirement": "R17",
+      "id": "rule-pattern-backtracking-bound",
+      "requirement": "R12",
       "files": [
         "routing.ts",
-        "schema-version.ts"
+        "tests/routing.test.ts"
       ],
-      "boundary": "Explicit tier fallback policies apply under every schema version that supports them (2 and 3) and stay inert under version 1, without changing candidate resolution.",
-      "assertions": "A version 3 configuration resolves its declared fallback tier exactly like version 2. The semantic validators keep rejecting unsupported versions, unknown tiers, self-links, and cycles.",
+      "boundary": "Regex route rules from any configuration source cannot stall the host event loop at pipeline construction or per message. compileRules rejects superlinear patterns structurally from the pattern text (an unbounded-quantified group whose body carries a variable quantifier, or an alternation whose branches split subjects ambiguously through prefix-overlap or an empty branch) and keeps canary probes under a per-canary wall-clock budget with a required re-measure override as the backstop for unnamed families; the deprecated classify() path applies the same guard so both paths drop the identical set and preserve rule-order precedence. The strategy selection is total at the injectable random seam: every value the seam returns, including values outside [0,1) and NaN, selects a candidate instead of returning undefined.",
+      "assertions": "Catastrophic families (nested quantifier, repeated group, branch-overlap alternation) and their lookahead-anchored dodge variants are dropped at compile without executing the regular expression, so rejection cannot pay a long probe; benign quantified rules (fixed-length tokens, bounded ambiguity-free alternations) and every shipped default rule still compile. The legacy classify() path drops the same catastrophic pattern the compiled path drops (parity for the audit's hang case), and rule-order precedence across match positions is preserved in both paths. A simulated scheduler pause inside one elapsed-time sample does not reject a benign rule, because a canary must over-run the budget twice, once on re-measure, before rejection. Random selection with seam values -1, NaN, 1, and 0.999999 picks a defined candidate, and in-range values keep candidate-index parity.",
       "boundaryTest": {
-        "file": "tests/config-schema.test.ts",
-        "name": "keeps every version 2 routing capability under schemaVersion 3"
+        "file": "tests/routing.test.ts",
+        "name": "drops rule patterns whose backtracking explodes on a small canary"
       },
       "invariant": {
-        "file": "tests/config.test.ts",
-        "name": "requires version 2 for tierPolicies and rejects unsupported versions"
+        "file": "tests/routing.test.ts",
+        "name": "still compiles every shipped default rule"
       },
       "fault": {
-        "file": "tests/config.test.ts",
-        "name": "validates fallback tier references, duplicates, self-links, cycles, and namespace fields"
+        "file": "tests/routing.test.ts",
+        "name": "keeps the injectable random seam total when it returns 1"
       }
     },
     {
-      "id": "acceptance-harness-schema-copy",
-      "requirement": "R16",
+      "id": "typesafe-decode-buffer-bound",
+      "requirement": "R12",
       "files": [
-        "scripts/acceptance/profiles/live.mjs",
-        "tests/fixtures/http-pi-harness.mjs",
-        "tests/integration/command-policy-acceptance.test.mjs",
-        "tests/integration/decision-parity-acceptance.test.mjs"
+        "typesafe-classifier.ts",
+        "tests/typesafe-classifier.test.ts"
       ],
-      "boundary": "Every isolated Pi extension copy used by the native and live acceptance harnesses now carries schema.json next to the TypeScript sources, and the replay guard baseline tracks the current index.ts region.",
-      "assertions": "Real AgentSession abort, manual, false, and throw cases still pass with the copied schema. Migration and reconciliation command tests wait for a complete current-turn JSON report, not an earlier report or a racing RPC response; a missing report times out. The real v1 output-effect and tool-effect guard faults still reach their named no-replay assertions and restore GREEN on the exact new index hash.",
+      "boundary": "The TypeSafe classifier bounds how much provider response body it materializes while decoding the streamed judgment JSON, so a hostile or stuck endpoint degrades to a classifier miss instead of growing process memory without limit.",
+      "assertions": "A response whose accumulated body exceeds the 1 MiB decode budget is treated as an invalid response: the classification returns undefined, the observation reports invalid_response, and the stream is cancelled. A response within the budget decodes normally, and deadline/abort behavior of the reader is unchanged.",
       "boundaryTest": {
-        "file": "tests/integration/native-activation-cancel.test.mjs",
-        "name": "cancels real AgentSession activation behind a proven deny-all fence"
+        "file": "tests/typesafe-classifier.test.ts",
+        "name": "treats an oversized response body as an invalid response"
       },
       "invariant": {
-        "file": "tests/integration/auto-virtual.test.mjs",
-        "name": "anchors the baseline source hash and proves isSideEffectFreeAllowanceFailure faults the output-effect no-replay assertion"
+        "file": "tests/typesafe-classifier.test.ts",
+        "name": "aborts and cancels a stalled response body at deadline"
       },
       "fault": {
-        "file": "tests/integration/auto-virtual.test.mjs",
-        "name": "proves autoBoundaryStillActive faults the synthetic tool side-effect no-replay assertion"
+        "exception": "The faulty implementation (an unbounded reader) was the shipped code this change replaced; the named boundary test failed against it before the fix was written and passes after, which is the recorded controlled-fault proof. Injecting the unbounded reader again would only re-run that same recorded red."
       }
     },
     {
-      "id": "router-runtime-dependency-closure",
+      "id": "affinity-dead-branch-removal",
+      "requirement": "R11",
+      "files": [
+        "affinity.ts"
+      ],
+      "boundary": "resolveRoute collapses every non-automatic origin to not_applicable in a single early return; the removed duplicate branch and its unused origin set were unreachable and carry no behavior. The set-based membership check duplicated the literal not-automatic condition already enforced.",
+      "assertions": "Explicit, pinned, disabled, and non-user targets still report not_applicable without echoing caller labels; unknown labels fail closed to not_applicable; automatic targets keep the full advisory evidence path. No export or type changes.",
+      "boundaryTest": {
+        "file": "tests/affinity.test.ts",
+        "name": "does not advise on explicit, pinned, disabled, or non-user targets"
+      },
+      "invariant": {
+        "file": "tests/affinity.test.ts",
+        "name": "fails closed on unknown origins without echoing caller labels"
+      },
+      "fault": {
+        "exception": "The removed code was unreachable dead logic: no caller routes a literal string origin through this path and every documented non-automatic origin collapsed to not_applicable before the removed branch. There is no faulty implementation exercising the removed branch to inject, and the collapse behavior itself is covered by the named boundary and invariant tests."
+      }
+    },
+    {
+      "id": "vulnerable-dependency-bumps",
       "requirement": "R13",
       "files": [
-        "package-lock.json",
-        "tests/router-package.test.mjs"
+        "package.json",
+        "package-lock.json"
       ],
-      "boundary": "The resolve-only API now depends on ajv at runtime, so the packed consumer installs the runtime dependency closure offline instead of symlinking only host-provided dev dependencies.",
-      "assertions": "A clean consumer installs no Pi packages, compiles the complete strict declaration graph, and runs both examples. A Pi import injected into the installed router graph still fails the named dependency assertion and restores GREEN.",
+      "boundary": "The shipped dependency chain resolves known vulnerable transitive versions: fast-uri 3.1.8 (four open GHSAs reachable through the ajv-based schema validation) is bumped to the patched 3.1.9, and transitive undici is forced through the existing overrides mechanism to ^8.12.2 (npm's own fix path was a semver-major bump of the host agent package, which stays out of scope).",
+      "assertions": "npm audit reports zero vulnerabilities on the resolved tree and osv-scanner passes the repository deps gate. The resolve-only API still installs into a clean consumer without Pi packages, compiles the strict declaration graph, runs both examples, and resolves without loader flags on Node 22.19+ after the bump and the override.",
       "boundaryTest": {
         "file": "tests/router-package.test.mjs",
         "name": "compiles and runs the shipped examples in a clean standalone consumer with no Pi packages installed"
@@ -146,124 +85,6 @@
       "fault": {
         "file": "tests/router-package.test.mjs",
         "name": "rejects a Pi dependency injected into the actual packed router graph and restores it"
-      }
-    },
-    {
-      "id": "agent-config-tool",
-      "requirement": "R07",
-      "files": [
-        "config-agent.ts",
-        "config-agent-report.ts",
-        "config-approval.ts",
-        "scripts/test-config-approval-tui.py",
-        "tests/config-agent.test.ts",
-        "tests/config-approval.test.ts",
-        "tests/fixtures/config-approval-extension.ts",
-        "tests/integration/config-approval-tui.test.mjs",
-        "tests/integration/config-agent-acceptance.test.mjs"
-      ],
-      "boundary": "The bifrost_config agent tool inspects Pi's catalog and layers, checks and previews offline, and applies one TUI-reviewed source atomically. Real pinned Pi PTY coverage drives the production tool from a fixture command and substitutes reload success; it proves host rendering and persistence, not model dispatch or reload activation. Real Pi RPC coverage uses a scripted fake provider and proves check works and apply refuses without writing. Both boundaries use isolated state and an outbound guard.",
-      "assertions": "inspect, check, and preview report structural warnings without vetoing a write; rejected previews also show their errors; inspect names every supported schema version and accepts a version-3 source whose reserved description key never becomes a tier; check and preview never write or dispatch; candidate and existing source nesting are bounded before recursive diffing; TUI apply shows exact escaped changes in viewport-sized pages, requires sequential rendered traversal and explicit final Apply, resets review on resize, refuses tiny viewports and proposals above 4000 characters, and writes nothing on Escape, abort, or UI failure; RPC apply returns approval_required without any approval dialog while check and preview remain usable; apply writes only after approval, and rejects changed candidate bytes, changed selected source, changed layers, changed model inventory, and unsafe sources; the previous config survives a failed write; a saved-but-not-activated write is reported honestly; unknown operations fail closed; config-layer paths come from the shared merge-order helper.",
-      "boundaryTest": {
-        "file": "tests/integration/config-approval-tui.test.mjs",
-        "name": "requires complete paged approval in real pinned Pi across viewport resize"
-      },
-      "invariant": {
-        "file": "tests/config-agent.test.ts",
-        "name": "compares the effective policy before and after without writing"
-      },
-      "fault": {
-        "file": "tests/integration/config-approval-tui.test.mjs",
-        "name": "detects the original non-scrollable confirmation fault in an isolated Pi copy"
-      }
-    },
-    {
-      "id": "agent-skill-packaging",
-      "requirement": "R07",
-      "files": [
-        "package.json",
-        "skills/configure-bifrost/SKILL.md",
-        "skills/configure-bifrost/references/configuration-reference.md",
-        "tests/config-skill.test.ts"
-      ],
-      "boundary": "The skills/configure-bifrost skill and the bifrost_config tool ship inside the pi package and register alongside the extension, with bundled references resolving from the skill directory.",
-      "assertions": "The packed archive contains the skill directory and the extension registration; the skill frontmatter parses, the always-loaded description stays short, bundled references resolve, and the skill names the tool and its safety gates. The approval component's Pi TUI import is declared as an optional host peer and pinned for development.",
-      "boundaryTest": {
-        "file": "tests/config-skill.test.ts",
-        "name": "is included in the published package"
-      },
-      "invariant": {
-        "file": "tests/config-skill.test.ts",
-        "name": "registers the agent tool alongside the extension"
-      },
-      "fault": {
-        "exception": "Packaging is evidence-shaped by construction: the packed-archive inclusion assertion fails directly when a file is missing from the package file list, so there is no separate production fault to inject."
-      }
-    },
-    {
-      "id": "reviewed-baseline-rerecord",
-      "requirement": "R16",
-      "files": [
-        "tests/fixtures/replay-fault-control.mjs",
-        "tests/integration/activation-cancellation-acceptance.test.mjs",
-        "tests/integration/native-activation-cancel.test.mjs"
-      ],
-      "boundary": "The reviewed production baseline sha256 recorded once in tests/fixtures/replay-fault-control.mjs and repeated in six integration fault gates must equal the reviewed committed index.ts, so offline fault proofs copy, mutate, and restore the real source.",
-      "assertions": "Each named fault control starts GREEN on the pristine copy, turns its named assertion RED under the controlled production mutation, restores the source, and records restored GREEN; the baseline constant equals the reviewed index.ts sha256 so no gate refuses the proof.",
-      "boundaryTest": {
-        "file": "tests/integration/command-privacy-acceptance.test.mjs",
-        "name": "fault control: leaking the prompt projection turns the named redaction assertion RED"
-      },
-      "invariant": {
-        "file": "tests/integration/activation-cancellation-acceptance.test.mjs",
-        "name": "fault control: removing the late-abort guard allows forbidden late dispatch"
-      },
-      "fault": {
-        "file": "tests/integration/affinity-policy-acceptance.test.mjs",
-        "name": "fails the named hard-exclusion assertion under a hard-filter-bypass fault in an isolated copy"
-      }
-    },
-    {
-      "id": "release-documentation",
-      "requirement": "R16",
-      "files": [
-        "CHANGELOG.md",
-        "README.md",
-        "docs/testing-coverage.md"
-      ],
-      "boundary": "Release and usage documentation for the goal-driven configuration tool, its skill, and the updated coverage map.",
-      "assertions": "The changelog entry, README goal-first usage section, and the R07 coverage row describe the shipped tool, skill, and safety gates accurately; the description stays consistent with the implemented tool contract.",
-      "boundaryTest": {
-        "exception": "Documentation-only change with no runtime behavior to execute; accuracy is review-verified against the tool contract tests above."
-      },
-      "invariant": {
-        "exception": "Documentation-only change with no runtime behavior to execute; accuracy is review-verified against the tool contract tests above."
-      },
-      "fault": {
-        "exception": "Documentation-only change with no runtime behavior to execute; there is no production fault to inject."
-      }
-    },
-    {
-      "id": "verification-release-gate-budget",
-      "requirement": "R16",
-      "files": [
-        ".github/workflows/verification.yml",
-        "tests/acceptance-runner.test.mjs",
-        "tests/verification-workflow.test.mjs"
-      ],
-      "boundary": "The release-gates job carries a hard job-level timeout that fits the whole four-stage release sequence (acceptance, CRAP trend refresh, proposed-merge acceptance, report uploads) on the slowest hosted runners; a 45-minute budget killed a fully green run mid-stage.",
-      "assertions": "The workflow suite proves release-gates declares timeout-minutes between 60 and 360 minutes, and a controlled rewrite to 45 minutes turns that named budget assertion red while the seven-gate job contract stays intact. The actual-predecessor caller preserves all three current-manifest proofs and bounds each by the existing 300-second phase ceiling, with a separate aggregate deadline and explicit subprocess diagnostics.",
-      "boundaryTest": {
-        "file": "tests/verification-workflow.test.mjs",
-        "name": "release-gates keeps a hard budget that fits every release stage"
-      },
-      "invariant": {
-        "file": "tests/verification-workflow.test.mjs",
-        "name": "release-gates fails closed on failed PR evidence preflight"
-      },
-      "fault": {
-        "file": "tests/verification-workflow.test.mjs",
-        "name": "fault control: a 45-minute release-gates budget turns the named budget assertion red"
       }
     }
   ]
