@@ -75,9 +75,12 @@ Provider projection tests require one state snapshot per nonempty decision and z
 `tests/integration/config-approval-tui.test.mjs` starts pinned Pi in an isolated
 PTY and drives the production tool through a test command. It checks a
 TOOL-GENERATED summary can be explicitly applied, classifier disablement,
-removed/replaced rules, model-pool and fallback changes are visible, and the
-optional exact view displays the entire 6,000-character value plus final suffix
-across sequential pages before apply. It also checks early
+removed/replaced rules, model-pool and fallback changes are visible without raw
+rule/model JSON, and the optional exact view displays the entire 6,000-character
+value plus final suffix across sequential pages before apply. It checks a
+layered workspace edit whose classifier and rules are masked by project policy:
+the summary distinguishes source changes from unchanged effective behavior.
+Both ordinary and narrow viewports have bounded summary pages and visible controls. It also checks early
 Apply refusal in exact view, cancellation, tiny viewports, resize reset, and one
 exact saved source. An isolated production copy omits classifier impact from the
 summary and fails the real-Pi display assertion. The fixture performs no model
@@ -87,9 +90,14 @@ and outbound network guard.
 
 The reviewer caps approval text at 2,000,000 characters and wraps by grapheme;
 proposals beyond that bound fail closed. Apply-from-summary does not assert that
-the user read every exact value. `tests/config-agent.test.ts` checks summary
-counts and change highlights for classifier, removed rules, model pools, and
-fallbacks, plus unchanged stale-input guards. `tests/config-approval.test.ts`
+the user read every exact value. `tests/config-agent.test.ts` checks concise summary counts, no raw rule/model
+values, actual retention of unrelated tiers/rules/classifier/fallbacks in a
+focused added-tier proposal, classifier/rule/pool/fallback highlights, and
+unchanged stale-input guards. `tests/config-skill.test.ts` checks the published
+skill tells agents to compare candidate removals with the stated goal, preserve
+unrelated settings, and not disable an existing classifier merely for fixed
+roles. This tests guidance text and deterministic config behavior, not model
+obedience. `tests/config-approval.test.ts`
 checks sequential summary/exact pages, cancellation, resize, and terminal
 wrapping.
 

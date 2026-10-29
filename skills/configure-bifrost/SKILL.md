@@ -29,15 +29,22 @@ goal needs something Bifrost does not do, say so.
    on; the filter and offset only narrow what is reported.
 3. **Preserve existing policy while composing.** See
    [references/configuration-reference.md](references/configuration-reference.md)
-   for the fields, strategies, and worked examples. Start from the current
-   effective config; keep existing tiers, rules, classifier settings, and
-   fallback policies unless the goal requires changing them. `patch` merges only
-   top-level keys: changing `models`, `rules`, `classifier`, or `tierPolicies`
-   replaces that whole value in the selected source. Before changing one of
-   those fields, read that source file (using the inspected path) and carry
-   forward its unrelated entries. Do not flatten inherited settings from other
-   layers into the selected source unless the user asks. Prefer a focused patch
-   over a complete `candidate`.
+   for the fields, strategies, and worked examples. Start from the user's
+   current source and effective config. Keep existing tiers, rules, classifier
+   settings, and fallbacks unless the stated goal needs a specific change.
+   `patch` merges only top-level keys: changing `models`, `rules`,
+   `classifier`, or `tierPolicies` replaces that entire value in the selected
+   source. Read that source file and carry forward its unrelated entries before
+   replacing one of those fields. Do not flatten inherited settings from other
+   layers unless the user asks. Prefer a focused patch over a complete
+   `candidate`.
+
+   A valid candidate can still discard unrelated policy. After `check`, compare
+   every reported replacement/removal and the effective before/after values
+   with the user's goal. Restore any unrelated tier, rule, classifier setting,
+   or fallback that disappeared. If you cannot tell whether a removal is
+   necessary, ask; do not present it as an assumed tradeoff. A passing check
+   proves validity, not that the candidate matches the goal.
 4. **Check the candidate.** Call `bifrost_config` with
    `{"operation":"check", ...}`. Fix every reported error. Read the reported
    warnings, pool references, and `newlyEligibleModels` before showing anything
@@ -50,12 +57,14 @@ goal needs something Bifrost does not do, say so.
    each removal or broad behavior change is necessary. If any existing setting
    must be replaced, say so before approval. Do not present a summary as the
    complete config or claim unchanged policy when values changed. No JSON dump
-   unless the user asks.
+   unless the user asks. These instructions guide the model; they do not enforce
+   its choices. Verify the proposed candidate and the approval summary instead
+   of claiming the model will preserve settings.
 7. **Ask, then apply.** Get explicit approval in the conversation, then call
    `bifrost_config` with `{"operation":"apply", ...}` and pass back the
    `proposalDigest`, `sourceDigest`, `effectiveDigest`, and `catalogDigest`
    printed under "apply digests" by check or preview — copy them exactly,
-   character for character. The tool shows its tool-generated impact summary
+   character for character. The tool shows a concise tool-generated impact summary
    first. The user may apply that summary explicitly with `a`, or choose `d` to
    inspect every exact change page before applying. State clearly that summary
    approval does not mean the user inspected every value. The exact view is
@@ -134,7 +143,7 @@ Pick the shape from the goal, then the smallest set of primitives:
 
 | Goal signal | Shape |
 | --- | --- |
-| Fixed roles (orchestrator, implementer, reviewer) | One tier per role, one model per tier, `classifier.enabled: false`, role `rules` and inline tier prefixes |
+| Fixed roles (orchestrator, implementer, reviewer) | One tier per role and explicit routing rules; retain the current classifier unless the user asks to replace its judgment with fully specified rules |
 | "Cheap by default, strong when it matters" | A cheap default tier with a `cheapest`/`cheapest_input` strategy plus a reasoning tier reached by rules |
 | "Never silently spend more" | Explicit `tierPolicies[tier].fallbackTiers`; an empty list is terminal |
 | Several eligible models in one role | Ordered pool plus `first`, `cheapest`, `largest_context`, or `random` |
@@ -142,10 +151,12 @@ Pick the shape from the goal, then the smallest set of primitives:
 | Subscription-first with metered fallbacks | `economics.preference.billingClass` with declared observations, and say that it is a preference, not a cap |
 | Mixed requests that need judgment | Keep the classifier enabled and give every custom tier explicit `classifier.criteria` |
 
-Leave out anything the goal does not need. If you keep the classifier enabled,
-write criteria for every custom tier; if the roles are fixed, prefer
-`classifier.enabled: false`. Do not add economics, affinity, or reliability
-fields as decoration.
+Leave out anything the goal does not need. Do not disable an existing
+classifier only because the goal mentions fixed roles. Disable it only when the
+user requests rule-only routing or the stated goal requires a fully deterministic
+rule set and every relevant prompt has an explicit route. If the classifier
+stays enabled, provide criteria for each custom tier. Do not add economics,
+affinity, or reliability fields as decoration.
 
 ## Reporting
 
@@ -155,7 +166,7 @@ Aim for five to ten lines:
 Tiers: orchestrator -> provider/strong (first)
        implement -> provider/cheap (cheapest), fallback: review
        review -> provider/reviewer (first), no fallback
-Classifier: off (roles are chosen by rules and inline tier prefixes)
+Classifier: unchanged (existing setting retained)
 Tradeoff: review prompts that do not match a rule use the default tier.
 Not covered: Bifrost cannot cap spending; the metered preference is advisory.
 Apply to .pi/bifrost.json? (adds models, default, rules, schemaVersion)

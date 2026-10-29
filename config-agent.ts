@@ -1042,84 +1042,128 @@ function approvalList(values: readonly string[], limit: number): string {
   return values.length > limit ? `${shown}, … ${values.length - limit} more (see full exact change)` : shown;
 }
 
-function summarizeRules(label: string, beforeValue: unknown, afterValue: unknown, lines: string[]): void {
+function ruleChanges(beforeValue: unknown, afterValue: unknown): { before: number; after: number; removed: string[]; added: string[] } | undefined {
   const before = Array.isArray(beforeValue) ? beforeValue : [];
   const after = Array.isArray(afterValue) ? afterValue : [];
-  if (canonicalJson(before) === canonicalJson(after)) return;
+  if (canonicalJson(before) === canonicalJson(after)) return undefined;
   const afterSet = new Set(after.map(canonicalJson));
   const beforeSet = new Set(before.map(canonicalJson));
-  const removed = before.filter((rule) => !afterSet.has(canonicalJson(rule)));
-  const added = after.filter((rule) => !beforeSet.has(canonicalJson(rule)));
-  lines.push(`${label} RULES CHANGED: ${before.length} → ${after.length}; ${removed.length} removed, ${added.length} added.`);
-  for (const rule of removed.slice(0, 6)) lines.push(`  REMOVED rule: ${approvalValue(rule)}`);
-  if (removed.length > 6) lines.push(`  … ${removed.length - 6} more removed rules; inspect full exact change.`);
-  for (const rule of added.slice(0, 6)) lines.push(`  Added rule: ${approvalValue(rule)}`);
-  if (added.length > 6) lines.push(`  … ${added.length - 6} more added rules; inspect full exact change.`);
+  return {
+    before: before.length,
+    after: after.length,
+    removed: before.filter((rule) => !afterSet.has(canonicalJson(rule))).map(canonicalJson).sort(),
+    added: after.filter((rule) => !beforeSet.has(canonicalJson(rule))).map(canonicalJson).sort(),
+  };
 }
 
-function summarizeMapChanges(label: string, beforeValue: unknown, afterValue: unknown, lines: string[]): void {
+function summarizeRules(checked: ConfigAgentCheckResult, before: Record<string, unknown>, after: Record<string, unknown>, lines: string[]): void {
+  const source = checked.changes.find((change) => change.field === "rules");
+  const sourceDelta = source ? ruleChanges(source.before, source.after) : undefined;
+  const effectiveDelta = ruleChanges(before.rules, after.rules);
+  const sameImpact = sourceDelta && effectiveDelta
+    && canonicalJson(sourceDelta.removed) === canonicalJson(effectiveDelta.removed)
+    && canonicalJson(sourceDelta.added) === canonicalJson(effectiveDelta.added);
+  if (sameImpact && sourceDelta && effectiveDelta) {
+    lines.push(`Rules: source ${sourceDelta.before} → ${sourceDelta.after}; effective ${effectiveDelta.before} → ${effectiveDelta.after}; ${effectiveDelta.removed.length} removed, ${effectiveDelta.added.length} added${sourceDelta.after === 0 && sourceDelta.before > 0 ? " — ALL target-source rules removed" : ""}.`);
+  } else {
+    if (sourceDelta) lines.push(`Target-source rules: ${sourceDelta.before} → ${sourceDelta.after}; ${sourceDelta.removed.length} removed, ${sourceDelta.added.length} added${sourceDelta.after === 0 && sourceDelta.before > 0 ? " — ALL target-source rules removed" : ""}.`);
+    if (effectiveDelta) lines.push(`Effective rules: ${effectiveDelta.before} → ${effectiveDelta.after}; ${effectiveDelta.removed.length} removed, ${effectiveDelta.added.length} added${effectiveDelta.after === 0 && effectiveDelta.before > 0 ? " — ALL effective rules removed" : ""}.`);
+    else if (sourceDelta) lines.push("Effective rules unchanged; source edit has no current routing effect.");
+  }
+}
+
+function changedKeys(beforeValue: unknown, afterValue: unknown): string[] {
   const before = asRecord(beforeValue);
   const after = asRecord(afterValue);
-  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])]
     .filter((key) => canonicalJson(before[key]) !== canonicalJson(after[key])).sort();
-  if (keys.length === 0) return;
-  lines.push(`${label} CHANGED: ${keys.length} entry/entries.`);
-  for (const key of keys.slice(0, 8)) lines.push(`  ${approvalValue(key)}: ${approvalValue(before[key])} → ${approvalValue(after[key])}`);
-  if (keys.length > 8) lines.push(`  … ${keys.length - 8} more; inspect full exact change.`);
+}
+
+function mapDelta(beforeValue: unknown, afterValue: unknown, valueSummary: (value: unknown) => string): string | undefined {
+  const before = asRecord(beforeValue);
+  const after = asRecord(afterValue);
+  const keys = changedKeys(before, after);
+  if (keys.length === 0) return undefined;
+  const examples = keys.slice(0, 3).map((key) => `${approvalValue(key)} ${valueSummary(before[key])} → ${valueSummary(after[key])}`);
+  return `${keys.length} tier${keys.length === 1 ? "" : "s"} (${examples.join("; ")}${keys.length > 3 ? `; +${keys.length - 3} more` : ""})`;
+}
+
+function poolCount(value: unknown): string {
+  return String(Array.isArray(value) ? value.length : 0);
+}
+
+function policyFallbacks(value: unknown): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(asRecord(value)).map(([tier, policy]) => [tier, asRecord(policy).fallbackTiers]));
+}
+
+function sameMapImpact(sourceBefore: unknown, sourceAfter: unknown, effectiveBefore: unknown, effectiveAfter: unknown): boolean {
+  const sourceKeys = changedKeys(sourceBefore, sourceAfter);
+  const effectiveKeys = changedKeys(effectiveBefore, effectiveAfter);
+  return canonicalJson(sourceKeys) === canonicalJson(effectiveKeys) && sourceKeys.every((key) =>
+    canonicalJson(asRecord(sourceBefore)[key]) === canonicalJson(asRecord(effectiveBefore)[key])
+      && canonicalJson(asRecord(sourceAfter)[key]) === canonicalJson(asRecord(effectiveAfter)[key]),
+  );
+}
+
+function summarizeMap(label: string, sourceBefore: unknown, sourceAfter: unknown, effectiveBefore: unknown, effectiveAfter: unknown, lines: string[], valueSummary: (value: unknown) => string): void {
+  const source = mapDelta(sourceBefore, sourceAfter, valueSummary);
+  const effective = mapDelta(effectiveBefore, effectiveAfter, valueSummary);
+  if (source && effective && sameMapImpact(sourceBefore, sourceAfter, effectiveBefore, effectiveAfter)) {
+    lines.push(`${label}: ${effective}.`);
+  } else {
+    if (source) lines.push(`Target-source ${label.toLowerCase()}: ${source}.`);
+    if (effective) lines.push(`Effective ${label.toLowerCase()}: ${effective}.`);
+    else if (source) lines.push(`Effective ${label.toLowerCase()} unchanged; source edit has no current routing effect.`);
+  }
+}
+
+function classifierState(value: unknown): string {
+  return asRecord(value).enabled === false ? "OFF" : "ON";
+}
+
+function summarizeClassifier(checked: ConfigAgentCheckResult, before: Record<string, unknown>, after: Record<string, unknown>, lines: string[]): void {
+  const source = checked.changes.find((change) => change.field === "classifier");
+  const effectiveBefore = before.classifier;
+  const effectiveAfter = after.classifier;
+  const effectiveChanged = canonicalJson(effectiveBefore) !== canonicalJson(effectiveAfter);
+  if (!source && !effectiveChanged) return;
+  const stateChange = `${classifierState(source?.before)} → ${classifierState(source?.after)}`;
+  const sourceLabel = source?.kind === "remove" ? "removed from target source" : `settings changed (enabled ${stateChange})`;
+  const effectiveStateChange = `${classifierState(effectiveBefore)} → ${classifierState(effectiveAfter)}`;
+  if (source && effectiveChanged && stateChange === effectiveStateChange && stateChange !== "ON → ON") {
+    lines.push(`Classifier enabled: ${stateChange} in source and effective policy — classification disabled.`);
+  } else if (source && canonicalJson(source.before) === canonicalJson(effectiveBefore) && canonicalJson(source.after) === canonicalJson(effectiveAfter)) {
+    lines.push(`Classifier settings (source + effective): ${sourceLabel}${stateChange.endsWith("→ OFF") ? " — classification disabled" : ""}.`);
+  } else {
+    if (source) lines.push(`Target-source classifier: ${sourceLabel}${stateChange.endsWith("→ OFF") ? " — classification disabled" : ""}.`);
+    if (effectiveChanged) {
+      const state = `${classifierState(effectiveBefore)} → ${classifierState(effectiveAfter)}`;
+      lines.push(`Effective classifier: ${state}${state.endsWith("→ OFF") ? " — classification disabled" : ""}.`);
+    } else if (source) lines.push(`Effective classifier remains ${classifierState(effectiveBefore)}; source edit has no current effect.`);
+  }
 }
 
 function approvalSummary(checked: ConfigAgentCheckResult): string {
   const counts = { add: 0, replace: 0, remove: 0 };
   for (const change of checked.changes) counts[change.kind] += 1;
+  const fields = checked.changes.map((change) => approvalValue(change.field));
+  const removed = checked.changes.filter((change) => change.kind === "remove").map((change) => approvalValue(change.field));
   const lines = [
-    "TOOL-GENERATED SUMMARY — concise view; not the full config.",
-    `Source: ${checked.source} (${approvalJson(checked.sourcePath)})`,
-    `Proposal: ${shortDigest(checked.proposalDigest)}`,
-    `Source fields: ${counts.add} added, ${counts.replace} replaced, ${counts.remove} removed.`,
-    `Changed fields: ${approvalList(checked.changes.map((change) => approvalValue(change.field)), 20) || "none"}`,
+    "TOOL-GENERATED SUMMARY — impact only; not full values.",
+    `Source: ${checked.source}.`,
+    `Fields: ${counts.add} added, ${counts.replace} replaced, ${counts.remove} removed: ${approvalList(fields.slice(0, 4), 4) || "none"}${fields.length > 4 ? `; +${fields.length - 4} more` : ""}`,
   ];
-  const removedFields = checked.changes.filter((change) => change.kind === "remove").map((change) => approvalValue(change.field));
-  if (removedFields.length > 0) lines.push(`REMOVED source fields: ${approvalList(removedFields, 20)}`);
+  if (removed.length > 0) lines.push(`REMOVED source keys: ${approvalList(removed.slice(0, 5), 5)}${removed.length > 5 ? `; +${removed.length - 5} more` : ""}`);
 
   const before = asRecord(checked.effectiveBefore);
   const after = asRecord(checked.effectiveAfter);
-  const classifierChange = checked.changes.find((change) => change.field === "classifier");
-  if (classifierChange) {
-    if (classifierChange.kind === "remove") lines.push("REMOVED source classifier field; inherited classifier settings will apply.");
-    else {
-      const wasEnabled = asRecord(classifierChange.before).enabled !== false;
-      const isEnabled = asRecord(classifierChange.after).enabled !== false;
-      lines.push(`Source classifier: ${wasEnabled ? "ENABLED" : "DISABLED"} → ${isEnabled ? "ENABLED" : "DISABLED"}${wasEnabled && !isEnabled ? " — classification is being turned off" : ""}`);
-    }
-  }
-  const beforeClassifier = asRecord(before.classifier);
-  const afterClassifier = asRecord(after.classifier);
-  if (canonicalJson(beforeClassifier) !== canonicalJson(afterClassifier)) {
-    const wasEnabled = beforeClassifier.enabled !== false;
-    const isEnabled = afterClassifier.enabled !== false;
-    lines.push(`Effective classifier: ${wasEnabled ? "ENABLED" : "DISABLED"} → ${isEnabled ? "ENABLED" : "DISABLED"}${wasEnabled && !isEnabled ? " — classification is being turned off" : ""}`);
-  } else if (classifierChange) lines.push("Effective classifier enablement does not change.");
-
-  const rulesChange = checked.changes.find((change) => change.field === "rules");
-  if (rulesChange) summarizeRules("Source", rulesChange.before, rulesChange.after, lines);
-  summarizeRules("Effective", before.rules, after.rules, lines);
-
-  const modelsChange = checked.changes.find((change) => change.field === "models");
-  if (modelsChange) summarizeMapChanges("SOURCE MODEL POOLS", modelsChange.before, modelsChange.after, lines);
-  summarizeMapChanges("EFFECTIVE MODEL POOLS", before.models, after.models, lines);
-
-  const policiesChange = checked.changes.find((change) => change.field === "tierPolicies");
-  if (policiesChange) {
-    const policyMap = (value: unknown): Record<string, unknown> => Object.fromEntries(
-      Object.entries(asRecord(value)).map(([tier, policy]) => [tier, asRecord(policy).fallbackTiers]),
-    );
-    summarizeMapChanges("SOURCE FALLBACKS", policyMap(policiesChange.before), policyMap(policiesChange.after), lines);
-  }
-  const policyMap = (value: unknown): Record<string, unknown> => Object.fromEntries(
-    Object.entries(asRecord(value)).map(([tier, policy]) => [tier, asRecord(policy).fallbackTiers]),
-  );
-  summarizeMapChanges("EFFECTIVE FALLBACKS", policyMap(before.tierPolicies), policyMap(after.tierPolicies), lines);
-  lines.push("This summary is computed from the checked candidate. Choose Full exact change to inspect every value before applying.");
+  summarizeClassifier(checked, before, after, lines);
+  summarizeRules(checked, before, after, lines);
+  const models = checked.changes.find((change) => change.field === "models");
+  summarizeMap("Model pools", models?.before, models?.after, before.models, after.models, lines, poolCount);
+  const policies = checked.changes.find((change) => change.field === "tierPolicies");
+  summarizeMap("Fallbacks", policyFallbacks(policies?.before), policyFallbacks(policies?.after), policyFallbacks(before.tierPolicies), policyFallbacks(after.tierPolicies), lines, approvalValue);
+  lines.push("Details shows exact values. Summary approval skips them.");
   return lines.join("\n");
 }
 

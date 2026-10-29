@@ -9,7 +9,7 @@ import { reportText } from "../../config-agent-report.ts";
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("approval-case", {
     description: "Exercise configuration approval without provider generation",
-    handler: async (_args, ctx) => {
+    handler: async (args, ctx) => {
       const tool = createBifrostConfigTool({
         extensionDir: fileURLToPath(new URL("../../", import.meta.url)),
         render: reportText,
@@ -19,19 +19,21 @@ export default function (pi: ExtensionAPI) {
       const toolContext: ExtensionToolContext = {
         ...ctx, tools: [], executeTool: async () => { throw new Error("Nested tools are not part of this fixture"); },
       };
-      const patch = {
+      const layered = args.trim() === "layered";
+      const source = layered ? "workspace" : "project";
+      const patch = layered ? { classifier: { enabled: false }, rules: [] } : {
         schemaVersion: 2,
         description: "x".repeat(6_000) + "HIDDEN_LAST_CHANGE",
         classifier: { enabled: false },
         models: { general: ["fake/healthy"], review: ["fake/healthy"] },
-        rules: [{ pattern: "review", model: "review" }],
+        rules: [],
         tierPolicies: { general: { fallbackTiers: [] } },
       };
-      const checked = await tool.execute("check", { operation: "check", patch }, undefined, undefined, toolContext);
+      const checked = await tool.execute("check", { operation: "check", source, patch }, undefined, undefined, toolContext);
       const details = checked.details as ConfigAgentCheckResult;
       if (details.status !== "ok" || !details.guards || !details.proposalDigest) throw new Error(reportText(details));
       const applied = await tool.execute("apply", {
-        operation: "apply", patch,
+        operation: "apply", source, patch,
         proposalDigest: details.proposalDigest,
         sourceDigest: details.guards.sourceDigest ?? "absent",
         effectiveDigest: details.guards.effectiveDigest,

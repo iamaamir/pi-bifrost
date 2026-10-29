@@ -13,18 +13,19 @@
         "skills/configure-bifrost/SKILL.md",
         "tests/config-agent.test.ts",
         "tests/config-approval.test.ts",
+        "tests/config-skill.test.ts",
         "tests/fixtures/config-approval-extension.ts",
         "tests/integration/config-approval-tui.test.mjs"
       ],
-      "boundary": "Real pinned Pi TUI offers a concise tool-generated summary or a user-selected sequential exact review before one guarded write. Summary explicitly identifies classifier disablement, removed/replaced rules, model-pool changes, and fallback changes; exact review displays the full 6,000-character value and suffix. Summary Apply is explicit; exact-view Apply is gated to its final rendered page. Resize and cancellation fail closed.",
-      "assertions": "Unit tests check summary counts and classifier/rule/model-pool/fallback deltas; summary and exact pager traversal, Unicode wrapping, cancellation, resize invalidation, stale source/effective/catalog guards, one write, reload, and TUI-unavailable behavior. Real Pi PTY test traverses and checks classifier, rule removals, model-pool and fallback changes in the summary, selects exact review, confirms early exact Apply writes nothing, verifies the entire repeated value across rendered pages, cancels safely, applies exact after resize reset, and separately applies from the final summary page. Isolated Pi fault copy removes the classifier-impact summary line and must fail the real-Pi display assertion. Current Pi has no ExtensionUIContext file-open API; unsupported behavior is reported instead of fabricating an open action.",
+      "boundary": "Real pinned Pi TUI offers a concise tool-generated summary without raw rule/model JSON or duplicate equivalent source/effective lists, or a user-selected sequential exact review before one guarded write. Summary explicitly identifies classifier disablement and wholesale rule removal; layered source changes are distinguished from unchanged effective behavior. Ordinary and narrow viewports show navigable bounded summaries; exact review displays the full 6,000-character value and suffix. Summary Apply is explicit; exact-view Apply is gated to its final rendered page. Resize and cancellation fail closed.",
+      "assertions": "Unit tests check concise summary counts, absence of raw rule/model values, accurate source/effective deltas, and a deterministic added-tier candidate retaining existing tiers/rules/classifier/fallbacks. Skill packaging test checks explicit preserve-and-compare guidance and states it is advisory, not model enforcement. Real Pi PTY checks concise summary content for a 16-rule removal without JSON values, pool/fallback counts, bounded page counts and visible controls at ordinary/narrow widths, and a layered workspace edit masked by project policy; the latter reports source changes and unchanged effective behavior. It also selects exact review, confirms early exact Apply writes nothing, verifies the entire 6,000-character value across rendered pages, cancels safely, applies exact after resize reset, and separately applies from summary. Isolated Pi fault copy suppresses classifier summary and must fail the real-Pi display assertion. Current Pi's `ctx.ui.editor` edits supplied text via a temporary editor file; it has no API to open the saved config path. No post-apply editor action is offered because editing a copy would need a validated, re-approved write/reload roundtrip.",
       "boundaryTest": {
         "file": "tests/integration/config-approval-tui.test.mjs",
         "name": "requires complete paged approval in real pinned Pi across viewport resize"
       },
       "invariant": {
         "file": "tests/config-agent.test.ts",
-        "name": "summarizes classifier, rule, model-pool, and fallback changes from the checked candidate"
+        "name": "retains existing tiers, rules, classifier, and fallbacks when adding a tier"
       },
       "fault": {
         "file": "tests/integration/config-approval-tui.test.mjs",

@@ -695,12 +695,39 @@ describe("apply requires approval, matching digests, and proves the result", () 
       assert.equal(applied.status, "ok");
       const summary = harness.confirmations()[0]!.summary;
       assert.match(summary, /TOOL-GENERATED SUMMARY/);
-      assert.match(summary, /Source classifier: ENABLED → DISABLED/);
-      assert.match(summary, /Source RULES CHANGED: 2 → 1; 1 removed/);
-      assert.match(summary, /REMOVED rule:/);
-      assert.match(summary, /MODEL POOLS CHANGED/);
-      assert.match(summary, /FALLBACKS CHANGED/);
-      assert.doesNotMatch(summary, /HUGE CONFIG DUMP/);
+      assert.match(summary, /Classifier enabled: ON → OFF in source and effective policy — classification disabled/);
+      assert.match(summary, /Rules: source 2 → 1; effective 2 → 1; 1 removed, 0 added/);
+      assert.match(summary, /Model pools: 1 tier/);
+      assert.match(summary, /Fallbacks: 1 tier/);
+      assert.doesNotMatch(summary, /\\\\b|"pattern"|"model"|beta\/code|alpha\/strong|gamma\/review/);
+      assert.ok(summary.length < 1_400, `impact summary should stay concise, got ${summary.length} chars`);
+    } finally { harness.cleanup(); }
+  });
+
+  it("retains existing tiers, rules, classifier, and fallbacks when adding a tier", async () => {
+    const harness = freshHarness();
+    try {
+      const original = {
+        schemaVersion: 2,
+        default: "work",
+        models: { work: ["beta/code"], review: ["gamma/review"] },
+        classifier: { enabled: true, criteria: { work: "existing criteria" } },
+        rules: [{ pattern: "existing-work-rule", model: "work" }],
+        tierPolicies: { work: { fallbackTiers: ["review"] } },
+      };
+      harness.writeFile(".pi/bifrost.json", original);
+      const candidate = {
+        ...original,
+        models: { ...original.models, docs: ["alpha/strong"] },
+      };
+      const { details } = await checkedCandidate(harness, { candidate });
+      assert.deepEqual(details.nextSource, candidate);
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
+      assert.equal(applied.status, "ok");
+      assert.deepEqual(JSON.parse(harness.readFile(".pi/bifrost.json") ?? "{}"), candidate);
+      const summary = harness.confirmations()[0]!.summary;
+      assert.match(summary, /Model pools: 1 tier/);
+      assert.doesNotMatch(summary, /Classifier|Rules:|Fallbacks:/);
     } finally { harness.cleanup(); }
   });
 

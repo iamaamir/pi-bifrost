@@ -42,9 +42,12 @@ def run():
         agent = home / ".pi/agent"
         agent.mkdir(parents=True)
         (work / ".pi").mkdir(parents=True)
-        original = json.dumps({"schemaVersion": 2, "enabled": False, "default": "general", "models": {"general": ["fake/healthy"]}, "classifier": {"enabled": True}, "rules": [{"pattern": "review", "model": "general"}, {"pattern": "planning", "model": "general"}]})
+        original_config = {"schemaVersion": 2, "enabled": False, "default": "general", "models": {"general": ["fake/healthy"]}, "classifier": {"enabled": True}, "rules": [{"pattern": f"rule-{index}", "model": "general"} for index in range(15)] + [{"pattern": "review", "model": "general"}]}
+        original = json.dumps(original_config)
         source = work / ".pi/bifrost.json"
+        workspace_source = work / "bifrost.json"
         source.write_text(original)
+        workspace_source.write_text(original)
         (agent / "models.json").write_text(json.dumps({"providers": {"fake": {"baseUrl": "http://127.0.0.1:1/v1", "api": "openai-completions", "apiKey": "fixture-only", "models": [{"id": "healthy", "contextWindow": 8192, "maxTokens": 128}]}}}))
         (agent / "settings.json").write_text(json.dumps({"retry": {"enabled": False}, "enabledModels": ["fake/*"]}))
         log = home / "tui.log"
@@ -84,6 +87,9 @@ def run():
             found = re.search(r"(?:Bifrost summary|Full exact change) (\d+)/(\d+)", text)
             return (int(found[1]), int(found[2])) if found else (0, 0)
 
+        def compact_summary(text):
+            return re.sub(r"[\s─.]", "", text)
+
         def traverse(label):
             seen = []
             for _ in range(100):
@@ -98,9 +104,10 @@ def run():
                 wait(lambda s, expected=(current + 1, total): page(s) == expected, "next rendered page")
             raise AssertionError(f"{label} review did not end")
 
-        def start_case():
-            ui.send(master, "/approval-case")
-            wait(lambda s: "/approval-case" in s, "command in editor")
+        def start_case(argument=""):
+            command = f"/approval-case {argument}".rstrip()
+            ui.send(master, command)
+            wait(lambda s: command in s, "command in editor")
             ui.send(master, "\r")
 
         try:
@@ -111,16 +118,16 @@ def run():
             time.sleep(0.2)
             unchanged()
             initial = wait(lambda s: page(s)[0] > 0, "summary")
-            assert page(initial)[0] == 1 and page(initial)[1] > 1, initial
+            assert page(initial)[0] == 1 and 1 < page(initial)[1] <= 3, initial
             assert "TOOL-GENERATED SUMMARY" in initial, initial
             assert "HIDDEN_LAST_CHANGE" not in initial, initial
             summary = traverse("summary")
-            summary_text = summary.replace("\n", "")
-            assert "Source classifier: ENABLED → DISABLED" in summary_text, f"summary omits classifier transition: {summary}"
-            assert "Source RULES CHANGED: 2 → 1; 2 removed, 1 added" in summary_text, summary
-            assert "REMOVED rule:" in summary_text and "planning" in summary_text, summary
-            assert "SOURCE MODEL POOLS CHANGED:" in summary_text and "review" in summary_text, summary
-            assert "SOURCE FALLBACKS CHANGED:" in summary_text and "general" in summary_text, summary
+            summary_text = compact_summary(summary)
+            assert "Classifierenabled:ON→OFF" in summary_text and "classificationdisabled" in summary_text, f"summary omits classifier status: {summary}"
+            assert "ALLtarget-sourcerulesremoved" in summary_text and "16removed,0added" in summary_text, summary
+            assert "Modelpools" in summary_text and "review" in summary_text and "→1" in summary_text, summary
+            assert "Fallbacks" in summary_text and "general" in summary_text, summary
+            assert '"pattern"' not in summary_text and '"model"' not in summary_text and "fake/healthy" not in summary_text, summary
             ui.send(master, "d")
             wait(lambda s: "Full exact change 1/" in s, "exact review")
             ui.send(master, "a")
@@ -169,22 +176,46 @@ def run():
                 "schemaVersion": 2,
                 "classifier": {"enabled": False},
                 "models": {"general": ["fake/healthy"], "review": ["fake/healthy"]},
-                "rules": [{"pattern": "review", "model": "review"}],
+                "rules": [],
                 "tierPolicies": {"general": {"fallbackTiers": []}},
             })
             assert saved == expected
             result.unlink()
             source.write_text(original)
+            width, height = 40, 9
+            ui.set_winsize(master, height, width)
+            os.kill(child.pid, signal.SIGWINCH)
             start_case()
-            wait(lambda s: "Bifrost summary 1/" in s, "summary approval path")
+            initial = wait(lambda s: page(s)[0] == 1, "narrow summary approval path")
+            assert page(initial)[1] <= 4, initial
+            assert "n Next | d Details" in initial, initial
+            assert all(len(line) <= width for line in initial.splitlines()), initial
             summary = traverse("summary")
-            assert "Source classifier: ENABLED" in summary, summary
+            summary_text = compact_summary(summary)
+            assert "ON→OFF" in summary_text and "ALLtarget-sourcerulesremoved" in summary_text, summary
+            assert '"pattern"' not in summary_text and '"model"' not in summary_text, summary
             ui.send(master, "a")
             wait(lambda _: result.exists(), "summary Apply result")
             assert json.loads(result.read_text())["status"] == "ok"
             assert json.loads(source.read_text()) == expected
+            result.unlink()
+            source.write_text(original)
+            workspace_source.write_text(original)
+            start_case("layered")
+            initial = wait(lambda s: page(s)[0] == 1, "layered summary")
+            assert page(initial)[1] <= 4, initial
+            summary = traverse("layered summary")
+            summary_text = compact_summary(summary)
+            assert "Target-sourceclassifier" in summary_text and "ON→OFF" in summary_text, summary
+            assert "EffectiveclassifierremainsON" in summary_text, summary
+            assert "ALLtarget-sourcerulesremoved" in summary_text and "Effectiverulesunchanged" in summary_text, summary
+            assert '"pattern"' not in summary_text and '"model"' not in summary_text, summary
+            ui.send(master, "\x1b")
+            wait(lambda _: result.exists(), "layered summary cancel")
+            assert json.loads(result.read_text())["status"] == "declined"
+            assert source.read_text() == original and workspace_source.read_text() == original
             ui.assert_no_network_violations(home)
-            print("PASS: pinned Pi summary apply, exact full-value review, early Apply refusal, cancel, resize reset, exact write")
+            print("PASS: pinned Pi concise summary, source/effective layering, narrow viewport, exact review, fail-closed controls")
         finally:
             child.terminate()
             try:
