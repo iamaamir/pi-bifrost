@@ -13,10 +13,27 @@ const moduleUrl = pathToFileURL(fileURLToPath(new URL("./fixtures/pack-lock.mjs"
 // journal. The journal is the only shared state, so a lock violation shows up
 // as an interleaved start/start/end/end rather than as a data race.
 const WORKER = `
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readdirSync, writeFileSync } from "node:fs";
 import { withPackLock } from ${JSON.stringify(moduleUrl)};
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+// Arrival barrier: when PACK_BARRIER names a count, a worker announces itself
+// and waits until that many workers have arrived, so an assertion about
+// interleaving cannot depend on two node startups landing within one section
+// window. Section entry order is then decoupled from process start order.
+const arrive = () => {
+  const wanted = Number(process.env.PACK_BARRIER || 0);
+  if (!(wanted > 1)) return;
+  writeFileSync(process.env.PACK_ROOT + "/ready-" + process.pid, "");
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    const arrived = readdirSync(process.env.PACK_ROOT).filter((name) => name.startsWith("ready-")).length;
+    if (arrived >= wanted) return;
+    if (Date.now() >= deadline) throw new Error("arrival barrier timed out waiting for " + wanted + " workers");
+    sleep(5);
+  }
+};
 const section = () => {
+  arrive();
   appendFileSync(process.env.PACK_JOURNAL, "start\\n");
   sleep(300);
   appendFileSync(process.env.PACK_JOURNAL, "end\\n");
@@ -179,9 +196,12 @@ describe("packed-package build lock", () => {
     const root = isolatedRoot();
     const journal = join(root, "journal.txt");
     try {
+      // The barrier keeps this witness about the lock, not about process
+      // startup skew: both workers reach the section together or the control
+      // would report sequential execution for a reason unrelated to the lock.
       const [first, second] = await Promise.all([
-        runWorker(root, journal, { PACK_LOCK: "bypass" }),
-        runWorker(root, journal, { PACK_LOCK: "bypass" }),
+        runWorker(root, journal, { PACK_LOCK: "bypass", PACK_BARRIER: "2" }),
+        runWorker(root, journal, { PACK_LOCK: "bypass", PACK_BARRIER: "2" }),
       ]);
       assert.equal(first.code, 0, first.stderr);
       assert.equal(second.code, 0, second.stderr);
