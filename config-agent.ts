@@ -838,7 +838,7 @@ function routerRegistry(catalog: ConfigAgentCatalog): RouterRegistrySnapshot {
   };
 }
 
-const ROUTER_CONFIG_KEYS = ["schemaVersion", "tierPolicies", "default", "strategy", "categoryStrategies", "models", "rules", "classifier", "reliability", "affinity"] as const;
+const ROUTER_CONFIG_KEYS = ["schemaVersion", "tierPolicies", "routingScope", "default", "strategy", "categoryStrategies", "models", "rules", "classifier", "reliability", "affinity"] as const;
 const ROUTER_RELIABILITY_KEYS = ["enabled", "failureThreshold", "windowMinutes", "cooldownMinutes"] as const;
 
 /** Project a full config onto the subset the resolve-only router accepts. */

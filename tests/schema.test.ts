@@ -134,28 +134,29 @@ describe("shipped JSON artifacts", () => {
     assert.match(String(property?.description), /tool results/);
   });
 
-  it("requires schemaVersion 2 for routingScope and keeps the allowlists exact", () => {
+  it("requires schemaVersion 2 or 3 for routingScope and keeps the allowlists exact", () => {
     const schema = readJson("schema.json") as Record<string, unknown>;
-    const allOf = schema.allOf as Array<{ if?: { required?: string[] }; then?: { required?: string[]; properties?: { schemaVersion?: { const?: number } } } }>;
+    const allOf = schema.allOf as Array<{ if?: { required?: string[] }; then?: { required?: string[]; properties?: { schemaVersion?: { enum?: number[] } } } }>;
     const gate = allOf.find((item) => item.if?.required?.includes("routingScope"));
     assert.deepEqual(gate?.then?.required, ["schemaVersion"]);
-    assert.equal(gate?.then?.properties?.schemaVersion?.const, 2);
+    assert.deepEqual(gate?.then?.properties?.schemaVersion?.enum, [2, 3]);
 
     const definition = (schema.definitions as {
       RoutingScope?: {
         additionalProperties?: boolean;
         properties?: {
           providers?: { type?: string; items?: { type?: string; minLength?: number } };
-          tiers?: { additionalProperties?: { required?: string[]; additionalProperties?: boolean; properties?: { providers?: { type?: string } } } };
+          tiers?: { additionalProperties?: { oneOf?: Array<{ required?: string[]; additionalProperties?: boolean; properties?: { providers?: { type?: string } } }> } };
         };
       };
     }).RoutingScope;
     assert.equal(definition?.additionalProperties, false);
     assert.equal(definition?.properties?.providers?.type, "array");
     assert.equal(definition?.properties?.providers?.items?.minLength, 1);
-    assert.equal(definition?.properties?.tiers?.additionalProperties?.required, undefined, "omitted tier providers impose no restriction");
-    assert.equal(definition?.properties?.tiers?.additionalProperties?.additionalProperties, false);
-    assert.equal(definition?.properties?.tiers?.additionalProperties?.properties?.providers?.type, "array");
+    const tier = definition?.properties?.tiers?.additionalProperties?.oneOf?.[0];
+    assert.equal(tier?.required, undefined, "omitted tier providers impose no restriction");
+    assert.equal(tier?.additionalProperties, false);
+    assert.equal(tier?.properties?.providers?.type, "array");
   });
 
   it("keeps checked-in examples parseable", () => {

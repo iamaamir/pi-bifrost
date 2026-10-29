@@ -74,9 +74,9 @@ You can annotate any object-valued section with an optional `description` string
 }
 ```
 
-### Provider routing scope (schema version 2)
+### Provider routing scope (schema versions 2 and 3)
 
-`routingScope` is a hard provider allowlist for Bifrost-controlled routing. It is an eligibility filter, not a preference: no strategy, affinity anchor, fallback, or recovery path may select a provider outside the effective scope. It requires `schemaVersion: 2` and does nothing on its own — it only removes candidates that other routing rules would otherwise consider.
+`routingScope` is a hard provider allowlist for Bifrost-controlled routing. It is an eligibility filter, not a preference: no strategy, affinity anchor, fallback, or recovery path may select a provider outside the effective scope. It requires `schemaVersion: 2` or `3` and does nothing on its own — it only removes candidates that other routing rules would otherwise consider.
 
 ```json
 {
@@ -92,7 +92,7 @@ You can annotate any object-valued section with an optional `description` string
 }
 ```
 
-Inside dynamically keyed maps — `models`, `categoryStrategies`, `tierPolicies`, `classifier.criteria`, `economics.scopes`, `economics.tierOverrides`, `economics.sourceOrder` — a key named `description` has always been a possible user-defined key (for example a tier named `description`). Versions 1 and 2 keep that meaning unchanged. Schema version 3 keeps every version 2 capability and additionally reserves `description` in those maps as inline metadata, which makes the syntax above unambiguous. A version 3 configuration whose dynamically keyed `description` holds a non-string value — or a layer that did not opt into version 3 while the effective version is 3 — is rejected with a precise diagnostic; rename the user-defined key or stay on your current version. Descriptions are optional under every supported version. Keys one level below `economics.tierOverrides` are admission rule IDs in every version, so a rule named `description` keeps its meaning and its reserve override.
+Inside dynamically keyed maps — `models`, `categoryStrategies`, `tierPolicies`, `routingScope.tiers`, `classifier.criteria`, `economics.scopes`, `economics.tierOverrides`, `economics.sourceOrder` — a key named `description` has always been a possible user-defined key (for example a tier named `description`). Versions 1 and 2 keep that meaning unchanged. Schema version 3 keeps every version 2 capability and additionally reserves `description` in those maps as inline metadata, which makes the syntax above unambiguous. A version 3 configuration whose dynamically keyed `description` holds a non-string value — or a layer that did not opt into version 3 while the effective version is 3 — is rejected with a precise diagnostic; rename the user-defined key or stay on your current version. Descriptions are optional under every supported version. Keys one level below `economics.tierOverrides` are admission rule IDs in every version, so a rule named `description` keeps its meaning and its reserve override.
 
 - Omit `routingScope` to keep the existing v2 behavior unchanged. Omit `providers` inside a scope to add no restriction at that level. Set `providers: []` to deny all providers at that level.
 - `providers` is the global allowlist. `tiers` adds a per-tier allowlist keyed by a configured tier name. A tier allowlist can only narrow the global allowlist; a candidate must satisfy both.

@@ -391,6 +391,11 @@ function routingPolicyInvalid(state: Pick<BifrostState, "tierPolicyValid" | "eco
   return state.tierPolicyValid === false || state.economicPolicyValid === false || state.reliabilityV2ConfigValid === false || state.affinityConfigValid === false;
 }
 
+function hasHardProviderScope(config: BifrostConfig): boolean {
+  const scope = config.routingScope;
+  return scope?.providers !== undefined || Object.values(scope?.tiers ?? {}).some((entry) => entry?.providers !== undefined);
+}
+
 function registryProviders(ctx: ExtensionContext): string[] {
   try {
     const registered = ctx.modelRegistry.getRegisteredProviderIds();
@@ -2832,7 +2837,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             : await getPipeline(ctx).classify(prompt, signal);
           if (!signal?.aborted) reportClassifierAttempt(ctx, classification, correlationTurn, requestCorrelationId);
           const verifiedBootstrapConfig = bootstrapVerifiedSelectionConfig(ctx);
-          if (classification.kind === "unclassified" && (hasHardEconomicAdmission(state.economicPolicy) || verifiedBootstrapConfig)
+          if (classification.kind === "unclassified" && (hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config) || verifiedBootstrapConfig)
             && (verifiedBootstrapConfig?.default ?? state.config.default)) {
             classification = { kind: "fallback", tier: (verifiedBootstrapConfig?.default ?? state.config.default)!, ...(classification.classifierAttempt ? { classifierAttempt: classification.classifierAttempt } : {}) };
           }
@@ -2852,7 +2857,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             throw new Error("Bifrost: configuration changed during routing; retry the turn");
           }
           if (classification.kind === "unclassified") {
-          if (hasHardEconomicAdmission(state.economicPolicy)) {
+          if (hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config)) {
               routeFailure = { tier: "default", pool: state.config.models?.[state.config.default ?? "default"], explicitBoundary: true };
             }
             terminalRouteCategory = "unclassified_request";
@@ -2936,7 +2941,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               reason: resolved.fallbackReason,
               skipped: resolved.skipped,
               reserveExcluded: reserveExclusionSummary(resolved),
-              explicitBoundary: !!activeRecoveryToken || resolved.explicitBoundary || hasHardEconomicAdmission(state.economicPolicy) || v2Active || blockedStickyModel,
+              explicitBoundary: !!activeRecoveryToken || resolved.explicitBoundary || hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config) || v2Active || blockedStickyModel,
               ...(blockedStickyModel ? {
                 message: `Bifrost: the last dispatched model is on an active model-only allowance cooldown and no configured alternative resolved for tier ${classification.tier}; no model was dispatched.`,
               } : {}),
@@ -3640,7 +3645,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const result = await (async (): Promise<InputEventResult> => {
     const originalText = event.text;
     const editorTextAtInput = readEditorText(ctx);
-    let routeBoundary = routingPolicyInvalid(state) || hasExplicitTierPolicies(state.config) || hasHardEconomicAdmission(state.economicPolicy) || reliabilityV2Enabled();
+    let routeBoundary = routingPolicyInvalid(state) || hasExplicitTierPolicies(state.config) || hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config) || reliabilityV2Enabled();
     let strictBoundary = routeBoundary || providerCooldownsEnabled();
     let begunStrictModel: string | undefined;
     let claimedTrial: string | undefined;
@@ -3726,7 +3731,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const { forcedTier, promptText } = parseInlineOverride(text, state.config.models);
     if (forcedTier) {
       routeBoundary = hasExplicitTierPolicy(state.config, forcedTier)
-        || hasHardEconomicAdmission(state.economicPolicy);
+        || hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config);
       strictBoundary = routeBoundary || providerCooldownsEnabled();
     }
     if (forcedTier) {
@@ -3803,7 +3808,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         : await getPipeline(ctx).classify(promptText, ctx.signal);
       if (!ctx.signal?.aborted) reportClassifierAttempt(ctx, classification);
       const verifiedBootstrapConfig = bootstrapVerifiedSelectionConfig(ctx);
-      if (classification.kind === "unclassified" && (hasHardEconomicAdmission(state.economicPolicy) || verifiedBootstrapConfig)
+      if (classification.kind === "unclassified" && (hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config) || verifiedBootstrapConfig)
         && (verifiedBootstrapConfig?.default ?? state.config.default)) {
         classification = { kind: "fallback", tier: (verifiedBootstrapConfig?.default ?? state.config.default)!, ...(classification.classifierAttempt ? { classifierAttempt: classification.classifierAttempt } : {}) };
       }
@@ -3813,7 +3818,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing is blocked by an invalid routing or economic policy config; fix the config and run /bifrost reload.");
       }
       if (!forcedTier && state.config !== classificationConfig) {
-        routeBoundary = routeBoundary || hasExplicitTierPolicies(state.config);
+        routeBoundary = routeBoundary || hasExplicitTierPolicies(state.config) || hasHardProviderScope(state.config);
         strictBoundary = routeBoundary || providerCooldownsEnabled();
         return routeBoundary
           ? strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost configuration changed during routing; the turn was not sent. Resubmit after repair.")
@@ -3837,8 +3842,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       setBifrostWorkingMessage(ctx, undefined);
 
       if (classification.kind === "unclassified") {
-        if (hasHardEconomicAdmission(state.economicPolicy)) {
-          return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost reserve policy could not resolve a tier; the turn was not sent. Configure a default tier or classify the request, then resubmit.");
+        if (hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config)) {
+          return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing policy could not resolve a tier; the turn was not sent. Configure a default tier or classify the request, then resubmit.");
         }
         routeBoundary = false;
         strictBoundary = providerCooldownsEnabled();
@@ -3859,7 +3864,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
       const tier = classification.tier;
       routeBoundary = hasExplicitTierPolicy(state.config, tier)
-        || hasHardEconomicAdmission(state.economicPolicy) || !!verifiedBootstrapConfig;
+        || hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config) || !!verifiedBootstrapConfig;
       strictBoundary = routeBoundary || providerCooldownsEnabled();
       const routeStart = performance.now();
       const physicalAffinityMode = resolvePiAffinityMode(state.config.affinity?.mode, "physical");

@@ -63,6 +63,22 @@ function issuePaths(issues: readonly { readonly path?: string; readonly code?: s
 }
 
 describe("config schema contract", () => {
+  it("preserves hard provider scope across metadata and layered validation", () => {
+    withTree(({ cwd, extensionDir }) => {
+      const project = join(cwd, ".pi", "bifrost.json");
+      writeJson(project, { schemaVersion: 3, models: { work: ["alpha/model"] }, routingScope: {
+        description: "scope", providers: ["alpha"], tiers: { description: "tiers", work: { description: "tier", providers: ["alpha"] } },
+      } });
+      const loaded = loadConfigForReload(cwd, extensionDir);
+      assert.deepEqual(loaded.diagnostics, []);
+      assert.deepEqual(loaded.warnings, []);
+      assert.deepEqual(loaded.config.routingScope, { providers: ["alpha"], tiers: { work: { providers: ["alpha"] } } });
+      writeJson(join(cwd, "bifrost.json"), { routingScope: { providers: "invalid" } });
+      assert.ok(loadConfigForReload(cwd, extensionDir).diagnostics.some((issue) => /routingScope/.test(issue.message)));
+      writeJson(join(cwd, "bifrost.json"), { routingScope: { tiers: { description: { providers: ["alpha"] } } } });
+      assert.ok(loadConfigForReload(cwd, extensionDir).diagnostics.some((issue) => /routingScope.tiers.description/.test(issue.message)));
+    });
+  });
   it("preserves a user-defined __proto__ tier when stripping metadata", () => {
     const source = JSON.parse('{"schemaVersion":2,"models":{"__proto__":["fake/chat"]}}') as Record<string, unknown>;
     const models = stripConfigMetadata(source).models as Record<string, unknown>;

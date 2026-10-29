@@ -9,7 +9,7 @@ import type { ReliabilityConfig } from "./reliability.ts";
 import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend, type TierCriterion } from "./classifier-backends.ts";
 import { emptyEconomicSnapshot, publishEconomicObservation, validateEconomicPolicy, type EconomicSignal, type ReservePolicy } from "./economic-signals.ts";
 import { SUPPORTED_SCHEMA_VERSIONS, schemaVersionAtLeast } from "./schema-version.ts";
-import { mergeRoutingScope, mergeRoutingScopeConflicts, routingScopeConflicts, type RoutingScope } from "./routing-scope.ts";
+import { mergeRoutingScope, routingScopeConflicts, type RoutingScope } from "./routing-scope.ts";
 
 export { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL } from "./classifier-backends.ts";
 export type { ClassifierBackend, TierCriterion } from "./classifier-backends.ts";
@@ -241,6 +241,7 @@ export const DYNAMIC_CONFIG_MAP_PATHS: readonly string[] = Object.freeze([
   "models",
   "categoryStrategies",
   "tierPolicies",
+  "routingScope.tiers",
   "classifier.criteria",
   "economics.scopes",
   "economics.tierOverrides",
@@ -254,6 +255,7 @@ function dynamicConfigMap(config: BifrostConfig, path: string): unknown {
     case "models": return config.models;
     case "categoryStrategies": return config.categoryStrategies;
     case "tierPolicies": return config.tierPolicies;
+    case "routingScope.tiers": return config.routingScope?.tiers;
     case "classifier.criteria": return config.classifier?.criteria;
     case "economics.scopes": return economics.scopes;
     case "economics.tierOverrides": return economics.tierOverrides;
@@ -529,8 +531,8 @@ export function validateRoutingScopeConfig(config: BifrostConfig): ConfigIssue[]
   const add = (code: string, path: string, message: string): void => {
     issues.push({ severity: "error", code, path, message });
   };
-  if (config.schemaVersion !== 2) {
-    add("config.routing_scope_requires_v2", "routingScope", "routingScope requires schemaVersion 2.");
+  if (!schemaVersionAtLeast(config.schemaVersion, 2)) {
+    add("config.routing_scope_requires_v2", "routingScope", "routingScope requires schemaVersion 2 or 3.");
   }
   if (!criterionObject(raw)) {
     add("config.routing_scope_invalid", "routingScope", "routingScope must be an object with optional providers and tiers.");

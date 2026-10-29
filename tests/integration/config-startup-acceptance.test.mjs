@@ -151,6 +151,45 @@ describe("startup config source acceptance", { timeout: 60_000, concurrency: 1 }
   before(async () => { const ready = await startFakeServer(); server = ready.child; port = ready.port; });
   after(() => server?.kill("SIGTERM"));
 
+  it("blocks physical and Auto generation when provider scope denies all", async () => {
+    const paths = fixture();
+    try {
+      for (const schemaVersion of [2, 3]) {
+        writeFileSync(join(paths.work, ".pi", "bifrost.json"), JSON.stringify({ schemaVersion, routingScope: { providers: [] } }));
+        const before = await stats();
+        const result = await runPi(paths);
+        assert.deepEqual((await stats()).stats.slice(before.stats.length), [], `deny-all scope must block physical generation\n${result.stderr}`);
+        const rpc = startRpc(paths);
+        try {
+          const beforeAuto = await stats();
+          await rpc.prompt("synthetic denied Auto request");
+          assert.deepEqual((await stats()).stats.slice(beforeAuto.stats.length), [], "deny-all scope must block Auto generation");
+        } finally { await rpc.close(); }
+      }
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
+  it("does not degrade a fresh Auto turn to the previous model after scope narrows", async () => {
+    const paths = fixture();
+    const project = join(paths.work, ".pi", "bifrost.json");
+    writeFileSync(project, JSON.stringify({ schemaVersion: 2, routingScope: { providers: ["fake"] } }));
+    const rpc = startRpc(paths);
+    try {
+      const before = await stats();
+      await rpc.prompt("synthetic allowed Auto request");
+      assert.equal((await stats()).stats.slice(before.stats.length).filter((entry) => entry.kind === "generation").length, 1);
+      writeFileSync(project, JSON.stringify({ schemaVersion: 2, routingScope: { providers: [] } }));
+      await rpc.prompt("/bifrost reload");
+      const beforeDenied = await stats();
+      await rpc.prompt("synthetic denied Auto follow-up");
+      assert.deepEqual((await stats()).stats.slice(beforeDenied.stats.length), [], "fresh Auto turn must not reuse the previous provider");
+    } finally {
+      await rpc.close();
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+
+
   it("rejects deeply nested config before generation", async () => {
     const paths = fixture();
     try {

@@ -519,10 +519,11 @@ function assertDecisionPool(pool, label) {
   assert.ok(Array.isArray(pool.candidates), `${label}.candidates must be an array`);
   for (const [index, candidate] of pool.candidates.entries()) {
     const path = `${label}.candidates[${index}]`;
-    assertExactKeys(candidate, ["model", "status"], ["exclusion", "exclusionEvidence", "reserve"], path);
+    assertExactKeys(candidate, ["model", "status"], ["exclusion", "exclusionEvidence", "scope", "reserve"], path);
     assertBoundedString(candidate.model, `${path}.model`);
     assert.ok(["eligible", "excluded"].includes(candidate.status));
     if (candidate.exclusion !== undefined) assertBoundedString(candidate.exclusion, `${path}.exclusion`);
+    if (candidate.scope !== undefined) assert.ok(["global", "tier"].includes(candidate.scope), `${path}.scope must identify the restriction`);
     if (candidate.exclusionEvidence !== undefined) {
       assert.ok(Array.isArray(candidate.exclusionEvidence));
       for (const [evidenceIndex, evidence] of candidate.exclusionEvidence.entries()) {

@@ -65,7 +65,7 @@
     },
     "routingScope": {
       "$ref": "#/definitions/RoutingScope",
-      "description": "Hard provider allowlists for Bifrost-controlled routing. This is an eligibility filter, not a preference: no strategy, affinity anchor, fallback, or recovery may select a provider outside the effective scope. Omitted means no additional restriction; an empty array means deny-all. Configuration layers intersect, so a later source can only narrow. Requires schemaVersion 2."
+      "description": "Hard provider allowlists for Bifrost-controlled routing. This is an eligibility filter, not a preference: no strategy, affinity anchor, fallback, or recovery may select a provider outside the effective scope. Omitted means no additional restriction; an empty array means deny-all. Configuration layers intersect, so a later source can only narrow. Requires schemaVersion 2 or 3."
     },
     "enabled": {
       "type": "boolean",
@@ -524,6 +524,7 @@
       "additionalProperties": false,
       "description": "Global and per-tier provider allowlists. Provider ids are compared exactly against Pi registry provider ids; no patterns, wildcards, or author inference.",
       "properties": {
+        "description": { "type": "string" },
         "providers": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
@@ -533,16 +534,21 @@
           "type": "object",
           "description": "Per-tier provider allowlists keyed by a configured tier name. A tier can narrow the global allowlist but never expand it.",
           "additionalProperties": {
-            "type": "object",
-            "required": ["providers"],
-            "additionalProperties": false,
-            "properties": {
-              "providers": {
-                "type": "array",
-                "items": { "type": "string", "minLength": 1 },
-                "description": "Allowlist of exact provider ids for this tier. An empty array denies all providers for this tier."
-              }
-            }
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "description": { "type": "string" },
+                  "providers": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 },
+                    "description": "Allowlist of exact provider ids for this tier. An empty array denies all providers for this tier."
+                  }
+                }
+              },
+              { "$ref": "#/definitions/V3MetadataDescription" }
+            ]
           }
         }
       },
@@ -631,6 +637,7 @@
         "properties": {
           "categoryStrategies": { "properties": { "description": { "enum": ["first", "cheapest", "cheapest_input", "cheapest_output", "largest_context", "random", "fastest"] } } },
           "tierPolicies": { "additionalProperties": { "not": { "type": "string" } } },
+          "routingScope": { "properties": { "tiers": { "additionalProperties": { "not": { "type": "string" } } } } },
           "economics": { "properties": {
             "scopes": { "additionalProperties": { "not": { "type": "string" } } },
             "sourceOrder": { "additionalProperties": { "not": { "type": "string" } } },
