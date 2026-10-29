@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
-import { closeSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { closeSync, linkSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,20 +21,64 @@ export function packLockPath(root) {
   return join(tmpdir(), `pi-bifrost-pack-${digest}.lock`);
 }
 
-/** True only when the recorded holder process provably no longer exists. */
-function holderIsGone(path) {
+/** Recorded holder of a lock file, or undefined when it is missing or unreadable. */
+function readOwner(path) {
   try {
     const owner = JSON.parse(readFileSync(path, "utf8"));
-    if (!Number.isInteger(owner.pid) || owner.pid <= 0) return false;
-    try {
-      process.kill(owner.pid, 0);
-      return false;
-    } catch (error) {
-      return error.code === "ESRCH";
-    }
+    return Number.isInteger(owner.pid) && owner.pid > 0 ? owner : undefined;
   } catch {
-    // A lock that cannot be read is treated as held, never removed blindly.
+    return undefined;
+  }
+}
+
+/** True only for a PID the kernel reports as nonexistent. */
+function processGone(pid) {
+  try {
+    process.kill(pid, 0);
     return false;
+  } catch (error) {
+    return error.code === "ESRCH";
+  }
+}
+
+/** True only when the recorded holder process provably no longer exists. */
+function holderIsGone(path) {
+  const owner = readOwner(path);
+  // A lock that is missing or cannot be read is treated as held.
+  return owner !== undefined && processGone(owner.pid);
+}
+
+/**
+ * Remove a lock whose recorded holder is gone without deleting a live one.
+ *
+ * `rename` is the claim: the file system moves the lock for exactly one
+ * reclaimer, so a second reclaimer gets ENOENT and retries instead of deleting
+ * the lock the winner just created. The claimed file is inspected afterwards
+ * because a live holder can create a lock between the staleness read and the
+ * claim; that lock is linked back into place rather than discarded, and the
+ * release path only unlinks a file it still owns.
+ *
+ * Returns the claimed record when this call reclaimed a dead holder's lock.
+ */
+export function reclaimStaleLock(path) {
+  const claim = `${path}.claim-${process.pid}-${randomUUID()}`;
+  try {
+    renameSync(path, claim);
+  } catch (error) {
+    // Another reclaimer claimed it first, or the holder released normally.
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  }
+  try {
+    const owner = readOwner(claim);
+    if (owner === undefined || processGone(owner.pid)) return owner;
+    // A live holder owned the claimed file: put it back. A third process may
+    // have taken the path meanwhile, in which case that lock wins and the
+    // displaced holder's release notices it no longer owns the file.
+    try { linkSync(claim, path); } catch { /* path is owned by another process */ }
+    return undefined;
+  } finally {
+    rmSync(claim, { force: true });
   }
 }
 
@@ -45,7 +89,8 @@ function holderIsGone(path) {
  * The unit suite runs the packed-package tests while the acceptance runner's
  * manifest-evidence gate runs the same file in a child process, so two builds
  * can otherwise overlap and one pack archives a half-rebuilt tree. Returns the
- * release function; only a holder whose process is proven gone is reclaimed.
+ * release function; only a holder whose process is proven gone is reclaimed,
+ * and only one reclaimer can claim that holder's file.
  */
 export function acquirePackLock(root, options = {}) {
   const path = packLockPath(root);
@@ -60,7 +105,7 @@ export function acquirePackLock(root, options = {}) {
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
       if (holderIsGone(path)) {
-        rmSync(path, { force: true });
+        reclaimStaleLock(path);
         continue;
       }
       if (Date.now() >= deadline) {
@@ -69,8 +114,11 @@ export function acquirePackLock(root, options = {}) {
       sleep(pollMs);
     }
   }
+  // The record doubles as the ownership token: release compares the file with
+  // these exact bytes, so a rejected or reclaimed replacement is never removed.
+  const record = JSON.stringify({ pid: process.pid, createdAt: Date.now(), nonce: randomUUID() });
   try {
-    writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: Date.now() }));
+    writeFileSync(fd, record);
   } catch (error) {
     closeSync(fd);
     rmSync(path, { force: true });
@@ -78,16 +126,32 @@ export function acquirePackLock(root, options = {}) {
   }
   return () => {
     closeSync(fd);
-    rmSync(path, { force: true });
+    let owned = false;
+    try {
+      owned = readFileSync(path, "utf8") === record;
+    } catch {
+      // Already released or displaced; nothing of ours is left to remove.
+    }
+    if (owned) rmSync(path, { force: true });
   };
 }
 
-/** Run `run` while holding the packed-package build lock for `root`. */
+/**
+ * Run `run` while holding the packed-package build lock for `root`.
+ *
+ * The lock is held until a returned promise settles, so an async build cannot
+ * release the lock while it is still writing `dist/router`.
+ */
 export function withPackLock(root, run, options) {
   const release = acquirePackLock(root, options);
+  let result;
   try {
-    return run();
-  } finally {
+    result = run();
+  } catch (error) {
     release();
+    throw error;
   }
+  if (result !== null && typeof result?.then === "function") return result.finally(release);
+  release();
+  return result;
 }
