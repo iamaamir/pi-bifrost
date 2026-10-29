@@ -4,6 +4,7 @@ import { isGenerativeModel } from "./virtual-model.ts";
 import { evaluateReserves, type EconomicSnapshot, type ReserveEvaluation, type ReservePolicy } from "./economic-signals.ts";
 import { projectBillingPreference, type BillingPreferenceProjection } from "./economic-preferences.ts";
 import { observeAffinity, type AffinityAnchor, type AffinityMode, type AffinityRouteObservation, type PiAffinityModeSource } from "./affinity.ts";
+import { performance } from "node:perf_hooks";
 import { checkProviderScope, compileRoutingScope, type CompiledRoutingScope, type RoutingScope, type RoutingScopeOrigin } from "./routing-scope.ts";
 
 export type RoutingStrategy =
@@ -198,6 +199,12 @@ function minBy<T>(items: readonly T[], score: (item: T) => number): T | undefine
   return best;
 }
 
+/**
+ * Pick one candidate for the configured strategy.
+ *
+ * Total for every strategy: an empty list yields undefined and every other
+ * input, including rng values outside [0, 1) and NaN, yields a candidate.
+ */
 export function selectModel<M extends RoutingModelBase>(
   candidates: M[],
   strategy: RoutingStrategy,
@@ -218,8 +225,16 @@ export function selectModel<M extends RoutingModelBase>(
     case "largest_context":
       // Descending sort picks the first maximum under stable tie-breaking.
       return minBy(candidates, (m) => -modelContextSize(m));
-    case "random":
-      return candidates[Math.floor(random() * candidates.length)];
+    case "random": {
+      // The rng seam is injectable, so selection must stay total for whatever
+      // it returns: any value outside [0, 1) (including NaN) picks the last
+      // candidate instead of indexing past the array into undefined.
+      const pick = random();
+      if (!(pick >= 0 && pick < 1)) {
+        return candidates[candidates.length - 1];
+      }
+      return candidates[Math.floor(pick * candidates.length)];
+    }
     default:
       // "first", "fastest" — list order is assumed meaningful.
       return candidates[0];
@@ -773,6 +788,7 @@ export function classify(text: string, rules: readonly RouteRule[]): string | un
   for (const rule of rules) {
     try {
       const re = new RegExp(rule.pattern, "i");
+      if (patternExceedsBacktrackingBudget(rule.pattern, re)) continue;
       if (re.test(text)) return rule.model;
     } catch (err) {
       console.error(`[bifrost] invalid regex "${rule.pattern}": ${err}`);
@@ -787,12 +803,209 @@ export interface CompiledRule {
   readonly model: string;
 }
 
-/** Compile rules ahead of time; invalid patterns are logged once and dropped. */
+// Rule patterns can arrive from any configuration source, but every match runs
+// synchronously on the host event loop, so a pattern that genuinely backtracks
+// without bound must be rejected at compile time. Two defenses, cheapest first:
+// 1. A structural scan rejects the known superlinear families without running
+//    the regular expression at all — quantified groups with unbounded bounds
+//    whose body carries another variable quantifier, or ambiguous alternation
+//    splits (a branch that is a prefix of another branch, or an empty branch).
+//    Execution-free rejection cannot be dodged by anchoring an explosion at
+//    the longest probe subject through a lookaround; the scan itself is
+//    character work and stays microseconds.
+// 2. Canary probes with a small wall-clock budget remain as the backstop for
+//    families the structural scan does not name. The check is per canary, and
+//    a canary must over-run the budget twice, once on re-measure, before its
+//    rule is rejected: one sample can include a scheduler stall, slow
+//    matching repeats. Benign rules stay in microseconds on every rung, so
+//    they are never rejected.
+// Residual limit: the scanner is textual and heuristic (branch overlap is
+// compared literally), so a family that hides its shape from the scan and
+// stays quiet on canaries ≤ the measured trip points still passes. That
+// residual is documented, not silently wide: the scan covers the audit's
+// named families (nested quantifier, repeated group, branch overlap).
+const BACKTRACKING_BUDGET_MS = 10;
+const BACKTRACKING_CANARIES = [
+  "a".repeat(10) + "b",
+  "a".repeat(14) + "b",
+  "a".repeat(18) + "b",
+  "a".repeat(20) + "b",
+  "a".repeat(22) + "b",
+  "a".repeat(24) + "b",
+  "ab".repeat(11) + "c",
+  "1".repeat(21) + "x",
+  "a".repeat(28) + "b",
+  "a".repeat(32) + "b",
+];
+
+interface BacktrackingFrame {
+  /** Positions of one alternation branch, pattern-start to `|` or group end. */
+  branches: string[];
+  branchStart: number;
+  /** The body carries a variable quantifier somewhere inside it. */
+  bodyVarQuant: boolean;
+}
+
+type QuantifierKind = "none" | "fixed" | "bounded" | "unbounded";
+
+/** Classify the quantifier starting at `position` without executing anything. */
+function classifyQuantifier(pattern: string, position: number): QuantifierKind {
+  const ch = pattern[position];
+  if (ch === "*" || ch === "+") return "unbounded";
+  if (ch === "?") return "bounded";
+  if (ch !== "{") return "none";
+  const close = pattern.indexOf("}", position + 1);
+  if (close === -1) return "none";
+  const body = pattern.slice(position + 1, close);
+  if (!/^\d+(?:,\d*)?$/.test(body)) return "none";
+  if (!body.includes(",")) return "fixed";
+  const [min, max] = body.split(",");
+  if (max === "") return "unbounded";
+  return Number(min) === Number(max) ? "fixed" : "bounded";
+}
+
+/**
+ * First character of a group's body, after its opening syntax.
+ *
+ * The `?` that introduces `(?:`, `(?=`, `(?!`, `(?<=`, `(?<!`, `(?<name>`,
+ * `(?>`, or inline flags is group syntax, not an optional quantifier, and it is
+ * not part of the branch text used for overlap detection. Returns undefined for
+ * constructs this textual scan does not model, which keeps the scan permissive.
+ */
+function groupBodyStart(pattern: string, open: number): number | undefined {
+  const next = open + 1;
+  if (pattern[next] !== "?") return next;
+  for (const prefix of ["?:", "?=", "?!", "?>"] as const) {
+    if (pattern.startsWith(prefix, next)) return next + 2;
+  }
+  for (const prefix of ["?<=", "?<!"] as const) {
+    if (pattern.startsWith(prefix, next)) return next + 3;
+  }
+  if (pattern.startsWith("?<", next)) {
+    const close = pattern.indexOf(">", next + 2);
+    return close === -1 ? undefined : close + 1;
+  }
+  // Inline flags: (?i:...) or (?im-s:...).
+  const colon = pattern.indexOf(":", next + 1);
+  return colon !== -1 && /^[a-zA-Z-]*$/.test(pattern.slice(next + 1, colon))
+    ? colon + 1
+    : undefined;
+}
+
+/**
+ * Textual detection of superlinear shapes; no regular expression executes.
+ * True for a group repeated without a finishing bound whose body carries a
+ * variable quantifier, or whose alternation splits a subject ambiguously
+ * (a branch that is a prefix of another branch, or an empty branch), regardless
+ * of anchors and lookarounds written in front of the group. Bounded repetition
+ * and fixed-length tokens keep this false, so fixed-brace rules survive.
+ */
+function patternHasSuperlinearShape(pattern: string): boolean {
+  const frames: BacktrackingFrame[] = [];
+  let escape = false;
+  let inClass = false;
+  const overlaps = (frame: BacktrackingFrame): boolean => frame.branches.some(
+    (branch, k) => branch === ""
+      || frame.branches.some((other, j) => j !== k && other.startsWith(branch)),
+  );
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i]!;
+    if (escape) { escape = false; continue; }
+    if (ch === "\\") { escape = true; continue; }
+    if (inClass) { if (ch === "]") inClass = false; continue; }
+    if (ch === "[") { inClass = true; continue; }
+    if (ch === "(") {
+      if (pattern.startsWith("(?#", i)) {
+        const end = pattern.indexOf(")", i + 3);
+        if (end === -1) return false;
+        i = end;
+        continue;
+      }
+      const bodyStart = groupBodyStart(pattern, i);
+      if (bodyStart === undefined) return false;
+      frames.push({ branches: [], branchStart: bodyStart, bodyVarQuant: false });
+      i = bodyStart - 1;
+      continue;
+    }
+    if (ch === "|" && frames.length > 0) {
+      const frame = frames[frames.length - 1]!;
+      frame.branches.push(pattern.slice(frame.branchStart, i));
+      frame.branchStart = i + 1;
+      continue;
+    }
+    if (ch === ")" && frames.length > 0) {
+      const frame = frames[frames.length - 1]!;
+      frame.branches.push(pattern.slice(frame.branchStart, i));
+      if (classifyQuantifier(pattern, i + 1) === "unbounded"
+        && (frame.bodyVarQuant || (frame.branches.length > 1 && overlaps(frame)))) {
+        return true;
+      }
+      frames.pop();
+      if (frames.length > 0) frames[frames.length - 1]!.bodyVarQuant ||= frame.bodyVarQuant;
+      continue;
+    }
+    if (ch === "*" || ch === "+" || ch === "?" || ch === "{") {
+      const kind = classifyQuantifier(pattern, i);
+      if (kind === "bounded" || kind === "unbounded") {
+        if (frames.length > 0) frames[frames.length - 1]!.bodyVarQuant = true;
+      }
+      if (ch === "{") {
+        const close = pattern.indexOf("}", i + 1);
+        if (close !== -1) i = close;
+      }
+    }
+  }
+  return false;
+}
+
+// Verdicts by pattern text, so the per-message classify() path neither re-scans
+// nor re-probes a configured rule and a rejection is reported once per process.
+const patternVerdicts = new Map<string, boolean>();
+
+/**
+ * True when a rule pattern must be dropped: either the structural scan names a
+ * superlinear shape without executing anything, or a canary probe over-runs the
+ * budget twice (once to measure, once to rule out a scheduler stall).
+ *
+ * The verdict depends only on the pattern text, so it is remembered: a rejected
+ * rule is reported once per process instead of on every classified message, and
+ * an accepted rule does not re-run the canary ladder per message either.
+ */
+function patternExceedsBacktrackingBudget(pattern: string, re: RegExp): boolean {
+  const decided = patternVerdicts.get(pattern);
+  if (decided !== undefined) return decided;
+  const reject = (): true => {
+    patternVerdicts.set(pattern, true);
+    console.error(`[bifrost] rejecting rule pattern with unbounded backtracking: "${pattern}"`);
+    return true;
+  };
+  if (patternHasSuperlinearShape(pattern)) return reject();
+  try {
+    for (const canary of BACKTRACKING_CANARIES) {
+      const started = performance.now();
+      re.test(canary);
+      if (performance.now() - started <= BACKTRACKING_BUDGET_MS) continue;
+      // One sample can include a scheduler stall; slow matching repeats, so
+      // the same canary must over-run the budget on re-measure as well.
+      const recheckStart = performance.now();
+      re.test(canary);
+      if (performance.now() - recheckStart > BACKTRACKING_BUDGET_MS) return reject();
+    }
+  } catch {
+    return false;
+  }
+  patternVerdicts.set(pattern, false);
+  return false;
+}
+
+/** Compile rules ahead of time; invalid and unbounded patterns are logged once and dropped. */
 export function compileRules(rules: readonly RouteRule[]): CompiledRule[] {
   const compiled: CompiledRule[] = [];
   for (const rule of rules) {
     try {
-      compiled.push({ re: new RegExp(rule.pattern, "i"), model: rule.model });
+      const re = new RegExp(rule.pattern, "i");
+      if (patternExceedsBacktrackingBudget(rule.pattern, re)) continue;
+      compiled.push({ re, model: rule.model });
     } catch (err) {
       console.error(`[bifrost] invalid regex "${rule.pattern}": ${err}`);
     }

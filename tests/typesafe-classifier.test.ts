@@ -100,6 +100,31 @@ describe("TypeSafe classifier", () => {
     assert.doesNotMatch(JSON.stringify([...slow, ...fast, ...shared]), /slow prompt|fast prompt/);
   });
 
+  it("treats an oversized response body as an invalid response", async () => {
+    // The decoder must bound how much provider body it materializes; a padded
+    // payload that exceeds the budget is a decode miss, not a classification.
+    const observations: TypeSafeObservation[] = [];
+    let chunksLeft = 20;
+    const oversized = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (chunksLeft-- > 0) {
+          controller.enqueue(new TextEncoder().encode(" ".repeat(64 * 1024)));
+          return;
+        }
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(payload())));
+        controller.close();
+      },
+    }));
+    const classifier = createTypeSafeClassifier({
+      apiKey: "key",
+      fetchImpl: async () => oversized,
+      observe: (observation) => observations.push(observation),
+    });
+    const result = await classifier({ prompt: "hello", tiers: ["quick", "general", "frontier"], criteria });
+    assert.equal(result, undefined);
+    assert.equal(observations[0]?.outcome, "invalid_response");
+  });
+
   it("reports circuit-open evidence per call without issuing a request", async () => {
     const key = `classifier/typesafe/${TYPESAFE_MODEL}`;
     const now = Date.now();
@@ -250,6 +275,32 @@ describe("TypeSafe classifier", () => {
     assert.equal(await classifier({ prompt: "x", tiers: ["general"], criteria: { general: "normal" } }), undefined);
     assert.equal(requestSignal?.aborted, true);
     assert.equal(cancelled, true);
+    assert.deepEqual(outcomes, ["timeout"]);
+  });
+
+  it("does not let a stuck body cancellation outlive the classification signal", async () => {
+    // A custom fetchImpl can return a teed response whose other branch stays
+    // open, so reader.cancel() never settles. Cleanup stays bounded by the
+    // same abort signal instead of holding the classification call open.
+    let requestSignal: AbortSignal | undefined;
+    const outcomes: string[] = [];
+    const body = new ReadableStream<Uint8Array>({
+      cancel: () => new Promise<void>(() => {}),
+    });
+    const classifier = createTypeSafeClassifier({
+      apiKey: "key",
+      timeoutMs: 50,
+      maxAttempts: 1,
+      observe: ({ outcome }) => outcomes.push(outcome),
+      fetchImpl: async (_url, init) => {
+        requestSignal = init?.signal ?? undefined;
+        return new Response(body, { status: 200 });
+      },
+    });
+    const started = performance.now();
+    assert.equal(await classifier({ prompt: "x", tiers: ["general"], criteria: { general: "normal" } }), undefined);
+    assert.ok(performance.now() - started < 2_000, "cancellation must not outlive the aborted signal");
+    assert.equal(requestSignal?.aborted, true);
     assert.deepEqual(outcomes, ["timeout"]);
   });
 

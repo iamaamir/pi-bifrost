@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { performance } from "node:perf_hooks";
 import {
   buildRouteDecisionSummary,
   type ClassificationResult,
@@ -22,6 +23,7 @@ import {
   type TierResolutionConfig,
 } from "../routing.ts";
 import { emptyReliabilityState, recordModelFailure, DEFAULT_RELIABILITY } from "../reliability.ts";
+import { DEFAULT_RULES } from "../config.ts";
 import { compileRoutingScope } from "../routing-scope.ts";
 import { makeCtx, makeModel, withoutCost } from "./helpers.ts";
 import { emptyEconomicSnapshot, hasHardEconomicAdmission, publishEconomicObservation, type EconomicSignal, type ReservePolicy } from "../economic-signals.ts";
@@ -899,6 +901,24 @@ describe("routing", () => {
       }
     });
 
+    it("keeps the injectable random seam total when it returns 1", () => {
+      // Injected rng beyond [0,1) must not produce undefined (LOB-unbounded
+      // selection). Values outside [0,1) route to the last candidate.
+      const a = makeModel("a", "a", 0, 0);
+      const b = makeModel("b", "b", 0, 0);
+      assert.equal(modelKey(selectModel([a, b], "random", () => 1)), "b/b");
+      assert.equal(modelKey(selectModel([a, b], "random", () => -1)), "b/b");
+      assert.equal(modelKey(selectModel([a, b], "random", () => NaN)), "b/b");
+      assert.equal(modelKey(selectModel([a, b], "random", () => 0.999999)), "b/b");
+    });
+
+    it("keeps the injectable random seam inside [0,1) on the first candidate", () => {
+      const a = makeModel("a", "a", 0, 0);
+      const b = makeModel("b", "b", 0, 0);
+      assert.equal(modelKey(selectModel([a, b], "random", () => 0.4)), "a/a");
+      assert.equal(modelKey(selectModel([a, b], "random", () => 0.75)), "b/b");
+    });
+
     it("keeps candidate order for fastest and metric ties", () => {
       const first = makeModel("a", "first", 2, 3, 128_000);
       const second = makeModel("b", "second", 2, 3, 128_000);
@@ -1475,6 +1495,127 @@ describe("routing", () => {
       ];
       assert.equal(classify("bar foo", rules), "first");
       assert.equal(classifyCompiled("bar foo", compileRules(rules)), "first");
+    });
+
+    it("drops rule patterns whose backtracking explodes on a small canary", () => {
+      // Security regression: a repo-provided rule with nested quantifiers
+      // hangs the host event loop synchronously before the message is sent.
+      // compileRules must drop the rule (fail closed to later rules/default)
+      // instead of shipping a pattern that cannot run within a bounded budget.
+      const compiled = compileRules([
+        { pattern: "^(a+)+$", model: "quick" },
+        { pattern: "hello", model: "general" },
+      ]);
+      assert.deepEqual(compiled.map((rule) => rule.model), ["general"]);
+    });
+
+    it("parity path drops the same catastrophic pattern", () => {
+      const rules = [{ pattern: "^(a+)+$", model: "quick" }];
+      assert.equal(classify("a".repeat(24) + "b", rules), undefined);
+      assert.equal(classifyCompiled("a".repeat(24) + "b", compileRules(rules)), undefined);
+    });
+
+    it("does not re-probe an accepted rule on every classify call", () => {
+      // classify() runs per message; an accepted configured rule must not pay
+      // the canary ladder again on the next prompt.
+      const originalNow = performance.now;
+      let reads = 0;
+      try {
+        performance.now = () => {
+          reads += 1;
+          return originalNow.call(performance);
+        };
+        const rules = [{ pattern: "deployment rollback checklist", model: "quick" }];
+        classify("a deployment rollback checklist", rules);
+        const afterFirst = reads;
+        assert.ok(afterFirst > 0, "the first call must probe the canaries");
+        classify("a deployment rollback checklist", rules);
+        assert.equal(reads, afterFirst, "a cached verdict must not probe again");
+      } finally {
+        performance.now = originalNow;
+      }
+    });
+
+    it("reports a rejected rule once across repeated classify calls", () => {
+      // classify() runs per message, so a rejected configured rule must be
+      // diagnosed once instead of logging on every classified prompt.
+      const messages: string[] = [];
+      const originalError = console.error;
+      console.error = (...values: unknown[]) => { messages.push(values.map(String).join(" ")); };
+      try {
+        const rules = [{ pattern: "^(zz+)+$", model: "quick" }];
+        assert.equal(classify("zzzzzzzzzzzzzzzzzzzzzzzzc", rules), undefined);
+        assert.equal(classify("zzzzzzzzzzzzzzzzzzzzzzzzc", rules), undefined);
+      } finally {
+        console.error = originalError;
+      }
+      const reported = messages.filter((line) => line.includes("rejecting rule pattern"));
+      assert.deepEqual(reported, ['[bifrost] rejecting rule pattern with unbounded backtracking: "^(zz+)+$"']);
+    });
+
+    it("still compiles every shipped default rule", () => {
+      assert.equal(compileRules(DEFAULT_RULES).length, DEFAULT_RULES.length);
+    });
+
+    it("rejects lookahead-anchored catastrophic patterns without paying the long probe", () => {
+      // A lookaround can keep every earlier canary cheap and detonate the guard's
+      // own longest probe, so the probe loop must not be the only defense:
+      // this includes the nested-quantifier test even past lookahead guards.
+      const started = performance.now();
+      const compiled = compileRules([
+        { pattern: "^(?=a{26}b)(a+)+$", model: "quick" },
+        { pattern: "^(?=a{32}b)(a+)+$", model: "quick" },
+      ]);
+      assert.deepEqual(compiled, []);
+      assert.ok(performance.now() - started < 250, "rejection must not pay a long probe");
+    });
+
+    it("rejects deterministic-free catastrophic alternations without exec", () => {
+      // (a|aa)+ explodes through branch prefix-overlap, not nested quantifiers.
+      const compiled = compileRules([
+        { pattern: "^((a|aa)+)b", model: "quick" },
+        { pattern: "^(a+)+$", model: "quick" },
+        { pattern: "(?:ab?)+c", model: "quick" },
+      ]);
+      assert.deepEqual(compiled, []);
+    });
+
+    it("keeps benign quantified rules that shuttle variable tokens safely", () => {
+      // Fixed-length repetition and non-overlapping alternations must survive
+      // the structural filter untouched.
+      const compiled = compileRules([
+        { pattern: "(\\d{2}:\\d{2})*", model: "quick" },
+        { pattern: "class(?:room|rooms)?", model: "quick" },
+        { pattern: "(foo|bar)+", model: "quick" },
+        { pattern: "(a|b|c)+", model: "quick" },
+        // The `?` that opens a noncapturing group is group syntax, not an
+        // optional quantifier, so a repeated noncapturing group is as safe as
+        // its capturing equivalent and must survive the structural scan.
+        { pattern: "(?:foo)+", model: "quick" },
+        { pattern: "(?:foo|bar)+", model: "quick" },
+      ]);
+      assert.equal(compiled.length, 6);
+    });
+
+    it("a scheduling pause does not drop a benign rule", () => {
+      // One elapsed-time sample can include a scheduler stall; before rejecting,
+      // the budget must re-measure the same canary so a one-shot pause is not
+      // misread as backtracking.
+      const originalNow = performance.now;
+      let reads = 0;
+      try {
+        performance.now = () => {
+          reads += 1;
+          // First two reads bracket the first probe with a 1000 ms stall.
+          if (reads === 2) return 1000;
+          if (reads === 1) return 0;
+          return 1000 + reads * 0.1;
+        };
+        const compiled = compileRules([{ pattern: "hello world", model: "quick" }]);
+        assert.equal(compiled.length, 1);
+      } finally {
+        performance.now = originalNow;
+      }
     });
   });
 });

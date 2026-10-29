@@ -5,7 +5,8 @@ import { createRequire } from "node:module";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, it } from "node:test";
+import { after, before, describe, it } from "node:test";
+import { acquirePackLock } from "./fixtures/pack-lock.mjs";
 
 const require = createRequire(import.meta.url);
 const typescriptCompiler = require.resolve("typescript/bin/tsc");
@@ -119,6 +120,15 @@ function compileTypeConsumer(consumer, source) {
 }
 
 describe("packed experimental router consumer", () => {
+  // `npm pack` runs the `prepack` build, which replaces this checkout's shared
+  // `dist/router` in place. The unit suite runs this file while the acceptance
+  // runner's manifest-evidence gate runs the same file in a child process, so
+  // without a cross-process lock one pack archives a tree the other is
+  // rebuilding (CI saw ENOENT dist/router and TS2307 on ./routing.ts).
+  let releasePackLock;
+  before(() => { releasePackLock = acquirePackLock(process.cwd()); });
+  after(() => { releasePackLock?.(); });
+
   it("installs the packed JS API and resolves without loader flags on Node 22.19+", () => {
     const [major, minor] = process.versions.node.split(".").map(Number);
     assert.ok(major > 22 || major === 22 && minor >= 19, "the API package test requires Node 22.19 or newer");
