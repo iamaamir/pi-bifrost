@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "base": "9678ddeeba2cf9d33cc59f94233a73c71829c196",
+  "base": "82a035e8aa79ca73f0e9beed6ae63b7ac3350f02",
   "contracts": [
     {
       "id": "rule-pattern-backtracking-bound",
@@ -66,11 +66,34 @@
       }
     },
     {
+      "id": "packed-package-build-mutex",
+      "requirement": "R16",
+      "files": [
+        "tests/fixtures/pack-lock.mjs",
+        "tests/pack-lock.test.mjs"
+      ],
+      "boundary": "The packed-package tests run `npm pack`, whose prepack build replaces the checkout's shared `dist/router` in place. The unit suite runs that file while the acceptance runner's manifest-evidence gate runs the same file in a child process, so two builds can overlap and one pack archives a half-rebuilt tree. A cross-process lock keyed by the checkout root serializes build, pack, and fault injection, and is released even when a guarded build throws.",
+      "assertions": "Two overlapping worker processes record a strictly alternating enter/leave journal, so no section can observe another's rebuild. A worker that throws inside the section still releases the lock, and the next build then acquires it. As a fault control, the identical two workers with the lock bypassed interleave (start, start, end, end), which proves the serialization assertions are sensitive to the guard and not to scheduling.",
+      "boundaryTest": {
+        "file": "tests/pack-lock.test.mjs",
+        "name": "serializes overlapping packed-package builds across processes"
+      },
+      "invariant": {
+        "file": "tests/pack-lock.test.mjs",
+        "name": "releases the lock when a guarded build throws"
+      },
+      "fault": {
+        "file": "tests/pack-lock.test.mjs",
+        "name": "fault control: bypassing the lock interleaves the same two builds"
+      }
+    },
+    {
       "id": "vulnerable-dependency-bumps",
       "requirement": "R13",
       "files": [
         "package.json",
-        "package-lock.json"
+        "package-lock.json",
+        "tests/router-package.test.mjs"
       ],
       "boundary": "The shipped dependency chain resolves known vulnerable transitive versions: fast-uri 3.1.8 (four open GHSAs reachable through the ajv-based schema validation) is bumped to the patched 3.1.9, and transitive undici is forced through the existing overrides mechanism to ^8.12.2 (npm's own fix path was a semver-major bump of the host agent package, which stays out of scope).",
       "assertions": "npm audit reports zero vulnerabilities on the resolved tree and osv-scanner passes the repository deps gate. The resolve-only API still installs into a clean consumer without Pi packages, compiles the strict declaration graph, runs both examples, and resolves without loader flags on Node 22.19+ after the bump and the override.",
