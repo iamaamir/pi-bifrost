@@ -276,6 +276,36 @@ describe("provider cooldowns through registered Pi runtime hooks", { concurrency
       }
     });
   }
+  it("releases its physical trial when classifier opt-out precedes final admission", async () => {
+    const selected = makeModel("provider-a", "selected");
+    const active = makeModel("provider-b", "active");
+    const classifier = makeModel("provider-c", "classifier");
+    const h = fixture({ models: [selected], activeModel: active, defaultTier: "quick", classifierEnabled: true, classifierModel: classifier,
+      streamSimple: () => ({ result: async () => ({ content: [{ type: "text", text: "quick" }] }) }),
+    });
+    try {
+      await seedExpiredUsagePause(h.cwd, selected.provider);
+      const store = createProviderCooldownStore(h.cwd, reliability);
+      let sawOwnedTrial = false;
+      const messages: string[] = [];
+      let off: Promise<void> | undefined;
+      (h.primary.ctx as { hasUI: boolean }).hasUI = true;
+      (h.primary.ctx.ui as unknown as { theme: unknown }).theme = { fg: (_color: string, text: string) => text };
+      h.primary.ctx.ui.notify = (message: string) => {
+        messages.push(message);
+        if (message.startsWith("Bifrost: quick →") && !off) {
+          sawOwnedTrial = store.read(selected.provider).trialActive;
+          off = h.commandHandler()!("classifier off", h.primary.ctx);
+        }
+      };
+      const result = await input(h, h.primary, "handoff-user", "route this request");
+      await off;
+      assert.equal(sawOwnedTrial, true, `selected trial was owned before admission; result=${JSON.stringify(result)} messages=${JSON.stringify(messages)}`);
+      assert.equal((result as { action: string }).action, "handled");
+      assert.equal(store.read(selected.provider).trialActive, false, "rejected input releases its selected trial");
+    } finally { h.cleanup(); }
+  });
+
   it("rejects classifier opt-out during final physical provider admission", async () => {
     const selected = makeModel("provider-a", "selected");
     const active = makeModel("provider-b", "active");

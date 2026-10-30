@@ -3826,6 +3826,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const admissionManualGeneration = v2Receipts.forSession(admissionSession).manualGeneration;
     const admissionSignal = ctx.signal;
     let admissionClassifier: { session: ClassifierSessionRuntime; generation: number } | undefined;
+    let admissionProviderClaim: { key: string; claim: ProviderTrialClaim } | undefined;
     const result = await (async (): Promise<InputEventResult> => {
     const originalText = event.text;
     const editorTextAtInput = readEditorText(ctx);
@@ -4220,6 +4221,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         begunStrictModel = modelKey(model);
         trackerFor(ctx).begin(begunStrictModel);
         endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
+        if (claimedProviderTrial) admissionProviderClaim = { key: modelKey(model), claim: claimedProviderTrial };
         claimedProviderTrial = undefined;
         claimedTrial = undefined;
         begunStrictModel = undefined;
@@ -4278,6 +4280,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         : `Bifrost: ${tier} → ${modelKey(model)} (fallback${detail ? `; ${detail}` : ""})`;
       begunStrictModel = modelKey(model);
       trackerFor(ctx).begin(begunStrictModel);
+      if (claimedProviderTrial) admissionProviderClaim = { key: modelKey(model), claim: claimedProviderTrial };
       claimedProviderTrial = undefined;
       claimedTrial = undefined;
       begunStrictModel = undefined;
@@ -4325,6 +4328,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     selfSetModelChangeBySession.delete(admissionSession);
     if (isUserTurn && acceptedAction && state.enabled && providerCooldownsEnabled()
       && activeModel && !isVirtualModel(activeModel)) {
+      const releaseAdmissionClaim = async (): Promise<void> => {
+        const owned = admissionProviderClaim;
+        if (!owned || providerClaimsBySession.get(admissionSession)?.get(owned.key) !== owned.claim) return;
+        try { await finishProviderDispatch(ctx, owned.key, undefined, false, owned.claim); }
+        catch { providerCooldownWriteFailed = true; }
+      };
       const admissionIsCurrent = (): boolean => {
         const currentBranch = admissionSession.getBranch();
         const branchPrefixIsOriginal = admissionBranchEntryIds.every((id, index) => currentBranch[index]?.id === id);
@@ -4362,6 +4371,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           && (branchIsOriginal || (branchPrefixIsOriginal && branchHasOnlyOwnSetModelEntries));
       };
       if (!admissionIsCurrent()) {
+        await releaseAdmissionClaim();
         return strictInputHandled(ctx, state, event.text, readEditorText(ctx),
           "Bifrost routing became stale before provider admission; the turn was not sent.");
       }
@@ -4384,6 +4394,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         }
         if (claims?.get(key) === claim) claims.delete(key);
         if (!admissionIsCurrent()) {
+          await releaseAdmissionClaim();
           if (claims && !claims.size && providerClaimsBySession.get(admissionSession) === claims) {
             providerClaimsBySession.delete(admissionSession);
             if (providerTrialSessionRefBySession.get(admissionSession) === claimsReference) {
