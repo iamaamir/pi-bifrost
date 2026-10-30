@@ -38,6 +38,9 @@ describe("classifier enablement", () => {
     assert.deepEqual(resolveClassifierEnablement(true, false, false), {
       enabled: false, source: "session", legacyConflict: { saved: false, configured: true },
     });
+    assert.deepEqual(resolveClassifierEnablement(true, undefined, true, "invalid-json"), {
+      enabled: false, source: "runtime-state-invalid", runtimeStateIssue: "invalid-json",
+    });
   });
 });
 
@@ -73,16 +76,42 @@ describe("runtime state", () => {
     }
   });
 
-  it("falls back on corrupt file", () => {
+  it("fails closed on corrupt state and preserves bytes until repair", () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-runtime-state-"));
     try {
       const path = runtimeStatePath(cwd);
       mkdirSync(join(cwd, ".pi"), { recursive: true });
-      writeFileSync(path, "{not json", "utf8");
+      const corrupt = "{not json";
+      writeFileSync(path, corrupt, "utf8");
       const fallback: RuntimeModeState = {
-        enabled: true, pinned: true, classifierEnabled: false, classifierSource: "configuration",
+        enabled: true, pinned: true, classifierEnabled: true, classifierSource: "configuration",
       };
-      assert.deepEqual(loadRuntimeState(path, fallback), fallback);
+      assert.deepEqual(loadRuntimeState(path, fallback), {
+        enabled: true, pinned: false, classifierEnabled: false,
+        classifierSource: "runtime-state-invalid", runtimeStateIssue: "invalid-json",
+      });
+      assert.equal(saveRuntimeState(path, { enabled: false }), false);
+      assert.equal(readFileSync(path, "utf8"), corrupt);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed on non-object state and unreadable paths", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-runtime-state-"));
+    try {
+      const path = runtimeStatePath(cwd);
+      mkdirSync(join(cwd, ".pi"), { recursive: true });
+      for (const text of ["[]", "null", "false", "{\"classifierEnabled\":\"false\"}"]) {
+        writeFileSync(path, text, "utf8");
+        assert.equal(loadRuntimeState(path).classifierSource, "runtime-state-invalid", text);
+        assert.equal(loadRuntimeState(path).classifierEnabled, false, text);
+      }
+      rmSync(path);
+      rmSync(join(cwd, ".pi"), { recursive: true, force: true });
+      writeFileSync(join(cwd, ".pi"), "not a directory", "utf8");
+      assert.equal(loadRuntimeState(path).classifierSource, "runtime-state-invalid");
+      assert.equal(loadRuntimeState(path).classifierEnabled, false);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

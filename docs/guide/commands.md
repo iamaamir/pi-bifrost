@@ -25,6 +25,7 @@
 | `/bifrost classifier` | Choose `prompt`, `typesafe`, or `pi-native`. The Pi-native picker can select a catalog model or use the default |
 | `/bifrost classifier on` | Enable classifier for this Pi session after backend validation |
 | `/bifrost classifier off` | Disable classifier for this Pi session while retaining routing |
+| `/bifrost classifier inherit` | Clear this session's classifier override and resume configured behavior; invalid runtime state still blocks classification |
 | `/bifrost classifier test` | Make fresh classifier request and show result/fallback |
 | `/bifrost classifier status` | Show effective backend, detection reason, model, fallback, and safe metrics |
 | `/bifrost debug` | Show effective routing and reliability diagnostics |
@@ -171,6 +172,6 @@ Probe sends `1+1=` to every model available in Pi's registry. The primary transp
 |---------|------------------|------------------------------|
 | `/bifrost on` / `off` | Yes | Yes, through shared runtime policy |
 | `/bifrost pin` / `unpin` | No | No |
-| Classifier on/off | Yes | Follows shared runtime/config state |
+| `/bifrost classifier on` / `off` / `inherit` | No | No; choice applies to this Pi session only |
 
 Pin is a hard lock. A tier name at the start of a message is not applied while pinned.

@@ -14,6 +14,7 @@ import {
   BIFROST_CONFIG_TOOL_NAME,
   buildConfigAgentCatalog,
   createBifrostConfigTool,
+  configAgentConfigDigest,
   type ConfigAgentApplyResult,
   type ConfigAgentCheckResult,
   type ConfigAgentInspectResult,
@@ -21,7 +22,7 @@ import {
 } from "../config-agent.ts";
 import { reportText } from "../config-agent-report.ts";
 import type { ConfigApproval } from "../config-approval.ts";
-import { SUPPORTED_SCHEMA_VERSIONS } from "../config.ts";
+import { SUPPORTED_SCHEMA_VERSIONS, type BifrostConfig } from "../config.ts";
 import { loadConfigForReload } from "../config-load.ts";
 import { classifyCompiled, compileRules } from "../routing.ts";
 import { makeModel } from "./helpers.ts";
@@ -40,6 +41,7 @@ interface HarnessOptions {
   /** Runs inside the confirm callback while the approval dialog is open. */
   readonly confirmHook?: () => void;
   readonly runtimeAware?: boolean;
+  readonly loadedClassifierEnabled?: boolean;
   readonly legacyClassifierEnabled?: boolean;
   readonly classifierSessionOverride?: boolean;
 }
@@ -120,12 +122,27 @@ function freshHarness(options: HarnessOptions = {}) {
     },
     ...(options.write ? { write: options.write } : {}),
     ...(options.runtimeAware ? {
-      classifierRuntime: (config: { classifier?: { enabled?: boolean; backend?: string } }) => {
+      classifierRuntime: (config: BifrostConfig) => {
         const configuredEnabled = config.classifier?.enabled !== false;
+        const projected = resolveClassifierEnablement(configuredEnabled, legacyClassifierEnabled, classifierSessionOverride);
+        const actualConfig = options.loadedClassifierEnabled === undefined
+          ? config
+          : { ...config, classifier: { ...config.classifier, enabled: options.loadedClassifierEnabled } };
+        const actualConfiguredEnabled = actualConfig.classifier?.enabled !== false;
+        const actual = resolveClassifierEnablement(actualConfiguredEnabled, legacyClassifierEnabled, classifierSessionOverride);
         return {
-          ...resolveClassifierEnablement(configuredEnabled, legacyClassifierEnabled, classifierSessionOverride),
+          ...projected,
           configuredEnabled,
           backend: config.classifier?.backend ?? "prompt",
+          criteriaTiers: Object.keys(config.classifier?.criteria ?? {}),
+          actual: {
+            ...actual,
+            configuredEnabled: actualConfiguredEnabled,
+            backend: actualConfig.classifier?.backend ?? "prompt",
+            criteriaTiers: Object.keys(actualConfig.classifier?.criteria ?? {}),
+          },
+          loadedConfigDigest: configAgentConfigDigest(actualConfig),
+          configGeneration: 7,
         };
       },
     } : {}),
@@ -716,8 +733,9 @@ describe("apply requires approval, matching digests, and proves the result", () 
       assert.equal(applied.status, "ok");
       const summary = harness.confirmations()[0]!.summary;
       assert.match(summary, /TOOL-GENERATED SUMMARY/);
-      assert.match(summary, /Classifier enabled: ON → OFF in source and effective policy — classification disabled/);
-      assert.doesNotMatch(summary, /Classifier runtime:/);
+      assert.match(summary, /Classifier policy: ON → OFF in source and effective config/);
+      assert.doesNotMatch(summary, /classification disabled/);
+      assert.doesNotMatch(summary, /Current classifier runtime:/);
       assert.match(summary, /Rules: source 2 → 1; effective 2 → 1; 1 removed, 0 added/);
       assert.match(summary, /Model pools: 1 tier/);
       assert.match(summary, /Fallbacks: 1 tier/);
@@ -741,7 +759,7 @@ describe("apply requires approval, matching digests, and proves the result", () 
       const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
       assert.equal(applied.status, "ok");
       const summary = harness.confirmations()[0]!.summary;
-      assert.match(summary, /Classifier enabled: OFF → ON in source and effective policy — classification enabled/);
+      assert.match(summary, /Classifier policy: OFF → ON in source and effective config/);
       assert.doesNotMatch(summary, /classification disabled/);
     } finally { harness.cleanup(); }
   });
@@ -1686,20 +1704,19 @@ describe("effective classifier runtime in the agent tool", () => {
         classifier: { enabled: false, backend: "typesafe" },
       });
       const inspect = detailsOf<ConfigAgentInspectResult>(await harness.run({ operation: "inspect" }));
-      assert.deepEqual(inspect.routing.classifier, {
-        enabled: false,
-        configuredEnabled: false,
-        source: "legacy-conflict",
-        backend: "typesafe",
-        criteriaTiers: [],
-        legacyConflict: { saved: true, configured: false },
-      });
+      assert.equal(inspect.routing.classifier.enabled, false);
+      assert.equal(inspect.routing.classifier.configuredEnabled, false);
+      assert.equal(inspect.routing.classifier.source, "legacy-conflict");
+      assert.equal(inspect.routing.classifier.backend, "typesafe");
+      assert.deepEqual(inspect.routing.classifier.legacyConflict, { saved: true, configured: false });
+      assert.equal(inspect.routing.classifier.projected?.enabled, false);
+      assert.equal(inspect.routing.classifier.loadedConfigMatches, true);
 
       const checkedResult = await harness.run({ operation: "check", patch: { strategy: "cheapest" } });
       const checked = detailsOf<ConfigAgentCheckResult>(checkedResult);
       assert.equal(checked.status, "ok", checked.issues.map((issue) => issue.message).join("; "));
       assert.equal(checked.issues.some((issue) => /criteria missing/u.test(issue.message)), false);
-      assert.match(contentOf(checkedResult), /classifier runtime: disabled \(legacy-conflict\).*configured=off; backend=typesafe/);
+      assert.match(contentOf(checkedResult), /classifier runtime now: disabled \(legacy-conflict\).*configured=off; backend=typesafe/);
       assert.match(contentOf(checkedResult), /configured false overrides legacy classifierEnabled=true/);
       assert.doesNotMatch(contentOf(checkedResult), /Classifier is paused/u);
 
@@ -1767,7 +1784,7 @@ describe("effective classifier runtime in the agent tool", () => {
       const result = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { patch })));
       assert.equal(result.status, "stale");
       assert.match(result.reason ?? "", /classifier runtime state changed while/u);
-      assert.match(harness.confirmations()[0]?.summary ?? "", /Classifier runtime: disabled \(legacy-conflict; backend=prompt\)/);
+      assert.match(harness.confirmations()[0]?.summary ?? "", /Current classifier runtime: disabled \(legacy-conflict; backend=prompt\)/);
       assert.deepEqual(JSON.parse(harness.readFile(".pi/bifrost.json") ?? "null"), original);
       assert.equal(harness.reloadCalls(), 0);
     } finally {
@@ -1797,6 +1814,41 @@ describe("effective classifier runtime in the agent tool", () => {
     } finally {
       harness.cleanup();
     }
+  });
+
+  it("separates loaded classifier runtime from disk projection and keeps actual state after rejected reload", async () => {
+    const harness = freshHarness({ runtimeAware: true, loadedClassifierEnabled: true, reload: false });
+    try {
+      const original = {
+        schemaVersion: 2,
+        default: "custom",
+        models: { custom: ["beta/code"] },
+        classifier: { enabled: false, backend: "prompt", criteria: { custom: "bounded implementation" } },
+      };
+      harness.writeFile(".pi/bifrost.json", original);
+      const inspected = detailsOf<ConfigAgentInspectResult>(await harness.run({ operation: "inspect" }));
+      assert.equal(inspected.routing.classifier.enabled, true, "inspection reports active loaded runtime");
+      assert.equal(inspected.routing.classifier.configuredEnabled, true);
+      assert.equal(inspected.routing.classifier.projected?.enabled, false, "disk projection remains separate");
+      assert.equal(inspected.routing.classifier.projected?.configuredEnabled, false);
+      assert.equal(inspected.routing.classifier.loadedConfigMatches, false);
+      assert.match(reportText(inspected), /loaded config differs from effective disk layers/);
+
+      const patch = { strategy: "cheapest" };
+      const { details } = await checkedCandidate(harness, { patch });
+      assert.equal(details.routingBefore?.classifier.enabled, true);
+      assert.equal(details.routingAfter?.classifier.enabled, true, "candidate check does not relabel current runtime");
+      assert.equal(details.routingAfter?.classifier.projected?.enabled, false);
+      assert.ok(details.notes.some((note) => /active loaded config differs/u.test(note)));
+      const result = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { patch })));
+      const summary = harness.confirmations()[0]?.summary;
+      assert.equal(result.status, "reload_failed");
+      assert.equal(result.routing?.classifier.enabled, true, "rejected reload leaves actual loaded runtime unchanged");
+      assert.equal(result.routing?.classifier.projected?.enabled, false);
+      assert.match(summary ?? "", /Current classifier runtime: enabled/);
+      assert.match(summary ?? "", /Classifier runtime after apply and reload: disabled/);
+      assert.doesNotMatch(summary ?? "", /classification disabled/);
+    } finally { harness.cleanup(); }
   });
 
   it("shows requested tier, selected fallback tier, and fallback reason in preview", async () => {

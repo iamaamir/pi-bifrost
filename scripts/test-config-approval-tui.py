@@ -123,7 +123,8 @@ def run():
             assert "HIDDEN_LAST_CHANGE" not in initial, initial
             summary = traverse("summary")
             summary_text = compact_summary(summary)
-            assert "Classifierenabled:ON→OFF" in summary_text and "classificationdisabled" in summary_text, f"summary omits classifier status: {summary}"
+            assert "Classifierpolicy:ON→OFFinsourceandeffec" in summary_text and "tiveconfig" in summary_text, f"summary omits classifier status: {summary}"
+            assert "classificationdisabled" not in summary_text, f"summary confuses configured policy with runtime status: {summary}"
             assert "ALLtarget-sourcerulesremoved" in summary_text and "16removed,0added" in summary_text, summary
             assert "tierPolicies" in summary_text, f"summary hides a changed field name: {summary}"
             assert "Modelpools" in summary_text and "review" in summary_text and "→1" in summary_text, summary
@@ -209,7 +210,7 @@ def run():
             summary = traverse("layered summary")
             summary_text = compact_summary(summary)
             assert "Target-sourceclassifier" in summary_text and "ON→OFF" in summary_text, summary
-            assert "EffectiveclassifierremainsON" in summary_text, summary
+            assert "EffectiveclassifierpolicyremainsON" in summary_text, summary
             assert "ALLtarget-sourcerulesremoved" in summary_text and "Effectiverulesunchanged" in summary_text, summary
             assert '"pattern"' not in summary_text and '"model"' not in summary_text, summary
             ui.send(master, "\x1b")
@@ -225,8 +226,8 @@ def run():
             start_case("classifier-on")
             summary = traverse("classifier enable summary")
             summary_text = compact_summary(summary)
-            assert "OFF→ONinsourceandeffectivepolicy" in summary_text, summary
-            assert "classificationenabled" in summary_text and "classificationdisabled" not in summary_text, summary
+            assert "Classifierpolicy:OFF→ONinsourceandeffectiveconfig" in summary_text, summary
+            assert "classificationdisabled" not in summary_text, summary
             ui.send(master, "\x1b")
             wait(lambda _: result.exists(), "classifier enable cancel")
             assert json.loads(result.read_text())["status"] == "cancelled"

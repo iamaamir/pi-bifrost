@@ -1,4 +1,5 @@
 import type { ModelSelectSource } from "@earendil-works/pi-coding-agent";
+import { lstatSync, readFileSync } from "node:fs";
 import { resolveStoragePath, readJsonFile, writeJsonFile } from "./storage.ts";
 
 /**
@@ -6,12 +7,14 @@ import { resolveStoragePath, readJsonFile, writeJsonFile } from "./storage.ts";
  * comes from config or an explicit session override; classifierEnabled in old
  * runtime files is read only to detect and explain a privacy-sensitive conflict.
  */
-export type ClassifierEnablementSource = "configuration" | "session" | "legacy-conflict";
+export type ClassifierEnablementSource = "configuration" | "session" | "legacy-conflict" | "runtime-state-invalid";
+export type RuntimeStateIssue = "unreadable" | "invalid-json" | "invalid-shape";
 
 export interface ClassifierEnablement {
   readonly enabled: boolean;
   readonly source: ClassifierEnablementSource;
   readonly legacyConflict?: { readonly saved: boolean; readonly configured: boolean };
+  readonly runtimeStateIssue?: RuntimeStateIssue;
 }
 
 export interface RuntimeModeState {
@@ -21,6 +24,7 @@ export interface RuntimeModeState {
   classifierSource: ClassifierEnablementSource;
   legacyClassifierEnabled?: boolean;
   classifierConflict?: { readonly saved: boolean; readonly configured: boolean };
+  runtimeStateIssue?: RuntimeStateIssue;
 }
 
 /** Only Bifrost's global on/off mode remains durable. */
@@ -41,10 +45,12 @@ export function resolveClassifierEnablement(
   configured: boolean,
   legacySaved?: boolean,
   sessionOverride?: boolean,
+  runtimeStateIssue?: RuntimeStateIssue,
 ): ClassifierEnablement {
   const legacyConflict = legacySaved !== undefined && legacySaved !== configured
     ? { saved: legacySaved, configured }
     : undefined;
+  if (runtimeStateIssue) return { enabled: false, source: "runtime-state-invalid", runtimeStateIssue };
   if (sessionOverride !== undefined) {
     return { enabled: sessionOverride, source: "session", ...(legacyConflict ? { legacyConflict } : {}) };
   }
@@ -88,24 +94,50 @@ export function runtimeStatePath(cwd: string): string {
 }
 
 export function loadRuntimeState(path: string, fallback: RuntimeModeState = DEFAULT_RUNTIME_STATE): RuntimeModeState {
+  let stat;
   try {
-    const parsed = readJsonFile<Record<string, unknown>>(path);
-    if (!parsed) return { ...fallback };
-    const legacyClassifierEnabled = typeof parsed.classifierEnabled === "boolean"
-      ? parsed.classifierEnabled : undefined;
-    const classifier = resolveClassifierEnablement(fallback.classifierEnabled, legacyClassifierEnabled);
-    return {
-      enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : fallback.enabled,
-      pinned: false, // pinned is ephemeral — session-local, never inherit from file
-      classifierEnabled: classifier.enabled,
-      classifierSource: classifier.source,
-      ...(legacyClassifierEnabled !== undefined ? { legacyClassifierEnabled } : {}),
-      ...(classifier.legacyConflict ? { classifierConflict: classifier.legacyConflict } : {}),
-    };
-  } catch (err) {
-    console.error(`[bifrost] failed to load runtime state: ${err}`);
-    return { ...fallback };
+    stat = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ...fallback };
+    return invalidRuntimeState(fallback, "unreadable");
   }
+  if (!stat.isFile()) return invalidRuntimeState(fallback, "invalid-shape");
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  } catch (error) {
+    return invalidRuntimeState(fallback, error instanceof SyntaxError ? "invalid-json" : "unreadable");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return invalidRuntimeState(fallback, "invalid-shape");
+  }
+  const record = parsed as Record<string, unknown>;
+  if ((Object.hasOwn(record, "enabled") && typeof record.enabled !== "boolean")
+    || (Object.hasOwn(record, "classifierEnabled") && typeof record.classifierEnabled !== "boolean")) {
+    return invalidRuntimeState(fallback, "invalid-shape");
+  }
+  const legacyClassifierEnabled = record.classifierEnabled as boolean | undefined;
+  const classifier = resolveClassifierEnablement(fallback.classifierEnabled, legacyClassifierEnabled);
+  return {
+    enabled: record.enabled as boolean | undefined ?? fallback.enabled,
+    pinned: false, // pinned is ephemeral — session-local, never inherit from file
+    classifierEnabled: classifier.enabled,
+    classifierSource: classifier.source,
+    ...(legacyClassifierEnabled !== undefined ? { legacyClassifierEnabled } : {}),
+    ...(classifier.legacyConflict ? { classifierConflict: classifier.legacyConflict } : {}),
+  };
+}
+
+function invalidRuntimeState(fallback: RuntimeModeState, issue: RuntimeStateIssue): RuntimeModeState {
+  console.error(`[bifrost] runtime state is invalid (${issue}); classifier is paused until the file is repaired`);
+  return {
+    enabled: fallback.enabled,
+    pinned: false,
+    classifierEnabled: false,
+    classifierSource: "runtime-state-invalid",
+    runtimeStateIssue: issue,
+  };
 }
 
 export function saveRuntimeState(path: string, state: PersistedModeState): boolean {

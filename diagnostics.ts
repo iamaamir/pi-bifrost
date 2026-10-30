@@ -6,6 +6,7 @@ import { validateEffectiveConfigStructure } from "./config-schema.ts";
 import { findCandidates, modelKey } from "./routing.ts";
 import { getCircuitState, type ReliabilityConfig, type ReliabilityState } from "./reliability.ts";
 import { isVirtualModel } from "./virtual-model.ts";
+import type { RuntimeStateIssue } from "./runtime-state.ts";
 
 export type DiagnosticSeverity = "error" | "warning" | "info";
 
@@ -35,6 +36,7 @@ export interface ValidateDiagnosticsInput {
   readonly classifierEnablementSource?: ClassifierDiagnosticStatus["source"];
   readonly effectiveClassifierBackend?: ClassifierBackend;
   readonly classifierConflict?: { readonly saved: boolean; readonly configured: boolean };
+  readonly classifierRuntimeStateIssue?: RuntimeStateIssue;
 }
 
 export interface ValidateDiagnosticsReport {
@@ -48,11 +50,12 @@ export interface ValidateDiagnosticsReport {
 export interface ClassifierDiagnosticStatus {
   readonly enabled: boolean;
   readonly configuredEnabled: boolean;
-  readonly source: "configuration" | "session" | "legacy-conflict" | "diagnostic";
+  readonly source: "configuration" | "session" | "legacy-conflict" | "runtime-state-invalid" | "diagnostic";
   readonly backend?: ClassifierBackend;
   readonly readiness: "inactive" | "ready" | "blocked";
   readonly errors: readonly string[];
   readonly legacyConflict?: { readonly saved: boolean; readonly configured: boolean };
+  readonly runtimeStateIssue?: RuntimeStateIssue;
 }
 
 export type AuthObservability = "configured" | "not_configured" | "unknown";
@@ -89,6 +92,7 @@ export interface InspectDiagnosticsInput {
   readonly classifierEnablementSource?: ClassifierDiagnosticStatus["source"];
   readonly effectiveClassifierBackend?: ClassifierBackend;
   readonly classifierConflict?: { readonly saved: boolean; readonly configured: boolean };
+  readonly classifierRuntimeStateIssue?: RuntimeStateIssue;
 }
 
 export interface InspectDiagnosticsReport {
@@ -296,9 +300,10 @@ export function validateDiagnostics(input: ValidateDiagnosticsInput): ValidateDi
       configuredEnabled: input.config.classifier?.enabled !== false,
       source: input.classifierEnablementSource ?? (input.classifierConflict ? "legacy-conflict" : input.classifierEnabled === undefined ? "diagnostic" : "configuration"),
       ...(input.effectiveClassifierBackend ? { backend: input.effectiveClassifierBackend } : {}),
-      readiness: !classifierEnabled ? "inactive" : classifierErrors.length > 0 ? "blocked" : "ready",
+      readiness: !classifierEnabled ? (input.classifierRuntimeStateIssue ? "blocked" : "inactive") : classifierErrors.length > 0 ? "blocked" : "ready",
       errors: classifierErrors,
       ...(input.classifierConflict ? { legacyConflict: input.classifierConflict } : {}),
+      ...(input.classifierRuntimeStateIssue ? { runtimeStateIssue: input.classifierRuntimeStateIssue } : {}),
     },
     diagnostics: uniqueDiagnostics(diagnostics),
   };
@@ -409,9 +414,10 @@ export function inspectDiagnostics(input: InspectDiagnosticsInput): InspectDiagn
       configuredEnabled: input.config.classifier?.enabled !== false,
       source: input.classifierEnablementSource ?? (input.classifierConflict ? "legacy-conflict" : input.classifierEnabled === undefined ? "diagnostic" : "configuration"),
       ...(input.effectiveClassifierBackend ? { backend: input.effectiveClassifierBackend } : {}),
-      readiness: !classifierEnabled ? "inactive" : classifierErrors.length > 0 ? "blocked" : "ready",
+      readiness: !classifierEnabled ? (input.classifierRuntimeStateIssue ? "blocked" : "inactive") : classifierErrors.length > 0 ? "blocked" : "ready",
       errors: classifierErrors,
       ...(input.classifierConflict ? { legacyConflict: input.classifierConflict } : {}),
+      ...(input.classifierRuntimeStateIssue ? { runtimeStateIssue: input.classifierRuntimeStateIssue } : {}),
     },
     diagnostics: uniqueDiagnostics(diagnostics),
   };

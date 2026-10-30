@@ -112,12 +112,21 @@ export interface ConfigAgentGuards {
   readonly classifierRuntimeDigest: string | null;
 }
 
-export interface ConfigAgentClassifierRuntime {
+export interface ConfigAgentClassifierRuntimeSnapshot {
   readonly enabled: boolean;
   readonly configuredEnabled: boolean;
-  readonly source: "configuration" | "session" | "legacy-conflict";
+  readonly source: "configuration" | "session" | "legacy-conflict" | "runtime-state-invalid";
   readonly backend?: string;
+  readonly criteriaTiers?: readonly string[];
   readonly legacyConflict?: { readonly saved: boolean; readonly configured: boolean };
+  readonly runtimeStateIssue?: "unreadable" | "invalid-json" | "invalid-shape";
+}
+
+/** Candidate projection is top-level; `actual` is the runtime from loaded config. */
+export interface ConfigAgentClassifierRuntime extends ConfigAgentClassifierRuntimeSnapshot {
+  readonly actual?: ConfigAgentClassifierRuntimeSnapshot;
+  readonly loadedConfigDigest?: string;
+  readonly configGeneration?: number;
 }
 
 export type ConfigAgentClassifierRuntimeProvider = (config: BifrostConfig) => ConfigAgentClassifierRuntime;
@@ -206,10 +215,14 @@ export interface ConfigAgentRoutingSummary {
   readonly classifier: {
     readonly enabled: boolean;
     readonly configuredEnabled: boolean;
-    readonly source: "configuration" | "session" | "legacy-conflict" | "config-only";
+    readonly source: "configuration" | "session" | "legacy-conflict" | "runtime-state-invalid" | "config-only";
     readonly backend: string | undefined;
     readonly criteriaTiers: readonly string[];
     readonly legacyConflict?: { readonly saved: boolean; readonly configured: boolean };
+    readonly runtimeStateIssue?: "unreadable" | "invalid-json" | "invalid-shape";
+    readonly projected?: ConfigAgentClassifierRuntimeSnapshot;
+    readonly loadedConfigMatches?: boolean;
+    readonly configGeneration?: number;
   };
   readonly affinity: { readonly mode: string; readonly surfaceNote: string };
   readonly rules: { readonly configRules: number; readonly routeFile: string | null };
@@ -568,6 +581,11 @@ function effectiveDigest(config: BifrostConfig): string {
   return sha256(canonicalJson(config as unknown as Record<string, unknown>));
 }
 
+/** Stable config fingerprint shared with the Pi adapter for loaded-vs-disk reporting. */
+export function configAgentConfigDigest(config: BifrostConfig): string {
+  return effectiveDigest(config);
+}
+
 function issuesOf(
   config: BifrostConfig,
   diagnostics: readonly ConfigLoadDiagnostic[],
@@ -618,6 +636,10 @@ function routingSummary(
   const tierNames = Object.keys(modelTiers);
   const routeFile = routeFileFor(cwd);
   const classifier = config.classifier;
+  const actual = runtime?.actual ?? runtime;
+  const projected = runtime;
+  const loadedConfigMatches = runtime?.loadedConfigDigest === undefined
+    ? undefined : runtime.loadedConfigDigest === effectiveDigest(config);
   const reliabilityVersion = config.reliability?.stateVersion === 2 ? 2 : 1;
   return {
     enabled: config.enabled !== false,
@@ -631,12 +653,24 @@ function routingSummary(
       fallbackTiers: config.tierPolicies?.[tier]?.fallbackTiers ?? null,
     })),
     classifier: {
-      enabled: runtime?.enabled ?? classifier?.enabled !== false,
-      configuredEnabled: runtime?.configuredEnabled ?? classifier?.enabled !== false,
-      source: runtime?.source ?? "config-only",
-      backend: runtime?.backend ?? classifier?.backend,
-      criteriaTiers: Object.keys(classifier?.criteria ?? {}),
-      ...(runtime?.legacyConflict ? { legacyConflict: runtime.legacyConflict } : {}),
+      enabled: actual?.enabled ?? classifier?.enabled !== false,
+      configuredEnabled: actual?.configuredEnabled ?? classifier?.enabled !== false,
+      source: actual?.source ?? "config-only",
+      backend: actual?.backend ?? classifier?.backend,
+      criteriaTiers: actual?.criteriaTiers ?? Object.keys(classifier?.criteria ?? {}),
+      ...(actual?.legacyConflict ? { legacyConflict: actual.legacyConflict } : {}),
+      ...(actual?.runtimeStateIssue ? { runtimeStateIssue: actual.runtimeStateIssue } : {}),
+      ...(projected ? { projected: {
+        enabled: projected.enabled,
+        configuredEnabled: projected.configuredEnabled,
+        source: projected.source,
+        backend: projected.backend,
+        criteriaTiers: projected.criteriaTiers ?? Object.keys(classifier?.criteria ?? {}),
+        ...(projected.legacyConflict ? { legacyConflict: projected.legacyConflict } : {}),
+        ...(projected.runtimeStateIssue ? { runtimeStateIssue: projected.runtimeStateIssue } : {}),
+      } } : {}),
+      ...(loadedConfigMatches !== undefined ? { loadedConfigMatches } : {}),
+      ...(runtime?.configGeneration !== undefined ? { configGeneration: runtime.configGeneration } : {}),
     },
     affinity: {
       mode: config.affinity?.mode ?? "off",
@@ -849,6 +883,12 @@ export function checkConfigCandidate(input: ConfigAgentCheckInput): ConfigAgentC
   const notes: string[] = [
     "Nothing was written. This check only composes the real config layers with the proposed source bytes.",
   ];
+  if (runtimeBefore?.loadedConfigDigest !== undefined && runtimeBefore.loadedConfigDigest !== effectiveDigest(before.config)) {
+    notes.push("The active loaded config differs from current disk layers; routing continues with the loaded config until a successful reload.");
+  }
+  if (runtimeBefore?.runtimeStateIssue) {
+    notes.push("Runtime state is invalid; classifier use is fail-closed unless the current session explicitly enables it.");
+  }
   if (references.some((reference) => reference.status === "unknown")) {
     notes.push("At least one configured pool entry matches no catalog model; it can never be selected.");
   }
@@ -1235,19 +1275,16 @@ function summarizeClassifier(checked: ConfigAgentCheckResult, before: Record<str
   const stateChange = `${classifierState(source?.before)} → ${classifierState(source?.after)}`;
   const sourceLabel = source?.kind === "remove" ? "removed from target source" : `settings changed (enabled ${stateChange})`;
   const effectiveStateChange = `${classifierState(effectiveBefore)} → ${classifierState(effectiveAfter)}`;
-  const effect = (change: string): string => change.endsWith("→ OFF")
-    ? " — classification disabled"
-    : change.endsWith("→ ON") ? " — classification enabled" : "";
   if (source && effectiveChanged && stateChange === effectiveStateChange && stateChange !== "ON → ON") {
-    lines.push(`Classifier enabled: ${stateChange} in source and effective policy${effect(stateChange)}.`);
+    lines.push(`Classifier policy: ${stateChange} in source and effective config.`);
   } else if (source && canonicalJson(source.before) === canonicalJson(effectiveBefore) && canonicalJson(source.after) === canonicalJson(effectiveAfter)) {
-    lines.push(`Classifier settings (source + effective): ${sourceLabel}${effect(stateChange)}.`);
+    lines.push(`Classifier settings (source + effective): ${sourceLabel}.`);
   } else {
-    if (source) lines.push(`Target-source classifier: ${sourceLabel}${effect(stateChange)}.`);
+    if (source) lines.push(`Target-source classifier: ${sourceLabel}.`);
     if (effectiveChanged) {
       const state = `${classifierState(effectiveBefore)} → ${classifierState(effectiveAfter)}`;
-      lines.push(`Effective classifier: ${state}${effect(state)}.`);
-    } else if (source) lines.push(`Effective classifier remains ${classifierState(effectiveBefore)}; source edit has no current effect.`);
+      lines.push(`Effective classifier policy: ${state}.`);
+    } else if (source) lines.push(`Effective classifier policy remains ${classifierState(effectiveBefore)}; source edit has no current effect.`);
   }
 }
 
@@ -1268,13 +1305,18 @@ function approvalSummary(checked: ConfigAgentCheckResult): string {
   summarizeClassifier(checked, before, after, lines);
   const runtimeBefore = checked.routingBefore?.classifier;
   const runtimeAfter = checked.routingAfter?.classifier;
-  if (runtimeAfter && (runtimeAfter.legacyConflict
-    || (runtimeAfter.source !== "configuration" && runtimeAfter.source !== "config-only")
-    || runtimeAfter.enabled !== runtimeAfter.configuredEnabled
-    || runtimeBefore?.source !== runtimeAfter.source
-    || runtimeBefore?.backend !== runtimeAfter.backend)) {
-    lines.push(`Classifier runtime: ${runtimeAfter.enabled ? "enabled" : "disabled"} (${runtimeAfter.source}; backend=${runtimeAfter.backend ?? "unresolved"}); configured=${runtimeAfter.configuredEnabled ? "on" : "off"}${runtimeAfter.legacyConflict ? `; legacy saved=${runtimeAfter.legacyConflict.saved} conflicts with configured=${runtimeAfter.legacyConflict.configured}` : ""}.`);
+  const projectedAfter = runtimeAfter?.projected;
+  const classifierChanged = checked.changes.some((change) => change.field === "classifier");
+  const runtimeDiffersFromProjection = runtimeAfter && projectedAfter
+    && (runtimeAfter.enabled !== projectedAfter.enabled || runtimeAfter.source !== projectedAfter.source || runtimeAfter.backend !== projectedAfter.backend);
+  if (runtimeAfter && (runtimeAfter.loadedConfigMatches === false || runtimeAfter.runtimeStateIssue || runtimeAfter.legacyConflict || runtimeDiffersFromProjection)) {
+    lines.push(`Current classifier runtime: ${runtimeAfter.enabled ? "enabled" : "disabled"} (${runtimeAfter.source}; backend=${runtimeAfter.backend ?? "unresolved"}); loaded config generation=${runtimeAfter.configGeneration ?? "unknown"}; configured=${runtimeAfter.configuredEnabled ? "on" : "off"}.`);
   }
+  if (runtimeBefore?.loadedConfigMatches === false) lines.push("Current runtime uses loaded config that differs from effective disk layers; inspection and approval show both states.");
+  if ((classifierChanged || runtimeAfter?.loadedConfigMatches === false) && projectedAfter) {
+    lines.push(`Classifier runtime after apply and reload: ${projectedAfter.enabled ? "enabled" : "disabled"} (${projectedAfter.source}; backend=${projectedAfter.backend ?? "unresolved"}); configured=${projectedAfter.configuredEnabled ? "on" : "off"}${projectedAfter.runtimeStateIssue ? `; runtime state invalid=${projectedAfter.runtimeStateIssue}` : ""}.`);
+  }
+  if (runtimeAfter?.runtimeStateIssue) lines.push(`${runtimeAfter.enabled ? "Current session override controls classification despite invalid runtime state" : "Classification is paused by invalid runtime state"}. Repair .pi/bifrost-state.json as a JSON object, then run /bifrost reload.`);
   summarizeRules(checked, before, after, lines);
   const models = checked.changes.find((change) => change.field === "models");
   summarizeMap("Model pools", modelPools(models?.before, before.schemaVersion), modelPools(models?.after, after.schemaVersion), modelPools(before.models, before.schemaVersion), modelPools(after.models, after.schemaVersion), lines, poolCount);
