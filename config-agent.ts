@@ -33,6 +33,8 @@ import {
   validateTierPolicyConfig,
   type BifrostConfig,
 } from "./config.ts";
+import type { ClassifierBackend } from "./classifier-backends.ts";
+import { validateConfigSourceStructure } from "./config-schema.ts";
 import { reconcileEconomicSnapshot } from "./economic-config.ts";
 import { findCandidates } from "./routing.ts";
 import { createRouter, type RouterModel, type RouterRegistrySnapshot, type RouterSnapshot } from "./router.ts";
@@ -95,6 +97,7 @@ export interface ConfigAgentRequest {
   readonly sourceDigest?: string;
   readonly effectiveDigest?: string;
   readonly catalogDigest?: string;
+  readonly classifierRuntimeDigest?: string;
 }
 
 /** Inputs a proposal was generated from. Apply rejects a changed input. */
@@ -105,7 +108,19 @@ export interface ConfigAgentGuards {
   readonly effectiveDigest: string;
   /** Digest of the model inventory. */
   readonly catalogDigest: string;
+  /** Effective classifier mode/backend snapshot; rechecked before and after approval. */
+  readonly classifierRuntimeDigest: string | null;
 }
+
+export interface ConfigAgentClassifierRuntime {
+  readonly enabled: boolean;
+  readonly configuredEnabled: boolean;
+  readonly source: "configuration" | "session" | "legacy-conflict";
+  readonly backend?: string;
+  readonly legacyConflict?: { readonly saved: boolean; readonly configured: boolean };
+}
+
+export type ConfigAgentClassifierRuntimeProvider = (config: BifrostConfig) => ConfigAgentClassifierRuntime;
 
 export interface ConfigAgentChange {
   readonly kind: "add" | "replace" | "remove";
@@ -131,6 +146,8 @@ export type ConfigAgentStatus =
   | "blocked"
   | "stale"
   | "declined"
+  | "cancelled"
+  | "approval_failed"
   | "approval_required"
   | "write_failed"
   | "reload_failed";
@@ -188,8 +205,11 @@ export interface ConfigAgentRoutingSummary {
   }[];
   readonly classifier: {
     readonly enabled: boolean;
+    readonly configuredEnabled: boolean;
+    readonly source: "configuration" | "session" | "legacy-conflict" | "config-only";
     readonly backend: string | undefined;
     readonly criteriaTiers: readonly string[];
+    readonly legacyConflict?: { readonly saved: boolean; readonly configured: boolean };
   };
   readonly affinity: { readonly mode: string; readonly surfaceNote: string };
   readonly rules: { readonly configRules: number; readonly routeFile: string | null };
@@ -212,6 +232,7 @@ export interface ConfigAgentCheckResult {
   readonly issues: readonly ConfigAgentIssueSummary[];
   readonly diagnostics: readonly ConfigLoadDiagnostic[];
   readonly references: readonly ConfigAgentReferenceIssue[];
+  readonly routingBefore: ConfigAgentRoutingSummary | null;
   readonly routingAfter: ConfigAgentRoutingSummary | null;
   readonly newlyEligibleModels: readonly string[];
   readonly removedModels: readonly string[];
@@ -234,9 +255,12 @@ export interface ConfigAgentPreviewCase {
 
 export interface ConfigAgentPreviewTier {
   readonly tier: string;
+  readonly requestedTier?: string;
   readonly strategy: string;
   readonly patterns: readonly string[];
   readonly selected?: string;
+  readonly selectedTier?: string;
+  readonly fallbackReason?: string;
   readonly excluded: readonly { readonly model: string; readonly exclusion: string }[];
   readonly unknownUnavailable: readonly string[];
 }
@@ -548,8 +572,12 @@ function issuesOf(
   config: BifrostConfig,
   diagnostics: readonly ConfigLoadDiagnostic[],
   warnings: readonly ConfigLoadDiagnostic[] = [],
+  classifierRuntime?: ConfigAgentClassifierRuntime,
 ): ConfigAgentIssueSummary[] {
-  const issues: ConfigAgentIssueSummary[] = [...validateConfig(config), ...validateTierPolicyConfig(config)]
+  const issues: ConfigAgentIssueSummary[] = [...validateConfig(config, {
+    ...(classifierRuntime?.backend ? { effectiveClassifierBackend: classifierRuntime.backend as ClassifierBackend } : {}),
+    ...(classifierRuntime ? { classifierEnabled: classifierRuntime.enabled } : {}),
+  }), ...validateTierPolicyConfig(config)]
     .map((issue) => ({
       severity: issue.severity,
       ...(issue.code ? { code: issue.code } : {}),
@@ -564,7 +592,7 @@ function issuesOf(
   // findings must not collapse into one line.
   for (const diagnostic of diagnostics) issues.push({ severity: "error", code: "config.source_invalid", message: diagnostic.message });
   for (const warning of warnings) issues.push({ severity: "warning", message: warning.message });
-  const unique = new Map(issues.map((issue) => [`${issue.severity}:${issue.code ?? issue.message}`, issue]));
+  const unique = new Map(issues.map((issue) => [`${issue.severity}:${issue.code ?? ""}:${issue.path ?? ""}:${issue.message}`, issue]));
   return [...unique.values()];
 }
 
@@ -581,7 +609,11 @@ function routeFileFor(cwd: string): string | null {
   return null;
 }
 
-function routingSummary(config: BifrostConfig, cwd: string): ConfigAgentRoutingSummary {
+function routingSummary(
+  config: BifrostConfig,
+  cwd: string,
+  runtime?: ConfigAgentClassifierRuntime,
+): ConfigAgentRoutingSummary {
   const modelTiers = config.models ?? {};
   const tierNames = Object.keys(modelTiers);
   const routeFile = routeFileFor(cwd);
@@ -599,9 +631,12 @@ function routingSummary(config: BifrostConfig, cwd: string): ConfigAgentRoutingS
       fallbackTiers: config.tierPolicies?.[tier]?.fallbackTiers ?? null,
     })),
     classifier: {
-      enabled: classifier?.enabled !== false,
-      backend: classifier?.backend,
+      enabled: runtime?.enabled ?? classifier?.enabled !== false,
+      configuredEnabled: runtime?.configuredEnabled ?? classifier?.enabled !== false,
+      source: runtime?.source ?? "config-only",
+      backend: runtime?.backend ?? classifier?.backend,
       criteriaTiers: Object.keys(classifier?.criteria ?? {}),
+      ...(runtime?.legacyConflict ? { legacyConflict: runtime.legacyConflict } : {}),
     },
     affinity: {
       mode: config.affinity?.mode ?? "off",
@@ -612,6 +647,25 @@ function routingSummary(config: BifrostConfig, cwd: string): ConfigAgentRoutingS
     reliability: { stateVersion: reliabilityVersion, enabled: config.reliability?.enabled !== false },
     economics: { configured: config.economics !== undefined, spendCap: false },
   };
+}
+
+function classifierRuntimeDigest(before: ConfigAgentClassifierRuntime | undefined, after: ConfigAgentClassifierRuntime | undefined): string | null {
+  return after ? sha256(canonicalJson({ before: before ?? null, after })) : null;
+}
+
+function authoredStructureIssues(
+  candidate: Record<string, unknown>,
+  changedFields?: readonly string[],
+): ConfigAgentIssueSummary[] {
+  const changed = changedFields ? new Set(changedFields) : undefined;
+  return validateConfigSourceStructure(candidate)
+    .filter((issue) => !changed || (issue.path !== undefined && changed.has(issue.path.split(".")[0]!)))
+    .map((issue) => ({
+      severity: "error",
+      ...(issue.code ? { code: issue.code } : {}),
+      ...(issue.path ? { path: issue.path } : {}),
+      message: issue.message,
+    }));
 }
 
 function tierModelKeys(config: BifrostConfig): string[] {
@@ -724,6 +778,7 @@ export interface ConfigAgentCheckInput {
   readonly catalog: ConfigAgentCatalog;
   readonly cwd: string;
   readonly extensionDir: string;
+  readonly classifierRuntime?: ConfigAgentClassifierRuntimeProvider;
 }
 
 /**
@@ -750,6 +805,7 @@ function emptyCheckResult(
     issues: [],
     diagnostics: [],
     references: [],
+    routingBefore: null,
     routingAfter: null,
     newlyEligibleModels: [],
     removedModels: [],
@@ -773,7 +829,15 @@ export function checkConfigCandidate(input: ConfigAgentCheckInput): ConfigAgentC
     diagnostics: prospective.diagnostics.map(({ layer, message }) => ({ layer, message })),
     warnings: prospective.warnings.map(({ layer, message }) => ({ layer, message })),
   };
-  const issues = issuesOf(after.config, after.diagnostics, after.warnings);
+  const runtimeBefore = input.classifierRuntime?.(before.config);
+  const runtimeAfter = input.classifierRuntime?.(after.config);
+  const combinedIssues = [
+    ...issuesOf(after.config, after.diagnostics, after.warnings, runtimeAfter),
+    ...authoredStructureIssues(plan.nextSource, request.candidate === undefined ? Object.keys(request.patch ?? {}) : undefined),
+  ];
+  const issues = [...new Map(combinedIssues.map((issue) => [
+    `${issue.severity}:${issue.code ?? ""}:${issue.path ?? ""}:${issue.message}`, issue,
+  ])).values()];
   const errors = issues.filter((issue) => issue.severity === "error");
   const references = checkModelReferences(after.config, catalog);
   const beforeModels = new Set(tierModelKeys(before.config));
@@ -791,6 +855,13 @@ export function checkConfigCandidate(input: ConfigAgentCheckInput): ConfigAgentC
   if (references.some((reference) => reference.status === "known_unavailable")) {
     notes.push("At least one configured pool entry exists in the catalog but is not currently available, so routing cannot select it.");
   }
+  if (runtimeAfter?.legacyConflict) {
+    notes.push(runtimeAfter.source === "session"
+      ? `Legacy classifierEnabled=${runtimeAfter.legacyConflict.saved} conflicts with configured=${runtimeAfter.legacyConflict.configured}; explicit session override is active.`
+      : runtimeAfter.legacyConflict.configured
+        ? "Classifier is paused: legacy classifierEnabled=false conflicts with configured true; an explicit session choice is required before classification can send prompts."
+        : "Classifier remains disabled because configured false overrides legacy classifierEnabled=true. Run /bifrost classifier on only if the user wants classification for this session.");
+  }
   if (after.config.reliability?.stateVersion === 2) {
     notes.push("reliability.stateVersion 2 requires the v2 migration and only covers supported Auto turns.");
   }
@@ -804,6 +875,7 @@ export function checkConfigCandidate(input: ConfigAgentCheckInput): ConfigAgentC
       sourceDigest: plan.current.digest,
       effectiveDigest: effectiveDigest(before.config),
       catalogDigest: catalogDigest(catalog),
+      classifierRuntimeDigest: classifierRuntimeDigest(runtimeBefore, runtimeAfter),
     },
     changes: plan.changes,
     nextSource: plan.nextSource,
@@ -812,7 +884,8 @@ export function checkConfigCandidate(input: ConfigAgentCheckInput): ConfigAgentC
     issues,
     diagnostics: after.diagnostics,
     references,
-    routingAfter: routingSummary(after.config, cwd),
+    routingBefore: routingSummary(before.config, cwd, runtimeBefore),
+    routingAfter: routingSummary(after.config, cwd, runtimeAfter),
     newlyEligibleModels: newlyEligible,
     removedModels: removed,
     writeEligible: errors.length === 0,
@@ -919,14 +992,20 @@ export async function previewConfigCandidate(input: ConfigAgentPreviewInput): Pr
   for (const tier of Object.keys(routerConfig.models ?? {})) {
     try {
       const resolved = await router.resolve({ prompt: "", forcedTier: tier, random: () => 0 });
-      if (resolved.status !== "completed") continue;
+      if (resolved.status !== "completed") {
+        tiers.push({ tier, strategy: afterConfig.categoryStrategies?.[tier] ?? afterConfig.strategy ?? "first", patterns: poolEntries(afterConfig.models?.[tier]), excluded: [], unknownUnavailable: [] });
+        continue;
+      }
       const decision = resolved.decision;
       const requested = decision.requested;
       tiers.push({
         tier,
+        ...(requested?.tier ? { requestedTier: requested.tier } : {}),
         strategy: requested?.strategy ?? "first",
         patterns: requested?.patterns ?? [],
         ...(decision.selected ? { selected: decision.selected } : {}),
+        ...(decision.selectedTier ? { selectedTier: decision.selectedTier } : {}),
+        ...(decision.fallbackReason ? { fallbackReason: decision.fallbackReason } : {}),
         excluded: (requested?.candidates ?? []).filter((candidate) => candidate.status === "excluded")
           .map((candidate) => ({ model: candidate.model, exclusion: candidate.exclusion ?? "excluded" })),
         unknownUnavailable: resolved.knownUnavailableModels,
@@ -980,8 +1059,12 @@ export async function previewConfigCandidate(input: ConfigAgentPreviewInput): Pr
     "Tier assignments use the configured strategy with a fixed random source, so `random` picks the same candidate every time here.",
     "Preview assumes healthy models: saved circuit breaks and provider cooldowns are not loaded, so live routing may skip a paused model that resolves here.",
   ];
+  const emptyTiers = routing?.tiers.filter((tier) => tier.pool.length === 0).map((tier) => tier.tier) ?? [];
+  if (emptyTiers.length > 0) {
+    notes.push(`Empty tiers remain configured boundaries and were not filtered: ${emptyTiers.join(", ")}. Inspect requested tier, selected tier, and fallback reason below; no implicit fallback is added.`);
+  }
   if (classifiersCanChangeRoutes) {
-    notes.push("The candidate enables the classifier, so prompt classification in a live session can pick a different tier than these cases show. Cases marked classifier_dependent show only the no-classifier path.");
+    notes.push("Effective classifier runtime is enabled, so prompt classification in a live session can pick a different tier than these cases show. Cases marked classifier_dependent show only the offline no-classifier path.");
   }
   if (catalog.available.length === 0) {
     notes.push("The model catalog reported no available models, so every tier resolves empty.");
@@ -1017,6 +1100,10 @@ function approvalDetails(checked: ConfigAgentCheckResult): string | null {
     if (change.kind === "add") lines.push(`  ${approvalJson(change.field)}: ${approvalJson(change.after)}`);
     else if (change.kind === "remove") lines.push(`  ${approvalJson(change.field)}: ${approvalJson(change.before)} (removed)`);
     else lines.push(`  ${approvalJson(change.field)}: ${approvalJson(change.before)} -> ${approvalJson(change.after)}`);
+  }
+  const runtime = checked.routingAfter?.classifier;
+  if (runtime) {
+    lines.push(`Classifier runtime: ${runtime.enabled ? "enabled" : "disabled"} (${runtime.source}); configured=${runtime.configuredEnabled ? "on" : "off"}; backend=${runtime.backend ?? "unresolved"}${runtime.legacyConflict ? `; legacy saved=${runtime.legacyConflict.saved} conflicts with configured=${runtime.legacyConflict.configured}` : ""}`);
   }
   const tiers = checked.routingAfter?.tiers ?? [];
   if (tiers.length > 0) {
@@ -1179,6 +1266,15 @@ function approvalSummary(checked: ConfigAgentCheckResult): string {
   const before = asRecord(checked.effectiveBefore);
   const after = asRecord(checked.effectiveAfter);
   summarizeClassifier(checked, before, after, lines);
+  const runtimeBefore = checked.routingBefore?.classifier;
+  const runtimeAfter = checked.routingAfter?.classifier;
+  if (runtimeAfter && (runtimeAfter.legacyConflict
+    || (runtimeAfter.source !== "configuration" && runtimeAfter.source !== "config-only")
+    || runtimeAfter.enabled !== runtimeAfter.configuredEnabled
+    || runtimeBefore?.source !== runtimeAfter.source
+    || runtimeBefore?.backend !== runtimeAfter.backend)) {
+    lines.push(`Classifier runtime: ${runtimeAfter.enabled ? "enabled" : "disabled"} (${runtimeAfter.source}; backend=${runtimeAfter.backend ?? "unresolved"}); configured=${runtimeAfter.configuredEnabled ? "on" : "off"}${runtimeAfter.legacyConflict ? `; legacy saved=${runtimeAfter.legacyConflict.saved} conflicts with configured=${runtimeAfter.legacyConflict.configured}` : ""}.`);
+  }
   summarizeRules(checked, before, after, lines);
   const models = checked.changes.find((change) => change.field === "models");
   summarizeMap("Model pools", modelPools(models?.before, before.schemaVersion), modelPools(models?.after, after.schemaVersion), modelPools(before.models, before.schemaVersion), modelPools(after.models, after.schemaVersion), lines, poolCount);
@@ -1225,8 +1321,11 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
       notes: ["Nothing was written."],
     };
   }
-  const missing = (["proposalDigest", "sourceDigest", "effectiveDigest", "catalogDigest"] as const)
-    .filter((key) => request[key] === undefined);
+  const requiredDigests = ["proposalDigest", "sourceDigest", "effectiveDigest", "catalogDigest"] as const;
+  const missing: string[] = requiredDigests.filter((key) => request[key] === undefined);
+  if (checked.guards.classifierRuntimeDigest !== null && request.classifierRuntimeDigest === undefined) {
+    missing.push("classifierRuntimeDigest");
+  }
   if (missing.length > 0) {
     return {
       ...withCheck,
@@ -1252,22 +1351,33 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
   if (catalogDigest(catalog) !== request.catalogDigest) {
     return stale("the model inventory changed after this proposal was generated", "Nothing was written. Run check and preview again against the current catalog.");
   }
+  if (checked.guards.classifierRuntimeDigest !== null) {
+    const runtimeDigest = classifierRuntimeDigest(
+      input.classifierRuntime?.(liveEffective.config),
+      input.classifierRuntime?.(checked.effectiveAfter as unknown as BifrostConfig),
+    );
+    if (runtimeDigest !== request.classifierRuntimeDigest) {
+      return stale("classifier runtime state changed after this proposal was checked", "Nothing was written. Run check again and review the current classifier mode.");
+    }
+  }
 
   const message = approvalDetails(checked);
   if (message === null) {
     return { ...withCheck, status: "rejected", reason: "the full change is too large to show for approval", notes: ["Nothing was written. Make a smaller change or edit the config manually."] };
   }
   let approved: boolean;
+  let approvalFailed = false;
   try {
     approved = await confirm("Apply this Bifrost configuration?", approvalSummary(checked), message);
   } catch {
     approved = false;
+    approvalFailed = true;
   }
   if (!approved) {
     return {
       ...withCheck,
-      status: "declined",
-      reason: "the user did not approve this change",
+      status: approvalFailed ? "approval_failed" : "cancelled",
+      reason: approvalFailed ? "approval dialog failed; nothing was written" : "approval was cancelled; nothing was written",
       notes: ["Nothing was written."],
     };
   }
@@ -1292,6 +1402,15 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
   if (catalogDigest(confirmedCatalog) !== request.catalogDigest) {
     return stale("the model inventory changed while the change was awaiting approval", "Nothing was written. Run check and preview again against the current catalog.");
   }
+  if (checked.guards.classifierRuntimeDigest !== null) {
+    const runtimeDigest = classifierRuntimeDigest(
+      input.classifierRuntime?.(confirmedEffective.config),
+      input.classifierRuntime?.(checked.effectiveAfter as unknown as BifrostConfig),
+    );
+    if (runtimeDigest !== request.classifierRuntimeDigest) {
+      return stale("classifier runtime state changed while the change was awaiting approval", "Nothing was written. Run check again and review the current classifier mode.");
+    }
+  }
   // The digests above cover one source, the merged result, and the catalog. A
   // layer that a higher-precedence layer currently masks is invisible to the
   // merged digest, yet it becomes visible as soon as this change removes the
@@ -1301,6 +1420,8 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
   if (
     recomposed.status !== "ok"
     || recomposed.effectiveAfter === null
+      || (checked.guards.classifierRuntimeDigest !== null
+        && recomposed.guards?.classifierRuntimeDigest !== request.classifierRuntimeDigest)
     || effectiveDigest(recomposed.effectiveAfter as unknown as BifrostConfig)
       !== effectiveDigest(checked.effectiveAfter as unknown as BifrostConfig)
   ) {
@@ -1319,7 +1440,8 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
   }
 
   const afterWrite = effectiveConfig(cwd, extensionDir);
-  const issues = issuesOf(afterWrite.config, afterWrite.diagnostics);
+  const runtimeAfterWrite = input.classifierRuntime?.(afterWrite.config);
+  const issues = issuesOf(afterWrite.config, afterWrite.diagnostics, afterWrite.warnings, runtimeAfterWrite);
   const errors = issues.filter((issue) => issue.severity === "error");
   if (errors.length > 0) {
     // The atomic write already replaced the file; report the real state rather
@@ -1331,7 +1453,7 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
       applied: true,
       reason: `the file was written but the effective configuration is now invalid: ${errors[0]!.message}`,
       effectiveConfig: afterWrite.config as unknown as Record<string, unknown>,
-      routing: routingSummary(afterWrite.config, cwd),
+      routing: routingSummary(afterWrite.config, cwd, runtimeAfterWrite),
       notes: ["Repair the reported issue and run /bifrost reload; Bifrost did not activate the invalid configuration."],
     };
   }
@@ -1352,7 +1474,7 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
     reloaded,
     verified: reloaded,
     effectiveConfig: afterWrite.config as unknown as Record<string, unknown>,
-    routing: routingSummary(afterWrite.config, cwd),
+    routing: routingSummary(afterWrite.config, cwd, input.classifierRuntime?.(afterWrite.config)),
     notes,
   };
 }
@@ -1363,6 +1485,7 @@ export interface ConfigAgentInspectInput {
   readonly catalog: ConfigAgentCatalog;
   readonly cwd: string;
   readonly extensionDir: string;
+  readonly classifierRuntime?: ConfigAgentClassifierRuntimeProvider;
   /** Optional display filter for one provider; it never changes validation or routing. */
   readonly provider?: string;
   /** Page start within the sorted, filtered inventory; it never changes validation or routing. */
@@ -1411,9 +1534,9 @@ export function inspectConfigAgent(input: ConfigAgentInspectInput): ConfigAgentI
     status: "ok",
     layers,
     effectiveConfig: loaded.config as unknown as Record<string, unknown>,
-    issues: issuesOf(loaded.config, loaded.diagnostics, loaded.warnings),
+    issues: issuesOf(loaded.config, loaded.diagnostics, loaded.warnings, input.classifierRuntime?.(loaded.config)),
     diagnostics: loaded.diagnostics,
-    routing: routingSummary(loaded.config, cwd),
+    routing: routingSummary(loaded.config, cwd, input.classifierRuntime?.(loaded.config)),
     restrictions,
     inventory,
     availableModelCount: catalog.available.length,
@@ -1436,6 +1559,8 @@ export interface ConfigAgentToolDeps {
   readonly cwd?: () => string;
   readonly now?: () => number;
   readonly write?: (path: string, text: string) => void;
+  /** Resolve the currently effective session/config classifier state without network access. */
+  readonly classifierRuntime?: (config: BifrostConfig, ctx: ExtensionToolContext) => ConfigAgentClassifierRuntime;
   /** Render a result for the model. Injected by the host entry so this module
    * owns policy and IO only and the presentation module stays a leaf. */
   readonly render: (result: ConfigAgentToolResult) => string;
@@ -1454,8 +1579,11 @@ function catalogFromContext(ctx: ExtensionContext): ConfigAgentCatalog {
   return buildConfigAgentCatalog(available, known.length > 0 ? known : available);
 }
 
-const CONFIG_OBJECT_SCHEMA = Type.Record(Type.String(), Type.Unknown(), {
-  description: "A Bifrost config object. Only fields the shipped schema.json supports are ever written.",
+const CONFIG_CANDIDATE_SCHEMA = Type.Record(Type.String(), Type.Unknown(), {
+  description: "Complete replacement content for the selected config source. Only fields supported by schema.json are written.",
+});
+const CONFIG_PATCH_SCHEMA = Type.Record(Type.String(), Type.Unknown(), {
+  description: "Shallow merge into selected source. Each supplied top-level value replaces that whole field; nested objects are not deep-merged.",
 });
 
 const ConfigAgentParameters = Type.Object({
@@ -1472,8 +1600,8 @@ const ConfigAgentParameters = Type.Object({
     Type.Literal("workspace"),
     Type.Literal("user"),
   ], { description: "Config source to change. Defaults to project (.pi/bifrost.json)." })),
-  candidate: Type.Optional(CONFIG_OBJECT_SCHEMA),
-  patch: Type.Optional(CONFIG_OBJECT_SCHEMA),
+  candidate: Type.Optional(CONFIG_CANDIDATE_SCHEMA),
+  patch: Type.Optional(CONFIG_PATCH_SCHEMA),
   remove: Type.Optional(Type.Array(Type.String(), { description: "Top-level keys to delete. Requires patch." })),
   prompts: Type.Optional(Type.Array(Type.String(), { description: "Representative prompts to evaluate in preview. Offline: nothing is sent anywhere." })),
   provider: Type.Optional(Type.String({ description: "Restrict the inventory reported by inspect to one provider. Display only." })),
@@ -1482,6 +1610,7 @@ const ConfigAgentParameters = Type.Object({
   sourceDigest: Type.Optional(Type.String({ description: "sourceDigest returned by check or preview for this exact candidate. When the source file does not exist yet, check reports the literal \"absent\"; pass that string back unchanged." })),
   effectiveDigest: Type.Optional(Type.String({ description: "effectiveDigest returned by check or preview for this exact candidate." })),
   catalogDigest: Type.Optional(Type.String({ description: "catalogDigest returned by check or preview for this exact candidate." })),
+  classifierRuntimeDigest: Type.Optional(Type.String({ description: "classifierRuntimeDigest returned by check or preview; apply refuses if runtime classifier state changes." })),
 });
 
 function readRequest(params: {
@@ -1494,6 +1623,7 @@ function readRequest(params: {
   readonly sourceDigest?: string;
   readonly effectiveDigest?: string;
   readonly catalogDigest?: string;
+  readonly classifierRuntimeDigest?: string;
 }): ConfigAgentRequest {
   return {
     ...(params.source !== undefined ? { source: params.source } : {}),
@@ -1505,6 +1635,7 @@ function readRequest(params: {
     ...(params.sourceDigest !== undefined ? { sourceDigest: params.sourceDigest } : {}),
     ...(params.effectiveDigest !== undefined ? { effectiveDigest: params.effectiveDigest } : {}),
     ...(params.catalogDigest !== undefined ? { catalogDigest: params.catalogDigest } : {}),
+    ...(params.classifierRuntimeDigest !== undefined ? { classifierRuntimeDigest: params.classifierRuntimeDigest } : {}),
   };
 }
 
@@ -1534,7 +1665,13 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
       const request = readRequest(params);
       const cwd = cwdOf();
       const catalog = catalogFromContext(ctx);
-      const input: ConfigAgentCheckInput = { request, catalog, cwd, extensionDir: deps.extensionDir };
+      const classifierRuntime = deps.classifierRuntime
+        ? (config: BifrostConfig) => deps.classifierRuntime!(config, ctx)
+        : undefined;
+      const input: ConfigAgentCheckInput = {
+        request, catalog, cwd, extensionDir: deps.extensionDir,
+        ...(classifierRuntime ? { classifierRuntime } : {}),
+      };
       let result: ConfigAgentToolResult;
       switch (operation) {
         case "inspect":
@@ -1544,6 +1681,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
             extensionDir: deps.extensionDir,
             ...(params.provider !== undefined ? { provider: params.provider } : {}),
             ...(params.offset !== undefined ? { offset: params.offset } : {}),
+            ...(classifierRuntime ? { classifierRuntime } : {}),
           });
           break;
         case "check":

@@ -127,6 +127,9 @@ function makeState(saveModeState: () => void = () => {}) {
     enabled: true,
     tierPolicyValid: true,
     classifierEnabled: true,
+    classifierEnablementSource: "configuration" as "configuration" | "session" | "legacy-conflict",
+    classifierSessionOverride: undefined as boolean | undefined,
+    classifierConflict: undefined as { readonly saved: boolean; readonly configured: boolean } | undefined,
     pinned: false,
     cacheEntries: [],
     reliabilityStore: makeStore(),
@@ -213,6 +216,7 @@ describe("bifrost command ui", () => {
   it("surfaces command descriptions in autocomplete", () => {
     const items = getBifrostCommandCompletions("class") ?? [];
     assert(items.some((item) => item.value === "classifier status" && item.description === "Show classifier state"));
+    assert(items.some((item) => item.value === "classifier off" && item.description === "Disable LLM classifier for this session"));
   });
 
   it("submits exact commands without requiring a second Enter", () => {
@@ -243,7 +247,7 @@ describe("bifrost command ui", () => {
     assert.equal(state.enabled, false);
   });
 
-  it("persists mode toggles", async () => {
+  it("persists global mode but keeps pin and classifier toggles session-only", async () => {
     const { ctx, calls } = makeCtx();
     const state = makeState(() => calls.push({ kind: "save" }));
     const dispatch = createCommandRouter(state as never);
@@ -252,10 +256,12 @@ describe("bifrost command ui", () => {
     await dispatch("pin", ctx as never);
     await dispatch("classifier off", ctx as never);
 
-    assert.equal(calls.filter((call) => call.kind === "save").length, 3);
+    assert.equal(calls.filter((call) => call.kind === "save").length, 1);
     assert.equal(state.enabled, false);
     assert.equal(state.pinned, true);
     assert.equal(state.classifierEnabled, false);
+    assert.equal(state.classifierSessionOverride, false);
+    assert.equal(state.classifierEnablementSource, "session");
   });
 
   it("does not pin or disable a virtual selection until physical activation succeeds", async () => {
@@ -351,6 +357,33 @@ describe("bifrost command ui", () => {
     const output = calls.find((call) => call.kind === "widget")?.lines?.join("\n") ?? "";
     assert.match(output, /backend=typesafe model=jev-1\.13\.0/);
     assert.match(output, /fallback=prompt fallbackModel=fixture\/classifier/);
+  });
+
+  it("reports legacy classifier conflict without disabled-backend criteria errors", async () => {
+    const { ctx, calls } = makeCtx();
+    const state: any = makeState();
+    state.config = { models: { custom: ["fixture/chat"] }, classifier: { enabled: false, backend: "prompt" } };
+    state.classifierEnabled = false;
+    state.classifierEnablementSource = "legacy-conflict";
+    state.classifierConflict = { saved: true, configured: false };
+    const dispatch = createCommandRouter(state);
+
+    await dispatch("classifier status", ctx as never);
+    let output = calls.filter((call) => call.kind === "widget").at(-1)?.lines?.join("\n") ?? "";
+    assert.match(output, /classifier: enabled=false \(legacy-conflict\)/);
+    assert.match(output, /configured=off/);
+    assert.match(output, /legacy saved classifierEnabled=true conflicts with configured=false/);
+    assert.match(output, /configured off takes precedence/);
+    assert.doesNotMatch(output, /classification paused/u);
+    assert.match(output, /readiness=inactive/);
+    assert.doesNotMatch(output, /criteria missing/);
+
+    await dispatch("classifier on", ctx as never);
+    await dispatch("classifier status", ctx as never);
+    output = calls.filter((call) => call.kind === "widget").at(-1)?.lines?.join("\n") ?? "";
+    assert.match(output, /classifier: enabled=true \(session\)/);
+    assert.match(output, /configured=off/);
+    assert.match(output, /explicit session override is active/);
   });
 
   it("shows auto-detected pi-native backend and reason in status", async () => {
@@ -605,7 +638,7 @@ describe("bifrost command ui", () => {
     }
   });
 
-  it("disables the classifier in memory when saving its preference fails", async () => {
+  it("disables the classifier for this session without writing runtime preference", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-classifier-off-bootstrap-"));
     const previousCwd = process.cwd();
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -623,9 +656,11 @@ describe("bifrost command ui", () => {
       await createCommandRouter(state)("classifier test", ctx);
 
       assert.equal(state.classifierEnabled, false);
+      assert.equal(state.classifierSessionOverride, false);
+      assert.equal(state.classifierEnablementSource, "session");
+      assert.equal(calls.filter((call) => call.kind === "save").length, 0);
+      assert.equal(existsSync(join(tempDir, ".pi", "bifrost-state.json")), false);
       assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
-      assert.ok(calls.some((call) => call.kind === "notify"
-        && String(call.value).includes("disabled for this session; its preference could not be saved")));
       assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("Classifier is disabled")));
     } finally {
       process.chdir(previousCwd);
@@ -2156,14 +2191,20 @@ describe("route dispatch", () => {
     assert.equal(state.pinned, false);
   });
 
-  it("routes classifier on and off", async () => {
+  it("routes classifier on and off as session-only choices", async () => {
     const { ctx } = makeCtx();
-    const state = makeState();
+    let saves = 0;
+    const state = makeState(() => { saves++; }) as any;
     state.classifierEnabled = false;
-    await createCommandRouter(state as never)("classifier on", ctx as never);
+    await createCommandRouter(state)("classifier on", ctx as never);
     assert.equal(state.classifierEnabled, true);
-    await createCommandRouter(state as never)("classifier off", ctx as never);
+    assert.equal(state.classifierSessionOverride, true);
+    assert.equal(state.classifierEnablementSource, "session");
+    await createCommandRouter(state)("classifier off", ctx as never);
     assert.equal(state.classifierEnabled, false);
+    assert.equal(state.classifierSessionOverride, false);
+    assert.equal(state.classifierEnablementSource, "session");
+    assert.equal(saves, 0);
   });
 
   // log() reaches the fake as ctx.ui.notify, recorded as kind "notify" with

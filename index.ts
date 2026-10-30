@@ -77,7 +77,7 @@ import {
   type AutoDispatchReceipt,
 } from "./runtime-reliability-v2.ts";
 import { ReliabilityV2Store } from "./reliability-v2-store.ts";
-import { loadRuntimeState, runtimeStatePath, saveRuntimeState, isPassiveModelSelection, createSelfSelectTracker } from "./runtime-state.ts";
+import { loadRuntimeState, resolveClassifierEnablement, runtimeStatePath, saveRuntimeState, isPassiveModelSelection, createSelfSelectTracker } from "./runtime-state.ts";
 import { createCommandRouter, getBifrostCommandCompletions, reloadBifrostConfig, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.ts";
 import { createBifrostConfigTool } from "./config-agent.ts";
 import { reportText } from "./config-agent-report.ts";
@@ -490,7 +490,7 @@ function buildPipeline(
   // If classifier is disabled, pass empty array — pipeline skips LLM stage.
   let classifierModels: ClassifierModelRef<Model<Api>>[] = [];
   let classifyDirect: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<DirectClassifierAttempt>) | undefined;
-  const directConfigOk = !hasClassifierConfigErrors(config, effective.backend);
+  const directConfigOk = !hasClassifierConfigErrors(config, effective.backend, classifierEnabled);
   const plan = directStagePlan({
     backend: effective.backend,
     auto: effective.auto,
@@ -500,7 +500,7 @@ function buildPipeline(
     fallback: config.classifier?.fallback,
   });
   if (plan.directDegraded) {
-    for (const message of classifierConfigErrors(config, effective.backend)) {
+    for (const message of classifierConfigErrors(config, effective.backend, classifierEnabled)) {
       console.error(`[bifrost/config] error: ${message}`);
     }
     console.error(`[bifrost/config] auto backend ${effective.backend} is unusable; ${plan.usePromptFallback ? "using prompt classifier fallback" : "regex/default fallback only"}. Fix the errors above or pin classifier.backend.`);
@@ -695,7 +695,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     enabled: config.enabled ?? true,
     pinned: false,
     classifierEnabled: config.classifier?.enabled ?? true,
-  });
+    classifierSource: "configuration",
+});
   // Programmatic activation keys, scoped per session: two sessions selecting
   // the same model concurrently must never swallow each other's event (#17).
   const selfSelect = createSelfSelectTracker();
@@ -980,6 +981,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     economicQuarantinedSourceRevisions: initialEconomic.quarantinedSourceRevisions,
     enabled: runtimeState.enabled,
     classifierEnabled: runtimeState.classifierEnabled,
+    classifierEnablementSource: runtimeState.classifierSource,
+    legacyClassifierEnabled: runtimeState.legacyClassifierEnabled,
+    classifierConflict: runtimeState.classifierConflict,
     pinned: runtimeState.pinned,
     cacheEntries,
     reliabilityStore,
@@ -992,10 +996,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       : effectiveBackendOf(targetConfig, detectionEngine),
     getPipeline,
     invalidatePipeline,
-    saveModeState: () => {
-      const next = { enabled: state.enabled, classifierEnabled: state.classifierEnabled };
-      return saveRuntimeState(runtimeStateFile, next);
-    },
+    saveModeState: () => saveRuntimeState(runtimeStateFile,
+      state.enabled === (state.config.enabled ?? true) ? {} : { enabled: state.enabled }),
     lastRegistryRefreshAt: undefined,
     forceRegistryRefresh: false,
   };
@@ -2565,7 +2567,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       state.cacheEntries = updateCache(state.cacheEntries, prompt, result.tier, maxEntries, activeClassifierCacheKey(state.config, detectionEngine));
       saveCache(cachePath(process.cwd(), state.config.cache?.path), state.cacheEntries);
       invalidatePipeline();
-    } catch (error) {
+    } catch {
       // Cache persistence must never fail the route.
       debug("virtual", "cache.save_error", { category: "cache_write_failed" });
     }
@@ -3216,6 +3218,21 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     pi.registerTool(createBifrostConfigTool({
       extensionDir,
       reload: (ctx) => reloadBifrostConfig(state, ctx),
+      classifierRuntime: (targetConfig, ctx) => {
+        const configuredEnabled = targetConfig.classifier?.enabled ?? true;
+        const enablement = resolveClassifierEnablement(
+          configuredEnabled,
+          state.legacyClassifierEnabled,
+          state.classifierSessionOverride,
+        );
+        return {
+          enabled: enablement.enabled,
+          configuredEnabled,
+          source: enablement.source,
+          backend: state.effectiveClassifierBackend(targetConfig, ctx).backend,
+          ...(enablement.legacyConflict ? { legacyConflict: enablement.legacyConflict } : {}),
+        };
+      },
       render: reportText,
     }));
   }
@@ -3237,6 +3254,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const lifecycle = autoBootstrapLifecycleBySession.get(ctx.sessionManager) ?? 0;
     await cleanupProviderTrials(ctx.sessionManager);
     clearAllowanceRetry(ctx.sessionManager, "session_start");
+    if (state.classifierConflict && ctx.hasUI) {
+      const message = state.classifierConflict.configured
+        ? "Classifier paused: legacy classifierEnabled=false conflicts with classifier.enabled=true. Run /bifrost classifier on or off to choose for this session."
+        : "Classifier stays disabled: classifier.enabled=false overrides legacy classifierEnabled=true. Run /bifrost classifier on only if you want to enable it for this session.";
+      ctx.ui.notify(message, "warning");
+    }
     debugLifecycle("bifrost", "session_start", ctx.sessionManager, undefined, { reliabilityMode: reliabilityV2Enabled() ? "reliability_v2" : "reliability_v1" });
     classifierNoticeStates.delete(ctx.sessionManager);
     overrideFor(ctx).clear();

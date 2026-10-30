@@ -31,6 +31,57 @@
         "file": "tests/integration/config-approval-tui.test.mjs",
         "name": "detects a faulty summary that hides classifier disablement in an isolated Pi copy"
       }
+    },
+    {
+      "id": "classifier-runtime-precedence-and-validation",
+      "requirement": "R14",
+      "files": [
+        "IMPLEMENTATION.md",
+        "PRD.md",
+        "README.md",
+        "auto-setup.ts",
+        "classifier-semantics.ts",
+        "commands.ts",
+        "config-agent-report.ts",
+        "config.ts",
+        "diagnostics.ts",
+        "docs/acceptance-coverage.md",
+        "docs/adr/0015-pinned-ephemeral.md",
+        "docs/guide/classifiers.md",
+        "docs/guide/commands.md",
+        "docs/guide/configuration.md",
+        "docs/guide/getting-started.md",
+        "docs/guide/troubleshooting.md",
+        "docs/llms.txt",
+        "index.ts",
+        "runtime-state.ts",
+        "scripts/acceptance.mjs",
+        "scripts/ui-reliability-fake-provider.sh",
+        "skills/configure-bifrost/references/configuration-reference.md",
+        "tests/auto-bootstrap-runtime.test.ts",
+        "tests/auto-setup.test.ts",
+        "tests/bifrost-commands.test.ts",
+        "tests/classifier-effective-validation.test.ts",
+        "tests/diagnostics.test.ts",
+        "tests/fixtures/replay-fault-control.mjs",
+        "tests/integration/command-privacy-acceptance.test.mjs",
+        "tests/integration/config-agent-acceptance.test.mjs",
+        "tests/runtime-state.test.ts"
+      ],
+      "boundary": "Classifier policy and saved runtime state stay distinct. A conflicting legacy classifier flag pauses classification until the user makes a session choice. Session toggles do not persist, preserve unrelated state, and do not send prompts while disabled. Active backends are validated before calls, and approval is refused when runtime state changes.",
+      "assertions": "Unit and Pi tests verify config-versus-legacy precedence, explicit session overrides, unknown-field preservation, mode persistence without classifier or pin flags, backend-aware criteria validation, disabled-backend diagnostic suppression, malformed authored criteria rejection, status and readiness reporting, runtime-aware inspect/check/preview/approval, stale runtime-digest refusal, and intentional empty-tier/fallback reporting. RPC acceptance confirms a config-off/legacy-on conflict is visible and that refusal preserves both configuration files. Session-only privacy acceptance confirms disabled dispatch suppression and configured behavior after restart. Mutation checks made 2 of 7 runtime-state tests fail when conflict handling was removed, 1 of 9 classifier tests fail when disabled-backend diagnostic suppression was removed, and the targeted config-agent approval test fail when the runtime-digest guard was removed.",
+      "boundaryTest": {
+        "file": "tests/integration/command-privacy-acceptance.test.mjs",
+        "name": "keeps classifier toggles session-only and resumes configured classification after restart"
+      },
+      "invariant": {
+        "file": "tests/runtime-state.test.ts",
+        "name": "uses configured state unless conflicting legacy state requires an explicit choice"
+      },
+      "fault": {
+        "file": "tests/config-agent.test.ts",
+        "name": "invalidates approval when legacy classifier state changes while dialog is open"
+      }
     }
   ]
 }

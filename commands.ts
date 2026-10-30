@@ -3,9 +3,9 @@ import { CONFIG_DIR_NAME, ModelSelectorComponent, getAgentDir, type ModelRuntime
 import { createHash } from "node:crypto";
 import { constants, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { loadRuntimeState, runtimeStatePath } from "./runtime-state.ts";
+import { loadRuntimeState, resolveClassifierEnablement, runtimeStatePath } from "./runtime-state.ts";
 import type { BifrostConfig, ClassifierConfig } from "./config.ts";
-import { BUNDLED_PUBLIC_INIT_DEFAULTS, DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, MAX_CONFIG_SOURCE_BYTES, PROMPT_ONLY_FIELDS, classifierTotalTimeoutIssue, schemaVersionAtLeast, validateConfig, validateEconomicConfig, validateTierPolicyConfig } from "./config.ts";
+import { BUNDLED_PUBLIC_INIT_DEFAULTS, DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, MAX_CONFIG_SOURCE_BYTES, PROMPT_ONLY_FIELDS, classifierConfigErrors, classifierTotalTimeoutIssue, schemaVersionAtLeast, validateConfig, validateEconomicConfig, validateTierPolicyConfig } from "./config.ts";
 import { loadConfigForReload, loadConfigWithSourceOverride, type ConfigLoadDiagnostic } from "./config-load.ts";
 import { applyConfigMigration, ConfigMigrationError, parseConfigMigrationArgs, planConfigMigration, readConfigMigrationSource } from "./config-migration.ts";
 import type { CacheEntry } from "./cache.ts";
@@ -82,6 +82,10 @@ export interface BifrostState {
   economicQuarantinedSourceRevisions?: ReadonlyMap<string, number>;
   enabled: boolean;
   classifierEnabled: boolean;
+  classifierEnablementSource?: "configuration" | "session" | "legacy-conflict";
+  classifierSessionOverride?: boolean;
+  legacyClassifierEnabled?: boolean;
+  classifierConflict?: { readonly saved: boolean; readonly configured: boolean };
   pinned: boolean;
   cacheEntries: CacheEntry[];
   reliabilityStore: ReliabilityStore;
@@ -93,8 +97,8 @@ export interface BifrostState {
   reliabilityV2ConfigValid?: boolean;
   reliabilityV2StateError?: string;
   onConfigInstalled?: (config: BifrostConfig, previousConfig: BifrostConfig, validatedReload?: boolean, ctx?: ExtensionContext) => void;
-  onInitStarted?: (session: object) => BifrostConfig | undefined;
-  onManualControl?: (session: object, action?: "on" | "off" | "pin" | "unpin") => void;
+  onInitStarted?: (session: ExtensionContext["sessionManager"]) => BifrostConfig | undefined;
+  onManualControl?: (session: ExtensionContext["sessionManager"], action?: "on" | "off" | "pin" | "unpin") => void;
   /** Read-only projection of the current branch-local successful Auto anchor. */
   getAffinityAnchor?: (ctx: ExtensionContext) => AffinityAnchor | undefined;
   classifierMetricsStore: ClassifierMetricsStore;
@@ -105,7 +109,7 @@ export interface BifrostState {
   invalidatePipeline: () => void;
   /** Leave Bifrost's virtual selection for its last dispatched physical model. */
   selectPhysicalFromVirtual?: (ctx: ExtensionContext) => Promise<boolean>;
-  /** Persist runtime mode toggles (enabled/pinned/classifierEnabled) to disk. */
+  /** Persist Bifrost's enabled mode while preserving legacy and unknown state fields. */
   saveModeState: () => boolean | void;
   lastRegistryRefreshAt?: number;
   forceRegistryRefresh?: boolean;
@@ -1357,9 +1361,18 @@ async function handleInit(
     enabled: state.config.enabled ?? true,
     pinned: false,
     classifierEnabled: state.config.classifier?.enabled ?? true,
+    classifierSource: "configuration",
   });
   state.enabled = runtimeState.enabled;
-  state.classifierEnabled = runtimeState.classifierEnabled;
+  const classifierEnablement = resolveClassifierEnablement(
+    state.config.classifier?.enabled ?? true,
+    runtimeState.legacyClassifierEnabled,
+    state.classifierSessionOverride,
+  );
+  state.classifierEnabled = classifierEnablement.enabled;
+  state.classifierEnablementSource = classifierEnablement.source;
+  state.legacyClassifierEnabled = runtimeState.legacyClassifierEnabled;
+  state.classifierConflict = classifierEnablement.legacyConflict;
   state.reliabilityStore.reload(state.config.reliability, process.cwd());
   state.classifierMetricsStore.reload({
     cwd: process.cwd(),
@@ -1427,7 +1440,8 @@ export function buildClassifierTestReport(input: {
     `final source: ${finalSource}`,
     `final backend: ${judgment?.backend ?? "none"}`,
     `final model: ${judgment?.model ?? "none"}`,
-    `request observed: ${after.total > before.total ? "yes" : "no"}`,
+    `metric delta: +${Math.max(0, after.total - before.total)} observation(s)`,
+    `classifier fallback: ${result.classifierAttempt?.fallbackKind ?? "none"}`,
   ];
   if (backend === CLASSIFIER_BACKEND_IDS.typesafe) lines.push(`credential: ${credential ?? "missing"}`);
   if (backend !== CLASSIFIER_BACKEND_IDS.prompt && after.total > before.total) {
@@ -1439,8 +1453,14 @@ export function buildClassifierTestReport(input: {
 
 async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState): Promise<void> {
   const classifier = state.config.classifier;
-  if (!state.classifierEnabled || classifier?.enabled === false) {
+  if (!state.classifierEnabled) {
     log(ctx, "Classifier is disabled; run /bifrost classifier on first", "warning");
+    return;
+  }
+  const effective = state.effectiveClassifierBackend(state.config, ctx);
+  const errors = classifierConfigErrors(state.config, effective.backend, true);
+  if (errors.length > 0) {
+    log(ctx, `Classifier test blocked by configuration errors: ${errors.join(" ")}`, "error");
     return;
   }
   const before = state.classifierMetricsStore.snapshot();
@@ -1455,7 +1475,7 @@ async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState):
     syncBifrostModeStatus(ctx, state);
   }
   const after = state.classifierMetricsStore.snapshot();
-  const credential = classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe
+  const credential = effective.backend === CLASSIFIER_BACKEND_IDS.typesafe
     ? resolveTypeSafeApiKey().source
     : undefined;
   await uiResult(ctx, "Classifier test", buildClassifierTestReport({
@@ -1464,7 +1484,7 @@ async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState):
     before,
     after,
     credential,
-    effectiveBackend: state.effectiveClassifierBackend(state.config),
+    effectiveBackend: effective,
   }));
 }
 
@@ -1953,8 +1973,8 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   // here; confirmation is a separate behavior change.
   { value: "cache clear", description: "Clear classification cache" },
   { value: "classifier", description: "Choose classifier backend" },
-  { value: "classifier on", description: "Enable LLM classifier" },
-  { value: "classifier off", description: "Disable LLM classifier" },
+  { value: "classifier on", description: "Enable LLM classifier for this session" },
+  { value: "classifier off", description: "Disable LLM classifier for this session" },
   { value: "classifier test", description: "Test selected classifier backend" },
   { value: "debug", description: "Show config and routing state" },
 ] as const;
@@ -2271,11 +2291,24 @@ function formatDiagnosticTimestamp(timestamp: number): string {
   return Number.isNaN(date.getTime()) ? "unknown" : date.toISOString();
 }
 
+function classifierConflictNote(
+  conflict: { readonly saved: boolean; readonly configured: boolean },
+  source: string,
+): string {
+  if (source === "session") return "explicit session override is active";
+  if (!conflict.configured && conflict.saved) return "configured off takes precedence; run /bifrost classifier on to override for this session";
+  return "classification paused until an explicit session choice";
+}
+
 function renderDiagnosticLines(report: ValidateDiagnosticsReport | (InspectDiagnosticsReport & { economics?: EconomicInspectEvidence; reliabilityV2?: ReliabilityV2InspectEvidence; affinity?: AffinityInspectEvidence })): string[] {
   const lines = [report.kind === "validation" ? "--- validation (loaded effective config) ---" : "--- inspection (local snapshot) ---"];
   if (report.kind === "validation") {
     lines.push("config source: loaded effective config (run /bifrost reload after editing files)");
-  } else {
+  }
+  lines.push(`classifier runtime: ${report.classifier.enabled ? "enabled" : "disabled"} (${report.classifier.source}); configured=${report.classifier.configuredEnabled ? "on" : "off"}; readiness=${report.classifier.readiness}${report.classifier.backend ? `; backend=${report.classifier.backend}` : ""}`);
+  if (report.classifier.legacyConflict) lines.push(`classifier conflict: saved=${report.classifier.legacyConflict.saved}, configured=${report.classifier.legacyConflict.configured}; ${classifierConflictNote(report.classifier.legacyConflict, report.classifier.source)}`);
+  for (const error of report.classifier.errors) lines.push(`classifier error: ${error}`);
+  if (report.kind === "inspection") {
     lines.push(`observed: ${formatDiagnosticTimestamp(report.observedAt)}`);
     lines.push(`registry: ${report.registry.knownModelCount} known, ${report.registry.availableModelCount} available`);
     lines.push(`reliability policy: ${report.reliabilityPolicy.enabled ? "enabled" : "disabled"}; usage/billing cooldown=${report.reliabilityPolicy.cooldownOnAllowanceExhausted ? "on" : "off"} (${report.reliabilityPolicy.allowanceCooldownScope} scope); provider rate-limit throttles=on`);
@@ -2359,7 +2392,14 @@ async function handleDiagnosticsCommand(
   }
   const affinityEvidence = command === "inspect" ? inspectAffinity(state, ctx) : undefined;
   const report = command === "validate"
-    ? validateDiagnostics({ config: state.config, registry: ctx.modelRegistry })
+    ? validateDiagnostics({
+      config: state.config,
+      registry: ctx.modelRegistry,
+      effectiveClassifierBackend: state.effectiveClassifierBackend(state.config, ctx).backend,
+      classifierEnabled: state.classifierEnabled,
+      classifierEnablementSource: state.classifierEnablementSource ?? "configuration",
+      ...(state.classifierConflict ? { classifierConflict: state.classifierConflict } : {}),
+    })
     : {
       ...inspectDiagnostics({
       config: state.config,
@@ -2367,6 +2407,10 @@ async function handleDiagnosticsCommand(
       reliabilityState,
       reliabilityConfig: state.config.reliability,
       lastRegistryRefreshAt: state.lastRegistryRefreshAt,
+      classifierEnabled: state.classifierEnabled,
+      classifierEnablementSource: state.classifierEnablementSource ?? "configuration",
+      effectiveClassifierBackend: state.effectiveClassifierBackend(state.config, ctx).backend,
+      ...(state.classifierConflict ? { classifierConflict: state.classifierConflict } : {}),
       }),
       economics: inspectEconomicEvidence(state),
       ...(affinityEvidence ? { affinity: affinityEvidence } : {}),
@@ -2719,9 +2763,18 @@ export function reloadBifrostConfig(state: BifrostState, ctx: ExtensionContext):
     enabled: state.config.enabled ?? true,
     pinned: false,
     classifierEnabled: state.config.classifier?.enabled ?? true,
+    classifierSource: "configuration",
   });
   state.enabled = runtimeState.enabled;
-  state.classifierEnabled = runtimeState.classifierEnabled;
+  const classifierEnablement = resolveClassifierEnablement(
+    state.config.classifier?.enabled ?? true,
+    runtimeState.legacyClassifierEnabled,
+    state.classifierSessionOverride,
+  );
+  state.classifierEnabled = classifierEnablement.enabled;
+  state.classifierEnablementSource = classifierEnablement.source;
+  state.legacyClassifierEnabled = runtimeState.legacyClassifierEnabled;
+  state.classifierConflict = classifierEnablement.legacyConflict;
   state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path), (state.config.cache?.ttlHours ?? 720) * 60 * 60 * 1000);
   state.reliabilityStore.reload(state.config.reliability, process.cwd());
   state.classifierMetricsStore.reload({
@@ -2764,7 +2817,6 @@ export function createCommandRouter(
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
       state.onManualControl?.(ctx.sessionManager, "pin");
       state.pinned = true;
-      state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost pinned");
@@ -2772,7 +2824,6 @@ export function createCommandRouter(
     exact("unpin", (_, ctx) => {
       state.onManualControl?.(ctx.sessionManager, "unpin");
       state.pinned = false;
-      state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       log(ctx, "Bifrost unpinned");
@@ -2907,25 +2958,28 @@ export function createCommandRouter(
     exact("classifier test", (_, ctx) => handleClassifierTest(ctx, state)),
     exact("classifier", (_, ctx) => handleClassifierChoose(ctx, state)),
     exact("classifier on", (_, ctx) => {
+      const effective = state.effectiveClassifierBackend(state.config, ctx);
+      const errors = classifierConfigErrors(state.config, effective.backend, true);
+      if (errors.length > 0) {
+        log(ctx, `Classifier remains disabled because its configuration is invalid: ${errors.join(" ")}`, "error");
+        return;
+      }
+      state.classifierSessionOverride = true;
       state.classifierEnabled = true;
+      state.classifierEnablementSource = "session";
       state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
-      debug("command", "classifier_toggle", { enabled: true });
-      let saved = true;
-      try { saved = state.saveModeState() !== false; } catch { saved = false; }
-      log(ctx, saved ? "LLM classifier enabled" : "LLM classifier enabled for this session; its preference could not be saved.", saved ? undefined : "error");
+      debug("command", "classifier_toggle", { enabled: true, persistence: "session" });
+      log(ctx, `Classifier enabled for this Pi session. Backend ${effective.backend} can receive current prompts; configuration was not changed.`);
     }),
     exact("classifier off", (_, ctx) => {
+      state.classifierSessionOverride = false;
       state.classifierEnabled = false;
+      state.classifierEnablementSource = "session";
       state.invalidatePipeline();
       syncBifrostModeStatus(ctx, state);
-      debug("command", "classifier_toggle", { enabled: false });
-      let saved = true;
-      try { saved = state.saveModeState() !== false; } catch { saved = false; }
-      log(ctx, saved
-        ? "LLM classifier disabled; regex fallback active"
-        : "LLM classifier disabled for this session; its preference could not be saved.",
-      saved ? undefined : "error");
+      debug("command", "classifier_toggle", { enabled: false, persistence: "session" });
+      log(ctx, "Classifier disabled for this Pi session; configuration was not changed.");
     }),
     exact("classifier status", (_, ctx) => {
       const rawModel = state.config.classifier?.model;
@@ -2933,7 +2987,7 @@ export function createCommandRouter(
         ? rawModel.join(", ")
         : (rawModel ?? "none");
       const classifier = state.config.classifier;
-      const effective = state.effectiveClassifierBackend(state.config);
+      const effective = state.effectiveClassifierBackend(state.config, ctx);
       const backend = effective.backend;
       const label = effective.auto ? `auto: ${backend} (${effective.reason})` : backend;
       const credential = backend === CLASSIFIER_BACKEND_IDS.typesafe ? resolveTypeSafeApiKey().source : undefined;
@@ -2944,10 +2998,16 @@ export function createCommandRouter(
           ? `backend=${label} model=${classifier?.piNative?.model ?? "catalog default"} minConfidence=${classifier?.minConfidence ?? 0.8} fallback=${fallback} fallbackModel=${fallback === "regex" ? "none" : modelId}`
           : `backend=${label} model=${modelId} endpoint=${classifier?.endpoint ?? "registry"} method=${classifier?.method ?? "auto"}`;
       const metrics = state.classifierMetricsStore.snapshot();
+      const errors = classifierConfigErrors(state.config, backend, state.classifierEnabled);
+      const enablement = state.classifierEnablementSource ?? "configuration";
       const lines = [
-        `classifier: enabled=${state.classifierEnabled}`,
+        `classifier: enabled=${state.classifierEnabled} (${enablement})`,
+        `configured=${classifier?.enabled === false ? "off" : "on"}`,
+        ...(state.classifierConflict ? [`legacy saved classifierEnabled=${state.classifierConflict.saved} conflicts with configured=${state.classifierConflict.configured}; ${classifierConflictNote(state.classifierConflict, state.classifierEnablementSource ?? "configuration")}`] : []),
+        `readiness=${!state.classifierEnabled ? "inactive" : errors.length > 0 ? "blocked" : "ready"}`,
+        ...errors.map((message) => `error=${message}`),
         detail,
-        ...(backend !== CLASSIFIER_BACKEND_IDS.prompt ? [`observations=${metrics.total}`, `outcomes=${JSON.stringify(metrics.outcomes)}`] : []),
+        ...(backend !== CLASSIFIER_BACKEND_IDS.prompt ? [`observations=${metrics.total} (persisted aggregate)`, `outcomes=${JSON.stringify(metrics.outcomes)}`] : []),
       ];
       uiOutput(ctx, lines);
     }),

@@ -23,8 +23,8 @@
 | `/bifrost cache stats` | Inspect local classification cache |
 | `/bifrost cache clear` | Empty saved local classification-cache entries |
 | `/bifrost classifier` | Choose `prompt`, `typesafe`, or `pi-native`. The Pi-native picker can select a catalog model or use the default |
-| `/bifrost classifier on` | Enable configured classifier |
-| `/bifrost classifier off` | Disable classifier while retaining routing |
+| `/bifrost classifier on` | Enable classifier for this Pi session after backend validation |
+| `/bifrost classifier off` | Disable classifier for this Pi session while retaining routing |
 | `/bifrost classifier test` | Make fresh classifier request and show result/fallback |
 | `/bifrost classifier status` | Show effective backend, detection reason, model, fallback, and safe metrics |
 | `/bifrost debug` | Show effective routing and reliability diagnostics |
@@ -33,7 +33,7 @@
 
 `preview --offline` skips both direct and prompt classifiers for that request. It does not change your classifier settings. Invalid routing configuration stops preview before classification and returns `config_invalid`. Fix the reported source and run `/bifrost reload`.
 
-`validate` and `inspect` accept a leading `--json` flag. Both commands are read-only: they do not classify, refresh the registry, probe providers, or write reliability state. `inspect` shows local registry/auth/circuit snapshots and the effective affinity mode: Auto defaults to within-tier retention, while physical routing defaults off. It reports the mode source and, when active, the proven Auto anchor's model and age without branch or prompt data. Its “Bifrost last registry refresh age” is the time since this extension last refreshed Pi's registry, not a freshness claim about provider data. JSON mode emits a version-1 `[bifrost-json] ` report line to stderr. The validation report names its source as `loaded-effective-config`; it does not read un-reloaded disk edits.
+`validate` and `inspect` accept a leading `--json` flag. Both commands are read-only: they do not classify, refresh the registry, probe providers, or write reliability state. They report configured classifier policy and effective session state. `inspect` shows local registry/auth/circuit snapshots and the effective affinity mode: Auto defaults to within-tier retention, while physical routing defaults off. It reports the mode source and, when active, the proven Auto anchor's model and age without branch or prompt data. Its “Bifrost last registry refresh age” is the time since this extension last refreshed Pi's registry, not a freshness claim about provider data. JSON mode emits a version-1 `[bifrost-json] ` report line to stderr. The validation report names its source as `loaded-effective-config`; it does not read un-reloaded disk edits.
 
 On first use, when no meaningful configuration, route file, runtime routing preference, or explicit routing override blocks setup, Bifrost loads provisional pools from Pi's catalog before generation. It checks model access in the background and saves only successful generated pools with an ownership receipt. An empty `{}` configuration does not block setup. If every probe fails or a safe save cannot finish, Bifrost leaves configuration unchanged and warns. Probe requests can use provider credits or reach rate limits.
 
@@ -53,7 +53,7 @@ For safe migration, follow the [existing-user migration steps](reliability-and-c
 /bifrost preview review this authorization design
 ```
 
-Preview does not submit a generation turn or activate the selected model. It does run the normal tier pipeline, so an enabled prompt, TypeSafe/Jev, or Pi-native classifier can receive the preview prompt and incur classifier usage. Run `/bifrost classifier off` first for a rules-and-default-only preview.
+Preview does not submit a generation turn or activate the selected model. It does run the normal tier pipeline, so an enabled prompt, TypeSafe/Jev, or Pi-native classifier can receive the preview prompt and incur classifier usage. Run `/bifrost classifier off` first for a rules-and-default-only preview. This choice lasts for the current Pi session.
 
 Preview does not read a tier name from the prompt. To preview a forced tier, confirm that tier's candidates and strategy in configuration instead.
 

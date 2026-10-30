@@ -118,6 +118,8 @@ describe("configure-bifrost skill packaging", () => {
 
   it("treats preservation guidance as advisory and requires candidate-by-candidate review", () => {
     const { body } = parseFrontmatter(read(skillPath));
+    assert.match(body, /classifier\.enabled=false` overrides a legacy saved `true`/);
+    assert.match(body, /legacy saved\s+`false` against config `true` pauses classification/);
     assert.match(body, /A valid candidate can still discard unrelated policy/);
     assert.match(body, /A passing check\s+proves validity, not that the candidate matches the goal/);
     assert.match(body, /Do not disable an existing\s+classifier only because the goal mentions fixed roles/);

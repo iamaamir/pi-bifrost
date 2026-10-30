@@ -1,14 +1,14 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { describe, it } from "node:test";
 import {
   loadRuntimeState,
+  resolveClassifierEnablement,
   runtimeStatePath,
   saveRuntimeState,
   isPassiveModelSelection,
-  type PersistedModeState,
   type RuntimeModeState,
 } from "../runtime-state.ts";
 
@@ -20,16 +20,41 @@ describe("isPassiveModelSelection", () => {
   });
 });
 
+describe("classifier enablement", () => {
+  it("uses configured state unless conflicting legacy state requires an explicit choice", () => {
+    assert.deepEqual(resolveClassifierEnablement(true), { enabled: true, source: "configuration" });
+    assert.deepEqual(resolveClassifierEnablement(false, true), {
+      enabled: false, source: "legacy-conflict", legacyConflict: { saved: true, configured: false },
+    });
+    assert.deepEqual(resolveClassifierEnablement(true, false), {
+      enabled: false, source: "legacy-conflict", legacyConflict: { saved: false, configured: true },
+    });
+  });
+
+  it("lets explicit session choice resolve conflict without changing durable state", () => {
+    assert.deepEqual(resolveClassifierEnablement(false, true, true), {
+      enabled: true, source: "session", legacyConflict: { saved: true, configured: false },
+    });
+    assert.deepEqual(resolveClassifierEnablement(true, false, false), {
+      enabled: false, source: "session", legacyConflict: { saved: false, configured: true },
+    });
+  });
+});
+
 describe("runtime state", () => {
-  it("saves and loads persisted mode", () => {
+  it("loads global mode and treats saved classifierEnabled as legacy conflict data", () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-runtime-state-"));
     try {
       const path = runtimeStatePath(cwd);
-      const state: PersistedModeState = { enabled: false, classifierEnabled: false };
-      saveRuntimeState(path, state);
-      // pinned is ephemeral — always false on load regardless of file
-      const loaded = loadRuntimeState(path);
-      assert.deepEqual(loaded, { ...state, pinned: false });
+      mkdirSync(join(cwd, ".pi"), { recursive: true });
+      writeFileSync(path, JSON.stringify({ enabled: false, classifierEnabled: true, unknown: "preserved" }));
+      const loaded = loadRuntimeState(path, {
+        enabled: true, pinned: false, classifierEnabled: false, classifierSource: "configuration",
+      });
+      assert.deepEqual(loaded, {
+        enabled: false, pinned: false, classifierEnabled: false, classifierSource: "legacy-conflict",
+        legacyClassifierEnabled: true, classifierConflict: { saved: true, configured: false },
+      });
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
@@ -39,7 +64,9 @@ describe("runtime state", () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-runtime-state-"));
     try {
       const path = runtimeStatePath(cwd);
-      const fallback: RuntimeModeState = { enabled: false, pinned: true, classifierEnabled: false };
+      const fallback: RuntimeModeState = {
+        enabled: false, pinned: true, classifierEnabled: false, classifierSource: "configuration",
+      };
       assert.deepEqual(loadRuntimeState(path, fallback), fallback);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
@@ -52,8 +79,25 @@ describe("runtime state", () => {
       const path = runtimeStatePath(cwd);
       mkdirSync(join(cwd, ".pi"), { recursive: true });
       writeFileSync(path, "{not json", "utf8");
-      const fallback: RuntimeModeState = { enabled: true, pinned: true, classifierEnabled: false };
+      const fallback: RuntimeModeState = {
+        enabled: true, pinned: true, classifierEnabled: false, classifierSource: "configuration",
+      };
       assert.deepEqual(loadRuntimeState(path, fallback), fallback);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("updates only durable Bifrost mode and preserves legacy plus unknown fields", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-runtime-state-"));
+    try {
+      const path = runtimeStatePath(cwd);
+      mkdirSync(join(cwd, ".pi"), { recursive: true });
+      writeFileSync(path, JSON.stringify({ enabled: true, classifierEnabled: false, unknown: "keep" }));
+      assert.equal(saveRuntimeState(path, {}), true);
+      assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { classifierEnabled: false, unknown: "keep" });
+      assert.equal(saveRuntimeState(path, { enabled: false }), true);
+      assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { classifierEnabled: false, unknown: "keep", enabled: false });
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

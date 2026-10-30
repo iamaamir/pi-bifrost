@@ -141,7 +141,7 @@ def run():
             assert value == "x" * 6_000 + "HIDDEN_LAST_CHANGE", f"captured exact value has {value.count('x')} x chars and suffix={value.endswith('HIDDEN_LAST_CHANGE')}"
             ui.send(master, "\x1b")
             wait(lambda _: result.exists(), "cancel result")
-            assert json.loads(result.read_text())["status"] == "declined"
+            assert json.loads(result.read_text())["status"] == "cancelled"
             assert source.read_text() == original
             result.unlink()
             start_case()
@@ -214,7 +214,7 @@ def run():
             assert '"pattern"' not in summary_text and '"model"' not in summary_text, summary
             ui.send(master, "\x1b")
             wait(lambda _: result.exists(), "layered summary cancel")
-            assert json.loads(result.read_text())["status"] == "declined"
+            assert json.loads(result.read_text())["status"] == "cancelled"
             assert source.read_text() == original and workspace_source.read_text() == original
             result.unlink()
 
@@ -229,7 +229,7 @@ def run():
             assert "classificationenabled" in summary_text and "classificationdisabled" not in summary_text, summary
             ui.send(master, "\x1b")
             wait(lambda _: result.exists(), "classifier enable cancel")
-            assert json.loads(result.read_text())["status"] == "declined"
+            assert json.loads(result.read_text())["status"] == "cancelled"
             assert source.read_text() == original
             result.unlink()
 
@@ -255,7 +255,7 @@ def run():
             assert '"pattern"' not in summary_text and '"model"' not in summary_text, summary
             ui.send(master, "\x1b")
             wait(lambda _: result.exists(), "rule order cancel")
-            assert json.loads(result.read_text())["status"] == "declined"
+            assert json.loads(result.read_text())["status"] == "cancelled"
             assert source.read_text() == original
             ui.assert_no_network_violations(home)
             print("PASS: pinned Pi concise summary, source/effective layering, narrow viewport, exact review, fail-closed controls")

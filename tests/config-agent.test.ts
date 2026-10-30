@@ -25,6 +25,7 @@ import { SUPPORTED_SCHEMA_VERSIONS } from "../config.ts";
 import { loadConfigForReload } from "../config-load.ts";
 import { classifyCompiled, compileRules } from "../routing.ts";
 import { makeModel } from "./helpers.ts";
+import { resolveClassifierEnablement } from "../runtime-state.ts";
 
 interface HarnessOptions {
   readonly available?: readonly Model<Api>[];
@@ -38,6 +39,9 @@ interface HarnessOptions {
   readonly write?: (path: string, text: string) => void;
   /** Runs inside the confirm callback while the approval dialog is open. */
   readonly confirmHook?: () => void;
+  readonly runtimeAware?: boolean;
+  readonly legacyClassifierEnabled?: boolean;
+  readonly classifierSessionOverride?: boolean;
 }
 
 function freshHarness(options: HarnessOptions = {}) {
@@ -61,6 +65,8 @@ function freshHarness(options: HarnessOptions = {}) {
   let hasUI = options.hasUI ?? true;
   let confirmResult = options.confirm ?? true;
   let reloadResult = options.reload ?? true;
+  let legacyClassifierEnabled = options.legacyClassifierEnabled;
+  const classifierSessionOverride = options.classifierSessionOverride;
   let classifyCalls = 0;
   let reloadCalls = 0;
   const confirmations: { title: string; summary: string; details: string }[] = [];
@@ -113,6 +119,16 @@ function freshHarness(options: HarnessOptions = {}) {
       return reloadResult;
     },
     ...(options.write ? { write: options.write } : {}),
+    ...(options.runtimeAware ? {
+      classifierRuntime: (config: { classifier?: { enabled?: boolean; backend?: string } }) => {
+        const configuredEnabled = config.classifier?.enabled !== false;
+        return {
+          ...resolveClassifierEnablement(configuredEnabled, legacyClassifierEnabled, classifierSessionOverride),
+          configuredEnabled,
+          backend: config.classifier?.backend ?? "prompt",
+        };
+      },
+    } : {}),
   });
   type ToolParams = Parameters<typeof tool.execute>[1];
 
@@ -138,6 +154,7 @@ function freshHarness(options: HarnessOptions = {}) {
     setConfirm(value: boolean) { confirmResult = value; },
     setHasUI(value: boolean) { hasUI = value; },
     setReload(value: boolean) { reloadResult = value; },
+    setLegacyClassifierEnabled(value: boolean | undefined) { legacyClassifierEnabled = value; },
     confirmations: () => confirmations,
     classifyCalls: () => classifyCalls,
     reloadCalls: () => reloadCalls,
@@ -193,6 +210,9 @@ function applyParams(details: ConfigAgentCheckResult, params: Record<string, unk
     sourceDigest: details.guards!.sourceDigest,
     effectiveDigest: details.guards!.effectiveDigest,
     catalogDigest: details.guards!.catalogDigest,
+    ...(details.guards!.classifierRuntimeDigest !== null
+      ? { classifierRuntimeDigest: details.guards!.classifierRuntimeDigest }
+      : {}),
   };
 }
 
@@ -697,6 +717,7 @@ describe("apply requires approval, matching digests, and proves the result", () 
       const summary = harness.confirmations()[0]!.summary;
       assert.match(summary, /TOOL-GENERATED SUMMARY/);
       assert.match(summary, /Classifier enabled: ON → OFF in source and effective policy — classification disabled/);
+      assert.doesNotMatch(summary, /Classifier runtime:/);
       assert.match(summary, /Rules: source 2 → 1; effective 2 → 1; 1 removed, 0 added/);
       assert.match(summary, /Model pools: 1 tier/);
       assert.match(summary, /Fallbacks: 1 tier/);
@@ -916,7 +937,7 @@ describe("apply requires approval, matching digests, and proves the result", () 
     } finally { harness.cleanup(); }
   });
 
-  it("writes nothing when approval is aborted before or during review", async () => {
+  it("reports cancellation and writes nothing when approval is aborted before or during review", async () => {
     for (const timing of ["before", "during"]) {
       const abort = new AbortController();
       const harness = freshHarness({ signal: abort.signal, confirmHook: () => abort.abort() });
@@ -924,19 +945,19 @@ describe("apply requires approval, matching digests, and proves the result", () 
         const { details } = await checkedCandidate(harness, { candidate });
         if (timing === "before") abort.abort();
         const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
-        assert.equal(applied.status, "declined");
+        assert.equal(applied.status, "cancelled");
         assert.equal(harness.reloadCalls(), 0);
         assert.equal(harness.readFile(".pi/bifrost.json"), undefined);
       } finally { harness.cleanup(); }
     }
   });
 
-  it("writes nothing when custom approval fails", async () => {
+  it("reports approval failure and writes nothing when custom approval fails", async () => {
     const harness = freshHarness({ uiError: true });
     try {
       const { details } = await checkedCandidate(harness, { candidate });
       const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
-      assert.equal(applied.status, "declined");
+      assert.equal(applied.status, "approval_failed");
       assert.equal(harness.readFile(".pi/bifrost.json"), undefined);
     } finally { harness.cleanup(); }
   });
@@ -958,12 +979,12 @@ describe("apply requires approval, matching digests, and proves the result", () 
     } finally { harness.cleanup(); }
   });
 
-  it("writes nothing when the user declines", async () => {
+  it("reports user cancellation and writes nothing when the user declines", async () => {
     const harness = freshHarness({ confirm: false });
     try {
       const { details } = await checkedCandidate(harness, { candidate });
       const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
-      assert.equal(applied.status, "declined");
+      assert.equal(applied.status, "cancelled");
       assert.equal(applied.applied, false);
       assert.equal(harness.readFile(".pi/bifrost.json"), undefined);
     } finally {
@@ -1340,7 +1361,7 @@ describe("tool surface", () => {
       assert.ok(harness.tool.promptSnippet);
       const properties = (harness.tool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
       assert.deepEqual(Object.keys(properties).sort(), [
-        "candidate", "catalogDigest", "effectiveDigest", "offset", "operation", "patch",
+        "candidate", "catalogDigest", "classifierRuntimeDigest", "effectiveDigest", "offset", "operation", "patch",
         "prompts", "proposalDigest", "provider", "remove", "source", "sourceDigest",
       ]);
     } finally {
@@ -1648,6 +1669,158 @@ describe("structural findings reach the agent", () => {
       assert.equal(tiers.includes("a"), true, "the authored tier survives");
       assert.equal(tiers.includes("description"), false,
         "the reserved description key never becomes a tier");
+    } finally {
+      harness.cleanup();
+    }
+  });
+});
+
+describe("effective classifier runtime in the agent tool", () => {
+  it("reports config-off over legacy-on and validates only criteria shape while disabled", async () => {
+    const harness = freshHarness({ runtimeAware: true, legacyClassifierEnabled: true });
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "custom",
+        models: { custom: ["beta/code"] },
+        classifier: { enabled: false, backend: "typesafe" },
+      });
+      const inspect = detailsOf<ConfigAgentInspectResult>(await harness.run({ operation: "inspect" }));
+      assert.deepEqual(inspect.routing.classifier, {
+        enabled: false,
+        configuredEnabled: false,
+        source: "legacy-conflict",
+        backend: "typesafe",
+        criteriaTiers: [],
+        legacyConflict: { saved: true, configured: false },
+      });
+
+      const checkedResult = await harness.run({ operation: "check", patch: { strategy: "cheapest" } });
+      const checked = detailsOf<ConfigAgentCheckResult>(checkedResult);
+      assert.equal(checked.status, "ok", checked.issues.map((issue) => issue.message).join("; "));
+      assert.equal(checked.issues.some((issue) => /criteria missing/u.test(issue.message)), false);
+      assert.match(contentOf(checkedResult), /classifier runtime: disabled \(legacy-conflict\).*configured=off; backend=typesafe/);
+      assert.match(contentOf(checkedResult), /configured false overrides legacy classifierEnabled=true/);
+      assert.doesNotMatch(contentOf(checkedResult), /Classifier is paused/u);
+
+      const malformed = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        patch: { classifier: { enabled: false, backend: "typesafe", criteria: { custom: 42 } } },
+      }));
+      assert.equal(malformed.status, "rejected");
+      assert.ok(malformed.issues.some((issue) => /criterion for tier "custom"/u.test(issue.message)));
+      assert.equal(harness.classifyCalls(), 0);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("rejects malformed TypeSafe criteria aliases in classifier patches", async () => {
+    const harness = freshHarness();
+    try {
+      const original = {
+        schemaVersion: 2,
+        default: "custom",
+        models: { custom: ["beta/code"] },
+        classifier: { enabled: false, backend: "typesafe" },
+      };
+      harness.writeFile(".pi/bifrost.json", original);
+      const invalid = [
+        { enabled: false, backend: "typesafe", criteria: "TypeSafe" },
+        { enabled: false, backend: "typesafe", criteria: { custom: { type: "TypeSafe" } } },
+        { enabled: false, backend: "typesafe", criteria: { custom: { kind: "TypeSafe" } } },
+        { enabled: false, backend: "typesafe", criteria: { custom: "valid natural-language criterion" }, type: "TypeSafe" },
+      ];
+      for (const classifier of invalid) {
+        const result = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", patch: { classifier } }));
+        assert.equal(result.status, "rejected", JSON.stringify(result.issues));
+        assert.ok(result.issues.some((issue) => issue.severity === "error"));
+      }
+      assert.deepEqual(JSON.parse(harness.readFile(".pi/bifrost.json") ?? "null"), original);
+      assert.equal(harness.classifyCalls(), 0);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("invalidates approval when legacy classifier state changes while dialog is open", async () => {
+    let harness: Harness;
+    harness = freshHarness({
+      runtimeAware: true,
+      legacyClassifierEnabled: false,
+      confirmHook: () => harness.setLegacyClassifierEnabled(true),
+    });
+    try {
+      const original = {
+        schemaVersion: 2,
+        default: "custom",
+        models: { custom: ["beta/code"] },
+        classifier: { enabled: true, backend: "prompt", criteria: { custom: "bounded implementation" } },
+      };
+      harness.writeFile(".pi/bifrost.json", original);
+      const patch = { strategy: "cheapest" };
+      const { details } = await checkedCandidate(harness, { patch });
+      assert.equal(details.routingAfter?.classifier.enabled, false);
+      assert.equal(details.routingAfter?.classifier.source, "legacy-conflict");
+      assert.ok(details.guards?.classifierRuntimeDigest);
+
+      const result = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { patch })));
+      assert.equal(result.status, "stale");
+      assert.match(result.reason ?? "", /classifier runtime state changed while/u);
+      assert.match(harness.confirmations()[0]?.summary ?? "", /Classifier runtime: disabled \(legacy-conflict; backend=prompt\)/);
+      assert.deepEqual(JSON.parse(harness.readFile(".pi/bifrost.json") ?? "null"), original);
+      assert.equal(harness.reloadCalls(), 0);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("rejects a stale classifier runtime digest before opening approval", async () => {
+    const harness = freshHarness({ runtimeAware: true, legacyClassifierEnabled: false });
+    try {
+      const original = {
+        schemaVersion: 2,
+        default: "custom",
+        models: { custom: ["beta/code"] },
+        classifier: { enabled: true, backend: "prompt", criteria: { custom: "bounded implementation" } },
+      };
+      harness.writeFile(".pi/bifrost.json", original);
+      const patch = { strategy: "cheapest" };
+      const { details } = await checkedCandidate(harness, { patch });
+      harness.setLegacyClassifierEnabled(true);
+      const result = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { patch })));
+      assert.equal(result.status, "stale");
+      assert.match(result.reason ?? "", /classifier runtime state changed after/u);
+      assert.equal(harness.confirmations().length, 0);
+      assert.deepEqual(JSON.parse(harness.readFile(".pi/bifrost.json") ?? "null"), original);
+      assert.equal(harness.reloadCalls(), 0);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("shows requested tier, selected fallback tier, and fallback reason in preview", async () => {
+    const harness = freshHarness();
+    try {
+      const result = await harness.run({
+        operation: "preview",
+        candidate: {
+          schemaVersion: 2,
+          default: "general",
+          models: { quick: [], general: ["beta/code"] },
+          tierPolicies: { quick: { fallbackTiers: ["general"] } },
+          classifier: { enabled: false },
+        },
+        prompts: ["quick review this code"],
+      });
+      const details = detailsOf<ConfigAgentPreviewResult>(result);
+      const entry = details.cases[0];
+      assert.equal(entry?.tier, "quick");
+      assert.equal(entry?.selectedTier, "general");
+      assert.equal(entry?.fallbackReason, "requested_tier_unavailable");
+      const text = contentOf(result);
+      assert.match(text, /requested=quick; selected=general => beta\/code/u);
+      assert.match(text, /fallback: requested_tier_unavailable/u);
     } finally {
       harness.cleanup();
     }

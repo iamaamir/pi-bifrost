@@ -26,7 +26,10 @@ goal needs something Bifrost does not do, say so.
    restrictions. Never use a model id from memory or from documentation. When the
    inventory is long, repeat inspect with `"provider": "<id>"` to list one
    provider's models, and page further with `"offset": 40`, then `80`, and so
-   on; the filter and offset only narrow what is reported.
+   on; the filter and offset only narrow what is reported. Inspect also reports
+   effective classifier runtime state, configured state, backend, and any
+   legacy-state conflict; use runtime state, not `classifier.enabled` alone,
+   when describing whether classification is active.
 3. **Preserve existing policy while composing.** See
    [references/configuration-reference.md](references/configuration-reference.md)
    for the fields, strategies, and worked examples. Start from the user's
@@ -36,8 +39,10 @@ goal needs something Bifrost does not do, say so.
    `classifier`, or `tierPolicies` replaces that entire value in the selected
    source. Read that source file and carry forward its unrelated entries before
    replacing one of those fields. Do not flatten inherited settings from other
-   layers unless the user asks. Prefer a focused patch over a complete
-   `candidate`.
+   layers unless the user asks. Prefer a focused `patch` over a complete
+   `candidate`; `patch` merges top-level fields only, so a nested object such as
+   `classifier` is replaced as a whole. Preserve its unrelated members when
+   changing one nested setting.
 
    A valid candidate can still discard unrelated policy. After `check`, compare
    every reported replacement/removal and the effective before/after values
@@ -46,12 +51,22 @@ goal needs something Bifrost does not do, say so.
    necessary, ask; do not present it as an assumed tradeoff. A passing check
    proves validity, not that the candidate matches the goal.
 4. **Check the candidate.** Call `bifrost_config` with
-   `{"operation":"check", ...}`. Fix every reported error. Read the reported
-   warnings, pool references, and `newlyEligibleModels` before showing anything
-   to the user.
+   `{"operation":"check", ...}`. Fix every reported error. Check reports the
+   effective classifier backend and whether classification is enabled for
+   this session. Malformed authored criteria fail check; missing criteria are
+   required only for the direct backend that is actually enabled. Config
+   `classifier.enabled=false` overrides a legacy saved `true`. A legacy saved
+   `false` against config `true` pauses classification until the user chooses
+   `/bifrost classifier on` or `off` for this session. Use the reported runtime
+   state; never treat a legacy value as current approval to send prompts.
+   Read warnings, pool references, and `newlyEligibleModels` before showing
+   anything to the user.
 5. **Preview routing outcomes.** Call `bifrost_config` with
    `{"operation":"preview", ...}` and 2–5 representative prompts drawn from the
-   user's real work. Preview is offline: it sends nothing anywhere.
+   user's real work. Preview is offline: it sends nothing anywhere. Read each
+   requested tier, selected tier/model, and fallback reason. Keep empty
+   inherited tiers: they can be intentional no-route boundaries. Do not fill,
+   filter, or invent fallbacks to make a preview succeed.
 6. **Explain impact and tradeoffs.** Name changed tiers and model pools, rule
    additions/removals, classifier changes, and fallback changes. Explain why
    each removal or broad behavior change is necessary. If any existing setting
@@ -64,7 +79,7 @@ goal needs something Bifrost does not do, say so.
    `bifrost_config` with `{"operation":"apply", ...}` and pass back the
    `proposalDigest`, `sourceDigest`, `effectiveDigest`, and `catalogDigest`
    printed under "apply digests" by check or preview — copy them exactly,
-   character for character. For exact changes within the current 2,000,000-character
+   character for character. Also pass `classifierRuntimeDigest` when present. For exact changes within the current 2,000,000-character
    approval bound, the tool shows a concise impact summary first. Larger exact
    changes fail closed before the dialog; no summary is shown and nothing is
    written. Do not retry or split the same proposal into multiple writes to evade
@@ -73,8 +88,12 @@ goal needs something Bifrost does not do, say so.
    inspect every exact change page before applying. State clearly that summary
    approval does not mean the user inspected every value. The exact view is
    sequential; `n` advances, `p` returns, `b` returns to summary, and `a` applies
-   from the final exact page. Escape cancels. The dialog reports changes/removals
-   derived from the checked candidate; if the summary flags classifier, rules,
+   from the final exact page. Escape cancels and writes nothing. A cancelled or
+   declined dialog is not an apply; report it as cancelled/declined. Classifier
+   enable/disable commands are session-only; an explicit `on` choice validates
+   the effective backend and may send current prompt text to that backend. Tell
+   the user before recommending that choice. The approval dialog also rechecks
+   classifier runtime state while open. If the summary flags classifier, rules,
    model pools, or fallbacks, explain those impacts in conversation too.
    Never apply without the user's agreement or after check reports an error. RPC and other
    non-TUI sessions return `approval_required` without writing. In that case,
@@ -116,7 +135,8 @@ and `frontier` (empty pools until a user or init fills them) plus their
 
 **A proposed source replaces only what the user asked for.** Use `patch` to add
 or change named top-level fields; the other sources and unrelated keys stay
-untouched. `apply` writes exactly one source atomically, and reports the exact
+untouched. Nested objects within a replaced field must carry forward unrelated
+members. `apply` writes exactly one source atomically, and reports the exact
 fields it adds, replaces, and removes.
 
 **Only claim what Bifrost does.** Read

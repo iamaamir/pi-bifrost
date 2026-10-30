@@ -23,21 +23,17 @@ start_pi(){ "$A" --json daemon start >/dev/null; local run; run=$($A --json run 
 prompt(){ "$A" --session "$1" type "$2" >/dev/null; "$A" --session "$1" press Escape Enter >/dev/null; }
 
 wait_mode_state(){
-  local path="$1" enabled="$2" pinned="$3" classifier="$4" max="${5:-60}"
+  local path="$1" enabled="$2" max="${3:-60}"
   for _ in $(seq 1 "$max"); do
     if [[ -f "$path" ]] && node -e '
 const fs = require("node:fs");
-const [statePath, enabled, pinned, classifier] = process.argv.slice(1);
+const [statePath, enabled] = process.argv.slice(1);
 const state = JSON.parse(fs.readFileSync(statePath, "utf8"));
-// `pinned` is session-local by design and is not persisted.
-const expect = {
-  enabled: enabled === "true",
-  classifierEnabled: classifier === "true",
-};
-for (const [key, value] of Object.entries(expect)) {
-  if (state[key] !== value) process.exit(1);
-}
-' "$path" "$enabled" "$pinned" "$classifier" >/dev/null 2>&1; then
+const hasExpectedMode = enabled === "unset"
+  ? !Object.hasOwn(state, "enabled")
+  : state.enabled === (enabled === "true");
+if (!hasExpectedMode || Object.hasOwn(state, "pinned") || Object.hasOwn(state, "classifierEnabled")) process.exit(1);
+' "$path" "$enabled" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
@@ -103,25 +99,25 @@ sid=$(start_pi)
 "$A" --session "$sid" wait 'Bifrost · on · classifier off' --assert --timeout 15000 >/dev/null
 prompt "$sid" '/bifrost off'
 "$A" --session "$sid" wait 'Bifrost · off' --assert --timeout 15000 >/dev/null
-wait_mode_state "$work/.pi/bifrost-state.json" false false false
+wait_mode_state "$work/.pi/bifrost-state.json" false
 prompt "$sid" '/reload'
 "$A" --session "$sid" wait 'Bifrost · off' --assert --timeout 15000 >/dev/null
-wait_mode_state "$work/.pi/bifrost-state.json" false false false
+wait_mode_state "$work/.pi/bifrost-state.json" false
 prompt "$sid" '/bifrost reload'
 "$A" --session "$sid" wait 'Bifrost · off' --assert --timeout 15000 >/dev/null
-wait_mode_state "$work/.pi/bifrost-state.json" false false false
+wait_mode_state "$work/.pi/bifrost-state.json" false
 prompt "$sid" '/bifrost on'
 "$A" --session "$sid" wait 'Bifrost · on · classifier off' --assert --timeout 15000 >/dev/null
-wait_mode_state "$work/.pi/bifrost-state.json" true false false
+wait_mode_state "$work/.pi/bifrost-state.json" unset
 prompt "$sid" '/bifrost pin'
 "$A" --session "$sid" wait 'Bifrost · pinned' --assert --timeout 15000 >/dev/null
-wait_mode_state "$work/.pi/bifrost-state.json" true true false
+wait_mode_state "$work/.pi/bifrost-state.json" unset
 prompt "$sid" '/reload'
 "$A" --session "$sid" wait 'Bifrost · on · classifier off' --assert --timeout 15000 >/dev/null
-wait_mode_state "$work/.pi/bifrost-state.json" true true false
+wait_mode_state "$work/.pi/bifrost-state.json" unset
 prompt "$sid" '/bifrost reload'
 "$A" --session "$sid" wait 'Bifrost · on · classifier off' --assert --timeout 15000 >/dev/null
-wait_mode_state "$work/.pi/bifrost-state.json" true true false
+wait_mode_state "$work/.pi/bifrost-state.json" unset
 echo 'scenario 4: pass'
 "$A" --json sessions cleanup --all --yes >/dev/null 2>&1||true; "$A" --json daemon stop --force --yes >/dev/null 2>&1||true
 
