@@ -901,6 +901,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return session;
   }
 
+  function classifierSessionIsCurrent(manager: ExtensionContext["sessionManager"], session: ClassifierSessionRuntime, generation: number): boolean {
+    return classifierSessionFor(manager) === session && session.generation === generation && !session.controller.signal.aborted;
+  }
+
   function classifierEnablementFor(ctx: ExtensionContext, targetConfig: BifrostConfig = state.config) {
     return resolveClassifierEnablement(
       targetConfig.classifier?.enabled !== false,
@@ -1008,7 +1012,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const session = classifierSessionFor(ctx.sessionManager);
     const generation = session.generation;
     const result = await getPipeline(ctx).classify(text, classifierSignalFor(ctx, signal), options);
-    return session.generation === generation ? result : { kind: "unclassified", classificationOutcome: "aborted" };
+    return classifierSessionIsCurrent(ctx.sessionManager, session, generation) ? result : { kind: "unclassified", classificationOutcome: "aborted" };
   }
 
   function discardClassifierPipeline(manager: ExtensionContext["sessionManager"]): void {
@@ -2729,6 +2733,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       let terminalRouteCategory: string | undefined;
       let activeRouteOrigin = request.reason === "direct" ? "direct" : request.reason === "retry" ? "retry" : request.reason === "continuation" ? "continuation" : "automatic";
       let classifierDispatchGeneration: number | undefined;
+      let classifierDispatchSession: ClassifierSessionRuntime | undefined;
       let classifierDispatchGuardEnabled = false;
       try {
       if (requestReason === "user" && state.enabled && !state.pinned) await joinAutoBootstrap(ctx);
@@ -2925,6 +2930,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           const classifierGeneration = classifierSession.generation;
           const classifierWasEnabled = classifierEnablementFor(ctx).enabled;
           classifierDispatchGeneration = classifierGeneration;
+          classifierDispatchSession = classifierSession;
           classifierDispatchGuardEnabled = classifierWasEnabled;
           let classification: ClassificationResult = activeRecoveryToken
             ? { kind: "fallback", tier: activeRecoveryToken.requestedTier }
@@ -2933,7 +2939,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               : forcedTier
             ? { kind: "classified", tier: forcedTier, source: "inline" }
             : await classifyForSession(ctx, prompt, signal);
-          if (classifierWasEnabled && classifierSession.generation !== classifierGeneration) {
+          if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
             terminalRouteCategory = "classifier_state_changed";
             throw new Error("Bifrost classifier settings changed during routing; no model was dispatched. Resubmit after repair.");
           }
@@ -3098,7 +3104,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               reason: modelKey(model) === activeRecoveryToken.candidateKey ? "prepared_candidate" : "revalidated_alternative",
             });
           }
-          if (classifierWasEnabled && classifierSession.generation !== classifierGeneration) {
+          if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
             terminalRouteCategory = "classifier_state_changed";
             throw new Error("Bifrost classifier settings changed during routing; no model was dispatched. Resubmit after repair.");
           }
@@ -3134,8 +3140,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         },
         beforeDispatch: async (model, currentRequest, intent) => {
           if (classifierDispatchGuardEnabled
-            && (classifierDispatchGeneration === undefined
-              || classifierSessionFor(ctx.sessionManager).generation !== classifierDispatchGeneration)) {
+            && (classifierDispatchGeneration === undefined || !classifierDispatchSession
+              || !classifierSessionIsCurrent(ctx.sessionManager, classifierDispatchSession, classifierDispatchGeneration))) {
             terminalRouteCategory = "classifier_state_changed";
             throw new Error("Bifrost classifier settings changed before dispatch; no model was sent. Resubmit after repair.");
           }
@@ -3973,7 +3979,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       let classification = forcedTier
         ? { kind: "classified" as const, tier: forcedTier, source: "inline" as const }
         : await classifyForSession(ctx, promptText, ctx.signal);
-      if (classifierWasEnabled && classifierSession.generation !== classifierGeneration) {
+      if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
         endClassify({ kind: "unclassified", outcome: "aborted" });
         endInput({ outcome: "classifier_state_changed" });
         return routeBoundary
@@ -4036,7 +4042,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         return defaultAction;
       }
 
-      if (classifierWasEnabled && classifierSession.generation !== classifierGeneration) {
+      if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
         endInput({ outcome: "classifier_state_changed" });
         return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Classifier settings changed during routing; the turn was not sent. Resubmit after repair.");
       }

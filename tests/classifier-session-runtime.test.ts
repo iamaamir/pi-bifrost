@@ -44,8 +44,9 @@ describe("classifier session isolation", () => {
     const general = makeModel("fixture", "general");
     const prompt = makeModel("fixture", "prompt");
     const models: Model<Api>[] = [quick, general, prompt];
+    let sessionAId = "session-a";
     const managers = ["session-a", "session-b"].map((id) => ({
-      getSessionId: () => id,
+      getSessionId: () => id === "session-a" ? sessionAId : id,
       getHeader: () => ({ id }),
       getBranch: () => [],
     }));
@@ -92,7 +93,7 @@ describe("classifier session isolation", () => {
       process.env[TYPE_SAFE_API_KEY_ENV] = "test-only-key";
       globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
         directRequests += 1;
-        if (directRequests === 3 || directRequests === 4) {
+        if (directRequests === 3 || directRequests === 4 || directRequests === 6) {
           const requestNumber = directRequests;
           const signal = init?.signal ?? undefined;
           if (signal) pendingSignals.set(requestNumber, signal);
@@ -149,6 +150,29 @@ describe("classifier session isolation", () => {
       assert.equal(modelB.model, general, "session B classifier remains enabled");
       assert.equal(directRequests, 5, "session B still makes its own direct classifier request");
       assert.equal(promptRequests, 0, "aborting direct classification must not start prompt fallback");
+
+      await command("classifier on", ctxA);
+      const replacedRoute = route(request("pending old session"), ctxA);
+      await waitForRequest(6);
+      sessionAId = "session-c";
+      await command("classifier status", ctxA);
+      assert.equal(pendingSignals.get(6)?.aborted, true, "replacing session aborts old classifier");
+      await assert.rejects(replacedRoute, /classifier settings changed/i);
+      assert.equal(promptRequests, 0, "replaced session cannot start prompt fallback");
+
+      let selectedBeforeReplacement = false;
+      const dispatchContext = {
+        ...ctxA,
+        hasUI: true,
+        ui: { ...ctxA.ui, notify: (message: string) => {
+          if (message.startsWith("Bifrost auto:")) {
+            selectedBeforeReplacement = true;
+            sessionAId = "session-d";
+          }
+        } },
+      } as ExtensionContext;
+      await assert.rejects(route(request("replace after selection"), dispatchContext), /changed before dispatch/i);
+      assert.equal(selectedBeforeReplacement, true, "session changed after selection and before dispatch");
     } finally {
       await flushDebug();
       process.chdir(previousCwd);
