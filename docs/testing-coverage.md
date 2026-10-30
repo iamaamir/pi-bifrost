@@ -74,32 +74,35 @@ Provider projection tests require one state snapshot per nonempty decision and z
 
 `tests/integration/config-approval-tui.test.mjs` starts pinned Pi in an isolated
 PTY and drives the production tool through a test command. It checks a
-TOOL-GENERATED summary can be explicitly applied, classifier disablement,
-removed/replaced rules, model-pool and fallback changes are visible without raw
-rule/model JSON, and the optional exact view displays the entire 6,000-character
-value plus final suffix across sequential pages before apply. It checks a
-layered workspace edit whose classifier and rules are masked by project policy:
-the summary distinguishes source changes from unchanged effective behavior.
-Both ordinary and narrow viewports have bounded summary pages and visible controls. It also checks early
-Apply refusal in exact view, cancellation, tiny viewports, resize reset, and one
-exact saved source. An isolated production copy omits classifier impact from the
-summary and fails the real-Pi display assertion. The fixture performs no model
-generation and substitutes reload success, so it does not prove model-issued
-tool dispatch or activation. It uses the existing Python/Pillow screen harness
-and outbound network guard.
+TOOL-GENERATED summary can be explicitly applied; classifier disablement and
+enablement are described accurately; complete changed-field names, first-match
+rule reordering, removed/replaced rules, model-pool and fallback changes appear
+without raw rule/model JSON; and the optional exact view displays the entire
+6,000-character value plus final suffix across sequential pages before apply.
+It checks a layered workspace edit whose classifier and rules are masked by
+project policy: the summary distinguishes source changes from unchanged
+effective behavior. Both ordinary and narrow viewports have bounded summary
+pages and visible controls. It also checks early Apply refusal in exact view,
+cancellation, tiny viewports, resize reset, and one exact saved source. An
+isolated production copy omits classifier impact from the summary and fails the
+real-Pi display assertion. The fixture performs no model generation and
+substitutes reload success, so it does not prove model-issued tool dispatch or
+activation. It uses the existing Python/Pillow screen harness and outbound
+network guard.
 
-The reviewer caps approval text at 2,000,000 characters and wraps by grapheme;
-proposals beyond that bound fail closed. Apply-from-summary does not assert that
-the user read every exact value. `tests/config-agent.test.ts` checks concise summary counts, no raw rule/model
-values, actual retention of unrelated tiers/rules/classifier/fallbacks in a
-focused added-tier proposal, classifier/rule/pool/fallback highlights, and
-unchanged stale-input guards. `tests/config-skill.test.ts` checks the published
-skill tells agents to compare candidate removals with the stated goal, preserve
-unrelated settings, and not disable an existing classifier merely for fixed
-roles. This tests guidance text and deterministic config behavior, not model
-obedience. `tests/config-approval.test.ts`
-checks sequential summary/exact pages, cancellation, resize, and terminal
-wrapping.
+The reviewer caps exact approval text at 2,000,000 characters and wraps by
+grapheme; larger proposals fail closed before the dialog, with no write or
+summary. Apply-from-summary does not assert that the user read every exact
+value. `tests/config-agent.test.ts` checks every changed field name, classifier
+enablement/disablement wording, first-match rule order and duplicate counts,
+scalar pools, legacy `models.description` tiers versus schema-v3 metadata,
+concise counts, no raw rule/model values, source/effective differences, actual
+retention of unrelated policy in an added-tier proposal, and unchanged stale-
+input guards. `tests/config-skill.test.ts` checks the published skill describes
+the size limit and tells agents to compare removals with the goal and preserve
+unrelated settings. This tests guidance text and deterministic config behavior,
+not model obedience. `tests/config-approval.test.ts` checks sequential
+summary/exact pages, cancellation, resize, and terminal wrapping.
 
 `tests/integration/config-agent-acceptance.test.mjs` covers model-issued check
 and apply in real Pi RPC mode. It proves apply returns `approval_required`,

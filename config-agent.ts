@@ -28,6 +28,7 @@ import {
   MAX_CONFIG_SOURCE_BYTES,
   SUPPORTED_SCHEMA_VERSIONS,
   classifierTotalTimeoutIssue,
+  schemaVersionAtLeast,
   validateConfig,
   validateTierPolicyConfig,
   type BifrostConfig,
@@ -1042,18 +1043,25 @@ function approvalList(values: readonly string[], limit: number): string {
   return values.length > limit ? `${shown}, … ${values.length - limit} more (see full exact change)` : shown;
 }
 
-function ruleChanges(beforeValue: unknown, afterValue: unknown): { before: number; after: number; removed: string[]; added: string[] } | undefined {
+function ruleChanges(beforeValue: unknown, afterValue: unknown): { before: number; after: number; removed: string[]; added: string[]; orderChanged: boolean } | undefined {
   const before = Array.isArray(beforeValue) ? beforeValue : [];
   const after = Array.isArray(afterValue) ? afterValue : [];
   if (canonicalJson(before) === canonicalJson(after)) return undefined;
-  const afterSet = new Set(after.map(canonicalJson));
-  const beforeSet = new Set(before.map(canonicalJson));
-  return {
-    before: before.length,
-    after: after.length,
-    removed: before.filter((rule) => !afterSet.has(canonicalJson(rule))).map(canonicalJson).sort(),
-    added: after.filter((rule) => !beforeSet.has(canonicalJson(rule))).map(canonicalJson).sort(),
+  const counts = (rules: readonly unknown[]): Map<string, number> => {
+    const result = new Map<string, number>();
+    for (const rule of rules) {
+      const key = canonicalJson(rule);
+      result.set(key, (result.get(key) ?? 0) + 1);
+    }
+    return result;
   };
+  const beforeCounts = counts(before);
+  const afterCounts = counts(after);
+  const delta = (from: Map<string, number>, to: Map<string, number>): string[] =>
+    [...from].flatMap(([rule, count]) => Array.from({ length: Math.max(0, count - (to.get(rule) ?? 0)) }, () => rule)).sort();
+  const removed = delta(beforeCounts, afterCounts);
+  const added = delta(afterCounts, beforeCounts);
+  return { before: before.length, after: after.length, removed, added, orderChanged: removed.length === 0 && added.length === 0 };
 }
 
 function summarizeRules(checked: ConfigAgentCheckResult, before: Record<string, unknown>, after: Record<string, unknown>, lines: string[]): void {
@@ -1062,12 +1070,15 @@ function summarizeRules(checked: ConfigAgentCheckResult, before: Record<string, 
   const effectiveDelta = ruleChanges(before.rules, after.rules);
   const sameImpact = sourceDelta && effectiveDelta
     && canonicalJson(sourceDelta.removed) === canonicalJson(effectiveDelta.removed)
-    && canonicalJson(sourceDelta.added) === canonicalJson(effectiveDelta.added);
+    && canonicalJson(sourceDelta.added) === canonicalJson(effectiveDelta.added)
+    && sourceDelta.orderChanged === effectiveDelta.orderChanged;
+  const orderNote = (delta: NonNullable<typeof sourceDelta>): string =>
+    delta.orderChanged ? "; first-match priority order changed — inspect Details" : "";
   if (sameImpact && sourceDelta && effectiveDelta) {
-    lines.push(`Rules: source ${sourceDelta.before} → ${sourceDelta.after}; effective ${effectiveDelta.before} → ${effectiveDelta.after}; ${effectiveDelta.removed.length} removed, ${effectiveDelta.added.length} added${sourceDelta.after === 0 && sourceDelta.before > 0 ? " — ALL target-source rules removed" : ""}.`);
+    lines.push(`Rules: source ${sourceDelta.before} → ${sourceDelta.after}; effective ${effectiveDelta.before} → ${effectiveDelta.after}; ${effectiveDelta.removed.length} removed, ${effectiveDelta.added.length} added${sourceDelta.after === 0 && sourceDelta.before > 0 ? " — ALL target-source rules removed" : ""}${orderNote(sourceDelta)}.`);
   } else {
-    if (sourceDelta) lines.push(`Target-source rules: ${sourceDelta.before} → ${sourceDelta.after}; ${sourceDelta.removed.length} removed, ${sourceDelta.added.length} added${sourceDelta.after === 0 && sourceDelta.before > 0 ? " — ALL target-source rules removed" : ""}.`);
-    if (effectiveDelta) lines.push(`Effective rules: ${effectiveDelta.before} → ${effectiveDelta.after}; ${effectiveDelta.removed.length} removed, ${effectiveDelta.added.length} added${effectiveDelta.after === 0 && effectiveDelta.before > 0 ? " — ALL effective rules removed" : ""}.`);
+    if (sourceDelta) lines.push(`Target-source rules: ${sourceDelta.before} → ${sourceDelta.after}; ${sourceDelta.removed.length} removed, ${sourceDelta.added.length} added${sourceDelta.after === 0 && sourceDelta.before > 0 ? " — ALL target-source rules removed" : ""}${orderNote(sourceDelta)}.`);
+    if (effectiveDelta) lines.push(`Effective rules: ${effectiveDelta.before} → ${effectiveDelta.after}; ${effectiveDelta.removed.length} removed, ${effectiveDelta.added.length} added${effectiveDelta.after === 0 && effectiveDelta.before > 0 ? " — ALL effective rules removed" : ""}${orderNote(effectiveDelta)}.`);
     else if (sourceDelta) lines.push("Effective rules unchanged; source edit has no current routing effect.");
   }
 }
@@ -1089,7 +1100,14 @@ function mapDelta(beforeValue: unknown, afterValue: unknown, valueSummary: (valu
 }
 
 function poolCount(value: unknown): string {
-  return String(Array.isArray(value) ? value.length : 0);
+  return String(poolEntries(value as string | string[] | undefined).length);
+}
+
+function modelPools(value: unknown, schemaVersion: unknown): Record<string, unknown> {
+  const models = asRecord(value);
+  return schemaVersionAtLeast(schemaVersion, 3)
+    ? Object.fromEntries(Object.entries(models).filter(([key]) => key !== "description"))
+    : models;
 }
 
 function policyFallbacks(value: unknown): Record<string, unknown> {
@@ -1130,15 +1148,18 @@ function summarizeClassifier(checked: ConfigAgentCheckResult, before: Record<str
   const stateChange = `${classifierState(source?.before)} → ${classifierState(source?.after)}`;
   const sourceLabel = source?.kind === "remove" ? "removed from target source" : `settings changed (enabled ${stateChange})`;
   const effectiveStateChange = `${classifierState(effectiveBefore)} → ${classifierState(effectiveAfter)}`;
+  const effect = (change: string): string => change.endsWith("→ OFF")
+    ? " — classification disabled"
+    : change.endsWith("→ ON") ? " — classification enabled" : "";
   if (source && effectiveChanged && stateChange === effectiveStateChange && stateChange !== "ON → ON") {
-    lines.push(`Classifier enabled: ${stateChange} in source and effective policy — classification disabled.`);
+    lines.push(`Classifier enabled: ${stateChange} in source and effective policy${effect(stateChange)}.`);
   } else if (source && canonicalJson(source.before) === canonicalJson(effectiveBefore) && canonicalJson(source.after) === canonicalJson(effectiveAfter)) {
-    lines.push(`Classifier settings (source + effective): ${sourceLabel}${stateChange.endsWith("→ OFF") ? " — classification disabled" : ""}.`);
+    lines.push(`Classifier settings (source + effective): ${sourceLabel}${effect(stateChange)}.`);
   } else {
-    if (source) lines.push(`Target-source classifier: ${sourceLabel}${stateChange.endsWith("→ OFF") ? " — classification disabled" : ""}.`);
+    if (source) lines.push(`Target-source classifier: ${sourceLabel}${effect(stateChange)}.`);
     if (effectiveChanged) {
       const state = `${classifierState(effectiveBefore)} → ${classifierState(effectiveAfter)}`;
-      lines.push(`Effective classifier: ${state}${state.endsWith("→ OFF") ? " — classification disabled" : ""}.`);
+      lines.push(`Effective classifier: ${state}${effect(state)}.`);
     } else if (source) lines.push(`Effective classifier remains ${classifierState(effectiveBefore)}; source edit has no current effect.`);
   }
 }
@@ -1151,7 +1172,7 @@ function approvalSummary(checked: ConfigAgentCheckResult): string {
   const lines = [
     "TOOL-GENERATED SUMMARY — impact only; not full values.",
     `Source: ${checked.source}.`,
-    `Fields: ${counts.add} added, ${counts.replace} replaced, ${counts.remove} removed: ${approvalList(fields.slice(0, 4), 4) || "none"}${fields.length > 4 ? `; +${fields.length - 4} more` : ""}`,
+    `Fields: ${counts.add} added, ${counts.replace} replaced, ${counts.remove} removed: ${fields.join(", ") || "none"}`,
   ];
   if (removed.length > 0) lines.push(`REMOVED source keys: ${approvalList(removed.slice(0, 5), 5)}${removed.length > 5 ? `; +${removed.length - 5} more` : ""}`);
 
@@ -1160,7 +1181,7 @@ function approvalSummary(checked: ConfigAgentCheckResult): string {
   summarizeClassifier(checked, before, after, lines);
   summarizeRules(checked, before, after, lines);
   const models = checked.changes.find((change) => change.field === "models");
-  summarizeMap("Model pools", models?.before, models?.after, before.models, after.models, lines, poolCount);
+  summarizeMap("Model pools", modelPools(models?.before, before.schemaVersion), modelPools(models?.after, after.schemaVersion), modelPools(before.models, before.schemaVersion), modelPools(after.models, after.schemaVersion), lines, poolCount);
   const policies = checked.changes.find((change) => change.field === "tierPolicies");
   summarizeMap("Fallbacks", policyFallbacks(policies?.before), policyFallbacks(policies?.after), policyFallbacks(before.tierPolicies), policyFallbacks(after.tierPolicies), lines, approvalValue);
   lines.push("Details shows exact values. Summary approval skips them.");

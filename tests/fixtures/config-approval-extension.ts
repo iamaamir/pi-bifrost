@@ -1,5 +1,5 @@
 // Test-only command drives the production tool through real Pi's TUI context.
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
@@ -19,9 +19,14 @@ export default function (pi: ExtensionAPI) {
       const toolContext: ExtensionToolContext = {
         ...ctx, tools: [], executeTool: async () => { throw new Error("Nested tools are not part of this fixture"); },
       };
-      const layered = args.trim() === "layered";
+      const argument = args.trim();
+      const layered = argument === "layered";
       const source = layered ? "workspace" : "project";
-      const patch = layered ? { classifier: { enabled: false }, rules: [] } : {
+      const configPath = join(ctx.cwd, source === "project" ? ".pi/bifrost.json" : "bifrost.json");
+      const current = JSON.parse(readFileSync(configPath, "utf8")) as { rules?: unknown[] };
+      const patch = argument === "classifier-on" ? { classifier: { enabled: true } }
+        : argument === "rules-reorder" ? { rules: [...(current.rules ?? [])].reverse() }
+          : layered ? { classifier: { enabled: false }, rules: [] } : {
         schemaVersion: 2,
         description: "x".repeat(6_000) + "HIDDEN_LAST_CHANGE",
         classifier: { enabled: false },

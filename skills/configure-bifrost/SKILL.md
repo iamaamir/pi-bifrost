@@ -64,8 +64,12 @@ goal needs something Bifrost does not do, say so.
    `bifrost_config` with `{"operation":"apply", ...}` and pass back the
    `proposalDigest`, `sourceDigest`, `effectiveDigest`, and `catalogDigest`
    printed under "apply digests" by check or preview — copy them exactly,
-   character for character. The tool shows a concise tool-generated impact summary
-   first. The user may apply that summary explicitly with `a`, or choose `d` to
+   character for character. For exact changes within the current 2,000,000-character
+   approval bound, the tool shows a concise impact summary first. Larger exact
+   changes fail closed before the dialog; no summary is shown and nothing is
+   written. Do not retry or split the same proposal into multiple writes to evade
+   the bound. Ask the user to narrow the change, then check and seek approval again.
+   The user may apply the summary explicitly with `a`, or choose `d` to
    inspect every exact change page before applying. State clearly that summary
    approval does not mean the user inspected every value. The exact view is
    sequential; `n` advances, `p` returns, `b` returns to summary, and `a` applies

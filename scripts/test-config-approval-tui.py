@@ -125,6 +125,7 @@ def run():
             summary_text = compact_summary(summary)
             assert "Classifierenabled:ON→OFF" in summary_text and "classificationdisabled" in summary_text, f"summary omits classifier status: {summary}"
             assert "ALLtarget-sourcerulesremoved" in summary_text and "16removed,0added" in summary_text, summary
+            assert "tierPolicies" in summary_text, f"summary hides a changed field name: {summary}"
             assert "Modelpools" in summary_text and "review" in summary_text and "→1" in summary_text, summary
             assert "Fallbacks" in summary_text and "general" in summary_text, summary
             assert '"pattern"' not in summary_text and '"model"' not in summary_text and "fake/healthy" not in summary_text, summary
@@ -193,6 +194,7 @@ def run():
             summary = traverse("summary")
             summary_text = compact_summary(summary)
             assert "ON→OFF" in summary_text and "ALLtarget-sourcerulesremoved" in summary_text, summary
+            assert "tierPolicies" in summary_text, f"narrow summary hides a changed field name: {summary}"
             assert '"pattern"' not in summary_text and '"model"' not in summary_text, summary
             ui.send(master, "a")
             wait(lambda _: result.exists(), "summary Apply result")
@@ -214,6 +216,47 @@ def run():
             wait(lambda _: result.exists(), "layered summary cancel")
             assert json.loads(result.read_text())["status"] == "declined"
             assert source.read_text() == original and workspace_source.read_text() == original
+            result.unlink()
+
+            enable_config = {**original_config, "classifier": {"enabled": False}}
+            original = json.dumps(enable_config)
+            source.write_text(original)
+            workspace_source.write_text(original)
+            start_case("classifier-on")
+            summary = traverse("classifier enable summary")
+            summary_text = compact_summary(summary)
+            assert "OFF→ONinsourceandeffectivepolicy" in summary_text, summary
+            assert "classificationenabled" in summary_text and "classificationdisabled" not in summary_text, summary
+            ui.send(master, "\x1b")
+            wait(lambda _: result.exists(), "classifier enable cancel")
+            assert json.loads(result.read_text())["status"] == "declined"
+            assert source.read_text() == original
+            result.unlink()
+
+            order_config = {
+                "schemaVersion": 2,
+                "enabled": False,
+                "default": "general",
+                "models": {"general": ["fake/healthy"], "review": ["fake/healthy"]},
+                "classifier": {"enabled": False},
+                "rules": [
+                    {"pattern": "review", "model": "general"},
+                    {"pattern": "review", "model": "review"},
+                ],
+            }
+            original = json.dumps(order_config)
+            source.write_text(original)
+            workspace_source.write_text(original)
+            start_case("rules-reorder")
+            summary = traverse("rule order summary")
+            summary_text = compact_summary(summary)
+            assert "0removed,0added" in summary_text, summary
+            assert "first-matchpriorityorderchanged" in summary_text and "inspectDetails" in summary_text, summary
+            assert '"pattern"' not in summary_text and '"model"' not in summary_text, summary
+            ui.send(master, "\x1b")
+            wait(lambda _: result.exists(), "rule order cancel")
+            assert json.loads(result.read_text())["status"] == "declined"
+            assert source.read_text() == original
             ui.assert_no_network_violations(home)
             print("PASS: pinned Pi concise summary, source/effective layering, narrow viewport, exact review, fail-closed controls")
         finally:

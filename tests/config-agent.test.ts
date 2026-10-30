@@ -23,6 +23,7 @@ import { reportText } from "../config-agent-report.ts";
 import type { ConfigApproval } from "../config-approval.ts";
 import { SUPPORTED_SCHEMA_VERSIONS } from "../config.ts";
 import { loadConfigForReload } from "../config-load.ts";
+import { classifyCompiled, compileRules } from "../routing.ts";
 import { makeModel } from "./helpers.ts";
 
 interface HarnessOptions {
@@ -701,6 +702,127 @@ describe("apply requires approval, matching digests, and proves the result", () 
       assert.match(summary, /Fallbacks: 1 tier/);
       assert.doesNotMatch(summary, /\\\\b|"pattern"|"model"|beta\/code|alpha\/strong|gamma\/review/);
       assert.ok(summary.length < 1_400, `impact summary should stay concise, got ${summary.length} chars`);
+    } finally { harness.cleanup(); }
+  });
+
+  it("reports classifier enablement without a contradictory disabled claim", async () => {
+    const harness = freshHarness();
+    try {
+      const original = {
+        schemaVersion: 2,
+        default: "work",
+        models: { work: ["beta/code"] },
+        classifier: { enabled: false },
+      };
+      harness.writeFile(".pi/bifrost.json", original);
+      const candidate = { ...original, classifier: { enabled: true } };
+      const { details } = await checkedCandidate(harness, { candidate });
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
+      assert.equal(applied.status, "ok");
+      const summary = harness.confirmations()[0]!.summary;
+      assert.match(summary, /Classifier enabled: OFF → ON in source and effective policy — classification enabled/);
+      assert.doesNotMatch(summary, /classification disabled/);
+    } finally { harness.cleanup(); }
+  });
+
+  it("reports first-match rule reorder and duplicate multiplicity changes", async () => {
+    const harness = freshHarness();
+    try {
+      const originalRules = [
+        { pattern: "review", model: "work" },
+        { pattern: "review", model: "review" },
+      ];
+      const original = {
+        schemaVersion: 2,
+        default: "work",
+        models: { work: ["beta/code"], review: ["gamma/review"] },
+        classifier: { enabled: false },
+        rules: originalRules,
+      };
+      harness.writeFile(".pi/bifrost.json", original);
+      const candidate = { ...original, rules: [...originalRules].reverse() };
+      assert.equal(classifyCompiled("review this", compileRules(originalRules)), "work");
+      assert.equal(classifyCompiled("review this", compileRules(candidate.rules)), "review");
+      const checked = await checkedCandidate(harness, { candidate });
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(checked.details, { candidate })));
+      assert.equal(applied.status, "ok");
+      const reordered = harness.confirmations()[0]!.summary;
+      assert.match(reordered, /0 removed, 0 added; first-match priority order changed — inspect Details/);
+
+      const duplicate = { ...original, rules: [originalRules[0], originalRules[0], originalRules[1]] };
+      const withoutDuplicate = { ...duplicate, rules: [originalRules[0], originalRules[1]] };
+      harness.writeFile(".pi/bifrost.json", duplicate);
+      const duplicateCheck = await checkedCandidate(harness, { candidate: withoutDuplicate });
+      const duplicateApply = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(duplicateCheck.details, { candidate: withoutDuplicate })));
+      assert.equal(duplicateApply.status, "ok");
+      assert.match(harness.confirmations()[1]!.summary, /Rules: source 3 → 2; effective 3 → 2; 1 removed, 0 added/);
+    } finally { harness.cleanup(); }
+  });
+
+  it("counts string model pools and treats description as a tier only before schema v3", async () => {
+    const harness = freshHarness();
+    try {
+      const legacy = {
+        schemaVersion: 2,
+        default: "work",
+        classifier: { enabled: false },
+        models: { description: "beta/code", work: "alpha/strong" },
+      };
+      harness.writeFile(".pi/bifrost.json", legacy);
+      const legacyCandidate = {
+        ...legacy,
+        models: { description: "gamma/review", work: "beta/code" },
+      };
+      const legacyCheck = await checkedCandidate(harness, { candidate: legacyCandidate });
+      const legacyApply = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(legacyCheck.details, { candidate: legacyCandidate })));
+      assert.equal(legacyApply.status, "ok");
+      assert.match(harness.confirmations()[0]!.summary, /Model pools: 2 tiers \("description" 1 → 1; "work" 1 → 1\)/);
+
+      const schemaV3 = {
+        schemaVersion: 3,
+        default: "work",
+        classifier: { enabled: false },
+        models: { description: "original metadata", work: "beta/code" },
+      };
+      harness.writeFile(".pi/bifrost.json", schemaV3);
+      const schemaV3Candidate = { ...schemaV3, models: { description: "updated metadata", work: "beta/code" } };
+      const v3Check = await checkedCandidate(harness, { candidate: schemaV3Candidate });
+      const v3Apply = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(v3Check.details, { candidate: schemaV3Candidate })));
+      assert.equal(v3Apply.status, "ok");
+      assert.doesNotMatch(harness.confirmations()[1]!.summary, /Model pools|description/);
+    } finally { harness.cleanup(); }
+  });
+
+  it("names every changed field before summary approval", async () => {
+    const harness = freshHarness();
+    try {
+      const original = {
+        schemaVersion: 2,
+        enabled: true,
+        default: "work",
+        strategy: "first",
+        models: { work: ["beta/code"], review: ["gamma/review"] },
+        rules: [{ pattern: "work", model: "work" }],
+        routingScope: { providers: ["beta"] },
+      };
+      harness.writeFile(".pi/bifrost.json", original);
+      const candidate = {
+        ...original,
+        enabled: false,
+        default: "review",
+        strategy: "cheapest",
+        models: { ...original.models, docs: ["alpha/strong"] },
+        rules: [{ pattern: "review", model: "review" }],
+        routingScope: { providers: ["gamma", "alpha"] },
+      };
+      const checked = await checkedCandidate(harness, { candidate });
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(checked.details, { candidate })));
+      assert.equal(applied.status, "ok");
+      const summary = harness.confirmations()[0]!.summary;
+      for (const field of ["default", "enabled", "models", "rules", "routingScope", "strategy"]) {
+        assert.ok(summary.includes(`"${field}"`), `summary omits changed field ${field}: ${summary}`);
+      }
+      assert.doesNotMatch(summary, /\+\d+ more/);
     } finally { harness.cleanup(); }
   });
 
