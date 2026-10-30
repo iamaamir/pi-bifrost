@@ -296,7 +296,7 @@ describe("config agent tool Pi acceptance", { concurrency: 1, timeout: 180_000 }
 
       const dialogs = rpc.records.filter((record) => record.type === "extension_ui_request" && ["confirm", "select", "editor", "custom"].includes(record.method));
       assert.deepEqual(dialogs, [], "RPC apply must not request a weaker approval");
-      assert.match(lastCheckReport ?? "", /classifier runtime: disabled \(legacy-conflict\).*configured=off; backend=prompt/i);
+      assert.match(lastCheckReport ?? "", /classifier runtime now: disabled \(legacy-conflict\).*configured=off; backend=prompt/i);
       assert.match(lastCheckReport ?? "", /configured false overrides legacy classifierEnabled=true/);
       assert.match(lastApplyReport ?? "", /approval_required/);
       assert.equal(readFileSync(savedPath, "utf8"), before, "RPC apply must preserve exact source bytes");
