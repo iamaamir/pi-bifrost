@@ -1851,6 +1851,25 @@ describe("effective classifier runtime in the agent tool", () => {
     } finally { harness.cleanup(); }
   });
 
+  for (const enabled of [true, false]) {
+    it(`previews classifier ${enabled ? "enable" : "disable"} using projected runtime`, async () => {
+      const harness = freshHarness({ runtimeAware: true, loadedClassifierEnabled: !enabled });
+      try {
+        harness.writeFile(".pi/bifrost.json", {
+          schemaVersion: 2, default: "custom", models: { custom: ["beta/code"] },
+          classifier: { enabled: !enabled, backend: "prompt" },
+        });
+        const result = detailsOf<ConfigAgentPreviewResult>(await harness.run({
+          operation: "preview", patch: { classifier: { enabled, backend: "prompt" } }, prompts: ["ordinary task"],
+        }));
+        assert.equal(result.status, "ok");
+        assert.equal(result.routing?.classifier.enabled, !enabled);
+        assert.equal(result.routing?.classifier.projected?.enabled, enabled);
+        assert.equal(result.cases[0]?.confidence, enabled ? "classifier_dependent" : "deterministic");
+      } finally { harness.cleanup(); }
+    });
+  }
+
   it("shows requested tier, selected fallback tier, and fallback reason in preview", async () => {
     const harness = freshHarness();
     try {

@@ -165,7 +165,7 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
       assert.ok(out.includes("backend: typesafe"));
       assert.ok(out.includes("credential: missing"));
       assert.ok(out.includes("outcome: missing_key"));
-      assert.ok(out.includes("request observed: yes"));
+      assert.ok(!out.includes("request observed: yes"), "missing credentials must not report a classifier request");
       assert.ok(out.includes("model: jev-1.13.0"));
       assert.ok(out.includes("accepted: no"));
       assert.ok(out.includes("final result: general"));

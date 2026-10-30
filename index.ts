@@ -3113,6 +3113,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           return model;
         },
         onDispatch: (model, thinkingLevel, intent) => {
+          if (classifierDispatchGuardEnabled
+            && (classifierDispatchGeneration === undefined || !classifierDispatchSession
+              || !classifierSessionIsCurrent(ctx.sessionManager, classifierDispatchSession, classifierDispatchGeneration))) {
+            terminalRouteCategory = "classifier_state_changed";
+            throw new Error("Bifrost classifier settings changed before dispatch; no model was sent. Resubmit after repair.");
+          }
           const key = modelKey(model);
           debugLifecycle("virtual", "dispatch", ctx.sessionManager, correlationTurn, {
             request_correlation_id: requestCorrelationId ?? null,
@@ -3139,12 +3145,15 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           debug("virtual", "dispatch", { model: key, thinkingLevel });
         },
         beforeDispatch: async (model, currentRequest, intent) => {
-          if (classifierDispatchGuardEnabled
-            && (classifierDispatchGeneration === undefined || !classifierDispatchSession
-              || !classifierSessionIsCurrent(ctx.sessionManager, classifierDispatchSession, classifierDispatchGeneration))) {
-            terminalRouteCategory = "classifier_state_changed";
-            throw new Error("Bifrost classifier settings changed before dispatch; no model was sent. Resubmit after repair.");
-          }
+          const assertClassifierCurrent = () => {
+            if (classifierDispatchGuardEnabled
+              && (classifierDispatchGeneration === undefined || !classifierDispatchSession
+                || !classifierSessionIsCurrent(ctx.sessionManager, classifierDispatchSession, classifierDispatchGeneration))) {
+              terminalRouteCategory = "classifier_state_changed";
+              throw new Error("Bifrost classifier settings changed before dispatch; no model was sent. Resubmit after repair.");
+            }
+          };
+          assertClassifierCurrent();
           if (dispatchRecoveryToken) {
             const recoveryUser = dispatchRecoveryToken.userMessage.deref();
             if (!recoveryUser || !allowanceRetryBoundaryStillSafe(ctx, dispatchRecoveryToken, recoveryUser)) {
@@ -3154,6 +3163,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           }
           if (!v2Active) {
             if (!isVirtualModel(model)) await claimProviderDispatch(ctx, model);
+            assertClassifierCurrent();
             if (affinityStore && state.enabled && !state.pinned && activeRouteOrigin === "automatic" && currentRequest.reason === "user" && autoBoundary && !isVirtualModel(model)) {
               pendingAffinity(ctx.sessionManager, true)!.set(autoBoundary.entryId, {
                 userEntryId: autoBoundary.entryId,
@@ -3227,6 +3237,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             }
             receipt.leases = admission.leases ?? [];
             receipt.proofUntil = admission.state.dispatches[receipt.dispatchId]?.proofUntil ?? receipt.proofUntil;
+            assertClassifierCurrent();
             debugLifecycle("reliability", "admitted", ctx.sessionManager, boundary.message, {
               request_correlation_id: requestCorrelationId ?? null,
               model: key,
@@ -3250,6 +3261,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               terminalRouteCategory = "provider_trial_renewal_failed";
               throw new Error("Bifrost provider recovery-trial renewal failed; the continuation was not sent.");
             }
+            assertClassifierCurrent();
             startV2Heartbeat(ctx, receipt);
             return;
           }
@@ -3279,6 +3291,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             terminalRouteCategory = "lease_renewal_failed";
             throw new Error("Bifrost reliability v2 could not renew this turn's lease; the continuation was not sent.");
           }
+          assertClassifierCurrent();
         },
         onDispatchFailed: async (model) => {
           const key = modelKey(model);
@@ -4037,6 +4050,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             return strictInputHandled(ctx, state, originalText, editorTextAtInput,
               `Bifrost: provider ${ctx.model.provider} is paused, has a recovery trial in progress, or its cooldown state is unavailable; the turn was not sent.`);
           }
+          if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
+            return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Classifier settings changed during routing; the turn was not sent. Resubmit after repair.");
+          }
           claimedProviderTrial = undefined;
         }
         return defaultAction;
@@ -4085,6 +4101,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           endInput({ model: modelKey(model), outcome: "provider_cooldown_blocked" });
           return strictInputHandled(ctx, state, originalText, editorTextAtInput, message);
         }
+        if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
+          return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Classifier settings changed during routing; the turn was not sent. Resubmit after repair.");
+        }
         const selectedKey = modelKey(model);
         const trial = isImportedLegacyV1AllowanceBlock(selectedKey)
           ? { allowed: true, claimed: false }
@@ -4112,6 +4131,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             catch {
               return strictInputHandled(ctx, state, originalText, editorTextAtInput,
                 `Bifrost: provider ${ctx.model.provider} is paused, has a recovery trial in progress, or its cooldown state is unavailable; the turn was not sent.`);
+            }
+            if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
+              return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Classifier settings changed during routing; the turn was not sent. Resubmit after repair.");
             }
             claimedProviderTrial = undefined;
           }
@@ -4161,6 +4183,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           catch {
             return strictInputHandled(ctx, state, originalText, editorTextAtInput,
               `Bifrost: provider ${ctx.model.provider} is paused, has a recovery trial in progress, or its cooldown state is unavailable; the turn was not sent.`);
+          }
+          if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
+            return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Classifier settings changed during routing; the turn was not sent. Resubmit after repair.");
           }
           claimedProviderTrial = undefined;
         }
@@ -4217,6 +4242,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       } finally {
         // Key lives only inside the awaited setModel window (see selectPhysicalFromVirtual).
         selfSelect.release(ctx.sessionManager);
+      }
+      if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
+        return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Classifier settings changed during routing; the turn was not sent. Resubmit after repair.");
       }
       try { endSwitch({ model: modelKey(model), ok }); } catch { /* optional timing output */ }
       try { uiDone(ctx); } catch { /* optional UI output must not suppress an activated turn */ }

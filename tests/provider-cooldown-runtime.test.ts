@@ -210,6 +210,72 @@ function scopeFromSidecar(cwd: string, kind: "usage" | "rate" | "trial", provide
 }
 
 describe("provider cooldowns through registered Pi runtime hooks", { concurrency: false }, () => {
+  for (const mode of ["auto-v1", "auto-v2", "physical"] as const) {
+    it(`rejects classifier opt-out during ${mode} admission and releases ownership`, async () => {
+      const selected = makeModel("provider-a", "selected");
+      const active = makeModel("provider-b", "active");
+      const classifier = makeModel("provider-c", "classifier");
+      const h = fixture({ models: [selected], activeModel: active, defaultTier: "quick", stateVersion2: mode === "auto-v2",
+        classifierEnabled: true, classifierModel: classifier,
+        streamSimple: () => ({ result: async () => ({ content: [{ type: "text", text: "quick" }] }) }),
+      });
+      const originalClaim = ProviderCooldownStore.prototype.claimTrial;
+      const originalAdmit = ReliabilityV2Store.prototype.admit;
+      let reached!: () => void;
+      let release!: () => void;
+      let admissionStore: ReliabilityV2Store | undefined;
+      let dispatchId: string | undefined;
+      const started = new Promise<void>((resolve) => { reached = resolve; });
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      try {
+        if (mode === "auto-v2") await initializeV2(h);
+        await seedExpiredUsagePause(h.cwd, selected.provider);
+        if (mode === "auto-v2") {
+          ReliabilityV2Store.prototype.admit = async function (...args) {
+            const result = await originalAdmit.apply(this, args);
+            if (args[0].modelKeys?.includes(`${selected.provider}/${selected.id}`)) {
+              admissionStore = this;
+              dispatchId = args[0].dispatchId;
+              assert.equal(result.status, "admitted");
+              reached();
+              await gate;
+            }
+            return result;
+          };
+        } else {
+          ProviderCooldownStore.prototype.claimTrial = async function (...args) {
+            const result = await originalClaim.apply(this, args);
+            if (args[0] === selected.provider) { reached(); await gate; }
+            return result;
+          };
+        }
+        const pending = mode === "physical"
+          ? input(h, h.primary, "claim-user", "route this request")
+          : routeAuto(h, h.primary, addUser(h.primary, "claim-user", "route this request").message);
+        await started;
+        const providerStore = createProviderCooldownStore(h.cwd, reliability);
+        if (mode !== "auto-v2") assert.equal(providerStore.read(selected.provider).trialActive, true, "real trial was acquired");
+        await h.commandHandler()!("classifier off", h.primary.ctx);
+        release();
+        if (mode === "physical") {
+          assert.equal((await pending as { action: string }).action, "handled");
+          assert.equal(h.primary.ctx.model, active, "stale selection must not activate");
+        } else {
+          await assert.rejects(pending, /classifier settings changed/i);
+        }
+        assert.equal(providerStore.read(selected.provider).trialActive, false, "unused provider trial was released");
+        if (mode === "auto-v2") {
+          assert.ok(admissionStore && dispatchId);
+          assert.equal(admissionStore.readSnapshot().dispatches[dispatchId]?.settledKind, "cancelled", "admitted receipt was settled");
+        }
+      } finally {
+        release();
+        ProviderCooldownStore.prototype.claimTrial = originalClaim;
+        ReliabilityV2Store.prototype.admit = originalAdmit;
+        h.cleanup();
+      }
+    });
+  }
   it("routes the next physical prompt to another provider after a terminal usage failure", async () => {
     const modelA = makeModel("provider-a", "model-a");
     const modelB = makeModel("provider-b", "model-b");

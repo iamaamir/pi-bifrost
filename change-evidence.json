@@ -69,6 +69,8 @@
         "tests/fixtures/replay-fault-control.mjs",
         "tests/integration/command-privacy-acceptance.test.mjs",
         "tests/integration/config-agent-acceptance.test.mjs",
+        "tests/integration/integration.test.mjs",
+        "tests/provider-cooldown-runtime.test.ts",
         "tests/reconciliation-command-router.test.ts",
         "tests/runtime-state.test.ts"
       ],
