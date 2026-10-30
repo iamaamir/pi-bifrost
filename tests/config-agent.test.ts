@@ -23,6 +23,7 @@ import { reportText } from "../config-agent-report.ts";
 import type { ConfigApproval } from "../config-approval.ts";
 import { SUPPORTED_SCHEMA_VERSIONS } from "../config.ts";
 import { loadConfigForReload } from "../config-load.ts";
+import { classifyCompiled, compileRules } from "../routing.ts";
 import { makeModel } from "./helpers.ts";
 
 interface HarnessOptions {
@@ -62,7 +63,7 @@ function freshHarness(options: HarnessOptions = {}) {
   let reloadResult = options.reload ?? true;
   let classifyCalls = 0;
   let reloadCalls = 0;
-  const confirmations: { title: string; message: string }[] = [];
+  const confirmations: { title: string; summary: string; details: string }[] = [];
 
   const registry = {
     getAvailable: () => available,
@@ -89,7 +90,7 @@ function freshHarness(options: HarnessOptions = {}) {
           { terminal: { columns: 80, rows: 24 }, requestRender() {} } as never,
           {} as never, {} as never, (value) => { result = value; },
         ) as ConfigApproval;
-        confirmations.push({ title: viewer.title, message: viewer.message });
+        confirmations.push({ title: viewer.title, summary: viewer.summary, details: viewer.details });
         options.confirmHook?.();
         for (let i = 0; i < 1000 && result === undefined; i++) {
           viewer.render(80);
@@ -643,21 +644,212 @@ describe("apply requires approval, matching digests, and proves the result", () 
     models: { fast: ["beta/code"], deep: ["alpha/strong"] },
   };
 
-  it("shows complete changes for approval and rejects proposals too large to show", async () => {
+  it("shows complete large changes for approval and rejects proposals beyond the review bound", async () => {
     const harness = freshHarness();
     try {
       const visible = { ...candidate, description: "x".repeat(130) + "visible-end" };
       const checked = await checkedCandidate(harness, { candidate: visible });
       const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(checked.details, { candidate: visible })));
       assert.equal(applied.status, "ok");
-      assert.match(harness.confirmations()[0]?.message ?? "", /visible-end/);
-      const tooLarge = { ...candidate, description: "y".repeat(5000) + "hidden-end" };
-      const largeCheck = await checkedCandidate(harness, { candidate: tooLarge });
-      const rejected = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(largeCheck.details, { candidate: tooLarge })));
-      assert.notEqual(rejected.status, "ok");
+      assert.match(harness.confirmations()[0]?.details ?? "", /visible-end/);
+      const large = { ...candidate, description: "y".repeat(5_000) + "visible-end" };
+      const largeCheck = await checkedCandidate(harness, { candidate: large });
+      const largeApplied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(largeCheck.details, { candidate: large })));
+      assert.equal(largeApplied.status, "ok");
+      assert.match(harness.confirmations()[1]?.details ?? "", /visible-end/);
+
+      const tooLarge = { ...candidate, description: "z".repeat(2_000_000) + "hidden-end" };
+      const boundedCheck = await checkedCandidate(harness, { candidate: tooLarge });
+      const rejected = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(boundedCheck.details, { candidate: tooLarge })));
+      assert.equal(rejected.status, "rejected");
       assert.equal(rejected.applied, false);
-      assert.equal(harness.confirmations().length, 1);
+      assert.equal(harness.confirmations().length, 2);
       assert.doesNotMatch(harness.readFile(".pi/bifrost.json") ?? "", /hidden-end/);
+    } finally { harness.cleanup(); }
+  });
+
+  it("summarizes classifier, rule, model-pool, and fallback changes from the checked candidate", async () => {
+    const harness = freshHarness();
+    try {
+      const originalRules = [
+        { pattern: "\\\\breview\\\\b", model: "review" },
+        { pattern: "\\\\bplanning\\\\b", model: "work" },
+      ];
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "work",
+        models: { work: ["beta/code", "alpha/strong"], review: ["gamma/review"] },
+        classifier: { enabled: true },
+        rules: originalRules,
+        tierPolicies: { work: { fallbackTiers: ["review"] } },
+      });
+      const candidate = {
+        schemaVersion: 2,
+        default: "work",
+        models: { work: ["beta/code"], review: ["gamma/review"] },
+        classifier: { enabled: false },
+        rules: [originalRules[0]],
+        tierPolicies: { work: { fallbackTiers: [] } },
+      };
+      const { details } = await checkedCandidate(harness, { candidate });
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
+      assert.equal(applied.status, "ok");
+      const summary = harness.confirmations()[0]!.summary;
+      assert.match(summary, /TOOL-GENERATED SUMMARY/);
+      assert.match(summary, /Classifier enabled: ON → OFF in source and effective policy — classification disabled/);
+      assert.match(summary, /Rules: source 2 → 1; effective 2 → 1; 1 removed, 0 added/);
+      assert.match(summary, /Model pools: 1 tier/);
+      assert.match(summary, /Fallbacks: 1 tier/);
+      assert.doesNotMatch(summary, /\\\\b|"pattern"|"model"|beta\/code|alpha\/strong|gamma\/review/);
+      assert.ok(summary.length < 1_400, `impact summary should stay concise, got ${summary.length} chars`);
+    } finally { harness.cleanup(); }
+  });
+
+  it("reports classifier enablement without a contradictory disabled claim", async () => {
+    const harness = freshHarness();
+    try {
+      const original = {
+        schemaVersion: 2,
+        default: "work",
+        models: { work: ["beta/code"] },
+        classifier: { enabled: false },
+      };
+      harness.writeFile(".pi/bifrost.json", original);
+      const candidate = { ...original, classifier: { enabled: true } };
+      const { details } = await checkedCandidate(harness, { candidate });
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
+      assert.equal(applied.status, "ok");
+      const summary = harness.confirmations()[0]!.summary;
+      assert.match(summary, /Classifier enabled: OFF → ON in source and effective policy — classification enabled/);
+      assert.doesNotMatch(summary, /classification disabled/);
+    } finally { harness.cleanup(); }
+  });
+
+  it("reports first-match rule reorder and duplicate multiplicity changes", async () => {
+    const harness = freshHarness();
+    try {
+      const originalRules = [
+        { pattern: "review", model: "work" },
+        { pattern: "review", model: "review" },
+      ];
+      const original = {
+        schemaVersion: 2,
+        default: "work",
+        models: { work: ["beta/code"], review: ["gamma/review"] },
+        classifier: { enabled: false },
+        rules: originalRules,
+      };
+      harness.writeFile(".pi/bifrost.json", original);
+      const candidate = { ...original, rules: [...originalRules].reverse() };
+      assert.equal(classifyCompiled("review this", compileRules(originalRules)), "work");
+      assert.equal(classifyCompiled("review this", compileRules(candidate.rules)), "review");
+      const checked = await checkedCandidate(harness, { candidate });
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(checked.details, { candidate })));
+      assert.equal(applied.status, "ok");
+      const reordered = harness.confirmations()[0]!.summary;
+      assert.match(reordered, /0 removed, 0 added; first-match priority order changed — inspect Details/);
+
+      const duplicate = { ...original, rules: [originalRules[0], originalRules[0], originalRules[1]] };
+      const withoutDuplicate = { ...duplicate, rules: [originalRules[0], originalRules[1]] };
+      harness.writeFile(".pi/bifrost.json", duplicate);
+      const duplicateCheck = await checkedCandidate(harness, { candidate: withoutDuplicate });
+      const duplicateApply = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(duplicateCheck.details, { candidate: withoutDuplicate })));
+      assert.equal(duplicateApply.status, "ok");
+      assert.match(harness.confirmations()[1]!.summary, /Rules: source 3 → 2; effective 3 → 2; 1 removed, 0 added/);
+    } finally { harness.cleanup(); }
+  });
+
+  it("counts string model pools and treats description as a tier only before schema v3", async () => {
+    const harness = freshHarness();
+    try {
+      const legacy = {
+        schemaVersion: 2,
+        default: "work",
+        classifier: { enabled: false },
+        models: { description: "beta/code", work: "alpha/strong" },
+      };
+      harness.writeFile(".pi/bifrost.json", legacy);
+      const legacyCandidate = {
+        ...legacy,
+        models: { description: "gamma/review", work: "beta/code" },
+      };
+      const legacyCheck = await checkedCandidate(harness, { candidate: legacyCandidate });
+      const legacyApply = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(legacyCheck.details, { candidate: legacyCandidate })));
+      assert.equal(legacyApply.status, "ok");
+      assert.match(harness.confirmations()[0]!.summary, /Model pools: 2 tiers \("description" 1 → 1; "work" 1 → 1\)/);
+
+      const schemaV3 = {
+        schemaVersion: 3,
+        default: "work",
+        classifier: { enabled: false },
+        models: { description: "original metadata", work: "beta/code" },
+      };
+      harness.writeFile(".pi/bifrost.json", schemaV3);
+      const schemaV3Candidate = { ...schemaV3, models: { description: "updated metadata", work: "beta/code" } };
+      const v3Check = await checkedCandidate(harness, { candidate: schemaV3Candidate });
+      const v3Apply = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(v3Check.details, { candidate: schemaV3Candidate })));
+      assert.equal(v3Apply.status, "ok");
+      assert.doesNotMatch(harness.confirmations()[1]!.summary, /Model pools|description/);
+    } finally { harness.cleanup(); }
+  });
+
+  it("names every changed field before summary approval", async () => {
+    const harness = freshHarness();
+    try {
+      const original = {
+        schemaVersion: 2,
+        enabled: true,
+        default: "work",
+        strategy: "first",
+        models: { work: ["beta/code"], review: ["gamma/review"] },
+        rules: [{ pattern: "work", model: "work" }],
+        routingScope: { providers: ["beta"] },
+      };
+      harness.writeFile(".pi/bifrost.json", original);
+      const candidate = {
+        ...original,
+        enabled: false,
+        default: "review",
+        strategy: "cheapest",
+        models: { ...original.models, docs: ["alpha/strong"] },
+        rules: [{ pattern: "review", model: "review" }],
+        routingScope: { providers: ["gamma", "alpha"] },
+      };
+      const checked = await checkedCandidate(harness, { candidate });
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(checked.details, { candidate })));
+      assert.equal(applied.status, "ok");
+      const summary = harness.confirmations()[0]!.summary;
+      for (const field of ["default", "enabled", "models", "rules", "routingScope", "strategy"]) {
+        assert.ok(summary.includes(`"${field}"`), `summary omits changed field ${field}: ${summary}`);
+      }
+      assert.doesNotMatch(summary, /\+\d+ more/);
+    } finally { harness.cleanup(); }
+  });
+
+  it("retains existing tiers, rules, classifier, and fallbacks when adding a tier", async () => {
+    const harness = freshHarness();
+    try {
+      const original = {
+        schemaVersion: 2,
+        default: "work",
+        models: { work: ["beta/code"], review: ["gamma/review"] },
+        classifier: { enabled: true, criteria: { work: "existing criteria" } },
+        rules: [{ pattern: "existing-work-rule", model: "work" }],
+        tierPolicies: { work: { fallbackTiers: ["review"] } },
+      };
+      harness.writeFile(".pi/bifrost.json", original);
+      const candidate = {
+        ...original,
+        models: { ...original.models, docs: ["alpha/strong"] },
+      };
+      const { details } = await checkedCandidate(harness, { candidate });
+      assert.deepEqual(details.nextSource, candidate);
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
+      assert.equal(applied.status, "ok");
+      assert.deepEqual(JSON.parse(harness.readFile(".pi/bifrost.json") ?? "{}"), candidate);
+      const summary = harness.confirmations()[0]!.summary;
+      assert.match(summary, /Model pools: 1 tier/);
+      assert.doesNotMatch(summary, /Classifier|Rules:|Fallbacks:/);
     } finally { harness.cleanup(); }
   });
 
@@ -672,6 +864,7 @@ describe("apply requires approval, matching digests, and proves the result", () 
       assert.equal(applied.applied, true);
       assert.equal(applied.reloaded, true);
       assert.equal(applied.verified, true);
+      assert.ok(applied.notes.some((note) => /Pi does not expose an extension API to open saved files/.test(note)));
       assert.equal(harness.reloadCalls(), 1);
       const appliedTiers = new Map(applied.routing?.tiers.map((tier) => [tier.tier, tier]));
       assert.deepEqual(appliedTiers.get("fast")?.pool, ["beta/code"]);
@@ -680,10 +873,10 @@ describe("apply requires approval, matching digests, and proves the result", () 
       const confirmations = harness.confirmations();
       assert.equal(confirmations.length, 1);
       assert.equal(confirmations[0]?.title, "Apply this Bifrost configuration?");
-      assert.match(confirmations[0]?.message ?? "", /Source: project/);
-      assert.match(confirmations[0]?.message ?? "", /replace "models"/);
-      assert.match(confirmations[0]?.message ?? "", /"deep" \("first"\): \["alpha\/strong"\]/);
-      assert.match(confirmations[0]?.message ?? "", /No other config source is modified/);
+      assert.match(confirmations[0]?.details ?? "", /Source: project/);
+      assert.match(confirmations[0]?.details ?? "", /replace "models"/);
+      assert.match(confirmations[0]?.details ?? "", /"deep" \("first"\): \["alpha\/strong"\]/);
+      assert.match(confirmations[0]?.details ?? "", /No other config source is modified/);
 
       const stored = JSON.parse(harness.readFile(".pi/bifrost.json") ?? "{}") as Record<string, unknown>;
       assert.deepEqual(stored, details.nextSource);
@@ -756,7 +949,7 @@ describe("apply requires approval, matching digests, and proves the result", () 
       const { details } = await checkedCandidate(harness, { candidate: value });
       const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate: value })));
       assert.equal(applied.status, "ok");
-      const message = harness.confirmations()[0]!.message;
+      const message = harness.confirmations()[0]!.details;
       assert.doesNotMatch(message, /[^\x20-\x7e\n]/);
       const line = message.split("\n").find((row) => row.startsWith('  "description": '))!;
       assert.equal(JSON.parse(line.slice('  "description": '.length)), description);
@@ -1356,7 +1549,7 @@ describe("confirmation-window races and preview fidelity", () => {
       const reportBeforeApply = contentOf(result);
       const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
       assert.equal(applied.status, "ok");
-      const dialog = harness.confirmations()[0]?.message ?? "";
+      const dialog = harness.confirmations()[0]?.details ?? "";
       assert.match(dialog, /replace "tierPolicies"/, "the change kind and field stay");
       assert.match(dialog, /fallbackTiers/, "the changed value path is visible");
       assert.match(dialog, /"review"/, "the value the user approved away is visible");

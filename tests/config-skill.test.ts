@@ -111,6 +111,17 @@ describe("configure-bifrost skill packaging", () => {
     }
     assert.match(text, /Never apply without the user's agreement/);
     assert.match(text, /Do not retry `apply` after a `stale` result/);
+    assert.match(text, /For exact changes within the current 2,000,000-character\s+approval bound/);
+    assert.match(text, /Larger exact\s+changes fail closed before the dialog; no summary is shown and nothing is\s+written/);
+    assert.match(text, /Do not retry or split the same proposal into multiple writes/);
+  });
+
+  it("treats preservation guidance as advisory and requires candidate-by-candidate review", () => {
+    const { body } = parseFrontmatter(read(skillPath));
+    assert.match(body, /A valid candidate can still discard unrelated policy/);
+    assert.match(body, /A passing check\s+proves validity, not that the candidate matches the goal/);
+    assert.match(body, /Do not disable an existing\s+classifier only because the goal mentions fixed roles/);
+    assert.match(body, /These instructions guide the model; they do not enforce\s+its choices/);
   });
 
   it("states the limitations the tool reports", () => {

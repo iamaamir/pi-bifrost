@@ -28,6 +28,7 @@ import {
   MAX_CONFIG_SOURCE_BYTES,
   SUPPORTED_SCHEMA_VERSIONS,
   classifierTotalTimeoutIssue,
+  schemaVersionAtLeast,
   validateConfig,
   validateTierPolicyConfig,
   type BifrostConfig,
@@ -43,7 +44,8 @@ import { approveConfig } from "./config-approval.ts";
 
 const MAX_PROMPTS = 8;
 const MAX_PROMPT_CHARS = 2_000;
-const MAX_APPROVAL_MESSAGE_CHARS = 4_000;
+// Bound approval text sent to the terminal; larger complete diffs fail closed.
+const MAX_APPROVAL_MESSAGE_CHARS = 2_000_000;
 
 // ── Public types ───────────────────────────────────────────────
 
@@ -991,7 +993,7 @@ export async function previewConfigCandidate(input: ConfigAgentPreviewInput): Pr
 
 export interface ConfigAgentApplyInput extends ConfigAgentCheckInput {
   /** Must return true only after the user explicitly approved this exact proposal. */
-  readonly confirm: (title: string, message: string) => Promise<boolean> | boolean;
+  readonly confirm: (title: string, summary: string, details: string) => Promise<boolean> | boolean;
   readonly write?: (path: string, text: string) => void;
   readonly reload: () => boolean;
   /** Re-derives the model inventory when apply revalidates after approval. */
@@ -1003,7 +1005,7 @@ function approvalJson(value: unknown): string {
   return canonicalJson(value).replace(/[^\x21-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 
-function approvalMessage(checked: ConfigAgentCheckResult): string | null {
+function approvalDetails(checked: ConfigAgentCheckResult): string | null {
   const lines = [
     `Source: ${checked.source} (${approvalJson(checked.sourcePath)})`,
     `Proposal: ${shortDigest(checked.proposalDigest)}`,
@@ -1024,6 +1026,166 @@ function approvalMessage(checked: ConfigAgentCheckResult): string | null {
   lines.push("No other config source is modified.");
   const message = lines.join("\n");
   return message.length <= MAX_APPROVAL_MESSAGE_CHARS ? message : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return isPlainRecord(value) ? value : {};
+}
+
+function approvalValue(value: unknown): string {
+  if (value === undefined) return "(not set)";
+  const text = approvalJson(value);
+  return text.length <= 180 ? text : `${text.slice(0, 177)}... (see full exact change)`;
+}
+
+function approvalList(values: readonly string[], limit: number): string {
+  const shown = values.slice(0, limit).join(", ");
+  return values.length > limit ? `${shown}, … ${values.length - limit} more (see full exact change)` : shown;
+}
+
+function ruleChanges(beforeValue: unknown, afterValue: unknown): { before: number; after: number; removed: string[]; added: string[]; orderChanged: boolean } | undefined {
+  const before = Array.isArray(beforeValue) ? beforeValue : [];
+  const after = Array.isArray(afterValue) ? afterValue : [];
+  if (canonicalJson(before) === canonicalJson(after)) return undefined;
+  const counts = (rules: readonly unknown[]): Map<string, number> => {
+    const result = new Map<string, number>();
+    for (const rule of rules) {
+      const key = canonicalJson(rule);
+      result.set(key, (result.get(key) ?? 0) + 1);
+    }
+    return result;
+  };
+  const beforeCounts = counts(before);
+  const afterCounts = counts(after);
+  const delta = (from: Map<string, number>, to: Map<string, number>): string[] =>
+    [...from].flatMap(([rule, count]) => Array.from({ length: Math.max(0, count - (to.get(rule) ?? 0)) }, () => rule)).sort();
+  const removed = delta(beforeCounts, afterCounts);
+  const added = delta(afterCounts, beforeCounts);
+  return { before: before.length, after: after.length, removed, added, orderChanged: removed.length === 0 && added.length === 0 };
+}
+
+function summarizeRules(checked: ConfigAgentCheckResult, before: Record<string, unknown>, after: Record<string, unknown>, lines: string[]): void {
+  const source = checked.changes.find((change) => change.field === "rules");
+  const sourceDelta = source ? ruleChanges(source.before, source.after) : undefined;
+  const effectiveDelta = ruleChanges(before.rules, after.rules);
+  const sameImpact = sourceDelta && effectiveDelta
+    && canonicalJson(sourceDelta.removed) === canonicalJson(effectiveDelta.removed)
+    && canonicalJson(sourceDelta.added) === canonicalJson(effectiveDelta.added)
+    && sourceDelta.orderChanged === effectiveDelta.orderChanged;
+  const orderNote = (delta: NonNullable<typeof sourceDelta>): string =>
+    delta.orderChanged ? "; first-match priority order changed — inspect Details" : "";
+  if (sameImpact && sourceDelta && effectiveDelta) {
+    lines.push(`Rules: source ${sourceDelta.before} → ${sourceDelta.after}; effective ${effectiveDelta.before} → ${effectiveDelta.after}; ${effectiveDelta.removed.length} removed, ${effectiveDelta.added.length} added${sourceDelta.after === 0 && sourceDelta.before > 0 ? " — ALL target-source rules removed" : ""}${orderNote(sourceDelta)}.`);
+  } else {
+    if (sourceDelta) lines.push(`Target-source rules: ${sourceDelta.before} → ${sourceDelta.after}; ${sourceDelta.removed.length} removed, ${sourceDelta.added.length} added${sourceDelta.after === 0 && sourceDelta.before > 0 ? " — ALL target-source rules removed" : ""}${orderNote(sourceDelta)}.`);
+    if (effectiveDelta) lines.push(`Effective rules: ${effectiveDelta.before} → ${effectiveDelta.after}; ${effectiveDelta.removed.length} removed, ${effectiveDelta.added.length} added${effectiveDelta.after === 0 && effectiveDelta.before > 0 ? " — ALL effective rules removed" : ""}${orderNote(effectiveDelta)}.`);
+    else if (sourceDelta) lines.push("Effective rules unchanged; source edit has no current routing effect.");
+  }
+}
+
+function changedKeys(beforeValue: unknown, afterValue: unknown): string[] {
+  const before = asRecord(beforeValue);
+  const after = asRecord(afterValue);
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])]
+    .filter((key) => canonicalJson(before[key]) !== canonicalJson(after[key])).sort();
+}
+
+function mapDelta(beforeValue: unknown, afterValue: unknown, valueSummary: (value: unknown) => string): string | undefined {
+  const before = asRecord(beforeValue);
+  const after = asRecord(afterValue);
+  const keys = changedKeys(before, after);
+  if (keys.length === 0) return undefined;
+  const examples = keys.slice(0, 3).map((key) => `${approvalValue(key)} ${valueSummary(before[key])} → ${valueSummary(after[key])}`);
+  return `${keys.length} tier${keys.length === 1 ? "" : "s"} (${examples.join("; ")}${keys.length > 3 ? `; +${keys.length - 3} more` : ""})`;
+}
+
+function poolCount(value: unknown): string {
+  return String(poolEntries(value as string | string[] | undefined).length);
+}
+
+function modelPools(value: unknown, schemaVersion: unknown): Record<string, unknown> {
+  const models = asRecord(value);
+  return schemaVersionAtLeast(schemaVersion, 3)
+    ? Object.fromEntries(Object.entries(models).filter(([key]) => key !== "description"))
+    : models;
+}
+
+function policyFallbacks(value: unknown): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(asRecord(value)).map(([tier, policy]) => [tier, asRecord(policy).fallbackTiers]));
+}
+
+function sameMapImpact(sourceBefore: unknown, sourceAfter: unknown, effectiveBefore: unknown, effectiveAfter: unknown): boolean {
+  const sourceKeys = changedKeys(sourceBefore, sourceAfter);
+  const effectiveKeys = changedKeys(effectiveBefore, effectiveAfter);
+  return canonicalJson(sourceKeys) === canonicalJson(effectiveKeys) && sourceKeys.every((key) =>
+    canonicalJson(asRecord(sourceBefore)[key]) === canonicalJson(asRecord(effectiveBefore)[key])
+      && canonicalJson(asRecord(sourceAfter)[key]) === canonicalJson(asRecord(effectiveAfter)[key]),
+  );
+}
+
+function summarizeMap(label: string, sourceBefore: unknown, sourceAfter: unknown, effectiveBefore: unknown, effectiveAfter: unknown, lines: string[], valueSummary: (value: unknown) => string): void {
+  const source = mapDelta(sourceBefore, sourceAfter, valueSummary);
+  const effective = mapDelta(effectiveBefore, effectiveAfter, valueSummary);
+  if (source && effective && sameMapImpact(sourceBefore, sourceAfter, effectiveBefore, effectiveAfter)) {
+    lines.push(`${label}: ${effective}.`);
+  } else {
+    if (source) lines.push(`Target-source ${label.toLowerCase()}: ${source}.`);
+    if (effective) lines.push(`Effective ${label.toLowerCase()}: ${effective}.`);
+    else if (source) lines.push(`Effective ${label.toLowerCase()} unchanged; source edit has no current routing effect.`);
+  }
+}
+
+function classifierState(value: unknown): string {
+  return asRecord(value).enabled === false ? "OFF" : "ON";
+}
+
+function summarizeClassifier(checked: ConfigAgentCheckResult, before: Record<string, unknown>, after: Record<string, unknown>, lines: string[]): void {
+  const source = checked.changes.find((change) => change.field === "classifier");
+  const effectiveBefore = before.classifier;
+  const effectiveAfter = after.classifier;
+  const effectiveChanged = canonicalJson(effectiveBefore) !== canonicalJson(effectiveAfter);
+  if (!source && !effectiveChanged) return;
+  const stateChange = `${classifierState(source?.before)} → ${classifierState(source?.after)}`;
+  const sourceLabel = source?.kind === "remove" ? "removed from target source" : `settings changed (enabled ${stateChange})`;
+  const effectiveStateChange = `${classifierState(effectiveBefore)} → ${classifierState(effectiveAfter)}`;
+  const effect = (change: string): string => change.endsWith("→ OFF")
+    ? " — classification disabled"
+    : change.endsWith("→ ON") ? " — classification enabled" : "";
+  if (source && effectiveChanged && stateChange === effectiveStateChange && stateChange !== "ON → ON") {
+    lines.push(`Classifier enabled: ${stateChange} in source and effective policy${effect(stateChange)}.`);
+  } else if (source && canonicalJson(source.before) === canonicalJson(effectiveBefore) && canonicalJson(source.after) === canonicalJson(effectiveAfter)) {
+    lines.push(`Classifier settings (source + effective): ${sourceLabel}${effect(stateChange)}.`);
+  } else {
+    if (source) lines.push(`Target-source classifier: ${sourceLabel}${effect(stateChange)}.`);
+    if (effectiveChanged) {
+      const state = `${classifierState(effectiveBefore)} → ${classifierState(effectiveAfter)}`;
+      lines.push(`Effective classifier: ${state}${effect(state)}.`);
+    } else if (source) lines.push(`Effective classifier remains ${classifierState(effectiveBefore)}; source edit has no current effect.`);
+  }
+}
+
+function approvalSummary(checked: ConfigAgentCheckResult): string {
+  const counts = { add: 0, replace: 0, remove: 0 };
+  for (const change of checked.changes) counts[change.kind] += 1;
+  const fields = checked.changes.map((change) => approvalValue(change.field));
+  const removed = checked.changes.filter((change) => change.kind === "remove").map((change) => approvalValue(change.field));
+  const lines = [
+    "TOOL-GENERATED SUMMARY — impact only; not full values.",
+    `Source: ${checked.source}.`,
+    `Fields: ${counts.add} added, ${counts.replace} replaced, ${counts.remove} removed: ${fields.join(", ") || "none"}`,
+  ];
+  if (removed.length > 0) lines.push(`REMOVED source keys: ${approvalList(removed.slice(0, 5), 5)}${removed.length > 5 ? `; +${removed.length - 5} more` : ""}`);
+
+  const before = asRecord(checked.effectiveBefore);
+  const after = asRecord(checked.effectiveAfter);
+  summarizeClassifier(checked, before, after, lines);
+  summarizeRules(checked, before, after, lines);
+  const models = checked.changes.find((change) => change.field === "models");
+  summarizeMap("Model pools", modelPools(models?.before, before.schemaVersion), modelPools(models?.after, after.schemaVersion), modelPools(before.models, before.schemaVersion), modelPools(after.models, after.schemaVersion), lines, poolCount);
+  const policies = checked.changes.find((change) => change.field === "tierPolicies");
+  summarizeMap("Fallbacks", policyFallbacks(policies?.before), policyFallbacks(policies?.after), policyFallbacks(before.tierPolicies), policyFallbacks(after.tierPolicies), lines, approvalValue);
+  lines.push("Details shows exact values. Summary approval skips them.");
+  return lines.join("\n");
 }
 
 export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promise<ConfigAgentApplyResult> {
@@ -1091,13 +1253,13 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
     return stale("the model inventory changed after this proposal was generated", "Nothing was written. Run check and preview again against the current catalog.");
   }
 
-  const message = approvalMessage(checked);
+  const message = approvalDetails(checked);
   if (message === null) {
     return { ...withCheck, status: "rejected", reason: "the full change is too large to show for approval", notes: ["Nothing was written. Make a smaller change or edit the config manually."] };
   }
   let approved: boolean;
   try {
-    approved = await confirm("Apply this Bifrost configuration?", message);
+    approved = await confirm("Apply this Bifrost configuration?", approvalSummary(checked), message);
   } catch {
     approved = false;
   }
@@ -1410,7 +1572,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
           }
           result = await applyConfigCandidate({
             ...input,
-            confirm: (title, message) => approveConfig(ctx, title, message, signal),
+            confirm: (title, summary, details) => approveConfig(ctx, title, summary, details, signal),
             reload: () => deps.reload(ctx),
             liveCatalog: () => catalogFromContext(ctx),
             ...(deps.write ? { write: deps.write } : {}),
@@ -1424,6 +1586,12 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
             "project",
             "",
           );
+      }
+      if (result.operation === "apply" && result.applied && ctx.mode === "tui") {
+        result = {
+          ...result,
+          notes: [...result.notes, "Pi does not expose an extension API to open saved files in its editor; open the saved path manually if needed."],
+        };
       }
       return {
         content: [{ type: "text", text: deps.render(result) }],

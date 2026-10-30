@@ -27,11 +27,24 @@ goal needs something Bifrost does not do, say so.
    inventory is long, repeat inspect with `"provider": "<id>"` to list one
    provider's models, and page further with `"offset": 40`, then `80`, and so
    on; the filter and offset only narrow what is reported.
-3. **Compose the smallest policy that meets the goal.** See
+3. **Preserve existing policy while composing.** See
    [references/configuration-reference.md](references/configuration-reference.md)
-   for the fields, strategies, and worked examples. Prefer few tiers and
-   explicit pools; add classifier, economics, affinity, or reliability only when
-   the goal needs them.
+   for the fields, strategies, and worked examples. Start from the user's
+   current source and effective config. Keep existing tiers, rules, classifier
+   settings, and fallbacks unless the stated goal needs a specific change.
+   `patch` merges only top-level keys: changing `models`, `rules`,
+   `classifier`, or `tierPolicies` replaces that entire value in the selected
+   source. Read that source file and carry forward its unrelated entries before
+   replacing one of those fields. Do not flatten inherited settings from other
+   layers unless the user asks. Prefer a focused patch over a complete
+   `candidate`.
+
+   A valid candidate can still discard unrelated policy. After `check`, compare
+   every reported replacement/removal and the effective before/after values
+   with the user's goal. Restore any unrelated tier, rule, classifier setting,
+   or fallback that disappeared. If you cannot tell whether a removal is
+   necessary, ask; do not present it as an assumed tradeoff. A passing check
+   proves validity, not that the candidate matches the goal.
 4. **Check the candidate.** Call `bifrost_config` with
    `{"operation":"check", ...}`. Fix every reported error. Read the reported
    warnings, pool references, and `newlyEligibleModels` before showing anything
@@ -39,16 +52,30 @@ goal needs something Bifrost does not do, say so.
 5. **Preview routing outcomes.** Call `bifrost_config` with
    `{"operation":"preview", ...}` and 2–5 representative prompts drawn from the
    user's real work. Preview is offline: it sends nothing anywhere.
-6. **Explain the proposal in a few lines.** Model assignments per role or tier,
-   the tradeoffs you chose, and the honest limits. No JSON dump unless the user
-   asks.
+6. **Explain impact and tradeoffs.** Name changed tiers and model pools, rule
+   additions/removals, classifier changes, and fallback changes. Explain why
+   each removal or broad behavior change is necessary. If any existing setting
+   must be replaced, say so before approval. Do not present a summary as the
+   complete config or claim unchanged policy when values changed. No JSON dump
+   unless the user asks. These instructions guide the model; they do not enforce
+   its choices. Verify the proposed candidate and the approval summary instead
+   of claiming the model will preserve settings.
 7. **Ask, then apply.** Get explicit approval in the conversation, then call
    `bifrost_config` with `{"operation":"apply", ...}` and pass back the
    `proposalDigest`, `sourceDigest`, `effectiveDigest`, and `catalogDigest`
    printed under "apply digests" by check or preview — copy them exactly,
-   character for character. The tool requires paged review in Pi's terminal UI
-   and refuses if any input changed. The user advances with `n`, returns with
-   `p`, and presses `a` on the final page to apply. Escape cancels.
+   character for character. For exact changes within the current 2,000,000-character
+   approval bound, the tool shows a concise impact summary first. Larger exact
+   changes fail closed before the dialog; no summary is shown and nothing is
+   written. Do not retry or split the same proposal into multiple writes to evade
+   the bound. Ask the user to narrow the change, then check and seek approval again.
+   The user may apply the summary explicitly with `a`, or choose `d` to
+   inspect every exact change page before applying. State clearly that summary
+   approval does not mean the user inspected every value. The exact view is
+   sequential; `n` advances, `p` returns, `b` returns to summary, and `a` applies
+   from the final exact page. Escape cancels. The dialog reports changes/removals
+   derived from the checked candidate; if the summary flags classifier, rules,
+   model pools, or fallbacks, explain those impacts in conversation too.
    Never apply without the user's agreement or after check reports an error. RPC and other
    non-TUI sessions return `approval_required` without writing. In that case,
    ask the user to re-check and approve in a TUI session. Keep the proposal
@@ -120,7 +147,7 @@ Pick the shape from the goal, then the smallest set of primitives:
 
 | Goal signal | Shape |
 | --- | --- |
-| Fixed roles (orchestrator, implementer, reviewer) | One tier per role, one model per tier, `classifier.enabled: false`, role `rules` and inline tier prefixes |
+| Fixed roles (orchestrator, implementer, reviewer) | One tier per role and explicit routing rules; retain the current classifier unless the user asks to replace its judgment with fully specified rules |
 | "Cheap by default, strong when it matters" | A cheap default tier with a `cheapest`/`cheapest_input` strategy plus a reasoning tier reached by rules |
 | "Never silently spend more" | Explicit `tierPolicies[tier].fallbackTiers`; an empty list is terminal |
 | Several eligible models in one role | Ordered pool plus `first`, `cheapest`, `largest_context`, or `random` |
@@ -128,10 +155,12 @@ Pick the shape from the goal, then the smallest set of primitives:
 | Subscription-first with metered fallbacks | `economics.preference.billingClass` with declared observations, and say that it is a preference, not a cap |
 | Mixed requests that need judgment | Keep the classifier enabled and give every custom tier explicit `classifier.criteria` |
 
-Leave out anything the goal does not need. If you keep the classifier enabled,
-write criteria for every custom tier; if the roles are fixed, prefer
-`classifier.enabled: false`. Do not add economics, affinity, or reliability
-fields as decoration.
+Leave out anything the goal does not need. Do not disable an existing
+classifier only because the goal mentions fixed roles. Disable it only when the
+user requests rule-only routing or the stated goal requires a fully deterministic
+rule set and every relevant prompt has an explicit route. If the classifier
+stays enabled, provide criteria for each custom tier. Do not add economics,
+affinity, or reliability fields as decoration.
 
 ## Reporting
 
@@ -141,15 +170,19 @@ Aim for five to ten lines:
 Tiers: orchestrator -> provider/strong (first)
        implement -> provider/cheap (cheapest), fallback: review
        review -> provider/reviewer (first), no fallback
-Classifier: off (roles are chosen by rules and inline tier prefixes)
+Classifier: unchanged (existing setting retained)
 Tradeoff: review prompts that do not match a rule use the default tier.
 Not covered: Bifrost cannot cap spending; the metered preference is advisory.
 Apply to .pi/bifrost.json? (adds models, default, rules, schemaVersion)
 ```
 
-After a successful apply, state that the configuration is active, or that
-`/bifrost reload` is required, and name the tier prefixes or rules the user can
-use per turn.
+After a successful apply, state that the configuration is saved and active, or
+that `/bifrost reload` is required, and name the tier prefixes or rules the user
+can use per turn. Offer to open the saved file only when the host exposes a
+real open-file API; do not use a scratch editor, shell command, or inferred
+capability as a substitute. Current Pi extension UI exposes text editing but
+no API for opening a config path, so report the saved path instead of claiming
+it was opened.
 
 ## Do not
 
