@@ -3825,6 +3825,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const admissionBranchEntryIds = admissionBranch.map((entry) => entry.id);
     const admissionManualGeneration = v2Receipts.forSession(admissionSession).manualGeneration;
     const admissionSignal = ctx.signal;
+    let admissionClassifier: { session: ClassifierSessionRuntime; generation: number } | undefined;
     const result = await (async (): Promise<InputEventResult> => {
     const originalText = event.text;
     const editorTextAtInput = readEditorText(ctx);
@@ -3989,6 +3990,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       const classifierSession = classifierSessionFor(ctx.sessionManager);
       const classifierGeneration = classifierSession.generation;
       const classifierWasEnabled = classifierEnablementFor(ctx).enabled;
+      if (classifierWasEnabled) admissionClassifier = { session: classifierSession, generation: classifierGeneration };
       let classification = forcedTier
         ? { kind: "classified" as const, tier: forcedTier, source: "inline" as const }
         : await classifyForSession(ctx, promptText, ctx.signal);
@@ -4350,6 +4352,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             && selfSetModelChange.thinkingLevel === ctx.thinkingLevel
           ));
         return !admissionSignal?.aborted
+          && (!admissionClassifier || classifierSessionIsCurrent(admissionSession, admissionClassifier.session, admissionClassifier.generation))
           && ctx.sessionManager === admissionSession
           && ctx.model === activeModel
           && modelKey(ctx.model) === modelKey(activeModel)

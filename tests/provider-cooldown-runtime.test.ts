@@ -276,6 +276,38 @@ describe("provider cooldowns through registered Pi runtime hooks", { concurrency
       }
     });
   }
+  it("rejects classifier opt-out during final physical provider admission", async () => {
+    const selected = makeModel("provider-a", "selected");
+    const active = makeModel("provider-b", "active");
+    const classifier = makeModel("provider-c", "classifier");
+    const h = fixture({ models: [selected], activeModel: active, defaultTier: "quick", classifierEnabled: true, classifierModel: classifier,
+      streamSimple: () => ({ result: async () => ({ content: [{ type: "text", text: "quick" }] }) }),
+    });
+    const originalClaim = ProviderCooldownStore.prototype.claimTrial;
+    let reached!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { reached = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let claims = 0;
+    try {
+      ProviderCooldownStore.prototype.claimTrial = async function (...args) {
+        const result = await originalClaim.apply(this, args);
+        if (args[0] === selected.provider && ++claims === 2) { reached(); await gate; }
+        return result;
+      };
+      const pending = input(h, h.primary, "final-claim-user", "route this request");
+      await started;
+      await h.commandHandler()!("classifier off", h.primary.ctx);
+      release();
+      assert.equal((await pending as { action: string }).action, "handled");
+      assert.equal(claims, 2, "final admission reached the second provider claim");
+    } finally {
+      release();
+      ProviderCooldownStore.prototype.claimTrial = originalClaim;
+      h.cleanup();
+    }
+  });
+
   it("routes the next physical prompt to another provider after a terminal usage failure", async () => {
     const modelA = makeModel("provider-a", "model-a");
     const modelB = makeModel("provider-b", "model-b");
