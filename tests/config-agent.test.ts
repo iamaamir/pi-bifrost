@@ -44,6 +44,7 @@ interface HarnessOptions {
   readonly loadedClassifierEnabled?: boolean;
   readonly legacyClassifierEnabled?: boolean;
   readonly classifierSessionOverride?: boolean;
+  readonly runtimeStateIssue?: "invalid-json";
 }
 
 function freshHarness(options: HarnessOptions = {}) {
@@ -124,12 +125,12 @@ function freshHarness(options: HarnessOptions = {}) {
     ...(options.runtimeAware ? {
       classifierRuntime: (config: BifrostConfig) => {
         const configuredEnabled = config.classifier?.enabled !== false;
-        const projected = resolveClassifierEnablement(configuredEnabled, legacyClassifierEnabled, classifierSessionOverride);
+        const projected = resolveClassifierEnablement(configuredEnabled, legacyClassifierEnabled, classifierSessionOverride, options.runtimeStateIssue);
         const actualConfig = options.loadedClassifierEnabled === undefined
           ? config
           : { ...config, classifier: { ...config.classifier, enabled: options.loadedClassifierEnabled } };
         const actualConfiguredEnabled = actualConfig.classifier?.enabled !== false;
-        const actual = resolveClassifierEnablement(actualConfiguredEnabled, legacyClassifierEnabled, classifierSessionOverride);
+        const actual = resolveClassifierEnablement(actualConfiguredEnabled, legacyClassifierEnabled, classifierSessionOverride, options.runtimeStateIssue);
         return {
           ...projected,
           configuredEnabled,
@@ -1848,6 +1849,17 @@ describe("effective classifier runtime in the agent tool", () => {
       assert.match(summary ?? "", /Current classifier runtime: enabled/);
       assert.match(summary ?? "", /Classifier runtime after apply and reload: disabled/);
       assert.doesNotMatch(summary ?? "", /classification disabled/);
+    } finally { harness.cleanup(); }
+  });
+
+  it("explains invalid runtime state cannot be overridden by session enablement", async () => {
+    const harness = freshHarness({ runtimeAware: true, runtimeStateIssue: "invalid-json", classifierSessionOverride: true });
+    try {
+      harness.writeFile(".pi/bifrost.json", { schemaVersion: 2, default: "custom", models: { custom: ["beta/code"] }, classifier: { enabled: false } });
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", patch: { strategy: "first" } }));
+      assert.equal(checked.routingBefore?.classifier.enabled, false);
+      assert.ok(checked.notes.some((note) => /fail.closed/i.test(note)));
+      assert.ok(!checked.notes.some((note) => /unless.*explicitly enables/i.test(note)));
     } finally { harness.cleanup(); }
   });
 

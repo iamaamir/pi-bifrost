@@ -127,6 +127,7 @@ export interface ConfigAgentClassifierRuntime extends ConfigAgentClassifierRunti
   readonly actual?: ConfigAgentClassifierRuntimeSnapshot;
   readonly loadedConfigDigest?: string;
   readonly configGeneration?: number;
+  readonly diskState?: { readonly enabled: boolean; readonly legacyClassifierEnabled?: boolean; readonly runtimeStateIssue?: "unreadable" | "invalid-json" | "invalid-shape" };
 }
 
 export type ConfigAgentClassifierRuntimeProvider = (config: BifrostConfig) => ConfigAgentClassifierRuntime;
@@ -887,7 +888,7 @@ export function checkConfigCandidate(input: ConfigAgentCheckInput): ConfigAgentC
     notes.push("The active loaded config differs from current disk layers; routing continues with the loaded config until a successful reload.");
   }
   if (runtimeBefore?.runtimeStateIssue) {
-    notes.push("Runtime state is invalid; classifier use is fail-closed unless the current session explicitly enables it.");
+    notes.push("Runtime state is invalid; classifier use is fail-closed even when the current session requests enablement. Repair the state file and reload.");
   }
   if (references.some((reference) => reference.status === "unknown")) {
     notes.push("At least one configured pool entry matches no catalog model; it can never be selected.");
@@ -1316,7 +1317,7 @@ function approvalSummary(checked: ConfigAgentCheckResult): string {
   if ((classifierChanged || runtimeAfter?.loadedConfigMatches === false) && projectedAfter) {
     lines.push(`Classifier runtime after apply and reload: ${projectedAfter.enabled ? "enabled" : "disabled"} (${projectedAfter.source}; backend=${projectedAfter.backend ?? "unresolved"}); configured=${projectedAfter.configuredEnabled ? "on" : "off"}${projectedAfter.runtimeStateIssue ? `; runtime state invalid=${projectedAfter.runtimeStateIssue}` : ""}.`);
   }
-  if (runtimeAfter?.runtimeStateIssue) lines.push(`${runtimeAfter.enabled ? "Current session override controls classification despite invalid runtime state" : "Classification is paused by invalid runtime state"}. Repair .pi/bifrost-state.json as a JSON object, then run /bifrost reload.`);
+  if (runtimeAfter?.runtimeStateIssue) lines.push("Classification is paused by invalid runtime state. Repair .pi/bifrost-state.json as a JSON object, then run /bifrost reload.");
   summarizeRules(checked, before, after, lines);
   const models = checked.changes.find((change) => change.field === "models");
   summarizeMap("Model pools", modelPools(models?.before, before.schemaVersion), modelPools(models?.after, after.schemaVersion), modelPools(before.models, before.schemaVersion), modelPools(after.models, after.schemaVersion), lines, poolCount);
