@@ -2991,8 +2991,8 @@ export function createCommandRouter(
       state.setClassifierSessionOverride(ctx.sessionManager, undefined);
       const enablement = classifierEnablementFor(state, ctx);
       syncBifrostModeStatus(ctx, state);
-      if (enablement.source === "legacy-conflict") {
-        log(ctx, "Classifier remains paused by conflicting legacy state. /bifrost classifier on or off affects only this session. To resume configured behavior after restart, back up .pi/bifrost-state.json, remove only classifierEnabled, then run /bifrost reload.", "warning");
+      if (enablement.source === "legacy-conflict" && enablement.legacyConflict) {
+        log(ctx, `Classifier session override cleared; ${classifierConflictNote(enablement.legacyConflict, enablement.source)}.`, "warning");
       } else if (enablement.runtimeStateIssue) {
         log(ctx, `Classifier remains disabled because runtime state is invalid. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.`, "error");
       } else {

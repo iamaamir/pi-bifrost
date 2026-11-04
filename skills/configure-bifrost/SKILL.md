@@ -79,7 +79,8 @@ goal needs something Bifrost does not do, say so.
    `bifrost_config` with `{"operation":"apply", "proposalHandle":"..."}` using
    the session-local handle from the latest successful check. Pass no candidate
    or other fields with the handle. The tool retains the candidate and all stale
-   guards; a later check replaces the handle. For exact changes within the current 2,000,000-character
+   guards; a later successful check replaces the handle, but a failed check does not.
+   Never use an earlier handle for a different candidate. For exact changes within the current 2,000,000-character
    approval bound, the tool shows a concise impact summary first. Larger exact
    changes fail closed before the dialog; no summary is shown and nothing is
    written. Do not retry or split the same proposal into multiple writes to evade

@@ -2220,6 +2220,24 @@ describe("route dispatch", () => {
     assert.equal(saves, 0);
   });
 
+  it("explains each legacy conflict accurately when clearing the session override", async () => {
+    for (const configured of [false, true]) {
+      const { ctx, calls } = makeCtx();
+      const state = makeState();
+      state.config.classifier = { enabled: configured };
+      state.legacyClassifierEnabled = !configured;
+      await createCommandRouter(state as never)("classifier inherit", ctx as never);
+      const output = calls.filter((call) => call.kind === "notify").map((call) => String(call.value)).join("\n");
+      if (configured) {
+        assert.match(output, /classification paused/);
+        assert.match(output, /remove only classifierEnabled/);
+      } else {
+        assert.match(output, /configured off takes precedence/);
+        assert.doesNotMatch(output, /resume configured behavior/);
+      }
+    }
+  });
+
   it("keeps invalid runtime state paused even when classifier on is requested", async () => {
     const { ctx, calls, sessionManager } = makeCtx();
     const state = makeState() as any;

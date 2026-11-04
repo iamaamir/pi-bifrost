@@ -203,7 +203,7 @@ function renderApply(result: ConfigAgentApplyResult): string {
   const lines = [
     "--- bifrost configuration apply ---",
     `status: ${result.status}`,
-    `source: ${result.source} (${result.sourcePath})`,
+    ...(result.sourcePath ? [`source: ${result.source} (${result.sourcePath})`] : []),
     `applied: ${result.applied}; reloaded: ${result.reloaded}; verified: ${result.verified}`,
   ];
   if (result.reason) lines.push(`reason: ${result.reason}`);

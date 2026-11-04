@@ -1389,6 +1389,20 @@ describe("tool surface", () => {
     } finally { harness.cleanup(); }
   });
 
+  it("retains the last successful handle after a failed check", async () => {
+    const harness = freshHarness({ confirm: false });
+    try {
+      const checked = await harness.run({ operation: "check", patch: { default: "quick" } });
+      const handle = contentOf(checked).match(/proposalHandle: ([a-f0-9]{12})/)?.[1];
+      assert.ok(handle);
+      const invalid = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", patch: { classifier: { criteria: 42 } } }));
+      assert.equal(invalid.status, "rejected");
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run({ operation: "apply", proposalHandle: handle }));
+      assert.equal(applied.status, "cancelled");
+      assert.equal(harness.readFile(".pi/bifrost.json"), undefined);
+    } finally { harness.cleanup(); }
+  });
+
   it("rejects handles across session replacement and with extra candidate fields", async () => {
     const harness = freshHarness();
     try {
@@ -1398,8 +1412,10 @@ describe("tool surface", () => {
       const extra = detailsOf<ConfigAgentApplyResult>(await harness.run({ operation: "apply", proposalHandle: handle, patch: { default: "general" } }));
       assert.equal(extra.status, "usage");
       harness.setSessionId("other-session");
-      const other = detailsOf<ConfigAgentApplyResult>(await harness.run({ operation: "apply", proposalHandle: handle }));
+      const rejected = await harness.run({ operation: "apply", proposalHandle: handle });
+      const other = detailsOf<ConfigAgentApplyResult>(rejected);
       assert.equal(other.status, "usage");
+      assert.doesNotMatch(contentOf(rejected), /source: project \(\)/);
       assert.equal(harness.confirmations().length, 0);
       assert.equal(harness.readFile(".pi/bifrost.json"), undefined);
     } finally { harness.cleanup(); }
