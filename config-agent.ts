@@ -298,7 +298,7 @@ export interface ConfigAgentPreviewResult {
 export interface ConfigAgentApplyResult {
   readonly operation: "apply";
   readonly status: ConfigAgentStatus;
-  readonly source: ConfigAgentSource;
+  readonly source: ConfigAgentSource | null;
   readonly sourcePath: string;
   readonly applied: boolean;
   readonly reloaded: boolean;
@@ -1753,7 +1753,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
         case "apply": {
           if (params.proposalHandle && (!saved || saved.sessionId !== sessionId || saved.handle !== params.proposalHandle || !handleOnly)) {
             result = {
-              operation: "apply", status: "usage", source: "project", sourcePath: "", applied: false, reloaded: false,
+              operation: "apply", status: "usage", source: null, sourcePath: "", applied: false, reloaded: false,
               verified: false, changes: [], effectiveConfig: null, routing: null,
               reason: "unknown proposal handle or extra candidate fields", notes: ["Nothing was written. Run check again, then apply using only its proposalHandle."],
             };
