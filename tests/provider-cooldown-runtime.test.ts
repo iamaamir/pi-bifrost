@@ -216,6 +216,23 @@ function scopeFromSidecar(cwd: string, kind: "usage" | "rate" | "trial", provide
 }
 
 describe("provider cooldowns through registered Pi runtime hooks", { concurrency: false }, () => {
+  for (const invalid of ['{"enabled":"bad"}', '{"classifierEnabled":"bad"}']) {
+    it(`preserves invalid runtime state through mode command and reload: ${invalid}`, async () => {
+      const h = fixture({ defaultTier: "quick", classifierEnabled: true, initialRuntimeState: invalid });
+      try {
+        const path = join(h.cwd, ".pi", "bifrost-state.json");
+        const inspect = async () => (await h.configTool().execute("test", { operation: "inspect" }, undefined, undefined, h.primary.ctx)).details.routing.classifier;
+        assert.equal((await inspect()).enabled, false);
+        await h.commandHandler()!("on", h.primary.ctx);
+        assert.equal(readFileSync(path, "utf8"), invalid, "mode command must preserve invalid bytes");
+        await h.commandHandler()!("reload", h.primary.ctx);
+        const runtime = await inspect();
+        assert.equal(runtime.enabled, false);
+        assert.equal(runtime.source, "runtime-state-invalid");
+        assert.equal(readFileSync(path, "utf8"), invalid);
+      } finally { h.cleanup(); }
+    });
+  }
   it("refuses config approval when runtime state file changes during confirmation", async () => {
     const h = fixture({ defaultTier: "quick", classifierEnabled: true, initialRuntimeState: '{"classifierEnabled":false}' });
     try {

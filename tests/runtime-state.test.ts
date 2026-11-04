@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
@@ -71,6 +71,8 @@ describe("runtime state", () => {
         enabled: false, pinned: true, classifierEnabled: false, classifierSource: "configuration",
       };
       assert.deepEqual(loadRuntimeState(path, fallback), fallback);
+      assert.equal(saveRuntimeState(path, {}), true);
+      assert.equal(existsSync(path), false, "no override must not create a state file");
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
@@ -102,10 +104,14 @@ describe("runtime state", () => {
     try {
       const path = runtimeStatePath(cwd);
       mkdirSync(join(cwd, ".pi"), { recursive: true });
-      for (const text of ["[]", "null", "false", "{\"classifierEnabled\":\"false\"}"]) {
+      for (const text of ["[]", "null", "false", "{\"classifierEnabled\":\"false\"}", "{\"enabled\":\"bad\",\"unknown\":7}"]) {
         writeFileSync(path, text, "utf8");
         assert.equal(loadRuntimeState(path).classifierSource, "runtime-state-invalid", text);
         assert.equal(loadRuntimeState(path).classifierEnabled, false, text);
+        for (const next of [{}, { enabled: true }, { enabled: false }]) {
+          assert.equal(saveRuntimeState(path, next), false, text);
+          assert.equal(readFileSync(path, "utf8"), text, "invalid bytes must remain unchanged");
+        }
       }
       rmSync(path);
       rmSync(join(cwd, ".pi"), { recursive: true, force: true });

@@ -93,6 +93,13 @@ export function runtimeStatePath(cwd: string): string {
   return resolveStoragePath(cwd, undefined, ".pi/bifrost-state.json");
 }
 
+function validRuntimeState(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (!Object.hasOwn(record, "enabled") || typeof record.enabled === "boolean")
+    && (!Object.hasOwn(record, "classifierEnabled") || typeof record.classifierEnabled === "boolean");
+}
+
 export function loadRuntimeState(path: string, fallback: RuntimeModeState = DEFAULT_RUNTIME_STATE): RuntimeModeState {
   let stat;
   try {
@@ -109,14 +116,8 @@ export function loadRuntimeState(path: string, fallback: RuntimeModeState = DEFA
   } catch (error) {
     return invalidRuntimeState(fallback, error instanceof SyntaxError ? "invalid-json" : "unreadable");
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return invalidRuntimeState(fallback, "invalid-shape");
-  }
-  const record = parsed as Record<string, unknown>;
-  if ((Object.hasOwn(record, "enabled") && typeof record.enabled !== "boolean")
-    || (Object.hasOwn(record, "classifierEnabled") && typeof record.classifierEnabled !== "boolean")) {
-    return invalidRuntimeState(fallback, "invalid-shape");
-  }
+  if (!validRuntimeState(parsed)) return invalidRuntimeState(fallback, "invalid-shape");
+  const record = parsed;
   const legacyClassifierEnabled = record.classifierEnabled as boolean | undefined;
   const classifier = resolveClassifierEnablement(fallback.classifierEnabled, legacyClassifierEnabled);
   return {
@@ -143,10 +144,10 @@ function invalidRuntimeState(fallback: RuntimeModeState, issue: RuntimeStateIssu
 export function saveRuntimeState(path: string, state: PersistedModeState): boolean {
   try {
     const current = readJsonFile<unknown>(path);
-    if (current !== undefined && (!current || typeof current !== "object" || Array.isArray(current))) {
-      throw new Error("runtime state must be an object");
+    if (current !== undefined && !validRuntimeState(current)) {
+      throw new Error("runtime state has invalid shape");
     }
-    const existing = current as Record<string, unknown> | undefined;
+    const existing = current;
     const next = state.enabled === undefined
       ? Object.fromEntries(Object.entries(existing ?? {}).filter(([key]) => key !== "enabled"))
       : { ...existing, enabled: state.enabled };
