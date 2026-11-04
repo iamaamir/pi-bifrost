@@ -63,7 +63,7 @@ goal needs something Bifrost does not do, say so.
    anything to the user.
 5. **Preview routing outcomes.** Call `bifrost_config` with
    `{"operation":"preview", ...}` and 2–5 representative prompts drawn from the
-   user's real work. Preview is offline: it sends nothing anywhere. Read each
+   user's real work. To preview current disk configuration, omit candidate and patch. Preview is offline: it sends nothing anywhere. Read each
    requested tier, selected tier/model, and fallback reason. Keep empty
    inherited tiers: they can be intentional no-route boundaries. Do not fill,
    filter, or invent fallbacks to make a preview succeed.
@@ -76,10 +76,10 @@ goal needs something Bifrost does not do, say so.
    its choices. Verify the proposed candidate and the approval summary instead
    of claiming the model will preserve settings.
 7. **Ask, then apply.** Get explicit approval in the conversation, then call
-   `bifrost_config` with `{"operation":"apply", ...}` and pass back the
-   `proposalDigest`, `sourceDigest`, `effectiveDigest`, and `catalogDigest`
-   printed under "apply digests" by check or preview — copy them exactly,
-   character for character. Also pass `classifierRuntimeDigest` when present. For exact changes within the current 2,000,000-character
+   `bifrost_config` with `{"operation":"apply", "proposalHandle":"..."}` using
+   the session-local handle from the latest successful check. Pass no candidate
+   or other fields with the handle. The tool retains the candidate and all stale
+   guards; a later check replaces the handle. For exact changes within the current 2,000,000-character
    approval bound, the tool shows a concise impact summary first. Larger exact
    changes fail closed before the dialog; no summary is shown and nothing is
    written. Do not retry or split the same proposal into multiple writes to evade

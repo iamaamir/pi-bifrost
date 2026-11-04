@@ -17,7 +17,7 @@
  * through the resolve-only router, and pool matching to `findCandidates`.
  */
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { closeSync, constants, lstatSync, openSync, readSync } from "node:fs";
 import { join } from "node:path";
 import type { Api, Model } from "@earendil-works/pi-ai";
@@ -756,6 +756,7 @@ function planCandidate(
   cwd: string,
   extensionDir: string,
   request: ConfigAgentRequest,
+  allowUnchanged = false,
 ): CandidatePlan {
   const source: ConfigAgentSource = isSource(request.source) ? request.source : "project";
   const current = readSelectedSource(cwd, extensionDir, source);
@@ -784,7 +785,7 @@ function planCandidate(
   }
   if (exceedsConfigNestingDepth(base) || exceedsConfigNestingDepth(nextSource)) return fail("configuration exceeds the nesting depth limit");
   const changes = diffFields(base, nextSource);
-  if (changes.length === 0) return fail("the selected source already matches this proposal");
+  if (changes.length === 0 && !allowUnchanged) return fail("the selected source already matches this proposal");
   return {
     ok: true, source, sourcePath: current.path, current, nextSource,
     nextText: serializeSource(nextSource),
@@ -814,6 +815,7 @@ export interface ConfigAgentCheckInput {
   readonly cwd: string;
   readonly extensionDir: string;
   readonly classifierRuntime?: ConfigAgentClassifierRuntimeProvider;
+  readonly allowUnchanged?: boolean;
 }
 
 /**
@@ -851,7 +853,7 @@ function emptyCheckResult(
 
 export function checkConfigCandidate(input: ConfigAgentCheckInput): ConfigAgentCheckResult {
   const { request, catalog, cwd, extensionDir } = input;
-  const plan = planCandidate(cwd, extensionDir, request);
+  const plan = planCandidate(cwd, extensionDir, request, input.allowUnchanged);
   if (!plan.ok) return emptyCheckResult("usage", plan.reason ?? "invalid request", plan.source, plan.sourcePath);
 
   const bytes = Buffer.from(plan.nextText, "utf-8");
@@ -929,7 +931,7 @@ export function checkConfigCandidate(input: ConfigAgentCheckInput): ConfigAgentC
     routingAfter: routingSummary(after.config, cwd, runtimeAfter),
     newlyEligibleModels: newlyEligible,
     removedModels: removed,
-    writeEligible: errors.length === 0,
+    writeEligible: errors.length === 0 && plan.changes.length > 0,
     notes,
   };
 }
@@ -978,13 +980,19 @@ export interface ConfigAgentPreviewInput extends ConfigAgentCheckInput {
 
 export async function previewConfigCandidate(input: ConfigAgentPreviewInput): Promise<ConfigAgentPreviewResult> {
   const { request, catalog, cwd, now } = input;
-  const checked = checkConfigCandidate(input);
+  const checked = checkConfigCandidate({
+    ...input,
+    allowUnchanged: true,
+    request: request.candidate === undefined && request.patch === undefined && !request.remove?.length
+      ? { ...request, patch: {} }
+      : request,
+  });
   const base = {
     operation: "preview" as const,
     source: checked.source,
     sourcePath: checked.sourcePath,
-    proposalDigest: checked.proposalDigest,
-    guards: checked.guards,
+    proposalDigest: checked.changes.length > 0 ? checked.proposalDigest : null,
+    guards: checked.changes.length > 0 ? checked.guards : null,
     network: "disabled" as const,
     promptExecution: "none" as const,
     cases: [],
@@ -1317,7 +1325,7 @@ function approvalSummary(checked: ConfigAgentCheckResult): string {
   if ((classifierChanged || runtimeAfter?.loadedConfigMatches === false) && projectedAfter) {
     lines.push(`Classifier runtime after apply and reload: ${projectedAfter.enabled ? "enabled" : "disabled"} (${projectedAfter.source}; backend=${projectedAfter.backend ?? "unresolved"}); configured=${projectedAfter.configuredEnabled ? "on" : "off"}${projectedAfter.runtimeStateIssue ? `; runtime state invalid=${projectedAfter.runtimeStateIssue}` : ""}.`);
   }
-  if (runtimeAfter?.runtimeStateIssue) lines.push("Classification is paused by invalid runtime state. Repair .pi/bifrost-state.json as a JSON object, then run /bifrost reload.");
+  if (runtimeAfter?.runtimeStateIssue) lines.push("Classification is paused by invalid runtime state. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.");
   summarizeRules(checked, before, after, lines);
   const models = checked.changes.find((change) => change.field === "models");
   summarizeMap("Model pools", modelPools(models?.before, before.schemaVersion), modelPools(models?.after, after.schemaVersion), modelPools(before.models, before.schemaVersion), modelPools(after.models, after.schemaVersion), lines, poolCount);
@@ -1400,7 +1408,7 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
       input.classifierRuntime?.(checked.effectiveAfter as unknown as BifrostConfig),
     );
     if (runtimeDigest !== request.classifierRuntimeDigest) {
-      return stale("classifier runtime state changed after this proposal was checked", "Nothing was written. Run check again and review the current classifier mode.");
+      return stale("classifier runtime digest does not match; the state may have changed or the digest may be incorrect", "Nothing was written. Run check again and use its proposal handle.");
     }
   }
 
@@ -1649,6 +1657,7 @@ const ConfigAgentParameters = Type.Object({
   prompts: Type.Optional(Type.Array(Type.String(), { description: "Representative prompts to evaluate in preview. Offline: nothing is sent anywhere." })),
   provider: Type.Optional(Type.String({ description: "Restrict the inventory reported by inspect to one provider. Display only." })),
   offset: Type.Optional(Type.Number({ minimum: 0, description: "Page start for the inspect inventory (sorted display order); repeat inspect with the suggested offset to list more models. Display only." })),
+  proposalHandle: Type.Optional(Type.String({ description: "Session-local handle returned by check. Apply with this handle alone; the tool retains the candidate and stale guards." })),
   proposalDigest: Type.Optional(Type.String({ description: "proposalDigest returned by check or preview for this exact candidate." })),
   sourceDigest: Type.Optional(Type.String({ description: "sourceDigest returned by check or preview for this exact candidate. When the source file does not exist yet, check reports the literal \"absent\"; pass that string back unchanged." })),
   effectiveDigest: Type.Optional(Type.String({ description: "effectiveDigest returned by check or preview for this exact candidate." })),
@@ -1689,6 +1698,7 @@ function readRequest(params: {
 export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefinition<typeof ConfigAgentParameters, ConfigAgentToolResult, unknown> {
   const cwdOf = deps.cwd ?? (() => process.cwd());
   const nowOf = deps.now ?? (() => Date.now());
+  const proposals = new WeakMap<object, { sessionId: string; handle: string; request: ConfigAgentRequest }>();
   return {
     name: BIFROST_CONFIG_TOOL_NAME,
     label: "Bifrost config",
@@ -1705,7 +1715,14 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const operation = params.operation as ConfigAgentOperation;
-      const request = readRequest(params);
+      let request = readRequest(params);
+      const sessionManager = ctx.sessionManager;
+      const sessionId = typeof sessionManager?.getSessionId === "function" ? sessionManager.getSessionId() : undefined;
+      const saved = sessionId === undefined ? undefined : proposals.get(sessionManager);
+      const handleOnly = Object.keys(params).every((key) => key === "operation" || key === "proposalHandle");
+      if (operation === "apply" && params.proposalHandle && saved && saved.sessionId === sessionId && saved.handle === params.proposalHandle && handleOnly) {
+        request = saved.request;
+      }
       const cwd = cwdOf();
       const catalog = catalogFromContext(ctx);
       const classifierRuntime = deps.classifierRuntime
@@ -1734,6 +1751,14 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
           result = await previewConfigCandidate({ ...input, now: nowOf() });
           break;
         case "apply": {
+          if (params.proposalHandle && (!saved || saved.sessionId !== sessionId || saved.handle !== params.proposalHandle || !handleOnly)) {
+            result = {
+              operation: "apply", status: "usage", source: "project", sourcePath: "", applied: false, reloaded: false,
+              verified: false, changes: [], effectiveConfig: null, routing: null,
+              reason: "unknown proposal handle or extra candidate fields", notes: ["Nothing was written. Run check again, then apply using only its proposalHandle."],
+            };
+            break;
+          }
           if (!ctx.hasUI || ctx.mode !== "tui") {
             result = {
               operation: "apply",
@@ -1774,8 +1799,24 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
           notes: [...result.notes, "Pi does not expose an extension API to open saved files in its editor; open the saved path manually if needed."],
         };
       }
+      let handleNote = "";
+      if (sessionId !== undefined && result.operation === "check" && result.status === "ok" && result.writeEligible && result.proposalDigest && result.guards) {
+        const handle = randomBytes(6).toString("hex");
+        proposals.set(sessionManager, {
+          sessionId, handle,
+          request: structuredClone({
+            ...request,
+            proposalDigest: result.proposalDigest,
+            sourceDigest: result.guards.sourceDigest ?? "absent",
+            effectiveDigest: result.guards.effectiveDigest,
+            catalogDigest: result.guards.catalogDigest,
+            ...(result.guards.classifierRuntimeDigest === null ? {} : { classifierRuntimeDigest: result.guards.classifierRuntimeDigest }),
+          }),
+        });
+        handleNote = `\nSession-local proposalHandle: ${handle}. To apply, pass only operation=apply and proposalHandle; do not copy digests.`;
+      }
       return {
-        content: [{ type: "text", text: deps.render(result) }],
+        content: [{ type: "text", text: deps.render(result) + handleNote }],
         details: result,
         isError: result.status !== "ok",
       };

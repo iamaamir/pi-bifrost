@@ -1459,7 +1459,7 @@ async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState):
   const classifier = state.config.classifier;
   const enablement = classifierEnablementFor(state, ctx);
   if (enablement.runtimeStateIssue) {
-    log(ctx, "Classifier is paused because runtime state is invalid. Repair .pi/bifrost-state.json as a JSON object, then run /bifrost reload.", "error");
+    log(ctx, "Classifier is paused because runtime state is invalid. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.", "error");
     return;
   }
   if (!enablement.enabled) {
@@ -2318,7 +2318,7 @@ function renderDiagnosticLines(report: ValidateDiagnosticsReport | (InspectDiagn
   }
   lines.push(`classifier runtime: ${report.classifier.enabled ? "enabled" : "disabled"} (${report.classifier.source}); configured=${report.classifier.configuredEnabled ? "on" : "off"}; readiness=${report.classifier.readiness}${report.classifier.backend ? `; backend=${report.classifier.backend}` : ""}`);
   if (report.classifier.legacyConflict) lines.push(`classifier conflict: saved=${report.classifier.legacyConflict.saved}, configured=${report.classifier.legacyConflict.configured}; ${classifierConflictNote(report.classifier.legacyConflict, report.classifier.source)}`);
-  if (report.classifier.runtimeStateIssue) lines.push(`classifier runtime state: invalid (${report.classifier.runtimeStateIssue}); classification is paused by default. Repair .pi/bifrost-state.json as a JSON object, then run /bifrost reload.`);
+  if (report.classifier.runtimeStateIssue) lines.push(`classifier runtime state: invalid (${report.classifier.runtimeStateIssue}); classification is paused by default. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.`);
   for (const error of report.classifier.errors) lines.push(`classifier error: ${error}`);
   if (report.kind === "inspection") {
     lines.push(`observed: ${formatDiagnosticTimestamp(report.observedAt)}`);
@@ -2967,7 +2967,7 @@ export function createCommandRouter(
     exact("classifier", (_, ctx) => handleClassifierChoose(ctx, state)),
     exact("classifier on", (_, ctx) => {
       if (state.classifierRuntimeStateIssue) {
-        log(ctx, "Classifier remains disabled because runtime state is invalid. Repair .pi/bifrost-state.json as a JSON object, then run /bifrost reload.", "error");
+        log(ctx, "Classifier remains disabled because runtime state is invalid. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.", "error");
         return;
       }
       const effective = state.effectiveClassifierBackend(state.config, ctx);
@@ -2994,7 +2994,7 @@ export function createCommandRouter(
       if (enablement.source === "legacy-conflict") {
         log(ctx, "Classifier remains paused by conflicting legacy state. /bifrost classifier on or off affects only this session. To resume configured behavior after restart, back up .pi/bifrost-state.json, remove only classifierEnabled, then run /bifrost reload.", "warning");
       } else if (enablement.runtimeStateIssue) {
-        log(ctx, `Classifier remains disabled because runtime state is invalid. Repair .pi/bifrost-state.json as a JSON object, then run /bifrost reload.`, "error");
+        log(ctx, `Classifier remains disabled because runtime state is invalid. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.`, "error");
       } else {
         log(ctx, `Classifier now follows configuration for this session (${enablement.enabled ? "enabled" : "disabled"}).`);
       }
@@ -3023,7 +3023,7 @@ export function createCommandRouter(
         `classifier: enabled=${runtime.enabled} (${runtime.source})`,
         `configured=${classifier?.enabled === false ? "off" : "on"}`,
         ...(conflict ? [`legacy saved classifierEnabled=${conflict.saved} conflicts with configured=${conflict.configured}; ${classifierConflictNote(conflict, runtime.source)}`] : []),
-        ...(runtime.runtimeStateIssue ? [`runtime-state=invalid (${runtime.runtimeStateIssue}); classification is paused. Repair .pi/bifrost-state.json as a JSON object, then run /bifrost reload.`] : []),
+        ...(runtime.runtimeStateIssue ? [`runtime-state=invalid (${runtime.runtimeStateIssue}); classification is paused. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.`] : []),
         `readiness=${runtime.runtimeStateIssue ? "blocked" : !runtime.enabled ? "inactive" : errors.length > 0 ? "blocked" : "ready"}`,
         ...errors.map((message) => `error=${message}`),
         detail,

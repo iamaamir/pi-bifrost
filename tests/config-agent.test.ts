@@ -72,6 +72,7 @@ function freshHarness(options: HarnessOptions = {}) {
   const classifierSessionOverride = options.classifierSessionOverride;
   let classifyCalls = 0;
   let reloadCalls = 0;
+  let sessionId = "test-session";
   const confirmations: { title: string; summary: string; details: string }[] = [];
 
   const registry = {
@@ -89,6 +90,7 @@ function freshHarness(options: HarnessOptions = {}) {
 
   const ctx = {
     cwd,
+    sessionManager: { getSessionId: () => sessionId },
     mode: options.mode ?? "tui",
     get hasUI() { return hasUI; },
     ui: {
@@ -169,6 +171,7 @@ function freshHarness(options: HarnessOptions = {}) {
       available.length = 0;
       available.push(...models);
     },
+    setSessionId(value: string) { sessionId = value; },
     setConfirm(value: boolean) { confirmResult = value; },
     setHasUI(value: boolean) { hasUI = value; },
     setReload(value: boolean) { reloadResult = value; },
@@ -1371,6 +1374,51 @@ describe("order, pause labeling, and inventory pagination", () => {
 });
 
 describe("tool surface", () => {
+  it("previews current configuration and applies a checked handle without copying digests", async () => {
+    const harness = freshHarness();
+    try {
+      const preview = detailsOf<ConfigAgentPreviewResult>(await harness.run({ operation: "preview", prompts: ["hello"] }));
+      assert.equal(preview.status, "ok");
+      assert.equal(preview.proposalDigest, null);
+      const checked = await harness.run({ operation: "check", patch: { default: "quick" } });
+      const handle = contentOf(checked).match(/proposalHandle: ([a-f0-9]{12})/)?.[1];
+      assert.ok(handle);
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run({ operation: "apply", proposalHandle: handle }));
+      assert.equal(applied.status, "ok");
+      assert.equal(applied.applied, true);
+    } finally { harness.cleanup(); }
+  });
+
+  it("rejects handles across session replacement and with extra candidate fields", async () => {
+    const harness = freshHarness();
+    try {
+      const checked = await harness.run({ operation: "check", patch: { default: "quick" } });
+      const handle = contentOf(checked).match(/proposalHandle: ([a-f0-9]{12})/)?.[1];
+      assert.ok(handle);
+      const extra = detailsOf<ConfigAgentApplyResult>(await harness.run({ operation: "apply", proposalHandle: handle, patch: { default: "general" } }));
+      assert.equal(extra.status, "usage");
+      harness.setSessionId("other-session");
+      const other = detailsOf<ConfigAgentApplyResult>(await harness.run({ operation: "apply", proposalHandle: handle }));
+      assert.equal(other.status, "usage");
+      assert.equal(harness.confirmations().length, 0);
+      assert.equal(harness.readFile(".pi/bifrost.json"), undefined);
+    } finally { harness.cleanup(); }
+  });
+
+  it("rejects a stale handle without writing", async () => {
+    const harness = freshHarness();
+    try {
+      const checked = await harness.run({ operation: "check", patch: { default: "quick" } });
+      const handle = contentOf(checked).match(/proposalHandle: ([a-f0-9]{12})/)?.[1];
+      assert.ok(handle);
+      harness.writeFile(".pi/bifrost.json", { default: "general" });
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run({ operation: "apply", proposalHandle: handle }));
+      assert.equal(applied.status, "stale");
+      assert.match(harness.readFile(".pi/bifrost.json")!, /general/);
+      assert.equal(harness.confirmations().length, 0);
+    } finally { harness.cleanup(); }
+  });
+
   it("exposes one cohesive tool with a stable name", () => {
     const harness = freshHarness();
     try {
@@ -1381,7 +1429,7 @@ describe("tool surface", () => {
       const properties = (harness.tool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
       assert.deepEqual(Object.keys(properties).sort(), [
         "candidate", "catalogDigest", "classifierRuntimeDigest", "effectiveDigest", "offset", "operation", "patch",
-        "prompts", "proposalDigest", "provider", "remove", "source", "sourceDigest",
+        "prompts", "proposalDigest", "proposalHandle", "provider", "remove", "source", "sourceDigest",
       ]);
     } finally {
       harness.cleanup();
@@ -1808,7 +1856,7 @@ describe("effective classifier runtime in the agent tool", () => {
       harness.setLegacyClassifierEnabled(true);
       const result = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { patch })));
       assert.equal(result.status, "stale");
-      assert.match(result.reason ?? "", /classifier runtime state changed after/u);
+      assert.match(result.reason ?? "", /classifier runtime digest does not match/u);
       assert.equal(harness.confirmations().length, 0);
       assert.deepEqual(JSON.parse(harness.readFile(".pi/bifrost.json") ?? "null"), original);
       assert.equal(harness.reloadCalls(), 0);

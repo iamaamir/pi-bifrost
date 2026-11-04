@@ -101,10 +101,7 @@ describe("configure-bifrost skill packaging", () => {
     for (const required of [
       BIFROST_CONFIG_TOOL_NAME,
       "operation\":\"inspect",
-      "proposalDigest",
-      "sourceDigest",
-      "effectiveDigest",
-      "catalogDigest",
+      "proposalHandle",
       "stale",
     ]) {
       assert.ok(text.includes(required), `the skill must mention ${required}`);

@@ -3419,7 +3419,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       ctx.ui.notify(message, "warning");
     }
     if (classifierRuntime.runtimeStateIssue && ctx.hasUI) {
-      ctx.ui.notify("Classifier is paused because .pi/bifrost-state.json is unreadable or invalid. Repair it as a JSON object, then run /bifrost reload.", "warning");
+      ctx.ui.notify("Classifier is paused because .pi/bifrost-state.json is unreadable or invalid. Repair it as a JSON object with boolean enabled and classifierEnabled fields if present, then run /bifrost reload.", "warning");
     }
     debugLifecycle("bifrost", "session_start", ctx.sessionManager, undefined, { reliabilityMode: reliabilityV2Enabled() ? "reliability_v2" : "reliability_v1" });
     classifierNoticeStates.delete(ctx.sessionManager);
