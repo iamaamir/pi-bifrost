@@ -23,6 +23,7 @@ let server;
 let requests;
 let scripted;
 let lastApplyReport;
+let lastCheckReport;
 
 const PATCH = {
   schemaVersion: 2,
@@ -80,8 +81,11 @@ function startFakeProvider() {
       }
       if (text.includes("bifrost candidate check")) {
         if (scripted.filter((entry) => entry === "apply").length >= 3) return textSse(response, "giving up");
+        lastCheckReport = (payload.messages ?? [])
+          .map((message) => message.content)
+          .find((content) => typeof content === "string" && content.includes("--- bifrost candidate check ---")) ?? "";
         const digests = {};
-        for (const key of ["proposalDigest", "sourceDigest", "effectiveDigest", "catalogDigest"]) {
+        for (const key of ["proposalDigest", "sourceDigest", "effectiveDigest", "catalogDigest", "classifierRuntimeDigest"]) {
           // Match against the JSON-encoded transcript, so stop at whitespace or
           // a JSON escape (\\n): a broader match would drag the line break in.
           const match = text.match(new RegExp(`${key}: ([0-9a-f]{64}|absent)`));
@@ -122,6 +126,7 @@ function fixture(port) {
     models: { general: ["fake/agentconfig"] },
     classifier: { enabled: false },
   }));
+  writeFileSync(join(work, ".pi", "bifrost-state.json"), JSON.stringify({ enabled: true, classifierEnabled: true }));
   return { home, work };
 }
 
@@ -281,7 +286,9 @@ describe("config agent tool Pi acceptance", { concurrency: 1, timeout: 180_000 }
     const rpc = startRpc({ ...env, port });
     try {
       const savedPath = join(env.work, ".pi", "bifrost.json");
+      const statePath = join(env.work, ".pi", "bifrost-state.json");
       const before = readFileSync(savedPath, "utf8");
+      const stateBefore = readFileSync(statePath, "utf8");
       await rpc.userTurn("please configure my routing e2e-config-agent-marker");
 
       // The scripted sequence ran: check first, then apply with copied digests.
@@ -289,8 +296,11 @@ describe("config agent tool Pi acceptance", { concurrency: 1, timeout: 180_000 }
 
       const dialogs = rpc.records.filter((record) => record.type === "extension_ui_request" && ["confirm", "select", "editor", "custom"].includes(record.method));
       assert.deepEqual(dialogs, [], "RPC apply must not request a weaker approval");
+      assert.match(lastCheckReport ?? "", /classifier runtime now: disabled \(legacy-conflict\).*configured=off; backend=prompt/i);
+      assert.match(lastCheckReport ?? "", /configured false overrides legacy classifierEnabled=true/);
       assert.match(lastApplyReport ?? "", /approval_required/);
       assert.equal(readFileSync(savedPath, "utf8"), before, "RPC apply must preserve exact source bytes");
+      assert.equal(readFileSync(statePath, "utf8"), stateBefore, "config inspection and apply must preserve legacy runtime bytes");
 
       // Offline inspection remains available and the old policy stays active.
       const preview = await rpc.prompt("/bifrost preview --json route this prompt e2e");

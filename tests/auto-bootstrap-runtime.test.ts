@@ -17,7 +17,7 @@ import { makeModel, makePiClassifierModel } from "./helpers.ts";
 type Hook = (event: any, ctx: ExtensionContext) => Promise<unknown>;
 const flushImmediate = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-function freshHarness(auto = false, persistedRuntimeState?: { enabled: boolean; classifierEnabled: boolean }, deferProbe = false, blockProbe = false) {
+function freshHarness(auto = false, persistedRuntimeState?: { enabled?: boolean; classifierEnabled?: boolean }, deferProbe = false, blockProbe = false) {
   const previousCwd = process.cwd();
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   const previousTypeSafeKey = process.env[TYPE_SAFE_API_KEY_ENV];
@@ -496,7 +496,7 @@ describe("automatic setup through registered Pi hooks", () => {
     } finally { harness.cleanup(); }
   });
 
-  it("lets direct Auto selection persist its own runtime mode while fresh setup is pending", async () => {
+  it("avoids a redundant mode override when direct Auto selection matches config", async () => {
     const harness = freshHarness(true);
     try {
       await harness.handlers.get("model_select")!({ model: harness.autoModel, source: "set" }, harness.ctx);
@@ -510,7 +510,7 @@ describe("automatic setup through registered Pi hooks", () => {
       assert.deepEqual(input, { action: "transform", text: "do a small task" });
       assert.match(harness.notices.join("\n"), /in-memory pools/);
       assert.equal(harness.confirmCalls(), 0);
-      assert.ok(existsSync(join(process.cwd(), ".pi", "bifrost-state.json")));
+      assert.equal(existsSync(join(process.cwd(), ".pi", "bifrost-state.json")), false);
       const message = { role: "user", content: [{ type: "text", text: "quick do a small task" }] };
       harness.branch.push({ type: "message", id: "auto-first-user", parentId: "root", timestamp: new Date().toISOString(), message });
       const request = {
@@ -524,7 +524,7 @@ describe("automatic setup through registered Pi hooks", () => {
     } finally { harness.cleanup(); }
   });
 
-  it("bootstraps after a prior empty-catalog classifier-off preference when models become available", async () => {
+  it("preserves a legacy classifier-off conflict while bootstrapping when models become available", async () => {
     const harness = freshHarness(true, { enabled: true, classifierEnabled: false });
     try {
       await harness.handlers.get("model_select")!({ model: harness.autoModel, source: "set" }, harness.ctx);
@@ -536,9 +536,9 @@ describe("automatic setup through registered Pi hooks", () => {
       assert.deepEqual(result, { action: "continue" });
       assert.match(harness.notices.join("\n"), /in-memory pools/);
       assert.deepEqual(JSON.parse(readFileSync(join(process.cwd(), ".pi", "bifrost-state.json"), "utf8")), {
-        enabled: true,
         classifierEnabled: false,
       });
+      assert.match(harness.status("bifrost-state") ?? "", /classifier off/);
       assert.equal(existsSync(join(process.cwd(), ".pi", "bifrost.json")), false);
       const message = { role: "user", content: [{ type: "text", text: "Review this code and suggest an improvement" }] };
       harness.branch.push({ type: "message", id: "classifier-off-user", parentId: "root", timestamp: new Date().toISOString(), message });

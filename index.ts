@@ -77,9 +77,9 @@ import {
   type AutoDispatchReceipt,
 } from "./runtime-reliability-v2.ts";
 import { ReliabilityV2Store } from "./reliability-v2-store.ts";
-import { loadRuntimeState, runtimeStatePath, saveRuntimeState, isPassiveModelSelection, createSelfSelectTracker } from "./runtime-state.ts";
+import { loadRuntimeState, resolveClassifierEnablement, runtimeStatePath, saveRuntimeState, isPassiveModelSelection, createSelfSelectTracker } from "./runtime-state.ts";
 import { createCommandRouter, getBifrostCommandCompletions, reloadBifrostConfig, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.ts";
-import { createBifrostConfigTool } from "./config-agent.ts";
+import { configAgentConfigDigest, createBifrostConfigTool } from "./config-agent.ts";
 import { reportText } from "./config-agent-report.ts";
 import { setupDebug, debug, debugMeasure, isDebugEnabled, flushDebug } from "./debug.ts";
 import { parseInlineOverride } from "./inline-override.ts";
@@ -103,6 +103,9 @@ import { buildBootstrapPools, canBootstrapModels, hasBlockingRuntimePreferences,
 import { buildInitOwnershipReceipt } from "./reconciliation-command.ts";
 import { applyReconciliationTransaction } from "./reconciliation-store.ts";
 import { probeOptionsFromConfig, readRecentCompleteProbeReport, runProbe } from "./probe.ts";
+
+type IdentityObject = object;
+
 
 interface DebugCorrelationState {
   readonly id: string;
@@ -150,7 +153,7 @@ function classifierFallbackLabel(result: ClassificationResult): string {
 function reportClassifierAttempt(
   ctx: ExtensionContext,
   result: ClassificationResult,
-  turn?: object,
+  turn?: IdentityObject,
   requestCorrelationId?: string,
 ): void {
   try {
@@ -247,7 +250,7 @@ function reportClassifierAttempt(
   }
 }
 
-function debugCorrelation(session?: object, turn?: object): Record<string, string> | undefined {
+function debugCorrelation(session?: IdentityObject, turn?: IdentityObject): Record<string, string> | undefined {
   if (!isDebugEnabled()) return undefined;
   debugRunCorrelationId ??= randomUUID();
   const correlation: Record<string, string> = { run_correlation_id: debugRunCorrelationId };
@@ -273,8 +276,8 @@ function debugCorrelation(session?: object, turn?: object): Record<string, strin
 function debugLifecycle(
   module: string,
   event: string,
-  session: object | undefined,
-  turn: object | undefined,
+  session: IdentityObject | undefined,
+  turn: IdentityObject | undefined,
   meta: Record<string, unknown>,
 ): void {
   try {
@@ -324,7 +327,7 @@ function restoreRejectedPrompt(
 
 function strictInputHandled(
   ctx: ExtensionContext,
-  state: Pick<BifrostState, "enabled" | "pinned" | "classifierEnabled" | "config" | "economicPolicyValid">,
+  state: Pick<BifrostState, "enabled" | "pinned" | "config" | "economicPolicyValid" | "getClassifierEnablementForSession">,
   originalText: string,
   editorTextAtInput: string | undefined,
   message: string,
@@ -490,7 +493,7 @@ function buildPipeline(
   // If classifier is disabled, pass empty array — pipeline skips LLM stage.
   let classifierModels: ClassifierModelRef<Model<Api>>[] = [];
   let classifyDirect: ((text: string, tiers: readonly string[], signal?: AbortSignal) => Promise<DirectClassifierAttempt>) | undefined;
-  const directConfigOk = !hasClassifierConfigErrors(config, effective.backend);
+  const directConfigOk = !hasClassifierConfigErrors(config, effective.backend, classifierEnabled);
   const plan = directStagePlan({
     backend: effective.backend,
     auto: effective.auto,
@@ -500,7 +503,7 @@ function buildPipeline(
     fallback: config.classifier?.fallback,
   });
   if (plan.directDegraded) {
-    for (const message of classifierConfigErrors(config, effective.backend)) {
+    for (const message of classifierConfigErrors(config, effective.backend, classifierEnabled)) {
       console.error(`[bifrost/config] error: ${message}`);
     }
     console.error(`[bifrost/config] auto backend ${effective.backend} is unusable; ${plan.usePromptFallback ? "using prompt classifier fallback" : "regex/default fallback only"}. Fix the errors above or pin classifier.backend.`);
@@ -695,7 +698,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     enabled: config.enabled ?? true,
     pinned: false,
     classifierEnabled: config.classifier?.enabled ?? true,
-  });
+    classifierSource: "configuration",
+});
   // Programmatic activation keys, scoped per session: two sessions selecting
   // the same model concurrently must never swallow each other's event (#17).
   const selfSelect = createSelfSelectTracker();
@@ -740,7 +744,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   const autoBootstrapRecords = new Set<AutoBootstrapRecord>();
   const pendingBootstrapConfigBySession = new WeakMap<object, { record: AutoBootstrapRecord; config: BifrostConfig }>();
   const autoBootstrapLifecycleBySession = new WeakMap<object, number>();
-  function advanceAutoBootstrapLifecycle(session: object, preserveEligibleBootstrap = false, ctx?: ExtensionContext): void {
+  function advanceAutoBootstrapLifecycle(session: IdentityObject, preserveEligibleBootstrap = false, ctx?: ExtensionContext): void {
     const record = preserveEligibleBootstrap ? autoBootstrapBySession.get(session) : undefined;
     const previousLifecycle = autoBootstrapLifecycleBySession.get(session) ?? 0;
     const nextLifecycle = previousLifecycle + 1;
@@ -774,7 +778,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     value.affinity?.mode === "observe" || value.affinity?.mode === "retain-within-tier";
   let affinityStore: RuntimeAffinityStore | undefined = usesRuntimeAffinity(config) ? createRuntimeAffinityStore() : undefined;
   let pendingAffinityBySession = new WeakMap<object, Map<string, PendingAffinityProof>>();
-  function pendingAffinity(session: object, create = false): Map<string, PendingAffinityProof> | undefined {
+  function pendingAffinity(session: IdentityObject, create = false): Map<string, PendingAffinityProof> | undefined {
     let pending = pendingAffinityBySession.get(session);
     if (!pending && create) {
       pending = new Map();
@@ -788,7 +792,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   }
   function affinityProofStillJoined(
     userEntryId: string,
-    userMessage: object,
+    userMessage: IdentityObject,
     assistantEntryId: string,
     key: string,
     branch: readonly unknown[],
@@ -805,8 +809,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return false;
   }
   function promoteAffinityProof(
-    session: object,
-    proof: Omit<RuntimeAffinitySuccessProof, "dispatchUnambiguous" | "physicalDispatch" | "outcome"> & { userEntryId: string; userMessage: object },
+    session: IdentityObject,
+    proof: Omit<RuntimeAffinitySuccessProof, "dispatchUnambiguous" | "physicalDispatch" | "outcome"> & { userEntryId: string; userMessage: IdentityObject },
     branch: readonly unknown[],
   ): boolean {
     if (!affinityStore || !affinityProofStillJoined(proof.userEntryId, proof.userMessage, proof.branchEntryId, proof.modelKey, branch)) return false;
@@ -871,8 +875,49 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     }
     return value;
   }
-  let pipeline: ClassificationPipeline | undefined;
+  interface ClassifierSessionRuntime {
+    readonly sessionId?: string;
+    override?: boolean;
+    generation: number;
+    controller: AbortController;
+    pipeline?: ClassificationPipeline;
+    pipelineConfigGeneration?: number;
+    pipelineEnabled?: boolean;
+    pipelineBackend?: string;
+  }
+  const classifierSessions = new Map<ExtensionContext["sessionManager"], ClassifierSessionRuntime>();
   const shouldNotifyDetection = createDetectionNoticeGate();
+
+  function classifierSessionFor(manager: ExtensionContext["sessionManager"]): ClassifierSessionRuntime {
+    let sessionId: string | undefined;
+    try { sessionId = typeof manager.getSessionId === "function" ? manager.getSessionId() : undefined; }
+    catch { sessionId = undefined; }
+    let session = classifierSessions.get(manager);
+    if (!session || session.sessionId !== sessionId) {
+      session?.controller.abort(new Error("Classifier session changed"));
+      session = { sessionId, generation: 0, controller: new AbortController() };
+      classifierSessions.set(manager, session);
+    }
+    return session;
+  }
+
+  function classifierSessionIsCurrent(manager: ExtensionContext["sessionManager"], session: ClassifierSessionRuntime, generation: number): boolean {
+    return classifierSessionFor(manager) === session && session.generation === generation && !session.controller.signal.aborted;
+  }
+
+  function classifierEnablementFor(ctx: ExtensionContext, targetConfig: BifrostConfig = state.config) {
+    return resolveClassifierEnablement(
+      targetConfig.classifier?.enabled !== false,
+      state.legacyClassifierEnabled,
+      classifierSessionFor(ctx.sessionManager).override,
+      state.classifierRuntimeStateIssue,
+    );
+  }
+
+  function classifierSignalFor(ctx: ExtensionContext, signal?: AbortSignal): AbortSignal {
+    const sessionSignal = classifierSessionFor(ctx.sessionManager).controller.signal;
+    return signal ? AbortSignal.any([sessionSignal, signal]) : sessionSignal;
+  }
 
   function effectiveClassifierFor(ctx: ExtensionContext, targetConfig: BifrostConfig): EffectiveBackend {
     const detected = detectionEngine.detect(() => collectDetectionFacts({
@@ -888,19 +933,22 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   function getPipeline(ctx: ExtensionContext): ClassificationPipeline {
     const effective = effectiveClassifierFor(ctx, state.config);
+    const session = classifierSessionFor(ctx.sessionManager);
+    const enablement = classifierEnablementFor(ctx);
     if (effective.auto) {
       if (shouldNotifyDetection(ctx.sessionManager)) {
         debug("classifier", "backend.detected", { backend: effective.backend, reason: effective.reason });
         console.warn(`Bifrost: classifier backend auto: ${effective.backend} (${effective.reason}). Run /bifrost classifier to change.`);
       }
     }
-    if (!pipeline) {
+    if (!session.pipeline || session.pipelineConfigGeneration !== state.configGeneration
+      || session.pipelineEnabled !== enablement.enabled || session.pipelineBackend !== effective.backend) {
       classifierMetricsStore.setEnabled(classifierMetricsEnabled(state.config, effective.backend));
-      pipeline = buildPipeline(
+      session.pipeline = buildPipeline(
         ctx,
         state.config,
         state.cacheEntries,
-        state.classifierEnabled,
+        enablement.enabled,
         reliabilityStore,
         classifierMetricsStore,
         activeClassifierCacheKey(state.config, detectionEngine),
@@ -948,13 +996,50 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           }
         },
       );
+      session.pipelineConfigGeneration = state.configGeneration;
+      session.pipelineEnabled = enablement.enabled;
+      session.pipelineBackend = effective.backend;
     }
-    return pipeline;
+    return session.pipeline;
   }
 
-  function invalidatePipeline() {
-    debug("bifrost", "pipeline.invalidate");
-    pipeline = undefined;
+  async function classifyForSession(
+    ctx: ExtensionContext,
+    text: string,
+    signal?: AbortSignal,
+    options?: { readonly offline?: boolean },
+  ): Promise<ClassificationResult> {
+    const session = classifierSessionFor(ctx.sessionManager);
+    const generation = session.generation;
+    const result = await getPipeline(ctx).classify(text, classifierSignalFor(ctx, signal), options);
+    return classifierSessionIsCurrent(ctx.sessionManager, session, generation) ? result : { kind: "unclassified", classificationOutcome: "aborted" };
+  }
+
+  function discardClassifierPipeline(manager: ExtensionContext["sessionManager"]): void {
+    const session = classifierSessions.get(manager);
+    if (!session) return;
+    session.pipeline = undefined;
+    session.pipelineConfigGeneration = undefined;
+    session.pipelineEnabled = undefined;
+    session.pipelineBackend = undefined;
+  }
+
+  function discardAllClassifierPipelines(): void {
+    for (const manager of classifierSessions.keys()) discardClassifierPipeline(manager);
+  }
+
+  function invalidatePipeline(manager?: ExtensionContext["sessionManager"]): void {
+    debug("bifrost", "pipeline.invalidate", { scope: manager ? "session" : "all" });
+    const sessions = manager ? [classifierSessions.get(manager)].filter((value): value is ClassifierSessionRuntime => Boolean(value)) : [...classifierSessions.values()];
+    for (const session of sessions) {
+      session.generation += 1;
+      session.controller.abort(new Error("Classifier state changed"));
+      session.controller = new AbortController();
+      session.pipeline = undefined;
+      session.pipelineConfigGeneration = undefined;
+      session.pipelineEnabled = undefined;
+      session.pipelineBackend = undefined;
+    }
   }
 
   // Mutable state shared with command handlers.
@@ -979,7 +1064,19 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     economicDiagnostics: initialEconomic.diagnostics,
     economicQuarantinedSourceRevisions: initialEconomic.quarantinedSourceRevisions,
     enabled: runtimeState.enabled,
-    classifierEnabled: runtimeState.classifierEnabled,
+    legacyClassifierEnabled: runtimeState.legacyClassifierEnabled,
+    classifierRuntimeStateIssue: runtimeState.runtimeStateIssue,
+    getClassifierEnablementForSession: (manager, targetConfig = state.config) => resolveClassifierEnablement(
+      targetConfig.classifier?.enabled !== false,
+      state.legacyClassifierEnabled,
+      classifierSessionFor(manager).override,
+      state.classifierRuntimeStateIssue,
+    ),
+    setClassifierSessionOverride: (manager, enabled) => {
+      classifierSessionFor(manager).override = enabled;
+      invalidatePipeline(manager);
+    },
+    classifyForSession,
     pinned: runtimeState.pinned,
     cacheEntries,
     reliabilityStore,
@@ -992,10 +1089,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       : effectiveBackendOf(targetConfig, detectionEngine),
     getPipeline,
     invalidatePipeline,
-    saveModeState: () => {
-      const next = { enabled: state.enabled, classifierEnabled: state.classifierEnabled };
-      return saveRuntimeState(runtimeStateFile, next);
-    },
+    saveModeState: () => saveRuntimeState(runtimeStateFile,
+      state.enabled === (state.config.enabled ?? true) ? {} : { enabled: state.enabled }),
     lastRegistryRefreshAt: undefined,
     forceRegistryRefresh: false,
   };
@@ -1175,7 +1270,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return record?.originalConfig;
   };
 
-  function cancelAutoBootstrap(session: object, ctx?: ExtensionContext): void {
+  function cancelAutoBootstrap(session: IdentityObject, ctx?: ExtensionContext): void {
     const pending = autoBootstrapBySession.get(session);
     if (pending) {
       pending.cancelled = true;
@@ -1186,7 +1281,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     if (ctx?.sessionManager === session) clearBifrostWidgets(ctx);
   }
 
-  function installPendingBootstrapConfig(session: object): void {
+  function installPendingBootstrapConfig(session: IdentityObject): void {
     const pending = pendingBootstrapConfigBySession.get(session);
     if (!pending) return;
     pendingBootstrapConfigBySession.delete(session);
@@ -1260,7 +1355,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   function persistAutoBootstrap(
     ctx: ExtensionContext,
-    session: object,
+    session: IdentityObject,
     record: AutoBootstrapRecord,
     nextConfig: BifrostConfig,
     generatedModels: Record<string, string[]>,
@@ -1397,7 +1492,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       if (!stillOwned()) return false;
       const effective = state.effectiveClassifierBackend(state.config, ctx);
       const classifier = state.config.classifier;
-      const classifierModel = state.enabled && state.classifierEnabled && classifier?.enabled !== false
+      const classifierModel = state.enabled && classifierEnablementFor(ctx).enabled
         && effective.backend === CLASSIFIER_BACKEND_IDS.prompt && classifier?.model === undefined
         ? [...catalogModels]
           .sort((a, b) => modelKey(a).localeCompare(modelKey(b)))
@@ -1779,7 +1874,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
 
   function isSideEffectFreeAllowanceFailure(
     ctx: ExtensionContext,
-    assistantMessage: object,
+    assistantMessage: IdentityObject,
     assistantEntryId: string,
     boundary: { entryId: string; message: object },
     failedModelKey: string,
@@ -2120,7 +2215,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return settlementConfirmed;
   }
 
-  function stopProviderTrialHeartbeat(session: object, model: string): void {
+  function stopProviderTrialHeartbeat(session: IdentityObject, model: string): void {
     const timers = providerTrialTimersBySession.get(session);
     const timer = timers?.get(model);
     if (timer) clearInterval(timer);
@@ -2150,7 +2245,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     timers.set(model, timer);
   }
 
-  async function cleanupProviderTrials(session: object): Promise<void> {
+  async function cleanupProviderTrials(session: IdentityObject): Promise<void> {
     const claims = providerClaimsBySession.get(session);
     const sessionReference = providerTrialSessionRefBySession.get(session);
     for (const [model, claim] of claims ?? []) {
@@ -2178,7 +2273,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     }
   }
 
-  async function cleanupV2Receipts(session: object, kind: "cancelled" = "cancelled"): Promise<void> {
+  async function cleanupV2Receipts(session: IdentityObject, kind: "cancelled" = "cancelled"): Promise<void> {
     const owner = v2Receipts.forSession(session);
     for (const receipt of [...owner.receipts.values()]) {
       receipt.finalizing = true;
@@ -2488,7 +2583,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return undefined;
   }
 
-  function clearAllowanceRetry(session: object, reason: string): void {
+  function clearAllowanceRetry(session: IdentityObject, reason: string): void {
     const token = allowanceRetryBySession.get(session) ?? allowanceRetryAttemptBySession.get(session);
     if (reason === "agent_settled") allowanceRetryCancelledBySession.delete(session);
     else if (token && !["explicit_rule_matched", "explicit_tier_override"].includes(reason)) {
@@ -2538,7 +2633,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return token;
   }
 
-  function allowanceRetryBoundaryStillSafe(ctx: ExtensionContext, token: AllowanceRetryToken, message: object): boolean {
+  function allowanceRetryBoundaryStillSafe(ctx: ExtensionContext, token: AllowanceRetryToken, message: IdentityObject): boolean {
     if (ctx.signal?.aborted || ctx.hasPendingMessages?.() || !state.enabled || state.pinned
       || state.config.reliability?.enabled === false || state.config.reliability?.cooldownOnAllowanceExhausted === false
       || state.config.reliability?.retryOnAllowanceExhausted !== true
@@ -2549,7 +2644,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         { entryId: token.entryId, message }, token.failedModelKey, [], [], token.approvedAssistantEntryIds, true);
   }
 
-  function recordAutoRouteProof(session: object, proof: AutoRouteProof): void {
+  function recordAutoRouteProof(session: IdentityObject, proof: AutoRouteProof): void {
     const proofs = (autoRouteProofsBySession.get(session) ?? []).filter((prior) =>
       prior.userMessage.deref() && prior.entryId !== proof.entryId);
     proofs.push(proof);
@@ -2563,9 +2658,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         || !classifierCacheEnabled(state.config, effectiveBackendOf(state.config, detectionEngine).backend)) return;
       const maxEntries = state.config.cache?.maxEntries ?? DEFAULT_MAX_ENTRIES;
       state.cacheEntries = updateCache(state.cacheEntries, prompt, result.tier, maxEntries, activeClassifierCacheKey(state.config, detectionEngine));
+      discardAllClassifierPipelines();
       saveCache(cachePath(process.cwd(), state.config.cache?.path), state.cacheEntries);
-      invalidatePipeline();
-    } catch (error) {
+    } catch {
       // Cache persistence must never fail the route.
       debug("virtual", "cache.save_error", { category: "cache_write_failed" });
     }
@@ -2637,6 +2732,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       let rejectionCategory = "preflight_rejection";
       let terminalRouteCategory: string | undefined;
       let activeRouteOrigin = request.reason === "direct" ? "direct" : request.reason === "retry" ? "retry" : request.reason === "continuation" ? "continuation" : "automatic";
+      let classifierDispatchGeneration: number | undefined;
+      let classifierDispatchSession: ClassifierSessionRuntime | undefined;
+      let classifierDispatchGuardEnabled = false;
       try {
       if (requestReason === "user" && state.enabled && !state.pinned) await joinAutoBootstrap(ctx);
       if (v2Active) {
@@ -2799,7 +2897,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             terminalRouteCategory = "disabled_or_pinned";
             throw new Error("Bifrost: virtual auto is disabled or pinned; select a physical model");
           }
-          if (!activeRecoveryToken && state.classifierEnabled && shouldRefreshRegistry(state, Date.now(), REGISTRY_REFRESH_TTL_MS)) {
+          if (!activeRecoveryToken && classifierEnablementFor(ctx).enabled && shouldRefreshRegistry(state, Date.now(), REGISTRY_REFRESH_TTL_MS)) {
             try {
               const outcome = await waitForRegistryRefresh(
                 (refreshSignal) => ctx.modelRegistry.refresh(refreshSignal ? { signal: refreshSignal } : undefined),
@@ -2813,7 +2911,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               }
               state.lastRegistryRefreshAt = Date.now();
               state.forceRegistryRefresh = false;
-              invalidatePipeline();
+              discardAllClassifierPipelines();
             } catch (error) {
               updateRegistryInventoryEvidence(state, ctx);
               if (signal?.aborted) {
@@ -2828,13 +2926,23 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             throw new Error("Bifrost: virtual auto was disabled or pinned during routing; select a physical model");
           }
           const classificationConfig = state.config;
+          const classifierSession = classifierSessionFor(ctx.sessionManager);
+          const classifierGeneration = classifierSession.generation;
+          const classifierWasEnabled = classifierEnablementFor(ctx).enabled;
+          classifierDispatchGeneration = classifierGeneration;
+          classifierDispatchSession = classifierSession;
+          classifierDispatchGuardEnabled = classifierWasEnabled;
           let classification: ClassificationResult = activeRecoveryToken
             ? { kind: "fallback", tier: activeRecoveryToken.requestedTier }
             : recoveryRuleTier !== undefined
               ? { kind: "classified", tier: recoveryRuleTier, source: "regex" }
               : forcedTier
             ? { kind: "classified", tier: forcedTier, source: "inline" }
-            : await getPipeline(ctx).classify(prompt, signal);
+            : await classifyForSession(ctx, prompt, signal);
+          if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
+            terminalRouteCategory = "classifier_state_changed";
+            throw new Error("Bifrost classifier settings changed during routing; no model was dispatched. Resubmit after repair.");
+          }
           if (!signal?.aborted) reportClassifierAttempt(ctx, classification, correlationTurn, requestCorrelationId);
           const verifiedBootstrapConfig = bootstrapVerifiedSelectionConfig(ctx);
           if (classification.kind === "unclassified" && (hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config) || verifiedBootstrapConfig)
@@ -2908,7 +3016,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               }
               state.lastRegistryRefreshAt = Date.now();
               state.forceRegistryRefresh = false;
-              invalidatePipeline();
+              discardAllClassifierPipelines();
               routeStart = performance.now();
               attempt = resolveForTier(ctx, classification.tier, affinity);
               routingDurationMs += +(performance.now() - routeStart).toFixed(3);
@@ -2996,11 +3104,21 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               reason: modelKey(model) === activeRecoveryToken.candidateKey ? "prepared_candidate" : "revalidated_alternative",
             });
           }
+          if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
+            terminalRouteCategory = "classifier_state_changed";
+            throw new Error("Bifrost classifier settings changed during routing; no model was dispatched. Resubmit after repair.");
+          }
           saveClassifierDecision(prompt, classification);
           log(ctx, `Bifrost auto: ${activeRouteTier ?? classification.tier} → ${modelKey(model)} (${activeRecoveryToken ? "allowance recovery" : classification.kind === "classified" ? classification.source : "fallback"}${resolved.fallbackReason ? `; ${resolved.fallbackReason}` : ""}${resolved.skipped.length > 0 ? `; ${resolved.skipped.length} skipped: ${resolved.skipped.map((s) => s.key).join(", ")}` : ""})`);
           return model;
         },
         onDispatch: (model, thinkingLevel, intent) => {
+          if (classifierDispatchGuardEnabled
+            && (classifierDispatchGeneration === undefined || !classifierDispatchSession
+              || !classifierSessionIsCurrent(ctx.sessionManager, classifierDispatchSession, classifierDispatchGeneration))) {
+            terminalRouteCategory = "classifier_state_changed";
+            throw new Error("Bifrost classifier settings changed before dispatch; no model was sent. Resubmit after repair.");
+          }
           const key = modelKey(model);
           debugLifecycle("virtual", "dispatch", ctx.sessionManager, correlationTurn, {
             request_correlation_id: requestCorrelationId ?? null,
@@ -3027,6 +3145,15 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           debug("virtual", "dispatch", { model: key, thinkingLevel });
         },
         beforeDispatch: async (model, currentRequest, intent) => {
+          const assertClassifierCurrent = () => {
+            if (classifierDispatchGuardEnabled
+              && (classifierDispatchGeneration === undefined || !classifierDispatchSession
+                || !classifierSessionIsCurrent(ctx.sessionManager, classifierDispatchSession, classifierDispatchGeneration))) {
+              terminalRouteCategory = "classifier_state_changed";
+              throw new Error("Bifrost classifier settings changed before dispatch; no model was sent. Resubmit after repair.");
+            }
+          };
+          assertClassifierCurrent();
           if (dispatchRecoveryToken) {
             const recoveryUser = dispatchRecoveryToken.userMessage.deref();
             if (!recoveryUser || !allowanceRetryBoundaryStillSafe(ctx, dispatchRecoveryToken, recoveryUser)) {
@@ -3036,6 +3163,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           }
           if (!v2Active) {
             if (!isVirtualModel(model)) await claimProviderDispatch(ctx, model);
+            assertClassifierCurrent();
             if (affinityStore && state.enabled && !state.pinned && activeRouteOrigin === "automatic" && currentRequest.reason === "user" && autoBoundary && !isVirtualModel(model)) {
               pendingAffinity(ctx.sessionManager, true)!.set(autoBoundary.entryId, {
                 userEntryId: autoBoundary.entryId,
@@ -3109,6 +3237,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             }
             receipt.leases = admission.leases ?? [];
             receipt.proofUntil = admission.state.dispatches[receipt.dispatchId]?.proofUntil ?? receipt.proofUntil;
+            assertClassifierCurrent();
             debugLifecycle("reliability", "admitted", ctx.sessionManager, boundary.message, {
               request_correlation_id: requestCorrelationId ?? null,
               model: key,
@@ -3132,6 +3261,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               terminalRouteCategory = "provider_trial_renewal_failed";
               throw new Error("Bifrost provider recovery-trial renewal failed; the continuation was not sent.");
             }
+            assertClassifierCurrent();
             startV2Heartbeat(ctx, receipt);
             return;
           }
@@ -3161,6 +3291,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             terminalRouteCategory = "lease_renewal_failed";
             throw new Error("Bifrost reliability v2 could not renew this turn's lease; the continuation was not sent.");
           }
+          assertClassifierCurrent();
         },
         onDispatchFailed: async (model) => {
           const key = modelKey(model);
@@ -3216,6 +3347,47 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     pi.registerTool(createBifrostConfigTool({
       extensionDir,
       reload: (ctx) => reloadBifrostConfig(state, ctx),
+      classifierRuntime: (targetConfig, ctx) => {
+        const sessionOverride = classifierSessionFor(ctx.sessionManager).override;
+        const projectedEnabled = targetConfig.classifier?.enabled !== false;
+        const diskState = loadRuntimeState(runtimeStatePath(process.cwd()), {
+          enabled: state.enabled, pinned: false, classifierEnabled: projectedEnabled, classifierSource: "configuration",
+        });
+        const projection = resolveClassifierEnablement(
+          projectedEnabled,
+          diskState.legacyClassifierEnabled,
+          sessionOverride,
+          diskState.runtimeStateIssue,
+        );
+        const activeEnabled = state.config.classifier?.enabled !== false;
+        const actual = resolveClassifierEnablement(
+          activeEnabled,
+          state.legacyClassifierEnabled,
+          sessionOverride,
+          state.classifierRuntimeStateIssue,
+        );
+        return {
+          enabled: projection.enabled,
+          configuredEnabled: projectedEnabled,
+          source: projection.source,
+          backend: state.effectiveClassifierBackend(targetConfig, ctx).backend,
+          criteriaTiers: Object.keys(targetConfig.classifier?.criteria ?? {}),
+          ...(projection.legacyConflict ? { legacyConflict: projection.legacyConflict } : {}),
+          ...(projection.runtimeStateIssue ? { runtimeStateIssue: projection.runtimeStateIssue } : {}),
+          actual: {
+            enabled: actual.enabled,
+            configuredEnabled: activeEnabled,
+            source: actual.source,
+            backend: state.effectiveClassifierBackend(state.config, ctx).backend,
+            criteriaTiers: Object.keys(state.config.classifier?.criteria ?? {}),
+            ...(actual.legacyConflict ? { legacyConflict: actual.legacyConflict } : {}),
+            ...(actual.runtimeStateIssue ? { runtimeStateIssue: actual.runtimeStateIssue } : {}),
+          },
+          loadedConfigDigest: configAgentConfigDigest(state.config),
+          configGeneration: state.configGeneration,
+          diskState: { enabled: diskState.enabled, legacyClassifierEnabled: diskState.legacyClassifierEnabled, runtimeStateIssue: diskState.runtimeStateIssue },
+        };
+      },
       render: reportText,
     }));
   }
@@ -3229,6 +3401,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    classifierSessionFor(ctx.sessionManager);
     advanceAutoBootstrapLifecycle(ctx.sessionManager, false, ctx);
     cancelAutoBootstrap(ctx.sessionManager, ctx);
     const branch = ctx.sessionManager.getBranch();
@@ -3237,6 +3410,17 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const lifecycle = autoBootstrapLifecycleBySession.get(ctx.sessionManager) ?? 0;
     await cleanupProviderTrials(ctx.sessionManager);
     clearAllowanceRetry(ctx.sessionManager, "session_start");
+    const classifierRuntime = classifierEnablementFor(ctx);
+    if (classifierRuntime.legacyConflict && ctx.hasUI) {
+      const conflict = classifierRuntime.legacyConflict;
+      const message = conflict.configured
+        ? "Classifier paused: legacy classifierEnabled=false conflicts with classifier.enabled=true. /bifrost classifier on or off affects only this session. To resume configured behavior after restart, back up .pi/bifrost-state.json, remove only classifierEnabled, then run /bifrost reload."
+        : "Classifier stays disabled: classifier.enabled=false overrides legacy classifierEnabled=true. Run /bifrost classifier on only if you want to enable it for this session.";
+      ctx.ui.notify(message, "warning");
+    }
+    if (classifierRuntime.runtimeStateIssue && ctx.hasUI) {
+      ctx.ui.notify("Classifier is paused because .pi/bifrost-state.json is unreadable or invalid. Repair it as a JSON object with boolean enabled and classifierEnabled fields if present, then run /bifrost reload.", "warning");
+    }
     debugLifecycle("bifrost", "session_start", ctx.sessionManager, undefined, { reliabilityMode: reliabilityV2Enabled() ? "reliability_v2" : "reliability_v1" });
     classifierNoticeStates.delete(ctx.sessionManager);
     overrideFor(ctx).clear();
@@ -3269,6 +3453,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    const classifierSession = classifierSessions.get(ctx.sessionManager);
+    classifierSession?.controller.abort(new Error("Classifier session ended"));
+    classifierSessions.delete(ctx.sessionManager);
     advanceAutoBootstrapLifecycle(ctx.sessionManager);
     cancelAutoBootstrap(ctx.sessionManager);
     await cleanupProviderTrials(ctx.sessionManager);
@@ -3642,6 +3829,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const admissionBranchEntryIds = admissionBranch.map((entry) => entry.id);
     const admissionManualGeneration = v2Receipts.forSession(admissionSession).manualGeneration;
     const admissionSignal = ctx.signal;
+    let admissionClassifier: { session: ClassifierSessionRuntime; generation: number } | undefined;
+    let admissionProviderClaim: { key: string; claim: ProviderTrialClaim } | undefined;
     const result = await (async (): Promise<InputEventResult> => {
     const originalText = event.text;
     const editorTextAtInput = readEditorText(ctx);
@@ -3757,7 +3946,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const endInput = debugMeasure("input", "total");
     debug("input", "prompt", { length: promptText.length });
 
-    const shouldRefresh = state.classifierEnabled
+    const shouldRefresh = classifierEnablementFor(ctx).enabled
       ? shouldRefreshRegistry(state, Date.now(), REGISTRY_REFRESH_TTL_MS)
       : false;
 
@@ -3783,7 +3972,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           refreshOutcome = "success";
           state.lastRegistryRefreshAt = Date.now();
           state.forceRegistryRefresh = false;
-          invalidatePipeline();
+          discardAllClassifierPipelines();
         } catch {
           updateRegistryInventoryEvidence(state, ctx);
           debug("input", "registry.refresh.error", { category: "registry_refresh_failure" });
@@ -3803,9 +3992,18 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       setBifrostWorkingMessage(ctx, forcedTier ? `Bifrost using ${forcedTier}...` : "Bifrost classifying...");
       const endClassify = debugMeasure("input", "classify");
       const classificationConfig = state.config;
+      const classifierSession = classifierSessionFor(ctx.sessionManager);
+      const classifierGeneration = classifierSession.generation;
+      const classifierWasEnabled = classifierEnablementFor(ctx).enabled;
+      if (classifierWasEnabled) admissionClassifier = { session: classifierSession, generation: classifierGeneration };
       let classification = forcedTier
         ? { kind: "classified" as const, tier: forcedTier, source: "inline" as const }
-        : await getPipeline(ctx).classify(promptText, ctx.signal);
+        : await classifyForSession(ctx, promptText, ctx.signal);
+      if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
+        endClassify({ kind: "unclassified", outcome: "aborted" });
+        endInput({ outcome: "classifier_state_changed" });
+        return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Classifier settings changed during routing; the turn was not sent. Resubmit after repair.");
+      }
       if (!ctx.signal?.aborted) reportClassifierAttempt(ctx, classification);
       const verifiedBootstrapConfig = bootstrapVerifiedSelectionConfig(ctx);
       if (classification.kind === "unclassified" && (hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config) || verifiedBootstrapConfig)
@@ -3857,11 +4055,18 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             return strictInputHandled(ctx, state, originalText, editorTextAtInput,
               `Bifrost: provider ${ctx.model.provider} is paused, has a recovery trial in progress, or its cooldown state is unavailable; the turn was not sent.`);
           }
+          if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
+            return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Classifier settings changed during routing; the turn was not sent. Resubmit after repair.");
+          }
           claimedProviderTrial = undefined;
         }
         return defaultAction;
       }
 
+      if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
+        endInput({ outcome: "classifier_state_changed" });
+        return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Classifier settings changed during routing; the turn was not sent. Resubmit after repair.");
+      }
       const tier = classification.tier;
       routeBoundary = hasExplicitTierPolicy(state.config, tier)
         || hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config) || !!verifiedBootstrapConfig;
@@ -3901,6 +4106,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           endInput({ model: modelKey(model), outcome: "provider_cooldown_blocked" });
           return strictInputHandled(ctx, state, originalText, editorTextAtInput, message);
         }
+        if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
+          return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Classifier settings changed during routing; the turn was not sent. Resubmit after repair.");
+        }
         const selectedKey = modelKey(model);
         const trial = isImportedLegacyV1AllowanceBlock(selectedKey)
           ? { allowed: true, claimed: false }
@@ -3928,6 +4136,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             catch {
               return strictInputHandled(ctx, state, originalText, editorTextAtInput,
                 `Bifrost: provider ${ctx.model.provider} is paused, has a recovery trial in progress, or its cooldown state is unavailable; the turn was not sent.`);
+            }
+            if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
+              return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Classifier settings changed during routing; the turn was not sent. Resubmit after repair.");
             }
             claimedProviderTrial = undefined;
           }
@@ -3978,6 +4189,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             return strictInputHandled(ctx, state, originalText, editorTextAtInput,
               `Bifrost: provider ${ctx.model.provider} is paused, has a recovery trial in progress, or its cooldown state is unavailable; the turn was not sent.`);
           }
+          if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
+            return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Classifier settings changed during routing; the turn was not sent. Resubmit after repair.");
+          }
           claimedProviderTrial = undefined;
         }
         return routeBoundary
@@ -3993,8 +4207,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         if (classifierCacheEnabled(state.config, effectiveBackendOf(state.config, detectionEngine).backend)) {
           const endCacheSave = debugMeasure("input", "cacheSave");
           state.cacheEntries = updateCache(state.cacheEntries, promptText, tier, maxEntries, activeClassifierCacheKey(state.config, detectionEngine));
+          discardAllClassifierPipelines();
           saveCache(cachePath(process.cwd(), state.config.cache?.path), state.cacheEntries);
-          invalidatePipeline();
           endCacheSave({ entries: state.cacheEntries.length });
         }
       }
@@ -4009,6 +4223,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         begunStrictModel = modelKey(model);
         trackerFor(ctx).begin(begunStrictModel);
         endInput({ model: modelKey(model), tier: selectedTier, strategy, source, thinkingLevel: ctx.thinkingLevel });
+        if (claimedProviderTrial) admissionProviderClaim = { key: modelKey(model), claim: claimedProviderTrial };
         claimedProviderTrial = undefined;
         claimedTrial = undefined;
         begunStrictModel = undefined;
@@ -4033,6 +4248,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       } finally {
         // Key lives only inside the awaited setModel window (see selectPhysicalFromVirtual).
         selfSelect.release(ctx.sessionManager);
+      }
+      if (classifierWasEnabled && !classifierSessionIsCurrent(ctx.sessionManager, classifierSession, classifierGeneration)) {
+        return strictInputHandled(ctx, state, originalText, editorTextAtInput, "Classifier settings changed during routing; the turn was not sent. Resubmit after repair.");
       }
       try { endSwitch({ model: modelKey(model), ok }); } catch { /* optional timing output */ }
       try { uiDone(ctx); } catch { /* optional UI output must not suppress an activated turn */ }
@@ -4064,6 +4282,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         : `Bifrost: ${tier} → ${modelKey(model)} (fallback${detail ? `; ${detail}` : ""})`;
       begunStrictModel = modelKey(model);
       trackerFor(ctx).begin(begunStrictModel);
+      if (claimedProviderTrial) admissionProviderClaim = { key: modelKey(model), claim: claimedProviderTrial };
       claimedProviderTrial = undefined;
       claimedTrial = undefined;
       begunStrictModel = undefined;
@@ -4111,6 +4330,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     selfSetModelChangeBySession.delete(admissionSession);
     if (isUserTurn && acceptedAction && state.enabled && providerCooldownsEnabled()
       && activeModel && !isVirtualModel(activeModel)) {
+      const releaseAdmissionClaim = async (): Promise<void> => {
+        const owned = admissionProviderClaim;
+        if (!owned || providerClaimsBySession.get(admissionSession)?.get(owned.key) !== owned.claim) return;
+        try { await finishProviderDispatch(ctx, owned.key, undefined, false, owned.claim); }
+        catch { providerCooldownWriteFailed = true; }
+      };
       const admissionIsCurrent = (): boolean => {
         const currentBranch = admissionSession.getBranch();
         const branchPrefixIsOriginal = admissionBranchEntryIds.every((id, index) => currentBranch[index]?.id === id);
@@ -4138,6 +4363,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             && selfSetModelChange.thinkingLevel === ctx.thinkingLevel
           ));
         return !admissionSignal?.aborted
+          && (!admissionClassifier || classifierSessionIsCurrent(admissionSession, admissionClassifier.session, admissionClassifier.generation))
           && ctx.sessionManager === admissionSession
           && ctx.model === activeModel
           && modelKey(ctx.model) === modelKey(activeModel)
@@ -4147,6 +4373,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           && (branchIsOriginal || (branchPrefixIsOriginal && branchHasOnlyOwnSetModelEntries));
       };
       if (!admissionIsCurrent()) {
+        await releaseAdmissionClaim();
         return strictInputHandled(ctx, state, event.text, readEditorText(ctx),
           "Bifrost routing became stale before provider admission; the turn was not sent.");
       }
@@ -4169,6 +4396,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         }
         if (claims?.get(key) === claim) claims.delete(key);
         if (!admissionIsCurrent()) {
+          await releaseAdmissionClaim();
           if (claims && !claims.size && providerClaimsBySession.get(admissionSession) === claims) {
             providerClaimsBySession.delete(admissionSession);
             if (providerTrialSessionRefBySession.get(admissionSession) === claimsReference) {

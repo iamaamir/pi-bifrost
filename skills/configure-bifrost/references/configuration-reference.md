@@ -80,11 +80,17 @@ Strategies: `first` (pool order), `cheapest` (input+output per 1M), `cheapest_in
 | `fallback` | `prompt`, `regex` | direct backends only |
 
 The bundled criteria cover `quick`, `general`, and `frontier`. Custom tiers with a
-direct classifier backend need their own criteria, otherwise validation fails with
-`criteria missing for tier "<name>"`.
+direct backend need criteria when that backend is actually enabled at runtime;
+validation checks the effective detected backend, not only the literal `backend`
+field. A malformed authored `criteria` value is rejected even when another
+backend is selected.
 
-With the classifier disabled, a prompt that matches no rule takes the `default`
-tier. That is deterministic and needs no model call.
+`classifier.enabled` is the durable default. `/bifrost classifier on|off` is a
+session-only override. If an old saved `classifierEnabled` value conflicts with
+config, classification pauses until the user makes an explicit session choice.
+`on` validates the effective backend and can send prompt text to it. With
+classifier runtime disabled, a prompt that matches no rule takes `default`;
+that path makes no classifier call.
 
 ## Affinity
 

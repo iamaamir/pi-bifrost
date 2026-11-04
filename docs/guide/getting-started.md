@@ -115,9 +115,9 @@ Before confirming, check:
 
 The confirmation summary does not show every model ID, strategy, or default tier. After saving, run `/bifrost inspect` to review pools and status. Edit the saved configuration before your first generation if needed.
 
-Classification is enabled by default. Init detects a classifier backend. When the prompt backend needs a model, Bifrost selects an available chat model as its default. On a local-cache miss, the active classifier can receive the current prompt. Run `/bifrost classifier off` to disable that extra call. Run `/bifrost classifier` to choose another backend or model. See [Classifier backends](classifiers.md).
+Classification is enabled by default. Init detects a classifier backend. When the prompt backend needs a model, Bifrost selects an available chat model as its default. On a local-cache miss, an enabled classifier can receive the current prompt. Run `/bifrost classifier off` to disable that extra call for this Pi session. The command does not edit config, so restart restores the configured default. Run `/bifrost classifier` to choose another backend or model. See [Classifier backends](classifiers.md).
 
-For rules/default-only routing, disable the classifier. This command works without a Bifrost JSON config file:
+For rules/default-only routing in the current Pi session, disable the classifier. This command works without a Bifrost JSON config file. Set `classifier.enabled` to `false` in your existing file when you need that policy after restart:
 
 ```text
 /bifrost classifier off

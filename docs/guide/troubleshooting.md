@@ -59,7 +59,7 @@ Preview reports:
 
 Preview does not start the generation turn or activate the selected model. It does run the normal tier pipeline. An enabled prompt, TypeSafe/Jev, or Pi-native classifier can receive the preview prompt and incur classifier usage. Preview does not read a tier name from the prompt, so a forced tier cannot be previewed.
 
-For local-only preview, disable the classifier first:
+For local-only preview, disable the classifier first. This change lasts for the current Pi session only:
 
 ```text
 /bifrost classifier off

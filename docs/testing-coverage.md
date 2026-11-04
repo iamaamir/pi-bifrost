@@ -51,7 +51,7 @@ The requirement IDs come from [the PRD](../PRD.md). These rows name test boundar
 | R11: retention within a tier | [Native-turn retention and prefix selection](../tests/integration/reliability-v2-auto.test.mjs) | Branch-local ownership and affinity tests |
 | R12: bounded classification and visible fallback | [Timeout notice followed by generation](../tests/integration/command-policy-acceptance.test.mjs) | Shared budget, pending callbacks, abort and notice-deduplication tests |
 | R13: resolve-only API | [Installed consumer](../tests/router-package.test.mjs) | Router API contract and immutable snapshot tests |
-| R14: private diagnostics | Pi fake-provider audit of local debug/metrics/v1-provider-v2 reliability/runtime/probe artifacts; command and UI notices | Recursive decision-summary schema, persistence field/value bounds, prompt/secret canaries, and fault controls. Normalized prompt cache intentionally retains potentially sensitive user text; completed TypeSafe/native detailed traces remain partial. |
+| R14: private diagnostics | Pi fake-provider audit of local debug/metrics/v1-provider-v2 reliability/probe artifacts; session-only classifier toggle and restart behavior | Recursive decision-summary schema, persistence field/value bounds, prompt/secret canaries, and fault controls. Classifier on/off choices do not create runtime state; legacy conflicts remain visible and preserve old fields. Normalized prompt cache intentionally retains potentially sensitive user text; completed TypeSafe/native detailed traces remain partial. |
 | R15: reviewed membership changes | [Pi reconciliation and init](../tests/integration/command-policy-acceptance.test.mjs); [init probe regressions](../tests/integration/init-regression.test.mjs) | Ownership, stale inventory, concurrent edits, preserved settings, successful-only pools, recent probe reuse, forced probes, exact backups; command-router fake-registry coverage proves thrown/unknown discovery preserves exact config bytes and includes isolated source-copy fault control (not Pi registration or Pi E2E) |
 | R16: repeatable release checks | [Verification runner](../scripts/verify-release.mjs), guarded Pi suites and UI scenarios | Routing corpus, runner failure and source-change tests |
 | R17: custom tiers and neutral defaults | Physical and Auto routing cases above | Config, schema, generated defaults, provider-scope validation and strategy tests |
@@ -62,7 +62,7 @@ The physical HTTP 402 pause, same-provider exclusion after restart, and same-tie
 
 The exact OpenCode Go subscription error, one alternate attempt, disabled retry, exhausted alternatives, and no cross-tier escape live in [Auto reliability acceptance](../tests/integration/reliability-v2-auto.test.mjs). The parser still treats bare tier words as overrides; [issue 27](https://github.com/iamaamir/pi-bifrost/issues/27) tracks changing that behavior.
 
-Classifier-timeout fallback, offline commands, billing preference, reviewed reconciliation, probes that outlast catalog freshness, and provider-to-model allowance-scope reload live in [command acceptance](../tests/integration/command-policy-acceptance.test.mjs). Precise callback cancellation and both allowance-scope reload directions are also tested through registered host handlers.
+Classifier-timeout fallback, offline commands, billing preference, reviewed reconciliation, probes that outlast catalog freshness, and provider-to-model allowance-scope reload live in [command acceptance](../tests/integration/command-policy-acceptance.test.mjs). Classifier runtime tests cover config/legacy conflicts, session-only on/off choices, no write on toggle, and configured behavior after restart. Precise callback cancellation and both allowance-scope reload directions are also tested through registered host handlers.
 
 The first-use background scenarios check that the first response returns before probes finish, that saving does not interrupt active generation, and that the next input uses verified pools. They also check all-failed warnings without configuration writes, provider pauses, and concurrent configuration edits. The earlier one-shot scenario cancels its background probe at process exit and does not prove persistence. Final release evidence must come from the frozen-candidate verification manifest.
 
@@ -73,19 +73,48 @@ Provider projection tests require one state snapshot per nonempty decision and z
 ## Configuration approval regression
 
 `tests/integration/config-approval-tui.test.mjs` starts pinned Pi in an isolated
-PTY and drives the production tool through a test command. It checks sequential
-review, early Apply refusal, cancellation, tiny viewports, resize reset, and the
-exact saved source. The fixture performs no generation and substitutes reload
-success, so this test does not prove model-issued tool dispatch or activation.
-It uses the existing Python/Pillow screen harness and outbound network guard.
-An isolated production copy restores the old `ctx.ui.confirm` path and fails
-the same early-write assertion. The original files remain unchanged.
+PTY and drives the production tool through a test command. It checks a
+TOOL-GENERATED summary can be explicitly applied; classifier disablement and
+enablement are described accurately; complete changed-field names, first-match
+rule reordering, removed/replaced rules, model-pool and fallback changes appear
+without raw rule/model JSON; and the optional exact view displays the entire
+6,000-character value plus final suffix across sequential pages before apply.
+It checks a layered workspace edit whose classifier and rules are masked by
+project policy: the summary distinguishes source changes from unchanged
+effective behavior. Both ordinary and narrow viewports have bounded summary
+pages and visible controls. It also checks early Apply refusal in exact view,
+cancellation, tiny viewports, resize reset, and one exact saved source. An
+isolated production copy omits classifier impact from the summary and fails the
+real-Pi display assertion. The fixture performs no model generation and
+substitutes reload success, so it does not prove model-issued tool dispatch or
+activation. It uses the existing Python/Pillow screen harness and outbound
+network guard.
+
+The reviewer caps exact approval text at 2,000,000 characters and wraps by
+grapheme; larger proposals fail closed before the dialog, with no write or
+summary. Apply-from-summary does not assert that the user read every exact
+value. `tests/config-agent.test.ts` checks every changed field name, classifier
+enablement/disablement wording, first-match rule order and duplicate counts,
+scalar pools, legacy `models.description` tiers versus schema-v3 metadata,
+concise counts, no raw rule/model values, source/effective differences, actual
+retention of unrelated policy in an added-tier proposal, and unchanged stale-
+input guards. It also rejects malformed classifier criteria patches and stops
+apply when classifier runtime state changes before or during approval.
+`tests/config-skill.test.ts` checks that the published skill describes
+the size limit and tells agents to compare removals with the goal and preserve
+unrelated settings. This tests guidance text and deterministic config behavior,
+not model obedience. `tests/config-approval.test.ts` checks sequential
+summary/exact pages, cancellation, resize, and terminal wrapping.
 
 `tests/integration/config-agent-acceptance.test.mjs` covers model-issued check
-and apply in real Pi RPC mode. It proves apply returns `approval_required`,
-preserves source bytes, and leaves offline preview available. Unit tests cover
-exact escaped values, cell wrapping, cancellation, queued input, and stale
-source, catalog, and layer guards.
+and apply in real Pi RPC mode. It starts with classifier config off and legacy
+runtime state on. The report must show that conflict and provide a runtime
+digest. The model copies that digest into apply. RPC apply returns
+`approval_required`, and both configuration files keep their exact bytes.
+Offline preview stays available. The fake provider and network guard prevent
+external classifier requests. Current Pi ExtensionUIContext exposes no file-open
+API. Bifrost reports that limit and the saved path instead of launching an
+external editor or filling a scratch buffer.
 
 ## Limits
 

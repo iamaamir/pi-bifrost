@@ -33,6 +33,8 @@ function fixture(options: {
   appendModelChangeOnSetModel?: boolean;
   appendThinkingChangeOnSetModel?: boolean;
   classifierEnabled?: boolean;
+  noReliability?: boolean;
+  initialRuntimeState?: string;
   classifierModel?: Model<Api>;
   streamSimple?: (model: Model<Api>, request: unknown, options: any) => unknown;
   refresh?: () => Promise<unknown>;
@@ -57,9 +59,10 @@ function fixture(options: {
     },
     models: { quick: (options.models ?? [makeModel("provider-a", "model-a")]).map((model) => `${model.provider}/${model.id}`) },
     rules: [],
-    reliability: configuredReliability,
+    reliability: options.noReliability ? { enabled: false } : configuredReliability,
   };
   writeFileSync(join(cwd, "bifrost.json"), JSON.stringify(config));
+  if (options.initialRuntimeState !== undefined) writeFileSync(join(cwd, ".pi", "bifrost-state.json"), options.initialRuntimeState);
   process.chdir(cwd);
   process.env.PI_CODING_AGENT_DIR = agentDir;
 
@@ -67,6 +70,7 @@ function fixture(options: {
   const handlers = new Map<string, Hook>();
   const notices: string[] = [];
   let routeDefinition: VirtualModelDefinition | undefined;
+  let configTool: any;
   let commandHandler: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
   let primary: ReturnType<typeof createContext>;
   function createContext(sessionId: string, activeModel: Model<Api>) {
@@ -97,6 +101,7 @@ function fixture(options: {
   }
   const pi = {
     registerVirtualModel: (definition: VirtualModelDefinition) => { routeDefinition = definition; },
+    registerTool: (tool: any) => { if (tool.name === "bifrost_config") configTool = tool; },
     registerCommand: (_name: string, opts: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => { commandHandler = opts.handler; },
     on: (event: string, handler: Hook) => { handlers.set(event, handler); return () => {}; },
     setModel: async (model: Model<Api>) => {
@@ -137,6 +142,7 @@ function fixture(options: {
     primary,
     createContext,
     routeDefinition: () => routeDefinition,
+    configTool: () => configTool,
     commandHandler: () => commandHandler,
     cleanup: () => {
       process.chdir(previousCwd);
@@ -210,6 +216,248 @@ function scopeFromSidecar(cwd: string, kind: "usage" | "rate" | "trial", provide
 }
 
 describe("provider cooldowns through registered Pi runtime hooks", { concurrency: false }, () => {
+  for (const invalid of ['{"enabled":"bad"}', '{"classifierEnabled":"bad"}']) {
+    it(`preserves invalid runtime state through mode command and reload: ${invalid}`, async () => {
+      const h = fixture({ defaultTier: "quick", classifierEnabled: true, initialRuntimeState: invalid });
+      try {
+        const path = join(h.cwd, ".pi", "bifrost-state.json");
+        const inspect = async () => (await h.configTool().execute("test", { operation: "inspect" }, undefined, undefined, h.primary.ctx)).details.routing.classifier;
+        assert.equal((await inspect()).enabled, false);
+        await h.commandHandler()!("on", h.primary.ctx);
+        assert.equal(readFileSync(path, "utf8"), invalid, "mode command must preserve invalid bytes");
+        await h.commandHandler()!("reload", h.primary.ctx);
+        const runtime = await inspect();
+        assert.equal(runtime.enabled, false);
+        assert.equal(runtime.source, "runtime-state-invalid");
+        assert.equal(readFileSync(path, "utf8"), invalid);
+      } finally { h.cleanup(); }
+    });
+  }
+  it("refuses config approval when runtime state file changes during confirmation", async () => {
+    const h = fixture({ defaultTier: "quick", classifierEnabled: true, initialRuntimeState: '{"classifierEnabled":false}' });
+    try {
+      const ctx = h.primary.ctx;
+      (ctx as { hasUI: boolean }).hasUI = true;
+      (ctx as { mode: string }).mode = "tui";
+      (ctx.ui as any).custom = async (factory: any) => {
+        let result: unknown;
+        const viewer = await factory({ terminal: { columns: 80, rows: 24 }, requestRender() {} }, {}, {}, (value: unknown) => { result = value; });
+        writeFileSync(join(h.cwd, ".pi", "bifrost-state.json"), "{}");
+        for (let i = 0; i < 1000 && result === undefined; i++) { viewer.render(80); viewer.handleInput("a"); if (result === undefined) viewer.handleInput("n"); }
+        return result;
+      };
+      const tool = h.configTool();
+      const patch = { classifier: { enabled: true, backend: "prompt" } };
+      const run = (params: object) => tool.execute("test", params, undefined, undefined, ctx);
+      const checked = (await run({ operation: "check", patch })).details;
+      assert.equal(checked.status, "ok");
+      const source = join(h.cwd, ".pi", "bifrost.json");
+      assert.equal(existsSync(source), false);
+      const result = (await run({ operation: "apply", patch, proposalDigest: checked.proposalDigest, ...checked.guards })).details;
+      assert.equal(result.status, "stale");
+      assert.equal(existsSync(source), false, "no project config was written");
+      const refreshed = (await run({ operation: "check", patch })).details;
+      assert.equal(refreshed.routingAfter.classifier.enabled, false, "loaded runtime remains paused");
+      assert.equal(refreshed.routingAfter.classifier.projected.enabled, true, "projection reflects disk state used by reload");
+    } finally { h.cleanup(); }
+  });
+  it("does not abort another session's pending classification when cache changes", async () => {
+    const selected = makeModel("provider-a", "selected");
+    const classifier = makeModel("provider-c", "classifier");
+    let calls = 0;
+    let started!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => { started = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let pendingSignal: AbortSignal | undefined;
+    const h = fixture({ models: [selected], defaultTier: "quick", noReliability: true, classifierEnabled: true, classifierModel: classifier,
+      streamSimple: (_model, _request, options) => {
+        const number = ++calls;
+        if (number === 1) pendingSignal = options.signal;
+        return { result: async () => { if (number === 1) { started(); await gate; } return { content: [{ type: "text", text: "quick" }] }; } };
+      },
+    });
+    try {
+      const auto = { ...makeModel(BIFROST_AUTO_PROVIDER, BIFROST_AUTO_ID), api: "pi-virtual" } as Model<Api>;
+      const a = h.createContext("pending-cache-a", auto);
+      const b = h.createContext("pending-cache-b", auto);
+      const pending = routeAuto(h, b, addUser(b, "pending", "pending unrelated unique task").message);
+      await entered;
+      await routeAuto(h, a, addUser(a, "writer", "different writer prompt").message);
+      assert.equal(pendingSignal?.aborted, false);
+      release();
+      assert.equal((await pending).model, selected);
+      assert.equal(calls, 2);
+    } finally { release(); h.cleanup(); }
+  });
+
+  it("refreshes other session pipelines after a shared cache write", async () => {
+    const selected = makeModel("provider-a", "selected");
+    const classifier = makeModel("provider-c", "classifier");
+    let calls = 0;
+    const h = fixture({ models: [selected], defaultTier: "quick", noReliability: true, classifierEnabled: true, classifierModel: classifier,
+      streamSimple: () => { calls++; return { result: async () => ({ content: [{ type: "text", text: "quick" }] }) }; },
+    });
+    try {
+      const auto = { ...makeModel(BIFROST_AUTO_PROVIDER, BIFROST_AUTO_ID), api: "pi-virtual" } as Model<Api>;
+      const a = h.createContext("cache-a", auto);
+      const b = h.createContext("cache-b", auto);
+      await routeAuto(h, a, addUser(a, "a0", "initial distinct seed text").message);
+      await routeAuto(h, b, addUser(b, "b1", "initial distinct seed text").message);
+      assert.equal(calls, 1, "session B retains its pipeline after a cache hit");
+      await routeAuto(h, a, addUser(a, "a1", "unique cache shared request").message);
+      assert.equal(calls, 2);
+      await routeAuto(h, b, addUser(b, "b2", "unique cache shared request").message);
+      assert.equal(calls, 2, "second session should see freshly written cache");
+    } finally { h.cleanup(); }
+  });
+
+  it("does not continue an unbounded physical turn after classifier opt-out", async () => {
+    const selected = makeModel("provider-a", "selected");
+    const classifier = makeModel("provider-c", "classifier");
+    let started!: () => void;
+    let release!: () => void;
+    const entered = new Promise<void>((resolve) => { started = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const h = fixture({ models: [selected], defaultTier: "quick", noReliability: true, classifierEnabled: true, classifierModel: classifier,
+      streamSimple: () => ({ result: async () => { started(); await gate; return { content: [{ type: "text", text: "quick" }] }; } }),
+    });
+    try {
+      const pending = input(h, h.primary, "unbounded-user", "ordinary task");
+      await entered;
+      await h.commandHandler()!("classifier off", h.primary.ctx);
+      release();
+      assert.equal((await pending as { action: string }).action, "handled");
+    } finally { release(); h.cleanup(); }
+  });
+  for (const mode of ["auto-v1", "auto-v2", "physical"] as const) {
+    it(`rejects classifier opt-out during ${mode} admission and releases ownership`, async () => {
+      const selected = makeModel("provider-a", "selected");
+      const active = makeModel("provider-b", "active");
+      const classifier = makeModel("provider-c", "classifier");
+      const h = fixture({ models: [selected], activeModel: active, defaultTier: "quick", stateVersion2: mode === "auto-v2",
+        classifierEnabled: true, classifierModel: classifier,
+        streamSimple: () => ({ result: async () => ({ content: [{ type: "text", text: "quick" }] }) }),
+      });
+      const originalClaim = ProviderCooldownStore.prototype.claimTrial;
+      const originalAdmit = ReliabilityV2Store.prototype.admit;
+      let reached!: () => void;
+      let release!: () => void;
+      let admissionStore: ReliabilityV2Store | undefined;
+      let dispatchId: string | undefined;
+      const started = new Promise<void>((resolve) => { reached = resolve; });
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      try {
+        if (mode === "auto-v2") await initializeV2(h);
+        await seedExpiredUsagePause(h.cwd, selected.provider);
+        if (mode === "auto-v2") {
+          ReliabilityV2Store.prototype.admit = async function (...args) {
+            const result = await originalAdmit.apply(this, args);
+            if (args[0].modelKeys?.includes(`${selected.provider}/${selected.id}`)) {
+              admissionStore = this;
+              dispatchId = args[0].dispatchId;
+              assert.equal(result.status, "admitted");
+              reached();
+              await gate;
+            }
+            return result;
+          };
+        } else {
+          ProviderCooldownStore.prototype.claimTrial = async function (...args) {
+            const result = await originalClaim.apply(this, args);
+            if (args[0] === selected.provider) { reached(); await gate; }
+            return result;
+          };
+        }
+        const pending = mode === "physical"
+          ? input(h, h.primary, "claim-user", "route this request")
+          : routeAuto(h, h.primary, addUser(h.primary, "claim-user", "route this request").message);
+        await started;
+        const providerStore = createProviderCooldownStore(h.cwd, reliability);
+        if (mode !== "auto-v2") assert.equal(providerStore.read(selected.provider).trialActive, true, "real trial was acquired");
+        await h.commandHandler()!("classifier off", h.primary.ctx);
+        release();
+        if (mode === "physical") {
+          assert.equal((await pending as { action: string }).action, "handled");
+          assert.equal(h.primary.ctx.model, active, "stale selection must not activate");
+        } else {
+          await assert.rejects(pending, /classifier settings changed/i);
+        }
+        assert.equal(providerStore.read(selected.provider).trialActive, false, "unused provider trial was released");
+        if (mode === "auto-v2") {
+          assert.ok(admissionStore && dispatchId);
+          assert.equal(admissionStore.readSnapshot().dispatches[dispatchId]?.settledKind, "cancelled", "admitted receipt was settled");
+        }
+      } finally {
+        release();
+        ProviderCooldownStore.prototype.claimTrial = originalClaim;
+        ReliabilityV2Store.prototype.admit = originalAdmit;
+        h.cleanup();
+      }
+    });
+  }
+  it("releases its physical trial when classifier opt-out precedes final admission", async () => {
+    const selected = makeModel("provider-a", "selected");
+    const active = makeModel("provider-b", "active");
+    const classifier = makeModel("provider-c", "classifier");
+    const h = fixture({ models: [selected], activeModel: active, defaultTier: "quick", classifierEnabled: true, classifierModel: classifier,
+      streamSimple: () => ({ result: async () => ({ content: [{ type: "text", text: "quick" }] }) }),
+    });
+    try {
+      await seedExpiredUsagePause(h.cwd, selected.provider);
+      const store = createProviderCooldownStore(h.cwd, reliability);
+      let sawOwnedTrial = false;
+      const messages: string[] = [];
+      let off: Promise<void> | undefined;
+      (h.primary.ctx as { hasUI: boolean }).hasUI = true;
+      (h.primary.ctx.ui as unknown as { theme: unknown }).theme = { fg: (_color: string, text: string) => text };
+      h.primary.ctx.ui.notify = (message: string) => {
+        messages.push(message);
+        if (message.startsWith("Bifrost: quick →") && !off) {
+          sawOwnedTrial = store.read(selected.provider).trialActive;
+          off = h.commandHandler()!("classifier off", h.primary.ctx);
+        }
+      };
+      const result = await input(h, h.primary, "handoff-user", "route this request");
+      await off;
+      assert.equal(sawOwnedTrial, true, `selected trial was owned before admission; result=${JSON.stringify(result)} messages=${JSON.stringify(messages)}`);
+      assert.equal((result as { action: string }).action, "handled");
+      assert.equal(store.read(selected.provider).trialActive, false, "rejected input releases its selected trial");
+    } finally { h.cleanup(); }
+  });
+
+  it("rejects classifier opt-out during final physical provider admission", async () => {
+    const selected = makeModel("provider-a", "selected");
+    const active = makeModel("provider-b", "active");
+    const classifier = makeModel("provider-c", "classifier");
+    const h = fixture({ models: [selected], activeModel: active, defaultTier: "quick", classifierEnabled: true, classifierModel: classifier,
+      streamSimple: () => ({ result: async () => ({ content: [{ type: "text", text: "quick" }] }) }),
+    });
+    const originalClaim = ProviderCooldownStore.prototype.claimTrial;
+    let reached!: () => void;
+    let release!: () => void;
+    const started = new Promise<void>((resolve) => { reached = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let claims = 0;
+    try {
+      ProviderCooldownStore.prototype.claimTrial = async function (...args) {
+        const result = await originalClaim.apply(this, args);
+        if (args[0] === selected.provider && ++claims === 2) { reached(); await gate; }
+        return result;
+      };
+      const pending = input(h, h.primary, "final-claim-user", "route this request");
+      await started;
+      await h.commandHandler()!("classifier off", h.primary.ctx);
+      release();
+      assert.equal((await pending as { action: string }).action, "handled");
+      assert.equal(claims, 2, "final admission reached the second provider claim");
+    } finally {
+      release();
+      ProviderCooldownStore.prototype.claimTrial = originalClaim;
+      h.cleanup();
+    }
+  });
+
   it("routes the next physical prompt to another provider after a terminal usage failure", async () => {
     const modelA = makeModel("provider-a", "model-a");
     const modelB = makeModel("provider-b", "model-b");

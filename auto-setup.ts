@@ -196,7 +196,9 @@ export function hasBlockingRuntimePreferences(path: string): boolean {
       || Object.getPrototypeOf(parsed) !== Object.prototype) return true;
     const value = parsed as Record<string, unknown>;
     const keys = Object.keys(value);
-    return value.enabled !== true || typeof value.classifierEnabled !== "boolean"
+    return value.enabled === false
+      || (value.enabled !== undefined && typeof value.enabled !== "boolean")
+      || (value.classifierEnabled !== undefined && typeof value.classifierEnabled !== "boolean")
       || keys.some((key) => key !== "enabled" && key !== "classifierEnabled");
   } catch {
     return true;

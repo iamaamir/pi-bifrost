@@ -32,6 +32,7 @@ function makeHarness(options: {
   readonly evidence?: Record<string, { status: "complete" | "partial" | "stale"; refreshedAt: number }>;
 }) {
   const models = options.models ?? [makeModel("openai", "new-model", 1, 1)];
+  const config = { enabled: true, default: "general", strategy: "first" as const, models: { general: ["manual/model"] } } as BifrostState["config"];
   const registry = {
     getAll: () => models,
     getAvailable: () => models,
@@ -41,7 +42,7 @@ function makeHarness(options: {
     refresh: options.refresh ?? (async () => ({ aborted: false, errors: new Map() })),
   };
   const state = {
-    config: { enabled: true, default: "general", strategy: "first" as const, models: { general: ["manual/model"] } },
+    config,
     enabled: true,
     classifierEnabled: true,
     pinned: false,
@@ -59,6 +60,10 @@ function makeHarness(options: {
     },
     extensionDir: join(process.cwd(), "extension"),
     effectiveClassifierBackend: () => ({ backend: "prompt", reason: "fixture", auto: true }),
+    getClassifierEnablementForSession: (_sessionManager: unknown, effectiveConfig = config) => ({
+      enabled: effectiveConfig.classifier?.enabled !== false,
+      source: "configuration" as const,
+    }),
     getPipeline: () => ({ classify: async () => ({ kind: "unclassified" as const }) }),
     invalidatePipeline: () => {},
     saveModeState: () => {},

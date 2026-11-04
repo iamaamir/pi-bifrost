@@ -144,6 +144,7 @@ if (terminal) {
     ["classifier", "Choose classifier backend", "classifier", "Choose a tier classifier; Pi-native requires host support."],
     ["classifier on", "Enable classifier", "classifier", "Configured classifier enabled."],
     ["classifier off", "Disable classifier", "classifier", "Rules and the default tier remain available."],
+    ["classifier inherit", "Resume configured classifier", "classifier", "Clears this session's classifier override."],
     ["classifier test", "Test selected classifier backend", "classifier", "Makes a fresh classifier request in Pi; usage can apply."],
     ["debug", "Show config and routing state", "debug", "Shows effective routing and reliability diagnostics."],
   ];

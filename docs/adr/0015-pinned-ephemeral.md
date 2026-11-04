@@ -36,3 +36,23 @@ Two semantic changes:
 - `/bifrost pin` still works within a session — survives reload but not restart or child spawn
 - Old state files with `pinned: true` are silently ignored on load
 - Tests updated to assert `pinned: false` on load regardless of file content
+
+### Classifier enablement (v2 behavior)
+
+The earlier state-file `classifierEnabled` runtime override is superseded. The
+loaded configuration's `classifier.enabled` is the durable default (missing
+means enabled). `/bifrost classifier on|off` is a session-only override and
+never writes classifier preference to runtime state.
+
+On load, an old saved `classifierEnabled` value that disagrees with the
+configured value is preserved and reported. If config says `false` and old
+state says `true`, config keeps classification off. If config says `true` and
+old state says `false`, classification pauses to avoid sending prompts under
+ambiguous consent. Status, validation, inspection, and approval report the
+conflict. The user can explicitly choose `on` or `off` for the current session.
+`on` validates the effective backend first and warns that classification can
+send prompt text to it. The config file remains unchanged.
+
+Runtime-state writes update only global `enabled` and preserve legacy and
+unknown fields. They read the latest file before replacement, but atomic
+replacement is not a cross-process compare-and-swap.
