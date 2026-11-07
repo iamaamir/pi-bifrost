@@ -457,11 +457,11 @@ describe("acceptance runner boundary", () => {
 
   it("terminates and awaits an active detached gate process group on SIGTERM", () => {
     const acceptanceUrl = new URL("../scripts/acceptance.mjs", import.meta.url).href;
-    const script = `const {registerTerminationHandlers,runChild}=await import(${JSON.stringify(acceptanceUrl)});const remove=registerTerminationHandlers();setTimeout(()=>process.kill(process.pid,'SIGTERM'),100);const result=await runChild(process.execPath,['-e','setInterval(()=>{},1000)'],{cwd:process.cwd(),env:{PATH:process.env.PATH}});const signal=remove();const next=await runChild(process.execPath,['-e',\"process.stdout.write('unexpected launch')\"],{cwd:process.cwd(),env:{PATH:process.env.PATH}});process.stdout.write(JSON.stringify({status:result.status,signal,nextStatus:next.status,nextStdout:next.stdout}));`;
+    const script = `const {registerTerminationHandlers,runChild}=await import(process.env.BIFROST_TEST_ACCEPTANCE_URL);const remove=registerTerminationHandlers();setTimeout(()=>process.kill(process.pid,'SIGTERM'),100);const result=await runChild(process.execPath,['-e','setInterval(()=>{},1000)'],{cwd:process.cwd(),env:{PATH:process.env.PATH}});const signal=remove();const next=await runChild(process.execPath,['-e',\"process.stdout.write('unexpected launch')\"],{cwd:process.cwd(),env:{PATH:process.env.PATH}});process.stdout.write(JSON.stringify({status:result.status,signal,nextStatus:next.status,nextStdout:next.stdout}));`;
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       encoding: "utf8",
       timeout: 10_000,
-      env: { PATH: process.env.PATH },
+      env: { PATH: process.env.PATH, BIFROST_TEST_ACCEPTANCE_URL: acceptanceUrl },
     });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), { status: 143, signal: "SIGTERM", nextStatus: 143, nextStdout: "" });
@@ -472,13 +472,13 @@ describe("acceptance runner boundary", () => {
     const directory = mkdtempSync(join(tmpdir(), "bifrost-grandchild-cleanup-"));
     temporary.push(directory);
     const heartbeat = join(directory, "heartbeat");
-    const grandchildCode = `const fs=require('node:fs');process.on('SIGTERM',()=>{});fs.writeFileSync(${JSON.stringify(heartbeat)},'ready');setInterval(()=>fs.appendFileSync(${JSON.stringify(heartbeat)},'.'),10);`;
+    const grandchildCode = `const fs=require('node:fs');process.on('SIGTERM',()=>{});fs.writeFileSync(process.env.BIFROST_TEST_HEARTBEAT,'ready');setInterval(()=>fs.appendFileSync(process.env.BIFROST_TEST_HEARTBEAT,'.'),10);`;
     const childCode = `const {spawn}=require('node:child_process');spawn(process.execPath,['-e',${JSON.stringify(grandchildCode)}],{stdio:'ignore'});process.stdout.write(String(process.pid));process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},1000);`;
-    const script = `const fs=await import('node:fs');const {registerTerminationHandlers,runChild,processGroupExists}=await import(${JSON.stringify(acceptanceUrl)});const remove=registerTerminationHandlers();let ready=false;const deadline=Date.now()+5000;const poll=setInterval(()=>{if(fs.existsSync(${JSON.stringify(heartbeat)})){ready=true;clearInterval(poll);process.kill(process.pid,'SIGTERM')}else if(Date.now()>deadline){clearInterval(poll);process.kill(process.pid,'SIGTERM')}},10);const result=await runChild(process.execPath,['-e',${JSON.stringify(childCode)}],{cwd:process.cwd(),env:{PATH:process.env.PATH}});clearInterval(poll);const signal=remove();const before=ready?fs.readFileSync(${JSON.stringify(heartbeat)},'utf8'):'';await new Promise(resolve=>setTimeout(resolve,150));const after=ready?fs.readFileSync(${JSON.stringify(heartbeat)},'utf8'):'';const groupId=Number(result.stdout);process.stdout.write(JSON.stringify({status:result.status,signal,ready,stopped:before===after,groupGone:groupId>0&&!processGroupExists(groupId),cleanupFailed:result.processCleanupFailed}));`;
+    const script = `const fs=await import('node:fs');const {registerTerminationHandlers,runChild,processGroupExists}=await import(process.env.BIFROST_TEST_ACCEPTANCE_URL);const remove=registerTerminationHandlers();let ready=false;const deadline=Date.now()+5000;const poll=setInterval(()=>{if(fs.existsSync(process.env.BIFROST_TEST_HEARTBEAT)){ready=true;clearInterval(poll);process.kill(process.pid,'SIGTERM')}else if(Date.now()>deadline){clearInterval(poll);process.kill(process.pid,'SIGTERM')}},10);const result=await runChild(process.execPath,['-e',${JSON.stringify(childCode)}],{cwd:process.cwd(),env:{PATH:process.env.PATH,BIFROST_TEST_HEARTBEAT:process.env.BIFROST_TEST_HEARTBEAT}});clearInterval(poll);const signal=remove();const before=ready?fs.readFileSync(process.env.BIFROST_TEST_HEARTBEAT,'utf8'):'';await new Promise(resolve=>setTimeout(resolve,150));const after=ready?fs.readFileSync(process.env.BIFROST_TEST_HEARTBEAT,'utf8'):'';const groupId=Number(result.stdout);process.stdout.write(JSON.stringify({status:result.status,signal,ready,stopped:before===after,groupGone:groupId>0&&!processGroupExists(groupId),cleanupFailed:result.processCleanupFailed}));`;
     const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
       encoding: "utf8",
       timeout: 10_000,
-      env: { PATH: process.env.PATH },
+      env: { PATH: process.env.PATH, BIFROST_TEST_ACCEPTANCE_URL: acceptanceUrl, BIFROST_TEST_HEARTBEAT: heartbeat },
     });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), { status: 143, signal: "SIGTERM", ready: true, stopped: true, groupGone: true, cleanupFailed: false });

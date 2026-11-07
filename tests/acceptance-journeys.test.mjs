@@ -107,7 +107,7 @@ describe("acceptance journey result classification", () => {
     const directory = mkdtempSync(join(tmpdir(), "bifrost-journey-signal-"));
     const readyPath = join(directory, "ready");
     const stoppedPath = join(directory, "descendant-stopped");
-    const childCode = `process.on("SIGTERM",()=>{require("node:fs").writeFileSync(${JSON.stringify(stoppedPath)},"stopped");process.exit(0)});require("node:fs").writeFileSync(${JSON.stringify(readyPath)},"ready");setInterval(()=>{},1000)`;
+    const childCode = `process.on("SIGTERM",()=>{require("node:fs").writeFileSync(process.env.BIFROST_TEST_STOPPED_PATH,"stopped");process.exit(0)});require("node:fs").writeFileSync(process.env.BIFROST_TEST_READY_PATH,"ready");setInterval(()=>{},1000)`;
     const parentCode = `const {spawn}=require("node:child_process");spawn(process.execPath,["-e",${JSON.stringify(childCode)}]);setInterval(()=>{},1000)`;
     const controller = new AbortController();
     try {
@@ -115,7 +115,7 @@ describe("acceptance journey result classification", () => {
         command: process.execPath,
         args: ["-e", parentCode],
         cwd: directory,
-        env: { PATH: process.env.PATH },
+        env: { PATH: process.env.PATH, BIFROST_TEST_STOPPED_PATH: stoppedPath, BIFROST_TEST_READY_PATH: readyPath },
         timeoutMs: 8_000,
         signal: controller.signal,
       });
@@ -137,14 +137,14 @@ describe("acceptance journey result classification", () => {
     const directory = mkdtempSync(join(tmpdir(), "bifrost-journey-close-"));
     const readyPath = join(directory, "ready");
     const stoppedPath = join(directory, "descendant-stopped");
-    const childCode = `const fs=require("node:fs");process.on("SIGTERM",()=>{fs.writeFileSync(${JSON.stringify(stoppedPath)},"stopped");process.exit(0)});fs.writeFileSync(${JSON.stringify(readyPath)},"ready");setInterval(()=>{},1000);setTimeout(()=>process.exit(0),5000)`;
-    const parentCode = `const {spawn}=require("node:child_process");const fs=require("node:fs");spawn(process.execPath,["-e",${JSON.stringify(childCode)}],{stdio:"ignore"});const deadline=Date.now()+3000;const wait=()=>fs.existsSync(${JSON.stringify(readyPath)})?process.exit(0):Date.now()<deadline?setTimeout(wait,10):process.exit(2);wait()`;
+    const childCode = `const fs=require("node:fs");process.on("SIGTERM",()=>{fs.writeFileSync(process.env.BIFROST_TEST_STOPPED_PATH,"stopped");process.exit(0)});fs.writeFileSync(process.env.BIFROST_TEST_READY_PATH,"ready");setInterval(()=>{},1000);setTimeout(()=>process.exit(0),5000)`;
+    const parentCode = `const {spawn}=require("node:child_process");const fs=require("node:fs");spawn(process.execPath,["-e",${JSON.stringify(childCode)}],{stdio:"ignore"});const deadline=Date.now()+3000;const wait=()=>fs.existsSync(process.env.BIFROST_TEST_READY_PATH)?process.exit(0):Date.now()<deadline?setTimeout(wait,10):process.exit(2);wait()`;
     try {
       const result = await runJourneyChild({
         command: process.execPath,
         args: ["-e", parentCode],
         cwd: directory,
-        env: { PATH: process.env.PATH },
+        env: { PATH: process.env.PATH, BIFROST_TEST_STOPPED_PATH: stoppedPath, BIFROST_TEST_READY_PATH: readyPath },
         timeoutMs: 8_000,
       });
       assert.equal(result.exitCode, 0, result.text);

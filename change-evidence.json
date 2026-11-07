@@ -1,92 +1,46 @@
 {
   "schemaVersion": 1,
-  "base": "82a035e8aa79ca73f0e9beed6ae63b7ac3350f02",
+  "base": "946669fc8e79bf756e1b92891f74e256761a4b1b",
   "contracts": [
     {
-      "id": "config-approval-summary-and-exact-review",
-      "requirement": "R07",
+      "id": "security-report-case-insensitive-test",
+      "requirement": "R16",
       "files": [
-        "config-agent.ts",
-        "config-approval.ts",
-        "docs/testing-coverage.md",
-        "scripts/test-config-approval-tui.py",
-        "skills/configure-bifrost/SKILL.md",
-        "tests/config-agent.test.ts",
-        "tests/config-approval.test.ts",
-        "tests/config-skill.test.ts",
-        "tests/fixtures/config-approval-extension.ts",
-        "tests/integration/config-approval-tui.test.mjs"
+        "tests/ci-report.test.mjs"
       ],
-      "boundary": "Real pinned Pi TUI offers a concise tool-generated summary without raw rule/model JSON or duplicate equivalent source/effective lists, or a user-selected sequential exact review before one guarded write. Summary accurately describes classifier policy changes without implying loaded runtime changed, lists every changed field, and flags first-match rule reordering and wholesale rule removal; layered source changes are distinguished from unchanged effective behavior. Ordinary and narrow viewports show navigable bounded summaries; exact review displays the full 6,000-character value and suffix. Summary Apply is explicit; exact-view Apply is gated to its final rendered page. Resize and cancellation fail closed.",
-      "assertions": "Unit tests verify accurate classifier enablement/disablement wording; first-match rule reordering and multiset duplicate removals; scalar model pools; legacy models.description tiers versus schema-v3 description metadata; every changed field name; concise counts; no raw rule/model values; source/effective deltas; and retention of unrelated policy in an added-tier candidate. Skill packaging test checks preserve-and-compare guidance, its advisory status, and the 2,000,000-character fail-closed path. Real Pi PTY verifies classifier enablement, rule priority change, all changed field names, concise impact for wholesale rule removal, pool/fallback counts, ordinary/narrow navigation and layered edits masked by project policy. It also selects exact review, confirms early exact Apply writes nothing, verifies the entire 6,000-character value across pages, cancels safely, applies exact after resize reset, and separately applies from summary. Isolated Pi fault copy suppresses classifier summary and must fail the real-Pi display assertion. Current Pi's `ctx.ui.editor` edits supplied text via a temporary editor file; it has no API to open the saved config path. No post-apply editor action is offered because editing a copy would need a validated, re-approved write/reload roundtrip.",
+      "boundary": "CI report rendering escapes hostile text in both lowercase and uppercase script tags.",
+      "assertions": "The report test supplies both cases and rejects an unescaped script tag case-insensitively.",
       "boundaryTest": {
-        "file": "tests/integration/config-approval-tui.test.mjs",
-        "name": "requires complete paged approval in real pinned Pi across viewport resize"
+        "file": "tests/ci-report.test.mjs",
+        "name": "keeps hostile Markdown and untrusted artifact URLs inert"
       },
       "invariant": {
-        "file": "tests/config-agent.test.ts",
-        "name": "reports first-match rule reorder and duplicate multiplicity changes"
+        "file": "tests/ci-report.test.mjs",
+        "name": "keeps hostile Markdown and untrusted artifact URLs inert"
       },
       "fault": {
-        "file": "tests/integration/config-approval-tui.test.mjs",
-        "name": "detects a faulty summary that hides classifier disablement in an isolated Pi copy"
+        "exception": "This test-only assertion strengthening has no independent fault-injection witness; CodeQL status requires a separate hosted scan."
       }
     },
     {
-      "id": "classifier-runtime-precedence-and-validation",
-      "requirement": "R14",
+      "id": "acceptance-process-fixture-path-transport",
+      "requirement": "R16",
       "files": [
-        "IMPLEMENTATION.md",
-        "PRD.md",
-        "README.md",
-        "auto-setup.ts",
-        "classifier-semantics.ts",
-        "commands.ts",
-        "config-agent-report.ts",
-        "config.ts",
-        "diagnostics.ts",
-        "docs/acceptance-coverage.md",
-        "docs/adr/0015-pinned-ephemeral.md",
-        "docs/guide/classifiers.md",
-        "docs/guide/commands.md",
-        "docs/guide/configuration.md",
-        "docs/guide/getting-started.md",
-        "docs/guide/troubleshooting.md",
-        "docs/llms.txt",
-        "docs/terminal-demo.js",
-        "index.ts",
-        "runtime-state.ts",
-        "scripts/acceptance.mjs",
-        "scripts/ui-smoke.py",
-        "scripts/ui-reliability-fake-provider.sh",
-        "skills/configure-bifrost/references/configuration-reference.md",
-        "tests/auto-bootstrap-runtime.test.ts",
-        "tests/auto-setup.test.ts",
-        "tests/bifrost-commands.test.ts",
-        "tests/classifier-effective-validation.test.ts",
-        "tests/classifier-session-runtime.test.ts",
-        "tests/diagnostics.test.ts",
-        "tests/fixtures/replay-fault-control.mjs",
-        "tests/integration/command-privacy-acceptance.test.mjs",
-        "tests/integration/config-agent-acceptance.test.mjs",
-        "tests/integration/integration.test.mjs",
-        "tests/provider-cooldown-runtime.test.ts",
-        "tests/reconciliation-command-router.test.ts",
-        "tests/runtime-state.test.ts"
+        "tests/acceptance-journeys.test.mjs",
+        "tests/acceptance-runner.test.mjs"
       ],
-      "boundary": "Classifier policy and saved runtime state stay distinct. Config-off masks legacy saved-on; legacy saved-off against config-on pauses classification pending a session choice. Invalid runtime state fails closed despite session overrides. Session toggles stay session-only; overrides, pipeline/cache identity, and pending-request cancellation are isolated per session. Active backends are validated before calls, and approval is refused when runtime state changes.",
-      "assertions": "Unit and Pi tests verify config-versus-legacy precedence, explicit session overrides, invalid-state fail-closed behavior and recovery, unknown-field preservation, mode persistence without classifier or pin flags, per-session isolation and pending-request cancellation, backend-aware criteria validation, disabled-backend diagnostic suppression, malformed authored criteria rejection, status/readiness, runtime-aware inspect/check/preview/approval, stale runtime-digest refusal, and intentional empty-tier/fallback reporting. Isolated Pi UI coverage confirms invalid runtime state blocks `/bifrost classifier on`, causes zero classifier dispatch, preserves corrupt bytes, and allows fake-model generation. RPC acceptance confirms config-off/legacy-on conflict is visible and refusal preserves both config files. Session-only privacy acceptance confirms disabled dispatch suppression and configured behavior after restart. Mutation checks made 2 of 7 runtime-state tests fail when conflict handling was removed, 1 of 9 classifier tests fail when disabled-backend diagnostic suppression was removed, and the targeted config-agent approval test fail when the runtime-digest guard was removed.",
+      "boundary": "Acceptance subprocess fixtures pass temporary filesystem paths and module URLs as environment data while preserving process-group shutdown behavior.",
+      "assertions": "Journey and gate process-group tests exercise descendant cleanup and wait for termination using environment-provided paths.",
       "boundaryTest": {
-        "file": "tests/integration/command-privacy-acceptance.test.mjs",
-        "name": "keeps classifier toggles session-only and resumes configured classification after restart"
+        "file": "tests/acceptance-journeys.test.mjs",
+        "name": "kills and awaits the whole detached child group when the journey is aborted"
       },
       "invariant": {
-        "file": "tests/runtime-state.test.ts",
-        "name": "uses configured state unless conflicting legacy state requires an explicit choice"
+        "file": "tests/acceptance-runner.test.mjs",
+        "name": "kills and awaits a SIGTERM-ignoring grandchild after its gate parent exits"
       },
       "fault": {
-        "file": "tests/config-agent.test.ts",
-        "name": "invalidates approval when legacy classifier state changes while dialog is open"
+        "exception": "No independent fault-injection witness was added for this test-fixture refactor; the existing process-group assertions are exercised directly."
       }
     }
   ]
