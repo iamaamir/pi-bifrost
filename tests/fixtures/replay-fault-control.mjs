@@ -59,7 +59,7 @@ import { join } from "node:path";
 import { processGroupExists } from "../../scripts/acceptance/core.mjs";
 import { closeTracking, cleanupFailure, detachOwnedHandles, spawnOwned } from "./child-auto-inline-harness.mjs";
 
-export const REPLAY_GUARD_BASELINE_SHA256 = "ff52732d8107f4f33c1c1bd49df0fb568a6d15781f196d08008718c6af2c6d02";
+export const REPLAY_GUARD_BASELINE_SHA256 = "ba53ddceaef7868bf17d0a766babf7c5c9bdfd1411655449617b35bbef30ce14";
 export const REPLAY_GUARD_FUNCTIONS = [
   "isSideEffectFreeAllowanceFailure",
   "allowanceRetryBoundaryStillSafe",
@@ -69,9 +69,9 @@ export const REPLAY_GUARD_FUNCTIONS = [
 // Guard line anchors are exact against the baseline commit; keep them in sync
 // with index.ts when the guards move.
 export const REPLAY_GUARD_LINES = {
-  autoBoundaryStillActive: 1818,
-  isSideEffectFreeAllowanceFailure: 1875,
-  allowanceRetryBoundaryStillSafe: 2636,
+  autoBoundaryStillActive: 1819,
+  isSideEffectFreeAllowanceFailure: 1876,
+  allowanceRetryBoundaryStillSafe: 2640,
 };
 
 // Each PROVEN pair has an executable fault reaching its exact named assertion.
@@ -212,6 +212,15 @@ export const FAULT_PROOFS = {
   },
 };
 
+for (const mode of ["v1", "v2"]) {
+  FAULT_PROOFS[`consumedSteering${mode.toUpperCase()}`] = {
+    guard: "consumedSteeringBoundary",
+    testFile: "tests/integration/auto-virtual.test.mjs",
+    testName: `does not retry a queued steering message after tool activity in ${mode}`,
+    redAssertionMessage: "queued steering after tool activity must not be replayed to an alternate",
+  };
+}
+
 // Adds one scratch-only duplicate null edit. The retry-time bypass keeps
 // dispatch alive so the named Pi lineage assertion, not admission, sees RED.
 function corruptNullEditLineage(source) {
@@ -259,6 +268,11 @@ function permitRepeatedEmptyRecovery(source, v2) {
 /** Injected fault per guard. `return false` proves the guard's restrictive half
  * (the assertion depends on the guard permitting the safe path). */
 export const REPLAY_GUARD_MUTATORS = {
+  consumedSteeringBoundary: (source) => {
+    const guard = "    if (!activity || activity.multipleUsers || activity.firstUser !== boundary.message) return undefined;\n";
+    if (source.split(guard).length !== 2) throw new Error("consumed steering fault requires one exact guard");
+    return source.replace(guard, "");
+  },
   singleAlternateV1: (source) => permitRepeatedEmptyRecovery(source, false),
   singleAlternateV2: (source) => permitRepeatedEmptyRecovery(source, true),
   isSideEffectFreeAllowanceFailure: (source) => injectGuardStatement(source, "isSideEffectFreeAllowanceFailure", "return [assistantEntryId];"),

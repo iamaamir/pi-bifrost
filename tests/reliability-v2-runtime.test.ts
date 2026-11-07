@@ -14,7 +14,7 @@ import { TYPE_SAFE_API_KEY_ENV } from "../classifier-backends.ts";
 import { CLASSIFIER_BACKEND_IDS } from "../classifier-backends.ts";
 import { makeModel, makePiClassifierModel } from "./helpers.ts";
 
-async function runAllowanceRuntime({ reloadOptOut = false, reloadAllowanceScope, failedContent = [], toolResults = [], priorToolHistory = false, rejectSettlement = false, interveneDuringSettlement = false, routeAfterPrepare = false, reloadAfterPrepare = false, inlineQuick = false, poolExhausted = false, dispatchPreparedRetry = false, retryEnabled = false, retryDisabled = false, stateVersion = 2, repeatPrefixOnRetry = false, mismatchedPrefixOnRetry = false, directRuleOnRetry = false, initialFallback = false }: {
+async function runAllowanceRuntime({ reloadOptOut = false, reloadAllowanceScope, failedContent = [], toolResults = [], priorToolHistory = false, rejectSettlement = false, interveneDuringSettlement = false, routeAfterPrepare = false, reloadAfterPrepare = false, inlineQuick = false, poolExhausted = false, dispatchPreparedRetry = false, retryEnabled = false, retryDisabled = false, stateVersion = 2, repeatPrefixOnRetry = false, mismatchedPrefixOnRetry = false, directRuleOnRetry = false, initialFallback = false, omitLifecycle = false }: {
   reloadOptOut?: boolean;
   reloadAllowanceScope?: "provider" | "model";
   failedContent?: unknown[];
@@ -34,6 +34,7 @@ async function runAllowanceRuntime({ reloadOptOut = false, reloadAllowanceScope,
   mismatchedPrefixOnRetry?: boolean;
   directRuleOnRetry?: boolean;
   initialFallback?: boolean;
+  omitLifecycle?: boolean;
 } = {}) {
   const previousCwd = process.cwd();
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -106,6 +107,10 @@ async function runAllowanceRuntime({ reloadOptOut = false, reloadAllowanceScope,
     if (reloadOptOut) {
       writeFileSync(configPath, JSON.stringify({ ...config, reliability: { ...config.reliability, cooldownOnAllowanceExhausted: false } }));
       await commandHandler("reload", ctx);
+    }
+    if (!omitLifecycle) {
+      await handlers.get("agent_start")?.({ type: "agent_start" } as never, ctx);
+      await handlers.get("message_start")?.({ type: "message_start", message: user } as never, ctx);
     }
     const route = routeDefinition.route as (request: ModelRouteRequest, ctx: ExtensionContext) => Promise<{ model: unknown }>;
     const request = { model: ctx.model, reason: "user", thinkingLevel: "low", messages: [user] } as unknown as ModelRouteRequest;
@@ -277,6 +282,13 @@ describe("reliability v2 registered Auto runtime", () => {
     for (const { state } of [withOutput, withTools, withPriorTools]) {
       assert.ok(state!.scopes[modelScopeKey("fixture/allowed")]?.openUntil,
         "unsafe failures still settle and apply the model-only cooldown");
+    }
+  });
+
+  it("does not recover when the original user lifecycle was not observed", async () => {
+    for (const stateVersion of [1, 2] as const) {
+      const result = await runAllowanceRuntime({ inlineQuick: true, dispatchPreparedRetry: true, retryEnabled: true, omitLifecycle: true, stateVersion });
+      assert.equal(result.beforeSettle, undefined, `stateVersion ${stateVersion} must fail closed without lifecycle proof`);
     }
   });
 

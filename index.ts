@@ -720,6 +720,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   const allowanceRetryCancelledBySession = new WeakMap<object, AllowanceRetryToken>();
   const allowanceRetryStopReasonBySession = new WeakMap<object, string>();
   const pendingAllowanceFailureBySession = new WeakMap<object, PendingAllowanceFailure>();
+  const allowanceActivityBySession = new WeakMap<object, { firstUser?: object; multipleUsers: boolean }>();
   const providerClaimsBySession = new WeakMap<object, Map<string, ProviderTrialClaim>>();
   const providerTrialTimersBySession = new WeakMap<object, Map<string, ReturnType<typeof setInterval>>>();
   const providerTrialSessionRefs = new Set<WeakRef<object>>();
@@ -1883,6 +1884,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     approvedAssistantEntryIds?: readonly string[],
     requireCurrentOmitted = false,
   ): string[] | undefined {
+    // Consumed steering is no longer pending and can appear as the latest user.
+    const activity = allowanceActivityBySession.get(ctx.sessionManager);
+    if (!activity || activity.multipleUsers || activity.firstUser !== boundary.message) return undefined;
     const failedMessage = assistantMessage as { role?: unknown; stopReason?: unknown; content?: unknown };
     if (failedMessage.role !== "assistant" || failedMessage.stopReason !== "error") return undefined;
     if (!Array.isArray(failedMessage.content) || failedMessage.content.length !== 0) return undefined;
@@ -3401,6 +3405,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    allowanceActivityBySession.delete(ctx.sessionManager);
     classifierSessionFor(ctx.sessionManager);
     advanceAutoBootstrapLifecycle(ctx.sessionManager, false, ctx);
     cancelAutoBootstrap(ctx.sessionManager, ctx);
@@ -3440,6 +3445,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_before_tree", async (_event, ctx) => {
+    allowanceActivityBySession.delete(ctx.sessionManager);
     advanceAutoBootstrapLifecycle(ctx.sessionManager, false, ctx);
     cancelAutoBootstrap(ctx.sessionManager, ctx);
     await cleanupProviderTrials(ctx.sessionManager);
@@ -3453,6 +3459,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    allowanceActivityBySession.delete(ctx.sessionManager);
     const classifierSession = classifierSessions.get(ctx.sessionManager);
     classifierSession?.controller.abort(new Error("Classifier session ended"));
     classifierSessions.delete(ctx.sessionManager);
@@ -3466,6 +3473,20 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     pendingAffinityBySession.delete(ctx.sessionManager);
     if (reliabilityV2Enabled()) await cleanupV2Receipts(ctx.sessionManager);
     await flushDebug();
+  });
+
+  pi.on("agent_start", async (_event, ctx) => {
+    if (!allowanceActivityBySession.has(ctx.sessionManager)) {
+      allowanceActivityBySession.set(ctx.sessionManager, { multipleUsers: false });
+    }
+  });
+
+  pi.on("message_start", async (event, ctx) => {
+    if (event.message.role !== "user") return;
+    const activity = allowanceActivityBySession.get(ctx.sessionManager);
+    if (!activity) return;
+    if (activity.firstUser) activity.multipleUsers = true;
+    else activity.firstUser = event.message;
   });
 
   pi.on("agent_end", async (event, ctx) => {
@@ -3650,6 +3671,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
+    allowanceActivityBySession.delete(ctx.sessionManager);
     const settled = trackerFor(ctx).settle();
     clearAllowanceRetry(ctx.sessionManager, "agent_settled");
     // Clear at settle, not agent_end: agent_end handlers can queue fresh work
