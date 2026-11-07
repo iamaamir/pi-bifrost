@@ -3,7 +3,7 @@
   "base": "d56096464a2b77e84be0eed6712781122bd9b3a0",
   "contracts": [
     {
-      "id": "consumed-steering-no-allowance-replay",
+      "id": "p1-steering-replay-and-removed-model",
       "requirement": "R12",
       "files": [
         "index.ts",
@@ -11,8 +11,8 @@
         "tests/integration/auto-virtual.test.mjs",
         "tests/reliability-v2-runtime.test.ts"
       ],
-      "boundary": "Auto allowance recovery requires proof of the first user message for the current agent activity. A second user message, including consumed steering, makes recovery ineligible until agent_settled; missing lifecycle proof fails closed.",
-      "assertions": "Real Pi sessions in reliability v1 and v2 execute a synthetic tool, consume queued steering and receive an empty allowance failure without dispatching an alternate; a later independent settled turn still recovers once. Scratch-only removal of the new guard turns the named assertion red in each mode and restores green. Existing queued follow-up dispatch and empty Pi retry controls also pass. A registered-event harness emits the Pi lifecycle and verifies absent lifecycle proof fails closed in both versions.",
+      "boundary": "Auto allowance recovery requires proof of the first user message for the current agent activity. A second user message, including consumed steering, makes recovery ineligible until agent_settled; missing lifecycle proof fails closed. Legacy Auto degradation for a new user request is permitted only when the last dispatched model remains a candidate in the selected or fallback pool.",
+      "assertions": "Real Pi sessions in reliability v1 and v2 execute a synthetic tool, consume queued steering and receive an empty allowance failure without dispatching an alternate; a later independent settled turn still recovers once. Scratch-only removal of the new guard turns the named assertion red in each mode and restores green. Existing queued follow-up dispatch and empty Pi retry controls also pass. A registered-event harness emits the Pi lifecycle and verifies absent lifecycle proof fails closed in both versions. Real Pi sessions confirm a model removed from the selected/fallback pools is not dispatched after reload in both reliability versions; an unrelated tier, empty pool, and configured-but-unhealthy fallback are covered.",
       "boundaryTest": {
         "file": "tests/integration/auto-virtual.test.mjs",
         "name": "does not retry a queued steering message after tool activity in v1"

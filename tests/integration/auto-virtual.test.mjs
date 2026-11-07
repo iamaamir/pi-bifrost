@@ -1281,6 +1281,44 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
     }
   });
 
+  for (const { stateVersion, enabled, label } of [
+    { stateVersion: 1, enabled: true, label: "v1" },
+    { stateVersion: 1, enabled: false, label: "v1 with reliability disabled" },
+    { stateVersion: 2, enabled: true, label: "v2" },
+  ]) it(`does not dispatch a removed last model after reload in ${label}`, async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-removed-model-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-removed-model-work-"));
+    const configPath = join(work, "bifrost.json");
+    const config = { ...(stateVersion === 2 ? { schemaVersion: 2 } : {}), enabled: true,
+      default: "general", strategy: "first", classifier: { enabled: false },
+      models: { general: ["backup/healthy"] },
+      reliability: { ...(stateVersion === 2 ? { stateVersion: 2 } : {}), enabled } };
+    try {
+      writeFixture({ home, work, port: server.port, models: [{ provider: "backup", id: "healthy", reasoning: false }], bifrost: config });
+      const rpc = startRpc({ home, work });
+      try {
+        if (stateVersion === 2) await rpc.request({ type: "prompt", message: "/bifrost reliability migrate --fresh" });
+        await rpc.userTurn("initial configured generation");
+        const before = await fakeStats(server.port);
+        for (const models of [
+          { general: ["missing-provider/missing-model"] },
+          { general: ["missing-provider/missing-model"], frontier: ["backup/healthy"] },
+          { general: [] },
+        ]) {
+          writeFileSync(configPath, JSON.stringify({ ...config, models }));
+          await rpc.request({ type: "prompt", message: "/bifrost reload" });
+          const start = rpc.records.length;
+          await rpc.userTurn("new prompt after model removal");
+          const after = await fakeStats(server.port);
+          const requests = after.stats.slice(before.stats.length).filter((item) => item.kind === "generation");
+          assert.equal(requests.length, 0, "a model outside the selected and fallback pools must not receive a new user prompt");
+          assert.ok(rpc.records.slice(start).some((item) => item.type === "message_end" && item.message?.stopReason === "error"),
+            "the unavailable pool must be visible as an error");
+        }
+      } finally { await rpc.close(); }
+    } finally { rmSync(home, { recursive: true, force: true }); rmSync(work, { recursive: true, force: true }); }
+  });
+
   it("opens the circuit on failure and visibly degrades to the last dispatched model", async () => {
     const home = mkdtempSync(join(tmpdir(), "bifrost-auto-home-"));
     const work = mkdtempSync(join(tmpdir(), "bifrost-auto-work-"));

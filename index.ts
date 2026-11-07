@@ -3041,19 +3041,19 @@ export default function bifrostExtension(pi: ExtensionAPI) {
           const model = resolved.selected;
           if (!model) {
             state.forceRegistryRefresh = true;
-            const priorPhysical = request.reason === "user" && !v2Active
-              && state.config.reliability?.enabled !== false
+            const lastPhysical = request.reason === "user" && !v2Active ? lastDispatchedPhysical(ctx) : undefined;
+            const configuredLastModel = lastPhysical && [...resolved.primary.candidates, ...(resolved.fallback?.candidates ?? [])]
+              .some((candidate) => modelKey(candidate) === modelKey(lastPhysical));
+            const blockedStickyModel = lastPhysical && state.config.reliability?.enabled !== false
               && state.config.reliability?.cooldownOnAllowanceExhausted !== false
-              ? lastDispatchedPhysical(ctx) : undefined;
-            const blockedStickyModel = priorPhysical
-              && hasActiveAllowanceCooldown(state.reliabilityStore.getState(), modelKey(priorPhysical), Date.now());
+              && hasActiveAllowanceCooldown(state.reliabilityStore.getState(), modelKey(lastPhysical), Date.now());
             routeFailure = {
               tier: classification.tier,
               pool: state.config.models?.[classification.tier],
               reason: resolved.fallbackReason,
               skipped: resolved.skipped,
               reserveExcluded: reserveExclusionSummary(resolved),
-              explicitBoundary: !!activeRecoveryToken || resolved.explicitBoundary || hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config) || v2Active || blockedStickyModel,
+              explicitBoundary: !!activeRecoveryToken || resolved.explicitBoundary || hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config) || v2Active || blockedStickyModel || (!!lastPhysical && !configuredLastModel),
               ...(blockedStickyModel ? {
                 message: `Bifrost: the last dispatched model is on an active model-only allowance cooldown and no configured alternative resolved for tier ${classification.tier}; no model was dispatched.`,
               } : {}),
