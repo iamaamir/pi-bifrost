@@ -1,46 +1,25 @@
 {
   "schemaVersion": 1,
-  "base": "946669fc8e79bf756e1b92891f74e256761a4b1b",
+  "base": "681f0a42b46c9e3f2d8e7474a54cfd8896a00f1a",
   "contracts": [
     {
-      "id": "security-report-case-insensitive-test",
+      "id": "acceptance-process-fixture-no-code-interpolation",
       "requirement": "R16",
       "files": [
-        "tests/ci-report.test.mjs"
-      ],
-      "boundary": "CI report rendering escapes hostile text in both lowercase and uppercase script tags.",
-      "assertions": "The report test supplies both cases and rejects an unescaped script tag case-insensitively.",
-      "boundaryTest": {
-        "file": "tests/ci-report.test.mjs",
-        "name": "keeps hostile Markdown and untrusted artifact URLs inert"
-      },
-      "invariant": {
-        "file": "tests/ci-report.test.mjs",
-        "name": "keeps hostile Markdown and untrusted artifact URLs inert"
-      },
-      "fault": {
-        "exception": "This test-only assertion strengthening has no independent fault-injection witness; CodeQL status requires a separate hosted scan."
-      }
-    },
-    {
-      "id": "acceptance-process-fixture-path-transport",
-      "requirement": "R16",
-      "files": [
-        "tests/acceptance-journeys.test.mjs",
         "tests/acceptance-runner.test.mjs"
       ],
-      "boundary": "Acceptance subprocess fixtures pass temporary filesystem paths and module URLs as environment data while preserving process-group shutdown behavior.",
-      "assertions": "Journey and gate process-group tests exercise descendant cleanup and wait for termination using environment-provided paths.",
+      "boundary": "The process-group fixture passes fixed child scripts and temporary file paths as environment data while exercising grandchild cleanup.",
+      "assertions": "The real process-group test verifies the SIGTERM-ignoring grandchild starts, stops, and leaves no process group.",
       "boundaryTest": {
-        "file": "tests/acceptance-journeys.test.mjs",
-        "name": "kills and awaits the whole detached child group when the journey is aborted"
+        "file": "tests/acceptance-runner.test.mjs",
+        "name": "kills and awaits a SIGTERM-ignoring grandchild after its gate parent exits"
       },
       "invariant": {
         "file": "tests/acceptance-runner.test.mjs",
         "name": "kills and awaits a SIGTERM-ignoring grandchild after its gate parent exits"
       },
       "fault": {
-        "exception": "No independent fault-injection witness was added for this test-fixture refactor; the existing process-group assertions are exercised directly."
+        "exception": "This test-fixture-only refactor has no independent fault-injection witness; hosted CodeQL must separately verify the reported alert."
       }
     }
   ]
