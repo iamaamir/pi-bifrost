@@ -116,7 +116,10 @@
     "typed-rest-client": {
       "qs": "6.16.1"
     },
-    "undici": "^8.12.2"
+    "undici": "^8.12.2",
+    "test-exclude": {
+      "glob": "14.0.4"
+    }
   },
   "devDependencies": {
     "@ast-grep/cli": "^0.51.0",
