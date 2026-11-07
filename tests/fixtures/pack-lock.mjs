@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, linkSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -48,91 +48,81 @@ function holderIsGone(path) {
   return owner !== undefined && processGone(owner.pid);
 }
 
-/**
- * Remove a lock whose recorded holder is gone without deleting a live one.
+/** Serialize every path mutation, including recovery and release.
  *
- * `rename` is the claim: the file system moves the lock for exactly one
- * reclaimer, so a second reclaimer gets ENOENT and retries instead of deleting
- * the lock the winner just created. The claimed file is inspected afterwards
- * because a live holder can create a lock between the staleness read and the
- * claim; that lock is linked back into place rather than discarded, and the
- * release path only unlinks a file it still owns.
- *
- * Returns the claimed record when this call reclaimed a dead holder's lock.
+ * A guard left by a process killed during this short critical section is not
+ * stolen: its owner cannot be proven from a mkdir alone. Waiters time out
+ * rather than risk letting two builders run concurrently.
  */
-export function reclaimStaleLock(path) {
-  const claim = `${path}.claim-${process.pid}-${randomUUID()}`;
-  try {
-    renameSync(path, claim);
-  } catch (error) {
-    // Another reclaimer claimed it first, or the holder released normally.
-    if (error.code === "ENOENT") return undefined;
-    throw error;
+function withGuard(path, deadline, pollMs, run) {
+  const guard = `${path}.guard`;
+  for (;;) {
+    try {
+      mkdirSync(guard, { mode: 0o700 });
+      break;
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      if (Date.now() >= deadline) throw new Error(`timed out waiting for packed-package lock guard at ${guard}`);
+      sleep(pollMs);
+    }
   }
   try {
-    const owner = readOwner(claim);
-    if (owner === undefined || processGone(owner.pid)) return owner;
-    // A live holder owned the claimed file: put it back. A third process may
-    // have taken the path meanwhile, in which case that lock wins and the
-    // displaced holder's release notices it no longer owns the file.
-    try { linkSync(claim, path); } catch { /* path is owned by another process */ }
-    return undefined;
+    return run();
   } finally {
-    rmSync(claim, { force: true });
+    rmdirSync(guard);
   }
 }
 
-/**
- * Acquire the cross-process lock guarding a checkout's `dist/router` output.
- *
- * `npm pack` runs the `prepack` build, which replaces `dist/router` in place.
- * The unit suite runs the packed-package tests while the acceptance runner's
- * manifest-evidence gate runs the same file in a child process, so two builds
- * can otherwise overlap and one pack archives a half-rebuilt tree. Returns the
- * release function; only a holder whose process is proven gone is reclaimed,
- * and only one reclaimer can claim that holder's file.
- */
+/** Reclaim a lock only after checking its current holder under the guard. */
+export function reclaimStaleLock(path, options = {}) {
+  const deadline = Date.now() + (options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
+  return withGuard(path, deadline, pollMs, () => {
+    const owner = readOwner(path);
+    if (owner === undefined || !processGone(owner.pid)) return undefined;
+    rmSync(path);
+    return owner;
+  });
+}
+
+/** Acquire the cross-process lock guarding a checkout's `dist/router` output. */
 export function acquirePackLock(root, options = {}) {
   const path = packLockPath(root);
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS;
   const deadline = Date.now() + timeoutMs;
+  const record = JSON.stringify({ pid: process.pid, createdAt: Date.now(), nonce: randomUUID() });
   let fd;
   for (;;) {
-    try {
-      fd = openSync(path, "wx", 0o600);
-      break;
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      if (holderIsGone(path)) {
-        reclaimStaleLock(path);
-        continue;
+    const acquired = withGuard(path, deadline, pollMs, () => {
+      if (holderIsGone(path)) rmSync(path);
+      try {
+        fd = openSync(path, "wx", 0o600);
+      } catch (error) {
+        if (error.code === "EEXIST") return false;
+        throw error;
       }
-      if (Date.now() >= deadline) {
-        throw new Error(`timed out after ${timeoutMs}ms waiting for the packed-package build lock at ${path}`);
+      try {
+        writeFileSync(fd, record);
+      } catch (error) {
+        closeSync(fd);
+        rmSync(path, { force: true });
+        throw error;
       }
-      sleep(pollMs);
-    }
-  }
-  // The record doubles as the ownership token: release compares the file with
-  // these exact bytes, so a rejected or reclaimed replacement is never removed.
-  const record = JSON.stringify({ pid: process.pid, createdAt: Date.now(), nonce: randomUUID() });
-  try {
-    writeFileSync(fd, record);
-  } catch (error) {
-    closeSync(fd);
-    rmSync(path, { force: true });
-    throw error;
+      return true;
+    });
+    if (acquired) break;
+    if (Date.now() >= deadline) throw new Error(`timed out after ${timeoutMs}ms waiting for the packed-package build lock at ${path}`);
+    sleep(pollMs);
   }
   return () => {
     closeSync(fd);
-    let owned = false;
-    try {
-      owned = readFileSync(path, "utf8") === record;
-    } catch {
-      // Already released or displaced; nothing of ours is left to remove.
-    }
-    if (owned) rmSync(path, { force: true });
+    // Take a fresh bounded wait: long builds may exceed the acquisition deadline.
+    withGuard(path, Date.now() + timeoutMs, pollMs, () => {
+      let owned = false;
+      try { owned = readFileSync(path, "utf8") === record; } catch { /* already absent */ }
+      if (owned) rmSync(path, { force: true });
+    });
   };
 }
 

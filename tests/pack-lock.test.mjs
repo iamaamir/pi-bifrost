@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { packLockPath, reclaimStaleLock } from "./fixtures/pack-lock.mjs";
+import { acquirePackLock, packLockPath, reclaimStaleLock } from "./fixtures/pack-lock.mjs";
 
 const moduleUrl = pathToFileURL(fileURLToPath(new URL("./fixtures/pack-lock.mjs", import.meta.url))).href;
 
@@ -165,6 +165,66 @@ describe("packed-package build lock", () => {
       assert.deepEqual(journalOf(journal), ["start", "end"]);
       assert.equal(existsSync(lock), false, "the holder must still remove the lock it owns");
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("a delayed stale reclaimer cannot expose a live lock to a third acquirer", () => {
+    const root = isolatedRoot();
+    const lock = packLockPath(root);
+    const script = `
+      import fs from "node:fs";
+      import { syncBuiltinESMExports } from "node:module";
+      const realRename = fs.renameSync;
+      let acquire;
+      let contenderRelease;
+      let contenderEntered = false;
+      fs.renameSync = (from, to) => {
+        realRename(from, to);
+        try {
+          contenderRelease = acquire(process.env.PACK_ROOT, { timeoutMs: 50, pollMs: 1 });
+          contenderEntered = true;
+        } catch (error) {
+          if (!String(error.message).includes("timed out")) throw error;
+        }
+      };
+      syncBuiltinESMExports();
+      const mod = await import(process.env.PACK_MODULE);
+      acquire = mod.acquirePackLock;
+      const ownerRelease = acquire(process.env.PACK_ROOT, { timeoutMs: 100 });
+      try {
+        // The call represents a reclaimer delayed after it observed a stale
+        // predecessor, by which point the live owner above holds the lock.
+        mod.reclaimStaleLock(process.env.PACK_LOCK_PATH, { timeoutMs: 100 });
+        if (contenderEntered) throw new Error("contender entered while the live owner held the lock");
+      } finally {
+        if (contenderRelease) contenderRelease();
+        ownerRelease();
+      }
+    `;
+    try {
+      const result = spawnSync(process.execPath, ["--input-type=module", "--eval", script], {
+        env: { ...process.env, PACK_ROOT: root, PACK_MODULE: moduleUrl, PACK_LOCK_PATH: lock },
+        encoding: "utf8", timeout: 5000,
+      });
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(existsSync(lock), false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed when a recovery guard is left behind", () => {
+    const root = isolatedRoot();
+    const lock = packLockPath(root);
+    const guard = `${lock}.guard`;
+    try {
+      mkdirSync(guard);
+      assert.throws(() => acquirePackLock(root, { timeoutMs: 30, pollMs: 1 }), /timed out.*guard/);
+      assert.equal(existsSync(lock), false, "a blocked guard must not allow an unguarded acquisition");
+      assert.equal(existsSync(guard), true, "an unowned guard must not be stolen");
+    } finally {
+      rmSync(guard, { recursive: true, force: true });
       rmSync(root, { recursive: true, force: true });
     }
   });
