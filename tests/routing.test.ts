@@ -1,5 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { performance } from "node:perf_hooks";
+import { spawnSync } from "node:child_process";
 import {
   buildRouteDecisionSummary,
   type ClassificationResult,
@@ -22,6 +24,7 @@ import {
   type TierResolutionConfig,
 } from "../routing.ts";
 import { emptyReliabilityState, recordModelFailure, DEFAULT_RELIABILITY } from "../reliability.ts";
+import { DEFAULT_RULES } from "../config.ts";
 import { compileRoutingScope } from "../routing-scope.ts";
 import { makeCtx, makeModel, withoutCost } from "./helpers.ts";
 import { emptyEconomicSnapshot, hasHardEconomicAdmission, publishEconomicObservation, type EconomicSignal, type ReservePolicy } from "../economic-signals.ts";
@@ -899,6 +902,24 @@ describe("routing", () => {
       }
     });
 
+    it("keeps the injectable random seam total when it returns 1", () => {
+      // Injected rng beyond [0,1) must not produce undefined (LOB-unbounded
+      // selection). Values outside [0,1) route to the last candidate.
+      const a = makeModel("a", "a", 0, 0);
+      const b = makeModel("b", "b", 0, 0);
+      assert.equal(modelKey(selectModel([a, b], "random", () => 1)), "b/b");
+      assert.equal(modelKey(selectModel([a, b], "random", () => -1)), "b/b");
+      assert.equal(modelKey(selectModel([a, b], "random", () => NaN)), "b/b");
+      assert.equal(modelKey(selectModel([a, b], "random", () => 0.999999)), "b/b");
+    });
+
+    it("keeps the injectable random seam inside [0,1) on the first candidate", () => {
+      const a = makeModel("a", "a", 0, 0);
+      const b = makeModel("b", "b", 0, 0);
+      assert.equal(modelKey(selectModel([a, b], "random", () => 0.4)), "a/a");
+      assert.equal(modelKey(selectModel([a, b], "random", () => 0.75)), "b/b");
+    });
+
     it("keeps candidate order for fastest and metric ties", () => {
       const first = makeModel("a", "first", 2, 3, 128_000);
       const second = makeModel("b", "second", 2, 3, 128_000);
@@ -1476,5 +1497,101 @@ describe("routing", () => {
       assert.equal(classify("bar foo", rules), "first");
       assert.equal(classifyCompiled("bar foo", compileRules(rules)), "first");
     });
+
+    it("drops rule patterns whose backtracking explodes on a small canary", () => {
+      // Security regression: a repo-provided rule with nested quantifiers
+      // hangs the host event loop synchronously before the message is sent.
+      // compileRules must drop the rule (fail closed to later rules/default)
+      // instead of shipping a pattern that cannot run within a bounded budget.
+      const compiled = compileRules([
+        { pattern: "^(a+)+$", model: "quick" },
+        { pattern: "hello", model: "general" },
+      ]);
+      assert.deepEqual(compiled.map((rule) => rule.model), ["general"]);
+    });
+
+    it("parity path drops the same catastrophic pattern", () => {
+      const rules = [{ pattern: "^(a+)+$", model: "quick" }];
+      assert.equal(classify("a".repeat(24) + "b", rules), undefined);
+      assert.equal(classifyCompiled("a".repeat(24) + "b", compileRules(rules)), undefined);
+    });
+
+    it("reports a rejected rule once across repeated classify calls", () => {
+      // classify() runs per message, so a rejected configured rule must be
+      // diagnosed once instead of logging on every classified prompt.
+      const messages: string[] = [];
+      const originalError = console.error;
+      console.error = (...values: unknown[]) => { messages.push(values.map(String).join(" ")); };
+      try {
+        const rules = [{ pattern: "^(zz+)+$", model: "quick" }];
+        assert.equal(classify("zzzzzzzzzzzzzzzzzzzzzzzzc", rules), undefined);
+        assert.equal(classify("zzzzzzzzzzzzzzzzzzzzzzzzc", rules), undefined);
+      } finally {
+        console.error = originalError;
+      }
+      const reported = messages.filter((line) => line.includes("rejecting rule pattern"));
+      assert.deepEqual(reported, ['[bifrost] rejecting rule pattern with unbounded backtracking or unverifiable safety: "^(zz+)+$"']);
+    });
+
+    it("still compiles every shipped default rule", () => {
+      assert.equal(compileRules(DEFAULT_RULES).length, DEFAULT_RULES.length);
+    });
+
+    it("rejects lookahead-anchored catastrophic patterns without paying the long probe", () => {
+      // A lookaround can keep every earlier canary cheap and detonate the guard's
+      // own longest probe, so the probe loop must not be the only defense:
+      // this includes the nested-quantifier test even past lookahead guards.
+      const started = performance.now();
+      const compiled = compileRules([
+        { pattern: "^(?=a{26}b)(a+)+$", model: "quick" },
+        { pattern: "^(?=a{32}b)(a+)+$", model: "quick" },
+      ]);
+      assert.deepEqual(compiled, []);
+      assert.ok(performance.now() - started < 250, "rejection must not pay a long probe");
+    });
+
+    it("bounds a disguised catastrophic rule while compiling", () => {
+      const moduleUrl = new URL("../routing.ts", import.meta.url).href;
+      const script = `const {compileRules} = await import(process.argv[1]); const rules = compileRules([{ pattern: "first literal", model: "first" }, { pattern: "^(?=a{32}b)(?:a|[a])+$", model: "quick" }, { pattern: "last literal", model: "last" }]); process.stdout.write(JSON.stringify(rules.map(rule => rule.model)));`;
+      const result = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script, moduleUrl], { encoding: "utf8", timeout: 2500, killSignal: "SIGKILL" });
+      assert.equal(result.error, undefined, `compilation must finish: ${result.error}`);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), ["first", "last"]);
+    });
+
+    it("rejects deterministic-free catastrophic alternations without exec", () => {
+      // (a|aa)+ explodes through branch prefix-overlap, not nested quantifiers.
+      const compiled = compileRules([
+        { pattern: "^((a|aa)+)b", model: "quick" },
+        { pattern: "^(a+)+$", model: "quick" },
+        { pattern: "(?:ab?)+c", model: "quick" },
+      ]);
+      assert.deepEqual(compiled, []);
+    });
+
+    it("accepts lazy fixed repeats and still rejects lazy variable repeats", () => {
+      const safe = compileRules([{ pattern: "^(?:[0-9]{2}?)+$", model: "quick" }]);
+      assert.equal(classifyCompiled("1234", safe), "quick");
+      assert.equal(compileRules([{ pattern: "^(?:a+?)+$", model: "quick" }]).length, 0);
+    });
+
+    it("keeps benign quantified rules that shuttle variable tokens safely", () => {
+      // Fixed-length repetition and non-overlapping alternations must survive
+      // the structural filter untouched.
+      const compiled = compileRules([
+        { pattern: "(\\d{2}:\\d{2})*", model: "quick" },
+        { pattern: "class(?:room|rooms)?", model: "quick" },
+        { pattern: "(foo|bar)+", model: "quick" },
+        { pattern: "(a|b|c)+", model: "quick" },
+        // The `?` that opens a noncapturing group is group syntax, not an
+        // optional quantifier, so a repeated noncapturing group is as safe as
+        // its capturing equivalent and must survive the structural scan.
+        { pattern: "(?:foo)+", model: "quick" },
+        { pattern: "(?:foo|bar)+", model: "quick" },
+      ]);
+      assert.equal(compiled.length, 6);
+    });
+
+
   });
 });

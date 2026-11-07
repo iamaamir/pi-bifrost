@@ -160,7 +160,7 @@
         },
         "pattern": {
           "type": "string",
-          "description": "JavaScript regex pattern (without flags, double-escaped). Matched case-insensitively against the user's prompt. Example: '\\\\b(debug|fix|refactor)\\\\b'"
+          "description": "JavaScript regex pattern (without flags, double-escaped). Matched case-insensitively against the user's prompt. Example: '\\\\b(debug|fix|refactor)\\\\b'. Patterns that can backtrack without bound - a quantified group whose body carries another variable quantifier, or an alternation whose branches split the same text ambiguously - are logged and skipped so they cannot stall the event loop; the prompt then falls through to later rules."
         },
         "model": {
           "type": "string",

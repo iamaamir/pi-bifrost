@@ -4,6 +4,7 @@ import { isGenerativeModel } from "./virtual-model.ts";
 import { evaluateReserves, type EconomicSnapshot, type ReserveEvaluation, type ReservePolicy } from "./economic-signals.ts";
 import { projectBillingPreference, type BillingPreferenceProjection } from "./economic-preferences.ts";
 import { observeAffinity, type AffinityAnchor, type AffinityMode, type AffinityRouteObservation, type PiAffinityModeSource } from "./affinity.ts";
+import { spawnSync } from "node:child_process";
 import { checkProviderScope, compileRoutingScope, type CompiledRoutingScope, type RoutingScope, type RoutingScopeOrigin } from "./routing-scope.ts";
 
 export type RoutingStrategy =
@@ -198,6 +199,12 @@ function minBy<T>(items: readonly T[], score: (item: T) => number): T | undefine
   return best;
 }
 
+/**
+ * Pick one candidate for the configured strategy.
+ *
+ * Total for every strategy: an empty list yields undefined and every other
+ * input, including rng values outside [0, 1) and NaN, yields a candidate.
+ */
 export function selectModel<M extends RoutingModelBase>(
   candidates: M[],
   strategy: RoutingStrategy,
@@ -218,8 +225,16 @@ export function selectModel<M extends RoutingModelBase>(
     case "largest_context":
       // Descending sort picks the first maximum under stable tie-breaking.
       return minBy(candidates, (m) => -modelContextSize(m));
-    case "random":
-      return candidates[Math.floor(random() * candidates.length)];
+    case "random": {
+      // The rng seam is injectable, so selection must stay total for whatever
+      // it returns: any value outside [0, 1) (including NaN) picks the last
+      // candidate instead of indexing past the array into undefined.
+      const pick = random();
+      if (!(pick >= 0 && pick < 1)) {
+        return candidates[candidates.length - 1];
+      }
+      return candidates[Math.floor(pick * candidates.length)];
+    }
     default:
       // "first", "fastest" — list order is assumed meaningful.
       return candidates[0];
@@ -773,6 +788,8 @@ export function classify(text: string, rules: readonly RouteRule[]): string | un
   for (const rule of rules) {
     try {
       const re = new RegExp(rule.pattern, "i");
+      verifyRulePatterns([rule.pattern]);
+      if (patternVerdicts.get(rule.pattern) !== false) continue;
       if (re.test(text)) return rule.model;
     } catch (err) {
       console.error(`[bifrost] invalid regex "${rule.pattern}": ${err}`);
@@ -787,17 +804,215 @@ export interface CompiledRule {
   readonly model: string;
 }
 
-/** Compile rules ahead of time; invalid patterns are logged once and dropped. */
+// Run untrusted canary matches outside Pi so a pathological regex can be killed.
+// The structural scan remains the cheap first defense; canaries are heuristic.
+const BACKTRACKING_BUDGET_MS = 10;
+const BACKTRACKING_PROBE_TIMEOUT_MS = 500;
+const BACKTRACKING_CANARIES = [
+  "a".repeat(10) + "b", "a".repeat(14) + "b", "a".repeat(18) + "b",
+  "a".repeat(20) + "b", "a".repeat(22) + "b", "a".repeat(24) + "b",
+  "ab".repeat(11) + "c", "1".repeat(21) + "x", "a".repeat(28) + "b", "a".repeat(32) + "b",
+];
+const BACKTRACKING_PROBE = `
+  const fs = require("node:fs");
+  const { performance } = require("node:perf_hooks");
+  const { patterns, canaries, budget } = JSON.parse(fs.readFileSync(0, "utf8"));
+  for (const pattern of patterns) {
+    const re = new RegExp(pattern, "i");
+    let unsafe = false;
+    for (const canary of canaries) {
+      let start = performance.now();
+      re.test(canary);
+      if (performance.now() - start <= budget) continue;
+      start = performance.now();
+      re.test(canary);
+      if (performance.now() - start > budget) { unsafe = true; break; }
+    }
+    fs.writeSync(1, unsafe ? "1\\n" : "0\\n");
+  }
+`;
+
+interface BacktrackingFrame {
+  /** Positions of one alternation branch, pattern-start to `|` or group end. */
+  branches: string[];
+  branchStart: number;
+  /** The body carries a variable quantifier somewhere inside it. */
+  bodyVarQuant: boolean;
+}
+
+type QuantifierKind = "none" | "fixed" | "bounded" | "unbounded";
+
+/** Classify the quantifier starting at `position` without executing anything. */
+function classifyQuantifier(pattern: string, position: number): QuantifierKind {
+  const ch = pattern[position];
+  if (ch === "*" || ch === "+") return "unbounded";
+  if (ch === "?") return "bounded";
+  if (ch !== "{") return "none";
+  const close = pattern.indexOf("}", position + 1);
+  if (close === -1) return "none";
+  const body = pattern.slice(position + 1, close);
+  if (!/^\d+(?:,\d*)?$/.test(body)) return "none";
+  if (!body.includes(",")) return "fixed";
+  const [min, max] = body.split(",");
+  if (max === "") return "unbounded";
+  return Number(min) === Number(max) ? "fixed" : "bounded";
+}
+
+/**
+ * First character of a group's body, after its opening syntax.
+ *
+ * The `?` that introduces `(?:`, `(?=`, `(?!`, `(?<=`, `(?<!`, `(?<name>`,
+ * `(?>`, or inline flags is group syntax, not an optional quantifier, and it is
+ * not part of the branch text used for overlap detection. Returns undefined for
+ * constructs this textual scan does not model, which keeps the scan permissive.
+ */
+function groupBodyStart(pattern: string, open: number): number | undefined {
+  const next = open + 1;
+  if (pattern[next] !== "?") return next;
+  for (const prefix of ["?:", "?=", "?!", "?>"] as const) {
+    if (pattern.startsWith(prefix, next)) return next + 2;
+  }
+  for (const prefix of ["?<=", "?<!"] as const) {
+    if (pattern.startsWith(prefix, next)) return next + 3;
+  }
+  if (pattern.startsWith("?<", next)) {
+    const close = pattern.indexOf(">", next + 2);
+    return close === -1 ? undefined : close + 1;
+  }
+  // Inline flags: (?i:...) or (?im-s:...).
+  const colon = pattern.indexOf(":", next + 1);
+  return colon !== -1 && /^[a-zA-Z-]*$/.test(pattern.slice(next + 1, colon))
+    ? colon + 1
+    : undefined;
+}
+
+/**
+ * Textual detection of superlinear shapes; no regular expression executes.
+ * True for a group repeated without a finishing bound whose body carries a
+ * variable quantifier, or whose alternation splits a subject ambiguously
+ * (a branch that is a prefix of another branch, or an empty branch), regardless
+ * of anchors and lookarounds written in front of the group. Bounded repetition
+ * and fixed-length tokens keep this false, so fixed-brace rules survive.
+ */
+function patternHasSuperlinearShape(pattern: string): boolean {
+  const frames: BacktrackingFrame[] = [];
+  let escape = false;
+  let inClass = false;
+  const overlaps = (frame: BacktrackingFrame): boolean => frame.branches.some(
+    (branch, k) => branch === ""
+      || frame.branches.some((other, j) => j !== k && other.startsWith(branch)),
+  );
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i]!;
+    if (escape) { escape = false; continue; }
+    if (ch === "\\") { escape = true; continue; }
+    if (inClass) { if (ch === "]") inClass = false; continue; }
+    if (ch === "[") { inClass = true; continue; }
+    if (ch === "(") {
+      if (pattern.startsWith("(?#", i)) {
+        const end = pattern.indexOf(")", i + 3);
+        if (end === -1) return false;
+        i = end;
+        continue;
+      }
+      const bodyStart = groupBodyStart(pattern, i);
+      if (bodyStart === undefined) return false;
+      frames.push({ branches: [], branchStart: bodyStart, bodyVarQuant: false });
+      i = bodyStart - 1;
+      continue;
+    }
+    if (ch === "|" && frames.length > 0) {
+      const frame = frames[frames.length - 1]!;
+      frame.branches.push(pattern.slice(frame.branchStart, i));
+      frame.branchStart = i + 1;
+      continue;
+    }
+    if (ch === ")" && frames.length > 0) {
+      const frame = frames[frames.length - 1]!;
+      frame.branches.push(pattern.slice(frame.branchStart, i));
+      if (classifyQuantifier(pattern, i + 1) === "unbounded"
+        && (frame.bodyVarQuant || (frame.branches.length > 1 && overlaps(frame)))) {
+        return true;
+      }
+      frames.pop();
+      if (frames.length > 0) frames[frames.length - 1]!.bodyVarQuant ||= frame.bodyVarQuant;
+      continue;
+    }
+    if (ch === "*" || ch === "+" || ch === "?" || ch === "{") {
+      const kind = classifyQuantifier(pattern, i);
+      if (kind === "bounded" || kind === "unbounded") {
+        if (frames.length > 0) frames[frames.length - 1]!.bodyVarQuant = true;
+      }
+      if (ch === "{") {
+        const close = pattern.indexOf("}", i + 1);
+        if (close !== -1) i = close;
+      }
+      if (kind !== "none" && pattern[i + 1] === "?") i += 1;
+    }
+  }
+  return false;
+}
+
+// Verdicts by pattern text, so the per-message classify() path neither re-scans
+// nor re-probes a configured rule and a rejection is reported once per process.
+const patternVerdicts = new Map<string, boolean>();
+
+/** Probe unknown patterns in batches; a timed-out pattern cannot stall later rules. */
+function verifyRulePatterns(patterns: readonly string[]): void {
+  let pending: string[] = [];
+  const reject = (pattern: string): void => {
+    patternVerdicts.set(pattern, true);
+    console.error(`[bifrost] rejecting rule pattern with unbounded backtracking or unverifiable safety: "${pattern}"`);
+  };
+  for (const pattern of new Set(patterns)) {
+    if (patternVerdicts.has(pattern)) continue;
+    if (patternHasSuperlinearShape(pattern)) reject(pattern);
+    else pending.push(pattern);
+  }
+  while (pending.length > 0) {
+    const batch = pending.slice(0, 32);
+    const result = spawnSync(process.execPath, ["-e", BACKTRACKING_PROBE], {
+      input: JSON.stringify({ patterns: batch, canaries: BACKTRACKING_CANARIES, budget: BACKTRACKING_BUDGET_MS }),
+      encoding: "utf8",
+      timeout: BACKTRACKING_PROBE_TIMEOUT_MS + batch.length * 20,
+      killSignal: "SIGKILL",
+      maxBuffer: Math.max(1024, batch.length * 4),
+      env: { ...process.env, NODE_OPTIONS: "" },
+    });
+    const lines = (result.stdout ?? "").split("\n").filter(Boolean);
+    let completed = 0;
+    for (const line of lines) {
+      if (completed >= batch.length || (line !== "0" && line !== "1")) break;
+      const pattern = pending[completed++]!;
+      if (line === "1") reject(pattern);
+      else patternVerdicts.set(pattern, false);
+    }
+    pending = pending.slice(completed);
+    if (completed === batch.length) continue;
+    if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+      reject(pending[0]!);
+      pending = pending.slice(1);
+    } else {
+      const failed = batch.length - completed;
+      for (const pattern of pending.slice(0, failed)) reject(pattern);
+      pending = pending.slice(failed);
+    }
+  }
+}
+
+/** Compile rules ahead of time; invalid and unverifiable patterns are logged and dropped. */
 export function compileRules(rules: readonly RouteRule[]): CompiledRule[] {
-  const compiled: CompiledRule[] = [];
+  const compiled: Array<CompiledRule & { pattern: string }> = [];
   for (const rule of rules) {
     try {
-      compiled.push({ re: new RegExp(rule.pattern, "i"), model: rule.model });
+      compiled.push({ re: new RegExp(rule.pattern, "i"), model: rule.model, pattern: rule.pattern });
     } catch (err) {
       console.error(`[bifrost] invalid regex "${rule.pattern}": ${err}`);
     }
   }
-  return compiled;
+  verifyRulePatterns(compiled.map((rule) => rule.pattern));
+  return compiled.filter((rule) => patternVerdicts.get(rule.pattern) === false)
+    .map(({ re, model }) => ({ re, model }));
 }
 
 /** Match against precompiled rules — no per-call regex construction. */

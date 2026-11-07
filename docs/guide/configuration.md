@@ -173,6 +173,8 @@ Regex rules are case-insensitive and evaluated in configured order. First match 
 
 Despite the property name `model`, a rule value without `/` names a tier.
 
+Rules run synchronously on Pi's event loop, so a pattern that can backtrack without bound is rejected instead of being matched. Bifrost logs the rejection and skips that rule, and the prompt falls through to the next rule, the classifier, or the default tier. Rejected shapes are a quantified group whose body carries another variable quantifier (for example `(a+)+`) and an alternation whose branches split the same text ambiguously (for example `(a|aa)+`). Fixed-brace repetition, single-letter alternations such as `(a|b)+`, and noncapturing groups keep working. Test a rule with `/bifrost preview <prompt>` before committing it.
+
 ## Direct-model rules
 
 A rule value containing `/` binds one exact provider/model and skips tier selection. In `.pi/bifrost.json`:

@@ -78,15 +78,6 @@ const MAX_MODEL_KEY_LENGTH = 512;
 const MAX_PROVIDER_LENGTH = 128;
 const MAX_POOL_SIZE = 512;
 const MAX_EPOCH = 8.64e15;
-const NON_AUTOMATIC_ORIGINS = new Set<AffinityTargetOrigin>([
-  "explicit_tier",
-  "explicit_model",
-  "pinned",
-  "off",
-  "direct",
-  "continuation",
-  "retry",
-]);
 
 function validEpoch(value: unknown): value is number {
   return typeof value === "number"
@@ -165,9 +156,6 @@ export function observeAffinity(input: AffinityObservationInput): AffinityObserv
   if (!input || typeof input !== "object" || !validEpoch(input.snapshotAsOf)) return invalidInput();
   const asOf = input.snapshotAsOf;
   const origin = input.targetOrigin;
-  if (origin !== "automatic" && !NON_AUTOMATIC_ORIGINS.has(origin as AffinityTargetOrigin)) {
-    return Object.freeze({ version: 1, status: "not_applicable", snapshotAsOf: asOf });
-  }
   if (origin !== "automatic") {
     return Object.freeze({ version: 1, status: "not_applicable", snapshotAsOf: asOf });
   }
