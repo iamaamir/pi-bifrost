@@ -25,6 +25,27 @@
         "file": "tests/integration/auto-virtual.test.mjs",
         "name": "proves consumed steering activity blocks replay in v1"
       }
+    },
+    {
+      "id": "ambiguous-provider-429-fails-closed",
+      "requirement": "R12",
+      "files": [
+        "tests/failure-observations.test.ts",
+        "scripts/fake-provider-server.mjs"
+      ],
+      "boundary": "Provider-controlled text that resembles a Pi HTTP error is not sufficient to assert transport status.",
+      "assertions": "A real Pi HTTP 200 stream error containing a 429-like string must not create a provider pause. Direct normalization keeps the ambiguous colon-formatted text as heuristic evidence. This does not fix the missed real HTTP 429 cooldown.",
+      "boundaryTest": {
+        "file": "tests/integration/auto-virtual.test.mjs",
+        "name": "does not trust an HTTP 200 stream error that merely says 429"
+      },
+      "invariant": {
+        "file": "tests/failure-observations.test.ts",
+        "name": "keeps ambiguous Pi-formatted 429 text as a heuristic"
+      },
+      "fault": {
+        "exception": "Promoting the colon prefix to HTTP-status evidence produced a real-Pi provider sidecar on the HTTP 200 fixture; the named boundary test failed before reverting that candidate."
+      }
     }
   ]
 }

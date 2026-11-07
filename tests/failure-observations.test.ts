@@ -61,6 +61,12 @@ describe("failure observation normalization", () => {
     assert.equal(heuristic?.categoryEvidence, "text_heuristic");
   });
 
+  it("keeps ambiguous Pi-formatted 429 text as a heuristic", () => {
+    const observation = normalizeFailureObservation({ ...base, errorText: '429: {"code":"rate_limit_exceeded","message":"Too many requests"}' }, { now: 1000 });
+    assert.equal(observation?.category, "rate_limit");
+    assert.equal(observation?.categoryEvidence, "text_heuristic");
+  });
+
   it("recognizes the reported exhausted-usage wording without retaining its text", () => {
     const errorText = "Error: Codex error: The usage limit has been reached";
     const observation = normalizeFailureObservation({ ...base, errorText }, { now: 1000 });

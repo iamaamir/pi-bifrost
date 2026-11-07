@@ -658,6 +658,28 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
     }
   });
 
+  it("does not trust an HTTP 200 stream error that merely says 429", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-spoof-429-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-spoof-429-work-"));
+    try {
+      installAutoSafetyConfig({ home, work, port: server.port,
+        models: [{ provider: "limited", id: "spoofed-rate-limit", reasoning: false }, { provider: "backup", id: "healthy", reasoning: false }],
+        quick: ["limited/spoofed-rate-limit", "backup/healthy"], healthy: "backup/healthy" });
+      const rpc = startRpc({ home, work });
+      try {
+        const before = await fakeStats(server.port);
+        const start = rpc.records.length;
+        await rpc.userTurn("quick synthetic stream error");
+        const after = await fakeStats(server.port);
+        assert.deepEqual(after.stats.slice(before.stats.length).filter((item) => item.kind === "generation").map(({ provider, model }) => [provider, model]), [["limited", "spoofed-rate-limit"]]);
+        const error = rpc.records.slice(start).find((item) => item.type === "message_end" && item.message?.stopReason === "error");
+        assert.equal(error?.message?.errorMessage, "429: Too many requests");
+        assert.equal(existsSync(join(work, ".pi", "bifrost-provider-reliability.json")), false,
+          "a status-free stream error must not create an authoritative provider cooldown");
+      } finally { await rpc.close(); }
+    } finally { rmSync(home, { recursive: true, force: true }); rmSync(work, { recursive: true, force: true }); }
+  });
+
   it("does not replay a failed Auto turn after the provider emitted output", async () => {
     const home = mkdtempSync(join(tmpdir(), "bifrost-partial-output-home-"));
     const work = mkdtempSync(join(tmpdir(), "bifrost-partial-output-work-"));
