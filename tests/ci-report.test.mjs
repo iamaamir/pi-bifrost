@@ -146,13 +146,13 @@ describe("CI report", () => {
     const issue = hostile.evidence.cases.find((item) => item.id === "gate:pinned-pi-reliability-ui");
     issue.status = "blocked";
     issue.id = "broken | [inject](javascript:alert(1))\n| forged row";
-    issue.detail = "<script>alert('x')</script> notify @danger\n| injected | passed |";
+    issue.detail = "<script>alert('x')</script> <SCRIPT>alert('x')</SCRIPT> notify @danger\n| injected | passed |";
     issue.artifacts = ["https://evil.example/steal.md](javascript:alert(2)", "file:///secret"];
     const report = renderCiReport(hostile, {
       sha: "a".repeat(40), runId: "123", attempt: "1",
       repository: "example/repo](javascript:alert(3)", serverUrl: "javascript:alert(4)",
     }).markdown;
-    assert.doesNotMatch(report, /\]\(javascript:|<script>|\n\| injected \|/);
+    assert.doesNotMatch(report, /\]\(javascript:|<script>|\n\| injected \|/i);
     assert.doesNotMatch(report, /@danger/);
     assert.match(report, /&#64;danger/);
     assert.match(report, /&lt;script&gt;/);
