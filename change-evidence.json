@@ -12,7 +12,7 @@
         "docs/guide/configuration.md"
       ],
       "boundary": "Known hazardous regex structures are rejected before execution; remaining canary checks execute in a killable subprocess, with cached verdicts shared by both routing paths. Canary coverage is heuristic and does not prove arbitrary patterns safe for all input. Random selection remains total for invalid injected draws.",
-      "assertions": "A separately timed child compiles the lookahead-anchored equivalent-alternation case, rejects it, and preserves safe rules before and after it. Shipped default rules still compile. The test failed with ETIMEDOUT against the previous implementation and passes with isolated probing.",
+      "assertions": "A separately timed child compiles the lookahead-anchored equivalent-alternation case, rejects it, and preserves safe rules before and after it. Shipped default rules still compile. The test failed with ETIMEDOUT against the previous implementation and passes with isolated probing. Lazy fixed repeats remain usable while nested lazy variable repeats are rejected; the fixed-repeat regression was observed failing before the scanner fix.",
       "boundaryTest": {
         "file": "tests/routing.test.ts",
         "name": "bounds a disguised catastrophic rule while compiling"

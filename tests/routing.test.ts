@@ -1569,6 +1569,12 @@ describe("routing", () => {
       assert.deepEqual(compiled, []);
     });
 
+    it("accepts lazy fixed repeats and still rejects lazy variable repeats", () => {
+      const safe = compileRules([{ pattern: "^(?:[0-9]{2}?)+$", model: "quick" }]);
+      assert.equal(classifyCompiled("1234", safe), "quick");
+      assert.equal(compileRules([{ pattern: "^(?:a+?)+$", model: "quick" }]).length, 0);
+    });
+
     it("keeps benign quantified rules that shuttle variable tokens safely", () => {
       // Fixed-length repetition and non-overlapping alternations must survive
       // the structural filter untouched.

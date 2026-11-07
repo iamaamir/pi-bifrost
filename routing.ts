@@ -947,6 +947,7 @@ function patternHasSuperlinearShape(pattern: string): boolean {
         const close = pattern.indexOf("}", i + 1);
         if (close !== -1) i = close;
       }
+      if (kind !== "none" && pattern[i + 1] === "?") i += 1;
     }
   }
   return false;
