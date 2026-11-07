@@ -7,11 +7,11 @@
 // in index.ts.
 //
 // GUARD INVENTORY (index.ts, candidate baseline SHA-256 declared below):
-//   - isSideEffectFreeAllowanceFailure (exact line 1775) — proves a failed
+//   - isSideEffectFreeAllowanceFailure (exact line 1875) — proves a failed
 //     attempt had no output/tool results/queued work before allowance recovery.
-//   - autoBoundaryStillActive (exact line 1718) — confirms the original user
+//   - autoBoundaryStillActive (exact line 1818) — confirms the original user
 //     boundary is still the active turn.
-//   - allowanceRetryBoundaryStillSafe (exact line 2536) — re-checks the boundary
+//   - allowanceRetryBoundaryStillSafe (exact line 2636) — re-checks the boundary
 //     immediately before dispatching the prepared allowance retry.
 //
 // CONTROLLED FAULT PROOF (performed in a disposable scratch copy, never in the
@@ -59,7 +59,7 @@ import { join } from "node:path";
 import { processGroupExists } from "../../scripts/acceptance/core.mjs";
 import { closeTracking, cleanupFailure, detachOwnedHandles, spawnOwned } from "./child-auto-inline-harness.mjs";
 
-export const REPLAY_GUARD_BASELINE_SHA256 = "16f74d584baa41c67e7aedf002ff8968a31d9304be90d3b28a566b0c3b5b4d53";
+export const REPLAY_GUARD_BASELINE_SHA256 = "ff52732d8107f4f33c1c1bd49df0fb568a6d15781f196d08008718c6af2c6d02";
 export const REPLAY_GUARD_FUNCTIONS = [
   "isSideEffectFreeAllowanceFailure",
   "allowanceRetryBoundaryStillSafe",
@@ -69,9 +69,9 @@ export const REPLAY_GUARD_FUNCTIONS = [
 // Guard line anchors are exact against the baseline commit; keep them in sync
 // with index.ts when the guards move.
 export const REPLAY_GUARD_LINES = {
-  autoBoundaryStillActive: 1718,
-  isSideEffectFreeAllowanceFailure: 1775,
-  allowanceRetryBoundaryStillSafe: 2536,
+  autoBoundaryStillActive: 1818,
+  isSideEffectFreeAllowanceFailure: 1875,
+  allowanceRetryBoundaryStillSafe: 2636,
 };
 
 // Each PROVEN pair has an executable fault reaching its exact named assertion.
@@ -475,7 +475,7 @@ function finalizeScratchLifecycle({ scratch, keepScratch, receipts, ownedGroupsA
   const liveGroups = ownedGroups.filter((group) => processGroupExists(group));
   if (unverified || liveGroups.length > 0) {
     const detail = liveGroups.length > 0 ? liveGroups.join(",") : "(unverified)";
-    if (pendingError) return { retained: true, ownedGroups, throwError: null };
+    if (pendingError) return { retained: true, ownedGroups, verified: false, throwError: null };
     const error = new Error(`G03 replay fault proof retained scratch ${scratch}: owned process group ${detail} not proven dead`);
     error.scratch = scratch;
     error.scratchRetained = true;
@@ -615,6 +615,7 @@ export async function runReplayGuardFaultProof({
       pendingError.scratch = scratch;
       pendingError.scratchRetained = lifecycle.retained;
       pendingError.ownedGroups = lifecycle.ownedGroups;
+      if (lifecycle.verified === false) pendingError.verified = false;
     }
     if (lifecycle.throwError) throw lifecycle.throwError;
   }

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "base": "82a035e8aa79ca73f0e9beed6ae63b7ac3350f02",
+  "base": "8551cd3959c81bbba99f3339707e82f8fd705890",
   "contracts": [
     {
       "id": "rule-pattern-backtracking-bound",
@@ -11,19 +11,18 @@
         "schema.json",
         "docs/guide/configuration.md"
       ],
-      "boundary": "Regex route rules from any configuration source cannot stall the host event loop at pipeline construction or per message. compileRules rejects superlinear patterns structurally from the pattern text (an unbounded-quantified group whose body carries a variable quantifier, or an alternation whose branches split subjects ambiguously through prefix-overlap or an empty branch) and keeps canary probes under a per-canary wall-clock budget with a required re-measure override as the backstop for unnamed families; the deprecated classify() path applies the same guard so both paths drop the identical set and preserve rule-order precedence. The strategy selection is total at the injectable random seam: every value the seam returns, including values outside [0,1) and NaN, selects a candidate instead of returning undefined.",
-      "assertions": "Catastrophic families (nested quantifier, repeated group, branch-overlap alternation) and their lookahead-anchored dodge variants are dropped at compile without executing the regular expression, so rejection cannot pay a long probe; benign quantified rules (fixed-length tokens, bounded ambiguity-free alternations) and every shipped default rule still compile. The legacy classify() path drops the same catastrophic pattern the compiled path drops (parity for the audit's hang case), and rule-order precedence across match positions is preserved in both paths. A simulated scheduler pause inside one elapsed-time sample does not reject a benign rule, because a canary must over-run the budget twice, once on re-measure, before rejection. Random selection with seam values -1, NaN, 1, and 0.999999 picks a defined candidate, and in-range values keep candidate-index parity. Both verdicts are remembered per pattern text, so the per-message classify() path neither re-probes an accepted rule nor re-reports a rejected one on every classified message.",
+      "boundary": "Known hazardous regex structures are rejected before execution; remaining canary checks execute in a killable subprocess, with cached verdicts shared by both routing paths. Canary coverage is heuristic and does not prove arbitrary patterns safe for all input. Random selection remains total for invalid injected draws.",
+      "assertions": "A separately timed child compiles the lookahead-anchored equivalent-alternation case, rejects it, and preserves safe rules before and after it. Shipped default rules still compile. The test failed with ETIMEDOUT against the previous implementation and passes with isolated probing.",
       "boundaryTest": {
         "file": "tests/routing.test.ts",
-        "name": "drops rule patterns whose backtracking explodes on a small canary"
+        "name": "bounds a disguised catastrophic rule while compiling"
       },
       "invariant": {
         "file": "tests/routing.test.ts",
         "name": "still compiles every shipped default rule"
       },
       "fault": {
-        "file": "tests/routing.test.ts",
-        "name": "keeps the injectable random seam total when it returns 1"
+        "exception": "The named boundary test was executed against the previous implementation and failed with ETIMEDOUT before this fix; the same test passes after isolation. No separate source mutation witness was added."
       }
     },
     {
@@ -74,11 +73,11 @@
         "tests/fixtures/pack-lock.mjs",
         "tests/pack-lock.test.mjs"
       ],
-      "boundary": "The packed-package tests run `npm pack`, whose prepack build replaces the checkout's shared `dist/router` in place. The unit suite runs that file while the acceptance runner's manifest-evidence gate runs the same file in a child process, so two builds can overlap and one pack archives a half-rebuilt tree. A cross-process lock keyed by the checkout root serializes build, pack, and fault injection, and is released even when a guarded build throws.",
-      "assertions": "Two overlapping worker processes record a strictly alternating enter/leave journal, so no section can observe another's rebuild. A worker that throws inside the section still releases the lock, and the next build then acquires it. Two workers recovering the same dead holder's stale lock still record a strictly alternating journal, because recovery claims the file with an atomic rename so only one reclaimer can remove it; a reclaimer acting on a stale read never deletes a lock a live holder created meanwhile and restores it in place, and a displaced holder's release removes only a lock whose bytes it still owns. As a fault control, the identical two workers with the lock bypassed interleave (start, start, end, end), which proves the serialization assertions are sensitive to the guard and not to scheduling.",
+      "boundary": "The package test lock serializes acquisition, stale-holder recovery and ownership-checked release through a separate guard. A guard abandoned by a crashed process fails closed and requires manual cleanup.",
+      "assertions": "The delayed stale-reclaimer interleaving cannot allow a contender to enter while a live holder owns the lock. The regression failed against the original implementation and passes with the guard; interrupted or abandoned guards cause bounded timeout.",
       "boundaryTest": {
         "file": "tests/pack-lock.test.mjs",
-        "name": "serializes overlapping packed-package builds across processes"
+        "name": "a delayed stale reclaimer cannot expose a live lock to a third acquirer"
       },
       "invariant": {
         "file": "tests/pack-lock.test.mjs",

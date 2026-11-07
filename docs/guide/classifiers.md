@@ -2,9 +2,9 @@
 
 [Guide index](index.md) · [Getting started](getting-started.md) · [Troubleshooting](troubleshooting.md)
 
-A classifier is optional and enabled by default. Regex rules and the configured default tier can route without an extra classification call. On a local-cache miss, the active classifier can receive the current prompt.
+A classifier is optional and enabled by default. `classifier.enabled` sets its durable default. `/bifrost classifier on|off` changes only the current Pi session. The command does not write a classifier toggle to runtime state. After restart, Bifrost uses the configured default. Regex rules and the configured default tier can route without an extra classification call. On a local-cache miss, an enabled classifier can receive the current prompt.
 
-`/bifrost init` detects a classifier backend. If the prompt backend needs a model, init selects a probe-verified available chat model when probe results are available. First-use setup can use a provisional chat model while its background probe runs. Run `/bifrost classifier` when you want to change the backend or model. Run `/bifrost classifier off` to disable the extra call without editing a Bifrost JSON file, or set `classifier.enabled` to `false` in config for rules/default-only routing.
+`/bifrost init` detects a classifier backend. If the prompt backend needs a model, init selects a probe-verified available chat model when probe results are available. First-use setup can use a provisional chat model while its background probe runs. Run `/bifrost classifier` when you want to change the backend or model. Run `/bifrost classifier off` to disable the extra call for this session without editing a Bifrost JSON file. Set `classifier.enabled` to `false` for a durable rules/default-only policy.
 
 Classifiers resolve **tiers**, not exact provider models. Model pools, reliability filtering, and strategies remain Bifrost policy.
 
@@ -16,7 +16,11 @@ Set `classifier.backend` to `prompt`, `typesafe`, or `pi-native` for a fixed cho
 
 An explicit backend always wins. Detection stays fixed until the extension restarts, even after `/bifrost reload`. On first use, Bifrost prints the detected backend and reason. `/bifrost classifier status` and `/bifrost classifier test` show `auto: <backend> (<reason>)` when detection supplies the choice. Users upgrading with no explicit backend can switch from prompt to a direct backend. Set `"backend": "prompt"` to keep prompt classification.
 
-If the auto-detected direct backend's settings are invalid (for example a missing criterion for a custom tier), Bifrost prints the config errors and falls back to prompt classification when `fallback` is not `regex`. An explicit `classifier.backend` fails closed instead.
+Old runtime state can contain `classifierEnabled`. If it conflicts with config, Bifrost preserves the old value and reports the conflict. Configured `false` wins over a legacy saved `true`; classification starts off. A legacy saved `false` against configured `true` pauses classification until you choose `/bifrost classifier on` or `off`. Either command sets only the current session; the pause returns after restart until the conflict is repaired. To use configured behavior durably, back up `.pi/bifrost-state.json`, remove only its `classifierEnabled` field, preserve all other fields, then run `/bifrost reload`. `on` checks the effective backend and warns before that backend can receive prompt text.
+
+If runtime state is malformed or unreadable, classification stays paused even after a session choice. Back up and repair `.pi/bifrost-state.json` as a JSON object, preserve unrelated fields, then run `/bifrost reload`.
+
+Bifrost validates criteria shape for every backend and requires complete criteria for an enabled direct backend. If an active direct backend has invalid settings, Bifrost reports the errors and makes no classifier request. It does not silently fall back to prompt classification. An explicit or auto-detected backend fails closed.
 
 ## Prompt classifier
 

@@ -4,7 +4,7 @@
 // inspects local debug, metrics, reliability, runtime, cache, and probe artifacts
 // against explicit schemas. The cache intentionally retains normalized prompt
 // text and is sensitive local user data, not a content-free diagnostic artifact.
-// The suite also checks classifier trace gates, opt-out persistence, aborts, and
+// The suite also checks classifier trace gates, session-only toggles, aborts, and
 // classifier test/benchmark command artifacts.
 //
 // Boundary: real pinned Pi processes (RPC) against the local fake provider.
@@ -1010,7 +1010,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
     });
   });
 
-  it("persists reliability and runtime state inside declared key sets without canaries", async () => {
+  it("persists reliability artifacts without saving the session-only classifier choice", async () => {
     await scenario({
       fixtureOptions: {
         models: ["chat", "classifier", "credits-exhausted"],
@@ -1027,7 +1027,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
       body: async ({ env, sessions }) => {
         const rpc = startRpc({ home: env.home, work: env.work });
         sessions.push(rpc);
-        // Opt out of the classifier: persist that preference to runtime state.
+        // Classifier opt-out is session-only; it must not write runtime state.
         const off = await rpc.prompt("/bifrost classifier off");
         assert.equal(off.response.data?.disposition, "handled");
         await rpc.userTurn(CANARY_PROMPT);
@@ -1058,9 +1058,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
         assert.ok(scopeKeys.some((key) => provider.scopes[key].openUntil > 0), "provider witness must carry an open cooldown");
 
         const runtime = artifact(env.project, "bifrost-state.json");
-        assertNoCanaries(runtime, "runtime mode state");
-        assert.deepEqual(Object.keys(JSON.parse(runtime)).sort(), ["classifierEnabled", "enabled"], "runtime state must hold only mode booleans");
-        assert.equal(JSON.parse(runtime).classifierEnabled, false);
+        assert.equal(runtime, undefined, "session-only classifier toggle must not create runtime state");
       },
     });
   });
@@ -1071,7 +1069,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
       "real Auto/v2 failure must leave a settled failure receipt in the audited artifact");
   });
 
-  it("persists the classifier opt-out across restart and suppresses classifier dispatch", async () => {
+  it("keeps classifier toggles session-only and resumes configured classification after restart", async () => {
     await scenario({
       fixtureOptions: {
         config: {
@@ -1092,16 +1090,22 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
         assert.equal(attemptDelta(before, after, "chat"), 1, "generation runs before opt-out");
         const off = await first.prompt("/bifrost classifier off");
         assert.equal(off.response.data?.disposition, "handled");
+        const beforeOffTurn = await stats();
+        await first.userTurn(`${CANARY_PROMPT} while session classifier is off`);
+        const afterOffTurn = await stats();
+        assert.equal(attemptDelta(beforeOffTurn, afterOffTurn, "classifier"), 0, "session opt-out suppresses classifier dispatch");
+        assert.equal(attemptDelta(beforeOffTurn, afterOffTurn, "chat"), 1, "generation continues with classifier off");
         const closed = await first.close(env.home);
         assert.equal(closed.closed, true);
         assert.equal(closed.groupGone, true);
 
+        assert.equal(artifact(env.project, "bifrost-state.json"), undefined, "session-only opt-out must not persist");
         const beforeRestart = await stats();
         const second = startRpc({ home: env.home, work: env.work });
         sessions.push(second);
-        await second.userTurn(CANARY_PROMPT);
+        await second.userTurn(`${CANARY_PROMPT} after session restart`);
         const afterRestart = await stats();
-        assert.equal(attemptDelta(beforeRestart, afterRestart, "classifier"), 0, "persisted opt-out must survive restart");
+        assert.equal(attemptDelta(beforeRestart, afterRestart, "classifier"), 1, "configured classifier resumes after session restart");
         assert.equal(attemptDelta(beforeRestart, afterRestart, "chat"), 1, "generation continues while classifier is off");
       },
     });

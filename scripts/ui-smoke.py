@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import pty
+import re
 import select
 import fcntl
 import termios
@@ -568,6 +569,7 @@ def capture(
     fresh_install: bool = False,
     launch_auto: bool = False,
     only_models: Iterable[str] | None = None,
+    runtime_state_override: str | None = None,
 ) -> Path:
     OUT.mkdir(parents=True, exist_ok=True)
     log_path = OUT / f"{name}.ansi.log"
@@ -578,6 +580,10 @@ def capture(
 
     tmp = tempfile.TemporaryDirectory()
     workspace = Path(tmp.name)
+    if runtime_state_override is not None:
+        state_path = workspace / ".pi" / "bifrost-state.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(runtime_state_override)
     if not fresh_install:
         config = json.loads((ROOT / "bifrost.json").read_text())
         config["enabled"] = enabled
@@ -633,6 +639,16 @@ def capture(
                 {key: int(value) for key, value in attempts_before.items() if isinstance(value, int)},
                 ("classifier", "healthy"),
             )
+        if name == "classifier-runtime-invalid":
+            wait_for_model_attempts(FAKE_PORT, attempts_before, ("healthy",))
+            attempts_after = fake_stats(FAKE_PORT).get("attempts", {})
+            if not isinstance(attempts_after, dict):
+                raise AssertionError("fake provider returned malformed attempt counts")
+            if int(attempts_after.get("classifier", 0)) != int(attempts_before.get("classifier", 0)):
+                raise AssertionError("invalid runtime state still dispatched a classifier request")
+            state_path = workspace / ".pi" / "bifrost-state.json"
+            if state_path.read_text() != runtime_state_override:
+                raise AssertionError("classifier commands rewrote invalid runtime-state bytes")
         if name == "allowance-recovery":
             wait_for_model_attempts(
                 FAKE_PORT,
@@ -821,6 +837,13 @@ def main() -> int:
         ),
         ("dashboard", True, [(1.0, "/bifrost\r")]),
         ("classifier-picker", True, [(0.5, "/bifrost classifier\r")], {"classifier": {"enabled": False, "backend": "prompt"}}),
+        (
+            "classifier-runtime-invalid",
+            True,
+            [(0.5, "/bifrost classifier on\r"), (0.5, "/bifrost classifier status\r"), (0.5, "hello\r")],
+            {"classifier": {"enabled": True, "backend": "typesafe", "fallback": "prompt", "model": "fake/classifier", "criteria": {"general": "Ordinary implementation work."}}},
+            [], False, False, False, None, "{invalid json",
+        ),
         ("validate", True, [(0.5, "/bifrost validate\r")]),
         ("inspect", True, [(0.5, "/bifrost inspect\r")]),
         (
@@ -905,6 +928,7 @@ def main() -> int:
             fresh_install = capture_spec[6] if len(capture_spec) > 6 else False
             launch_auto = capture_spec[7] if len(capture_spec) > 7 else False
             only_models = capture_spec[8] if len(capture_spec) > 8 else None
+            runtime_state_override = capture_spec[9] if len(capture_spec) > 9 else None
             print(f"[ui-smoke] capturing {name}…")
             results.append(capture(
                 name,
@@ -916,6 +940,7 @@ def main() -> int:
                 fresh_install,
                 launch_auto,
                 only_models,
+                runtime_state_override,
             ))
             if name == "startup":
                 startup_text = (OUT / "startup.txt").read_text(errors="ignore")
@@ -931,6 +956,13 @@ def main() -> int:
                     raise AssertionError("dashboard picker did not render the root command list")
                 if "(fake) healthy" not in dashboard_text or "Bifrost ·" not in dashboard_text:
                     raise AssertionError("dashboard footer is not Pi-owned with a separate Bifrost status")
+            if name == "classifier-runtime-invalid":
+                runtime_log = (OUT / "classifier-runtime-invalid.ansi.log").read_text(errors="ignore")
+                runtime_text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\\\)", "", runtime_log).lower()
+                if "enabled=false (runtime-state-invalid)" not in runtime_text or "readiness=blocked" not in runtime_text or "classification is paused" not in runtime_text:
+                    raise AssertionError("classifier status did not consistently report the fail-closed runtime state")
+                if "runtime state is invalid" not in runtime_text:
+                    raise AssertionError("classifier on did not refuse while runtime state was invalid")
             if name == "classifier-picker":
                 picker_text = (OUT / "classifier-picker.txt").read_text(errors="ignore")
                 if "Classifier backend" not in picker_text or "prompt — choose a Pi model" not in picker_text:

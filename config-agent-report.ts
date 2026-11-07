@@ -53,7 +53,10 @@ function renderInspect(result: ConfigAgentInspectResult): string {
     ...result.layers.map((layer) => `  ${layer.layer}${layer.editable ? "" : " (read-only)"}: ${layer.path}${layer.exists ? ` [${layer.bytes} bytes, ${layer.fields.length} field(s)]` : " [absent]"}${layer.readError ? ` -- ${layer.readError}` : ""}`),
     "tiers:",
     ...result.routing.tiers.map((tier) => `  ${tier.tier} (${tier.strategy})${tier.fallbackTiers ? ` fallback: [${tier.fallbackTiers.join(", ")}]` : ""}: ${tier.pool.join(", ") || "empty"}`),
-    `classifier: ${result.routing.classifier.enabled ? `enabled (${result.routing.classifier.backend ?? "auto backend"})` : "disabled"}`,
+    `classifier runtime (loaded${result.routing.classifier.configGeneration === undefined ? "" : ` generation ${result.routing.classifier.configGeneration}`}): ${result.routing.classifier.enabled ? "enabled" : "disabled"} (${result.routing.classifier.source}); configured=${result.routing.classifier.configuredEnabled ? "on" : "off"}; backend=${result.routing.classifier.backend ?? "auto backend"}${result.routing.classifier.legacyConflict ? `; legacy saved=${result.routing.classifier.legacyConflict.saved} conflicts with configured=${result.routing.classifier.legacyConflict.configured}` : ""}`,
+    ...(result.routing.classifier.projected ? [`classifier policy in disk layers: runtime would be ${result.routing.classifier.projected.enabled ? "enabled" : "disabled"} (${result.routing.classifier.projected.source}); configured=${result.routing.classifier.projected.configuredEnabled ? "on" : "off"}; backend=${result.routing.classifier.projected.backend ?? "auto backend"}`] : []),
+    ...(result.routing.classifier.loadedConfigMatches === false ? ["loaded config differs from effective disk layers; run /bifrost reload to activate disk changes"] : []),
+    ...(result.routing.classifier.runtimeStateIssue ? [`classifier runtime state invalid (${result.routing.classifier.runtimeStateIssue}); repair .pi/bifrost-state.json as a JSON object with boolean enabled and classifierEnabled fields if present, then run /bifrost reload`] : []),
     `affinity: ${result.routing.affinity.mode}`,
     `reliability: v${result.routing.reliability.stateVersion}${result.routing.reliability.enabled ? "" : " (disabled)"}`,
     `available models: ${result.inventory.length}${result.inventoryProvider ? ` of ${result.availableModelCount} (provider "${result.inventoryProvider}")` : ""}`,
@@ -102,6 +105,7 @@ function digestLines(proposalDigest: string | null, guards: ConfigAgentGuards | 
     `  sourceDigest: ${guards.sourceDigest ?? "absent"}`,
     `  effectiveDigest: ${guards.effectiveDigest}`,
     `  catalogDigest: ${guards.catalogDigest}`,
+    ...(guards.classifierRuntimeDigest ? [`  classifierRuntimeDigest: ${guards.classifierRuntimeDigest}`] : []),
   ];
 }
 
@@ -112,6 +116,15 @@ function renderCheck(result: ConfigAgentCheckResult): string {
     `source: ${result.source} (${result.sourcePath})`,
     `proposal: ${shortDigest(result.proposalDigest)}`,
   ];
+  if (result.routingBefore?.classifier || result.routingAfter?.classifier) {
+    const before = result.routingBefore?.classifier;
+    const after = result.routingAfter?.classifier;
+    const projected = after?.projected;
+    lines.push(`classifier runtime now: ${before?.enabled ? "enabled" : "disabled"} (${before?.source ?? "unknown"}); configured=${before?.configuredEnabled ? "on" : "off"}; backend=${before?.backend ?? "auto"}; loaded generation=${before?.configGeneration ?? "unknown"}`);
+    if (projected) lines.push(`classifier runtime projection after candidate: ${projected.enabled ? "enabled" : "disabled"} (${projected.source}); configured=${projected.configuredEnabled ? "on" : "off"}; backend=${projected.backend ?? "auto"}`);
+    if (before?.loadedConfigMatches === false) lines.push("current loaded config differs from effective disk layers; reload required to activate disk changes");
+    if (before?.runtimeStateIssue) lines.push(`runtime state invalid (${before.runtimeStateIssue}); classification stays paused despite session overrides until repair and reload`);
+  }
   if (result.status === "usage" || result.status === "rejected") {
     lines.push("nothing was written");
     for (const issue of result.issues.filter((issue) => issue.severity === "error")) lines.push(`  error: ${issue.message}`);
@@ -159,16 +172,23 @@ function renderPreview(result: ConfigAgentPreviewResult): string {
     lines.push("-------------------------------------------");
     return bounded(lines).join("\n");
   }
+  if (result.routing) {
+    const classifier = result.routing.classifier;
+    lines.push(`classifier runtime (loaded${classifier.configGeneration === undefined ? "" : ` generation ${classifier.configGeneration}`}): ${classifier.enabled ? "enabled" : "disabled"} (${classifier.source}); configured=${classifier.configuredEnabled ? "on" : "off"}; backend=${classifier.backend ?? "auto"}`);
+    if (classifier.projected) lines.push(`classifier policy projection: runtime would be ${classifier.projected.enabled ? "enabled" : "disabled"} (${classifier.projected.source}); configured=${classifier.projected.configuredEnabled ? "on" : "off"}; backend=${classifier.projected.backend ?? "auto"}`);
+    if (classifier.runtimeStateIssue) lines.push(`runtime state invalid (${classifier.runtimeStateIssue}); classification stays paused despite session overrides until repair and reload`);
+  }
   lines.push("tier assignments (forced tier resolution, deterministic):");
   for (const tier of result.tiers) {
-    lines.push(`  ${tier.tier} (${tier.strategy}) -> ${tier.selected ?? "nothing resolved"}`);
+    lines.push(`  requested ${tier.requestedTier ?? tier.tier} (${tier.strategy}) -> ${tier.selectedTier ?? tier.tier}: ${tier.selected ?? "nothing resolved"}`);
+    if (tier.fallbackReason) lines.push(`    fallback: ${tier.fallbackReason}`);
     for (const excluded of tier.excluded) lines.push(`    excluded: ${excluded.model} (${excluded.exclusion})`);
     if (tier.unknownUnavailable.length > 0) lines.push(`    known but unavailable: ${tier.unknownUnavailable.join(", ")}`);
   }
   if (result.cases.length > 0) {
     lines.push("representative prompts:");
     for (const entry of result.cases) {
-      lines.push(`  "${entry.prompt.slice(0, 80)}" -> ${entry.decidedBy} / ${entry.confidence}: ${entry.selected ? `${entry.selectedTier} => ${entry.selected}` : "no selection"}`);
+      lines.push(`  "${entry.prompt.slice(0, 80)}" -> ${entry.decidedBy} / ${entry.confidence}: requested=${entry.tier ?? "none"}; selected=${entry.selected ? `${entry.selectedTier ?? "unknown"} => ${entry.selected}` : "none"}`);
       if (entry.fallbackReason) lines.push(`    fallback: ${entry.fallbackReason}`);
       for (const excluded of entry.excluded) lines.push(`    excluded: ${excluded.model} (${excluded.exclusion})`);
       if (entry.unavailable.length > 0) lines.push(`    known but unavailable: ${entry.unavailable.join(", ")}`);
@@ -183,12 +203,19 @@ function renderApply(result: ConfigAgentApplyResult): string {
   const lines = [
     "--- bifrost configuration apply ---",
     `status: ${result.status}`,
-    `source: ${result.source} (${result.sourcePath})`,
+    ...(result.sourcePath ? [`source: ${result.source} (${result.sourcePath})`] : []),
     `applied: ${result.applied}; reloaded: ${result.reloaded}; verified: ${result.verified}`,
   ];
   if (result.reason) lines.push(`reason: ${result.reason}`);
   for (const change of result.changes) lines.push(`  ${changeLine(change)}`);
-  if (result.routing) lines.push(`active default tier: ${result.routing.defaultTier ?? "none"}; tiers: ${result.routing.tiers.map((tier) => tier.tier).join(", ") || "none"}`);
+  if (result.routing) {
+    const classifier = result.routing.classifier;
+    lines.push(`active default tier: ${result.routing.defaultTier ?? "none"}; tiers: ${result.routing.tiers.map((tier) => tier.tier).join(", ") || "none"}`);
+    lines.push(`classifier runtime (loaded${classifier.configGeneration === undefined ? "" : ` generation ${classifier.configGeneration}`}): ${classifier.enabled ? "enabled" : "disabled"} (${classifier.source}); configured=${classifier.configuredEnabled ? "on" : "off"}; backend=${classifier.backend ?? "auto"}`);
+    if (classifier.projected) lines.push(`classifier policy projection: runtime would be ${classifier.projected.enabled ? "enabled" : "disabled"} (${classifier.projected.source}); configured=${classifier.projected.configuredEnabled ? "on" : "off"}; backend=${classifier.projected.backend ?? "auto"}`);
+    if (classifier.loadedConfigMatches === false) lines.push("loaded config differs from effective disk layers; the running extension did not activate them");
+    if (classifier.runtimeStateIssue) lines.push(`runtime state invalid (${classifier.runtimeStateIssue}); classification stays paused despite session overrides until repair and reload`);
+  }
   for (const note of result.notes) lines.push(`note: ${note}`);
   lines.push("----------------------------------");
   return bounded(lines).join("\n");

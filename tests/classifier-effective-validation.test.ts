@@ -4,9 +4,9 @@ import { hasClassifierConfigErrors, classifierConfigErrors, type BifrostConfig }
 import { directStagePlan } from "../classifier-semantics.ts";
 
 describe("direct classifier stage plan", () => {
-  it("degrades an auto-detected direct backend to prompt when direct config is invalid", () => {
+  it("blocks an auto-detected direct backend when its active config is invalid", () => {
     const plan = directStagePlan({ backend: "pi-native", auto: true, classifierEnabled: true, tierCount: 3, directConfigOk: false, fallback: "prompt" });
-    assert.deepEqual(plan, { useDirect: false, usePromptFallback: true, directDegraded: true });
+    assert.deepEqual(plan, { useDirect: false, usePromptFallback: false, directDegraded: true });
   });
 
   it("fails closed for an explicit direct backend with invalid config", () => {
@@ -21,7 +21,8 @@ describe("direct classifier stage plan", () => {
 
   it("honors regex fallback, classifier-off, and empty tiers", () => {
     assert.equal(directStagePlan({ backend: "pi-native", auto: true, classifierEnabled: true, tierCount: 3, directConfigOk: false, fallback: "regex" }).usePromptFallback, false);
-    assert.equal(directStagePlan({ backend: "pi-native", auto: true, classifierEnabled: false, tierCount: 3, directConfigOk: false, fallback: "prompt" }).usePromptFallback, false);
+    assert.deepEqual(directStagePlan({ backend: "pi-native", auto: true, classifierEnabled: false, tierCount: 3, directConfigOk: false, fallback: "prompt" }),
+      { useDirect: false, usePromptFallback: false, directDegraded: false });
     assert.equal(directStagePlan({ backend: "pi-native", auto: true, classifierEnabled: true, tierCount: 0, directConfigOk: true, fallback: "prompt" }).usePromptFallback, false);
     assert.equal(directStagePlan({ backend: "prompt", auto: false, classifierEnabled: true, tierCount: 3, directConfigOk: true, fallback: "regex" }).usePromptFallback, true);
   });
@@ -52,11 +53,17 @@ describe("effective direct-backend validation", () => {
   it("blocks invalid criteria and confidence for the effective backend", () => {
     const invalid: BifrostConfig = {
       ...inheritedPrompt,
-      classifier: { ...inheritedPrompt.classifier, minConfidence: 2, criteria: { general: "" } },
+      classifier: { ...inheritedPrompt.classifier, minConfidence: 2, criteria: { general: "valid criteria" } },
     };
     assert.equal(hasClassifierConfigErrors(invalid), false);
     assert.equal(hasClassifierConfigErrors(invalid, "typesafe"), true);
     assert.equal(hasClassifierConfigErrors(invalid, "pi-native"), true);
+
+    const malformedCriteria: BifrostConfig = {
+      ...inheritedPrompt,
+      classifier: { ...inheritedPrompt.classifier, criteria: { general: "" } },
+    };
+    assert.equal(hasClassifierConfigErrors(malformedCriteria), true, "criterion shape is validated even before backend detection");
   });
 
   it("rejects prompt-only fields when a direct backend was explicitly configured", () => {
@@ -64,5 +71,21 @@ describe("effective direct-backend validation", () => {
       ...inheritedPrompt, classifier: { ...inheritedPrompt.classifier, backend: "pi-native" },
     };
     assert.equal(hasClassifierConfigErrors(explicit, "pi-native"), true);
+  });
+
+  it("checks authored criteria shape while disabled but skips active-backend completeness", () => {
+    const disabled: BifrostConfig = {
+      default: "custom", models: { custom: ["chat/a"] },
+      classifier: { enabled: false, backend: "typesafe" },
+    };
+    assert.equal(hasClassifierConfigErrors(disabled, "typesafe", false), false);
+    assert.equal(classifierConfigErrors(disabled, "typesafe", false).some((message) => message.includes("criteria missing")), false);
+
+    const malformed: BifrostConfig = {
+      ...disabled,
+      classifier: { enabled: false, backend: "typesafe", criteria: { custom: 42 } as never },
+    };
+    assert.equal(hasClassifierConfigErrors(malformed, "typesafe", false), true);
+    assert.ok(classifierConfigErrors(malformed, "typesafe", false).some((message) => message.includes("requires a non-empty")));
   });
 });

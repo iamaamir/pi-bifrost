@@ -71,12 +71,7 @@ export interface DirectStagePlan {
   readonly directDegraded: boolean;
 }
 
-/**
- * Stage wiring for the direct transports. An auto-detected direct backend
- * degrades to prompt classification when its config is invalid (preserving
- * pre-detection behavior); an explicit backend fails closed with the config
- * errors printed at startup.
- */
+/** Stage wiring for direct transports. Invalid active backend config blocks classifier calls; disabled classifiers emit no backend diagnostics. */
 export function directStagePlan(input: {
   readonly backend: ClassifierBackend;
   readonly auto: boolean;
@@ -89,10 +84,10 @@ export function directStagePlan(input: {
     || input.backend === CLASSIFIER_BACKEND_IDS.piNative;
   const stagesEnabled = input.classifierEnabled && input.tierCount > 0;
   const useDirect = stagesEnabled && isDirect && input.directConfigOk;
-  const directDegraded = isDirect && input.auto && !input.directConfigOk;
-  const usePromptFallback = stagesEnabled
+  const directDegraded = stagesEnabled && isDirect && input.auto && !input.directConfigOk;
+  const usePromptFallback = stagesEnabled && input.directConfigOk
     && (input.backend === CLASSIFIER_BACKEND_IDS.prompt
-      || (isDirect && input.fallback !== "regex" && (input.directConfigOk || input.auto)));
+      || (isDirect && input.fallback !== "regex"));
   return { useDirect, usePromptFallback, directDegraded };
 }
 

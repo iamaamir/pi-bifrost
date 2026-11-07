@@ -102,14 +102,16 @@ describe("automatic first-run setup", () => {
     assert.equal(Object.hasOwn(empty, "routingScope"), false);
   });
 
-  it("allows valid enabled runtime preferences and fails closed on off or invalid preferences", () => {
+  it("accepts classifier-less runtime state and fails closed on disabled or malformed global mode", () => {
     const root = mkdtempSync(join(tmpdir(), "bifrost-runtime-bootstrap-"));
     const path = join(root, "bifrost-state.json");
     try {
       assert.equal(hasBlockingRuntimePreferences(path), false);
       writeFileSync(path, JSON.stringify({ enabled: true, classifierEnabled: true }));
       assert.equal(hasBlockingRuntimePreferences(path), false);
-      writeFileSync(path, JSON.stringify({ enabled: true, classifierEnabled: false }));
+      writeFileSync(path, JSON.stringify({ enabled: true }));
+      assert.equal(hasBlockingRuntimePreferences(path), false);
+      writeFileSync(path, JSON.stringify({ classifierEnabled: false }));
       assert.equal(hasBlockingRuntimePreferences(path), false);
       writeFileSync(path, JSON.stringify({ enabled: false, classifierEnabled: true }));
       assert.equal(hasBlockingRuntimePreferences(path), true);

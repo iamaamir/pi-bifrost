@@ -239,7 +239,7 @@ describe("offline diagnostics", () => {
   it("returns a bounded diagnostic instead of throwing on malformed loaded config", () => {
     const malformed = config({ rules: [null] });
     const report = validateDiagnostics({ config: malformed, registry: registry() });
-    assert.ok(report.diagnostics.some((issue) => issue.code === "config.validation_unavailable"));
+    assert.ok(report.diagnostics.some((issue) => issue.code === "config.invalid" && issue.severity === "error"));
     assert.equal(JSON.stringify(report).includes("null"), false);
   });
 
@@ -303,6 +303,56 @@ describe("offline diagnostics", () => {
     const serialized = JSON.stringify(report);
     assert.ok(serialized.includes("classifier.bogus"), "the JSON form must name the offending path");
     assert.equal(serialized.includes("config.schema_unsupported_field"), true);
+  });
+
+  it("reports classifier conflict while suppressing missing criteria errors when inactive", () => {
+    const inactive = config({
+      models: { custom: ["fixture/allowed"] },
+      default: "custom",
+      classifier: { enabled: false, backend: "typesafe" },
+    });
+    const report = validateDiagnostics({
+      config: inactive,
+      classifierEnabled: false,
+      classifierEnablementSource: "legacy-conflict",
+      effectiveClassifierBackend: "typesafe",
+      classifierConflict: { saved: true, configured: false },
+    });
+    assert.deepEqual(report.classifier, {
+      enabled: false,
+      configuredEnabled: false,
+      source: "legacy-conflict",
+      backend: "typesafe",
+      readiness: "inactive",
+      errors: [],
+      legacyConflict: { saved: true, configured: false },
+    });
+    assert.deepEqual(report.classifier.errors, [], "disabled classification does not expose irrelevant criteria errors");
+
+    const malformed = config({
+      models: { custom: ["fixture/allowed"] },
+      default: "custom",
+      classifier: { enabled: false, backend: "typesafe", criteria: { custom: 42 } as never },
+    });
+    const malformedReport = validateDiagnostics({
+      config: malformed,
+      classifierEnabled: false,
+      effectiveClassifierBackend: "typesafe",
+    });
+    assert.ok(malformedReport.classifier.errors.some((message) => /criteria have an invalid shape/u.test(message)));
+
+    const activeMalformed = config({
+      models: { custom: ["fixture/allowed"] },
+      default: "custom",
+      classifier: { enabled: true, backend: "typesafe", criteria: { custom: { type: "TypeSafe" } } as never },
+    });
+    const activeReport = validateDiagnostics({
+      config: activeMalformed,
+      classifierEnabled: true,
+      effectiveClassifierBackend: "typesafe",
+    });
+    assert.equal(activeReport.classifier.readiness, "blocked");
+    assert.ok(activeReport.classifier.errors.some((message) => /criteria have an invalid shape/u.test(message)));
   });
 
 });

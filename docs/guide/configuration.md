@@ -206,7 +206,7 @@ For a normal message with routing on and nothing pinned, routing considers:
 
 First matching step wins; later steps are skipped. A rule naming an exact model wins before the cache and classifiers; a rule naming a tier is checked after them. Reliability filtering and strategy selection happen after a tier is resolved.
 
-Classification is enabled by default. On a local-cache miss, the active classifier can receive the current prompt. Set `classifier.enabled` to `false` or run `/bifrost classifier off` to disable the extra classification call. The separate `cache.enabled` setting controls classification-cache use. Its threshold defaults to `1`, which matches ordered normalized prompts only; set it below `1` to opt into fuzzy Jaccard matches. Setting `cache.enabled` to `false` does not clear saved entries; run `/bifrost cache clear` to empty them. The generation provider still receives the prompt.
+Classification is enabled by default. On a local-cache miss, an enabled classifier can receive the current prompt. Set `classifier.enabled` to `false` for a durable off default. Run `/bifrost classifier off` to disable classification for the current Pi session only. A session toggle does not change config or survive restart. The separate `cache.enabled` setting controls classification-cache use. Its threshold defaults to `1`, which matches ordered normalized prompts only; set it below `1` to opt into fuzzy Jaccard matches. Setting `cache.enabled` to `false` does not clear saved entries; run `/bifrost cache clear` to empty them. The generation provider still receives the prompt.
 
 Capability requirements are advisory-only in this release. `requirements.mode: "enforce"` is rejected because general capability enforcement is not implemented.
 

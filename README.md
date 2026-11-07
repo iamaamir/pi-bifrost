@@ -83,18 +83,20 @@ expensive model. Use the models I already have.
 
 The agent reads Pi's real model list and your config files. It builds a candidate
 policy, checks it, previews routes offline, and explains the tradeoffs. It shows
-the exact changes. Nothing is written before you agree, and one config file is
-written atomically. The agent does not change how Bifrost routes; it only writes
-the configuration you approve. Apply requires Pi's terminal UI (TUI). Read each
-page with `n`, return with `p`, then press `a` to apply on the final page.
-Escape cancels. Resizing restarts the review. Terminals smaller than 40 columns
-or 8 rows cannot approve.
+a tool-generated impact summary first. Nothing is written before you agree, and
+one config file is written atomically. The agent does not change how Bifrost
+routes; it only writes the configuration you approve. Apply requires Pi's
+terminal UI (TUI). Press `a` to apply the summary, or press `d` to inspect every
+exact change. In exact view, press `n` or `p` to move through pages, `b` to
+return to the summary, and `a` on the last page to apply. Summary approval does
+not mean you inspected every value. Escape cancels. Resizing returns to the
+summary. Terminals smaller than 40 columns or 8 rows cannot approve.
 
-The review uses JSON escapes for whitespace, controls, and non-ASCII characters
-so values remain exact. Proposals above the 4,000-character review limit are
-rejected. RPC sessions can inspect, check, and preview, but apply returns
-`approval_required`: Pi's RPC protocol cannot prove that clients display every
-change. Use a TUI session to check and approve the proposal again.
+The exact view uses JSON escapes so values remain exact. Proposals above the
+2,000,000-character review limit fail before the dialog and write nothing. RPC
+sessions can inspect, check, and preview, but apply returns `approval_required`:
+Pi's RPC protocol cannot prove that clients display every change. Use a TUI
+to check and approve the proposal again.
 
 You can also ask for the single tool directly. It has four operations: `inspect`,
 `check`, `preview`, and `apply`. See [the skill](skills/configure-bifrost/SKILL.md).
@@ -109,7 +111,7 @@ Use these commands in Pi:
 | `quick <message>` | Use the `quick` tier once. Bifrost removes its name before sending the prompt. |
 | `/bifrost pin` / `/bifrost unpin` | Keep the model or resume routing. |
 | `/bifrost off` / `/bifrost on` | Stop or resume routing. |
-| `/bifrost classifier off` | Stop the extra AI call that chooses a tier. |
+| `/bifrost classifier off` | Stop the extra AI call for this Pi session. |
 | `/bifrost cache stats` / `/bifrost cache clear` | View or empty saved entries. |
 
 See [all commands](docs/guide/commands.md) and [routing controls](docs/guide/routing-controls.md).
@@ -118,7 +120,7 @@ See [all commands](docs/guide/commands.md) and [routing controls](docs/guide/rou
 
 The classifier is on by default. The local cache saves earlier routing decisions. It stores simplified words from prompts and the chosen tier. Treat these as sensitive. Bifrost does not cache answers. If the cache has no matching decision, the classifier can receive the prompt.
 
-`/bifrost classifier off` stops this call and works without a Bifrost configuration file. Pi still sends the prompt to your selected model service.
+`/bifrost classifier off` stops this call for the current Pi session. It works without a Bifrost configuration file and does not save a toggle. After restart, Bifrost uses `classifier.enabled`. If legacy state says `false` while config says `true`, classification pauses until a session choice. Pi still sends the prompt to your selected model service.
 
 To stop using the local cache, add `"cache": { "enabled": false }` inside your existing configuration. Keep its model lists. This stops cache lookups and new classification entries. It does not clear saved entries. `/bifrost cache clear` empties them. If you have no configuration, run `/bifrost init` first. See [reliability and local cache](docs/guide/reliability-and-cache.md).
 

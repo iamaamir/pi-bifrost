@@ -1,5 +1,5 @@
 // Test-only command drives the production tool through real Pi's TUI context.
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionToolContext } from "@earendil-works/pi-coding-agent";
@@ -9,7 +9,7 @@ import { reportText } from "../../config-agent-report.ts";
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("approval-case", {
     description: "Exercise configuration approval without provider generation",
-    handler: async (_args, ctx) => {
+    handler: async (args, ctx) => {
       const tool = createBifrostConfigTool({
         extensionDir: fileURLToPath(new URL("../../", import.meta.url)),
         render: reportText,
@@ -19,12 +19,26 @@ export default function (pi: ExtensionAPI) {
       const toolContext: ExtensionToolContext = {
         ...ctx, tools: [], executeTool: async () => { throw new Error("Nested tools are not part of this fixture"); },
       };
-      const patch = { description: "x".repeat(900) + "HIDDEN_LAST_CHANGE" };
-      const checked = await tool.execute("check", { operation: "check", patch }, undefined, undefined, toolContext);
+      const argument = args.trim();
+      const layered = argument === "layered";
+      const source = layered ? "workspace" : "project";
+      const configPath = join(ctx.cwd, source === "project" ? ".pi/bifrost.json" : "bifrost.json");
+      const current = JSON.parse(readFileSync(configPath, "utf8")) as { rules?: unknown[] };
+      const patch = argument === "classifier-on" ? { classifier: { enabled: true } }
+        : argument === "rules-reorder" ? { rules: [...(current.rules ?? [])].reverse() }
+          : layered ? { classifier: { enabled: false }, rules: [] } : {
+        schemaVersion: 2,
+        description: "x".repeat(6_000) + "HIDDEN_LAST_CHANGE",
+        classifier: { enabled: false },
+        models: { general: ["fake/healthy"], review: ["fake/healthy"] },
+        rules: [],
+        tierPolicies: { general: { fallbackTiers: [] } },
+      };
+      const checked = await tool.execute("check", { operation: "check", source, patch }, undefined, undefined, toolContext);
       const details = checked.details as ConfigAgentCheckResult;
       if (details.status !== "ok" || !details.guards || !details.proposalDigest) throw new Error(reportText(details));
       const applied = await tool.execute("apply", {
-        operation: "apply", patch,
+        operation: "apply", source, patch,
         proposalDigest: details.proposalDigest,
         sourceDigest: details.guards.sourceDigest ?? "absent",
         effectiveDigest: details.guards.effectiveDigest,

@@ -312,25 +312,22 @@ export function hasExplicitTierPolicies(config: BifrostConfig): boolean {
     && Object.values(config.tierPolicies ?? {}).some((policy) => Array.isArray(policy?.fallbackTiers));
 }
 
-export function classifierConfigErrors(config: BifrostConfig, effectiveBackend?: ClassifierBackend): string[] {
-  let checked = config;
-  if (effectiveBackend && config.classifier?.backend === undefined) {
-    // Auto-detection chooses the direct transport after layers merge. Retain
-    // prompt-only settings for fallback, but do not validate them as direct
-    // transport settings; still validate direct criteria and bounds.
-    const classifier: Record<string, unknown> = { ...config.classifier, backend: effectiveBackend };
-    if (effectiveBackend !== CLASSIFIER_BACKEND_IDS.prompt) {
-      for (const field of PROMPT_ONLY_FIELDS) delete classifier[field];
-    }
-    checked = { ...config, classifier: classifier as ClassifierConfig };
-  }
-  return validateConfig(checked)
+export function classifierConfigErrors(
+  config: BifrostConfig,
+  effectiveBackend?: ClassifierBackend,
+  classifierEnabled = config.classifier?.enabled !== false,
+): string[] {
+  return validateConfig(config, { effectiveClassifierBackend: effectiveBackend, classifierEnabled })
     .filter((issue) => issue.severity === "error" && /classifier/i.test(issue.message))
     .map((issue) => issue.message);
 }
 
-export function hasClassifierConfigErrors(config: BifrostConfig, effectiveBackend?: ClassifierBackend): boolean {
-  return classifierConfigErrors(config, effectiveBackend).length > 0;
+export function hasClassifierConfigErrors(
+  config: BifrostConfig,
+  effectiveBackend?: ClassifierBackend,
+  classifierEnabled = config.classifier?.enabled !== false,
+): boolean {
+  return classifierConfigErrors(config, effectiveBackend, classifierEnabled).length > 0;
 }
 
 export function validateTierPolicyConfigInternal(config: BifrostConfig, maxIssues = Number.POSITIVE_INFINITY): ConfigIssue[] {
@@ -612,8 +609,14 @@ function checkProviderAllowlist(
  * Validate a resolved BifrostConfig. Returns issues (errors stop
  * the extension from starting, warnings are logged only).
  */
+export interface ValidateConfigOptions {
+  readonly effectiveClassifierBackend?: ClassifierBackend;
+  readonly classifierEnabled?: boolean;
+}
+
 export function validateConfig(
   config: BifrostConfig,
+  options: ValidateConfigOptions = {},
 ): ConfigIssue[] {
   const issues: ConfigIssue[] = validateTierPolicyConfig(config);
   const requirementsRaw: unknown = config.requirements;
@@ -624,53 +627,68 @@ export function validateConfig(
     issues.push({ severity: "error", code: "config.requirements_unsupported", path: "requirements", message: "Capability requirements are advisory-only in this release; remove unsupported fields and do not set mode to enforce." });
   }
   const modelKeys = Object.keys(config.models ?? {});
-  const classifier = config.classifier;
-  const totalTimeoutIssue = classifierTotalTimeoutIssue(config);
-  if (totalTimeoutIssue) issues.push(totalTimeoutIssue);
-  if (classifier?.backend && !Object.values(CLASSIFIER_BACKEND_IDS).includes(classifier.backend)) {
-    issues.push({ severity: "error", message: `Unknown classifier backend "${classifier.backend}".` });
+  const rawClassifier = config.classifier;
+  let classifier = rawClassifier;
+  if (options.effectiveClassifierBackend && rawClassifier?.backend === undefined) {
+    const resolved = { ...rawClassifier, backend: options.effectiveClassifierBackend } as ClassifierConfig & Record<string, unknown>;
+    if (options.effectiveClassifierBackend !== CLASSIFIER_BACKEND_IDS.prompt) {
+      for (const field of PROMPT_ONLY_FIELDS) delete resolved[field];
+    }
+    classifier = resolved;
   }
+  const classifierEnabled = options.classifierEnabled ?? classifier?.enabled !== false;
   const directBackend = classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe || classifier?.backend === CLASSIFIER_BACKEND_IDS.piNative;
   const directLabel = classifier?.backend === CLASSIFIER_BACKEND_IDS.piNative ? "PiNative" : "TypeSafe";
   const directKey = classifier?.backend === CLASSIFIER_BACKEND_IDS.piNative ? "piNative" : "typesafe";
-  if (classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe) {
-    if (classifier.typesafe?.model !== undefined && classifier.typesafe.model !== TYPE_SAFE_MODEL) {
-      issues.push({ severity: "error", message: `TypeSafe classifier model must be exactly "${TYPE_SAFE_MODEL}".` });
+  if (classifierEnabled) {
+    const totalTimeoutIssue = classifierTotalTimeoutIssue(config);
+    if (totalTimeoutIssue) issues.push(totalTimeoutIssue);
+    if (classifier?.backend && !Object.values(CLASSIFIER_BACKEND_IDS).includes(classifier.backend)) {
+      issues.push({ severity: "error", message: `Unknown classifier backend "${classifier.backend}".` });
     }
-    if (classifier.typesafe?.endpoint !== undefined && classifier.typesafe.endpoint !== TYPE_SAFE_ENDPOINT) {
-      issues.push({ severity: "error", message: `TypeSafe classifier endpoint must be "${TYPE_SAFE_ENDPOINT}".` });
+    if (classifier?.backend === CLASSIFIER_BACKEND_IDS.typesafe) {
+      if (classifier.typesafe?.model !== undefined && classifier.typesafe.model !== TYPE_SAFE_MODEL) {
+        issues.push({ severity: "error", message: `TypeSafe classifier model must be exactly "${TYPE_SAFE_MODEL}".` });
+      }
+      if (classifier.typesafe?.endpoint !== undefined && classifier.typesafe.endpoint !== TYPE_SAFE_ENDPOINT) {
+        issues.push({ severity: "error", message: `TypeSafe classifier endpoint must be "${TYPE_SAFE_ENDPOINT}".` });
+      }
+      if (classifier.typesafe?.timeoutMs !== undefined && (!Number.isInteger(classifier.typesafe.timeoutMs) || classifier.typesafe.timeoutMs < 100 || classifier.typesafe.timeoutMs > 60_000)) {
+        issues.push({ severity: "error", message: `TypeSafe classifier timeoutMs must be an integer between 100 and 60000, got ${classifier.typesafe.timeoutMs}.` });
+      }
+      if (classifier.typesafe?.maxAttempts !== undefined && (!Number.isInteger(classifier.typesafe.maxAttempts) || classifier.typesafe.maxAttempts < 1 || classifier.typesafe.maxAttempts > 3)) {
+        issues.push({ severity: "error", message: `TypeSafe classifier maxAttempts must be an integer between 1 and 3, got ${classifier.typesafe.maxAttempts}.` });
+      }
     }
-    if (classifier.typesafe?.timeoutMs !== undefined && (!Number.isInteger(classifier.typesafe.timeoutMs) || classifier.typesafe.timeoutMs < 100 || classifier.typesafe.timeoutMs > 60_000)) {
-      issues.push({ severity: "error", message: `TypeSafe classifier timeoutMs must be an integer between 100 and 60000, got ${classifier.typesafe.timeoutMs}.` });
+    if (classifier?.backend === CLASSIFIER_BACKEND_IDS.piNative) {
+      if (classifier.piNative?.timeoutMs !== undefined && (!Number.isInteger(classifier.piNative.timeoutMs) || classifier.piNative.timeoutMs < 100 || classifier.piNative.timeoutMs > 60_000)) {
+        issues.push({ severity: "error", message: `PiNative classifier timeoutMs must be an integer between 100 and 60000, got ${classifier.piNative.timeoutMs}.` });
+      }
+      if (classifier.piNative?.maxAttempts !== undefined && (!Number.isInteger(classifier.piNative.maxAttempts) || classifier.piNative.maxAttempts < 1 || classifier.piNative.maxAttempts > 3)) {
+        issues.push({ severity: "error", message: `PiNative classifier maxAttempts must be an integer between 1 and 3, got ${classifier.piNative.maxAttempts}.` });
+      }
     }
-    if (classifier.typesafe?.maxAttempts !== undefined && (!Number.isInteger(classifier.typesafe.maxAttempts) || classifier.typesafe.maxAttempts < 1 || classifier.typesafe.maxAttempts > 3)) {
-      issues.push({ severity: "error", message: `TypeSafe classifier maxAttempts must be an integer between 1 and 3, got ${classifier.typesafe.maxAttempts}.` });
+    if (directBackend && classifier) {
+      if (classifier.endpoint !== undefined || classifier.method !== undefined || classifier.systemPrompt !== undefined || classifier.maxTokens !== undefined || classifier.temperature !== undefined || classifier.fallbackToRegex !== undefined) {
+        issues.push({ severity: "error", message: `${directLabel} classifier does not support endpoint, method, systemPrompt, maxTokens, temperature, or fallbackToRegex; use nested ${directKey} transport settings.` });
+      }
+      if (classifier.minConfidence !== undefined && (!Number.isFinite(classifier.minConfidence) || classifier.minConfidence < 0 || classifier.minConfidence > 1)) {
+        issues.push({ severity: "error", message: `${directLabel} classifier minConfidence must be between 0 and 1, got ${classifier.minConfidence}.` });
+      }
+      if (classifier.fallback !== undefined && classifier.fallback !== "prompt" && classifier.fallback !== "regex") {
+        issues.push({ severity: "error", message: `${directLabel} classifier fallback must be "prompt" or "regex", got ${classifier.fallback}.` });
+      }
+      const criteria = criterionObject(classifier.criteria) ? classifier.criteria : {};
+      for (const tier of modelKeys) {
+        if (criteria[tier] === undefined && DEFAULT_CLASSIFIER_CRITERIA[tier] === undefined) issues.push({ severity: "error", message: `${directLabel} classifier criteria missing for tier "${tier}".` });
+      }
     }
   }
-  if (classifier?.backend === CLASSIFIER_BACKEND_IDS.piNative) {
-    if (classifier.piNative?.timeoutMs !== undefined && (!Number.isInteger(classifier.piNative.timeoutMs) || classifier.piNative.timeoutMs < 100 || classifier.piNative.timeoutMs > 60_000)) {
-      issues.push({ severity: "error", message: `PiNative classifier timeoutMs must be an integer between 100 and 60000, got ${classifier.piNative.timeoutMs}.` });
-    }
-    if (classifier.piNative?.maxAttempts !== undefined && (!Number.isInteger(classifier.piNative.maxAttempts) || classifier.piNative.maxAttempts < 1 || classifier.piNative.maxAttempts > 3)) {
-      issues.push({ severity: "error", message: `PiNative classifier maxAttempts must be an integer between 1 and 3, got ${classifier.piNative.maxAttempts}.` });
-    }
-  }
-  if (directBackend && classifier) {
-    if (classifier.endpoint !== undefined || classifier.method !== undefined || classifier.systemPrompt !== undefined || classifier.maxTokens !== undefined || classifier.temperature !== undefined || classifier.fallbackToRegex !== undefined) {
-      issues.push({ severity: "error", message: `${directLabel} classifier does not support endpoint, method, systemPrompt, maxTokens, temperature, or fallbackToRegex; use nested ${directKey} transport settings.` });
-    }
-    if (classifier.minConfidence !== undefined && (!Number.isFinite(classifier.minConfidence) || classifier.minConfidence < 0 || classifier.minConfidence > 1)) {
-      issues.push({ severity: "error", message: `${directLabel} classifier minConfidence must be between 0 and 1, got ${classifier.minConfidence}.` });
-    }
-    if (classifier.fallback !== undefined && classifier.fallback !== "prompt" && classifier.fallback !== "regex") {
-      issues.push({ severity: "error", message: `${directLabel} classifier fallback must be "prompt" or "regex", got ${classifier.fallback}.` });
-    }
-    const criteria = classifier.criteria ?? {};
-    for (const tier of modelKeys) {
-      if (criteria[tier] === undefined && DEFAULT_CLASSIFIER_CRITERIA[tier] === undefined) issues.push({ severity: "error", message: `${directLabel} classifier criteria missing for tier "${tier}".` });
-    }
-    for (const [tier, criterion] of Object.entries(criteria)) {
-      if (!modelKeys.includes(tier)) issues.push({ severity: "error", message: `Classifier criteria references unknown tier "${tier}".` });
+  const criteriaValue: unknown = classifier?.criteria;
+  if (criteriaValue !== undefined && !criterionObject(criteriaValue)) {
+    issues.push({ severity: "error", message: "Classifier criteria must be an object keyed by tier." });
+  } else if (criterionObject(criteriaValue)) {
+    for (const [tier, criterion] of Object.entries(criteriaValue)) {
       if (typeof criterion === "string") {
         if (!criterion.trim()) issues.push({ severity: "error", message: `Classifier criterion for tier "${tier}" must not be empty.` });
       } else if (!criterionObject(criterion) || typeof criterion.what !== "string" || !criterion.what.trim()) {
@@ -852,6 +870,10 @@ export function validateConfig(
   if (config.rules) {
     for (let i = 0; i < config.rules.length; i++) {
       const rule = config.rules[i];
+      if (!rule || typeof rule.pattern !== "string") {
+        issues.push({ severity: "error", message: `Rule #${i} must be an object with a pattern string.` });
+        continue;
+      }
       try {
         new RegExp(rule.pattern, "i");
       } catch {

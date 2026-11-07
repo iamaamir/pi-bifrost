@@ -1,10 +1,12 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { validateConfig, type BifrostConfig } from "./config.ts";
+import { classifierConfigErrors, validateConfig, type BifrostConfig } from "./config.ts";
+import type { ClassifierBackend } from "./classifier-backends.ts";
 import { validateEffectiveConfigStructure } from "./config-schema.ts";
 import { findCandidates, modelKey } from "./routing.ts";
 import { getCircuitState, type ReliabilityConfig, type ReliabilityState } from "./reliability.ts";
 import { isVirtualModel } from "./virtual-model.ts";
+import type { RuntimeStateIssue } from "./runtime-state.ts";
 
 export type DiagnosticSeverity = "error" | "warning" | "info";
 
@@ -30,6 +32,11 @@ export interface ValidateDiagnosticsInput {
   /** The effective, already-loaded config. Disk edits appear after reload. */
   readonly config: BifrostConfig;
   readonly registry?: DiagnosticRegistry;
+  readonly classifierEnabled?: boolean;
+  readonly classifierEnablementSource?: ClassifierDiagnosticStatus["source"];
+  readonly effectiveClassifierBackend?: ClassifierBackend;
+  readonly classifierConflict?: { readonly saved: boolean; readonly configured: boolean };
+  readonly classifierRuntimeStateIssue?: RuntimeStateIssue;
 }
 
 export interface ValidateDiagnosticsReport {
@@ -37,6 +44,18 @@ export interface ValidateDiagnosticsReport {
   readonly kind: "validation";
   readonly configSource: "loaded-effective-config";
   readonly diagnostics: readonly BifrostDiagnostic[];
+  readonly classifier: ClassifierDiagnosticStatus;
+}
+
+export interface ClassifierDiagnosticStatus {
+  readonly enabled: boolean;
+  readonly configuredEnabled: boolean;
+  readonly source: "configuration" | "session" | "legacy-conflict" | "runtime-state-invalid" | "diagnostic";
+  readonly backend?: ClassifierBackend;
+  readonly readiness: "inactive" | "ready" | "blocked";
+  readonly errors: readonly string[];
+  readonly legacyConflict?: { readonly saved: boolean; readonly configured: boolean };
+  readonly runtimeStateIssue?: RuntimeStateIssue;
 }
 
 export type AuthObservability = "configured" | "not_configured" | "unknown";
@@ -69,6 +88,11 @@ export interface InspectDiagnosticsInput {
   readonly now?: number;
   /** Bifrost's local refresh completion time, not a provider-data timestamp. */
   readonly lastRegistryRefreshAt?: number;
+  readonly classifierEnabled?: boolean;
+  readonly classifierEnablementSource?: ClassifierDiagnosticStatus["source"];
+  readonly effectiveClassifierBackend?: ClassifierBackend;
+  readonly classifierConflict?: { readonly saved: boolean; readonly configured: boolean };
+  readonly classifierRuntimeStateIssue?: RuntimeStateIssue;
 }
 
 export interface InspectDiagnosticsReport {
@@ -86,6 +110,7 @@ export interface InspectDiagnosticsReport {
     readonly cooldownOnAllowanceExhausted: boolean;
     readonly allowanceCooldownScope: "provider" | "model";
   };
+  readonly classifier: ClassifierDiagnosticStatus;
   readonly diagnostics: readonly BifrostDiagnostic[];
 }
 
@@ -134,6 +159,7 @@ function modelPoolEntries(config: BifrostConfig, tier: string): readonly string[
 }
 
 function registryContext(registry: DiagnosticRegistry): ExtensionContext {
+  // SAFETY: findCandidates only reads modelRegistry; this adapter supplies every registry method it uses.
   return { modelRegistry: registry } as unknown as ExtensionContext;
 }
 
@@ -150,9 +176,35 @@ function knownModelSnapshot(registry: DiagnosticRegistry, knownModels: readonly 
   };
 }
 
-function issueDiagnostics(config: BifrostConfig): BifrostDiagnostic[] {
+function uniqueDiagnostics(items: readonly BifrostDiagnostic[]): BifrostDiagnostic[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = [item.severity, item.code, item.path, item.tier, item.entryIndex, item.ruleIndex, item.model, item.repair].join("\u0000");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function safeClassifierErrors(config: BifrostConfig, effectiveClassifierBackend?: ClassifierBackend, classifierEnabled?: boolean): string[] {
   try {
-    return validateConfig(config).map((issue) => {
+    return [...new Set(classifierConfigErrors(config, effectiveClassifierBackend, classifierEnabled).map((message) => {
+      const lower = message.toLowerCase();
+      if (lower.includes("criteria missing for tier")) return "Classifier criteria are missing for a configured tier.";
+      if (lower.includes("criteria") || lower.includes("criterion")) return "Classifier criteria have an invalid shape or tier reference.";
+      if (lower.includes("unknown classifier backend")) return "Classifier backend is unsupported.";
+      if (lower.includes("minconfidence")) return "Classifier confidence is outside its supported range.";
+      if (lower.includes("timeout")) return "Classifier timeout settings are invalid.";
+      return "Classifier configuration is invalid.";
+    }))];
+  } catch {
+    return ["Classifier validation is unavailable."];
+  }
+}
+
+function issueDiagnostics(config: BifrostConfig, effectiveClassifierBackend?: ClassifierBackend, classifierEnabled?: boolean): BifrostDiagnostic[] {
+  try {
+    return validateConfig(config, { effectiveClassifierBackend, classifierEnabled }).map((issue) => {
       // Messages can contain user regexes, names, or arbitrary invalid values.
       // Only consume static codes and separately sanitized field paths.
       const metadata = issue as typeof issue & { readonly code?: unknown; readonly path?: unknown };
@@ -226,7 +278,9 @@ function structuralDiagnostics(config: BifrostConfig): BifrostDiagnostic[] {
 
 /** Validate only the active merged snapshot and synchronous registry reads. */
 export function validateDiagnostics(input: ValidateDiagnosticsInput): ValidateDiagnosticsReport {
-  const diagnostics = [...issueDiagnostics(input.config), ...structuralDiagnostics(input.config)];
+  const classifierEnabled = input.classifierEnabled ?? input.config.classifier?.enabled !== false;
+  const classifierErrors = safeClassifierErrors(input.config, input.effectiveClassifierBackend, classifierEnabled);
+  const diagnostics = [...issueDiagnostics(input.config, input.effectiveClassifierBackend, classifierEnabled), ...structuralDiagnostics(input.config)];
   if (!input.registry) {
     diagnostics.push({ code: "registry.unavailable", severity: "info", repair: "Registry reference checks are unavailable until Pi exposes its local registry snapshot." });
   } else {
@@ -241,7 +295,17 @@ export function validateDiagnostics(input: ValidateDiagnosticsInput): ValidateDi
     version: 1,
     kind: "validation",
     configSource: "loaded-effective-config",
-    diagnostics,
+    classifier: {
+      enabled: classifierEnabled,
+      configuredEnabled: input.config.classifier?.enabled !== false,
+      source: input.classifierEnablementSource ?? (input.classifierConflict ? "legacy-conflict" : input.classifierEnabled === undefined ? "diagnostic" : "configuration"),
+      ...(input.effectiveClassifierBackend ? { backend: input.effectiveClassifierBackend } : {}),
+      readiness: !classifierEnabled ? (input.classifierRuntimeStateIssue ? "blocked" : "inactive") : classifierErrors.length > 0 ? "blocked" : "ready",
+      errors: classifierErrors,
+      ...(input.classifierConflict ? { legacyConflict: input.classifierConflict } : {}),
+      ...(input.classifierRuntimeStateIssue ? { runtimeStateIssue: input.classifierRuntimeStateIssue } : {}),
+    },
+    diagnostics: uniqueDiagnostics(diagnostics),
   };
 }
 
@@ -286,6 +350,8 @@ function allowanceFailureEvidence(reason: unknown): InspectedCandidate["failureE
 /** Build an offline snapshot without route selection, random ranking, or reservation. */
 export function inspectDiagnostics(input: InspectDiagnosticsInput): InspectDiagnosticsReport {
   const now = input.now ?? Date.now();
+  const classifierEnabled = input.classifierEnabled ?? input.config.classifier?.enabled !== false;
+  const classifierErrors = safeClassifierErrors(input.config, input.effectiveClassifierBackend, classifierEnabled);
   let knownModels: Model<Api>[] | undefined;
   let availableModels: Model<Api>[] | undefined;
   const diagnostics: BifrostDiagnostic[] = [];
@@ -343,6 +409,16 @@ export function inspectDiagnostics(input: InspectDiagnosticsInput): InspectDiagn
       cooldownOnAllowanceExhausted: input.config.reliability?.cooldownOnAllowanceExhausted ?? true,
       allowanceCooldownScope: input.config.reliability?.allowanceCooldownScope ?? "provider",
     },
-    diagnostics,
+    classifier: {
+      enabled: classifierEnabled,
+      configuredEnabled: input.config.classifier?.enabled !== false,
+      source: input.classifierEnablementSource ?? (input.classifierConflict ? "legacy-conflict" : input.classifierEnabled === undefined ? "diagnostic" : "configuration"),
+      ...(input.effectiveClassifierBackend ? { backend: input.effectiveClassifierBackend } : {}),
+      readiness: !classifierEnabled ? (input.classifierRuntimeStateIssue ? "blocked" : "inactive") : classifierErrors.length > 0 ? "blocked" : "ready",
+      errors: classifierErrors,
+      ...(input.classifierConflict ? { legacyConflict: input.classifierConflict } : {}),
+      ...(input.classifierRuntimeStateIssue ? { runtimeStateIssue: input.classifierRuntimeStateIssue } : {}),
+    },
+    diagnostics: uniqueDiagnostics(diagnostics),
   };
 }

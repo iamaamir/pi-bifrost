@@ -14,6 +14,7 @@ import { emptyReliabilityV2State } from "../reliability-v2.ts";
 import { buildInitOwnershipReceipt } from "../reconciliation-command.ts";
 import { REGISTRY_REFRESH_TTL_MS } from "../ux-status.ts";
 import { loadConfigForReload } from "../config-load.ts";
+import { resolveClassifierEnablement } from "../runtime-state.ts";
 
 it("renders missing configured entries in text route traces", () => {
   const trace = buildTracePreview({
@@ -44,6 +45,7 @@ function makeCtx(
   registryOverride?: Pick<ReturnType<typeof makeRegistry>, "getAvailableOfType">,
 ) {
   const calls: Array<{ kind: string; value?: unknown; title?: string; options?: string[]; lines?: string[] }> = [];
+  const sessionManager = {};
   const ctx = {
     hasUI: true,
     mode: "tui",
@@ -97,9 +99,10 @@ function makeCtx(
       getAvailable: () => models,
       ...registryOverride,
     },
+    sessionManager,
     scopedModels: [],
   };
-  return { ctx: ctx as never, calls };
+  return { ctx: ctx as never, sessionManager, calls };
 }
 
 function makeStore(reliabilityState?: Record<string, { failures: number[]; openUntil?: number }>, enabled = true) {
@@ -117,16 +120,19 @@ function makeStore(reliabilityState?: Record<string, { failures: number[]; openU
 }
 
 function makeState(saveModeState: () => void = () => {}) {
-  return {
+  const classifierOverrides = new WeakMap<object, boolean>();
+  const state = {
     config: {
       models: {},
       default: undefined as string | undefined,
       strategy: "first",
       reliability: { enabled: true, failureThreshold: 3, windowMinutes: 5, cooldownMinutes: 60 },
+      classifier: undefined as { enabled?: boolean; backend?: string } | undefined,
     },
     enabled: true,
     tierPolicyValid: true,
-    classifierEnabled: true,
+    legacyClassifierEnabled: undefined as boolean | undefined,
+    classifierRuntimeStateIssue: undefined as "unreadable" | "invalid-json" | "invalid-shape" | undefined,
     pinned: false,
     cacheEntries: [],
     reliabilityStore: makeStore(),
@@ -140,10 +146,25 @@ function makeState(saveModeState: () => void = () => {}) {
       reason: config.classifier?.backend ? "explicit config" : "no credential detected",
       auto: !config.classifier?.backend,
     }),
-    getPipeline: () => ({ classify: async () => ({ kind: "unclassified" as const }) }),
+    getPipeline: (_ctx?: unknown) => ({ classify: async (_prompt?: string, _signal?: AbortSignal, _options?: { readonly offline?: boolean }) => ({ kind: "unclassified" as const }) }),
     invalidatePipeline: () => {},
     saveModeState,
   };
+  return Object.assign(state, {
+    getClassifierEnablementForSession: (session: object, config = state.config) => resolveClassifierEnablement(
+      (config as { classifier?: { enabled?: boolean } }).classifier?.enabled !== false,
+      state.legacyClassifierEnabled,
+      classifierOverrides.get(session),
+      state.classifierRuntimeStateIssue,
+    ),
+    setClassifierSessionOverride: (session: object, enabled?: boolean) => {
+      if (enabled === undefined) classifierOverrides.delete(session);
+      else classifierOverrides.set(session, enabled);
+
+    },
+    classifyForSession: async (ctx: unknown, prompt: string, signal?: AbortSignal, options?: { readonly offline?: boolean }) =>
+      await state.getPipeline(ctx).classify(prompt, signal, options),
+  });
 }
 
 async function captureJsonReports(run: () => Promise<void>): Promise<unknown[]> {
@@ -213,6 +234,7 @@ describe("bifrost command ui", () => {
   it("surfaces command descriptions in autocomplete", () => {
     const items = getBifrostCommandCompletions("class") ?? [];
     assert(items.some((item) => item.value === "classifier status" && item.description === "Show classifier state"));
+    assert(items.some((item) => item.value === "classifier off" && item.description === "Disable LLM classifier for this session"));
   });
 
   it("submits exact commands without requiring a second Enter", () => {
@@ -243,8 +265,8 @@ describe("bifrost command ui", () => {
     assert.equal(state.enabled, false);
   });
 
-  it("persists mode toggles", async () => {
-    const { ctx, calls } = makeCtx();
+  it("persists global mode but keeps pin and classifier toggles session-only", async () => {
+    const { ctx, calls, sessionManager } = makeCtx();
     const state = makeState(() => calls.push({ kind: "save" }));
     const dispatch = createCommandRouter(state as never);
 
@@ -252,10 +274,10 @@ describe("bifrost command ui", () => {
     await dispatch("pin", ctx as never);
     await dispatch("classifier off", ctx as never);
 
-    assert.equal(calls.filter((call) => call.kind === "save").length, 3);
+    assert.equal(calls.filter((call) => call.kind === "save").length, 1);
     assert.equal(state.enabled, false);
     assert.equal(state.pinned, true);
-    assert.equal(state.classifierEnabled, false);
+    assert.deepEqual(state.getClassifierEnablementForSession(sessionManager), { enabled: false, source: "session" });
   });
 
   it("does not pin or disable a virtual selection until physical activation succeeds", async () => {
@@ -351,6 +373,31 @@ describe("bifrost command ui", () => {
     const output = calls.find((call) => call.kind === "widget")?.lines?.join("\n") ?? "";
     assert.match(output, /backend=typesafe model=jev-1\.13\.0/);
     assert.match(output, /fallback=prompt fallbackModel=fixture\/classifier/);
+  });
+
+  it("reports legacy classifier conflict without disabled-backend criteria errors", async () => {
+    const { ctx, calls } = makeCtx();
+    const state: any = makeState();
+    state.config = { models: { custom: ["fixture/chat"] }, classifier: { enabled: false, backend: "prompt" } };
+    state.legacyClassifierEnabled = true;
+    const dispatch = createCommandRouter(state);
+
+    await dispatch("classifier status", ctx as never);
+    let output = calls.filter((call) => call.kind === "widget").at(-1)?.lines?.join("\n") ?? "";
+    assert.match(output, /classifier: enabled=false \(legacy-conflict\)/);
+    assert.match(output, /configured=off/);
+    assert.match(output, /legacy saved classifierEnabled=true conflicts with configured=false/);
+    assert.match(output, /configured off takes precedence/);
+    assert.doesNotMatch(output, /classification paused/u);
+    assert.match(output, /readiness=inactive/);
+    assert.doesNotMatch(output, /criteria missing/);
+
+    await dispatch("classifier on", ctx as never);
+    await dispatch("classifier status", ctx as never);
+    output = calls.filter((call) => call.kind === "widget").at(-1)?.lines?.join("\n") ?? "";
+    assert.match(output, /classifier: enabled=true \(session\)/);
+    assert.match(output, /configured=off/);
+    assert.match(output, /explicit session-only override is active/);
   });
 
   it("shows auto-detected pi-native backend and reason in status", async () => {
@@ -605,7 +652,7 @@ describe("bifrost command ui", () => {
     }
   });
 
-  it("disables the classifier in memory when saving its preference fails", async () => {
+  it("disables the classifier for this session without writing runtime preference", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-classifier-off-bootstrap-"));
     const previousCwd = process.cwd();
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -613,7 +660,7 @@ describe("bifrost command ui", () => {
     mkdirSync(process.env.PI_CODING_AGENT_DIR);
     process.chdir(tempDir);
     try {
-      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      const { ctx, calls, sessionManager } = makeCtx([{ provider: "fixture", id: "chat" }]);
       const state = makeState(() => false) as any;
       state.bootstrapModelsInMemory = true;
       state.config.default = "quick";
@@ -622,10 +669,10 @@ describe("bifrost command ui", () => {
       await createCommandRouter(state)("classifier off", ctx);
       await createCommandRouter(state)("classifier test", ctx);
 
-      assert.equal(state.classifierEnabled, false);
+      assert.deepEqual(state.getClassifierEnablementForSession(sessionManager), { enabled: false, source: "session" });
+      assert.equal(calls.filter((call) => call.kind === "save").length, 0);
+      assert.equal(existsSync(join(tempDir, ".pi", "bifrost-state.json")), false);
       assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
-      assert.ok(calls.some((call) => call.kind === "notify"
-        && String(call.value).includes("disabled for this session; its preference could not be saved")));
       assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("Classifier is disabled")));
     } finally {
       process.chdir(previousCwd);
@@ -2156,14 +2203,56 @@ describe("route dispatch", () => {
     assert.equal(state.pinned, false);
   });
 
-  it("routes classifier on and off", async () => {
-    const { ctx } = makeCtx();
-    const state = makeState();
-    state.classifierEnabled = false;
-    await createCommandRouter(state as never)("classifier on", ctx as never);
-    assert.equal(state.classifierEnabled, true);
-    await createCommandRouter(state as never)("classifier off", ctx as never);
-    assert.equal(state.classifierEnabled, false);
+  it("routes classifier on and off as session-only choices", async () => {
+    const { ctx, sessionManager } = makeCtx();
+    let saves = 0;
+    const state = makeState(() => { saves++; }) as any;
+    const getEnabled = () => state.getClassifierEnablementForSession(sessionManager).enabled;
+    await createCommandRouter(state)("classifier on", ctx as never);
+    assert.equal(getEnabled(), true);
+    assert.equal(state.getClassifierEnablementForSession(sessionManager).source, "session");
+    await createCommandRouter(state)("classifier off", ctx as never);
+    assert.equal(getEnabled(), false);
+    assert.equal(state.getClassifierEnablementForSession(sessionManager).source, "session");
+    await createCommandRouter(state)("classifier inherit", ctx as never);
+    assert.equal(getEnabled(), true, "inherit returns to configured behavior");
+    assert.equal(state.getClassifierEnablementForSession(sessionManager).source, "configuration");
+    assert.equal(saves, 0);
+  });
+
+  it("explains each legacy conflict accurately when clearing the session override", async () => {
+    for (const configured of [false, true]) {
+      const { ctx, calls } = makeCtx();
+      const state = makeState();
+      state.config.classifier = { enabled: configured };
+      state.legacyClassifierEnabled = !configured;
+      await createCommandRouter(state as never)("classifier inherit", ctx as never);
+      const output = calls.filter((call) => call.kind === "notify").map((call) => String(call.value)).join("\n");
+      if (configured) {
+        assert.match(output, /classification paused/);
+        assert.match(output, /remove only classifierEnabled/);
+      } else {
+        assert.match(output, /configured off takes precedence/);
+        assert.doesNotMatch(output, /resume configured behavior/);
+      }
+    }
+  });
+
+  it("keeps invalid runtime state paused even when classifier on is requested", async () => {
+    const { ctx, calls, sessionManager } = makeCtx();
+    const state = makeState() as any;
+    state.classifierRuntimeStateIssue = "invalid-json";
+    const dispatch = createCommandRouter(state);
+    await dispatch("classifier on", ctx as never);
+    assert.deepEqual(state.getClassifierEnablementForSession(sessionManager), {
+      enabled: false, source: "runtime-state-invalid", runtimeStateIssue: "invalid-json",
+    });
+    await dispatch("classifier status", ctx as never);
+    const output = calls.filter((call) => call.kind === "widget").at(-1)?.lines?.join("\n") ?? "";
+    assert.match(output, /enabled=false \(runtime-state-invalid\)/);
+    assert.match(output, /readiness=blocked/);
+    assert.match(output, /classification is paused/);
+    assert.ok(calls.some((call) => String(call.value).includes("runtime state is invalid")));
   });
 
   // log() reaches the fake as ctx.ui.notify, recorded as kind "notify" with
@@ -2590,8 +2679,8 @@ describe("dashboard menu", () => {
     }
   });
 
-it("offers 25 rows", async () => {
-    assert.equal((await rowsFor()).length, 25);
+it("offers 26 rows", async () => {
+    assert.equal((await rowsFor()).length, 26);
   });
 
   it("keeps the top row actionable in every state combination", async () => {
