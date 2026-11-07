@@ -4,7 +4,7 @@ import { isGenerativeModel } from "./virtual-model.ts";
 import { evaluateReserves, type EconomicSnapshot, type ReserveEvaluation, type ReservePolicy } from "./economic-signals.ts";
 import { projectBillingPreference, type BillingPreferenceProjection } from "./economic-preferences.ts";
 import { observeAffinity, type AffinityAnchor, type AffinityMode, type AffinityRouteObservation, type PiAffinityModeSource } from "./affinity.ts";
-import { performance } from "node:perf_hooks";
+import { spawnSync } from "node:child_process";
 import { checkProviderScope, compileRoutingScope, type CompiledRoutingScope, type RoutingScope, type RoutingScopeOrigin } from "./routing-scope.ts";
 
 export type RoutingStrategy =
@@ -788,7 +788,8 @@ export function classify(text: string, rules: readonly RouteRule[]): string | un
   for (const rule of rules) {
     try {
       const re = new RegExp(rule.pattern, "i");
-      if (patternExceedsBacktrackingBudget(rule.pattern, re)) continue;
+      verifyRulePatterns([rule.pattern]);
+      if (patternVerdicts.get(rule.pattern) !== false) continue;
       if (re.test(text)) return rule.model;
     } catch (err) {
       console.error(`[bifrost] invalid regex "${rule.pattern}": ${err}`);
@@ -803,40 +804,33 @@ export interface CompiledRule {
   readonly model: string;
 }
 
-// Rule patterns can arrive from any configuration source, but every match runs
-// synchronously on the host event loop, so a pattern that genuinely backtracks
-// without bound must be rejected at compile time. Two defenses, cheapest first:
-// 1. A structural scan rejects the known superlinear families without running
-//    the regular expression at all — quantified groups with unbounded bounds
-//    whose body carries another variable quantifier, or ambiguous alternation
-//    splits (a branch that is a prefix of another branch, or an empty branch).
-//    Execution-free rejection cannot be dodged by anchoring an explosion at
-//    the longest probe subject through a lookaround; the scan itself is
-//    character work and stays microseconds.
-// 2. Canary probes with a small wall-clock budget remain as the backstop for
-//    families the structural scan does not name. The check is per canary, and
-//    a canary must over-run the budget twice, once on re-measure, before its
-//    rule is rejected: one sample can include a scheduler stall, slow
-//    matching repeats. Benign rules stay in microseconds on every rung, so
-//    they are never rejected.
-// Residual limit: the scanner is textual and heuristic (branch overlap is
-// compared literally), so a family that hides its shape from the scan and
-// stays quiet on canaries ≤ the measured trip points still passes. That
-// residual is documented, not silently wide: the scan covers the audit's
-// named families (nested quantifier, repeated group, branch overlap).
+// Run untrusted canary matches outside Pi so a pathological regex can be killed.
+// The structural scan remains the cheap first defense; canaries are heuristic.
 const BACKTRACKING_BUDGET_MS = 10;
+const BACKTRACKING_PROBE_TIMEOUT_MS = 500;
 const BACKTRACKING_CANARIES = [
-  "a".repeat(10) + "b",
-  "a".repeat(14) + "b",
-  "a".repeat(18) + "b",
-  "a".repeat(20) + "b",
-  "a".repeat(22) + "b",
-  "a".repeat(24) + "b",
-  "ab".repeat(11) + "c",
-  "1".repeat(21) + "x",
-  "a".repeat(28) + "b",
-  "a".repeat(32) + "b",
+  "a".repeat(10) + "b", "a".repeat(14) + "b", "a".repeat(18) + "b",
+  "a".repeat(20) + "b", "a".repeat(22) + "b", "a".repeat(24) + "b",
+  "ab".repeat(11) + "c", "1".repeat(21) + "x", "a".repeat(28) + "b", "a".repeat(32) + "b",
 ];
+const BACKTRACKING_PROBE = `
+  const fs = require("node:fs");
+  const { performance } = require("node:perf_hooks");
+  const { patterns, canaries, budget } = JSON.parse(fs.readFileSync(0, "utf8"));
+  for (const pattern of patterns) {
+    const re = new RegExp(pattern, "i");
+    let unsafe = false;
+    for (const canary of canaries) {
+      let start = performance.now();
+      re.test(canary);
+      if (performance.now() - start <= budget) continue;
+      start = performance.now();
+      re.test(canary);
+      if (performance.now() - start > budget) { unsafe = true; break; }
+    }
+    fs.writeSync(1, unsafe ? "1\\n" : "0\\n");
+  }
+`;
 
 interface BacktrackingFrame {
   /** Positions of one alternation branch, pattern-start to `|` or group end. */
@@ -962,55 +956,62 @@ function patternHasSuperlinearShape(pattern: string): boolean {
 // nor re-probes a configured rule and a rejection is reported once per process.
 const patternVerdicts = new Map<string, boolean>();
 
-/**
- * True when a rule pattern must be dropped: either the structural scan names a
- * superlinear shape without executing anything, or a canary probe over-runs the
- * budget twice (once to measure, once to rule out a scheduler stall).
- *
- * The verdict depends only on the pattern text, so it is remembered: a rejected
- * rule is reported once per process instead of on every classified message, and
- * an accepted rule does not re-run the canary ladder per message either.
- */
-function patternExceedsBacktrackingBudget(pattern: string, re: RegExp): boolean {
-  const decided = patternVerdicts.get(pattern);
-  if (decided !== undefined) return decided;
-  const reject = (): true => {
+/** Probe unknown patterns in batches; a timed-out pattern cannot stall later rules. */
+function verifyRulePatterns(patterns: readonly string[]): void {
+  let pending: string[] = [];
+  const reject = (pattern: string): void => {
     patternVerdicts.set(pattern, true);
-    console.error(`[bifrost] rejecting rule pattern with unbounded backtracking: "${pattern}"`);
-    return true;
+    console.error(`[bifrost] rejecting rule pattern with unbounded backtracking or unverifiable safety: "${pattern}"`);
   };
-  if (patternHasSuperlinearShape(pattern)) return reject();
-  try {
-    for (const canary of BACKTRACKING_CANARIES) {
-      const started = performance.now();
-      re.test(canary);
-      if (performance.now() - started <= BACKTRACKING_BUDGET_MS) continue;
-      // One sample can include a scheduler stall; slow matching repeats, so
-      // the same canary must over-run the budget on re-measure as well.
-      const recheckStart = performance.now();
-      re.test(canary);
-      if (performance.now() - recheckStart > BACKTRACKING_BUDGET_MS) return reject();
-    }
-  } catch {
-    return false;
+  for (const pattern of new Set(patterns)) {
+    if (patternVerdicts.has(pattern)) continue;
+    if (patternHasSuperlinearShape(pattern)) reject(pattern);
+    else pending.push(pattern);
   }
-  patternVerdicts.set(pattern, false);
-  return false;
+  while (pending.length > 0) {
+    const batch = pending.slice(0, 32);
+    const result = spawnSync(process.execPath, ["-e", BACKTRACKING_PROBE], {
+      input: JSON.stringify({ patterns: batch, canaries: BACKTRACKING_CANARIES, budget: BACKTRACKING_BUDGET_MS }),
+      encoding: "utf8",
+      timeout: BACKTRACKING_PROBE_TIMEOUT_MS + batch.length * 20,
+      killSignal: "SIGKILL",
+      maxBuffer: Math.max(1024, batch.length * 4),
+      env: { ...process.env, NODE_OPTIONS: "" },
+    });
+    const lines = (result.stdout ?? "").split("\n").filter(Boolean);
+    let completed = 0;
+    for (const line of lines) {
+      if (completed >= batch.length || (line !== "0" && line !== "1")) break;
+      const pattern = pending[completed++]!;
+      if (line === "1") reject(pattern);
+      else patternVerdicts.set(pattern, false);
+    }
+    pending = pending.slice(completed);
+    if (completed === batch.length) continue;
+    if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+      reject(pending[0]!);
+      pending = pending.slice(1);
+    } else {
+      const failed = batch.length - completed;
+      for (const pattern of pending.slice(0, failed)) reject(pattern);
+      pending = pending.slice(failed);
+    }
+  }
 }
 
-/** Compile rules ahead of time; invalid and unbounded patterns are logged once and dropped. */
+/** Compile rules ahead of time; invalid and unverifiable patterns are logged and dropped. */
 export function compileRules(rules: readonly RouteRule[]): CompiledRule[] {
-  const compiled: CompiledRule[] = [];
+  const compiled: Array<CompiledRule & { pattern: string }> = [];
   for (const rule of rules) {
     try {
-      const re = new RegExp(rule.pattern, "i");
-      if (patternExceedsBacktrackingBudget(rule.pattern, re)) continue;
-      compiled.push({ re, model: rule.model });
+      compiled.push({ re: new RegExp(rule.pattern, "i"), model: rule.model, pattern: rule.pattern });
     } catch (err) {
       console.error(`[bifrost] invalid regex "${rule.pattern}": ${err}`);
     }
   }
-  return compiled;
+  verifyRulePatterns(compiled.map((rule) => rule.pattern));
+  return compiled.filter((rule) => patternVerdicts.get(rule.pattern) === false)
+    .map(({ re, model }) => ({ re, model }));
 }
 
 /** Match against precompiled rules — no per-call regex construction. */

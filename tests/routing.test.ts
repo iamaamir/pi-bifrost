@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
+import { spawnSync } from "node:child_process";
 import {
   buildRouteDecisionSummary,
   type ClassificationResult,
@@ -1515,27 +1516,6 @@ describe("routing", () => {
       assert.equal(classifyCompiled("a".repeat(24) + "b", compileRules(rules)), undefined);
     });
 
-    it("does not re-probe an accepted rule on every classify call", () => {
-      // classify() runs per message; an accepted configured rule must not pay
-      // the canary ladder again on the next prompt.
-      const originalNow = performance.now;
-      let reads = 0;
-      try {
-        performance.now = () => {
-          reads += 1;
-          return originalNow.call(performance);
-        };
-        const rules = [{ pattern: "deployment rollback checklist", model: "quick" }];
-        classify("a deployment rollback checklist", rules);
-        const afterFirst = reads;
-        assert.ok(afterFirst > 0, "the first call must probe the canaries");
-        classify("a deployment rollback checklist", rules);
-        assert.equal(reads, afterFirst, "a cached verdict must not probe again");
-      } finally {
-        performance.now = originalNow;
-      }
-    });
-
     it("reports a rejected rule once across repeated classify calls", () => {
       // classify() runs per message, so a rejected configured rule must be
       // diagnosed once instead of logging on every classified prompt.
@@ -1550,7 +1530,7 @@ describe("routing", () => {
         console.error = originalError;
       }
       const reported = messages.filter((line) => line.includes("rejecting rule pattern"));
-      assert.deepEqual(reported, ['[bifrost] rejecting rule pattern with unbounded backtracking: "^(zz+)+$"']);
+      assert.deepEqual(reported, ['[bifrost] rejecting rule pattern with unbounded backtracking or unverifiable safety: "^(zz+)+$"']);
     });
 
     it("still compiles every shipped default rule", () => {
@@ -1568,6 +1548,15 @@ describe("routing", () => {
       ]);
       assert.deepEqual(compiled, []);
       assert.ok(performance.now() - started < 250, "rejection must not pay a long probe");
+    });
+
+    it("bounds a disguised catastrophic rule while compiling", () => {
+      const moduleUrl = new URL("../routing.ts", import.meta.url).href;
+      const script = `const {compileRules} = await import(process.argv[1]); const rules = compileRules([{ pattern: "first literal", model: "first" }, { pattern: "^(?=a{32}b)(?:a|[a])+$", model: "quick" }, { pattern: "last literal", model: "last" }]); process.stdout.write(JSON.stringify(rules.map(rule => rule.model)));`;
+      const result = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script, moduleUrl], { encoding: "utf8", timeout: 2500, killSignal: "SIGKILL" });
+      assert.equal(result.error, undefined, `compilation must finish: ${result.error}`);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), ["first", "last"]);
     });
 
     it("rejects deterministic-free catastrophic alternations without exec", () => {
@@ -1597,25 +1586,6 @@ describe("routing", () => {
       assert.equal(compiled.length, 6);
     });
 
-    it("a scheduling pause does not drop a benign rule", () => {
-      // One elapsed-time sample can include a scheduler stall; before rejecting,
-      // the budget must re-measure the same canary so a one-shot pause is not
-      // misread as backtracking.
-      const originalNow = performance.now;
-      let reads = 0;
-      try {
-        performance.now = () => {
-          reads += 1;
-          // First two reads bracket the first probe with a 1000 ms stall.
-          if (reads === 2) return 1000;
-          if (reads === 1) return 0;
-          return 1000 + reads * 0.1;
-        };
-        const compiled = compileRules([{ pattern: "hello world", model: "quick" }]);
-        assert.equal(compiled.length, 1);
-      } finally {
-        performance.now = originalNow;
-      }
-    });
+
   });
 });
