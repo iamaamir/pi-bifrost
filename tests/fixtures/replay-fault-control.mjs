@@ -101,6 +101,13 @@ export const NAMED_REPLAY_ASSERTIONS = [
     status: "OUTSTANDING",
     remainingEvidence: "The attempted side-effect, queued-work and boundary mutations stayed GREEN. Which remaining guard masks them has not been established; continuation-admission fault sensitivity remains unproven.",
   },
+  ...["v1", "v2"].map((mode) => ({
+    testFile: "tests/integration/auto-virtual.test.mjs",
+    testName: `does not retry a queued steering message after tool activity in ${mode}`,
+    guard: "consumedSteeringBoundary",
+    mutation: "remove the consumed steering boundary guard",
+    status: "PROVEN",
+  })),
   // reliability-v2-auto titles are mode-parameterized; each concrete mode is listed.
   {
     testFile: "tests/integration/reliability-v2-auto.test.mjs",
