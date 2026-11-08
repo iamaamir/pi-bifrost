@@ -720,6 +720,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   const allowanceRetryCancelledBySession = new WeakMap<object, AllowanceRetryToken>();
   const allowanceRetryStopReasonBySession = new WeakMap<object, string>();
   const pendingAllowanceFailureBySession = new WeakMap<object, PendingAllowanceFailure>();
+  const pendingInferredRateBySession = new WeakMap<object, { provider: string; entryId: string; configGeneration: number }>();
   const allowanceActivityBySession = new WeakMap<object, { firstUser?: object; multipleUsers: boolean }>();
   const providerClaimsBySession = new WeakMap<object, Map<string, ProviderTrialClaim>>();
   const providerTrialTimersBySession = new WeakMap<object, Map<string, ReturnType<typeof setInterval>>>();
@@ -3405,6 +3406,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    pendingInferredRateBySession.delete(ctx.sessionManager);
     allowanceActivityBySession.delete(ctx.sessionManager);
     classifierSessionFor(ctx.sessionManager);
     advanceAutoBootstrapLifecycle(ctx.sessionManager, false, ctx);
@@ -3445,6 +3447,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_before_tree", async (_event, ctx) => {
+    pendingInferredRateBySession.delete(ctx.sessionManager);
     allowanceActivityBySession.delete(ctx.sessionManager);
     advanceAutoBootstrapLifecycle(ctx.sessionManager, false, ctx);
     cancelAutoBootstrap(ctx.sessionManager, ctx);
@@ -3459,6 +3462,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async (_event, ctx) => {
+    pendingInferredRateBySession.delete(ctx.sessionManager);
     allowanceActivityBySession.delete(ctx.sessionManager);
     const classifierSession = classifierSessions.get(ctx.sessionManager);
     classifierSession?.controller.abort(new Error("Classifier session ended"));
@@ -3500,12 +3504,22 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("turn_end", async (event, ctx) => {
+    pendingInferredRateBySession.delete(ctx.sessionManager);
     const allowanceRetryEnabled = state.config.reliability?.enabled !== false
       && state.config.reliability?.cooldownOnAllowanceExhausted !== false
       && state.config.reliability?.retryOnAllowanceExhausted === true;
     if ((!reliabilityV2Enabled() && !affinityStore && !allowanceRetryEnabled && !providerCooldownsEnabled()) || event.message.role !== "assistant") return;
     const boundary = turnUserBoundary(ctx, event);
     if (!boundary) return;
+    if (providerCooldownsEnabled() && event.message.stopReason === "error"
+      && typeof event.message.provider === "string" && typeof event.message.model === "string"
+      && typeof event.message.errorMessage === "string" && /^\s*429:/.test(event.message.errorMessage)) {
+      const observation = normalizeFailureObservation({ outcomeId: randomUUID(),
+        modelKey: `${event.message.provider}/${event.message.model}`, source: "runtime", errorText: event.message.errorMessage });
+      if (!isBudgetLimitFailure(observation)) pendingInferredRateBySession.set(ctx.sessionManager, {
+        provider: event.message.provider, entryId: event.messageEntryId, configGeneration: state.configGeneration ?? 0,
+      });
+    }
     if (!reliabilityV2Enabled()) {
       const proof = pendingAffinity(ctx.sessionManager)?.get(boundary.entryId);
       if (proof && proof.userMessage.deref() === boundary.message && (event.message.stopReason === "stop" || event.message.stopReason === "length")) {
@@ -3663,6 +3677,21 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_before_settle", async (event, ctx) => {
+    const inferredRate = pendingInferredRateBySession.get(ctx.sessionManager);
+    pendingInferredRateBySession.delete(ctx.sessionManager);
+    if (inferredRate && event.outcome === "error" && !ctx.signal?.aborted && providerCooldownsEnabled()
+      && inferredRate.configGeneration === (state.configGeneration ?? 0)
+      && event.context.contextEntries.some((entry) => entry.sourceEntry.id === inferredRate.entryId
+        && entry.messages.some((message) => message.role === "assistant" && message.stopReason === "error"))) {
+      try {
+        // shortcut: error text can imitate HTTP 429, replace this inference when Pi exposes transport evidence.
+        await state.providerCooldownStore!.pauseRate(inferredRate.provider);
+        log(ctx, `Bifrost paused provider ${inferredRate.provider} for 5 seconds: rate limit inferred from error text.`, "warning");
+      } catch {
+        providerCooldownWriteFailed = true;
+        log(ctx, "Bifrost could not save the inferred provider cooldown; routing is blocked.", "warning");
+      }
+    }
     const pending = pendingAllowanceFailureBySession.get(ctx.sessionManager);
     if (!pending) return;
     pendingAllowanceFailureBySession.delete(ctx.sessionManager);
@@ -3671,6 +3700,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
+    pendingInferredRateBySession.delete(ctx.sessionManager);
     allowanceActivityBySession.delete(ctx.sessionManager);
     const settled = trackerFor(ctx).settle();
     clearAllowanceRetry(ctx.sessionManager, "agent_settled");

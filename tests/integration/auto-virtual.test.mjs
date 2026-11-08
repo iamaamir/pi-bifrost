@@ -658,24 +658,67 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
     }
   });
 
-  it("does not trust an HTTP 200 stream error that merely says 429", async () => {
-    const home = mkdtempSync(join(tmpdir(), "bifrost-spoof-429-home-"));
-    const work = mkdtempSync(join(tmpdir(), "bifrost-spoof-429-work-"));
+  for (const stateVersion of [1, 2]) {
+    for (const limitedModel of ["rate-limit-429", "spoofed-rate-limit"]) {
+      for (const physical of stateVersion === 2 ? [false] : [false, true]) {
+        it(`temporarily avoids a provider for inferred 429 (${stateVersion}, ${limitedModel}, ${physical ? "physical" : "auto"})`, async () => {
+          const home = mkdtempSync(join(tmpdir(), "bifrost-rate-home-"));
+          const work = mkdtempSync(join(tmpdir(), "bifrost-rate-work-"));
+          try {
+            installAutoSafetyConfig({ home, work, port: server.port, stateVersion,
+              models: [{ provider: "limited", id: limitedModel, reasoning: false }, { provider: "limited", id: "healthy", reasoning: false }, { provider: "backup", id: "healthy", reasoning: false }],
+              quick: [`limited/${limitedModel}`, "limited/healthy", "backup/healthy"], healthy: "backup/healthy" });
+            const rpc = startRpc({ home, work, ...(physical ? { model: `limited/${limitedModel}` } : {}) });
+            try {
+              if (stateVersion === 2) await rpc.request({ type: "prompt", message: "/bifrost reliability migrate --fresh" });
+              const before = await fakeStats(server.port);
+              const start = rpc.records.length;
+              await rpc.userTurn("quick synthetic rate limit");
+              const after = await fakeStats(server.port);
+              assert.deepEqual(after.stats.slice(before.stats.length).filter((item) => item.kind === "generation").map(({ provider, model }) => [provider, model]), [["limited", limitedModel]]);
+              assert.ok(rpc.records.slice(start).some((item) => item.type === "message_end" && item.message?.errorMessage?.startsWith("429:")));
+              assert.equal(existsSync(join(work, ".pi", "bifrost-provider-reliability.json")), true, "inferred 429 must create a bounded provider pause");
+              assert.ok(rpc.records.slice(start).some((item) => item.type === "extension_ui_request" && item.method === "notify" && /inferred.*error text/i.test(item.message ?? "")), "explain the inferred cooldown");
+              await rpc.userTurn("quick next user turn");
+              const later = await fakeStats(server.port);
+              assert.deepEqual(later.stats.slice(before.stats.length).filter((item) => item.kind === "generation").map(({ provider, model }) => [provider, model]), [["limited", limitedModel], ["backup", "healthy"]]);
+            } finally { await rpc.close(); }
+          } finally { rmSync(home, { recursive: true, force: true }); rmSync(work, { recursive: true, force: true }); }
+        });
+      }
+    }
+  }
+
+  it("does not infer a provider rate limit from an unrelated HTTP 500", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-rate-other-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-rate-other-work-"));
     try {
       installAutoSafetyConfig({ home, work, port: server.port,
-        models: [{ provider: "limited", id: "spoofed-rate-limit", reasoning: false }, { provider: "backup", id: "healthy", reasoning: false }],
-        quick: ["limited/spoofed-rate-limit", "backup/healthy"], healthy: "backup/healthy" });
+        models: [{ provider: "limited", id: "fail", reasoning: false }, { provider: "backup", id: "healthy", reasoning: false }],
+        quick: ["limited/fail", "backup/healthy"], healthy: "backup/healthy" });
+      const rpc = startRpc({ home, work });
+      try {
+        await rpc.userTurn("quick synthetic server failure");
+        assert.equal(existsSync(join(work, ".pi", "bifrost-provider-reliability.json")), false);
+      } finally { await rpc.close(); }
+    } finally { rmSync(home, { recursive: true, force: true }); rmSync(work, { recursive: true, force: true }); }
+  });
+
+  it("does not pause a provider after Pi retries an inferred 429 successfully", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-rate-retry-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-rate-retry-work-"));
+    try {
+      installAutoSafetyConfig({ home, work, port: server.port,
+        models: [{ provider: "limited", id: "rate-limit-then-ok", reasoning: false }, { provider: "backup", id: "healthy", reasoning: false }],
+        quick: ["limited/rate-limit-then-ok", "backup/healthy"], healthy: "backup/healthy" });
+      writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } }));
       const rpc = startRpc({ home, work });
       try {
         const before = await fakeStats(server.port);
-        const start = rpc.records.length;
-        await rpc.userTurn("quick synthetic stream error");
+        await rpc.userTurn("quick synthetic retry success");
         const after = await fakeStats(server.port);
-        assert.deepEqual(after.stats.slice(before.stats.length).filter((item) => item.kind === "generation").map(({ provider, model }) => [provider, model]), [["limited", "spoofed-rate-limit"]]);
-        const error = rpc.records.slice(start).find((item) => item.type === "message_end" && item.message?.stopReason === "error");
-        assert.equal(error?.message?.errorMessage, "429: Too many requests");
-        assert.equal(existsSync(join(work, ".pi", "bifrost-provider-reliability.json")), false,
-          "a status-free stream error must not create an authoritative provider cooldown");
+        assert.deepEqual(after.stats.slice(before.stats.length).filter((item) => item.kind === "generation").map(({ model }) => model), ["rate-limit-then-ok", "rate-limit-then-ok"]);
+        assert.equal(existsSync(join(work, ".pi", "bifrost-provider-reliability.json")), false, "successful native retry must not pause the provider");
       } finally { await rpc.close(); }
     } finally { rmSync(home, { recursive: true, force: true }); rmSync(work, { recursive: true, force: true }); }
   });
