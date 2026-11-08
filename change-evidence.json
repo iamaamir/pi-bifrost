@@ -31,10 +31,11 @@
       "requirement": "R12",
       "files": [
         "tests/failure-observations.test.ts",
-        "scripts/fake-provider-server.mjs"
+        "scripts/fake-provider-server.mjs",
+        "failure-observations.ts"
       ],
-      "boundary": "Provider-controlled text that resembles a Pi HTTP error is not sufficient to assert transport status.",
-      "assertions": "A real Pi HTTP 200 stream error containing a 429-like string must not create a provider pause. Direct normalization keeps the ambiguous colon-formatted text as heuristic evidence. This does not fix the missed real HTTP 429 cooldown.",
+      "boundary": "An explicit structured non-429 HTTP status cannot be overridden by a conflicting textual 429 claim. Ambiguous colon-formatted provider text remains heuristic; the missing real-429 cooldown remains open.",
+      "assertions": "A real Pi HTTP 200 stream error containing a 429-like string must not create a provider pause. Direct normalization keeps the ambiguous colon-formatted text as heuristic evidence. This does not fix the missed real HTTP 429 cooldown. A structured HTTP 500 plus conflicting 429 text was reproduced as wrongly authoritative before the fix and now remains heuristic.",
       "boundaryTest": {
         "file": "tests/integration/auto-virtual.test.mjs",
         "name": "does not trust an HTTP 200 stream error that merely says 429"

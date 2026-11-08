@@ -61,6 +61,14 @@ describe("failure observation normalization", () => {
     assert.equal(heuristic?.categoryEvidence, "text_heuristic");
   });
 
+  it("does not override an explicit non-429 status with conflicting error text", () => {
+    for (const httpStatus of [200, 500]) {
+      const observation = normalizeFailureObservation({ ...base, structured: { httpStatus }, errorText: "429 Too many requests" }, { now: 1000 });
+      assert.equal(observation?.category, "rate_limit");
+      assert.equal(observation?.categoryEvidence, "text_heuristic");
+    }
+  });
+
   it("keeps ambiguous Pi-formatted 429 text as a heuristic", () => {
     const observation = normalizeFailureObservation({ ...base, errorText: '429: {"code":"rate_limit_exceeded","message":"Too many requests"}' }, { now: 1000 });
     assert.equal(observation?.category, "rate_limit");
