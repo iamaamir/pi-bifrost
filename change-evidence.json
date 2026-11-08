@@ -27,25 +27,25 @@
       }
     },
     {
-      "id": "ambiguous-provider-429-fails-closed",
+      "id": "inferred-provider-429-short-cooldown",
       "requirement": "R12",
       "files": [
         "tests/failure-observations.test.ts",
         "scripts/fake-provider-server.mjs",
         "failure-observations.ts"
       ],
-      "boundary": "An explicit structured non-429 HTTP status cannot be overridden by a conflicting textual 429 claim. Ambiguous colon-formatted provider text remains heuristic; the missing real-429 cooldown remains open.",
-      "assertions": "A real Pi HTTP 200 stream error containing a 429-like string must not create a provider pause. Direct normalization keeps the ambiguous colon-formatted text as heuristic evidence. This does not fix the missed real HTTP 429 cooldown. A structured HTTP 500 plus conflicting 429 text was reproduced as wrongly authoritative before the fix and now remains heuristic.",
+      "boundary": "After a final failed turn, Pi-style 429 text is an explicitly labeled inference, not HTTP status evidence. It causes a bounded five-second provider pause; structured non-429 status remains authoritative during normalization.",
+      "assertions": "Real Pi tests exercise actual HTTP 429 and an HTTP 200 stream lookalike in v1 Auto and physical mode and v2 Auto. Both trigger the visibly inferred pause and a subsequent turn avoids the same provider. An unrelated 500 and a successful native retry do not trigger the pause. The lookalike is an accepted, bounded false-positive tradeoff. No retry or Retry-After propagation is inferred.",
       "boundaryTest": {
         "file": "tests/integration/auto-virtual.test.mjs",
-        "name": "does not trust an HTTP 200 stream error that merely says 429"
+        "name": "temporarily avoids a provider for inferred 429 (1, rate-limit-429, auto)"
       },
       "invariant": {
         "file": "tests/failure-observations.test.ts",
         "name": "keeps ambiguous Pi-formatted 429 text as a heuristic"
       },
       "fault": {
-        "exception": "Promoting the colon prefix to HTTP-status evidence produced a real-Pi provider sidecar on the HTTP 200 fixture; the named boundary test failed before reverting that candidate."
+        "exception": "Before the implementation, the real Pi boundary test failed because the inferred 429 did not create a provider pause; after the change it passes. The prior no-pause assertion for the HTTP 200 lookalike was intentionally replaced by an explicit bounded-false-positive control."
       }
     }
   ]
