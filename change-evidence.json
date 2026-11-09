@@ -1,115 +1,51 @@
 {
   "schemaVersion": 1,
-  "base": "8551cd3959c81bbba99f3339707e82f8fd705890",
+  "base": "d56096464a2b77e84be0eed6712781122bd9b3a0",
   "contracts": [
     {
-      "id": "rule-pattern-backtracking-bound",
+      "id": "p1-steering-replay-and-removed-model",
       "requirement": "R12",
       "files": [
-        "routing.ts",
-        "tests/routing.test.ts",
-        "schema.json",
-        "docs/guide/configuration.md"
+        "index.ts",
+        "tests/fixtures/replay-fault-control.mjs",
+        "tests/integration/auto-virtual.test.mjs",
+        "tests/reliability-v2-runtime.test.ts"
       ],
-      "boundary": "Known hazardous regex structures are rejected before execution; remaining canary checks execute in a killable subprocess, with cached verdicts shared by both routing paths. Canary coverage is heuristic and does not prove arbitrary patterns safe for all input. Random selection remains total for invalid injected draws.",
-      "assertions": "A separately timed child compiles the lookahead-anchored equivalent-alternation case, rejects it, and preserves safe rules before and after it. Shipped default rules still compile. The test failed with ETIMEDOUT against the previous implementation and passes with isolated probing. Lazy fixed repeats remain usable while nested lazy variable repeats are rejected; the fixed-repeat regression was observed failing before the scanner fix.",
+      "boundary": "Auto allowance recovery requires proof of the first user message for the current agent activity. A second user message, including consumed steering, makes recovery ineligible until agent_settled; missing lifecycle proof fails closed. Legacy Auto degradation for a new user request is permitted only when the last dispatched model remains a candidate in the selected or fallback pool.",
+      "assertions": "Real Pi sessions in reliability v1 and v2 execute a synthetic tool, consume queued steering and receive an empty allowance failure without dispatching an alternate; a later independent settled turn still recovers once. Scratch-only removal of the new guard turns the named assertion red in each mode and restores green. Existing queued follow-up dispatch and empty Pi retry controls also pass. A registered-event harness emits the Pi lifecycle and verifies absent lifecycle proof fails closed in both versions. Real Pi sessions confirm a model removed from the selected/fallback pools is not dispatched after reload in both reliability versions; an unrelated tier, empty pool, and configured-but-unhealthy fallback are covered.",
       "boundaryTest": {
-        "file": "tests/routing.test.ts",
-        "name": "bounds a disguised catastrophic rule while compiling"
+        "file": "tests/integration/auto-virtual.test.mjs",
+        "name": "does not retry a queued steering message after tool activity in v1"
       },
       "invariant": {
-        "file": "tests/routing.test.ts",
-        "name": "still compiles every shipped default rule"
+        "file": "tests/integration/auto-virtual.test.mjs",
+        "name": "does not retry a queued steering message after tool activity in v2"
       },
       "fault": {
-        "exception": "The named boundary test was executed against the previous implementation and failed with ETIMEDOUT before this fix; the same test passes after isolation. No separate source mutation witness was added."
+        "file": "tests/integration/auto-virtual.test.mjs",
+        "name": "proves consumed steering activity blocks replay in v1"
       }
     },
     {
-      "id": "typesafe-decode-buffer-bound",
+      "id": "inferred-provider-429-short-cooldown",
       "requirement": "R12",
       "files": [
-        "typesafe-classifier.ts",
-        "tests/typesafe-classifier.test.ts"
+        "tests/failure-observations.test.ts",
+        "scripts/fake-provider-server.mjs",
+        "failure-observations.ts"
       ],
-      "boundary": "The TypeSafe classifier bounds how much provider response body it materializes while decoding the streamed judgment JSON, so a hostile or stuck endpoint degrades to a classifier miss instead of growing process memory without limit.",
-      "assertions": "A response whose accumulated body exceeds the 1 MiB decode budget is treated as an invalid response: the classification returns undefined, the observation reports invalid_response, and the stream is cancelled. A response within the budget decodes normally, and deadline/abort behavior of the reader is unchanged.",
+      "boundary": "After a final failed turn, Pi-style 429 text is an explicitly labeled inference, not HTTP status evidence. It causes a bounded five-second provider pause; structured non-429 status remains authoritative during normalization.",
+      "assertions": "Real Pi tests exercise actual HTTP 429 and an HTTP 200 stream lookalike in v1 Auto and physical mode and v2 Auto. Both trigger the visibly inferred pause and a subsequent turn avoids the same provider. An unrelated 500 and a successful native retry do not trigger the pause. The lookalike is an accepted, bounded false-positive tradeoff. No retry or Retry-After propagation is inferred.",
       "boundaryTest": {
-        "file": "tests/typesafe-classifier.test.ts",
-        "name": "treats an oversized response body as an invalid response"
+        "file": "tests/integration/auto-virtual.test.mjs",
+        "name": "temporarily avoids a provider for inferred 429 (1, rate-limit-429, auto)"
       },
       "invariant": {
-        "file": "tests/typesafe-classifier.test.ts",
-        "name": "aborts and cancels a stalled response body at deadline"
+        "file": "tests/failure-observations.test.ts",
+        "name": "keeps ambiguous Pi-formatted 429 text as a heuristic"
       },
       "fault": {
-        "exception": "The faulty implementation (an unbounded reader) was the shipped code this change replaced; the named boundary test failed against it before the fix was written and passes after, which is the recorded controlled-fault proof. Injecting the unbounded reader again would only re-run that same recorded red."
-      }
-    },
-    {
-      "id": "affinity-dead-branch-removal",
-      "requirement": "R11",
-      "files": [
-        "affinity.ts"
-      ],
-      "boundary": "resolveRoute collapses every non-automatic origin to not_applicable in a single early return; the removed duplicate branch and its unused origin set were unreachable and carry no behavior. The set-based membership check duplicated the literal not-automatic condition already enforced.",
-      "assertions": "Explicit, pinned, disabled, and non-user targets still report not_applicable without echoing caller labels; unknown labels fail closed to not_applicable; automatic targets keep the full advisory evidence path. No export or type changes.",
-      "boundaryTest": {
-        "file": "tests/affinity.test.ts",
-        "name": "does not advise on explicit, pinned, disabled, or non-user targets"
-      },
-      "invariant": {
-        "file": "tests/affinity.test.ts",
-        "name": "fails closed on unknown origins without echoing caller labels"
-      },
-      "fault": {
-        "exception": "The removed code was unreachable dead logic: no caller routes a literal string origin through this path and every documented non-automatic origin collapsed to not_applicable before the removed branch. There is no faulty implementation exercising the removed branch to inject, and the collapse behavior itself is covered by the named boundary and invariant tests."
-      }
-    },
-    {
-      "id": "packed-package-build-mutex",
-      "requirement": "R16",
-      "files": [
-        "tests/fixtures/pack-lock.mjs",
-        "tests/pack-lock.test.mjs"
-      ],
-      "boundary": "The package test lock serializes acquisition, stale-holder recovery and ownership-checked release through a separate guard. A guard abandoned by a crashed process fails closed and requires manual cleanup.",
-      "assertions": "The delayed stale-reclaimer interleaving cannot allow a contender to enter while a live holder owns the lock. The regression failed against the original implementation and passes with the guard; interrupted or abandoned guards cause bounded timeout.",
-      "boundaryTest": {
-        "file": "tests/pack-lock.test.mjs",
-        "name": "a delayed stale reclaimer cannot expose a live lock to a third acquirer"
-      },
-      "invariant": {
-        "file": "tests/pack-lock.test.mjs",
-        "name": "releases the lock when a guarded build throws"
-      },
-      "fault": {
-        "file": "tests/pack-lock.test.mjs",
-        "name": "fault control: bypassing the lock interleaves the same two builds"
-      }
-    },
-    {
-      "id": "vulnerable-dependency-bumps",
-      "requirement": "R13",
-      "files": [
-        "package.json",
-        "package-lock.json",
-        "tests/router-package.test.mjs",
-        "CHANGELOG.md"
-      ],
-      "boundary": "The shipped dependency chain resolves known vulnerable transitive versions: fast-uri 3.1.8 (four open GHSAs reachable through the ajv-based schema validation) is bumped to the patched 3.1.9, and transitive undici is forced through the existing overrides mechanism to ^8.12.2 (npm's own fix path was a semver-major bump of the host agent package, which stays out of scope).",
-      "assertions": "npm audit reports zero vulnerabilities on the resolved tree and osv-scanner passes the repository deps gate. The resolve-only API still installs into a clean consumer without Pi packages, compiles the strict declaration graph, runs both examples, and resolves without loader flags on Node 22.19+ after the bump and the override. The unreleased changelog records the security-facing effect of these bumps, including the limit of the override to this package's own install tree. The test-exclude-only glob override addresses a newly reported advisory; a real c8 coverage run and the dependency gate were exercised with the patched major release. Five moderate npm audit findings remain in other dependency paths.",
-      "boundaryTest": {
-        "file": "tests/router-package.test.mjs",
-        "name": "compiles and runs the shipped examples in a clean standalone consumer with no Pi packages installed"
-      },
-      "invariant": {
-        "file": "tests/router-package.test.mjs",
-        "name": "installs the packed JS API and resolves without loader flags on Node 22.19+"
-      },
-      "fault": {
-        "file": "tests/router-package.test.mjs",
-        "name": "rejects a Pi dependency injected into the actual packed router graph and restores it"
+        "exception": "Before the implementation, the real Pi boundary test failed because the inferred 429 did not create a provider pause; after the change it passes. The prior no-pause assertion for the HTTP 200 lookalike was intentionally replaced by an explicit bounded-false-positive control."
       }
     }
   ]

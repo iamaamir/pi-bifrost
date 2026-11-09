@@ -2,6 +2,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import { appendFileSync, copyFileSync, existsSync, mkdtempSync, mkdirSync, readdirSync, symlinkSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -657,6 +658,71 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
     }
   });
 
+  for (const stateVersion of [1, 2]) {
+    for (const limitedModel of ["rate-limit-429", "spoofed-rate-limit"]) {
+      for (const physical of stateVersion === 2 ? [false] : [false, true]) {
+        it(`temporarily avoids a provider for inferred 429 (${stateVersion}, ${limitedModel}, ${physical ? "physical" : "auto"})`, async () => {
+          const home = mkdtempSync(join(tmpdir(), "bifrost-rate-home-"));
+          const work = mkdtempSync(join(tmpdir(), "bifrost-rate-work-"));
+          try {
+            installAutoSafetyConfig({ home, work, port: server.port, stateVersion,
+              models: [{ provider: "limited", id: limitedModel, reasoning: false }, { provider: "limited", id: "healthy", reasoning: false }, { provider: "backup", id: "healthy", reasoning: false }],
+              quick: [`limited/${limitedModel}`, "limited/healthy", "backup/healthy"], healthy: "backup/healthy" });
+            const rpc = startRpc({ home, work, ...(physical ? { model: `limited/${limitedModel}` } : {}) });
+            try {
+              if (stateVersion === 2) await rpc.request({ type: "prompt", message: "/bifrost reliability migrate --fresh" });
+              const before = await fakeStats(server.port);
+              const start = rpc.records.length;
+              await rpc.userTurn("quick synthetic rate limit");
+              const after = await fakeStats(server.port);
+              assert.deepEqual(after.stats.slice(before.stats.length).filter((item) => item.kind === "generation").map(({ provider, model }) => [provider, model]), [["limited", limitedModel]]);
+              assert.ok(rpc.records.slice(start).some((item) => item.type === "message_end" && item.message?.errorMessage?.startsWith("429:")));
+              assert.equal(existsSync(join(work, ".pi", "bifrost-provider-reliability.json")), true, "inferred 429 must create a bounded provider pause");
+              assert.ok(rpc.records.slice(start).some((item) => item.type === "extension_ui_request" && item.method === "notify" && /inferred.*error text/i.test(item.message ?? "")), "explain the inferred cooldown");
+              await rpc.userTurn("quick next user turn");
+              const later = await fakeStats(server.port);
+              assert.deepEqual(later.stats.slice(before.stats.length).filter((item) => item.kind === "generation").map(({ provider, model }) => [provider, model]), [["limited", limitedModel], ["backup", "healthy"]]);
+            } finally { await rpc.close(); }
+          } finally { rmSync(home, { recursive: true, force: true }); rmSync(work, { recursive: true, force: true }); }
+        });
+      }
+    }
+  }
+
+  it("does not infer a provider rate limit from an unrelated HTTP 500", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-rate-other-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-rate-other-work-"));
+    try {
+      installAutoSafetyConfig({ home, work, port: server.port,
+        models: [{ provider: "limited", id: "fail", reasoning: false }, { provider: "backup", id: "healthy", reasoning: false }],
+        quick: ["limited/fail", "backup/healthy"], healthy: "backup/healthy" });
+      const rpc = startRpc({ home, work });
+      try {
+        await rpc.userTurn("quick synthetic server failure");
+        assert.equal(existsSync(join(work, ".pi", "bifrost-provider-reliability.json")), false);
+      } finally { await rpc.close(); }
+    } finally { rmSync(home, { recursive: true, force: true }); rmSync(work, { recursive: true, force: true }); }
+  });
+
+  it("does not pause a provider after Pi retries an inferred 429 successfully", async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-rate-retry-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-rate-retry-work-"));
+    try {
+      installAutoSafetyConfig({ home, work, port: server.port,
+        models: [{ provider: "limited", id: "rate-limit-then-ok", reasoning: false }, { provider: "backup", id: "healthy", reasoning: false }],
+        quick: ["limited/rate-limit-then-ok", "backup/healthy"], healthy: "backup/healthy" });
+      writeFileSync(join(home, ".pi", "agent", "settings.json"), JSON.stringify({ retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } }));
+      const rpc = startRpc({ home, work });
+      try {
+        const before = await fakeStats(server.port);
+        await rpc.userTurn("quick synthetic retry success");
+        const after = await fakeStats(server.port);
+        assert.deepEqual(after.stats.slice(before.stats.length).filter((item) => item.kind === "generation").map(({ model }) => model), ["rate-limit-then-ok", "rate-limit-then-ok"]);
+        assert.equal(existsSync(join(work, ".pi", "bifrost-provider-reliability.json")), false, "successful native retry must not pause the provider");
+      } finally { await rpc.close(); }
+    } finally { rmSync(home, { recursive: true, force: true }); rmSync(work, { recursive: true, force: true }); }
+  });
+
   it("does not replay a failed Auto turn after the provider emitted output", async () => {
     const home = mkdtempSync(join(tmpdir(), "bifrost-partial-output-home-"));
     const work = mkdtempSync(join(tmpdir(), "bifrost-partial-output-work-"));
@@ -807,6 +873,58 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
       rmSync(home, { recursive: true, force: true });
       rmSync(work, { recursive: true, force: true });
       rmSync(extensionDir, { recursive: true, force: true });
+    }
+  });
+
+  for (const stateVersion of [1, 2]) it(`does not retry a queued steering message after tool activity in v${stateVersion}`, async () => {
+    const server = await startFakeServer();
+    const serverClosed = once(server.child, "close");
+    const home = mkdtempSync(join(tmpdir(), "bifrost-steering-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-steering-work-"));
+    const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-steering-extension-"));
+    const counterPath = join(work, "tool-counter.jsonl");
+    const model = "queue-tool-then-fail";
+    try {
+      installAutoSafetyConfig({ home, work, port: server.port,
+        models: [{ id: model, reasoning: false }, { provider: "failnext", id: "usage-exhausted", reasoning: false }, { provider: "backup", id: "healthy", reasoning: false }],
+        quick: [`fake/${model}`, "failnext/usage-exhausted", "backup/healthy"], healthy: "backup/healthy", stateVersion, debug: true });
+      await generationGate(server.port, "hold", model);
+      const before = await fakeStats(server.port);
+      const rpc = startRpc({ home, work, noTools: false, extraExtensions: [createAcceptanceTool(extensionDir)],
+        extraEnv: { BIFROST_TEST_TOOL_COUNTER: counterPath, BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${server.port}` } });
+      try {
+        if (stateVersion === 2) {
+          const migration = await rpc.request({ type: "prompt", message: "/bifrost reliability migrate --fresh" });
+          assert.equal(migration.data?.disposition, "handled");
+        }
+        const start = rpc.records.length;
+        const turn = rpc.userTurn("quick synthetic initial tool request").catch((error) => error);
+        await waitFor("initial generation held", async () => (await fakeStats(server.port)).stats.slice(before.stats.length)
+          .some((item) => item.kind === "generation" && item.model === model && !item.completed));
+        const queued = await rpc.request({ type: "steer", message: "quick synthetic queued steering" });
+        assert.equal(queued.data?.disposition, "queued", JSON.stringify(queued));
+        await generationGate(server.port, "release", model);
+        await turn;
+        await waitFor("the turn to settle", async () => rpc.records.slice(start).some((record) => record.type === "agent_settled"));
+        const after = await fakeStats(server.port);
+        const requests = after.stats.slice(before.stats.length).filter((item) => item.kind === "generation");
+        assert.equal(readFileSync(counterPath, "utf8").trim().split("\n").length, 1, "the synthetic tool executed once");
+        assert.deepEqual(requests.map(({ provider, model: selected }) => [provider, selected]), [["fake", model], ["fake", model]],
+          "queued steering after tool activity must not be replayed to an alternate");
+        await rpc.userTurn("quick synthetic separate user request");
+        const final = await fakeStats(server.port);
+        const later = final.stats.slice(after.stats.length).filter((item) => item.kind === "generation");
+        assert.deepEqual(later.map(({ provider, model: selected }) => [provider, selected]),
+          [["failnext", "usage-exhausted"], ["backup", "healthy"]],
+          "a separate settled turn can still retry one empty allowance failure");
+      } finally { await rpc.close(); }
+    } finally {
+      await generationGate(server.port, "release", model);
+      rmSync(home, { recursive: true, force: true });
+      rmSync(work, { recursive: true, force: true });
+      rmSync(extensionDir, { recursive: true, force: true });
+      server.child.kill();
+      await serverClosed;
     }
   });
 
@@ -1228,6 +1346,44 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
     }
   });
 
+  for (const { stateVersion, enabled, label } of [
+    { stateVersion: 1, enabled: true, label: "v1" },
+    { stateVersion: 1, enabled: false, label: "v1 with reliability disabled" },
+    { stateVersion: 2, enabled: true, label: "v2" },
+  ]) it(`does not dispatch a removed last model after reload in ${label}`, async () => {
+    const home = mkdtempSync(join(tmpdir(), "bifrost-removed-model-home-"));
+    const work = mkdtempSync(join(tmpdir(), "bifrost-removed-model-work-"));
+    const configPath = join(work, "bifrost.json");
+    const config = { ...(stateVersion === 2 ? { schemaVersion: 2 } : {}), enabled: true,
+      default: "general", strategy: "first", classifier: { enabled: false },
+      models: { general: ["backup/healthy"] },
+      reliability: { ...(stateVersion === 2 ? { stateVersion: 2 } : {}), enabled } };
+    try {
+      writeFixture({ home, work, port: server.port, models: [{ provider: "backup", id: "healthy", reasoning: false }], bifrost: config });
+      const rpc = startRpc({ home, work });
+      try {
+        if (stateVersion === 2) await rpc.request({ type: "prompt", message: "/bifrost reliability migrate --fresh" });
+        await rpc.userTurn("initial configured generation");
+        const before = await fakeStats(server.port);
+        for (const models of [
+          { general: ["missing-provider/missing-model"] },
+          { general: ["missing-provider/missing-model"], frontier: ["backup/healthy"] },
+          { general: [] },
+        ]) {
+          writeFileSync(configPath, JSON.stringify({ ...config, models }));
+          await rpc.request({ type: "prompt", message: "/bifrost reload" });
+          const start = rpc.records.length;
+          await rpc.userTurn("new prompt after model removal");
+          const after = await fakeStats(server.port);
+          const requests = after.stats.slice(before.stats.length).filter((item) => item.kind === "generation");
+          assert.equal(requests.length, 0, "a model outside the selected and fallback pools must not receive a new user prompt");
+          assert.ok(rpc.records.slice(start).some((item) => item.type === "message_end" && item.message?.stopReason === "error"),
+            "the unavailable pool must be visible as an error");
+        }
+      } finally { await rpc.close(); }
+    } finally { rmSync(home, { recursive: true, force: true }); rmSync(work, { recursive: true, force: true }); }
+  });
+
   it("opens the circuit on failure and visibly degrades to the last dispatched model", async () => {
     const home = mkdtempSync(join(tmpdir(), "bifrost-auto-home-"));
     const work = mkdtempSync(join(tmpdir(), "bifrost-auto-work-"));
@@ -1341,6 +1497,17 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
 // tests/fixtures/replay-fault-control.mjs for the guard inventory, the named
 // proof specs, and the still-outstanding follow-ups.
 describe("G03 replay guard integrity anchor", () => {
+  for (const mode of ["v1", "v2"]) it(`proves consumed steering activity blocks replay in ${mode}`, async () => {
+    const proof = FAULT_PROOFS[`consumedSteering${mode.toUpperCase()}`];
+    const receipt = await runReplayGuardFaultProof({ root: ROOT, proof });
+    assert.equal(receipt.guard, proof.guard);
+    assert.notEqual(receipt.mutantSha256, receipt.baselineSha256);
+    assert.equal(receipt.restoredSha256, receipt.baselineSha256);
+    assert.equal(receipt.phases.green, 0);
+    assert.equal(receipt.phases.red, 1);
+    assert.equal(receipt.phases.restoredGreen, 0);
+  });
+
   it("anchors the baseline source hash and proves isSideEffectFreeAllowanceFailure faults the output-effect no-replay assertion", async () => {
     const source = readFileSync(EXTENSION_PATH, "utf8");
     const hash = createHash("sha256").update(source).digest("hex");

@@ -144,6 +144,13 @@ const server = http.createServer((request, response) => {
     });
     if (model === "usage-exhausted" || model === "usage-exhausted-alternate") return json(response, 429, { error: { code: "usage_limit_reached", message: "The usage limit has been reached. Please try again later." } });
     if (model === "quota") return json(response, 429, { error: { message: "quota exhausted" } }, { "retry-after": "1" });
+    if (model === "rate-limit-429") return json(response, 429, { error: { code: "rate_limit_exceeded", message: "Too many requests" } }, { "retry-after": "60" });
+    if (model === "rate-limit-then-ok" && generationAttempt === 1) return json(response, 429, { error: { message: "Too many requests" } });
+    if (model === "spoofed-rate-limit") {
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end('data: {"error":{"message":"429: Too many requests"}}\n\n');
+      return;
+    }
     if (model === "fail") return json(response, 500, { error: { message: "simulated provider failure" } });
     if (model === "fail-then-ok" && attempt === 1) return json(response, 500, { error: { message: "simulated transient failure" } });
     if (model === "classifier") return sse(response, "general");

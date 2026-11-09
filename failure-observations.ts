@@ -288,8 +288,9 @@ export function normalizeFailureObservation(
   const structuredCategory = (structured ? categoryValue(ownValue(structured, "category")) : undefined)
     ?? semanticErrorCodeCategory(input);
   const failureText = textFromRawFields(input);
-  const structuredStatus = structured ? statusCategory(ownValue(structured, "httpStatus")) : undefined;
-  const status = structuredStatus ?? statusCategory(anchoredHttpStatus(failureText));
+  const rawStatus = structured ? ownValue(structured, "httpStatus") : undefined;
+  const hasStructuredStatus = typeof rawStatus === "number" && Number.isInteger(rawStatus) && rawStatus >= 100 && rawStatus <= 599;
+  const status = hasStructuredStatus ? statusCategory(rawStatus) : statusCategory(anchoredHttpStatus(failureText));
   const categoryFromText = textCategory(failureText);
   const quotaTextOverrides429 = status === "rate_limit" && categoryFromText === "allowance_exhausted";
   const category = structuredCategory ?? (quotaTextOverrides429 ? categoryFromText : status ?? categoryFromText) ?? "unknown";
