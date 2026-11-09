@@ -1,51 +1,32 @@
 {
   "schemaVersion": 1,
-  "base": "d56096464a2b77e84be0eed6712781122bd9b3a0",
+  "base": "a2c21e4d8338f7cfd33ce049145f04a07b42f156",
   "contracts": [
     {
-      "id": "p1-steering-replay-and-removed-model",
+      "id": "inferred-rate-limit-status-provenance",
       "requirement": "R12",
       "files": [
+        "failure-observations.ts",
         "index.ts",
-        "tests/fixtures/replay-fault-control.mjs",
-        "tests/integration/auto-virtual.test.mjs",
-        "tests/reliability-v2-runtime.test.ts"
-      ],
-      "boundary": "Auto allowance recovery requires proof of the first user message for the current agent activity. A second user message, including consumed steering, makes recovery ineligible until agent_settled; missing lifecycle proof fails closed. Legacy Auto degradation for a new user request is permitted only when the last dispatched model remains a candidate in the selected or fallback pool.",
-      "assertions": "Real Pi sessions in reliability v1 and v2 execute a synthetic tool, consume queued steering and receive an empty allowance failure without dispatching an alternate; a later independent settled turn still recovers once. Scratch-only removal of the new guard turns the named assertion red in each mode and restores green. Existing queued follow-up dispatch and empty Pi retry controls also pass. A registered-event harness emits the Pi lifecycle and verifies absent lifecycle proof fails closed in both versions. Real Pi sessions confirm a model removed from the selected/fallback pools is not dispatched after reload in both reliability versions; an unrelated tier, empty pool, and configured-but-unhealthy fallback are covered.",
-      "boundaryTest": {
-        "file": "tests/integration/auto-virtual.test.mjs",
-        "name": "does not retry a queued steering message after tool activity in v1"
-      },
-      "invariant": {
-        "file": "tests/integration/auto-virtual.test.mjs",
-        "name": "does not retry a queued steering message after tool activity in v2"
-      },
-      "fault": {
-        "file": "tests/integration/auto-virtual.test.mjs",
-        "name": "proves consumed steering activity blocks replay in v1"
-      }
-    },
-    {
-      "id": "inferred-provider-429-short-cooldown",
-      "requirement": "R12",
-      "files": [
-        "tests/failure-observations.test.ts",
         "scripts/fake-provider-server.mjs",
-        "failure-observations.ts"
+        "tests/auto-bootstrap-runtime.test.ts",
+        "tests/failure-observations.test.ts",
+        "tests/integration/auto-virtual.test.mjs",
+        "tests/provider-cooldown-runtime.test.ts",
+        "tests/fixtures/replay-fault-control.mjs"
       ],
-      "boundary": "After a final failed turn, Pi-style 429 text is an explicitly labeled inference, not HTTP status evidence. It causes a bounded five-second provider pause; structured non-429 status remains authoritative during normalization.",
-      "assertions": "Real Pi tests exercise actual HTTP 429 and an HTTP 200 stream lookalike in v1 Auto and physical mode and v2 Auto. Both trigger the visibly inferred pause and a subsequent turn avoids the same provider. An unrelated 500 and a successful native retry do not trigger the pause. The lookalike is an accepted, bounded false-positive tradeoff. No retry or Retry-After propagation is inferred.",
+      "boundary": "Only structured numeric HTTP statuses carry HTTP-status evidence. Pi error text with an explicit 429 remains heuristic and is applied at final settlement with a visible short provider pause; background probe inference is also identified visibly. Incidental numbers do not become billing or rate-limit signals.",
+      "assertions": "Real Pi HTTP 200 stream errors using 429 followed by a space or colon produce an inferred warning and bounded provider pause in v1 Auto and physical and v2 Auto. Actual HTTP 429 and native successful retry controls pass. Registered-hook tests exercise both background probe text formats and failed provider persistence. Direct normalization tests verify text provenance, structured-status precedence, and incidental-number controls.",
       "boundaryTest": {
         "file": "tests/integration/auto-virtual.test.mjs",
-        "name": "temporarily avoids a provider for inferred 429 (1, rate-limit-429, auto)"
+        "name": "temporarily avoids a provider for inferred 429 (1, spoofed-rate-limit-space, auto)"
       },
       "invariant": {
         "file": "tests/failure-observations.test.ts",
-        "name": "keeps ambiguous Pi-formatted 429 text as a heuristic"
+        "name": "keeps every status-like 429 text heuristic while explicit quota codes retain allowance meaning"
       },
       "fault": {
-        "exception": "Before the implementation, the real Pi boundary test failed because the inferred 429 did not create a provider pause; after the change it passes. The prior no-pause assertion for the HTTP 200 lookalike was intentionally replaced by an explicit bounded-false-positive control."
+        "exception": "Before the fix, a real Pi HTTP 200 stream containing 429 followed by a space created a provider cooldown without the inferred-text warning; a temporary real-Pi control reproduced that boundary."
       }
     }
   ]

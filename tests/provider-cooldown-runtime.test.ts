@@ -200,6 +200,15 @@ async function turnEnd(
   await h.handlers.get("turn_end")!({ messageEntryId, message, toolResults: [], toolResultEntryIds: [] }, ctx.ctx);
 }
 
+async function settleFailedTurn(h: ReturnType<typeof fixture>, ctx: ReturnType<typeof fixture>["primary"], userEntryId: string): Promise<void> {
+  const entry = ctx.branch.find((item) => item.id === `${userEntryId}-assistant`);
+  assert.ok(entry);
+  await h.handlers.get("agent_before_settle")!({
+    outcome: "error", entries: [],
+    context: { contextEntries: [{ sourceEntry: entry, messages: [entry.message] }], pendingMessages: [] },
+  }, ctx.ctx);
+}
+
 async function seedExpiredUsagePause(cwd: string, provider: string): Promise<void> {
   const seedTime = Date.now() - 120_000;
   const store = new ReliabilityV2Store({
@@ -806,12 +815,26 @@ describe("provider cooldowns through registered Pi runtime hooks", { concurrency
       assert.equal(existsSync(sidecarPath), false, "healthy provider admission should be read-only");
       mkdirSync(sidecarPath);
       await turnEnd(h, h.primary, "write-failure-user", modelA, "error", "HTTP 429 Too Many Requests");
+      (h.primary.ctx as { hasUI: boolean }).hasUI = true;
+      await settleFailedTurn(h, h.primary, "write-failure-user");
+      assert.ok(h.notices.some((notice) => /could not save the inferred provider cooldown/i.test(notice)));
 
       const before = (h.primary.ctx.model as Model<Api>).provider;
       const blocked = await input(h, h.primary, "write-failure-next", "next request");
       assert.equal((blocked as { action: string }).action, "handled");
       assert.equal((h.primary.ctx.model as Model<Api>).provider, before,
         "an unconfirmed pause write must stop later routing instead of choosing a sibling");
+    } finally { h.cleanup(); }
+  });
+
+  it("does not infer a provider status from a later line of an error message", async () => {
+    const modelA = makeModel("provider-a", "model-a");
+    const h = fixture({ models: [modelA], defaultTier: "quick" });
+    try {
+      await input(h, h.primary, "incidental-rate-user", "a normal request");
+      await turnEnd(h, h.primary, "incidental-rate-user", modelA, "error", "other error\n429 Too Many Requests");
+      await settleFailedTurn(h, h.primary, "incidental-rate-user");
+      assert.equal(existsSync(providerReliabilityPath(h.cwd)), false, "only a leading 429-style status may pause the provider");
     } finally { h.cleanup(); }
   });
 
@@ -824,8 +847,10 @@ describe("provider cooldowns through registered Pi runtime hooks", { concurrency
       const routed = await routeAuto(h, h.primary, message);
       assert.equal(routed.model.provider, "provider-a");
       await turnEnd(h, h.primary, "v2-rate-user", modelA, "error", "HTTP 429 Too Many Requests");
+      assert.equal(existsSync(providerReliabilityPath(h.cwd)), false, "a text-only status must wait for final settlement");
+      await settleFailedTurn(h, h.primary, "v2-rate-user");
       const rate = scopeFromSidecar(h.cwd, "rate", "provider-a");
-      assert.ok(rate?.openUntil > Date.now(), "V2 turn_end must persist generic HTTP 429 as provider rate pause");
+      assert.ok(rate?.openUntil > Date.now(), "V2 final settlement must persist an inferred provider rate pause");
 
       const config = JSON.parse(readFileSync(join(h.cwd, "bifrost.json"), "utf8"));
       assert.notEqual(config.reliability.observations?.enabled, true,

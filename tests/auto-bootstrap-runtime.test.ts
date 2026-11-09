@@ -158,6 +158,7 @@ function freshHarness(auto = false, persistedRuntimeState?: { enabled?: boolean;
     confirmCalls: () => confirmCalls,
     probeStarted,
     completeProbe: () => releaseProbe(successfulProbeResponse()),
+    completeProbeError: (errorMessage: string) => releaseProbe({ ...successfulProbeResponse(), stopReason: "error", errorMessage }),
     cleanup: () => {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -170,6 +171,20 @@ function freshHarness(auto = false, persistedRuntimeState?: { enabled?: boolean;
 }
 
 describe("automatic setup through registered Pi hooks", () => {
+  for (const errorText of ["429: Too many requests", "429 Too many requests"]) {
+    it(`labels a background probe rate limit as inferred: ${errorText}`, async () => {
+      const harness = freshHarness(false, undefined, true);
+      try {
+        await harness.handlers.get("session_start")!({}, harness.ctx);
+        await harness.probeStarted;
+        harness.completeProbeError(errorText);
+        for (let i = 0; i < 100 && !harness.notices.some((notice) => /inferred from probe error text/.test(notice)); i++) await flushImmediate();
+        assert.ok(harness.notices.some((notice) => /inferred from probe error text/.test(notice)), "probe cooldown must identify text inference");
+        assert.ok(existsSync(join(process.cwd(), ".pi", "bifrost-provider-reliability.json")), "probe must persist the bounded provider pause");
+      } finally { harness.cleanup(); }
+    });
+  }
+
   it("routes from first-use metadata before saving readable config and ownership in the background", async () => {
     const harness = freshHarness(false, undefined, true);
     try {

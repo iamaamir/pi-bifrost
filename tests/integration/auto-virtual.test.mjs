@@ -659,7 +659,7 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
   });
 
   for (const stateVersion of [1, 2]) {
-    for (const limitedModel of ["rate-limit-429", "spoofed-rate-limit"]) {
+    for (const limitedModel of ["rate-limit-429", "spoofed-rate-limit", "spoofed-rate-limit-space"]) {
       for (const physical of stateVersion === 2 ? [false] : [false, true]) {
         it(`temporarily avoids a provider for inferred 429 (${stateVersion}, ${limitedModel}, ${physical ? "physical" : "auto"})`, async () => {
           const home = mkdtempSync(join(tmpdir(), "bifrost-rate-home-"));
@@ -676,7 +676,7 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
               await rpc.userTurn("quick synthetic rate limit");
               const after = await fakeStats(server.port);
               assert.deepEqual(after.stats.slice(before.stats.length).filter((item) => item.kind === "generation").map(({ provider, model }) => [provider, model]), [["limited", limitedModel]]);
-              assert.ok(rpc.records.slice(start).some((item) => item.type === "message_end" && item.message?.errorMessage?.startsWith("429:")));
+              assert.ok(rpc.records.slice(start).some((item) => item.type === "message_end" && item.message?.errorMessage?.startsWith(limitedModel === "spoofed-rate-limit-space" ? "429 " : "429:")));
               assert.equal(existsSync(join(work, ".pi", "bifrost-provider-reliability.json")), true, "inferred 429 must create a bounded provider pause");
               assert.ok(rpc.records.slice(start).some((item) => item.type === "extension_ui_request" && item.method === "notify" && /inferred.*error text/i.test(item.message ?? "")), "explain the inferred cooldown");
               await rpc.userTurn("quick next user turn");

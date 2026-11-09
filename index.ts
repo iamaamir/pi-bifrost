@@ -1641,14 +1641,20 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             observedAt: Date.now(),
           });
           if (!observation || (!isBudgetLimitFailure(observation) && observation.category !== "rate_limit")) return;
+          if (observation.category === "rate_limit" && observation.categoryEvidence === "text_heuristic"
+            && !hasExplicit429StatusText(result.error ?? "")) return;
           pendingDeniedProviders.add(model.provider);
-          const statusMatch = /^\s*(?:HTTP(?:\/\d(?:\.\d)?)?\s+|status\s*[:=]\s*)?(402|429)\b/i.exec(result.error ?? "");
           providerPauseWrites.push(recordClassifierProviderFailure(
             model,
-            statusMatch ? Number(statusMatch[1]) : undefined,
+            undefined,
             undefined,
             result.error,
-          ).catch(() => {
+            true,
+          ).then((savedObservation) => {
+            if (savedObservation?.category === "rate_limit" && savedObservation.categoryEvidence === "text_heuristic") {
+              log(ctx, `Bifrost paused provider ${model.provider} for 5 seconds: rate limit inferred from probe error text.`, "warning");
+            }
+          }).catch(() => {
             providerCooldownWriteFailed = true;
           }));
         },
@@ -2365,13 +2371,18 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return observation?.category === "allowance_exhausted" || observation?.category === "billing_denied";
   }
 
+  function hasExplicit429StatusText(text: string): boolean {
+    return /^\s*(?:(?:HTTP(?:\/\d(?:\.\d)?)?\s+)|(?:status\s*[:=]\s*))?429\b/i.test(text);
+  }
+
   async function recordClassifierProviderFailure(
     model: Pick<Model<Api>, "provider" | "id">,
     httpStatus?: number,
     retryAfter?: string,
     errorText?: string,
-  ): Promise<void> {
-    if (!providerCooldownsEnabled()) return;
+    allowTextInference = false,
+  ): Promise<ReturnType<typeof normalizeFailureObservation>> {
+    if (!providerCooldownsEnabled()) return undefined;
     const observedAt = Date.now();
     const retryAt = typeof retryAfter === "string" ? classifierRetryAt(retryAfter, observedAt) : undefined;
     const observation = normalizeFailureObservation({
@@ -2382,16 +2393,20 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       ...(httpStatus === undefined ? {} : { structured: { httpStatus, ...(retryAt === undefined ? {} : { retryAt }) } }),
       observedAt,
     }, { now: observedAt });
-    if (!observation) return;
+    if (!observation) return undefined;
     const store = state.providerCooldownStore;
     if (!store) throw new Error("Provider cooldown state is unavailable.");
     if (isBudgetLimitFailure(observation)
       && state.config.reliability?.cooldownOnAllowanceExhausted !== false
       && state.config.reliability?.allowanceCooldownScope !== "model") {
       await store.pauseUsage(model.provider, observedAt);
-    } else if (observation.category === "rate_limit" && observation.categoryEvidence === "http_status") {
+    } else if (observation.category === "rate_limit"
+      && (observation.categoryEvidence === "http_status" || observation.categoryEvidence === "structured"
+        || (allowTextInference && observation.categoryEvidence === "text_heuristic"
+          && hasExplicit429StatusText(errorText ?? "")))) {
       await store.pauseRate(model.provider, observation.retryAt, observedAt);
     }
+    return observation;
   }
 
   async function claimProviderDispatch(ctx: ExtensionContext, model: Model<Api>): Promise<ProviderTrialClaim | undefined> {
@@ -3513,10 +3528,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     if (!boundary) return;
     if (providerCooldownsEnabled() && event.message.stopReason === "error"
       && typeof event.message.provider === "string" && typeof event.message.model === "string"
-      && typeof event.message.errorMessage === "string" && /^\s*429:/.test(event.message.errorMessage)) {
+      && typeof event.message.errorMessage === "string" && hasExplicit429StatusText(event.message.errorMessage)) {
       const observation = normalizeFailureObservation({ outcomeId: randomUUID(),
         modelKey: `${event.message.provider}/${event.message.model}`, source: "runtime", errorText: event.message.errorMessage });
-      if (!isBudgetLimitFailure(observation)) pendingInferredRateBySession.set(ctx.sessionManager, {
+      if (observation?.category === "rate_limit" && observation.categoryEvidence === "text_heuristic") pendingInferredRateBySession.set(ctx.sessionManager, {
         provider: event.message.provider, entryId: event.messageEntryId, configGeneration: state.configGeneration ?? 0,
       });
     }
@@ -3684,7 +3699,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       && event.context.contextEntries.some((entry) => entry.sourceEntry.id === inferredRate.entryId
         && entry.messages.some((message) => message.role === "assistant" && message.stopReason === "error"))) {
       try {
-        // shortcut: error text can imitate HTTP 429, replace this inference when Pi exposes transport evidence.
+        // Pi exposes only error text here, so keep the cooldown short and label it as inferred.
         await state.providerCooldownStore!.pauseRate(inferredRate.provider);
         log(ctx, `Bifrost paused provider ${inferredRate.provider} for 5 seconds: rate limit inferred from error text.`, "warning");
       } catch {

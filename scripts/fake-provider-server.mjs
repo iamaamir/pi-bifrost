@@ -146,9 +146,10 @@ const server = http.createServer((request, response) => {
     if (model === "quota") return json(response, 429, { error: { message: "quota exhausted" } }, { "retry-after": "1" });
     if (model === "rate-limit-429") return json(response, 429, { error: { code: "rate_limit_exceeded", message: "Too many requests" } }, { "retry-after": "60" });
     if (model === "rate-limit-then-ok" && generationAttempt === 1) return json(response, 429, { error: { message: "Too many requests" } });
-    if (model === "spoofed-rate-limit") {
+    if (model === "spoofed-rate-limit" || model === "spoofed-rate-limit-space") {
       response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end('data: {"error":{"message":"429: Too many requests"}}\n\n');
+      const message = model === "spoofed-rate-limit-space" ? "429 Too many requests" : "429: Too many requests";
+      response.end(`data: ${JSON.stringify({ error: { message } })}\n\n`);
       return;
     }
     if (model === "fail") return json(response, 500, { error: { message: "simulated provider failure" } });
