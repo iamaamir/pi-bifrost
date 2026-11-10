@@ -59,7 +59,7 @@ import { join } from "node:path";
 import { processGroupExists } from "../../scripts/acceptance/core.mjs";
 import { closeTracking, cleanupFailure, detachOwnedHandles, spawnOwned } from "./child-auto-inline-harness.mjs";
 
-export const REPLAY_GUARD_BASELINE_SHA256 = "dd3e3087a31c0eea9fddadf303fc068442faaadbaafc6d8db0af348cb09b80d4";
+export const REPLAY_GUARD_BASELINE_SHA256 = "11c37de4d617fc30949bc56ffb32818791a0c5f0d4eddeaf1f1d8a9562ac5abd";
 export const REPLAY_GUARD_FUNCTIONS = [
   "isSideEffectFreeAllowanceFailure",
   "allowanceRetryBoundaryStillSafe",
@@ -69,9 +69,9 @@ export const REPLAY_GUARD_FUNCTIONS = [
 // Guard line anchors are exact against the baseline commit; keep them in sync
 // with index.ts when the guards move.
 export const REPLAY_GUARD_LINES = {
-  autoBoundaryStillActive: 1826,
-  isSideEffectFreeAllowanceFailure: 1883,
-  allowanceRetryBoundaryStillSafe: 2656,
+  autoBoundaryStillActive: 1830,
+  isSideEffectFreeAllowanceFailure: 1887,
+  allowanceRetryBoundaryStillSafe: 2660,
 };
 
 // Each PROVEN pair has an executable fault reaching its exact named assertion.

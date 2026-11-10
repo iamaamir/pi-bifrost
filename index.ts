@@ -1650,12 +1650,16 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             undefined,
             result.error,
             true,
-          ).then((savedObservation) => {
-            if (savedObservation?.category === "rate_limit" && savedObservation.categoryEvidence === "text_heuristic") {
-              log(ctx, `Bifrost paused provider ${model.provider} for 5 seconds: rate limit inferred from probe error text.`, "warning");
-            }
-          }).catch(() => {
+          ).catch(() => {
             providerCooldownWriteFailed = true;
+            return undefined;
+          }).then((savedObservation) => {
+            try {
+              if (savedObservation?.category === "rate_limit" && savedObservation.categoryEvidence === "text_heuristic"
+                && autoBootstrapCanUpdateProgress(record)) {
+                log(ctx, `Bifrost paused provider ${model.provider} for 5 seconds: rate limit inferred from probe error text.`, "warning");
+              }
+            } catch { /* an optional notification cannot invalidate a saved cooldown */ }
           }));
         },
       }).then(async ({ results, cancelled }) => {

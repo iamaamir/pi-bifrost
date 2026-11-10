@@ -44,11 +44,13 @@ function freshHarness(auto = false, persistedRuntimeState?: { enabled?: boolean;
   const branch: any[] = [];
   const handlers = new Map<string, Hook>();
   const notices: string[] = [];
+  let throwNotices = false;
   let availableReads = 0;
   let refreshCalls = 0;
   let probeRequests = 0;
   const probedModels: string[] = [];
   let classifierModels: unknown[] = [];
+  let immediateProbeSuccessProvider: string | undefined;
   let selected: string | undefined;
   let routeDefinition: VirtualModelDefinition | undefined;
   let confirmCalls = 0;
@@ -99,6 +101,9 @@ function freshHarness(auto = false, persistedRuntimeState?: { enabled?: boolean;
         probeRequests += 1;
         probedModels.push(`${probeModel.provider}/${probeModel.id}`);
         onProbeStarted();
+        if (probeModel.provider === immediateProbeSuccessProvider) {
+          return { result: async () => ({ ...successfulProbeResponse(), provider: probeModel.provider, model: probeModel.id }) };
+        }
         return { result: () => deferredProbe };
       } } : {}),
     },
@@ -108,7 +113,7 @@ function freshHarness(auto = false, persistedRuntimeState?: { enabled?: boolean;
     },
     ui: {
       theme: { fg: (_color: string, value: string) => value },
-      notify: (message: string) => notices.push(message),
+      notify: (message: string) => { if (throwNotices && /inferred from probe error text/.test(message)) throw new Error("notification unavailable"); notices.push(message); },
       setStatus: (id: string, text: string) => { statuses.set(id, text); },
       setWidget: (id: string, lines: string[]) => {
         if (id === "bifrost-probe") {
@@ -140,12 +145,14 @@ function freshHarness(auto = false, persistedRuntimeState?: { enabled?: boolean;
     handlers,
     model,
     setAvailable: (next: Model<Api>[]) => { models = next; },
+    setImmediateProbeSuccessProvider: (provider: string) => { immediateProbeSuccessProvider = provider; },
     setClassifierModels: (next: unknown[]) => { classifierModels = next; },
     probeModels: () => [...probedModels],
     autoModel,
     branch,
     routeDefinition: () => routeDefinition,
     notices,
+    makeNoticesThrow: () => { throwNotices = true; },
     availableReads: () => availableReads,
     refreshCalls: () => refreshCalls,
     probeRequests: () => probeRequests,
@@ -184,6 +191,57 @@ describe("automatic setup through registered Pi hooks", () => {
       } finally { harness.cleanup(); }
     });
   }
+
+  it("keeps a healthy provider routable when an inferred cooldown warning cannot be shown", async () => {
+    const harness = freshHarness(false, undefined, true);
+    try {
+      const alternate = makeModel("fixture-alt", "quick", 0.3, 0.3);
+      harness.setAvailable([harness.model, alternate]);
+      harness.setImmediateProbeSuccessProvider(alternate.provider);
+      await harness.handlers.get("session_start")!({}, harness.ctx);
+      await harness.probeStarted;
+      harness.makeNoticesThrow();
+      harness.completeProbeError("429: Too many requests");
+      for (let i = 0; i < 100 && !existsSync(join(process.cwd(), ".pi", "bifrost.json")); i++) await flushImmediate();
+      assert.ok(existsSync(join(process.cwd(), ".pi", "bifrost-provider-reliability.json")), "the inferred cooldown must persist");
+      assert.ok(existsSync(join(process.cwd(), ".pi", "bifrost.json")), "the healthy alternate provider must still be saved for routing");
+      const saved = JSON.parse(readFileSync(join(process.cwd(), ".pi", "bifrost.json"), "utf8")) as { models?: Record<string, string[]> };
+      assert.deepEqual(Object.values(saved.models ?? {}).flat(), ["fixture-alt/quick"]);
+      assert.equal(harness.notices.some((notice) => /inferred from probe error text/.test(notice)), false);
+    } finally { harness.cleanup(); }
+  });
+
+  it("does not notify from a provider cooldown write after its session shuts down", async () => {
+    const harness = freshHarness(false, undefined, true);
+    const originalSetScopeCooldown = ReliabilityV2Store.prototype.setScopeCooldown;
+    let releaseWrite!: () => void;
+    let writeStarted!: () => void;
+    const writeGate = new Promise<void>((resolve) => { releaseWrite = resolve; });
+    const writeStartedPromise = new Promise<void>((resolve) => { writeStarted = resolve; });
+    ReliabilityV2Store.prototype.setScopeCooldown = async function (modelKey, openUntil) {
+      if (modelKey.includes("bifrost-provider-rate/")) {
+        writeStarted();
+        await writeGate;
+      }
+      return originalSetScopeCooldown.call(this, modelKey, openUntil);
+    };
+    try {
+      await harness.handlers.get("session_start")!({}, harness.ctx);
+      await harness.probeStarted;
+      harness.completeProbeError("429: Too many requests");
+      await writeStartedPromise;
+      await harness.handlers.get("session_shutdown")!({}, harness.ctx);
+      releaseWrite();
+      for (let i = 0; i < 100 && !existsSync(join(process.cwd(), ".pi", "bifrost-provider-reliability.json")); i++) await flushImmediate();
+      assert.ok(existsSync(join(process.cwd(), ".pi", "bifrost-provider-reliability.json")), "the in-flight cooldown write should finish");
+      assert.equal(harness.notices.some((notice) => /inferred from probe error text/.test(notice)), false,
+        "a stale bootstrap session must not receive its delayed warning");
+    } finally {
+      releaseWrite();
+      ReliabilityV2Store.prototype.setScopeCooldown = originalSetScopeCooldown;
+      harness.cleanup();
+    }
+  });
 
   it("routes from first-use metadata before saving readable config and ownership in the background", async () => {
     const harness = freshHarness(false, undefined, true);

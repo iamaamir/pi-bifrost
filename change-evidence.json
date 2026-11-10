@@ -16,7 +16,7 @@
         "tests/fixtures/replay-fault-control.mjs"
       ],
       "boundary": "Only structured numeric HTTP statuses carry HTTP-status evidence. Pi error text with an explicit 429 remains heuristic and is applied at final settlement with a visible short provider pause; background probe inference is also identified visibly. Incidental numbers do not become billing or rate-limit signals.",
-      "assertions": "Real Pi HTTP 200 stream errors using 429 followed by a space or colon produce an inferred warning and bounded provider pause in v1 Auto and physical and v2 Auto. Actual HTTP 429 and native successful retry controls pass. Registered-hook tests exercise both background probe text formats and failed provider persistence. Direct normalization tests verify text provenance, structured-status precedence, and incidental-number controls.",
+      "assertions": "Real Pi HTTP 200 stream errors using 429 followed by a space or colon produce an inferred warning and bounded provider pause in v1 Auto and physical and v2 Auto. Actual HTTP 429 and native successful retry controls pass. Registered-hook tests exercise both background probe text formats and failed provider persistence. Direct normalization tests verify text provenance, structured-status precedence, and incidental-number controls. A delayed background cooldown write cannot notify after session shutdown, and a throwing optional warning cannot block saving a healthy alternate.",
       "boundaryTest": {
         "file": "tests/integration/auto-virtual.test.mjs",
         "name": "temporarily avoids a provider for inferred 429 (1, spoofed-rate-limit-space, auto)"
