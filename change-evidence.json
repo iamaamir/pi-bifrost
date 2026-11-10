@@ -25,6 +25,28 @@
       "fault": {
         "exception": "Conflict resolution only; no production routing behavior changes. The target test exercises a real non-executable temporary binary rather than an injected production fault."
       }
+    },
+    {
+      "id": "bounded-pr-secret-scanning",
+      "requirement": "R16",
+      "files": [
+        ".github/workflows/static-analysis.yml",
+        "scripts/scan-gitleaks-pr-history.sh",
+        "scripts/test-gitleaks-pr-boundaries.sh"
+      ],
+      "boundary": "Scan all non-merge commits introduced by the actual PR base-to-head range, and scan each new merge commit against its first parent. Preserve the configured Gitleaks rules and fail closed on scan errors.",
+      "assertions": "With Gitleaks 8.24.3, executable controls detect a canary added and later removed on a side branch and one introduced only in a merge resolution, including when removed later. Controls do not report a historical base canary or its removal. The secret job runs these controls. Node test witnesses verify pinned external action references and a narrowly scoped secret allowlist.",
+      "boundaryTest": {
+        "file": "tests/tooling-config.test.mjs",
+        "name": "pins every external action reference to a full commit SHA"
+      },
+      "invariant": {
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the secret allowlist is scoped to the generic API key rule and exact values"
+      },
+      "fault": {
+        "exception": "The executable scanner controls run in the secret job rather than the Node test-event runner. In a disposable copy, removing merge scanning made the named merge-resolution-only control fail."
+      }
     }
   ]
 }
