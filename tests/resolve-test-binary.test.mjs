@@ -114,7 +114,7 @@ describe("resolveTestBinary", () => {
             root: tempDir,
             env: { PI_BIN: bin, PATH: "" },
           }),
-        new RegExp(`PI_BIN="${bin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}" is set but is not an executable file\.`),
+        new RegExp(`PI_BIN="${bin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}" is set but is not an executable file\\.`),
       );
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
