@@ -1,51 +1,51 @@
 {
   "schemaVersion": 1,
-  "base": "d56096464a2b77e84be0eed6712781122bd9b3a0",
+  "base": "a2c21e4d8338f7cfd33ce049145f04a07b42f156",
   "contracts": [
     {
-      "id": "p1-steering-replay-and-removed-model",
-      "requirement": "R12",
+      "id": "merge-main-conflict-resolution",
+      "requirement": "R16",
       "files": [
-        "index.ts",
-        "tests/fixtures/replay-fault-control.mjs",
-        "tests/integration/auto-virtual.test.mjs",
-        "tests/reliability-v2-runtime.test.ts"
+        ".gitignore",
+        "AGENTS.md",
+        "LICENSE",
+        "README.md",
+        "tests/resolve-test-binary.test.mjs"
       ],
-      "boundary": "Auto allowance recovery requires proof of the first user message for the current agent activity. A second user message, including consumed steering, makes recovery ineligible until agent_settled; missing lifecycle proof fails closed. Legacy Auto degradation for a new user request is permitted only when the last dispatched model remains a candidate in the selected or fallback pool.",
-      "assertions": "Real Pi sessions in reliability v1 and v2 execute a synthetic tool, consume queued steering and receive an empty allowance failure without dispatching an alternate; a later independent settled turn still recovers once. Scratch-only removal of the new guard turns the named assertion red in each mode and restores green. Existing queued follow-up dispatch and empty Pi retry controls also pass. A registered-event harness emits the Pi lifecycle and verifies absent lifecycle proof fails closed in both versions. Real Pi sessions confirm a model removed from the selected/fallback pools is not dispatched after reload in both reliability versions; an unrelated tier, empty pool, and configured-but-unhealthy fallback are covered.",
+      "boundary": "Merge the current main branch into v2, preserving both ignore rules, main copyright attribution, v2 license link, main badge, main instruction updates, and the upstream test assertion correction. Product routing code is unchanged.",
+      "assertions": "The merge commit has the current v2 and main tips as parents and merges cleanly with main. The targeted resolver tests check the upstream assertion and executable resolution. Diff checks confirm no conflict markers or whitespace defects.",
       "boundaryTest": {
-        "file": "tests/integration/auto-virtual.test.mjs",
-        "name": "does not retry a queued steering message after tool activity in v1"
+        "file": "tests/resolve-test-binary.test.mjs",
+        "name": "throws when explicit env is not executable"
       },
       "invariant": {
-        "file": "tests/integration/auto-virtual.test.mjs",
-        "name": "does not retry a queued steering message after tool activity in v2"
+        "file": "tests/resolve-test-binary.test.mjs",
+        "name": "prefers explicit env value"
       },
       "fault": {
-        "file": "tests/integration/auto-virtual.test.mjs",
-        "name": "proves consumed steering activity blocks replay in v1"
+        "exception": "Conflict resolution only; no production routing behavior changes. The target test exercises a real non-executable temporary binary rather than an injected production fault."
       }
     },
     {
-      "id": "inferred-provider-429-short-cooldown",
-      "requirement": "R12",
+      "id": "bounded-pr-secret-scanning",
+      "requirement": "R16",
       "files": [
-        "tests/failure-observations.test.ts",
-        "scripts/fake-provider-server.mjs",
-        "failure-observations.ts"
+        ".github/workflows/static-analysis.yml",
+        "scripts/scan-gitleaks-pr-history.sh",
+        "scripts/test-gitleaks-pr-boundaries.sh"
       ],
-      "boundary": "After a final failed turn, Pi-style 429 text is an explicitly labeled inference, not HTTP status evidence. It causes a bounded five-second provider pause; structured non-429 status remains authoritative during normalization.",
-      "assertions": "Real Pi tests exercise actual HTTP 429 and an HTTP 200 stream lookalike in v1 Auto and physical mode and v2 Auto. Both trigger the visibly inferred pause and a subsequent turn avoids the same provider. An unrelated 500 and a successful native retry do not trigger the pause. The lookalike is an accepted, bounded false-positive tradeoff. No retry or Retry-After propagation is inferred.",
+      "boundary": "Scan all non-merge commits introduced by the actual PR base-to-head range, and scan each new merge commit against its first parent. Preserve the configured Gitleaks rules and fail closed on scan errors.",
+      "assertions": "With Gitleaks 8.24.3, executable controls detect a canary added and later removed on a side branch and one introduced only in a merge resolution, including when removed later. Controls do not report a historical base canary or its removal. The secret job runs these controls. Node test witnesses verify pinned external action references and a narrowly scoped secret allowlist.",
       "boundaryTest": {
-        "file": "tests/integration/auto-virtual.test.mjs",
-        "name": "temporarily avoids a provider for inferred 429 (1, rate-limit-429, auto)"
+        "file": "tests/tooling-config.test.mjs",
+        "name": "pins every external action reference to a full commit SHA"
       },
       "invariant": {
-        "file": "tests/failure-observations.test.ts",
-        "name": "keeps ambiguous Pi-formatted 429 text as a heuristic"
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the secret allowlist is scoped to the generic API key rule and exact values"
       },
       "fault": {
-        "exception": "Before the implementation, the real Pi boundary test failed because the inferred 429 did not create a provider pause; after the change it passes. The prior no-pause assertion for the HTTP 200 lookalike was intentionally replaced by an explicit bounded-false-positive control."
+        "exception": "The executable scanner controls run in the secret job rather than the Node test-event runner. In a disposable copy, removing merge scanning made the named merge-resolution-only control fail."
       }
     }
   ]

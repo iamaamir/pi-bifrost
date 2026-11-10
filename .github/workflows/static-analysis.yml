@@ -76,12 +76,36 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Bind Gitleaks to the pull request base
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          first_pr_commit="$(git rev-list --first-parent --reverse "$BASE_SHA..$HEAD_SHA" | sed -n '1p')"
+          if [ -z "$first_pr_commit" ]; then
+            echo "Could not determine the first pull request commit" >&2
+            exit 1
+          fi
+          echo "BASE_REF=$first_pr_commit" >> "$GITHUB_ENV"
       - name: Scan commits for secrets
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # The personal-account action does not require GITLEAKS_LICENSE.
           GITLEAKS_CONFIG: ${{ github.workspace }}/.gitleaks.toml
+      - name: Verify secret scan boundaries
+        if: github.event_name == 'pull_request'
+        run: bash scripts/test-gitleaks-pr-boundaries.sh
+      - name: Scan all introduced commits and merge resolutions
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          GITLEAKS_CONFIG: ${{ github.workspace }}/.gitleaks.toml
+        run: |
+          set -o pipefail
+          scripts/scan-gitleaks-pr-history.sh "$BASE_SHA" "$HEAD_SHA"
 
   sast:
     runs-on: ubuntu-latest

@@ -139,3 +139,5 @@ Set `reliability.retryOnAllowanceExhausted` to `true` to opt in to the one Auto 
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+[![Greptile: The War on Bugs](https://www.greptile.com/badge.svg)](https://www.greptile.com/?utm_source=oss_badge&utm_medium=readme&utm_campaign=greptile_for_open_source)
