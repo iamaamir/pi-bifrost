@@ -19,3 +19,4 @@ evidence/
 
 *.cpuprofile
 *.heapprofile
+docs/research/*

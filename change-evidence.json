@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "base": "a2c21e4d8338f7cfd33ce049145f04a07b42f156",
+  "base": "5999c768477d58d20adb823c61de1cfd87250daa",
   "contracts": [
     {
       "id": "inferred-rate-limit-status-provenance",
