@@ -1,51 +1,32 @@
 {
   "schemaVersion": 1,
-  "base": "a2c21e4d8338f7cfd33ce049145f04a07b42f156",
+  "base": "5999c768477d58d20adb823c61de1cfd87250daa",
   "contracts": [
     {
-      "id": "merge-main-conflict-resolution",
-      "requirement": "R16",
+      "id": "inferred-rate-limit-status-provenance",
+      "requirement": "R12",
       "files": [
-        ".gitignore",
-        "AGENTS.md",
-        "LICENSE",
-        "README.md",
-        "tests/resolve-test-binary.test.mjs"
+        "failure-observations.ts",
+        "index.ts",
+        "scripts/fake-provider-server.mjs",
+        "tests/auto-bootstrap-runtime.test.ts",
+        "tests/failure-observations.test.ts",
+        "tests/integration/auto-virtual.test.mjs",
+        "tests/provider-cooldown-runtime.test.ts",
+        "tests/fixtures/replay-fault-control.mjs"
       ],
-      "boundary": "Merge the current main branch into v2, preserving both ignore rules, main copyright attribution, v2 license link, main badge, main instruction updates, and the upstream test assertion correction. Product routing code is unchanged.",
-      "assertions": "The merge commit has the current v2 and main tips as parents and merges cleanly with main. The targeted resolver tests check the upstream assertion and executable resolution. Diff checks confirm no conflict markers or whitespace defects.",
+      "boundary": "Only structured numeric HTTP statuses carry HTTP-status evidence. Pi error text with an explicit 429 remains heuristic and is applied at final settlement with a visible short provider pause; background probe inference is also identified visibly. Incidental numbers do not become billing or rate-limit signals.",
+      "assertions": "Real Pi HTTP 200 stream errors using 429 followed by a space or colon produce an inferred warning and bounded provider pause in v1 Auto and physical and v2 Auto. Actual HTTP 429 and native successful retry controls pass. Registered-hook tests exercise both background probe text formats and failed provider persistence. Direct normalization tests verify text provenance, structured-status precedence, and incidental-number controls. A delayed background cooldown write cannot notify after session shutdown, and a throwing optional warning cannot block saving a healthy alternate.",
       "boundaryTest": {
-        "file": "tests/resolve-test-binary.test.mjs",
-        "name": "throws when explicit env is not executable"
+        "file": "tests/integration/auto-virtual.test.mjs",
+        "name": "temporarily avoids a provider for inferred 429 (1, spoofed-rate-limit-space, auto)"
       },
       "invariant": {
-        "file": "tests/resolve-test-binary.test.mjs",
-        "name": "prefers explicit env value"
+        "file": "tests/failure-observations.test.ts",
+        "name": "keeps every status-like 429 text heuristic while explicit quota codes retain allowance meaning"
       },
       "fault": {
-        "exception": "Conflict resolution only; no production routing behavior changes. The target test exercises a real non-executable temporary binary rather than an injected production fault."
-      }
-    },
-    {
-      "id": "bounded-pr-secret-scanning",
-      "requirement": "R16",
-      "files": [
-        ".github/workflows/static-analysis.yml",
-        "scripts/scan-gitleaks-pr-history.sh",
-        "scripts/test-gitleaks-pr-boundaries.sh"
-      ],
-      "boundary": "Scan all non-merge commits introduced by the actual PR base-to-head range, and scan each new merge commit against its first parent. Preserve the configured Gitleaks rules and fail closed on scan errors.",
-      "assertions": "With Gitleaks 8.24.3, executable controls detect a canary added and later removed on a side branch and one introduced only in a merge resolution, including when removed later. Controls do not report a historical base canary or its removal. The secret job runs these controls. Node test witnesses verify pinned external action references and a narrowly scoped secret allowlist.",
-      "boundaryTest": {
-        "file": "tests/tooling-config.test.mjs",
-        "name": "pins every external action reference to a full commit SHA"
-      },
-      "invariant": {
-        "file": "tests/tooling-config.test.mjs",
-        "name": "the secret allowlist is scoped to the generic API key rule and exact values"
-      },
-      "fault": {
-        "exception": "The executable scanner controls run in the secret job rather than the Node test-event runner. In a disposable copy, removing merge scanning made the named merge-resolution-only control fail."
+        "exception": "Before the fix, a real Pi HTTP 200 stream containing 429 followed by a space created a provider cooldown without the inferred-text warning; a temporary real-Pi control reproduced that boundary."
       }
     }
   ]

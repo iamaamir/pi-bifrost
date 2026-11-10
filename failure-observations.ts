@@ -186,7 +186,7 @@ function statusCategory(value: unknown): FailureCategory | undefined {
 }
 
 function anchoredHttpStatus(text: string): number | undefined {
-  const match = /^\s*(?:(?:HTTP(?:\/\d(?:\.\d)?)?\s+|status\s*[:=]\s*)(402|429)\b|(402|429)(?:\s|$))/i.exec(text);
+  const match = /^\s*(?:(?:HTTP(?:\/\d(?:\.\d)?)?\s+|status\s*[:=]\s*)(402|429)\b|(402|429)(?=\s|:|$))/i.exec(text);
   return match ? Number(match[1] ?? match[2]) : undefined;
 }
 
@@ -290,6 +290,8 @@ export function normalizeFailureObservation(
   const failureText = textFromRawFields(input);
   const rawStatus = structured ? ownValue(structured, "httpStatus") : undefined;
   const hasStructuredStatus = typeof rawStatus === "number" && Number.isInteger(rawStatus) && rawStatus >= 100 && rawStatus <= 599;
+  // Status-shaped text is still provider error text. Only an adapter-supplied
+  // numeric status is authoritative transport evidence.
   const status = hasStructuredStatus ? statusCategory(rawStatus) : statusCategory(anchoredHttpStatus(failureText));
   const categoryFromText = textCategory(failureText);
   const quotaTextOverrides429 = status === "rate_limit" && categoryFromText === "allowance_exhausted";
@@ -299,7 +301,7 @@ export function normalizeFailureObservation(
     : quotaTextOverrides429
       ? "text_heuristic"
     : status
-      ? "http_status"
+      ? hasStructuredStatus ? "http_status" : "text_heuristic"
       : categoryFromText
         ? "text_heuristic"
         : "unknown";
