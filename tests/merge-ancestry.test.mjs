@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,6 +13,9 @@ test("preserves resolved main ancestry when a squash merge lost it", () => {
     git("init", "-q", "-b", "v2");
     git("config", "user.name", "Merge fixture");
     git("config", "user.email", "merge-fixture@example.invalid");
+    git("config", "commit.gpgSign", "false");
+    mkdirSync(join(root, "empty-hooks"));
+    git("config", "core.hooksPath", join(root, "empty-hooks"));
     write("base"); git("add", "shared.txt"); git("commit", "-qm", "base");
     git("switch", "-qc", "main");
     write("main"); git("commit", "-qam", "main change");
