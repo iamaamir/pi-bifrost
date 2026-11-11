@@ -236,6 +236,10 @@ test("push events use the predecessor base and reject stale or wrong bases", () 
     writeFileSync(eventPath, JSON.stringify(payload));
     const options = { root, testEvents: data.testEvents, env: { GITHUB_EVENT_NAME: "push", GITHUB_EVENT_PATH: eventPath } };
     assert.equal(changeEvidenceCase(options).status, "passed");
+    const missedSelection = changeEvidenceCase({ ...options, selection: null });
+    assert.equal(missedSelection.status, "failed");
+    assert.match(missedSelection.detail, /event-bound declaration selection was unavailable/,
+      "a valid declaration added after witness selection cannot be reselected for validation");
 
     const wrong = "b".repeat(40);
     writeFileSync(eventPath, JSON.stringify({ ...payload, before: wrong }));

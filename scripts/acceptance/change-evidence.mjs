@@ -63,6 +63,7 @@ export function changeEvidenceCase({ root, testEvents, env = process.env, select
   if (!required) return null;
   const result = { id: "change-evidence", requirements: ["R16"], boundary: "event-bound executed evidence declaration", required: true, attempts: 1, artifacts: [], exclusions: [] };
   try {
+    requireValue(selection !== null, "the event-bound declaration selection was unavailable to acceptance");
     // Event-driven checks are fail-closed: a missing or null event base cannot be
     // rescued by a competing local BIFROST_EVIDENCE_BASE. Non-event runs use it.
     const eventBase = eventEvidenceBase(env);
