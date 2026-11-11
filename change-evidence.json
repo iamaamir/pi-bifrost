@@ -1,54 +1,52 @@
 {
   "schemaVersion": 1,
-  "base": "982a4ce6c517cb430700d6c71596b2ab0aa92fbd",
+  "base": "4d3e3b32e3ca9fa3ef11e1de6d7c19f6c2c8ad4e",
   "contracts": [
     {
-      "id": "push-secret-scan-boundary",
-      "requirement": "R16",
+      "id": "config-agent-provider-signin",
+      "requirement": "R07",
       "files": [
-        ".github/workflows/static-analysis.yml",
-        "scripts/scan-gitleaks-pr-history.sh",
-        "scripts/test-gitleaks-pr-boundaries.sh",
-        ".gitleaksignore"
+        "config-agent.ts",
+        "config-agent-report.ts",
+        "tests/config-agent.test.ts",
+        "CHANGELOG.md",
+        "skills/configure-bifrost/SKILL.md"
       ],
-      "boundary": "Scan the actual push before-to-after history and first-parent merge changes, failing closed on invalid event boundaries and merge enumeration errors; preserve PR and manual scanning. Historical fixture findings are excluded only by exact commit, path, rule and line fingerprints.",
-      "assertions": "Executable Gitleaks controls detect side-branch and merge-only secrets, exclude pre-base and deleted content, and require merge enumeration errors to propagate. The real 9df98a3-to-982a4ce push range scanned cleanly. A Node witness checks action pins. The pinned integration history scan is clean with 19 verified synthetic historical fingerprints, while removing the ignore file or copying a fixture value into a new commit is detected.",
+      "boundary": "Report a stored provider credential that cannot be resolved, warn when a proposed tier routes to it, and keep the advisory candidate writable.",
+      "assertions": "A fake registry whose provider status says configured but whose credential resolution throws produces an invalid sign-in report, a check warning on the referencing tier, and a repeated warning in the approval summary while check stays ok and write eligible. A provider that resolves cleanly emits no warning. Provider error text is flattened, stripped of terminal escapes, and bounded before it reaches the model-facing report.",
       "boundaryTest": {
-        "exception": "The Gitleaks boundary controls run directly in the secrets workflow using the pinned scanner, rather than as Node test events."
+        "file": "tests/config-agent.test.ts",
+        "name": "reports a stored sign-in that cannot be resolved and warns without blocking the write"
       },
       "invariant": {
-        "file": "tests/tooling-config.test.mjs",
-        "name": "pins every external action reference to a full commit SHA"
+        "file": "tests/config-agent.test.ts",
+        "name": "warns only for providers a tier can actually select"
       },
       "fault": {
-        "exception": "The executable boundary controls inject a git rev-list failure and require its nonzero exit to propagate."
+        "file": "tests/config-agent.test.ts",
+        "name": "fault control: a provider that resolves cleanly emits no sign-in warning"
       }
     },
     {
-      "id": "event-bound-evidence-selection",
+      "id": "ui-smoke-capture-wrap",
       "requirement": "R16",
       "files": [
-        "scripts/acceptance.mjs",
-        "scripts/acceptance/change-evidence.mjs",
-        "scripts/acceptance/evidence-rebind.mjs",
-        "scripts/acceptance/evidence-selection.mjs",
-        "tests/acceptance-runner.test.mjs",
-        "tests/change-evidence.test.mjs",
-        "tests/evidence-rebind.test.mjs"
+        "scripts/ui-smoke.py",
+        "tests/ui-smoke-screen.test.mjs"
       ],
-      "boundary": "Select exactly one of two fixed-path declarations by trusted event base, use the same selection for acceptance witnesses and final validation, and cover any changed non-selected declaration.",
-      "assertions": "Selection rejects missing or ambiguous matching bases and stale push events; exact diff coverage includes a changed non-selected manifest. Local acceptance retains normal witness selection.",
+      "boundary": "The snapshot parser defers the line wrap until the next printable character, so a padded TUI frame keeps its row alignment across redraws.",
+      "assertions": "Replaying frames through the real Screen class keeps a padded row's successor anchored and leaves no blank row between them. The eager-wrap fault model on the same fixture loses the anchor, and the previous implementation fails both behavioral cases.",
       "boundaryTest": {
-        "file": "tests/acceptance-runner.test.mjs",
-        "name": "uses one base-selected artifact for acceptance witnesses and exact preflight coverage"
+        "file": "tests/ui-smoke-screen.test.mjs",
+        "name": "defers the wrap at the terminal edge"
       },
       "invariant": {
-        "file": "tests/change-evidence.test.mjs",
-        "name": "main release and later ordinary pushes select declarations by their own event.before"
+        "file": "tests/ui-smoke-screen.test.mjs",
+        "name": "keeps a padded frame anchored across redraws"
       },
       "fault": {
-        "file": "tests/change-evidence.test.mjs",
-        "name": "fault control: selecting HEAD parent instead of event.before turns push base RED"
+        "file": "tests/ui-smoke-screen.test.mjs",
+        "name": "fault control: an eager wrap moves the anchored row"
       }
     }
   ]
