@@ -91,6 +91,37 @@ head_sha="$(git -C "$repo" rev-parse HEAD)"
 expect_boundary_error "zero before boundary" "0000000000000000000000000000000000000000" "$head_sha"
 expect_boundary_error "zero after boundary" "$head_sha" "0000000000000000000000000000000000000000"
 
+# Exact fingerprints suppress only the original fixture commit/path/rule/line.
+repo="$project_root"
+fingerprint_count=0
+while IFS=: read -r commit path rule line; do
+  [ -n "$commit" ] || continue
+  if [ "$rule" != "generic-api-key" ] || [ -z "$path" ] || [ -z "$line" ]; then
+    echo "unexpected Gitleaks ignore fingerprint shape" >&2
+    exit 1
+  fi
+  base_sha="$(git -C "$project_root" rev-parse "$commit^")"
+  expect_green "exact fixture fingerprint $fingerprint_count" "$base_sha" "$commit"
+  fingerprint_count=$((fingerprint_count + 1))
+done < "$project_root/.gitleaksignore"
+[ "$fingerprint_count" -eq 8 ] || {
+  echo "expected eight exact fixture fingerprints, got $fingerprint_count" >&2
+  exit 1
+}
+
+# Reusing the same fixture value in a new commit must not inherit its old fingerprint.
+IFS=: read -r fixture_commit fixture_path fixture_rule fixture_line < "$project_root/.gitleaksignore"
+repo="$(new_repo same-fixture-new-commit)"
+cp "$project_root/.gitleaksignore" "$repo/.gitleaksignore"
+mkdir -p "$repo/$(dirname "$fixture_path")"
+git -C "$project_root" show "$fixture_commit:$fixture_path" \
+  | sed -n "${fixture_line}p" > "$repo/$fixture_path"
+git -C "$repo" add .gitleaksignore "$fixture_path"
+git -C "$repo" commit -q -m copy-synthetic-fixture
+base_sha="$(git -C "$repo" rev-parse HEAD^)"
+head_sha="$(git -C "$repo" rev-parse HEAD)"
+expect_red "same fixture value in new commit" "$base_sha" "$head_sha"
+
 # A secret added and then removed on a side branch must remain visible in history.
 repo="$(new_repo side-branch)"
 base_sha="$(git -C "$repo" rev-parse HEAD)"
