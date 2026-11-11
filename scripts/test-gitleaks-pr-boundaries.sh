@@ -46,6 +46,51 @@ expect_green() {
   echo "$name: GREEN as expected"
 }
 
+expect_boundary_error() {
+  local name="$1" base_sha="$2" head_sha="$3" output="$proof_root/$1.log"
+  if (cd "$repo" && "$scanner" "$base_sha" "$head_sha") > "$output" 2>&1; then
+    echo "$name: expected an invalid boundary to fail closed" >&2
+    return 1
+  fi
+  echo "$name: failed closed as expected"
+}
+
+expect_rev_list_failure() {
+  local base_sha="$1" head_sha="$2" shim_bin="$proof_root/failing-tools" output="$proof_root/rev-list-failure.log" status
+  mkdir -p "$shim_bin"
+  cat > "$shim_bin/git" <<'EOF'
+#!/bin/sh
+if [ "$1" = rev-list ]; then
+  for arg in "$@"; do
+    [ "$arg" = --merges ] && exit 73
+  done
+fi
+exec "$REAL_GIT" "$@"
+EOF
+  cat > "$shim_bin/gitleaks" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+  chmod +x "$shim_bin/git" "$shim_bin/gitleaks"
+  if (cd "$repo" && REAL_GIT="$(command -v git)" PATH="$shim_bin:$PATH" "$scanner" "$base_sha" "$head_sha") > "$output" 2>&1; then
+    echo "merge enumeration failure: scanner unexpectedly succeeded" >&2
+    return 1
+  else
+    status=$?
+  fi
+  if [ "$status" -ne 73 ]; then
+    echo "merge enumeration failure: expected exit 73, got $status" >&2
+    return 1
+  fi
+  echo "merge enumeration failure: propagated as expected"
+}
+
+# Pushes without a usable before commit (new branch/deletion events) must fail closed.
+repo="$(new_repo push-boundary)"
+head_sha="$(git -C "$repo" rev-parse HEAD)"
+expect_boundary_error "zero before boundary" "0000000000000000000000000000000000000000" "$head_sha"
+expect_boundary_error "zero after boundary" "$head_sha" "0000000000000000000000000000000000000000"
+
 # A secret added and then removed on a side branch must remain visible in history.
 repo="$(new_repo side-branch)"
 base_sha="$(git -C "$repo" rev-parse HEAD)"
@@ -64,6 +109,7 @@ git -C "$repo" merge -q --no-ff --no-edit side
 head_sha="$(git -C "$repo" rev-parse HEAD)"
 [ ! -e "$repo/side.txt" ]
 expect_red "removed side-branch secret" "$base_sha" "$head_sha"
+expect_rev_list_failure "$base_sha" "$head_sha"
 
 # A secret present only in the merge resolution must be caught by its first-parent diff.
 repo="$(new_repo merge-resolution)"
