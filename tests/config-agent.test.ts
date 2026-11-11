@@ -399,6 +399,20 @@ describe("provider sign-in state", () => {
     }
   });
 
+  it("fault control: a provider that resolves cleanly emits no sign-in warning", async () => {
+    const harness = freshHarness({ providerAuthResult: () => ({ auth: { apiKey: "resolved" } }) });
+    try {
+      const healthy = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+      }));
+      assert.equal(healthy.providerAuth.find((entry) => entry.provider === "alpha")?.state, "ready");
+      assert.equal(healthy.issues.some((issue) => issue.code === "config.provider_auth_invalid"), false);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("repeats the sign-in warning in the approval dialog", async () => {
     const harness = freshHarness({ providerAuthResult: () => new Error("token refresh failed") });
     try {
