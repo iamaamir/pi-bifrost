@@ -98,7 +98,7 @@ export interface ConfigAgentProviderAuth {
 }
 
 /** The registry surface auth resolution needs; both members are optional on older hosts. */
-export interface ConfigAgentAuthRegistry {
+interface ConfigAgentAuthRegistry {
   getProviderAuthStatus?(provider: string): { configured: boolean; source?: string };
   getProviderAuth?(provider: string): Promise<unknown>;
 }
@@ -560,7 +560,7 @@ function boundedAuthReason(error: unknown): string {
  * an expired token; it never sends a model request. Failures are reported, not
  * thrown: this signal is advisory.
  */
-export async function resolveProviderAuth(
+async function resolveProviderAuth(
   registry: ConfigAgentAuthRegistry,
   providers: readonly string[],
 ): Promise<ConfigAgentProviderAuth[]> {
