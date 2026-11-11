@@ -916,7 +916,6 @@ describe("acceptance runner boundary", () => {
       }
     };
     runCaller(predecessor, "passed", head);
-    runCaller(predecessor, "passed", head, "pull_request");
     const intermediate = git("rev-list", "--ancestry-path", `${predecessor}..HEAD`).split("\n").find((sha) => sha !== head);
     // A candidate can be a single commit. The owned merged-push fixture above
     // guarantees a real intermediate witness; the direct single-commit caller
