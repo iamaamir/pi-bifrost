@@ -7,10 +7,11 @@
  *   inspect → check → preview → apply
  *
  * Every operation reads the real config layers and the real model catalog.
- * `check` and `preview` never write and never reach a provider. `apply` writes
- * one reviewed source with the same atomic writer the rest of Bifrost uses,
- * after an explicit confirmation, and only when the proposal still matches the
- * inputs it was generated from.
+ * `check` and `preview` never write and never send a model request; the adapter
+ * resolves provider sign-in state, which may refresh an expired OAuth token.
+ * `apply` writes one reviewed source with the same atomic writer the rest of
+ * Bifrost uses, after an explicit confirmation, and only when the proposal
+ * still matches the inputs it was generated from.
  *
  * No second schema validator, routing engine, or routing policy lives here:
  * validation delegates to `validateConfig`, routing to `resolveConfiguredTier`
@@ -82,6 +83,24 @@ export interface ConfigAgentCatalog {
   readonly known: readonly ConfigAgentModel[];
   readonly knownKeys: readonly string[];
   readonly metadataIncomplete: readonly string[];
+}
+
+/** What Pi can tell Bifrost about a provider's stored sign-in, without a model request. */
+export type ConfigAgentProviderAuthState = "ready" | "not_configured" | "invalid" | "unknown";
+
+export interface ConfigAgentProviderAuth {
+  readonly provider: string;
+  readonly state: ConfigAgentProviderAuthState;
+  /** Where Pi found the credential, when it reports one. Never the credential itself. */
+  readonly source?: string;
+  /** Bounded single-line resolution failure, for `invalid`. */
+  readonly reason?: string;
+}
+
+/** The registry surface auth resolution needs; both members are optional on older hosts. */
+export interface ConfigAgentAuthRegistry {
+  getProviderAuthStatus?(provider: string): { configured: boolean; source?: string };
+  getProviderAuth?(provider: string): Promise<unknown>;
 }
 
 export interface ConfigAgentRequest {
@@ -177,6 +196,8 @@ export interface ConfigAgentInspectResult {
   readonly issues: readonly ConfigAgentIssueSummary[];
   readonly diagnostics: readonly ConfigLoadDiagnostic[];
   readonly routing: ConfigAgentRoutingSummary;
+  /** Sign-in state per inventory provider; `invalid` cannot route until re-authenticated. */
+  readonly providerAuth: readonly ConfigAgentProviderAuth[];
   readonly restrictions: readonly string[];
   /** Physical models the agent may route to, narrowed by the optional provider filter. */
   readonly inventory: readonly ConfigAgentModel[];
@@ -246,6 +267,8 @@ export interface ConfigAgentCheckResult {
   readonly issues: readonly ConfigAgentIssueSummary[];
   readonly diagnostics: readonly ConfigLoadDiagnostic[];
   readonly references: readonly ConfigAgentReferenceIssue[];
+  /** Sign-in state the adapter resolved for this proposal; drives advisory warnings. */
+  readonly providerAuth: readonly ConfigAgentProviderAuth[];
   readonly routingBefore: ConfigAgentRoutingSummary | null;
   readonly routingAfter: ConfigAgentRoutingSummary | null;
   readonly newlyEligibleModels: readonly string[];
@@ -515,6 +538,55 @@ export function catalogDigest(catalog: ConfigAgentCatalog): string {
   }))));
 }
 
+const MAX_AUTH_REASON_CHARS = 200;
+
+function boundedAuthReason(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const line = message.replace(/\s+/g, " ").trim() || "sign-in could not be resolved";
+  return line.length <= MAX_AUTH_REASON_CHARS ? line : `${line.slice(0, MAX_AUTH_REASON_CHARS - 3)}...`;
+}
+
+/**
+ * Resolve each provider's stored sign-in through Pi's registry. Pi's
+ * synchronous auth status only reports that a credential is stored, not that it
+ * works, so a dead OAuth refresh is invisible to `getProviderAuthStatus` and
+ * only surfaces when credentials are actually resolved. Resolving may refresh
+ * an expired token; it never sends a model request. Failures are reported, not
+ * thrown: this signal is advisory.
+ */
+export async function resolveProviderAuth(
+  registry: ConfigAgentAuthRegistry,
+  providers: readonly string[],
+): Promise<ConfigAgentProviderAuth[]> {
+  const resolved: ConfigAgentProviderAuth[] = [];
+  for (const provider of [...new Set(providers)].sort()) {
+    let source: string | undefined;
+    try {
+      const status = registry.getProviderAuthStatus?.(provider);
+      if (status) {
+        if (status.configured === false) {
+          resolved.push({ provider, state: "not_configured" });
+          continue;
+        }
+        source = status.source;
+      }
+    } catch {
+      // A throwing status is not evidence either way; try to resolve instead.
+    }
+    if (typeof registry.getProviderAuth !== "function") {
+      resolved.push({ provider, state: "unknown", ...(source ? { source } : {}) });
+      continue;
+    }
+    try {
+      await registry.getProviderAuth(provider);
+      resolved.push({ provider, state: "ready", ...(source ? { source } : {}) });
+    } catch (error) {
+      resolved.push({ provider, state: "invalid", ...(source ? { source } : {}), reason: boundedAuthReason(error) });
+    }
+  }
+  return resolved;
+}
+
 function registryContext(catalog: ConfigAgentCatalog): ExtensionContext {
   const models = catalog.available.map((model) => ({
     provider: model.provider,
@@ -558,6 +630,48 @@ export function checkModelReferences(
         ? "known_unavailable"
         : "unknown";
       issues.push({ tier, entry, status, matches: [] });
+    }
+  }
+  return issues;
+}
+
+/**
+ * Tiers whose pool resolves to a provider whose stored sign-in does not work.
+ * Advisory on purpose: a user may intend to re-authenticate after applying, so
+ * this warns loudly without blocking the write.
+ */
+function providerAuthIssues(
+  config: BifrostConfig,
+  catalog: ConfigAgentCatalog,
+  providerAuth: readonly ConfigAgentProviderAuth[],
+): ConfigAgentIssueSummary[] {
+  const problem = new Map(providerAuth
+    .filter((auth) => auth.state === "invalid" || auth.state === "not_configured")
+    .map((auth) => [auth.provider, auth]));
+  if (problem.size === 0) return [];
+  const providerOfModel = new Map<string, string>();
+  for (const model of catalog.known) providerOfModel.set(model.key, model.provider);
+  for (const model of catalog.available) providerOfModel.set(model.key, model.provider);
+  const issues: ConfigAgentIssueSummary[] = [];
+  const reported = new Set<string>();
+  for (const [tier, pool] of Object.entries(config.models ?? {})) {
+    for (const entry of poolEntries(pool)) {
+      for (const key of poolMatches(catalog, entry)) {
+        const provider = providerOfModel.get(key);
+        const auth = provider ? problem.get(provider) : undefined;
+        if (!provider || !auth) continue;
+        const dedupe = `${tier}:${provider}:${auth.state}`;
+        if (reported.has(dedupe)) continue;
+        reported.add(dedupe);
+        issues.push({
+          severity: "warning",
+          code: auth.state === "invalid" ? "config.provider_auth_invalid" : "config.provider_auth_not_configured",
+          path: `models.${tier}`,
+          message: auth.state === "invalid"
+            ? `Provider "${provider}" sign-in cannot be resolved (${auth.reason ?? "unknown error"}), so ${key} would fail when selected. Sign in to ${provider} in Pi again before relying on tier "${tier}".`
+            : `Provider "${provider}" has no configured sign-in, so ${key} cannot route. Set up ${provider} in Pi or remove it from tier "${tier}".`,
+        });
+      }
     }
   }
   return issues;
@@ -815,6 +929,8 @@ export interface ConfigAgentCheckInput {
   readonly cwd: string;
   readonly extensionDir: string;
   readonly classifierRuntime?: ConfigAgentClassifierRuntimeProvider;
+  /** Sign-in state resolved by the adapter; absent means the host has no signal. */
+  readonly providerAuth?: readonly ConfigAgentProviderAuth[];
   readonly allowUnchanged?: boolean;
 }
 
@@ -842,6 +958,7 @@ function emptyCheckResult(
     issues: [],
     diagnostics: [],
     references: [],
+    providerAuth: [],
     routingBefore: null,
     routingAfter: null,
     newlyEligibleModels: [],
@@ -868,8 +985,10 @@ export function checkConfigCandidate(input: ConfigAgentCheckInput): ConfigAgentC
   };
   const runtimeBefore = input.classifierRuntime?.(before.config);
   const runtimeAfter = input.classifierRuntime?.(after.config);
+  const providerAuth = input.providerAuth ?? [];
   const combinedIssues = [
     ...issuesOf(after.config, after.diagnostics, after.warnings, runtimeAfter),
+    ...providerAuthIssues(after.config, catalog, providerAuth),
     ...authoredStructureIssues(plan.nextSource, request.candidate === undefined ? Object.keys(request.patch ?? {}) : undefined),
   ];
   const issues = [...new Map(combinedIssues.map((issue) => [
@@ -927,6 +1046,7 @@ export function checkConfigCandidate(input: ConfigAgentCheckInput): ConfigAgentC
     issues,
     diagnostics: after.diagnostics,
     references,
+    providerAuth,
     routingBefore: routingSummary(before.config, cwd, runtimeBefore),
     routingAfter: routingSummary(after.config, cwd, runtimeAfter),
     newlyEligibleModels: newlyEligible,
@@ -1137,6 +1257,11 @@ function approvalJson(value: unknown): string {
   return canonicalJson(value).replace(/[^\x21-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
 }
 
+/** Warning prose keeps spaces readable; only control and non-ASCII characters are escaped. */
+function approvalText(value: string): string {
+  return value.replace(/[^\x20-\x7e]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 function approvalDetails(checked: ConfigAgentCheckResult): string | null {
   const lines = [
     `Source: ${checked.source} (${approvalJson(checked.sourcePath)})`,
@@ -1158,6 +1283,9 @@ function approvalDetails(checked: ConfigAgentCheckResult): string | null {
   if (tiers.length > 0) {
     lines.push("Tiers after the change:");
     for (const tier of tiers) lines.push(`  ${approvalJson(tier.tier)} (${approvalJson(tier.strategy)}): ${approvalJson(tier.pool)}`);
+  }
+  for (const warning of checked.issues.filter((issue) => issue.severity === "warning")) {
+    lines.push(`Warning: ${approvalText(warning.message)}`);
   }
   lines.push("No other config source is modified.");
   const message = lines.join("\n");
@@ -1331,6 +1459,11 @@ function approvalSummary(checked: ConfigAgentCheckResult): string {
   summarizeMap("Model pools", modelPools(models?.before, before.schemaVersion), modelPools(models?.after, after.schemaVersion), modelPools(before.models, before.schemaVersion), modelPools(after.models, after.schemaVersion), lines, poolCount);
   const policies = checked.changes.find((change) => change.field === "tierPolicies");
   summarizeMap("Fallbacks", policyFallbacks(policies?.before), policyFallbacks(policies?.after), policyFallbacks(before.tierPolicies), policyFallbacks(after.tierPolicies), lines, approvalValue);
+  // A dead provider sign-in is the one warning that makes an otherwise valid
+  // config fail on its first routed turn, so the approval summary repeats it.
+  for (const warning of checked.issues.filter((issue) => issue.severity === "warning")) {
+    lines.push(`WARNING: ${approvalText(warning.message)}`);
+  }
   lines.push("Details shows exact values. Summary approval skips them.");
   return lines.join("\n");
 }
@@ -1537,6 +1670,8 @@ export interface ConfigAgentInspectInput {
   readonly cwd: string;
   readonly extensionDir: string;
   readonly classifierRuntime?: ConfigAgentClassifierRuntimeProvider;
+  /** Sign-in state resolved by the adapter; absent means the host has no signal. */
+  readonly providerAuth?: readonly ConfigAgentProviderAuth[];
   /** Optional display filter for one provider; it never changes validation or routing. */
   readonly provider?: string;
   /** Page start within the sorted, filtered inventory; it never changes validation or routing. */
@@ -1568,10 +1703,16 @@ export function inspectConfigAgent(input: ConfigAgentInspectInput): ConfigAgentI
   const offset = Math.max(input.offset ?? 0, 0);
   const inventory = sorted.slice(offset);
   const knownUnavailableCount = catalog.known.length - catalog.available.length;
+  const providerAuth = input.providerAuth ?? [];
   const notes = [
-    "No credentials, tokens, or account data are read or reported by this tool.",
+    "No stored sign-in values, tokens, or account data are read or reported; only whether each provider's sign-in resolves.",
     "This inventory is a snapshot. Re-run inspect before relying on it after a registry refresh or a config edit.",
   ];
+  for (const auth of providerAuth) {
+    if (auth.state === "not_configured") notes.push(`Provider "${auth.provider}" has no configured sign-in, so its models cannot route.`);
+    else if (auth.state === "invalid") notes.push(`Provider "${auth.provider}" sign-in cannot be resolved: ${auth.reason ?? "unknown error"}. Its models stay listed but fail when selected until the provider is signed in again; check reports this as a warning.`);
+    else if (auth.state === "unknown") notes.push(`Pi did not expose sign-in state for provider "${auth.provider}"; availability is unverified.`);
+  }
   if (provider) {
     notes.push(inventory.length > 0
       ? `The reported inventory is filtered to provider "${provider}" for display only.`
@@ -1588,6 +1729,7 @@ export function inspectConfigAgent(input: ConfigAgentInspectInput): ConfigAgentI
     issues: issuesOf(loaded.config, loaded.diagnostics, loaded.warnings, input.classifierRuntime?.(loaded.config)),
     diagnostics: loaded.diagnostics,
     routing: routingSummary(loaded.config, cwd, input.classifierRuntime?.(loaded.config)),
+    providerAuth,
     restrictions,
     inventory,
     availableModelCount: catalog.available.length,
@@ -1725,11 +1867,16 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
       }
       const cwd = cwdOf();
       const catalog = catalogFromContext(ctx);
+      // Resolve sign-in for every provider the inventory offers. Pi's status
+      // only proves a credential is stored, so a dead OAuth refresh stays
+      // invisible until something resolves it; this is that resolution, done
+      // once per call and reported as advisory state rather than an error.
+      const providerAuth = await resolveProviderAuth(ctx.modelRegistry, catalog.available.map((model) => model.provider));
       const classifierRuntime = deps.classifierRuntime
         ? (config: BifrostConfig) => deps.classifierRuntime!(config, ctx)
         : undefined;
       const input: ConfigAgentCheckInput = {
-        request, catalog, cwd, extensionDir: deps.extensionDir,
+        request, catalog, cwd, extensionDir: deps.extensionDir, providerAuth,
         ...(classifierRuntime ? { classifierRuntime } : {}),
       };
       let result: ConfigAgentToolResult;
@@ -1739,6 +1886,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
             catalog,
             cwd,
             extensionDir: deps.extensionDir,
+            providerAuth,
             ...(params.provider !== undefined ? { provider: params.provider } : {}),
             ...(params.offset !== undefined ? { offset: params.offset } : {}),
             ...(classifierRuntime ? { classifierRuntime } : {}),
