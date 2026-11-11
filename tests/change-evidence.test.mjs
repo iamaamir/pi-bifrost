@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 import { changeEvidenceCase, validateChangeEvidence } from "../scripts/acceptance/change-evidence.mjs";
+import { selectEvidenceManifest } from "../scripts/acceptance/evidence-selection.mjs";
 
 const base = "a".repeat(40);
 const ref = { file: "tests/route.test.ts", name: "observes dispatch" };
@@ -123,6 +124,90 @@ test("rejects a changed file covered by more than one contract with a named erro
   assert.throws(() => validateChangeEvidence(data), /duplicate file coverage: routing\.ts declared by routing and routing-copy/);
 });
 
+test("selects exactly one fixed declaration by event base and covers a changed non-selected manifest", () => {
+  const root = mkdtempSync(join(tmpdir(), "bifrost-evidence-selection-"));
+  const releaseBase = "c".repeat(40);
+  const routineBase = "d".repeat(40);
+  const contract = { id: "release", requirement: "R16", files: ["routing.ts"],
+    boundary: "release boundary", assertions: "release gates passed", boundaryTest: { exception: "release-level coverage fixture" },
+    invariant: { exception: "release-level coverage fixture" }, fault: { exception: "release-level coverage fixture" } };
+  try {
+    writeFileSync(join(root, "release-evidence.json"), JSON.stringify({ schemaVersion: 1, base: releaseBase, contracts: [contract] }));
+    writeFileSync(join(root, "change-evidence.json"), JSON.stringify({ schemaVersion: 1, base: routineBase, contracts: [contract] }));
+    const selected = selectEvidenceManifest({ root, base: releaseBase });
+    assert.equal(selected.file, "release-evidence.json");
+    const changedFiles = ["routing.ts", "change-evidence.json", "release-evidence.json"];
+    assert.throws(() => validateChangeEvidence({ manifest: selected.manifest, manifestFile: selected.file,
+      base: releaseBase, changedFiles, testEvents: [], root }), /unmapped changed files: change-evidence\.json/,
+    "the selected declaration cannot exempt the other manifest from exact diff coverage");
+    selected.manifest.contracts[0].files.push("change-evidence.json");
+    assert.equal(validateChangeEvidence({ manifest: selected.manifest, manifestFile: selected.file,
+      base: releaseBase, changedFiles, testEvents: [], root }), selected.manifest);
+
+    writeFileSync(join(root, "change-evidence.json"), JSON.stringify({ schemaVersion: 1, base: releaseBase, contracts: [contract] }));
+    assert.throws(() => selectEvidenceManifest({ root, base: releaseBase }), /multiple declarations/);
+    writeFileSync(join(root, "change-evidence.json"), JSON.stringify({ schemaVersion: 1, base: routineBase, contracts: [contract] }));
+    assert.throws(() => selectEvidenceManifest({ root, base: "e".repeat(40) }), /no declaration is bound|missing, unsupported or stale/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("main release and later ordinary pushes select declarations by their own event.before", () => {
+  const root = mkdtempSync(join(tmpdir(), "bifrost-main-evidence-selection-"));
+  const eventDirectory = mkdtempSync(join(tmpdir(), "bifrost-main-evidence-event-"));
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  const eventPath = join(eventDirectory, "event.json");
+  const fixtureContract = (id, files) => ({ id, requirement: "R16", files, boundary: "selection fixture",
+    assertions: "the selector binds to the event predecessor", boundaryTest: { exception: "selection-only fixture" },
+    invariant: { exception: "selection-only fixture" }, fault: { exception: "selection-only fixture" } });
+  try {
+    git("init", "-q"); git("config", "user.name", "Fixture"); git("config", "user.email", "fixture@example.test");
+    writeFileSync(join(root, "routing.ts"), "old"); git("add", "."); git("commit", "-qm", "main base");
+    const releaseBase = git("rev-parse", "HEAD");
+    writeFileSync(join(root, "routing.ts"), "release");
+    writeFileSync(join(root, "release-evidence.json"), JSON.stringify({ schemaVersion: 1, base: releaseBase,
+      contracts: [fixtureContract("release", ["routing.ts", "change-evidence.json"])] }));
+    writeFileSync(join(root, "change-evidence.json"), JSON.stringify({ schemaVersion: 1, base: "b".repeat(40),
+      contracts: [fixtureContract("stale-routine", ["routing.ts"])] }));
+    git("add", "."); git("commit", "-qm", "release delivery");
+    const releaseHead = git("rev-parse", "HEAD");
+    writeFileSync(eventPath, JSON.stringify({ before: releaseBase, after: releaseHead, ref: "refs/heads/main" }));
+    const releaseSelection = selectEvidenceManifest({ root, base: releaseBase });
+    assert.equal(releaseSelection.file, "release-evidence.json");
+    assert.equal(changeEvidenceCase({ root, testEvents: [], selection: releaseSelection,
+      env: { GITHUB_EVENT_NAME: "push", GITHUB_EVENT_PATH: eventPath } }).status, "passed");
+
+    writeFileSync(join(root, "notes.txt"), "routine");
+    writeFileSync(join(root, "change-evidence.json"), JSON.stringify({ schemaVersion: 1, base: releaseHead,
+      contracts: [fixtureContract("routine", ["notes.txt"])] }));
+    git("add", "."); git("commit", "-qm", "ordinary main push");
+    const ordinaryHead = git("rev-parse", "HEAD");
+    writeFileSync(eventPath, JSON.stringify({ before: releaseHead, after: ordinaryHead, ref: "refs/heads/main" }));
+    const ordinarySelection = selectEvidenceManifest({ root, base: releaseHead });
+    assert.equal(ordinarySelection.file, "change-evidence.json");
+    const ordinaryResult = changeEvidenceCase({ root, testEvents: [], selection: ordinarySelection,
+      env: { GITHUB_EVENT_NAME: "push", GITHUB_EVENT_PATH: eventPath } });
+    assert.equal(ordinaryResult.status, "passed", ordinaryResult.detail);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(eventDirectory, { recursive: true, force: true });
+  }
+});
+
+test("cached selection cannot rescue a missing push predecessor from the event or environment", () => {
+  const directory = mkdtempSync(join(tmpdir(), "bifrost-missing-push-base-"));
+  const eventPath = join(directory, "event.json");
+  const cachedBase = "f".repeat(40);
+  try {
+    writeFileSync(eventPath, JSON.stringify({ before: null, after: cachedBase, ref: "refs/heads/main" }));
+    const result = changeEvidenceCase({ root: directory, testEvents: [], selection: { base: cachedBase,
+      file: "release-evidence.json", manifest: { schemaVersion: 1, base: cachedBase, contracts: [] } },
+    env: { GITHUB_EVENT_NAME: "push", GITHUB_EVENT_PATH: eventPath, BIFROST_EVIDENCE_BASE: cachedBase } });
+    assert.equal(result.status, "failed");
+    assert.match(result.detail, /a full base commit is required/,
+      "event-driven validation must reject the missing event.before even when a cached declaration and env base exist");
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("keeps previously passing declarations passing", () => {
   const data = input();
   assert.equal(validateChangeEvidence(data), data.manifest);
@@ -151,6 +236,10 @@ test("push events use the predecessor base and reject stale or wrong bases", () 
     writeFileSync(eventPath, JSON.stringify(payload));
     const options = { root, testEvents: data.testEvents, env: { GITHUB_EVENT_NAME: "push", GITHUB_EVENT_PATH: eventPath } };
     assert.equal(changeEvidenceCase(options).status, "passed");
+    const missedSelection = changeEvidenceCase({ ...options, selection: null });
+    assert.equal(missedSelection.status, "failed");
+    assert.match(missedSelection.detail, /event-bound declaration selection was unavailable/,
+      "a valid declaration added after witness selection cannot be reselected for validation");
 
     const wrong = "b".repeat(40);
     writeFileSync(eventPath, JSON.stringify({ ...payload, before: wrong }));
@@ -172,7 +261,9 @@ test("the missing-case assertion detects a disabled execution guard", async () =
   const requireRejection = (validate) => assert.throws(() => validate(broken), /did not complete/);
   requireRejection(validateChangeEvidence);
   try {
-    const copy = source.replace('"./core.mjs"', JSON.stringify(new URL("../scripts/acceptance/core.mjs", import.meta.url).href)).replace(guard, "true");
+    const copy = source.replace('"./core.mjs"', JSON.stringify(new URL("../scripts/acceptance/core.mjs", import.meta.url).href))
+      .replace('"./evidence-selection.mjs"', JSON.stringify(new URL("../scripts/acceptance/evidence-selection.mjs", import.meta.url).href))
+      .replace(guard, "true");
     const file = join(directory, "fault.mjs"); writeFileSync(file, copy);
     const mutant = await import(pathToFileURL(file).href);
     assert.throws(() => requireRejection(mutant.validateChangeEvidence), { code: "ERR_ASSERTION", message: /Missing expected exception/ });
@@ -323,18 +414,21 @@ test("fault control: selecting HEAD parent instead of event.before turns push ba
     const options = { root, testEvents, env: { GITHUB_EVENT_NAME: "push", GITHUB_EVENT_PATH: eventPath } };
     assert.equal(changeEvidenceCase(options).status, "passed");
 
-    const source = readFileSync(new URL("../scripts/acceptance/change-evidence.mjs", import.meta.url), "utf8");
+    const source = readFileSync(new URL("../scripts/acceptance/evidence-selection.mjs", import.meta.url), "utf8");
     const anchor = "event?.before";
     assert.equal(source.split(anchor).length, 2, "fault anchor must be unique");
     const directory = mkdtempSync(join(tmpdir(), "bifrost-change-evidence-fault-push-"));
     try {
-      const copy = source.replace('"./core.mjs"', JSON.stringify(new URL("../scripts/acceptance/core.mjs", import.meta.url).href)).replace(anchor, 'git(root, ["rev-parse", "HEAD^"])');
-      const file = join(directory, "fault-push.mjs"); writeFileSync(file, copy);
-      const mutant = await import(pathToFileURL(file).href);
+      const changedBase = source.replace(anchor, "event?.after");
+      const selectionFile = join(directory, "evidence-selection.mjs"); writeFileSync(selectionFile, changedBase);
+      const changeSource = readFileSync(new URL("../scripts/acceptance/change-evidence.mjs", import.meta.url), "utf8")
+        .replace('"./core.mjs"', JSON.stringify(new URL("../scripts/acceptance/core.mjs", import.meta.url).href));
+      const changeFile = join(directory, "change-evidence.mjs"); writeFileSync(changeFile, changeSource);
+      const mutant = await import(pathToFileURL(changeFile).href);
       const mutantResult = mutant.changeEvidenceCase(options);
       assert.equal(mutantResult.status, "failed");
     } finally { rmSync(directory, { recursive: true, force: true }); }
-    assert.equal(readFileSync(new URL("../scripts/acceptance/change-evidence.mjs", import.meta.url), "utf8"), source);
+    assert.equal(readFileSync(new URL("../scripts/acceptance/evidence-selection.mjs", import.meta.url), "utf8"), source);
     assert.equal(changeEvidenceCase(options).status, "passed");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

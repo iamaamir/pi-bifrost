@@ -1,25 +1,54 @@
 {
   "schemaVersion": 1,
-  "base": "9df98a381f265b044bd3c739ff811e70f93e0789",
+  "base": "982a4ce6c517cb430700d6c71596b2ab0aa92fbd",
   "contracts": [
     {
-      "id": "restore-main-merge-ancestry",
+      "id": "push-secret-scan-boundary",
       "requirement": "R16",
       "files": [
-        "tests/merge-ancestry.test.mjs"
+        ".github/workflows/static-analysis.yml",
+        "scripts/scan-gitleaks-pr-history.sh",
+        "scripts/test-gitleaks-pr-boundaries.sh",
+        ".gitleaksignore"
       ],
-      "boundary": "Restore main ancestry through the previously resolved merge without changing the existing product tree.",
-      "assertions": "A real Git fixture demonstrates that squashing a conflict resolution leaves main unmerged and conflicting, while merging the original resolution preserves the current tree and makes the next main merge clean.",
+      "boundary": "Scan the actual push before-to-after history and first-parent merge changes, failing closed on invalid event boundaries and merge enumeration errors; preserve PR and manual scanning. Historical fixture findings are excluded only by exact commit, path, rule and line fingerprints.",
+      "assertions": "Executable Gitleaks controls detect side-branch and merge-only secrets, exclude pre-base and deleted content, and require merge enumeration errors to propagate. The real 9df98a3-to-982a4ce push range scanned cleanly. A Node witness checks action pins. The pinned integration history scan is clean with 19 verified synthetic historical fingerprints, while removing the ignore file or copying a fixture value into a new commit is detected.",
       "boundaryTest": {
-        "file": "tests/merge-ancestry.test.mjs",
-        "name": "preserves resolved main ancestry when a squash merge lost it"
+        "exception": "The Gitleaks boundary controls run directly in the secrets workflow using the pinned scanner, rather than as Node test events."
       },
       "invariant": {
-        "file": "tests/merge-ancestry.test.mjs",
-        "name": "preserves resolved main ancestry when a squash merge lost it"
+        "file": "tests/tooling-config.test.mjs",
+        "name": "pins every external action reference to a full commit SHA"
       },
       "fault": {
-        "exception": "In a disposable copy, removing the ancestry-restoring merge makes the named ancestry assertion fail."
+        "exception": "The executable boundary controls inject a git rev-list failure and require its nonzero exit to propagate."
+      }
+    },
+    {
+      "id": "event-bound-evidence-selection",
+      "requirement": "R16",
+      "files": [
+        "scripts/acceptance.mjs",
+        "scripts/acceptance/change-evidence.mjs",
+        "scripts/acceptance/evidence-rebind.mjs",
+        "scripts/acceptance/evidence-selection.mjs",
+        "tests/acceptance-runner.test.mjs",
+        "tests/change-evidence.test.mjs",
+        "tests/evidence-rebind.test.mjs"
+      ],
+      "boundary": "Select exactly one of two fixed-path declarations by trusted event base, use the same selection for acceptance witnesses and final validation, and cover any changed non-selected declaration.",
+      "assertions": "Selection rejects missing or ambiguous matching bases and stale push events; exact diff coverage includes a changed non-selected manifest. Local acceptance retains normal witness selection.",
+      "boundaryTest": {
+        "file": "tests/acceptance-runner.test.mjs",
+        "name": "uses one base-selected artifact for acceptance witnesses and exact preflight coverage"
+      },
+      "invariant": {
+        "file": "tests/change-evidence.test.mjs",
+        "name": "main release and later ordinary pushes select declarations by their own event.before"
+      },
+      "fault": {
+        "file": "tests/change-evidence.test.mjs",
+        "name": "fault control: selecting HEAD parent instead of event.before turns push base RED"
       }
     }
   ]

@@ -8,7 +8,9 @@ import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer } from "node:http";
 import { gateDirectory, gitTruth, installedToolVersions, matchNamedTestEvent, parseArgs, sourceFingerprint, summarizeCases } from "../scripts/acceptance/core.mjs";
-import { buildGateEvidenceCases, manifestEvidenceGate, registerTerminationHandlers, runChild, supportingTestCase, terminateProcessGroup, verificationGateEnvironment, writeNodeTestEventsArtifact } from "../scripts/acceptance.mjs";
+import { acceptanceEvidenceSelection, buildGateEvidenceCases, manifestEvidenceGate, registerTerminationHandlers, runChild, supportingTestCase, terminateProcessGroup, verificationGateEnvironment, writeNodeTestEventsArtifact } from "../scripts/acceptance.mjs";
+import { eventEvidenceBase, selectEvidenceManifest } from "../scripts/acceptance/evidence-selection.mjs";
+import { evidenceCoverageProblems } from "../scripts/acceptance/evidence-rebind.mjs";
 
 const temporary = [];
 after(() => temporary.forEach((path) => rmSync(path, { recursive: true, force: true })));
@@ -624,7 +626,7 @@ describe("acceptance runner boundary", () => {
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
     git("checkout", "--quiet", "--detach", head);
     // Include the current worktree's fixes while keeping all mutations private.
-    for (const file of ["scripts/merge-controller.mjs", "scripts/acceptance.mjs", "scripts/acceptance/core.mjs", "tests/integration/fake-provider-ownership.test.mjs", "tests/merge-controller.test.mjs", "tests/acceptance-runner.test.mjs", "change-evidence.json"]) {
+    for (const file of ["scripts/merge-controller.mjs", "scripts/acceptance.mjs", "scripts/acceptance/core.mjs", "scripts/acceptance/evidence-selection.mjs", "tests/integration/fake-provider-ownership.test.mjs", "tests/merge-controller.test.mjs", "tests/acceptance-runner.test.mjs", "change-evidence.json"]) {
       cpSync(join(root, file), join(checkout, file));
     }
     symlinkSync(realpathSync(join(root, "node_modules")), join(checkout, "node_modules"), "dir");
@@ -633,16 +635,18 @@ describe("acceptance runner boundary", () => {
     // this caller proof. A unique fixture witness still detects lost selection.
     const witnessFile = "tests/workflow-caller-fixture.test.mjs";
     const witnessName = "owned workflow declaration witness";
-    writeFileSync(join(checkout, witnessFile), 'import { test } from "node:test"; import assert from "node:assert/strict";\ntest(' + JSON.stringify(witnessName) + ', () => assert.equal(process.env.GITHUB_EVENT_NAME, "push"));\n');
-    const fixtureFiles = [...git("diff", "--name-only", "--no-renames", predecessor).split("\n").filter((file) => file && file !== "change-evidence.json"), witnessFile];
-    writeFileSync(join(checkout, "change-evidence.json"), JSON.stringify({ schemaVersion: 1, base: predecessor, contracts: [{
+    writeFileSync(join(checkout, witnessFile), 'import { test } from "node:test"; import assert from "node:assert/strict";\ntest(' + JSON.stringify(witnessName) + ', () => assert.ok(["push", "pull_request"].includes(process.env.GITHUB_EVENT_NAME)));\n');
+    const fixtureFiles = [...git("diff", "--name-only", "--no-renames", predecessor).split("\n").filter(Boolean), witnessFile];
+    const fixtureContract = {
       id: "owned-workflow-caller", requirement: "R16", files: fixtureFiles,
       boundary: "owned actual workflow caller declaration", assertions: "Exact selected witness and event context reach the real validator",
       boundaryTest: { file: witnessFile, name: witnessName },
       invariant: { file: "tests/change-evidence.test.mjs", name: "event-driven push and pull request bases fail closed despite competing env" },
       fault: { file: "tests/change-evidence.test.mjs", name: "fault control: selecting HEAD parent instead of event.before turns push base RED" },
-    }] }, null, 2) + "\n");
-    git("add", "--", "scripts/merge-controller.mjs", "scripts/acceptance.mjs", "scripts/acceptance/core.mjs", "tests/integration/fake-provider-ownership.test.mjs", "tests/merge-controller.test.mjs", "tests/acceptance-runner.test.mjs", "change-evidence.json", witnessFile);
+    };
+    writeFileSync(join(checkout, "change-evidence.json"), JSON.stringify({ schemaVersion: 1, base: "f".repeat(40), contracts: [fixtureContract] }, null, 2) + "\n");
+    writeFileSync(join(checkout, "release-evidence.json"), JSON.stringify({ schemaVersion: 1, base: predecessor, contracts: [fixtureContract] }, null, 2) + "\n");
+    git("add", "--", "scripts/merge-controller.mjs", "scripts/acceptance.mjs", "scripts/acceptance/core.mjs", "scripts/acceptance/evidence-selection.mjs", "tests/integration/fake-provider-ownership.test.mjs", "tests/merge-controller.test.mjs", "tests/acceptance-runner.test.mjs", "change-evidence.json", "release-evidence.json", witnessFile);
     const merged = execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit-tree", git("write-tree"), "-p", predecessor, ...(topology === "multi" ? ["-p", head] : [])], {
       cwd: checkout, input: "synthetic merged push\n", encoding: "utf8",
     }).trim();
@@ -675,6 +679,9 @@ describe("acceptance runner boundary", () => {
     // must carry the push payload into the real unit caller.
     const runCallerTest = async (eventName = "push") => {
       try {
+        writeFileSync(eventPath, JSON.stringify(eventName === "pull_request"
+          ? { pull_request: { base: { sha: predecessor }, head: { sha: merged } } }
+          : { before: predecessor, after: merged, ref: "refs/heads/v2" }));
         const remainingMs = deadline - Date.now();
         assert.ok(remainingMs > 0, "actual caller proof must stay inside its overall deadline");
         const result = await runChild(process.execPath, [launcher, eventName], {
@@ -720,14 +727,14 @@ describe("acceptance runner boundary", () => {
 
     const testPath = join(checkout, "tests/acceptance-runner.test.mjs");
     const source = readFileSync(testPath, "utf8");
-    const anchor = '? JSON.parse(readFileSync(' + 'process.env.GITHUB_EVENT_PATH, "utf8")).before';
+    const anchor = '\n    const predecessor = deliveryEvent ? eventEvidenceBase(process.env) : git("merge-base", "origin/v2", "HEAD");';
     assert.equal(source.split(anchor).length, 2);
-    const mutant = source.replace(anchor, '? git("merge-base", "origin/v2", "HEAD")');
+    const mutant = source.replace(anchor, 'const predecessor = git("merge-base", "origin/v2", "HEAD");');
     writeFileSync(testPath, mutant);
     assert.equal(readFileSync(testPath, "utf8"), mutant);
     const red = await runCallerTest();
     assert.notEqual(red.status, 0, red.stdout + red.stderr);
-    assert.match(red.stdout, /the declaration base must be the actual merge predecessor/);
+    assert.match(red.stdout, /missing, unsupported or stale declaration|selected declaration must match the trusted event base/);
     writeFileSync(testPath, source);
     assert.equal(readFileSync(testPath, "utf8"), source);
     const restored = await runCallerTest();
@@ -766,6 +773,35 @@ describe("acceptance runner boundary", () => {
     }
   });
 
+  it("uses one base-selected artifact for acceptance witnesses and exact preflight coverage", () => {
+    const directory = mkdtempSync(join(tmpdir(), "bifrost-release-evidence-selection-"));
+    temporary.push(directory);
+    const base = "a".repeat(40);
+    const witness = { file: "tests/release-fixture.test.mjs", name: "release-only witness" };
+    const contract = { id: "release", requirement: "R16", files: ["routing.ts", "change-evidence.json"],
+      boundary: "release boundary", assertions: "release assertion", boundaryTest: witness, invariant: witness, fault: witness };
+    writeFileSync(join(directory, "release-evidence.json"), JSON.stringify({ schemaVersion: 1, base, contracts: [contract] }));
+    writeFileSync(join(directory, "change-evidence.json"), JSON.stringify({ schemaVersion: 1, base: "b".repeat(40), contracts: [contract] }));
+    const selection = selectEvidenceManifest({ root: directory, base });
+    const gate = manifestEvidenceGate(directory, selection);
+    assert.equal(acceptanceEvidenceSelection(directory, {}), undefined,
+      "local acceptance without an evidence base preserves the existing declaration witness selection");
+    assert.equal(acceptanceEvidenceSelection(directory, { GITHUB_EVENT_NAME: "push", GITHUB_EVENT_PATH: join(directory, "missing.json") }), null,
+      "a missing event payload uses only fixed selector controls");
+    const eventPath = join(directory, "event.json");
+    writeFileSync(eventPath, JSON.stringify({ before: base }));
+    assert.equal(acceptanceEvidenceSelection(directory, { GITHUB_EVENT_NAME: "push", GITHUB_EVENT_PATH: eventPath })?.file, "release-evidence.json");
+    assert.equal(selection.file, "release-evidence.json");
+    assert.ok(gate.paths.includes(witness.file), "acceptance selects tests from the same base-matching artifact");
+    const changed = ["routing.ts", "change-evidence.json", "release-evidence.json"];
+    assert.deepEqual(evidenceCoverageProblems(selection.manifest, changed, selection.file).changedNotDeclared, []);
+    selection.manifest.contracts[0].files = ["routing.ts"];
+    assert.ok(evidenceCoverageProblems(selection.manifest, changed, selection.file).changedNotDeclared.includes("change-evidence.json"),
+      "preflight requires the non-selected declaration to be explicitly covered");
+    writeFileSync(join(directory, "change-evidence.json"), JSON.stringify({ schemaVersion: 1, base, contracts: [contract] }));
+    assert.throws(() => selectEvidenceManifest({ root: directory, base }), /multiple declarations/);
+  });
+
   it("fault control: dropping declaration witnesses fails the named bounded selection assertion", async (t) => {
     const directory = mkdtempSync(join(tmpdir(), "bifrost-manifest-selection-fault-"));
     temporary.push(directory);
@@ -795,14 +831,14 @@ describe("acceptance runner boundary", () => {
 
   it("workflow acceptance CLI records actual-predecessor change evidence with bounded gates", { timeout: 3 * CALLER_PHASE_BUDGET_MS + 30_000 }, (t) => {
     const root = process.cwd();
-    const manifest = JSON.parse(readFileSync(join(root, "change-evidence.json"), "utf8"));
     const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
-    // Push uses its delivery predecessor; local caller proof uses its current
-    // delivery merge base before exercising the real validator with wrong bases.
-    const predecessor = process.env.GITHUB_EVENT_NAME === "push"
-      ? JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8")).before
-      : git("merge-base", "origin/v2", "HEAD");
-    assert.equal(predecessor, manifest.base, "the declaration base must be the actual merge predecessor");
+    // Use the same trusted event-base resolver and fixed-path selector as the
+    // actual caller. PR deliveries bind to pull_request.base.sha, including
+    // release-targeting PRs where origin/v2 can point at HEAD.
+    const deliveryEvent = process.env.GITHUB_EVENT_NAME === "push" || process.env.GITHUB_EVENT_NAME === "pull_request";
+    const predecessor = deliveryEvent ? eventEvidenceBase(process.env) : git("merge-base", "origin/v2", "HEAD");
+    const selected = selectEvidenceManifest({ root, base: predecessor });
+    assert.equal(selected.manifest.base, predecessor, "the selected declaration must match the trusted event base");
     const head = git("rev-parse", "HEAD");
     const fixture = mkdtempSync(join(tmpdir(), "bifrost-acceptance-push-caller-"));
     temporary.push(fixture);
@@ -836,8 +872,11 @@ describe("acceptance runner boundary", () => {
     const env = { ...process.env, GITHUB_EVENT_NAME: "push", GITHUB_EVENT_PATH: eventPath };
     delete env.BIFROST_EVIDENCE_BASE;
     delete env.BIFROST_CI_REPORT;
-    const runCaller = (before, expectedStatus, competingBase) => {
-      writeFileSync(eventPath, JSON.stringify({ before, after: head, ref: "refs/heads/v2" }));
+    const runCaller = (before, expectedStatus, competingBase, eventName = "push") => {
+      writeFileSync(eventPath, JSON.stringify(eventName === "pull_request"
+        ? { pull_request: { base: { sha: before }, head: { sha: head } } }
+        : { before, after: head, ref: "refs/heads/main" }));
+      env.GITHUB_EVENT_NAME = eventName;
       if (competingBase) env.BIFROST_EVIDENCE_BASE = competingBase;
       else delete env.BIFROST_EVIDENCE_BASE;
       const startedAt = Date.now();
@@ -856,10 +895,10 @@ describe("acceptance runner boundary", () => {
         const changeEvidence = evidence.cases.find((item) => item.id === "change-evidence");
         assert.equal(changeEvidence?.status, expectedStatus, changeEvidence?.detail ?? JSON.stringify(evidence.cases));
         if (expectedStatus === "failed") {
-          assert.match(changeEvidence.detail, /missing, unsupported or stale declaration/);
+          assert.match(changeEvidence.detail, /event-bound declaration selection was unavailable/);
           assert.notEqual(result.status, 0, "a stale event base must fail the actual CLI");
         } else {
-          assert.equal(JSON.parse(changeEvidence.detail).base, predecessor, "CLI evidence must bind the expected event.before");
+          assert.equal(JSON.parse(changeEvidence.detail).base, before, "CLI evidence must bind the trusted event base");
         }
         t.diagnostic(JSON.stringify({ before, competingBase, expectedStatus, actualStatus: changeEvidence.status, cliStatus: result.status }));
         const eventsPath = join(dirname(evidencePath), "gates", "node-test-events.jsonl");
@@ -884,6 +923,6 @@ describe("acceptance runner boundary", () => {
     const wrongBase = intermediate ?? head;
     assert.notEqual(wrongBase, predecessor, "negative base must differ from event.before");
     runCaller(wrongBase, "failed", predecessor);
-    runCaller(predecessor, "passed", wrongBase);
+    runCaller(predecessor, "passed", wrongBase, "pull_request");
   });
 });

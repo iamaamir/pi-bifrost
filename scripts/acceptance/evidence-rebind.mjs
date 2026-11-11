@@ -2,6 +2,7 @@ import { lstatSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { git } from "./core.mjs";
+import { selectEvidenceManifest } from "./evidence-selection.mjs";
 
 const MANIFEST = "change-evidence.json";
 const SHA = /^[a-f0-9]{40}$/;
@@ -63,10 +64,10 @@ export function assertBaseAncestor(root, base) {
   }
 }
 
-/** Changed files between base and HEAD, excluding the declaration itself, like the validator. */
+/** Full changed-file inventory; coverage excludes only the selected declaration. */
 export function changedFilesForBase(root, base) {
   return git(root, ["diff", "--name-only", "--no-renames", "-z", base, "HEAD"])
-    .split("\0").filter(Boolean).filter((file) => file !== MANIFEST);
+    .split("\0").filter(Boolean);
 }
 
 function safePath(value) {
@@ -81,9 +82,9 @@ function safePath(value) {
  * witness execution stay with the full acceptance run, which checks them
  * against real test events.
  */
-export function evidenceCoverageProblems(manifest, changedFiles) {
+export function evidenceCoverageProblems(manifest, changedFiles, manifestFile = MANIFEST) {
   requireValue(text(manifest.base) && SHA.test(manifest.base), "the declaration must carry a full base commit sha");
-  const changedSet = new Set([...new Set(changedFiles)]);
+  const changedSet = new Set([...new Set(changedFiles)].filter((file) => file !== manifestFile));
   const covered = new Map();
   const ids = new Set();
   const notInDiff = new Set();
@@ -112,8 +113,8 @@ export function rebindedManifest(manifest, base) {
   return { ...manifest, base };
 }
 
-export function writeEvidenceManifest(root, manifest) {
-  const path = join(root, MANIFEST);
+export function writeEvidenceManifest(root, manifest, manifestFile = MANIFEST) {
+  const path = join(root, manifestFile);
   requireValue(lstatSync(path).isFile(), "declaration must exist as a regular file before rebinding");
   const contents = `${JSON.stringify(manifest, null, 2)}\n`;
   // Reformatting can grow the file: refuse a rewrite that would break the
@@ -147,18 +148,19 @@ export function writeEvidenceManifest(root, manifest) {
 export function evaluateEvidenceRebind({ root, baseRef, apply = false }) {
   const base = resolveBaseRef(root, baseRef);
   assertBaseAncestor(root, base);
-  const previous = loadEvidenceManifest(root);
+  const selected = apply ? { file: MANIFEST, manifest: loadEvidenceManifest(root) } : selectEvidenceManifest({ root, base });
+  const previous = selected.manifest;
   const manifest = apply ? rebindedManifest(previous, base) : previous;
-  const problems = evidenceCoverageProblems(manifest, changedFilesForBase(root, base));
+  const problems = evidenceCoverageProblems(manifest, changedFilesForBase(root, base), selected.file);
   let wrote = false;
   if (apply) {
-    wrote = writeEvidenceManifest(root, manifest);
+    wrote = writeEvidenceManifest(root, manifest, selected.file);
   }
   const declarationMatches = manifest.base === base;
   const status = declarationMatches && problems.notInDiff.length === 0 && problems.changedNotDeclared.length === 0
     ? "passed"
     : "failed";
-  return { status, base, wrote, declarationMatches, ...problems, detail: JSON.stringify(problems) };
+  return { status, base, manifestFile: selected.file, wrote, declarationMatches, ...problems, detail: JSON.stringify(problems) };
 }
 
 export function usage() {
