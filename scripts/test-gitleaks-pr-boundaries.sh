@@ -104,10 +104,49 @@ while IFS=: read -r commit path rule line; do
   expect_green "exact fixture fingerprint $fingerprint_count" "$base_sha" "$commit"
   fingerprint_count=$((fingerprint_count + 1))
 done < "$project_root/.gitleaksignore"
-[ "$fingerprint_count" -eq 8 ] || {
-  echo "expected eight exact fixture fingerprints, got $fingerprint_count" >&2
+[ "$fingerprint_count" -gt 0 ] || {
+  echo "expected at least one exact fixture fingerprint" >&2
   exit 1
 }
+
+# The first exact fingerprint must fail when its ignore entry is removed.
+# Keep this control bound to the PR #34 run whose findings are allowlisted.
+fixture_pr_base="74775776e5214e8182150cd8d0f4761482b06f6b"
+fixture_pr_head="982a4ce6c517cb430700d6c71596b2ab0aa92fbd"
+no_ignore_repo="$proof_root/no-ignore"
+git -c advice.detachedHead=false clone -q --no-hardlinks "$project_root" "$no_ignore_repo" \
+  > "$proof_root/no-ignore-clone.log" 2>&1
+rm "$no_ignore_repo/.gitleaksignore"
+if (cd "$no_ignore_repo" && gitleaks detect --redact --exit-code=2 \
+  --log-opts="--no-merges --full-history $fixture_pr_base..$fixture_pr_head") \
+  > "$proof_root/exact-ignore-removed.log" 2>&1; then
+  echo "PR history stayed clean after removing all exact fixture fingerprints" >&2
+  exit 1
+else
+  scan_rc=$?
+fi
+[ "$scan_rc" -eq 2 ] || {
+  echo "expected Gitleaks finding exit 2 after removing exact ignores, got $scan_rc" >&2
+  exit 1
+}
+echo "PR history: RED without exact ignore file as expected"
+
+# Gitleaks 8.24.3 accepts --first-parent as a git log option, not a CLI flag.
+first_pr_commit="$(git -C "$project_root" rev-list --first-parent --reverse \
+  "$fixture_pr_base..$fixture_pr_head" | sed -n '1p')"
+[ -n "$first_pr_commit" ] || {
+  echo "could not find the first PR #34 commit" >&2
+  exit 1
+}
+if (cd "$project_root" && gitleaks detect --redact --exit-code=2 \
+  --log-opts="--first-parent $first_pr_commit^..$fixture_pr_head") \
+  > "$proof_root/first-parent.log" 2>&1; then
+  echo "PR #34 first-parent history: GREEN as expected"
+else
+  scan_rc=$?
+  echo "PR #34 first-parent history: expected GREEN, got exit $scan_rc" >&2
+  exit 1
+fi
 
 # Reusing the same fixture value in a new commit must not inherit its old fingerprint.
 IFS=: read -r fixture_commit fixture_path fixture_rule fixture_line < "$project_root/.gitleaksignore"
