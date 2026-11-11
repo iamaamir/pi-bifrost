@@ -542,7 +542,13 @@ const MAX_AUTH_REASON_CHARS = 200;
 
 function boundedAuthReason(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  const line = message.replace(/\s+/g, " ").trim() || "sign-in could not be resolved";
+  // Provider text is stripped of terminal escapes, flattened, and reduced to
+  // printable text so a hostile or noisy error cannot inject into the report.
+  const line = message
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g, "")
+    .replace(/[\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ").trim() || "sign-in could not be resolved";
   return line.length <= MAX_AUTH_REASON_CHARS ? line : `${line.slice(0, MAX_AUTH_REASON_CHARS - 3)}...`;
 }
 

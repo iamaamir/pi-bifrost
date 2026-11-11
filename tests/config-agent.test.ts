@@ -338,15 +338,17 @@ describe("provider sign-in state", () => {
     const harness = freshHarness({
       providerAuthStatus: () => ({ configured: true, source: "stored" }),
       providerAuthResult: (provider) => provider === "alpha"
-        ? Object.assign(new Error("OAuth refresh failed for alpha: invalid_grant\nprovider stack trace"), { name: "AuthError" })
+        ? Object.assign(new Error("OAuth refresh failed for alpha: invalid_grant\n\u001b[31mprovider stack trace"), { name: "AuthError" })
         : { auth: { apiKey: "resolved-value-not-reported" } },
     });
     try {
       const inspected = detailsOf<ConfigAgentInspectResult>(await harness.run({ operation: "inspect" }));
       const alpha = inspected.providerAuth.find((entry) => entry.provider === "alpha");
       assert.equal(alpha?.state, "invalid");
-      // Provider error text is flattened to one bounded line; no payload follows it.
+      // Provider error text is flattened to one bounded line, with control
+      // characters stripped, so no payload or terminal escape follows it.
       assert.equal(alpha?.reason, "OAuth refresh failed for alpha: invalid_grant provider stack trace");
+      assert.doesNotMatch(alpha?.reason ?? "", /[\u0000-\u001f\u007f]/);
       assert.equal(inspected.providerAuth.find((entry) => entry.provider === "beta")?.state, "ready");
 
       const inspectText = contentOf(await harness.run({ operation: "inspect" }));
