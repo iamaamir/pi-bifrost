@@ -38,5 +38,9 @@ export function selectEvidenceManifest({ root, base }) {
   requireValue(matching.length === 1, matching.length === 0
     ? "missing, unsupported or stale declaration: no declaration is bound to the trusted event base"
     : "multiple declarations are bound to the trusted event base");
-  return { ...matching[0], base };
+  const selected = matching[0];
+  requireValue(selected.manifest?.schemaVersion === 1, `${selected.file} must use schemaVersion 1`);
+  requireValue(Array.isArray(selected.manifest?.contracts) && selected.manifest.contracts.length > 0,
+    `${selected.file} must contain at least one contract`);
+  return { ...selected, base };
 }

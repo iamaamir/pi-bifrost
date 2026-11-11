@@ -213,6 +213,30 @@ describe("evidence rebind helper", () => {
         rmSync(root, { recursive: true, force: true });
       }
     });
+
+    it("preflight rejects an unsupported schema on a uniquely base-matching declaration", () => {
+      const { root, base } = initRepo();
+      try {
+        const declaration = readDeclaration(root);
+        declaration.schemaVersion = 2;
+        writeDeclaration(root, declaration);
+        assert.throws(() => evaluateEvidenceRebind({ root, baseRef: base }), /schemaVersion 1/);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("preflight rejects an empty contract list even when only the selected manifest changed", () => {
+      const { root, base } = initRepo();
+      try {
+        const declaration = readDeclaration(root);
+        declaration.contracts = [];
+        writeDeclaration(root, declaration);
+        assert.throws(() => evaluateEvidenceRebind({ root, baseRef: base }), /at least one contract/);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 
   describe("rebinding", () => {
