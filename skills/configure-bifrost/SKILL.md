@@ -29,7 +29,11 @@ goal needs something Bifrost does not do, say so.
    on; the filter and offset only narrow what is reported. Inspect also reports
    effective classifier runtime state, configured state, backend, and any
    legacy-state conflict; use runtime state, not `classifier.enabled` alone,
-   when describing whether classification is active.
+   when describing whether classification is active. It reports each provider's
+   sign-in state too. A provider marked `invalid` still lists its models but
+   cannot route: do not put a tier on it unless the user has said they will sign
+   in again first, and say what you avoided. `not_configured` providers cannot
+   route at all.
 3. **Preserve existing policy while composing.** See
    [references/configuration-reference.md](references/configuration-reference.md)
    for the fields, strategies, and worked examples. Start from the user's
@@ -60,7 +64,11 @@ goal needs something Bifrost does not do, say so.
    `/bifrost classifier on` or `off` for this session. Use the reported runtime
    state; never treat a legacy value as current approval to send prompts.
    Read warnings, pool references, and `newlyEligibleModels` before showing
-   anything to the user.
+   anything to the user. A `config.provider_auth_invalid` or
+   `config.provider_auth_not_configured` warning means a tier you are adding
+   will fail on its first routed turn even though check returns `ok`: report it,
+   and either move that tier to a provider whose sign-in resolves or ask the user
+   to sign in before applying. Never apply such a tier silently.
 5. **Preview routing outcomes.** Call `bifrost_config` with
    `{"operation":"preview", ...}` and 2–5 representative prompts drawn from the
    user's real work. To preview current disk configuration, omit candidate and patch. Preview is offline: it sends nothing anywhere. Read each
@@ -211,7 +219,7 @@ it was opened.
   validation, layering, and writes stay safe.
 - Do not run `/bifrost init`, model probing, or a registry refresh to satisfy a
   goal: those operations can send provider requests and spend credits. Work with
-  the inventory `inspect` reports.
+  the inventory `inspect` reports, including its provider sign-in state.
 - Do not retry `apply` after a `stale` result with the same digests. Re-inspect,
   re-check, and re-confirm with the user. A project with no configuration yet
   can receive Bifrost's automatic first-use starter pools while you work, so a
