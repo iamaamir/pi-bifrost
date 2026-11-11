@@ -887,7 +887,7 @@ describe("acceptance runner boundary", () => {
         const changeEvidence = evidence.cases.find((item) => item.id === "change-evidence");
         assert.equal(changeEvidence?.status, expectedStatus, changeEvidence?.detail ?? JSON.stringify(evidence.cases));
         if (expectedStatus === "failed") {
-          assert.match(changeEvidence.detail, /missing, unsupported or stale declaration/);
+          assert.match(changeEvidence.detail, /event-bound declaration selection was unavailable/);
           assert.notEqual(result.status, 0, "a stale event base must fail the actual CLI");
         } else {
           assert.equal(JSON.parse(changeEvidence.detail).base, predecessor, "CLI evidence must bind the expected event.before");
