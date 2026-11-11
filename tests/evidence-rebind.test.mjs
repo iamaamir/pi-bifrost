@@ -16,6 +16,7 @@ import {
   resolveBaseRef,
   writeEvidenceManifest,
 } from "../scripts/acceptance/evidence-rebind.mjs";
+import { selectEvidenceManifest } from "../scripts/acceptance/evidence-selection.mjs";
 
 function contract(id, files, overrides = {}) {
   return {
@@ -181,10 +182,33 @@ describe("evidence rebind helper", () => {
       }
     });
 
-    it("lists the candidate diff without the declaration itself", () => {
+    it("lists the full candidate diff including declarations for selected-manifest filtering", () => {
       const { root, base } = initRepo();
       try {
-        assert.deepEqual(changedFilesForBase(root, base), ["new.test.mjs", "src.mjs"]);
+        assert.deepEqual(changedFilesForBase(root, base), ["change-evidence.json", "new.test.mjs", "src.mjs"]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps a changed non-selected declaration in the real selected-manifest diff", () => {
+      const { root, base } = initRepo();
+      try {
+        const routine = readDeclaration(root);
+        routine.base = "e".repeat(40);
+        writeDeclaration(root, routine);
+        const declaration = manifest(base, [contract("release", ["src.mjs", "new.test.mjs"])]);
+        writeFile(root, "release-evidence.json", JSON.stringify(declaration));
+        git(root, ["add", "release-evidence.json"]);
+        git(root, ["commit", "--amend", "--no-gpg-sign", "-m", "release declaration"]);
+        const selection = selectEvidenceManifest({ root, base });
+        assert.equal(selection.file, "release-evidence.json");
+        const changed = changedFilesForBase(root, base);
+        assert.ok(changed.includes("change-evidence.json"), "the real candidate diff includes the non-selected declaration");
+        const problems = evidenceCoverageProblems(selection.manifest, changed, selection.file);
+        assert.deepEqual(problems.changedNotDeclared, ["change-evidence.json"]);
+        selection.manifest.contracts[0].files.push("change-evidence.json");
+        assert.deepEqual(evidenceCoverageProblems(selection.manifest, changed, selection.file).changedNotDeclared, []);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
@@ -283,11 +307,8 @@ describe("evidence rebind helper", () => {
         assert.equal(clean.declarationMatches, true);
         assert.equal(clean.changedCount, 2);
 
-        const stale = evaluateEvidenceRebind({ root, baseRef: head });
-        assert.equal(stale.status, "failed", "the declaration does not name the requested base");
-        assert.equal(stale.declarationMatches, false);
-        assert.equal(stale.changedCount, 0);
-        assert.deepEqual(stale.notInDiff, ["src.mjs", "new.test.mjs"], "the declared file set is not this diff");
+        assert.throws(() => evaluateEvidenceRebind({ root, baseRef: head }), /missing, unsupported or stale declaration/,
+          "a stale declaration cannot be selected for a different event base");
 
         const applied = evaluateEvidenceRebind({ root, baseRef: head, apply: true });
         assert.equal(applied.wrote, true);
@@ -303,11 +324,8 @@ describe("evidence rebind helper", () => {
 
         // Coverage can be clean while the declaration names another base: then and
         // only then the declaration-match factor alone decides failure.
-        const rebasedCoverage = evaluateEvidenceRebind({ root, baseRef: base });
-        assert.equal(rebasedCoverage.status, "failed", "the declaration now names head, not this older base");
-        assert.equal(rebasedCoverage.declarationMatches, false);
-        assert.deepEqual(rebasedCoverage.notInDiff, [], "coverage against the original base remains clean");
-        assert.deepEqual(rebasedCoverage.changedNotDeclared, [], "coverage against the original base remains clean");
+        assert.throws(() => evaluateEvidenceRebind({ root, baseRef: base }), /missing, unsupported or stale declaration/,
+          "the rebased declaration cannot be reused for an older base");
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

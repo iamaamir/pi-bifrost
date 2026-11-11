@@ -8,7 +8,9 @@ import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer } from "node:http";
 import { gateDirectory, gitTruth, installedToolVersions, matchNamedTestEvent, parseArgs, sourceFingerprint, summarizeCases } from "../scripts/acceptance/core.mjs";
-import { buildGateEvidenceCases, manifestEvidenceGate, registerTerminationHandlers, runChild, supportingTestCase, terminateProcessGroup, verificationGateEnvironment, writeNodeTestEventsArtifact } from "../scripts/acceptance.mjs";
+import { acceptanceEvidenceSelection, buildGateEvidenceCases, manifestEvidenceGate, registerTerminationHandlers, runChild, supportingTestCase, terminateProcessGroup, verificationGateEnvironment, writeNodeTestEventsArtifact } from "../scripts/acceptance.mjs";
+import { selectEvidenceManifest } from "../scripts/acceptance/evidence-selection.mjs";
+import { evidenceCoverageProblems } from "../scripts/acceptance/evidence-rebind.mjs";
 
 const temporary = [];
 after(() => temporary.forEach((path) => rmSync(path, { recursive: true, force: true })));
@@ -624,7 +626,7 @@ describe("acceptance runner boundary", () => {
     const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
     git("checkout", "--quiet", "--detach", head);
     // Include the current worktree's fixes while keeping all mutations private.
-    for (const file of ["scripts/merge-controller.mjs", "scripts/acceptance.mjs", "scripts/acceptance/core.mjs", "tests/integration/fake-provider-ownership.test.mjs", "tests/merge-controller.test.mjs", "tests/acceptance-runner.test.mjs", "change-evidence.json"]) {
+    for (const file of ["scripts/merge-controller.mjs", "scripts/acceptance.mjs", "scripts/acceptance/core.mjs", "scripts/acceptance/evidence-selection.mjs", "tests/integration/fake-provider-ownership.test.mjs", "tests/merge-controller.test.mjs", "tests/acceptance-runner.test.mjs", "change-evidence.json"]) {
       cpSync(join(root, file), join(checkout, file));
     }
     symlinkSync(realpathSync(join(root, "node_modules")), join(checkout, "node_modules"), "dir");
@@ -642,7 +644,7 @@ describe("acceptance runner boundary", () => {
       invariant: { file: "tests/change-evidence.test.mjs", name: "event-driven push and pull request bases fail closed despite competing env" },
       fault: { file: "tests/change-evidence.test.mjs", name: "fault control: selecting HEAD parent instead of event.before turns push base RED" },
     }] }, null, 2) + "\n");
-    git("add", "--", "scripts/merge-controller.mjs", "scripts/acceptance.mjs", "scripts/acceptance/core.mjs", "tests/integration/fake-provider-ownership.test.mjs", "tests/merge-controller.test.mjs", "tests/acceptance-runner.test.mjs", "change-evidence.json", witnessFile);
+    git("add", "--", "scripts/merge-controller.mjs", "scripts/acceptance.mjs", "scripts/acceptance/core.mjs", "scripts/acceptance/evidence-selection.mjs", "tests/integration/fake-provider-ownership.test.mjs", "tests/merge-controller.test.mjs", "tests/acceptance-runner.test.mjs", "change-evidence.json", witnessFile);
     const merged = execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit-tree", git("write-tree"), "-p", predecessor, ...(topology === "multi" ? ["-p", head] : [])], {
       cwd: checkout, input: "synthetic merged push\n", encoding: "utf8",
     }).trim();
@@ -764,6 +766,35 @@ describe("acceptance runner boundary", () => {
       writeFileSync(join(directory, "change-evidence.json"), JSON.stringify(declaration));
       assert.throws(() => manifestEvidenceGate(directory), /witness is malformed/);
     }
+  });
+
+  it("uses one base-selected artifact for acceptance witnesses and exact preflight coverage", () => {
+    const directory = mkdtempSync(join(tmpdir(), "bifrost-release-evidence-selection-"));
+    temporary.push(directory);
+    const base = "a".repeat(40);
+    const witness = { file: "tests/release-fixture.test.mjs", name: "release-only witness" };
+    const contract = { id: "release", requirement: "R16", files: ["routing.ts", "change-evidence.json"],
+      boundary: "release boundary", assertions: "release assertion", boundaryTest: witness, invariant: witness, fault: witness };
+    writeFileSync(join(directory, "release-evidence.json"), JSON.stringify({ schemaVersion: 1, base, contracts: [contract] }));
+    writeFileSync(join(directory, "change-evidence.json"), JSON.stringify({ schemaVersion: 1, base: "b".repeat(40), contracts: [contract] }));
+    const selection = selectEvidenceManifest({ root: directory, base });
+    const gate = manifestEvidenceGate(directory, selection);
+    assert.equal(acceptanceEvidenceSelection(directory, {}), undefined,
+      "local acceptance without an evidence base preserves the existing declaration witness selection");
+    assert.equal(acceptanceEvidenceSelection(directory, { GITHUB_EVENT_NAME: "push", GITHUB_EVENT_PATH: join(directory, "missing.json") }), null,
+      "a missing event payload uses only fixed selector controls");
+    const eventPath = join(directory, "event.json");
+    writeFileSync(eventPath, JSON.stringify({ before: base }));
+    assert.equal(acceptanceEvidenceSelection(directory, { GITHUB_EVENT_NAME: "push", GITHUB_EVENT_PATH: eventPath })?.file, "release-evidence.json");
+    assert.equal(selection.file, "release-evidence.json");
+    assert.ok(gate.paths.includes(witness.file), "acceptance selects tests from the same base-matching artifact");
+    const changed = ["routing.ts", "change-evidence.json", "release-evidence.json"];
+    assert.deepEqual(evidenceCoverageProblems(selection.manifest, changed, selection.file).changedNotDeclared, []);
+    selection.manifest.contracts[0].files = ["routing.ts"];
+    assert.ok(evidenceCoverageProblems(selection.manifest, changed, selection.file).changedNotDeclared.includes("change-evidence.json"),
+      "preflight requires the non-selected declaration to be explicitly covered");
+    writeFileSync(join(directory, "change-evidence.json"), JSON.stringify({ schemaVersion: 1, base, contracts: [contract] }));
+    assert.throws(() => selectEvidenceManifest({ root: directory, base }), /multiple declarations/);
   });
 
   it("fault control: dropping declaration witnesses fails the named bounded selection assertion", async (t) => {

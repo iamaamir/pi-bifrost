@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { gateDirectory, git, gitTruth, installedToolVersions, matchNamedTestEvent, parseArgs, processGroupExists, sourceFingerprint, summarizeCases, terminateProcessGroup, verificationGateEnvironment } from "./acceptance/core.mjs";
 import { exportCiReportIfConfigured } from "./ci-report.mjs";
 import { changeEvidenceCase } from "./acceptance/change-evidence.mjs";
+import { eventEvidenceBase, selectEvidenceManifest } from "./acceptance/evidence-selection.mjs";
 export { processGroupExists, terminateProcessGroup, verificationGateEnvironment };
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -322,11 +323,12 @@ export function runChild(command, args, {
   });
 }
 
-export function manifestEvidenceGate(root) {
-  const path = join(root, "change-evidence.json");
+export function manifestEvidenceGate(root, selection) {
+  if (selection === null) return NODE_TEST_GATES.get("test:manifest-evidence");
+  const path = selection?.path ?? join(root, "change-evidence.json");
   const stat = lstatSync(path);
   if (!stat.isFile() || stat.size > 256 * 1024) throw new Error("Manifest evidence declaration exceeds its bound");
-  const manifest = JSON.parse(readFileSync(path, "utf8"));
+  const manifest = selection?.manifest ?? JSON.parse(readFileSync(path, "utf8"));
   if (!Array.isArray(manifest.contracts) || !manifest.contracts.length || manifest.contracts.length > 100) {
     throw new Error("Manifest evidence contracts are unavailable or unbounded");
   }
@@ -351,9 +353,19 @@ export function manifestEvidenceGate(root) {
   return { paths: [...paths], pattern: patterns.join("|") };
 }
 
-async function executeVerificationGate({ root, script, testEvents, artifactDir }) {
+export function acceptanceEvidenceSelection(root, env = process.env) {
+  const eventDriven = env.GITHUB_EVENT_NAME === "pull_request" || env.GITHUB_EVENT_NAME === "push";
+  try {
+    const base = eventEvidenceBase(env);
+    return base ? selectEvidenceManifest({ root, base }) : eventDriven ? null : undefined;
+  } catch {
+    return null;
+  }
+}
+
+async function executeVerificationGate({ root, script, testEvents, artifactDir, evidenceSelection }) {
   const gateEnvironment = verificationGateEnvironment({ root, artifactDir, script });
-  const testGate = script === "test:manifest-evidence" ? manifestEvidenceGate(root) : NODE_TEST_GATES.get(script);
+  const testGate = script === "test:manifest-evidence" ? manifestEvidenceGate(root, evidenceSelection) : NODE_TEST_GATES.get(script);
   if (!testGate) {
     return enforceGateNetworkBoundary(await runChild("npm", ["run", script], { cwd: root, env: gateEnvironment.env }), gateEnvironment.violationPath);
   }
@@ -392,9 +404,10 @@ async function runDeterministic({ root, artifactDir }) {
   const { runVerification } = await import("./verify-release.mjs");
   const runStartedMs = Date.now();
   const testEvents = [];
+  const evidenceSelection = acceptanceEvidenceSelection(root, process.env);
   const verification = await runVerification({
     root,
-    execute: ({ script }) => executeVerificationGate({ root, script, testEvents, artifactDir }),
+    execute: ({ script }) => executeVerificationGate({ root, script, testEvents, artifactDir, evidenceSelection }),
   });
   const testEventsArtifact = writeNodeTestEventsArtifact({ root, artifactDir, testEvents });
   if (receivedSignal) {
@@ -426,7 +439,7 @@ async function runDeterministic({ root, artifactDir }) {
   } catch {}
   const cases = buildGateEvidenceCases({ verification, root, artifactDir, terminalCaptures });
   const eventPath = relative(root, testEventsArtifact);
-  const changeEvidence = changeEvidenceCase({ root, testEvents });
+  const changeEvidence = changeEvidenceCase({ root, testEvents, selection: evidenceSelection });
   if (changeEvidence) cases.push({ ...changeEvidence, artifacts: [eventPath], detail: changeEvidence.detail });
   for (const target of SUPPORTING_TESTS) {
     cases.push(supportingTestCase({ target, testEvents, artifactDir, root, eventPath }));

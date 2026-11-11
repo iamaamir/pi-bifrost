@@ -1,8 +1,7 @@
-import { lstatSync, readFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute } from "node:path";
 import { git, matchNamedTestEvent, normalizedTestPath } from "./core.mjs";
+import { eventEvidenceBase, selectEvidenceManifest } from "./evidence-selection.mjs";
 
-const MANIFEST = "change-evidence.json";
 const SHA = /^[a-f0-9]{40}$/;
 const ZERO_SHA = "0".repeat(40);
 
@@ -19,11 +18,11 @@ function safePath(value) {
     && value.split("/").every((part) => part && part !== "." && part !== "..");
 }
 
-export function validateChangeEvidence({ manifest, base, changedFiles, testEvents, root }) {
+export function validateChangeEvidence({ manifest, manifestFile = "change-evidence.json", base, changedFiles, testEvents, root }) {
   requireValue(SHA.test(base), "a full base commit is required");
   requireValue(manifest?.schemaVersion === 1 && manifest.base === base, "missing, unsupported or stale declaration");
   requireValue(Array.isArray(manifest.contracts) && manifest.contracts.length > 0, "contracts must not be empty");
-  const changed = new Set(changedFiles.filter((file) => file !== MANIFEST));
+  const changed = new Set(changedFiles.filter((file) => file !== manifestFile));
   const covered = new Map();
   const ids = new Set();
   for (const contract of manifest.contracts) {
@@ -57,36 +56,24 @@ export function validateChangeEvidence({ manifest, base, changedFiles, testEvent
   return manifest;
 }
 
-export function changeEvidenceCase({ root, testEvents, env = process.env }) {
+export function changeEvidenceCase({ root, testEvents, env = process.env, selection }) {
   const isPullRequest = env.GITHUB_EVENT_NAME === "pull_request";
   const isPush = env.GITHUB_EVENT_NAME === "push";
   const required = isPullRequest || isPush || Object.hasOwn(env, "BIFROST_EVIDENCE_BASE");
   if (!required) return null;
-  const result = { id: "change-evidence", requirements: ["R16"], boundary: "per-change executed evidence declarations", required: true, attempts: 1, artifacts: [MANIFEST], exclusions: [] };
+  const result = { id: "change-evidence", requirements: ["R16"], boundary: "event-bound executed evidence declaration", required: true, attempts: 1, artifacts: [], exclusions: [] };
   try {
-    const eventPath = env.GITHUB_EVENT_PATH;
-    const event = (isPullRequest || isPush) && typeof eventPath === "string"
-      ? JSON.parse(readFileSync(eventPath, "utf8"))
-      : null;
-    const eventBase = isPullRequest
-      ? event?.pull_request?.base?.sha
-      : isPush
-        ? event?.before
-        : undefined;
     // Event-driven checks are fail-closed: a missing or null event base cannot be
     // rescued by a competing local BIFROST_EVIDENCE_BASE. Non-event runs use it.
-    const base = (isPullRequest || isPush)
-      ? eventBase
-      : env.BIFROST_EVIDENCE_BASE;
+    const eventBase = eventEvidenceBase(env);
+    const base = isPullRequest || isPush ? eventBase : eventBase ?? selection?.base;
     requireValue(typeof base === "string" && SHA.test(base) && base !== ZERO_SHA, "a full base commit is required");
+    requireValue(!selection || selection.base === base, "selected declaration does not match the trusted event base");
+    const selected = selection ?? selectEvidenceManifest({ root, base });
     git(root, ["merge-base", "--is-ancestor", base, "HEAD"]);
     const changedFiles = git(root, ["diff", "--name-only", "--no-renames", "-z", base, "HEAD"]).split("\0").filter(Boolean);
-    const manifestPath = join(root, MANIFEST);
-    const stat = lstatSync(manifestPath);
-    requireValue(stat.isFile() && stat.size <= 256 * 1024, "declaration must be a regular file no larger than 256 KiB");
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-    validateChangeEvidence({ manifest, base, changedFiles, testEvents, root });
-    return { ...result, status: "passed", detail: JSON.stringify(manifest) };
+    validateChangeEvidence({ manifest: selected.manifest, manifestFile: selected.file, base, changedFiles, testEvents, root });
+    return { ...result, artifacts: [selected.file], status: "passed", detail: JSON.stringify(selected.manifest) };
   } catch (error) {
     return { ...result, status: "failed", detail: String(error.message) };
   }
