@@ -2,7 +2,7 @@ import { lstatSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { git } from "./core.mjs";
-import { selectEvidenceManifest } from "./evidence-selection.mjs";
+import { EVIDENCE_MANIFESTS, selectEvidenceManifest } from "./evidence-selection.mjs";
 
 const MANIFEST = "change-evidence.json";
 const SHA = /^[a-f0-9]{40}$/;
@@ -164,22 +164,31 @@ export function evaluateEvidenceRebind({ root, baseRef, apply = false }) {
 }
 
 export function usage() {
-  return `usage: node scripts/acceptance/evidence-rebind.mjs <base-ref> [--apply]\n`
+  return `usage: node scripts/acceptance/evidence-rebind.mjs <base-ref> [--apply | --pre-push]\n`
     + `  resolves <base-ref> (default origin/v2) and validates that ${MANIFEST}\n`
     + `  declares an ancestor base and a file list exactly covering diff(base, HEAD);\n`
-    + `  --apply rewrites the declaration base commit to <base-ref> first.`;
+    + `  --apply rewrites the declaration base commit to <base-ref> first.\n`
+    + `  --pre-push requires an explicit base and a clean tracked candidate.`;
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2);
   const applyFlags = args.filter((arg) => arg === "--apply");
-  const operands = args.filter((arg) => arg !== "--apply");
-  const malformed = operands.length > 1 || applyFlags.length > 1 || operands.some((arg) => arg.startsWith("--"));
+  const prePushFlags = args.filter((arg) => arg === "--pre-push");
+  const operands = args.filter((arg) => arg !== "--apply" && arg !== "--pre-push");
+  const malformed = operands.length > 1 || applyFlags.length > 1 || prePushFlags.length > 1
+    || (prePushFlags.length && (operands.length !== 1 || applyFlags.length))
+    || operands.some((arg) => arg.startsWith("--"));
   if (malformed) {
     console.error(usage());
     process.exitCode = 1;
   } else {
     try {
+      if (prePushFlags.length) {
+        const root = process.cwd();
+        requireValue(!git(root, ["status", "--porcelain", "--untracked-files=no"]), "commit tracked changes before pre-push validation");
+        requireValue(!git(root, ["status", "--porcelain", "--untracked-files=all", "--ignored", "--", ...EVIDENCE_MANIFESTS]), "commit evidence declarations before pre-push validation");
+      }
       const result = evaluateEvidenceRebind({ root: process.cwd(), baseRef: operands[0] ?? "origin/v2", apply: applyFlags.length === 1 });
       console.log(JSON.stringify(result, null, 2));
       process.exitCode = result.status === "passed" ? 0 : 1;

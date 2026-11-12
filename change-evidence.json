@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "base": "d501d118160d295e307943a683b3fa5679809b35",
+  "base": "44c77c8f0155facd57c77e78e93ffa61fd207df1",
   "contracts": [
     {
       "id": "trusted-publisher-dependency-boundary",
