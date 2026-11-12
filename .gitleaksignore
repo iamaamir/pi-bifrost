@@ -17,3 +17,14 @@ e5877a0100dbe5dabaf9d44d192138984dc46cdb:tests/integration/command-privacy-accep
 391b559befed08bf769c59ad6de949610aee49c8:tests/integration/command-privacy-acceptance.test.mjs:generic-api-key:44
 2b373fc9427bdaf9f89e52630563d73df8d461e5:tests/acceptance-runner.test.mjs:generic-api-key:33
 2b373fc9427bdaf9f89e52630563d73df8d461e5:tests/integration/command-privacy-acceptance.test.mjs:generic-api-key:44
+d501d118160d295e307943a683b3fa5679809b35:tests/classifier-cache-key.test.ts:generic-api-key:42
+d501d118160d295e307943a683b3fa5679809b35:tests/diagnostics.test.ts:generic-api-key:130
+d501d118160d295e307943a683b3fa5679809b35:tests/bifrost-commands.test.ts:generic-api-key:2907
+d501d118160d295e307943a683b3fa5679809b35:tests/acceptance-runner.test.mjs:generic-api-key:35
+d501d118160d295e307943a683b3fa5679809b35:tests/integration/command-privacy-acceptance.test.mjs:generic-api-key:46
+d501d118160d295e307943a683b3fa5679809b35:tests/reconciliation.test.ts:generic-api-key:83
+d501d118160d295e307943a683b3fa5679809b35:tests/routing.test.ts:generic-api-key:70
+d501d118160d295e307943a683b3fa5679809b35:tests/routing.test.ts:generic-api-key:87
+d501d118160d295e307943a683b3fa5679809b35:tests/routing.test.ts:generic-api-key:96
+d501d118160d295e307943a683b3fa5679809b35:tests/routing.test.ts:generic-api-key:117
+d501d118160d295e307943a683b3fa5679809b35:tests/routing.test.ts:generic-api-key:126

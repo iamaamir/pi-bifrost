@@ -149,6 +149,25 @@ fi
 }
 echo "PR history: RED without exact ignore file as expected"
 
+# The squash introduced the same reviewed fixtures with new commit fingerprints.
+squash_head="d501d118160d295e307943a683b3fa5679809b35"
+if (cd "$no_ignore_repo" && gitleaks detect --redact --exit-code=2 \
+  --log-opts="--no-merges --full-history $fixture_pr_base..$squash_head") \
+  > "$proof_root/squash-no-ignore.log" 2>&1; then
+  echo "squash scan stayed clean without exact fixture fingerprints" >&2
+  exit 1
+else
+  scan_rc=$?
+fi
+[ "$scan_rc" -eq 2 ] || { echo "squash scan did not produce a finding" >&2; exit 1; }
+if (cd "$project_root" && "$scanner" "$fixture_pr_base" "$squash_head") \
+  > "$proof_root/squash-scanner.log" 2>&1; then
+  echo "squash scan: GREEN with reviewed exact fingerprints"
+else
+  echo "squash scan failed with reviewed exact fingerprints" >&2
+  exit 1
+fi
+
 # Gitleaks 8.24.3 accepts --first-parent as a git log option, not a CLI flag.
 first_pr_commit="$(git -C "$project_root" rev-list --first-parent --reverse \
   "$fixture_pr_base..$fixture_pr_head" | sed -n '1p')"

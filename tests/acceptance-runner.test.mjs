@@ -648,7 +648,11 @@ describe("acceptance runner boundary", () => {
     writeFileSync(join(checkout, "change-evidence.json"), JSON.stringify({ schemaVersion: 1, base: "f".repeat(40), contracts: [fixtureContract] }, null, 2) + "\n");
     writeFileSync(join(checkout, "release-evidence.json"), JSON.stringify({ schemaVersion: 1, base: predecessor, contracts: [fixtureContract] }, null, 2) + "\n");
     git("add", "--", "scripts/merge-controller.mjs", "scripts/acceptance.mjs", "scripts/acceptance/core.mjs", "scripts/acceptance/evidence-selection.mjs", "tests/integration/fake-provider-ownership.test.mjs", "tests/merge-controller.test.mjs", "tests/acceptance-runner.test.mjs", "change-evidence.json", "release-evidence.json", witnessFile);
-    const merged = execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit-tree", git("write-tree"), "-p", predecessor, ...(topology === "multi" ? ["-p", head] : [])], {
+    const tree = git("write-tree");
+    const intermediate = topology === "multi" ? execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit-tree", tree, "-p", predecessor], {
+      cwd: checkout, input: "synthetic intermediate\n", encoding: "utf8",
+    }).trim() : undefined;
+    const merged = execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit-tree", tree, "-p", predecessor, ...(intermediate ? ["-p", intermediate] : [])], {
       cwd: checkout, input: "synthetic merged push\n", encoding: "utf8",
     }).trim();
     git("checkout", "--quiet", "--detach", merged);
@@ -657,7 +661,7 @@ describe("acceptance runner boundary", () => {
     assert.notEqual(merged, predecessor, "the current delivery tip is not the historic push predecessor");
     const ancestry = git("rev-list", "--ancestry-path", `${predecessor}..${merged}`).split("\n");
     if (topology === "multi") {
-      assert.ok(head !== predecessor && ancestry.includes(head), "the owned merged-push fixture must exercise a real intermediate commit");
+      assert.ok(ancestry.includes(intermediate), "the owned merged-push fixture must exercise a real intermediate commit");
     } else {
       assert.deepEqual(ancestry, [merged], "the owned single-commit fixture must not contain an intermediate commit");
     }

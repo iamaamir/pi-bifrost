@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { MAX_REPORT_BYTES, makeReportData, renderCiReport, writeCiReport } from "../scripts/ci-report.mjs";
 import {
   COMMENT_MARKER,
@@ -13,6 +15,30 @@ import {
   validateArtifactMetadata,
   validateReportData,
 } from "../scripts/ci-report-publish.mjs";
+
+test("publisher starts from a dependency-free checkout for a push workflow event", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "bifrost-publisher-no-deps-")));
+  try {
+    cpSync(fileURLToPath(new URL("../scripts", import.meta.url)), join(root, "scripts"), { recursive: true });
+    const eventPath = join(root, "event.json");
+    writeFileSync(eventPath, JSON.stringify({ action: "in_progress", workflow_run: { event: "push" } }));
+    const run = () => spawnSync(process.execPath, [join(root, "scripts", "ci-report-publish.mjs")], {
+      encoding: "utf8", env: { PATH: process.env.PATH, GITHUB_TOKEN: "fixture", GITHUB_REPOSITORY: "example/repo", GITHUB_EVENT_PATH: eventPath },
+    });
+    const assertStarts = (result) => {
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /Acceptance report publisher: ignored/);
+    };
+    assertStarts(run());
+    appendFileSync(join(root, "scripts", "ci-report.mjs"), '\nimport "typescript";\n');
+    const faulty = run();
+    assert.notEqual(faulty.status, 0);
+    assert.match(faulty.stderr, /ERR_MODULE_NOT_FOUND/);
+    assert.throws(() => assertStarts(faulty), { code: "ERR_ASSERTION" });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("reports a bounded GitHub permission error without logging a token", async () => {
   const api = createGitHubApi({

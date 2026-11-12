@@ -1,46 +1,69 @@
 {
   "schemaVersion": 1,
-  "base": "56be0335284ed0db00533b816adb40a03584d164",
+  "base": "d501d118160d295e307943a683b3fa5679809b35",
   "contracts": [
     {
-      "id": "release-evidence-feature-refresh",
+      "id": "trusted-publisher-dependency-boundary",
       "requirement": "R16",
       "files": [
-        "release-evidence.json"
+        "scripts/ci-report.mjs",
+        "scripts/crap-history.mjs",
+        "scripts/crap-report.mjs",
+        "tests/ci-report-publish.test.mjs"
       ],
-      "boundary": "Update the main-bound release declaration to cover the merged provider sign-in warning and terminal-capture parser changes.",
-      "assertions": "Provider sign-in and terminal-wrap changes retain their own boundary, invariant and fault witnesses. Unchanged release contracts remain preserved; the added UI test is included in exact main-diff coverage.",
+      "boundary": "The trusted publisher executes its real CLI without installed project dependencies.",
+      "assertions": "A push event is ignored successfully in an isolated dependency-free checkout; injecting a TypeScript import makes the same assertion fail. Existing trend rendering remains unchanged.",
       "boundaryTest": {
-        "file": "tests/config-agent.test.ts",
-        "name": "reports a stored sign-in that cannot be resolved and warns without blocking the write"
+        "file": "tests/ci-report-publish.test.mjs",
+        "name": "publisher starts from a dependency-free checkout for a push workflow event"
       },
       "invariant": {
-        "file": "tests/ui-smoke-screen.test.mjs",
-        "name": "keeps a padded frame anchored across redraws"
+        "file": "tests/crap-report.test.mjs",
+        "name": "renderTrend shows per-snapshot rows and the overall direction"
       },
       "fault": {
-        "file": "tests/integration/config-agent-acceptance.test.mjs",
-        "name": "fault control: dropping the sign-in warning turns the named assertion RED"
+        "file": "tests/ci-report-publish.test.mjs",
+        "name": "publisher starts from a dependency-free checkout for a push workflow event"
       }
     },
     {
-      "id": "evidence-caller-unmatched-base",
+      "id": "owned-merged-push-fixture",
       "requirement": "R16",
       "files": [
         "tests/acceptance-runner.test.mjs"
       ],
-      "boundary": "The real acceptance caller must use a negative-control base that matches neither the routine nor release declaration.",
-      "assertions": "Named selector witnesses check exact-base selection; the actual merged, single-commit and main-base callers were also run directly to check event propagation, unmatched-base rejection and restored success.",
+      "boundary": "The actual acceptance caller handles an owned multi-commit push independent of checkout history.",
+      "assertions": "The fixture creates its own intermediate commit and the real caller passes, fails for context, witness and predecessor faults, then passes after restoration.",
       "boundaryTest": {
-        "file": "tests/change-evidence.test.mjs",
-        "name": "selects exactly one fixed declaration by event base and covers a changed non-selected manifest"
+        "file": "tests/acceptance-runner.test.mjs",
+        "name": "merged-push checkout runs the actual workflow caller with event.before"
       },
       "invariant": {
-        "file": "tests/change-evidence.test.mjs",
-        "name": "main release and later ordinary pushes select declarations by their own event.before"
+        "file": "tests/acceptance-runner.test.mjs",
+        "name": "single-commit checkout runs the actual workflow caller without inventing an intermediate"
       },
       "fault": {
-        "exception": "The actual main-base caller failed before the correction and passed afterward. Declaring the caller or its outer caller fixtures as manifest witnesses would nest the caller proof recursively or multiply its runtime."
+        "file": "tests/acceptance-runner.test.mjs",
+        "name": "merged-push checkout runs the actual workflow caller with event.before"
+      }
+    },
+    {
+      "id": "squash-fixture-fingerprints",
+      "requirement": "R16",
+      "files": [
+        ".gitleaksignore",
+        "scripts/test-gitleaks-pr-boundaries.sh"
+      ],
+      "boundary": "Secret scanning of the actual squash commit recognizes only the previously reviewed exact fixture fingerprints.",
+      "assertions": "The actual squash range fails without the allowlist and passes with the exact entries; the separate new-commit and merge-resolution secret controls still fail closed.",
+      "boundaryTest": {
+        "exception": "The executable shell scanner boundary suite runs the actual squash scan and its no-ignore control; it is not a Node test event."
+      },
+      "invariant": {
+        "exception": "The same shell suite verifies a reused fixture in a new commit and a merge-resolution-only secret are still detected."
+      },
+      "fault": {
+        "exception": "Removing the exact ignore file makes the actual squash scan return the finding exit code in the shell boundary suite."
       }
     }
   ]
