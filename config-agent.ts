@@ -1966,23 +1966,22 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
       // status only proves a credential is stored, so a dead OAuth refresh
       // stays invisible until something resolves it; this is that resolution,
       // done once per call and reported as advisory state rather than an error.
-      // A full candidate replaces the stored config, so every operation but a
-      // candidate-driven one needs the stored config's providers too: inspect
-      // is where an agent looks first, and it must not report a dead sign-in as
-      // clean just because Pi already hid those models.
+      // A candidate replaces one source, not the other layers, and a patch
+      // leaves every tier it does not name in place, so the stored config's
+      // providers are always in scope. Over-collecting a provider that no
+      // surviving tier references costs nothing: the warning is issued per tier
+      // of the composed config, and only inspect lists raw sign-in state.
       const resolvedProviders = new Set([
         ...catalog.available.map((model) => model.provider),
         ...poolProviders(requestEntries(request), catalog),
       ]);
-      if (!request.candidate) {
-        try {
-          for (const provider of configProviders(effectiveConfig(cwd, deps.extensionDir).config, catalog)) {
-            resolvedProviders.add(provider);
-          }
-        } catch {
-          // The stored config is reported by the operation itself; a probe that
-          // cannot read it must not turn into a failed call.
+      try {
+        for (const provider of configProviders(effectiveConfig(cwd, deps.extensionDir).config, catalog)) {
+          resolvedProviders.add(provider);
         }
+      } catch {
+        // The stored config is reported by the operation itself; a probe that
+        // cannot read it must not turn into a failed call.
       }
       const providerAuth = await resolveProviderAuth(ctx.modelRegistry, [...resolvedProviders]);
       const classifierRuntime = deps.classifierRuntime

@@ -463,6 +463,32 @@ describe("provider sign-in state", () => {
     }
   });
 
+  it("warns for a dead sign-in a workspace tier inherits under a candidate", async () => {
+    // A candidate replaces the selected source only. The workspace tier stays
+    // in the composed config, so its dead provider must still be checked.
+    const harness = freshHarness({
+      knownOnly: [makeModel("hidden", "only", 1, 1, 64_000)],
+      providerAuthResult: (provider) => provider === "hidden"
+        ? new Error("token refresh failed")
+        : { auth: { apiKey: "resolved" } },
+    });
+    try {
+      harness.writeFile("bifrost.json", { default: "general", models: { general: ["hidden/only"] } });
+      const { result, details } = await checkedCandidate(harness, {
+        source: "project",
+        candidate: { schemaVersion: 2, default: "cheap", models: { cheap: ["beta/code"] } },
+      });
+      assert.equal(details.status, "ok", "the inherited dead sign-in stays advisory");
+      const general = (details.effectiveAfter as { models?: Record<string, unknown> }).models?.general;
+      assert.deepEqual(general, ["hidden/only"], "the workspace tier survived the candidate");
+      assert.ok(details.issues.some((issue) => issue.code === "config.provider_auth_invalid" && issue.path === "models.general"),
+        "the inherited tier's dead sign-in is reported");
+      assert.match(contentOf(result), /Provider "hidden" sign-in cannot be resolved/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("reports a dead sign-in the stored config depends on", async () => {
     // inspect is the first tool an agent reads. A config that already routes to
     // a provider Pi hid must not inspect clean.
