@@ -187,7 +187,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       if (prePushFlags.length) {
         const root = process.cwd();
         requireValue(!git(root, ["status", "--porcelain", "--untracked-files=no"]), "commit tracked changes before pre-push validation");
-        requireValue(!git(root, ["status", "--porcelain", "--untracked-files=all", "--", ...EVIDENCE_MANIFESTS]), "commit evidence declarations before pre-push validation");
+        requireValue(!git(root, ["status", "--porcelain", "--untracked-files=all", "--ignored", "--", ...EVIDENCE_MANIFESTS]), "commit evidence declarations before pre-push validation");
       }
       const result = evaluateEvidenceRebind({ root: process.cwd(), baseRef: operands[0] ?? "origin/v2", apply: applyFlags.length === 1 });
       console.log(JSON.stringify(result, null, 2));

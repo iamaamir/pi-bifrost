@@ -21,7 +21,8 @@
         "name": "exits 0 with the passed report and exits 1 on a stale diff report"
       },
       "fault": {
-        "exception": "The named CLI boundary test directly exercises rejected dirty, stale and uncovered candidates; a separate injected fault duplicates the same boundary control."
+        "file": "tests/evidence-rebind.test.mjs",
+        "name": "fault control: ignored evidence cannot make pre-push validation pass"
       }
     }
   ]
