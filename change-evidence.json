@@ -6,11 +6,10 @@
       "id": "release-evidence-feature-refresh",
       "requirement": "R16",
       "files": [
-        "release-evidence.json",
-        "tests/acceptance-runner.test.mjs"
+        "release-evidence.json"
       ],
-      "boundary": "Update the main-bound release declaration to cover the merged provider sign-in warning and terminal-capture parser changes. The real caller negative control uses an ancestor that matches neither evidence declaration.",
-      "assertions": "Provider sign-in and terminal-wrap changes retain their own boundary, invariant and fault witnesses. Unchanged release contracts remain preserved; the added UI test is included in exact main-diff coverage. The caller still proves that a truly unmatched base fails and that the correct base is restored.",
+      "boundary": "Update the main-bound release declaration to cover the merged provider sign-in warning and terminal-capture parser changes.",
+      "assertions": "Provider sign-in and terminal-wrap changes retain their own boundary, invariant and fault witnesses. Unchanged release contracts remain preserved; the added UI test is included in exact main-diff coverage.",
       "boundaryTest": {
         "file": "tests/config-agent.test.ts",
         "name": "reports a stored sign-in that cannot be resolved and warns without blocking the write"
@@ -22,6 +21,26 @@
       "fault": {
         "file": "tests/integration/config-agent-acceptance.test.mjs",
         "name": "fault control: dropping the sign-in warning turns the named assertion RED"
+      }
+    },
+    {
+      "id": "evidence-caller-unmatched-base",
+      "requirement": "R16",
+      "files": [
+        "tests/acceptance-runner.test.mjs"
+      ],
+      "boundary": "The real acceptance caller must use a negative-control base that matches neither the routine nor release declaration.",
+      "assertions": "Owned merged and single-commit caller controls preserve event context, declaration selection and predecessor fault sensitivity. A direct main-base caller failed before the fix when it chose the valid v2 base and passed after choosing an unmatched ancestor.",
+      "boundaryTest": {
+        "file": "tests/acceptance-runner.test.mjs",
+        "name": "merged-push checkout runs the actual workflow caller with event.before"
+      },
+      "invariant": {
+        "file": "tests/acceptance-runner.test.mjs",
+        "name": "single-commit checkout runs the actual workflow caller without inventing an intermediate"
+      },
+      "fault": {
+        "exception": "The direct main-base caller was run before and after the correction. It is not declared as its own nested witness because that would recursively select the caller test."
       }
     }
   ]
