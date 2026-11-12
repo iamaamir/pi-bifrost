@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "base": "4d3e3b32e3ca9fa3ef11e1de6d7c19f6c2c8ad4e",
+  "base": "30579183248ebd7285cf5c22b54fc42b9c5ff202",
   "contracts": [
     {
       "id": "config-agent-provider-signin",
