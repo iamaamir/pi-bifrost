@@ -70,6 +70,28 @@
         "file": "tests/tooling-config.test.mjs",
         "name": "the secret allowlist check rejects weakening fixture path and value matching"
       }
+    },
+    {
+      "id": "gitleaks-policy-guidance",
+      "requirement": "R16",
+      "files": [
+        "docs/dev-tooling.md",
+        "tests/performance-tooling.test.mjs"
+      ],
+      "boundary": "Developer guidance matches the configured generic-key fixture exceptions.",
+      "assertions": "The guide describes both existing global exact canaries and the additional exact path-and-value exceptions; obsolete value-only guidance fails the named assertion.",
+      "boundaryTest": {
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "the developer guide describes scoped Gitleaks fixture exceptions"
+      },
+      "invariant": {
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the secret allowlist is scoped to the generic API key rule and exact values"
+      },
+      "fault": {
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "fault control: outdated Gitleaks guidance fails the scoped policy assertion"
+      }
     }
   ]
 }
