@@ -1862,28 +1862,42 @@ const ConfigAgentParameters = Type.Object({
  * inventory alone cannot tell Bifrost that the candidate points at a provider
  * whose stored sign-in is dead.
  */
-function requestProviders(request: ConfigAgentRequest, catalog: ConfigAgentCatalog): string[] {
+/**
+ * Providers a set of tier pools names, whether by `provider/model` prefix or by
+ * a bare entry matched against the known catalog. A bare entry names no
+ * provider, and Pi hides the models of a provider whose sign-in is dead.
+ */
+function poolProviders(pools: Iterable<string>, catalog: ConfigAgentCatalog): Set<string> {
   const providers = new Set<string>();
-  const addProvider = (key: string) => {
-    const slash = key.indexOf("/");
-    if (slash > 0) providers.add(key.slice(0, slash));
-  };
+  for (const entry of pools) {
+    const slash = entry.indexOf("/");
+    if (slash > 0) providers.add(entry.slice(0, slash));
+    else for (const key of knownPoolMatches(catalog, entry)) providers.add(key.slice(0, key.indexOf("/")));
+  }
+  return providers;
+}
+
+/** Tier entries a request names, before it is merged with the loaded config. */
+function requestEntries(request: ConfigAgentRequest): string[] {
+  const entries: string[] = [];
   for (const pools of [request.candidate?.models, request.patch?.models]) {
     if (!pools || typeof pools !== "object" || Array.isArray(pools)) continue;
     for (const value of Object.values(pools as Record<string, unknown>)) {
-      for (const entry of poolEntries(value as string | string[] | undefined)) {
-        const slash = entry.indexOf("/");
-        if (slash > 0) {
-          providers.add(entry.slice(0, slash));
-          continue;
-        }
-        // A bare entry names no provider, so the provider comes from the models
-        // it matches in the known catalog, hidden ones included.
-        for (const key of knownPoolMatches(catalog, entry)) addProvider(key);
-      }
+      entries.push(...poolEntries(value as string | string[] | undefined));
     }
   }
-  return [...providers].sort();
+  return entries;
+}
+
+/**
+ * Providers the stored configuration routes to. A patch can leave a tier in
+ * place, so checking only what the request mentions would miss a dead sign-in
+ * the applied config still depends on.
+ */
+function configProviders(config: BifrostConfig, catalog: ConfigAgentCatalog): Set<string> {
+  const entries: string[] = [];
+  for (const pool of Object.values(config.models ?? {})) entries.push(...poolEntries(pool));
+  return poolProviders(entries, catalog);
 }
 
 function readRequest(params: {
@@ -1947,15 +1961,30 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
       const cwd = cwdOf();
       const catalog = catalogFromContext(ctx);
       // Resolve sign-in for every provider the inventory offers, plus every
-      // provider the request itself names, so a dead credential Pi already hid
-      // from the inventory is still reported. Pi's status only proves a
-      // credential is stored, so a dead OAuth refresh stays invisible until
-      // something resolves it; this is that resolution, done once per call and
-      // reported as advisory state rather than an error.
-      const providerAuth = await resolveProviderAuth(ctx.modelRegistry, [
+      // provider the request or the stored configuration routes to, so a dead
+      // credential Pi already hid from the inventory is still reported. Pi's
+      // status only proves a credential is stored, so a dead OAuth refresh
+      // stays invisible until something resolves it; this is that resolution,
+      // done once per call and reported as advisory state rather than an error.
+      // A full candidate replaces the stored config, so every operation but a
+      // candidate-driven one needs the stored config's providers too: inspect
+      // is where an agent looks first, and it must not report a dead sign-in as
+      // clean just because Pi already hid those models.
+      const resolvedProviders = new Set([
         ...catalog.available.map((model) => model.provider),
-        ...requestProviders(request, catalog),
+        ...poolProviders(requestEntries(request), catalog),
       ]);
+      if (!request.candidate) {
+        try {
+          for (const provider of configProviders(effectiveConfig(cwd, deps.extensionDir).config, catalog)) {
+            resolvedProviders.add(provider);
+          }
+        } catch {
+          // The stored config is reported by the operation itself; a probe that
+          // cannot read it must not turn into a failed call.
+        }
+      }
+      const providerAuth = await resolveProviderAuth(ctx.modelRegistry, [...resolvedProviders]);
       const classifierRuntime = deps.classifierRuntime
         ? (config: BifrostConfig) => deps.classifierRuntime!(config, ctx)
         : undefined;

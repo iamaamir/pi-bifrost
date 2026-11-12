@@ -463,6 +463,60 @@ describe("provider sign-in state", () => {
     }
   });
 
+  it("reports a dead sign-in the stored config depends on", async () => {
+    // inspect is the first tool an agent reads. A config that already routes to
+    // a provider Pi hid must not inspect clean.
+    const harness = freshHarness({
+      knownOnly: [makeModel("hidden", "only", 1, 1, 64_000)],
+      providerAuthResult: (provider) => provider === "hidden"
+        ? new Error("token refresh failed")
+        : { auth: { apiKey: "resolved" } },
+    });
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "review",
+        models: { review: ["hidden/only"] },
+      });
+      const inspected = detailsOf<ConfigAgentInspectResult>(await harness.run({ operation: "inspect" }));
+      const hidden = inspected.providerAuth.find((entry) => entry.provider === "hidden");
+      assert.equal(hidden?.state, "invalid");
+      const text = contentOf(await harness.run({ operation: "inspect" }));
+      assert.match(text, /provider sign-in:/);
+      assert.match(text, /hidden: invalid/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("warns about a dead sign-in a patch leaves in place", async () => {
+    // The patch only moves the default tier. The dead pool is inherited from the
+    // stored config, so the probe has to cover what the stored config routes to
+    // and not just what the request spells out.
+    const harness = freshHarness({
+      knownOnly: [makeModel("hidden", "only", 1, 1, 64_000)],
+      providerAuthResult: (provider) => provider === "hidden"
+        ? new Error("token refresh failed")
+        : { auth: { apiKey: "resolved" } },
+    });
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "healthy",
+        models: { healthy: ["alpha/strong"], dead: ["hidden/only"] },
+      });
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        patch: { default: "dead" },
+      }));
+      const warning = checked.issues.find((issue) => issue.code === "config.provider_auth_invalid");
+      assert.equal(warning?.path, "models.dead");
+      assert.match(warning?.message ?? "", /hidden\/only would fail when selected/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("keeps an unconfigured prefix out of the warnings when no model matched it", async () => {
     // A tier may name a provider that does not exist; that is a reference
     // finding, not a sign-in finding, so the sign-in pass stays silent.
