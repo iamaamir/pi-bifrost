@@ -7,13 +7,17 @@ export GITLEAKS_CONFIG="$project_root/.gitleaks.toml"
 proof_root="$(mktemp -d "${TMPDIR:-/tmp}/gitleaks-pr-boundaries.XXXXXX")"
 trap 'rm -rf "$proof_root"' EXIT
 
-canary="$(openssl rand -hex 32)"
+# A stable high-entropy fixture avoids Gitleaks entropy-stopword variance.
+canary_seed="0123456789abcdef"
+canary="${canary_seed}${canary_seed}${canary_seed}${canary_seed}"
 
 new_repo() {
   local name="$1"
   local path="$proof_root/$name"
   mkdir -p "$path"
   git -C "$path" init -q -b main
+  git -C "$path" config commit.gpgsign false
+  git -C "$path" config core.hooksPath /dev/null
   git -C "$path" config user.name "Gitleaks boundary test"
   git -C "$path" config user.email "gitleaks-boundary-test@example.invalid"
   printf 'baseline\n' > "$path/baseline.txt"
@@ -25,13 +29,15 @@ new_repo() {
 expect_red() {
   local name="$1" base_sha="$2" head_sha="$3" output="$proof_root/$1.log" status
   if (cd "$repo" && "$scanner" "$base_sha" "$head_sha") > "$output" 2>&1; then
-    echo "$name: expected a secret finding, got a clean scan" >&2
+    echo "$name: expected Gitleaks exit 2, got exit 0" >&2
+    sed -n -E '/scanned ~[0-9]+ bytes|leaks found: [0-9]+/ { s/^.*(scanned ~[0-9]+ bytes|leaks found: [0-9]+).*$/  \1/p; }' "$output" | tail -n 2 >&2
     return 1
   else
     status=$?
   fi
   if [ "$status" -ne 2 ]; then
     echo "$name: expected Gitleaks finding exit 2, got exit $status" >&2
+    sed -n -E '/scanned ~[0-9]+ bytes|leaks found: [0-9]+/ { s/^.*(scanned ~[0-9]+ bytes|leaks found: [0-9]+).*$/  \1/p; }' "$output" | tail -n 2 >&2
     return 1
   fi
   echo "$name: RED as expected"
@@ -39,11 +45,14 @@ expect_red() {
 
 expect_green() {
   local name="$1" base_sha="$2" head_sha="$3" output="$proof_root/$1.log"
-  if ! (cd "$repo" && "$scanner" "$base_sha" "$head_sha") > "$output" 2>&1; then
-    echo "$name: expected a clean scan" >&2
+  if (cd "$repo" && "$scanner" "$base_sha" "$head_sha") > "$output" 2>&1; then
+    echo "$name: GREEN as expected"
+  else
+    local status=$?
+    echo "$name: expected Gitleaks exit 0, got exit $status" >&2
+    sed -n -E '/scanned ~[0-9]+ bytes|leaks found: [0-9]+/ { s/^.*(scanned ~[0-9]+ bytes|leaks found: [0-9]+).*$/  \1/p; }' "$output" | tail -n 2 >&2
     return 1
   fi
-  echo "$name: GREEN as expected"
 }
 
 expect_boundary_error() {
@@ -84,6 +93,15 @@ EOF
   fi
   echo "merge enumeration failure: propagated as expected"
 }
+
+# Prove the deterministic synthetic canary itself triggers the pinned detector.
+repo="$(new_repo deterministic-canary-control)"
+base_sha="$(git -C "$repo" rev-parse HEAD)"
+printf 'api_key=%s\n' "$canary" > "$repo/canary.txt"
+git -C "$repo" add canary.txt
+git -C "$repo" commit -q -m add-deterministic-canary
+head_sha="$(git -C "$repo" rev-parse HEAD)"
+expect_red "deterministic canary detection" "$base_sha" "$head_sha"
 
 # Pushes without a usable before commit (new branch/deletion events) must fail closed.
 repo="$(new_repo push-boundary)"
