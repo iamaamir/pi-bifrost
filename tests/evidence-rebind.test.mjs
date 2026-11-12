@@ -357,6 +357,29 @@ describe("evidence rebind helper", () => {
   });
 
   describe("CLI", () => {
+    it("pre-push validates a committed candidate against an explicit base", () => {
+      const { root, base } = initRepo();
+      try {
+        assert.equal(runCli(root, ["--pre-push"]).code, 1);
+        assert.equal(runCli(root, ["--pre-push", "--apply", base]).code, 1);
+        assert.equal(runCli(root, ["--pre-push", base]).code, 0);
+        assert.equal(runCli(root, ["--pre-push", "HEAD"]).code, 1, "a stale base fails");
+        writeFile(root, "src.mjs", "uncommitted\n");
+        assert.match(runCli(root, ["--pre-push", base]).stderr, /commit tracked changes/);
+        git(root, ["checkout", "--", "src.mjs"]);
+        writeFile(root, "release-evidence.json", "{}\n");
+        assert.match(runCli(root, ["--pre-push", base]).stderr, /commit evidence declarations/);
+        rmSync(join(root, "release-evidence.json"));
+        writeFile(root, "extra.mjs", "export default 1;\n");
+        commit(root, "adds extra");
+        const missing = runCli(root, ["--pre-push", base]);
+        assert.equal(missing.code, 1);
+        assert.deepEqual(JSON.parse(missing.stdout).changedNotDeclared, ["extra.mjs"]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
     it("exits 0 with the passed report and exits 1 on a stale diff report", () => {
       const { root, base } = initRepo();
       try {
