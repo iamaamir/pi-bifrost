@@ -42,6 +42,10 @@ interface HarnessOptions {
   readonly confirmHook?: () => void;
   readonly runtimeAware?: boolean;
   readonly loadedClassifierEnabled?: boolean;
+  /** Pi's synchronous status: is a credential stored for this provider? */
+  readonly providerAuthStatus?: (provider: string) => { configured: boolean; source?: string };
+  /** Resolve sign-in; return an Error to simulate a dead OAuth refresh token. */
+  readonly providerAuthResult?: (provider: string) => unknown;
   readonly legacyClassifierEnabled?: boolean;
   readonly classifierSessionOverride?: boolean;
   readonly runtimeStateIssue?: "invalid-json";
@@ -79,6 +83,14 @@ function freshHarness(options: HarnessOptions = {}) {
     getAvailable: () => available,
     getAll: () => [...available, ...knownOnly],
     find: (provider: string, id: string) => available.find((model) => model.provider === provider && model.id === id),
+    getProviderAuthStatus: (provider: string) => options.providerAuthStatus?.(provider) ?? { configured: true, source: "stored" },
+    getProviderAuth: async (provider: string) => {
+      // Default to a resolved credential: Pi's registry returns nothing only
+      // when no usable credential exists, which is its own case below.
+      const result = options.providerAuthResult ? options.providerAuthResult(provider) : { auth: { apiKey: "resolved" } };
+      if (result instanceof Error) throw result;
+      return result;
+    },
     classify: () => {
       classifyCalls += 1;
       throw new Error("no test may invoke a classifier");
@@ -317,6 +329,291 @@ describe("agent-facing configuration inspection", () => {
       const details = detailsOf<ConfigAgentInspectResult>(await harness.run({ operation: "inspect" }));
       assert.equal(details.routing.routeFileOverridesRules, true);
       assert.match(details.routing.rules.routeFile ?? "", /bifrost-routes\.json$/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+});
+
+describe("provider sign-in state", () => {
+  it("reports a stored sign-in that cannot be resolved and warns without blocking the write", async () => {
+    const harness = freshHarness({
+      providerAuthStatus: () => ({ configured: true, source: "stored" }),
+      providerAuthResult: (provider) => provider === "alpha"
+        ? Object.assign(new Error("OAuth refresh failed for alpha: invalid_grant\n\u001b[31mprovider stack trace"), { name: "AuthError" })
+        : { auth: { apiKey: "resolved-value-not-reported" } },
+    });
+    try {
+      const inspected = detailsOf<ConfigAgentInspectResult>(await harness.run({ operation: "inspect" }));
+      const alpha = inspected.providerAuth.find((entry) => entry.provider === "alpha");
+      assert.equal(alpha?.state, "invalid");
+      // Provider error text is flattened to one bounded line, with control
+      // characters stripped, so no payload or terminal escape follows it.
+      assert.equal(alpha?.reason, "OAuth refresh failed for alpha: invalid_grant provider stack trace");
+      assert.doesNotMatch(alpha?.reason ?? "", /[\u0000-\u001f\u007f]/);
+      assert.equal(inspected.providerAuth.find((entry) => entry.provider === "beta")?.state, "ready");
+
+      const inspectText = contentOf(await harness.run({ operation: "inspect" }));
+      assert.match(inspectText, /provider sign-in:/);
+      assert.match(inspectText, /alpha: invalid -- OAuth refresh failed for alpha: invalid_grant provider stack trace/);
+      assert.doesNotMatch(inspectText, /resolved-value-not-reported/);
+      assert.doesNotMatch(JSON.stringify(inspected), /resolved-value-not-reported/);
+
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+      }));
+      const warning = checked.issues.find((issue) => issue.code === "config.provider_auth_invalid");
+      assert.equal(warning?.severity, "warning");
+      assert.equal(warning?.path, "models.review");
+      assert.match(warning?.message ?? "", /alpha/);
+      // Advisory: the candidate is still valid and writable, with the warning reported.
+      assert.equal(checked.status, "ok");
+      assert.equal(checked.writeEligible, true);
+      assert.match(contentOf(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+      })), /warnings:/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("warns only for providers a tier can actually select", async () => {
+    const harness = freshHarness({ providerAuthStatus: (provider) => ({ configured: provider !== "gamma" }) });
+    try {
+      const deadTier = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["gamma/review"] } },
+      }));
+      const warning = deadTier.issues.find((issue) => issue.code === "config.provider_auth_not_configured");
+      assert.equal(warning?.severity, "warning");
+      assert.equal(warning?.path, "models.review");
+      assert.equal(deadTier.status, "ok");
+
+      const healthyTier = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "implement", models: { implement: ["beta/code"] } },
+      }));
+      assert.equal(healthyTier.issues.some((issue) => issue.code?.startsWith("config.provider_auth_")), false);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("warns for a dead stored sign-in whose models Pi removed from the catalog", async () => {
+    // Pi drops a provider from its catalog once the stored credential stops
+    // resolving, so the warning has to come from the provider the pool names.
+    const harness = freshHarness({ providerAuthResult: () => new Error("token refresh failed") });
+    try {
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"], dead: ["retired/only"] } },
+      }));
+      const warning = checked.issues.find((issue) => issue.code === "config.provider_auth_invalid" && issue.path === "models.dead");
+      assert.match(warning?.message ?? "", /retired\/only would fail when selected/);
+      assert.match(warning?.message ?? "", /token refresh failed/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("warns when a stored sign-in resolves to nothing", async () => {
+    // Pi's getAuth resolves an unusable credential to undefined instead of
+    // throwing, so an empty resolution on a stored credential is a dead sign-in.
+    const harness = freshHarness({ providerAuthResult: () => undefined });
+    try {
+      const inspected = detailsOf<ConfigAgentInspectResult>(await harness.run({ operation: "inspect" }));
+      const alpha = inspected.providerAuth.find((entry) => entry.provider === "alpha");
+      assert.equal(alpha?.state, "invalid");
+      assert.equal(alpha?.reason, "the stored sign-in cannot be used for this provider");
+
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+      }));
+      const warning = checked.issues.find((issue) => issue.code === "config.provider_auth_invalid");
+      assert.equal(warning?.path, "models.review");
+      assert.equal(checked.writeEligible, true);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("warns for a bare pool entry whose provider Pi hid from the catalog", async () => {
+    // "only" names no provider, and Pi kept the model out of the available
+    // inventory because the stored sign-in is dead. The provider comes from the
+    // known catalog, so the warning is not lost with the hidden model.
+    const harness = freshHarness({
+      knownOnly: [makeModel("hidden", "only", 1, 1, 64_000)],
+      providerAuthResult: (provider) => provider === "hidden"
+        ? new Error("token refresh failed")
+        : { auth: { apiKey: "resolved" } },
+    });
+    try {
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["only"] } },
+      }));
+      const warning = checked.issues.find((issue) => issue.code === "config.provider_auth_invalid");
+      assert.equal(warning?.path, "models.review");
+      assert.match(warning?.message ?? "", /hidden\/only would fail when selected/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("warns for a dead sign-in a workspace tier inherits under a candidate", async () => {
+    // A candidate replaces the selected source only. The workspace tier stays
+    // in the composed config, so its dead provider must still be checked.
+    const harness = freshHarness({
+      knownOnly: [makeModel("hidden", "only", 1, 1, 64_000)],
+      providerAuthResult: (provider) => provider === "hidden"
+        ? new Error("token refresh failed")
+        : { auth: { apiKey: "resolved" } },
+    });
+    try {
+      harness.writeFile("bifrost.json", { default: "general", models: { general: ["hidden/only"] } });
+      const { result, details } = await checkedCandidate(harness, {
+        source: "project",
+        candidate: { schemaVersion: 2, default: "cheap", models: { cheap: ["beta/code"] } },
+      });
+      assert.equal(details.status, "ok", "the inherited dead sign-in stays advisory");
+      const general = (details.effectiveAfter as { models?: Record<string, unknown> }).models?.general;
+      assert.deepEqual(general, ["hidden/only"], "the workspace tier survived the candidate");
+      assert.ok(details.issues.some((issue) => issue.code === "config.provider_auth_invalid" && issue.path === "models.general"),
+        "the inherited tier's dead sign-in is reported");
+      assert.match(contentOf(result), /Provider "hidden" sign-in cannot be resolved/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("reports a dead sign-in the stored config depends on", async () => {
+    // inspect is the first tool an agent reads. A config that already routes to
+    // a provider Pi hid must not inspect clean.
+    const harness = freshHarness({
+      knownOnly: [makeModel("hidden", "only", 1, 1, 64_000)],
+      providerAuthResult: (provider) => provider === "hidden"
+        ? new Error("token refresh failed")
+        : { auth: { apiKey: "resolved" } },
+    });
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "review",
+        models: { review: ["hidden/only"] },
+      });
+      const inspected = detailsOf<ConfigAgentInspectResult>(await harness.run({ operation: "inspect" }));
+      const hidden = inspected.providerAuth.find((entry) => entry.provider === "hidden");
+      assert.equal(hidden?.state, "invalid");
+      const text = contentOf(await harness.run({ operation: "inspect" }));
+      assert.match(text, /provider sign-in:/);
+      assert.match(text, /hidden: invalid/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("warns about a dead sign-in a patch leaves in place", async () => {
+    // The patch only moves the default tier. The dead pool is inherited from the
+    // stored config, so the probe has to cover what the stored config routes to
+    // and not just what the request spells out.
+    const harness = freshHarness({
+      knownOnly: [makeModel("hidden", "only", 1, 1, 64_000)],
+      providerAuthResult: (provider) => provider === "hidden"
+        ? new Error("token refresh failed")
+        : { auth: { apiKey: "resolved" } },
+    });
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "healthy",
+        models: { healthy: ["alpha/strong"], dead: ["hidden/only"] },
+      });
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        patch: { default: "dead" },
+      }));
+      const warning = checked.issues.find((issue) => issue.code === "config.provider_auth_invalid");
+      assert.equal(warning?.path, "models.dead");
+      assert.match(warning?.message ?? "", /hidden\/only would fail when selected/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("keeps an unconfigured prefix out of the warnings when no model matched it", async () => {
+    // A tier may name a provider that does not exist; that is a reference
+    // finding, not a sign-in finding, so the sign-in pass stays silent.
+    const harness = freshHarness({ providerAuthStatus: () => ({ configured: false }) });
+    try {
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["ghost/only"] } },
+      }));
+      assert.equal(checked.issues.some((issue) => issue.code?.startsWith("config.provider_auth_")), false,
+        JSON.stringify(checked.issues));
+      assert.equal(checked.references.some((reference) => reference.status === "unknown"), true);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("stays silent about a provider the tier's routing scope excludes", async () => {
+    // `routingScope` is a hard eligibility filter. A pool can name two
+    // providers while the tier allowlist permits only the healthy one; warning
+    // about the excluded provider would push the user toward a change that
+    // cannot affect the route.
+    const harness = freshHarness({ providerAuthStatus: (provider) => ({ configured: provider !== "alpha" }) });
+    try {
+      const pool = ["alpha/strong", "beta/code"];
+      const scoped = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: pool }, routingScope: { tiers: { review: { providers: ["beta"] } } } },
+      }));
+      assert.equal(scoped.issues.some((issue) => issue.code?.startsWith("config.provider_auth_")), false,
+        JSON.stringify(scoped.issues));
+      assert.equal(scoped.status, "ok");
+
+      // The same pool without the allowlist does name a dead provider, so the
+      // silence above comes from the scope and not from a broken harness.
+      const unscoped = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: pool } },
+      }));
+      const warning = unscoped.issues.find((issue) => issue.code === "config.provider_auth_not_configured");
+      assert.equal(warning?.path, "models.review");
+      assert.match(warning?.message ?? "", /alpha/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("fault control: a provider that resolves cleanly emits no sign-in warning", async () => {
+    const harness = freshHarness({ providerAuthResult: () => ({ auth: { apiKey: "resolved" } }) });
+    try {
+      const healthy = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+      }));
+      assert.equal(healthy.providerAuth.find((entry) => entry.provider === "alpha")?.state, "ready");
+      assert.equal(healthy.issues.some((issue) => issue.code === "config.provider_auth_invalid"), false);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("repeats the sign-in warning in the approval dialog", async () => {
+    const harness = freshHarness({ providerAuthResult: () => new Error("token refresh failed") });
+    try {
+      const candidate = { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } };
+      const { details } = await checkedCandidate(harness, { candidate });
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
+      assert.equal(applied.status, "ok");
+      const [confirmation] = harness.confirmations();
+      assert.match(confirmation?.summary ?? "", /WARNING: Provider "alpha" sign-in cannot be resolved/);
+      assert.match(confirmation?.details ?? "", /Warning: Provider "alpha" sign-in cannot be resolved/);
     } finally {
       harness.cleanup();
     }

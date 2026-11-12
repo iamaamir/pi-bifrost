@@ -30,6 +30,7 @@ All notable changes to pi-bifrost are documented here.
 - Classification cache now preserves token order and defaults to exact prompt matches. Set `cache.threshold` below `1` to opt into fuzzy Jaccard matches. The cache semantic key version changes, so existing entries become misses and repopulate safely.
 
 ### Fixed
+- `bifrost_config` resolves each provider's stored sign-in instead of trusting Pi's configured-or-not status. `inspect` now reports a dead OAuth credential that still looks configured, and `check` warns when a proposed tier would route to it, repeating the warning in the approval dialog. The candidate stays writable on purpose: a user may intend to sign in again after applying.
 - Exact model rules now bypass Auto affinity without replacing the prior automatic anchor; tool continuations stay on the physical model selected for the user turn.
 - Config validation rejects `requirements.mode: "enforce"` and unknown capability-requirement fields; this release does not enforce general model capabilities.
 - Invalid schema versions or tier-policy configuration block physical and Auto routing. Reload rejects unreadable, malformed, or non-object config layers and keeps the active config; an exhausted explicit boundary also does not degrade to a previously dispatched model.

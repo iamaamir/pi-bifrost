@@ -1,46 +1,53 @@
 {
   "schemaVersion": 1,
-  "base": "4d3e3b32e3ca9fa3ef11e1de6d7c19f6c2c8ad4e",
+  "base": "30579183248ebd7285cf5c22b54fc42b9c5ff202",
   "contracts": [
     {
-      "id": "deterministic-secret-boundary-fixture",
-      "requirement": "R16",
+      "id": "config-agent-provider-signin",
+      "requirement": "R07",
       "files": [
-        "scripts/test-gitleaks-pr-boundaries.sh"
+        "CHANGELOG.md",
+        "config-agent-report.ts",
+        "config-agent.ts",
+        "skills/configure-bifrost/SKILL.md",
+        "tests/config-agent.test.ts",
+        "tests/integration/config-agent-acceptance.test.mjs"
       ],
-      "boundary": "The secret scan boundary self-test uses a stable synthetic value and isolates temporary Git fixtures from signing and hooks.",
-      "assertions": "The pinned Gitleaks detector first detects the chosen fixture; side-branch and merge-only additions remain detected, and pre-base exclusions and injected merge-enumeration failures remain checked. Failure diagnostics expose counts and exit statuses only.",
+      "boundary": "Report a stored provider credential that cannot be resolved, warn when a proposed tier routes to it, and keep the advisory candidate writable.",
+      "assertions": "A fake registry whose provider status says configured but whose credential resolution throws produces an invalid sign-in report, a check warning on the referencing tier, and a repeated warning in the approval summary while check stays ok and write eligible. A provider that resolves cleanly emits no warning, and a stored credential Pi resolves to nothing is reported as invalid instead of ready, because Pi returns an empty resolution rather than throwing for an unusable credential. A pool naming a provider whose models Pi removed from its catalog still warns when the stored sign-in is dead, an unconfigured prefix with no matching model does not; a bare pool entry names no provider, so the warning follows the models it matches in the known catalog, hidden ones included, and a provider the tier's routingScope excludes never warns because it can never be selected. A provider named only by the stored config is always probed, because a candidate replaces one source and a patch leaves unnamed tiers in place: inspect reports its dead sign-in instead of a clean inventory, a patch that leaves such a tier in place warns, and a candidate warns for the workspace tier it inherits. A controlled source mutation that drops the sign-in warnings turns the named boundary assertion RED and restoring it returns GREEN. Provider error text is flattened, stripped of terminal escapes, and bounded before it reaches the model-facing report. The invalid sign-in path has no real-Pi end-to-end assertion because the fake-provider fixture cannot express it: a stored credential on a custom models.json provider resolves through getAuth instead of failing, and Pi drops a provider it cannot authenticate from both getAvailable() and getAll(), so `inspect` reports no sign-in section and a request against it fails with `No API key found` before any tool call. Custom providers only support the built-in `oauth: \"radius\"` flow, so an offline refresh cannot be made to fail. Coverage for the invalid state therefore stays at the unit boundary, where a registry stub supplies it.",
       "boundaryTest": {
-        "exception": "The Gitleaks boundary self-test is a shell script executed directly in the secrets CI job; it does not emit Node test events."
+        "file": "tests/config-agent.test.ts",
+        "name": "reports a stored sign-in that cannot be resolved and warns without blocking the write"
       },
       "invariant": {
-        "file": "tests/tooling-config.test.mjs",
-        "name": "pins every external action reference to a full commit SHA"
+        "file": "tests/config-agent.test.ts",
+        "name": "warns only for providers a tier can actually select"
       },
       "fault": {
-        "exception": "The executable boundary script injects a failing git rev-list and requires its failure to propagate; its secret-detection controls require Gitleaks to exit 2."
+        "file": "tests/integration/config-agent-acceptance.test.mjs",
+        "name": "fault control: dropping the sign-in warning turns the named assertion RED"
       }
     },
     {
-      "id": "main-release-evidence-declaration",
+      "id": "ui-smoke-capture-wrap",
       "requirement": "R16",
       "files": [
-        "release-evidence.json",
-        "tests/acceptance-runner.test.mjs"
+        "scripts/ui-smoke.py",
+        "tests/ui-smoke-screen.test.mjs"
       ],
-      "boundary": "Provide a separate, main-base-bound integration declaration while retaining per-change evidence for v2.",
-      "assertions": "Preflight selects by the event base and requires exact diff coverage including the changed non-selected declaration. The release declaration separately records named subsystem witnesses and explicit coverage gaps. The owned release caller excludes the selected declaration itself from the declared changed-file set.",
+      "boundary": "The snapshot parser defers the line wrap until the next printable character, so a padded TUI frame keeps its row alignment across redraws.",
+      "assertions": "Replaying frames through the real Screen class keeps a padded row's successor anchored and leaves no blank row between them.  The eager-wrap fault is applied to a copy of the production parser itself, and that copy loses the anchor while the real parser keeps it, so a parser change that makes the assertion insensitive fails the fault control, and the previous implementation fails both behavioral cases. Importing the parser loads with Pillow unavailable, so the default test command works on the documented `npm ci` setup; only image rendering needs Pillow.",
       "boundaryTest": {
-        "file": "tests/change-evidence.test.mjs",
-        "name": "selects exactly one fixed declaration by event base and covers a changed non-selected manifest"
+        "file": "tests/ui-smoke-screen.test.mjs",
+        "name": "defers the wrap at the terminal edge"
       },
       "invariant": {
-        "file": "tests/evidence-rebind.test.mjs",
-        "name": "keeps a changed non-selected declaration in the real selected-manifest diff"
+        "file": "tests/ui-smoke-screen.test.mjs",
+        "name": "keeps a padded frame anchored across redraws"
       },
       "fault": {
-        "file": "tests/change-evidence.test.mjs",
-        "name": "fault control: selecting HEAD parent instead of event.before turns push base RED"
+        "file": "tests/ui-smoke-screen.test.mjs",
+        "name": "fault control: an eager wrap moves the anchored row"
       }
     }
   ]

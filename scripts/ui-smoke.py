@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "screenshots" / "ui-smoke"
@@ -58,11 +57,17 @@ class Screen:
         self.alt_screen = False
         self.fg = (208, 208, 208)
         self.bg = (15, 15, 15)
+        # Writing the last column leaves the cursor there; the wrap happens on
+        # the next printable character. TUI frames pad every row to the full
+        # width, so wrapping eagerly inserts a blank row per line and shifts the
+        # rest of the frame, which is what hid the approval overlay.
+        self.wrap_pending = False
 
     def clear_all(self) -> None:
         self.rows = [[Cell() for _ in range(self.width)] for _ in range(self.height)]
         self.row = 0
         self.col = 0
+        self.wrap_pending = False
 
     def save_screen(self) -> None:
         self.saved_screen = [[Cell(cell.ch, cell.fg, cell.bg) for cell in row] for row in self.rows]
@@ -100,6 +105,7 @@ class Screen:
 
     def newline(self) -> None:
         self.col = 0
+        self.wrap_pending = False
         self.row += 1
         if self.row >= self.height:
             self.scroll_up()
@@ -110,23 +116,28 @@ class Screen:
             return
         if ch == "\r":
             self.col = 0
+            self.wrap_pending = False
             return
         if ch == "\b":
             self.col = max(0, self.col - 1)
+            self.wrap_pending = False
             return
         if ch == "\t":
             self.col = min(self.width - 1, ((self.col // TABSTOP) + 1) * TABSTOP)
+            self.wrap_pending = False
             return
 
         if not (0 <= self.row < self.height):
             return
-        if self.col >= self.width:
+        if self.wrap_pending:
             self.newline()
         if 0 <= self.row < self.height and 0 <= self.col < self.width:
             self.rows[self.row][self.col] = Cell(ch=ch, fg=self.fg, bg=self.bg)
-        self.col += 1
-        if self.col >= self.width:
-            self.newline()
+        if self.col + 1 >= self.width:
+            self.col = self.width - 1
+            self.wrap_pending = True
+        else:
+            self.col += 1
 
     def csi(self, final: str, params: str) -> None:
         cleaned = params.replace("?", "")
@@ -137,6 +148,9 @@ class Screen:
                 ints.append(int(p))
             except ValueError:
                 return
+
+        if final in ("H", "f", "G", "A", "B", "C", "D"):
+            self.wrap_pending = False
 
         if final in ("H", "f"):
             r = (ints[0] if len(ints) >= 1 else 1) - 1
@@ -278,6 +292,7 @@ class Screen:
         return ["".join(cell.ch for cell in row).rstrip() for row in self.rows]
 
     def draw(self, path: Path) -> None:
+        Image, ImageDraw, _ = pillow()
         font = load_font(18)
         cell_w = int(max(10, font.getbbox("M")[2] - font.getbbox("M")[0] + 1))
         cell_h = int(max(18, font.getbbox("Ag")[3] - font.getbbox("Ag")[1] + 4))
@@ -335,6 +350,22 @@ BG_8 = {
 }
 
 
+def pillow():
+    """Import Pillow where it is used.
+
+    The parser tests replay ANSI bytes without rendering an image, so importing
+    this module must not require Pillow: `npm test` discovers them on a
+    contributor machine that only ran `npm ci`.
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ModuleNotFoundError as error:  # pragma: no cover - environment guard
+        raise SystemExit(
+            "Pillow is required to render UI snapshots. Install it with `python3 -m pip install Pillow`."
+        ) from error
+    return Image, ImageDraw, ImageFont
+
+
 def load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = [
         "/System/Library/Fonts/Menlo.ttc",
@@ -344,6 +375,7 @@ def load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
         "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
     ]
+    _, _, ImageFont = pillow()
     for item in candidates:
         if Path(item).exists():
             try:

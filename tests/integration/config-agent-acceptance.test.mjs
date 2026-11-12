@@ -13,6 +13,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runControlledFault } from "../fixtures/controlled-source-fault.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PI = join(ROOT, "node_modules", ".bin", "pi");
@@ -319,5 +320,25 @@ describe("config agent tool Pi acceptance", { concurrency: 1, timeout: 180_000 }
       rmSync(env.home, { recursive: true, force: true });
       rmSync(env.work, { recursive: true, force: true });
     }
+  });
+});
+describe("config agent sign-in evidence", { concurrency: 1, timeout: 180_000 }, () => {
+  it("fault control: dropping the sign-in warning turns the named assertion RED", async () => {
+    const testName = "reports a stored sign-in that cannot be resolved and warns without blocking the write";
+    const proof = await runControlledFault({
+      root: ROOT,
+      testFile: "tests/config-agent.test.ts",
+      targetFile: "config-agent.ts",
+      testName,
+      expectedRed: testName,
+      mutation(source) {
+        const needle = "  const problem = new Map(providerAuth";
+        assert.ok(source.includes(needle), "the sign-in problem map anchor must exist");
+        return source.replace(needle, "  return [];\n  const problem = new Map(providerAuth");
+      },
+    });
+    assert.equal(proof.baseline.code, 0);
+    assert.notEqual(proof.red.code, 0);
+    assert.equal(proof.restored.code, 0);
   });
 });

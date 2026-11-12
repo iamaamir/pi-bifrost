@@ -62,6 +62,15 @@ function renderInspect(result: ConfigAgentInspectResult): string {
     `available models: ${result.inventory.length}${result.inventoryProvider ? ` of ${result.availableModelCount} (provider "${result.inventoryProvider}")` : ""}`,
     `known but unavailable models: ${result.knownUnavailableCount}`,
   ];
+  const authProblems = result.providerAuth.filter((auth) => auth.state === "invalid" || auth.state === "not_configured");
+  if (authProblems.length > 0) {
+    lines.push("provider sign-in:");
+    for (const auth of authProblems) {
+      lines.push(auth.state === "invalid"
+        ? `  ${auth.provider}: invalid -- ${auth.reason ?? "sign-in could not be resolved"} (its models fail when selected until it is signed in again)`
+        : `  ${auth.provider}: not configured -- its models cannot route`);
+    }
+  }
   lines.push("available model inventory:");
   for (const model of result.inventory.slice(0, 40)) lines.push(`  ${modelLine(model)}`);
   if (result.inventory.length > 40) {
