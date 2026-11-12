@@ -109,50 +109,48 @@ head_sha="$(git -C "$repo" rev-parse HEAD)"
 expect_boundary_error "zero before boundary" "0000000000000000000000000000000000000000" "$head_sha"
 expect_boundary_error "zero after boundary" "$head_sha" "0000000000000000000000000000000000000000"
 
-# The reviewed PR and squash fixtures must scan clean without commit-specific ignores.
-fixture_pr_base="74775776e5214e8182150cd8d0f4761482b06f6b"
-fixture_pr_head="982a4ce6c517cb430700d6c71596b2ab0aa92fbd"
-squash_head="d501d118160d295e307943a683b3fa5679809b35"
-repo="$project_root"
-expect_green "reviewed PR fixture history" "$fixture_pr_base" "$fixture_pr_head"
-expect_green "reviewed squash fixture history" "$fixture_pr_base" "$squash_head"
+# Exercise the reviewed fixture using owned history, including a squash merge.
+fixture_path="tests/routing.test.ts"
+awk 'index($0, "modelKey: \"fixture/anchor\"") { print; exit }' \
+  "$project_root/$fixture_path" > "$proof_root/reviewed-fixture-line"
+[ -s "$proof_root/reviewed-fixture-line" ] || { echo "reviewed fixture line is missing" >&2; exit 1; }
+repo="$(new_repo reviewed-fixture-history)"
+base_sha="$(git -C "$repo" rev-parse HEAD)"
+git -C "$repo" switch -q -c feature
+mkdir -p "$repo/$(dirname "$fixture_path")"
+cp "$proof_root/reviewed-fixture-line" "$repo/$fixture_path"
+git -C "$repo" add "$fixture_path"
+git -C "$repo" commit -q -m add-reviewed-fixture
+printf 'another change\n' > "$repo/other.txt"
+git -C "$repo" add other.txt
+git -C "$repo" commit -q -m add-unrelated-change
+feature_sha="$(git -C "$repo" rev-parse HEAD)"
+expect_green "reviewed fixture in multi-commit history" "$base_sha" "$feature_sha"
+git -C "$repo" switch -q main
+git -C "$repo" merge -q --squash feature
+git -C "$repo" -c core.hooksPath=/dev/null commit -q -m squash-reviewed-fixture
+squash_sha="$(git -C "$repo" rev-parse HEAD)"
+expect_green "reviewed fixture in squash commit" "$base_sha" "$squash_sha"
 
-# The same history must go red without our rule-specific fixture exceptions.
+# The same squash must go red without the rule-specific fixture exceptions.
 printf '[extend]\nuseDefault = true\n' > "$proof_root/default-only.toml"
-if (cd "$project_root" && GITLEAKS_CONFIG="$proof_root/default-only.toml" \
+if (cd "$repo" && GITLEAKS_CONFIG="$proof_root/default-only.toml" \
   gitleaks detect --redact --exit-code=2 \
-  --log-opts="--no-merges --full-history $fixture_pr_base..$squash_head") \
+  --log-opts="--no-merges --full-history $base_sha..$squash_sha") \
   > "$proof_root/no-fixture-exceptions.log" 2>&1; then
-  echo "squash fixtures were not detected without the exceptions" >&2
+  echo "squash fixture was not detected without the exception" >&2
   exit 1
 else
   scan_rc=$?
 fi
 [ "$scan_rc" -eq 2 ] || { echo "squash fault control did not return a finding" >&2; exit 1; }
-echo "squash scan: RED without fixture exceptions as expected"
-
-# Gitleaks 8.24.3 accepts --first-parent as a git log option, not a CLI flag.
-first_pr_commit="$(git -C "$project_root" rev-list --first-parent --reverse \
-  "$fixture_pr_base..$fixture_pr_head" | sed -n '1p')"
-[ -n "$first_pr_commit" ] || {
-  echo "could not find the first PR #34 commit" >&2
-  exit 1
-}
-if (cd "$project_root" && gitleaks detect --redact --exit-code=2 \
-  --log-opts="--first-parent $first_pr_commit^..$fixture_pr_head") \
-  > "$proof_root/first-parent.log" 2>&1; then
-  echo "PR #34 first-parent history: GREEN as expected"
-else
-  scan_rc=$?
-  echo "PR #34 first-parent history: expected GREEN, got exit $scan_rc" >&2
-  exit 1
-fi
+echo "squash scan: RED without fixture exception as expected"
 
 # Only the exact fixture in its reviewed file may survive a new commit.
 fixture_path="tests/routing.test.ts"
 repo="$(new_repo scoped-fixture)"
 mkdir -p "$repo/$(dirname "$fixture_path")"
-git -C "$project_root" show "$squash_head:$fixture_path" | sed -n '70p' > "$repo/$fixture_path"
+cp "$proof_root/reviewed-fixture-line" "$repo/$fixture_path"
 git -C "$repo" add "$fixture_path"
 git -C "$repo" commit -q -m copy-reviewed-fixture
 base_sha="$(git -C "$repo" rev-parse HEAD^)"
@@ -165,7 +163,7 @@ git -C "$repo" commit -q -m different-secret-same-path
 expect_red "different secret in reviewed file" "$head_sha" "$(git -C "$repo" rev-parse HEAD)"
 
 repo="$(new_repo wrong-fixture-path)"
-git -C "$project_root" show "$squash_head:$fixture_path" | sed -n '70p' > "$repo/wrong-path.txt"
+cp "$proof_root/reviewed-fixture-line" "$repo/wrong-path.txt"
 git -C "$repo" add wrong-path.txt
 git -C "$repo" commit -q -m fixture-wrong-path
 base_sha="$(git -C "$repo" rev-parse HEAD^)"

@@ -57,7 +57,7 @@
         "tests/tooling-config.test.mjs"
       ],
       "boundary": "The scanner suppresses only the reviewed generic-key fixtures at their exact test paths, independently of commit and line.",
-      "assertions": "Actual historical and squash scans pass with scoped exceptions and fail with default rules; same fixture in a new commit is accepted while a different secret in the same file and the fixture at another path are detected.",
+      "assertions": "Owned multi-commit and squash histories pass with the scoped exception and fail under default rules; the same fixture in a new commit is accepted while a different secret in the same file and the fixture at another path are detected.",
       "boundaryTest": {
         "file": "tests/tooling-config.test.mjs",
         "name": "the secret allowlist is scoped to the generic API key rule and exact values"
