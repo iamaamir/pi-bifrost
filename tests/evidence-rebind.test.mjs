@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -80,9 +80,9 @@ function initRepo() {
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = join(REPO_ROOT, "scripts", "acceptance", "evidence-rebind.mjs");
 
-function runCli(root, args) {
+function runCli(root, args, cli = CLI) {
   try {
-    const stdout = execFileSync(process.execPath, [CLI, ...args],
+    const stdout = execFileSync(process.execPath, [cli, ...args],
       { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     return { code: 0, stdout, stderr: "" };
   } catch (error) {
@@ -357,6 +357,60 @@ describe("evidence rebind helper", () => {
   });
 
   describe("CLI", () => {
+    it("pre-push validates a committed candidate against an explicit base", () => {
+      const { root, base } = initRepo();
+      try {
+        assert.equal(runCli(root, ["--pre-push"]).code, 1);
+        assert.equal(runCli(root, ["--pre-push", "--apply", base]).code, 1);
+        assert.equal(runCli(root, ["--pre-push", base]).code, 0);
+        assert.equal(runCli(root, ["--pre-push", "HEAD"]).code, 1, "a stale base fails");
+        writeFile(root, "src.mjs", "uncommitted\n");
+        assert.match(runCli(root, ["--pre-push", base]).stderr, /commit tracked changes/);
+        git(root, ["checkout", "--", "src.mjs"]);
+        writeFile(root, "release-evidence.json", "{}\n");
+        assert.match(runCli(root, ["--pre-push", base]).stderr, /commit evidence declarations/);
+        rmSync(join(root, "release-evidence.json"));
+        writeFile(root, "extra.mjs", "export default 1;\n");
+        assert.equal(runCli(root, ["--pre-push", base]).code, 0, "unrelated untracked files are allowed");
+        commit(root, "adds extra");
+        const missing = runCli(root, ["--pre-push", base]);
+        assert.equal(missing.code, 1);
+        assert.deepEqual(JSON.parse(missing.stdout).changedNotDeclared, ["extra.mjs"]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    it("fault control: ignored evidence cannot make pre-push validation pass", () => {
+      const { root, base } = initRepo();
+      const mutantDir = mkdtempSync(join(tmpdir(), "evidence-pre-push-mutant-"));
+      try {
+        git(root, ["rm", "change-evidence.json"]);
+        git(root, ["commit", "--no-gpg-sign", "-m", "remove declaration"]);
+        writeFileSync(join(root, ".git", "info", "exclude"), "release-evidence.json\n");
+        writeFile(root, "release-evidence.json", JSON.stringify(manifest(base, [contract("release", ["src.mjs", "new.test.mjs"])])));
+        const rejectIgnoredDeclaration = (cli) => {
+          const result = runCli(root, ["--pre-push", base], cli);
+          assert.equal(result.code, 1);
+          assert.match(result.stderr, /commit evidence declarations/);
+        };
+        rejectIgnoredDeclaration(CLI);
+        const source = readFileSync(CLI, "utf8");
+        const guard = '"--untracked-files=all", "--ignored", "--", ...EVIDENCE_MANIFESTS';
+        assert.ok(source.includes(guard), "fault target must exist");
+        const mutant = join(realpathSync(mutantDir), "evidence-rebind.mjs");
+        writeFileSync(mutant, source.replace(guard, '"--untracked-files=all", "--", ...EVIDENCE_MANIFESTS'));
+        for (const file of ["core.mjs", "evidence-selection.mjs"]) copyFileSync(join(dirname(CLI), file), join(mutantDir, file));
+        const bypassed = runCli(root, ["--pre-push", base], mutant);
+        assert.equal(bypassed.code, 0, bypassed.stderr);
+        assert.equal(JSON.parse(bypassed.stdout).status, "passed");
+        assert.throws(() => rejectIgnoredDeclaration(mutant), { code: "ERR_ASSERTION" });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+        rmSync(mutantDir, { recursive: true, force: true });
+      }
+    });
+
     it("exits 0 with the passed report and exits 1 on a stale diff report", () => {
       const { root, base } = initRepo();
       try {

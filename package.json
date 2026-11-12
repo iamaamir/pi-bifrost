@@ -80,6 +80,7 @@
     "acceptance": "node scripts/acceptance.mjs",
     "acceptance:deterministic": "node scripts/acceptance-deterministic.mjs",
     "acceptance:verify": "node scripts/verify-release.mjs",
+    "evidence:pre-push": "node scripts/acceptance/evidence-rebind.mjs --pre-push",
     "check:arch": "node scripts/toolbox.mjs arch",
     "check:dead-code": "node scripts/toolbox.mjs dead-code",
     "check:ast": "node scripts/toolbox.mjs ast",
