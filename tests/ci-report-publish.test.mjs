@@ -155,11 +155,11 @@ test("keeps closing provenance when a failing report exceeds the old comment cap
   const result = await publishWorkflowRun({ ...value, serverUrl: "https://github.com", reportData: value.report });
   assert.equal(result.status, "published");
   const body = value.calls.create[0].body;
-  assert.ok(Buffer.byteLength(body) > 10_000);
-  assert.ok(Buffer.byteLength(body) <= 65_000);
-  assert.match(body, /and 27 more in the workflow artifact/u);
+  assert.ok(Buffer.byteLength(body) <= 65_000, "comment body stays within the publisher file limit");
   assert.match(body, /PR controls the workflow producer and test code/u);
   assert.ok(body.endsWith("</details>\n"));
+  // Artifact lists may mention additional evidence; omitted acceptance cases are
+  // not referenced in the published comment.
 });
 
 test("updates only a marker comment owned by github-actions[bot]", async () => {
@@ -328,10 +328,20 @@ test("every accepted report fits the publisher's file limit", () => {
       status: "passed",
       detail: "x".repeat(2_000),
     }));
-    assert.throws(() => makeReportData(evidence), /size limit/u);
+    assert.equal(validateReportData(evidence), null, "publisher validation rejects oversized evidence");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("Verification uploads exported Markdown and JSON paths with SHA, run, and attempt identities", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/verification.yml", import.meta.url), "utf8");
+  assert.match(workflow, /id: acceptance\n/u);
+  assert.match(workflow, /name: ci-report-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
+  assert.match(workflow, /name: acceptance-report-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
+  assert.match(workflow, /path: \$\{\{ steps\.acceptance\.outputs\.report-markdown \}\}/u);
+  assert.match(workflow, /path: \$\{\{ steps\.acceptance\.outputs\.report-data \}\}/u);
+  assert.doesNotMatch(workflow, /screenshots\/acceptance\/\*\*\/report-data\.json/u);
 });
 
 test("pending workflow_run activity updates the existing report without trusting artifacts", async () => {

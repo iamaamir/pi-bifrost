@@ -33,6 +33,96 @@ Adding a model makes it available in that tier. Removing it prevents selection t
 
 Patterns containing `/` may resolve an exact `provider/id`. Shorter strings may substring-match multiple registry IDs. Use exact IDs when ambiguity matters, then confirm candidates with `/bifrost preview <prompt>`.
 
+### Explicit fallback boundaries (schema version 2)
+
+By default, an unavailable or unhealthy tier can still fall back to the configured `default` tier. To limit one tier to an explicit ordered list, set `schemaVersion` to `2` and add that tier's `fallbackTiers` policy:
+
+```json
+{
+  "schemaVersion": 2,
+  "models": {
+    "frontier": ["provider/frontier-model"],
+    "general": ["provider/general-model"],
+    "quick": ["provider/quick-model"]
+  },
+  "tierPolicies": {
+    "frontier": { "fallbackTiers": ["general", "quick"] },
+    "quick": { "fallbackTiers": [] }
+  }
+}
+```
+
+For `frontier`, Bifrost tries `frontier`, then `general`, then `quick`; it stops at the first tier with an eligible model. The empty list makes `quick` a singleton boundary. A tier without a `tierPolicies` entry keeps the legacy default-tier fallback, including when `schemaVersion` is `2`. Version 2 by itself does not change routing. References must name configured tiers, and duplicate, self, or cyclic fallback references are rejected. Invalid version-2 policy configuration blocks physical and Auto routing until corrected. Startup checks each source before merging. An invalid source, unsupported version, or invalid strict policy stops routing and preview classification. A higher layer cannot hide the invalid source. Reload keeps the last valid configuration and session-local pin if a source fails these checks. Fix that source and reload to resume.
+
+Configuration sources must be regular files of at most 10,000,000 bytes. Read-only symlinks to regular files are supported. Managed writes keep their existing symlink protection. Oversized sources are rejected, not truncated.
+
+### Structural contract and inline descriptions
+
+The `schema.json` shipped with Bifrost is the authoritative structural contract: it defines every supported field, its type, its allowed values, and its constraints. Every configuration source is validated against it on load, reload, and prospective apply. A source nested more than 128 levels is rejected before validation. Unknown fields, invalid enum values, and wrong types are reported with a diagnostic naming the offending path, so no key becomes active silently. A finding that makes a source unusable — an unsupported `schemaVersion`, or a reserved `description` key that a version upgrade would reinterpret — rejects that source and stops routing until it is fixed. Other structural findings load as warnings, because the semantic validators decide the safe outcome for their namespace: an invalid economic or reliability invariant fails closed, while an invalid classifier budget disables classification and keeps local routing. Cross-field rules — tier references, fallback cycles, classifier constraints, economic and reliability invariants — stay with Bifrost's semantic validators, which run on the merged effective policy.
+
+You can annotate any object-valued section with an optional `description` string. Descriptions are metadata: they explain why a configuration exists and never affect routing, classification, eligibility, economics, reliability, or fallback decisions. Bifrost strips them at the load boundary, so no routing subsystem can mistake one for a tier or policy, and they are preserved in the files you author. The same structural findings appear in `/bifrost validate` and its JSON output, as warnings alongside the semantic ones.
+
+```json
+{
+  "$schema": "./schema.json",
+  "schemaVersion": 3,
+  "description": "Project routing policy for coding agents.",
+  "models": {
+    "description": "Define the available model tiers and their eligible models.",
+    "quick": ["provider/cheap"]
+  }
+}
+```
+
+### Provider routing scope (schema versions 2 and 3)
+
+`routingScope` is a hard provider allowlist for Bifrost-controlled routing. It is an eligibility filter, not a preference: no strategy, affinity anchor, fallback, or recovery path may select a provider outside the effective scope. It requires `schemaVersion: 2` or `3` and does nothing on its own — it only removes candidates that other routing rules would otherwise consider.
+
+```json
+{
+  "schemaVersion": 2,
+  "models": {
+    "quick": ["subscription/quick-model"],
+    "general": ["subscription/general-model", "metered/general-model"]
+  },
+  "routingScope": {
+    "providers": ["subscription", "metered"],
+    "tiers": { "quick": { "providers": ["subscription"] } }
+  }
+}
+```
+
+Inside dynamically keyed maps — `models`, `categoryStrategies`, `tierPolicies`, `routingScope.tiers`, `classifier.criteria`, `economics.scopes`, `economics.tierOverrides`, `economics.sourceOrder` — a key named `description` has always been a possible user-defined key (for example a tier named `description`). Versions 1 and 2 keep that meaning unchanged. Schema version 3 keeps every version 2 capability and additionally reserves `description` in those maps as inline metadata, which makes the syntax above unambiguous. A version 3 configuration whose dynamically keyed `description` holds a non-string value — or a layer that did not opt into version 3 while the effective version is 3 — is rejected with a precise diagnostic; rename the user-defined key or stay on your current version. Descriptions are optional under every supported version. Keys one level below `economics.tierOverrides` are admission rule IDs in every version, so a rule named `description` keeps its meaning and its reserve override.
+
+- Omit `routingScope` to keep the existing v2 behavior unchanged. Omit `providers` inside a scope to add no restriction at that level. Set `providers: []` to deny all providers at that level.
+- `providers` is the global allowlist. `tiers` adds a per-tier allowlist keyed by a configured tier name. A tier allowlist can only narrow the global allowlist; a candidate must satisfy both.
+- Provider ids match exactly against Pi registry provider ids. There are no patterns, wildcards, substring matches, or case folding.
+- Each evaluated pool uses its own tier allowlist: a fallback tier is scoped by the fallback tier's allowlist, not by the tier that failed. The global allowlist applies to every pool, so no fallback can reach a provider outside the global scope.
+- Configuration layers compose by intersection: extension, global, workspace, and project allowlists are intersected, so a later source can only narrow an earlier restriction. Two nonempty allowlists at the same level that share no provider are a conflict. Because that is invalid strict configuration, it is reported as a config error and blocks routing until corrected, like other version-2 policy errors.
+- A direct-model rule that is not a configured tier is governed by the global allowlist only; Bifrost does not invent a tier scope for it.
+
+`routingScope` controls Bifrost's own routing. It does not change Pi's model inventory, model picker, or manual model selection outside Bifrost. `/bifrost preview` and `/bifrost preview --trace` report an excluded candidate as `provider not allowed` with the rejecting level.
+
+### Economic observations and billing preference (schema version 2)
+
+The optional `economics` namespace starts off when omitted. It accepts provider- or model-scoped facts that you enter in config. Sources must be marked `declared` or `estimated`; Pi does not read billing APIs or account scopes. Use `mode: "observe"` first. It records whether each rule would reject a candidate and leaves selection order and random selection unchanged.
+
+`mode: "policy"` applies configured reserve rules before strategy selection. Each rule sets `unknown` to `block` or `ignore`, which controls candidates without a fresh allowance fact. A policy-mode no-route is handled by physical routing and does not fall through to Auto's last dispatched model. Manual pin and off controls remain in charge. Existing tool continuations and retries keep Pi's established model.
+
+An optional `preference.billingClass` can prefer `subscription`, `metered`, or `free` billing facts. In observe mode, Bifrost reports which final eligible candidates would be preferred while preserving their order and random selection. In policy mode, it applies the existing strategy only within the preferred candidates in the already chosen tier. If no eligible candidate has a fresh matching fact, the existing strategy sees the full eligible pool. Unknown, stale, conflicting, or unsupported evidence stays neutral. Preference-only policy with `admission: []` does not create a hard admission rule or turn an otherwise unresolved route into a route.
+
+Billing class comes only from a fresh explicit declared or estimated signal, not provider naming or a zero catalog price. The same source order and authority rules apply as for reserves. A window reset expires allowance facts for that period; it does not refresh or change the billing-class fact. Routing decision summaries report class, source alias, authority, and freshness without allowance values or account references. This preference is not a spend cap and makes no savings claim. See [`economic-reserve-observe.json`](../../examples/economic-reserve-observe.json) and [`economic-billing-preference.json`](../../examples/economic-billing-preference.json).
+
+### Affinity observation and retention
+
+In the Pi extension, Auto uses `retain-within-tier` when the `affinity` namespace is absent. It keeps a proven successful Auto model only when that model remains in the chosen tier's final selection pool. Physical selection stays off by default. The resolve-only API also stays off when affinity is omitted; it uses only the mode explicitly passed in its config.
+
+The optional `affinity` namespace requires `schemaVersion: 2` or later and overrides the Pi defaults. Set `{"schemaVersion":2,"affinity":{"mode":"off"}}` to opt out in Auto, or use `mode: "observe"` to report the proven anchor without changing selection. `/bifrost inspect` and `/bifrost preview --trace` show the effective mode and whether it comes from the Auto default, physical default, or config. Init keeps writing the existing version-1 config shape and does not add the affinity namespace.
+
+In Pi, Bifrost creates the anchor only from a proven successful Auto user turn and keeps it in memory for the session. The mode source is `auto_default` when the Auto-only default applies and `config` when an explicit namespace sets it. Physical routing with no namespace reports `physical_default` and does not retain the Auto anchor. If no anchor is available, the summary reports `locality_unknown`. `providerAdvisory: true` adds only whether the pool contains a candidate from the anchor provider.
+
+The final selection pool is formed after hard reserve and circuit exclusions and any policy-mode billing preference. A nonpreferred model can remain healthy and hard-eligible while being outside the selection pool, so it will not be restored by affinity retention. The structured route summary keeps billing-preference evidence separate from reserve or circuit exclusions, and leaves nonpreferred candidates marked eligible. Retention does not cross tiers, restore a hard-excluded model, or replace an explicit tier/model choice. In Auto routing, direct, continuation, and retry outcomes do not retain the anchor. Physical routing is blocked before provider activity when retention mode is enabled unless manual pin/off controls already bypass routing; use `observe` for physical routing. Continuations and retries keep Pi's established model. Neither mode claims cache reuse or savings.
+
 ## Selection strategies
 
 Strategies choose the exact healthy candidate after a tier has resolved:
@@ -83,6 +173,8 @@ Regex rules are case-insensitive and evaluated in configured order. First match 
 
 Despite the property name `model`, a rule value without `/` names a tier.
 
+Rules run synchronously on Pi's event loop, so a pattern that can backtrack without bound is rejected instead of being matched. Bifrost logs the rejection and skips that rule, and the prompt falls through to the next rule, the classifier, or the default tier. Rejected shapes are a quantified group whose body carries another variable quantifier (for example `(a+)+`) and an alternation whose branches split the same text ambiguously (for example `(a|aa)+`). Fixed-brace repetition, single-letter alternations such as `(a|b)+`, and noncapturing groups keep working. Test a rule with `/bifrost preview <prompt>` before committing it.
+
 ## Direct-model rules
 
 A rule value containing `/` binds one exact provider/model and skips tier selection. In `.pi/bifrost.json`:
@@ -113,6 +205,12 @@ For a normal message with routing on and nothing pinned, routing considers:
 7. the configured default tier.
 
 First matching step wins; later steps are skipped. A rule naming an exact model wins before the cache and classifiers; a rule naming a tier is checked after them. Reliability filtering and strategy selection happen after a tier is resolved.
+
+Classification is enabled by default. On a local-cache miss, an enabled classifier can receive the current prompt. Set `classifier.enabled` to `false` for a durable off default. Run `/bifrost classifier off` to disable classification for the current Pi session only. A session toggle does not change config or survive restart. The separate `cache.enabled` setting controls classification-cache use. Its threshold defaults to `1`, which matches ordered normalized prompts only; set it below `1` to opt into fuzzy Jaccard matches. Setting `cache.enabled` to `false` does not clear saved entries; run `/bifrost cache clear` to empty them. The generation provider still receives the prompt.
+
+Capability requirements are advisory-only in this release. `requirements.mode: "enforce"` is rejected because general capability enforcement is not implemented.
+
+Set optional `classifier.totalTimeoutMs` to bound all external classifier work for one request. It accepts an integer from `1` to `60000`; when the budget expires, Bifrost stops classifier calls and continues with local regex/default routing. Caller cancellation stops routing. When omitted, existing backend timeout and retry settings remain in effect. See the [classifier guide](classifiers.md#prompt-classifier) for details.
 
 ## Complete example
 
@@ -149,16 +247,23 @@ Full configuration file, `.pi/bifrost.json`:
   "cache": {
     "enabled": true,
     "maxEntries": 500,
-    "threshold": 0.85
+    "threshold": 1
   },
   "reliability": {
     "enabled": true,
     "failureThreshold": 3,
     "windowMinutes": 5,
-    "cooldownMinutes": 60
+    "cooldownMinutes": 60,
+    "allowanceCooldownScope": "provider"
   }
 }
 ```
+
+## Usage and rate-limit pauses
+
+`reliability.allowanceCooldownScope` defaults to `provider`. A usage or billing rejection then pauses all models with the same Pi provider ID. It does not identify shared billing accounts. Set the value to `model` to pause only the model that returned the rejection. Generic HTTP 429 rate limits remain provider-scoped.
+
+`reliability.enabled: false` disables provider pauses. `reliability.cooldownOnAllowanceExhausted: false` disables usage and billing pauses. `reliability.retryOnAllowanceExhausted` defaults to `false`; set it to `true` to opt in to the one bounded Auto retry while keeping the pause. See [reliability and local cache](reliability-and-cache.md#provider-pauses-are-not-account-checks) for status and reset commands.
 
 ## More examples
 

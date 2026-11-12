@@ -108,6 +108,13 @@ describe("commands helpers", () => {
       const proposal = buildInitProposal({}, undefined, ".") as { classifier: Record<string, unknown> };
       assert.equal(proposal.classifier.model, undefined);
     });
+
+    it("leaves the classifier backend automatic unless the user explicitly chose one", () => {
+      const automatic = buildInitProposal({}, undefined, ".") as { classifier: Record<string, unknown> };
+      const explicit = buildInitProposal({}, undefined, ".", "typesafe") as { classifier: Record<string, unknown> };
+      assert.equal(automatic.classifier.backend, undefined);
+      assert.equal(explicit.classifier.backend, "typesafe");
+    });
   });
 
   describe("selectModel with cheapest strategy", () => {

@@ -1,0 +1,6 @@
+id: no-process-exit-in-extension
+valid:
+  - 'throw new Error("bounded failure");'
+  - 'return { status: "cancelled" };'
+invalid:
+  - 'process.exit(1);'

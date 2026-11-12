@@ -13,6 +13,8 @@ export const DEFAULT_TYPESAFE_TIMEOUT_MS = 3_000;
 export const DEFAULT_TYPESAFE_MAX_ATTEMPTS = 2;
 const MAX_TYPESAFE_TIMEOUT_MS = 60_000;
 const MAX_TYPESAFE_ATTEMPTS = 3;
+/** Cap the materialized decode buffer; classification needs kilobytes, not megabytes. */
+const MAX_RESPONSE_BODY_BYTES = 1_048_576;
 export const TYPESAFE_MIN_CONFIDENCE = 0.8;
 
 /** @deprecated Use `ClassifierRequest`. Kept for the benchmark and provider seam. */
@@ -130,6 +132,13 @@ async function cancelResponseBody(response: Response | undefined): Promise<void>
   }
 }
 
+/**
+ * Decode a streamed response body under a byte budget and the caller's signal.
+ *
+ * Over-budget bodies and aborts both reject, and cleanup never outlives those
+ * bounds: a reader whose cancellation stays pending is raced against the same
+ * abort promise, so a custom fetch cannot hold the classifier call open.
+ */
 async function readResponseJson(response: Response, signal: AbortSignal): Promise<unknown> {
   if (!response.body) return response.json();
   const reader = response.body.getReader();
@@ -146,11 +155,17 @@ async function readResponseJson(response: Response, signal: AbortSignal): Promis
     while (true) {
       const result = await Promise.race([reader.read(), aborted]);
       if (result.done) break;
+      // Bound the decode buffer before retaining the chunk: a hostile or stuck
+      // provider endpoint must degrade to a classifier miss instead of growing
+      // the RSS past the budget, even when one chunk is larger than it.
+      if (total + result.value.byteLength > MAX_RESPONSE_BODY_BYTES) {
+        throw new Error(`provider response exceeds the bounded decode budget (${MAX_RESPONSE_BODY_BYTES} bytes)`);
+      }
       chunks.push(result.value);
       total += result.value.byteLength;
     }
   } catch (error) {
-    try { await reader.cancel(); } catch { /* cleanup only */ }
+    try { await Promise.race([reader.cancel(), aborted]); } catch { /* cleanup only */ }
     throw error;
   } finally {
     signal.removeEventListener("abort", abort);
@@ -199,7 +214,11 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
   const maxAttempts = Math.min(MAX_TYPESAFE_ATTEMPTS, Math.max(1, Math.floor(options.maxAttempts ?? DEFAULT_TYPESAFE_MAX_ATTEMPTS)));
   let warnedMissingKey = false;
 
-  return async function classify(input: TypeSafeInput, signal?: AbortSignal): Promise<TypeSafeJudgment | undefined> {
+  return async function classify(
+    input: TypeSafeInput,
+    signal?: AbortSignal,
+    onObservation?: (observation: TypeSafeObservation) => void,
+  ): Promise<TypeSafeJudgment | undefined> {
     const activeSignal = signal ?? options.signal;
     const startedAt = performance.now();
     const traceId = `ts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -224,17 +243,23 @@ export function createTypeSafeClassifier(options: TypeSafeOptions = {}) {
       });
       if (!observed) {
         observed = true;
+        const observation: TypeSafeObservation = Object.freeze({
+          outcome,
+          latencyMs: performance.now() - startedAt,
+          attempts,
+          model: TYPESAFE_MODEL,
+          tier: judgment?.tier,
+          confidence: judgment?.confidence,
+        });
         try {
-          options.observe?.({
-            outcome,
-            latencyMs: performance.now() - startedAt,
-            attempts,
-            model: TYPESAFE_MODEL,
-            tier: judgment?.tier,
-            confidence: judgment?.confidence,
-          });
+          options.observe?.(observation);
         } catch {
           console.error("[bifrost] TypeSafe observation failed");
+        }
+        try {
+          onObservation?.(observation);
+        } catch {
+          // Per-call observers are advisory and must not change classification.
         }
       }
       return judgment;

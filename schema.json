@@ -4,7 +4,69 @@
   "title": "Bifrost Model Router Config",
   "description": "Configuration for the pi-bifrost model router. Routes prompts to configured tiers or exact provider models. Optional classifiers can select a tier. Merged from extension defaults → global → project root → project config (.pi/bifrost.json), with later layers winning.",
   "type": "object",
+  "additionalProperties": false,
   "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional editor pointer to this schema file, for example \"./schema.json\". Ignored by routing."
+    },
+    "description": {
+      "type": "string",
+      "description": "Optional inline note explaining the purpose of this configuration. Metadata only: it never affects routing, classification, eligibility, economics, reliability, or fallback decisions."
+    },
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [1, 2, 3],
+      "description": "Config schema version. Omit or set 1 to retain legacy routing behavior. Version 2 permits explicit per-tier fallback boundaries; each boundary is activated only by its tierPolicies entry. Version 3 keeps every version 2 capability and additionally reserves the key \"description\" inside dynamically keyed maps (models, categoryStrategies, tierPolicies, classifier.criteria, economics.scopes, economics.tierOverrides, economics.sourceOrder) as inline metadata instead of a user-defined key. Under versions 1 and 2 a key named \"description\" in those maps keeps its original meaning as a user-defined key.",
+      "examples": [2, 3]
+    },
+    "tierPolicies": {
+      "type": "object",
+      "description": "Optional strict fallback boundaries. A configured tier with fallbackTiers resolves only itself and the listed tiers in order. An empty list allows no fallback. Requires schemaVersion 2 or later. In schemaVersion 3 a \"description\" key here is inline metadata, not a tier policy.",
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "description": {
+                "type": "string",
+                "description": "Optional inline note explaining this fallback boundary. Metadata only; it never affects routing."
+              },
+              "fallbackTiers": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Ordered configured tier names to try after this tier. Must not include this tier, duplicates, missing tiers, or form a cycle. A single source layer may omit it when another layer supplies it; Bifrost's semantic validation requires every effective policy to define it."
+              }
+            }
+          },
+          { "$ref": "#/definitions/V3MetadataDescription" }
+        ]
+      },
+      "examples": [
+        { "quick": { "fallbackTiers": ["general"] }, "general": { "fallbackTiers": [] } }
+      ]
+    },
+    "economics": {
+      "$ref": "#/definitions/EconomicsConfig",
+      "description": "Optional local reserve signals and admission policy. Without this namespace, Bifrost keeps legacy routing behavior. Config-declared facts are declared or estimated; Pi does not query live billing or account APIs."
+    },
+    "affinity": {
+      "$ref": "#/definitions/AffinityConfig",
+      "description": "Optional explicit affinity override. When absent, the Pi extension retains a proven successful Auto-dispatch anchor within the selected tier; physical selection and the resolve-only API remain off by default. Retention stays inside the final selection pool and does not override hard exclusions. This namespace requires schemaVersion 2."
+    },
+    "requirements": {
+      "type": "object",
+      "description": "Capability enforcement is not supported in this release. Only the advisory mode is accepted; do not use requirements to claim that a model capability is enforced.",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string", "enum": ["advisory"], "default": "advisory" }
+      }
+    },
+    "routingScope": {
+      "$ref": "#/definitions/RoutingScope",
+      "description": "Hard provider allowlists for Bifrost-controlled routing. This is an eligibility filter, not a preference: no strategy, affinity anchor, fallback, or recovery may select a provider outside the effective scope. Omitted means no additional restriction; an empty array means deny-all. Configuration layers intersect, so a later source can only narrow. Requires schemaVersion 2 or 3."
+    },
     "enabled": {
       "type": "boolean",
       "description": "Enable or disable routing. When disabled, Bifrost does not switch models for new turns. Pi uses the selected physical model.",
@@ -24,8 +86,11 @@
     },
     "categoryStrategies": {
       "type": "object",
-      "description": "Per-tier strategy overrides. Keys must match tier names in 'models'. If a tier is not listed here, 'strategy' is used.",
+      "description": "Per-tier strategy overrides. Keys must match tier names in 'models'. If a tier is not listed here, 'strategy' is used. In schemaVersion 3 a \"description\" key here is inline metadata, not a tier.",
       "default": { "quick": "random", "general": "first", "frontier": "first" },
+      "properties": {
+        "description": { "$ref": "#/definitions/V3MetadataDescription" }
+      },
       "additionalProperties": {
         "type": "string",
         "enum": ["first", "cheapest", "cheapest_input", "cheapest_output", "largest_context", "random", "fastest"]
@@ -33,7 +98,7 @@
     },
     "models": {
       "type": "object",
-      "description": "Model tiers. Each key is a tier name (e.g. 'quick', 'general', 'frontier'). Values are provider/model patterns — either a single string or an ordered array of candidate patterns.",
+      "description": "Model tiers. Each key is a tier name (e.g. 'quick', 'general', 'frontier'). Values are provider/model patterns — either a single string or an ordered array of candidate patterns. In schemaVersion 3 a \"description\" key here is inline metadata, not a tier.",
       "default": {},
       "additionalProperties": {
         "oneOf": [
@@ -80,14 +145,22 @@
     }
   },
   "definitions": {
+    "V3MetadataDescription": {
+      "type": "string",
+      "description": "Inline section metadata for a dynamically keyed map whose other values are structured records. Only valid in schemaVersion 3, where this key is reserved as metadata instead of a user-defined key; versions 1 and 2 reject strings here (see the x-bifrost-effective-only root conditional)."
+    },
     "RouteRule": {
       "type": "object",
       "required": ["pattern", "model"],
       "additionalProperties": false,
       "properties": {
+        "description": {
+          "type": "string",
+          "description": "Optional inline note explaining this rule. Metadata only; it never affects matching."
+        },
         "pattern": {
           "type": "string",
-          "description": "JavaScript regex pattern (without flags, double-escaped). Matched case-insensitively against the user's prompt. Example: '\\\\b(debug|fix|refactor)\\\\b'"
+          "description": "JavaScript regex pattern (without flags, double-escaped). Matched case-insensitively against the user's prompt. Example: '\\\\b(debug|fix|refactor)\\\\b'. Patterns that can backtrack without bound - a quantified group whose body carries another variable quantifier, or an alternation whose branches split the same text ambiguously - are logged and skipped so they cannot stall the event loop; the prompt then falls through to later rules."
         },
         "model": {
           "type": "string",
@@ -100,6 +173,10 @@
       "description": "LLM-based classifier that inspects user prompts and selects a tier before falling back to regex rules. Set 'enabled: false' to use regex-only routing.",
       "additionalProperties": false,
       "properties": {
+        "description": {
+          "type": "string",
+          "description": "Optional inline note explaining this classifier section. Metadata only; it never affects classification."
+        },
         "enabled": {
           "type": "boolean",
           "description": "Enable the LLM classifier. When disabled, only regex rules are used.",
@@ -110,10 +187,17 @@
           "enum": ["prompt", "typesafe", "pi-native"],
           "description": "Classifier backend. If omitted, Bifrost detects Pi-managed TypeSafe credentials first, TYPESAFE_API_KEY second, and otherwise uses prompt. An explicit value always wins."
         },
+        "totalTimeoutMs": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60000,
+          "description": "Optional total budget for external classification across direct backends, retries, and prompt fallback. When it expires, Bifrost stops external classifier attempts and continues with local regex/default routing. Caller cancellation stops routing. If omitted, backend-specific timeouts remain unchanged."
+        },
         "typesafe": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
+            "description": { "type": "string", "description": "Optional inline note. Metadata only." },
             "model": { "type": "string", "const": "jev-1.13.0" },
             "endpoint": { "type": "string", "const": "https://api.typesafe.ai/v1/systemone" },
             "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 },
@@ -123,6 +207,7 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
+                "description": { "type": "string", "description": "Optional inline note. Metadata only." },
                 "enabled": { "type": "boolean", "default": true }
               }
             }
@@ -133,13 +218,17 @@
           "additionalProperties": false,
           "description": "Pi-native classifier settings. Omit model to use the first available TypeSafe classifier model in Pi's catalog.",
           "properties": {
+            "description": { "type": "string", "description": "Optional inline note. Metadata only." },
             "model": { "type": "string", "description": "Classifier model in provider/id form, for example typesafe/jev-latest." },
             "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 },
             "maxAttempts": { "type": "integer", "minimum": 1, "maximum": 3 },
             "metrics": {
               "type": "object",
               "additionalProperties": false,
-              "properties": { "enabled": { "type": "boolean", "default": true } }
+              "properties": {
+                "description": { "type": "string", "description": "Optional inline note. Metadata only." },
+                "enabled": { "type": "boolean", "default": true }
+              }
             }
           }
         },
@@ -181,12 +270,12 @@
         },
         "criteria": {
           "type": "object",
-          "description": "Provider-neutral criteria keyed by configured tier.",
+          "description": "Provider-neutral criteria keyed by configured tier. In schemaVersion 3 a \"description\" key here is inline metadata, not a criterion.",
           "additionalProperties": {
             "oneOf": [
               { "type": "null", "description": "Remove inherited criterion for this tier." },
               { "type": "string", "minLength": 1 },
-              { "type": "object", "required": ["what"], "additionalProperties": false, "properties": { "what": { "type": "string", "minLength": 1 }, "notFor": { "type": "string" }, "examples": { "type": "array", "items": { "type": "string" } } } }
+              { "type": "object", "additionalProperties": false, "properties": { "description": { "type": "string", "description": "Optional inline note. Metadata only." }, "what": { "type": "string", "minLength": 1 }, "notFor": { "type": "string" }, "examples": { "type": "array", "items": { "type": "string" } } } }
             ]
           }
         },
@@ -201,9 +290,13 @@
     },
     "CacheConfig": {
       "type": "object",
-      "description": "Fuzzy classification cache. Repeated or similar prompts reuse the cached category instead of calling the classifier again.",
+      "description": "Classification cache. Exact ordered prompt matches are the default; set threshold below 1 to opt into fuzzy reuse.",
       "additionalProperties": false,
       "properties": {
+        "description": {
+          "type": "string",
+          "description": "Optional inline note explaining this cache section. Metadata only; it never affects caching."
+        },
         "enabled": {
           "type": "boolean",
           "description": "Enable the classification cache.",
@@ -220,8 +313,8 @@
           "type": "number",
           "minimum": 0,
           "maximum": 1,
-          "description": "Jaccard similarity threshold for fuzzy cache matches. 0 = any prompt sharing at least one token with an entry matches (prompts with zero token overlap never match). 1 = only exact token matches.",
-          "default": 0.85
+          "description": "Jaccard threshold for opt-in fuzzy cache matches. Values below 1 enable fuzzy matching; 1 requires an exact ordered normalized prompt match.",
+          "default": 1
         },
         "ttlHours": {
           "type": "number",
@@ -239,6 +332,10 @@
       "description": "Health-aware model selection and circuit breaker. Tracks repeated probe/runtime failures, opens circuits for unhealthy models, and skips them before routing.",
       "additionalProperties": false,
       "properties": {
+        "description": {
+          "type": "string",
+          "description": "Optional inline note explaining this reliability section. Metadata only; it never affects reliability behavior."
+        },
         "enabled": {
           "type": "boolean",
           "description": "Enable circuit-breaker based model health filtering.",
@@ -262,6 +359,35 @@
           "description": "How long an opened circuit stays open before model becomes eligible again.",
           "default": 60
         },
+        "cooldownOnAllowanceExhausted": {
+          "type": "boolean",
+          "description": "Immediately pause a provider after a normalized explicit usage-allowance or billing failure. A 402 response pauses the provider; ordinary 429 rate limits use a short provider throttle. Set false to disable usage and billing pauses; rate-limit throttles remain enabled.",
+          "default": true
+        },
+        "allowanceCooldownScope": {
+          "type": "string",
+          "enum": ["provider", "model"],
+          "description": "Scope usage-allowance and billing pauses. The default provider scope pauses all configured models under the same provider ID. Set model to keep those pauses model-scoped. HTTP 429 throttles always use provider scope.",
+          "default": "provider"
+        },
+        "retryOnAllowanceExhausted": {
+          "type": "boolean",
+"description": "Disabled by default. Set true to retry at most once on a different configured model only when reliability and cooldownOnAllowanceExhausted are enabled and Pi proves the failed Auto generation had no assistant content, tool calls, tool results, or other activity. The failed response is omitted from the next model context; the raw transcript remains visible.",
+          "default": false
+        },
+        "stateVersion": {
+          "type": "integer",
+          "enum": [1, 2],
+          "description": "Reliability state format. Omitted or 1 uses the legacy runtime; 2 opts into the experimental receipt-owned runtime and requires explicit /bifrost reliability migrate preparation. Physical routing and direct utility requests are unsupported while version 2 is enabled."
+        },
+        "observations": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "description": { "type": "string", "description": "Optional inline note. Metadata only." },
+            "enabled": { "type": "boolean", "default": false, "description": "Store allowlisted failure categories and timestamps from proven runtime failures. No provider error text is retained." }
+          }
+        },
         "path": {
           "type": "string",
           "description": "Custom path for persisted reliability state. Default: .pi/bifrost-reliability.json"
@@ -273,6 +399,10 @@
       "description": "Structured debug logging. Appends JSONL lines to a file for performance analysis and troubleshooting. Disabled by default.",
       "additionalProperties": false,
       "properties": {
+        "description": {
+          "type": "string",
+          "description": "Optional inline note explaining this debug section. Metadata only."
+        },
         "enabled": {
           "type": "boolean",
           "description": "Enable debug logging.",
@@ -289,6 +419,10 @@
       "description": "Model probe tuning (/bifrost probe and /bifrost init). The probe sends a tiny prompt to every registry model; lower concurrency if providers rate-limit burst traffic.",
       "additionalProperties": false,
       "properties": {
+        "description": {
+          "type": "string",
+          "description": "Optional inline note explaining this probe section. Metadata only."
+        },
         "concurrency": {
           "type": "integer",
           "minimum": 1,
@@ -302,6 +436,215 @@
           "default": 10000
         }
       }
+    },
+    "EconomicsConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "scopes", "sources", "admission"],
+      "properties": {
+        "description": { "type": "string", "description": "Optional inline note explaining this economics section. Metadata only; it never affects economic policy." },
+        "mode": { "type": "string", "enum": ["observe", "policy"], "description": "observe reports reserve and billing preference effects without changing candidate membership, order, or random selection. policy excludes only candidates rejected by a configured hard reserve and may prefer an explicitly configured billing class among the remaining eligible candidates." },
+        "preference": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["billingClass"],
+          "description": "Optional preference among final eligible candidates in the already selected tier. It does not exclude candidates or override a direct model selection. Requires fresh explicit billing facts; unknown or conflicting facts remain neutral.",
+          "properties": {
+            "description": { "type": "string" },
+            "billingClass": { "type": "string", "enum": ["subscription", "metered", "free"] }
+          }
+        },
+        "scopes": {
+          "type": "object",
+          "maxProperties": 64,
+          "additionalProperties": {
+            "oneOf": [
+              { "type": "object", "required": ["kind", "model"], "additionalProperties": false, "properties": { "description": { "type": "string" }, "kind": { "const": "model" }, "model": { "type": "string", "minLength": 1, "maxLength": 256 } } },
+              { "type": "object", "required": ["kind", "provider"], "additionalProperties": false, "properties": { "description": { "type": "string" }, "kind": { "const": "provider" }, "provider": { "type": "string", "minLength": 1, "maxLength": 128 } } },
+              { "$ref": "#/definitions/V3MetadataDescription" }
+            ]
+          }
+        },
+        "sources": {
+          "type": "array",
+          "maxItems": 16,
+          "items": {
+            "type": "object", "required": ["id", "scopeRef", "authority"], "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "scopeRef": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "description": { "type": "string" },
+              "authority": { "type": "string", "enum": ["declared", "estimated"], "description": "A static fact entered by the user; it is not authoritative provider billing data." }
+            }
+          }
+        },
+        "sourceOrder": { "type": "object", "additionalProperties": { "oneOf": [ { "type": "array", "maxItems": 16, "items": { "type": "string" } }, { "$ref": "#/definitions/V3MetadataDescription" } ] } },
+        "admission": {
+          "type": "array", "maxItems": 128,
+          "items": {
+            "type": "object", "required": ["id", "scopeRef", "windowId", "reserveRatio", "unknown"], "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "scopeRef": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "windowId": { "type": "string", "minLength": 1, "maxLength": 128 },
+              "description": { "type": "string" },
+              "reserveRatio": { "type": "number", "minimum": 0, "maximum": 1 },
+              "unknown": { "type": "string", "enum": ["block", "ignore"] }
+            }
+          }
+        },
+        "tierOverrides": { "type": "object", "additionalProperties": { "oneOf": [ { "type": "object", "additionalProperties": { "type": "object", "additionalProperties": false, "properties": { "description": { "type": "string" }, "reserveRatio": { "type": "number", "minimum": 0, "maximum": 1 }, "unknown": { "type": "string", "enum": ["block", "ignore"] } } } }, { "$ref": "#/definitions/V3MetadataDescription" } ] } },
+        "observations": {
+          "type": "array", "maxItems": 64,
+          "description": "User-entered static observations only. Values are local evidence and must be refreshed by the user; no provider adapter is invoked.",
+          "items": {
+            "type": "object", "required": ["sourceId", "scopeRef", "billing", "observedAt", "expiresAt", "revision", "windows"], "additionalProperties": false,
+            "properties": {
+              "description": { "type": "string" }, "sourceId": { "type": "string" }, "scopeRef": { "type": "string" },
+              "billing": { "type": "string", "enum": ["subscription", "metered", "free", "unknown"] },
+              "observedAt": { "type": "integer", "minimum": 0 }, "expiresAt": { "type": "integer", "minimum": 0 }, "revision": { "type": "integer", "minimum": 0 },
+              "windows": { "type": "array", "maxItems": 16, "items": { "$ref": "#/definitions/EconomicWindow" } }
+            }
+          }
+        }
+      }
+    },
+    "AffinityConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "description": { "type": "string", "description": "Optional inline note explaining this affinity section. Metadata only; it never affects affinity behavior." },
+        "mode": { "type": "string", "enum": ["off", "observe", "retain-within-tier"], "description": "Explicit Pi extension override: off disables affinity, observe reports the proven Auto anchor without changing selection, and retain-within-tier may keep an automatic successful-dispatch anchor only when it is in the selected tier's final selection pool. It never crosses tiers or bypasses hard exclusions." },
+        "providerAdvisory": { "type": "boolean", "default": false, "description": "Include whether any final eligible candidate shares the anchor provider. This reports candidate availability only; it does not claim cache reuse or savings." }
+      }
+    },
+    "RoutingScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Global and per-tier provider allowlists. Provider ids are compared exactly against Pi registry provider ids; no patterns, wildcards, or author inference.",
+      "properties": {
+        "description": { "type": "string" },
+        "providers": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Global allowlist of exact provider ids. Omit for no global restriction. An empty array is an intentional deny-all."
+        },
+        "tiers": {
+          "type": "object",
+          "description": "Per-tier provider allowlists keyed by a configured tier name. A tier can narrow the global allowlist but never expand it.",
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "description": { "type": "string" },
+                  "providers": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 },
+                    "description": "Allowlist of exact provider ids for this tier. An empty array denies all providers for this tier."
+                  }
+                }
+              },
+              { "$ref": "#/definitions/V3MetadataDescription" }
+            ]
+          }
+        }
+      },
+      "examples": [
+        { "providers": ["provider-one", "provider-two"] },
+        { "providers": ["provider-one", "provider-two"], "tiers": { "quick": { "providers": ["provider-two"] } } }
+      ]
+    },
+    "EconomicWindow": {
+      "type": "object", "required": ["id", "period", "unit", "remaining"], "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "description": { "type": "string" },
+        "period": { "type": "object", "required": ["id", "sequence"], "additionalProperties": false, "properties": { "description": { "type": "string" }, "id": { "type": "string" }, "sequence": { "type": "integer", "minimum": 0 } } },
+        "unit": { "type": "string", "enum": ["requests", "tokens", "credits", "ratio", "currency"] },
+        "currency": { "type": "string", "pattern": "^[A-Z]{3}$" },
+        "remaining": { "type": "number", "minimum": 0 },
+        "limit": { "type": "number", "exclusiveMinimum": 0 },
+        "resetsAt": { "type": "integer", "minimum": 0 }
+      }
     }
-  }
+  },
+  "allOf": [
+    {
+      "x-bifrost-effective-only": true,
+      "if": { "required": ["tierPolicies"] },
+      "then": {
+        "properties": { "schemaVersion": { "enum": [2, 3] } },
+        "required": ["schemaVersion"]
+      }
+    },
+    {
+      "x-bifrost-effective-only": true,
+      "if": { "required": ["economics"] },
+      "then": {
+        "properties": { "schemaVersion": { "enum": [2, 3] } },
+        "required": ["schemaVersion"]
+      }
+    },
+    {
+      "x-bifrost-effective-only": true,
+      "if": { "required": ["affinity"] },
+      "then": {
+        "properties": { "schemaVersion": { "enum": [2, 3] } },
+        "required": ["schemaVersion"]
+      }
+    },
+    {
+      "x-bifrost-effective-only": true,
+      "if": { "required": ["routingScope"] },
+      "then": {
+        "properties": { "schemaVersion": { "enum": [2, 3] } },
+        "required": ["schemaVersion"]
+      }
+    },
+    {
+      "x-bifrost-effective-only": true,
+      "if": { "properties": { "reliability": { "properties": { "stateVersion": { "const": 2 } }, "required": ["stateVersion"] } }, "required": ["reliability"] },
+      "then": {
+        "properties": { "schemaVersion": { "enum": [2, 3] } },
+        "required": ["schemaVersion"]
+      }
+    },
+    {
+      "x-bifrost-effective-only": true,
+      "if": { "properties": { "reliability": { "required": ["observations"] } }, "required": ["reliability"] },
+      "then": {
+        "properties": { "schemaVersion": { "enum": [2, 3] }, "reliability": { "required": ["stateVersion"] } },
+        "required": ["schemaVersion"]
+      }
+    },
+    {
+      "if": { "properties": { "schemaVersion": { "const": 3 } }, "required": ["schemaVersion"] },
+      "then": {
+        "properties": {
+          "models": { "properties": { "description": { "type": "string", "description": "Inline section metadata. Reserved in schemaVersion 3; never a tier name." } } },
+          "categoryStrategies": { "properties": { "description": { "type": "string", "description": "Inline section metadata. Reserved in schemaVersion 3; never a tier name." } } },
+          "classifier": { "properties": { "criteria": { "properties": { "description": { "type": "string", "description": "Inline section metadata. Reserved in schemaVersion 3; never a criterion." } } } } }
+        }
+      }
+    },
+    {
+      "x-bifrost-effective-only": true,
+      "if": { "not": { "properties": { "schemaVersion": { "const": 3 } }, "required": ["schemaVersion"] } },
+      "then": {
+        "properties": {
+          "categoryStrategies": { "properties": { "description": { "enum": ["first", "cheapest", "cheapest_input", "cheapest_output", "largest_context", "random", "fastest"] } } },
+          "tierPolicies": { "additionalProperties": { "not": { "type": "string" } } },
+          "routingScope": { "properties": { "tiers": { "additionalProperties": { "not": { "type": "string" } } } } },
+          "economics": { "properties": {
+            "scopes": { "additionalProperties": { "not": { "type": "string" } } },
+            "sourceOrder": { "additionalProperties": { "not": { "type": "string" } } },
+            "tierOverrides": { "additionalProperties": { "not": { "type": "string" } } }
+          } }
+        }
+      }
+    }
+  ]
 }

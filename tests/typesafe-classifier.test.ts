@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setupDebug } from "../debug.ts";
+import { flushDebug, setupDebug } from "../debug.ts";
 import {
   TYPESAFE_MODEL,
   TYPESAFE_SYSTEMONE_URL,
@@ -12,6 +12,7 @@ import {
 } from "../typesafe-classifier.ts";
 import { ReliabilityStore } from "../reliability-store.ts";
 import { emptyReliabilityState } from "../reliability.ts";
+import type { TypeSafeObservation } from "../classifier-metrics.ts";
 
 const criteria = {
   quick: "bounded work",
@@ -61,6 +62,155 @@ describe("TypeSafe classifier", () => {
       outcome: "success", attempts: 1, model: TYPESAFE_MODEL, tier: "frontier", confidence: 0.92, latencyMs: 0,
     });
     assert.doesNotMatch(JSON.stringify(observations), /sensitive|probabilit|authorization|api.?key/i);
+  });
+
+  it("emits isolated per-call observations for overlapping success and timeout calls", async () => {
+    let calls = 0;
+    const shared: unknown[] = [];
+    const classifier = createTypeSafeClassifier({
+      apiKey: "key",
+      maxAttempts: 1,
+      timeoutMs: 100,
+      observe: (observation) => shared.push(observation),
+      fetchImpl: async (_url, init) => {
+        calls++;
+        const body = JSON.parse(String(init?.body)) as { state: string };
+        if (body.state === "slow prompt") {
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+          });
+        }
+        return new Response(JSON.stringify(payload()), { status: 200 });
+      },
+    });
+    const slow: TypeSafeObservation[] = [];
+    const fast: TypeSafeObservation[] = [];
+    const [slowResult, fastResult] = await Promise.all([
+      classifier({ prompt: "slow prompt", tiers: ["quick", "general", "frontier"], criteria }, undefined, (value) => slow.push(value)),
+      classifier({ prompt: "fast prompt", tiers: ["quick", "general", "frontier"], criteria }, undefined, (value) => fast.push(value)),
+    ]);
+    assert.equal(slowResult, undefined);
+    assert.equal(fastResult?.tier, "general");
+    assert.equal(calls, 2);
+    assert.equal(slow.length, 1);
+    assert.equal(slow[0]?.outcome, "timeout");
+    assert.equal(fast.length, 1);
+    assert.equal(fast[0]?.outcome, "success");
+    assert.deepEqual(shared.map((value) => (value as TypeSafeObservation).outcome).sort(), ["success", "timeout"]);
+    assert.doesNotMatch(JSON.stringify([...slow, ...fast, ...shared]), /slow prompt|fast prompt/);
+  });
+
+  it("treats an oversized response body as an invalid response", async () => {
+    // The decoder must bound how much provider body it materializes; a padded
+    // payload that exceeds the budget is a decode miss, not a classification.
+    const observations: TypeSafeObservation[] = [];
+    let chunksLeft = 20;
+    const oversized = new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (chunksLeft-- > 0) {
+          controller.enqueue(new TextEncoder().encode(" ".repeat(64 * 1024)));
+          return;
+        }
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(payload())));
+        controller.close();
+      },
+    }));
+    const classifier = createTypeSafeClassifier({
+      apiKey: "key",
+      fetchImpl: async () => oversized,
+      observe: (observation) => observations.push(observation),
+    });
+    const result = await classifier({ prompt: "hello", tiers: ["quick", "general", "frontier"], criteria });
+    assert.equal(result, undefined);
+    assert.equal(observations[0]?.outcome, "invalid_response");
+  });
+
+  it("reports circuit-open evidence per call without issuing a request", async () => {
+    const key = `classifier/typesafe/${TYPESAFE_MODEL}`;
+    const now = Date.now();
+    const reliability = new ReliabilityStore({
+      cwd: "/tmp",
+      config: { enabled: true, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 1 },
+      initialState: { version: 1, models: { [key]: { failures: [now], openUntil: now + 60_000 } } },
+      io: { load: emptyReliabilityState, save: () => {} },
+    });
+    let calls = 0;
+    const metrics: TypeSafeObservation[] = [];
+    const perCall: TypeSafeObservation[] = [];
+    const classify = createTypeSafeClassifier({
+      apiKey: "key",
+      reliability,
+      observe: (observation) => metrics.push(observation),
+      fetchImpl: async () => { calls++; return new Response(JSON.stringify(payload()), { status: 200 }); },
+    });
+    assert.equal(await classify({ prompt: "hello", tiers: ["general"], criteria: { general: "normal" } }, undefined, (observation) => perCall.push(observation)), undefined);
+    assert.equal(calls, 0);
+    assert.equal(metrics.length, 1);
+    assert.equal(perCall.length, 1);
+    assert.equal(perCall[0]?.outcome, "circuit_open");
+    assert.strictEqual(perCall[0], metrics[0]);
+  });
+
+  it("isolates throwing metrics and per-call observers from each other and the result", async () => {
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      const metrics: TypeSafeObservation[] = [];
+      const metricsThrowing = createTypeSafeClassifier({
+        apiKey: "key",
+        observe: () => { throw new Error("metrics failure"); },
+        fetchImpl: async () => new Response(JSON.stringify(payload()), { status: 200 }),
+      });
+      assert.equal((await metricsThrowing({ prompt: "x", tiers: ["quick", "general", "frontier"], criteria }, undefined, (value) => metrics.push(value)))?.tier, "general");
+      assert.equal(metrics[0]?.outcome, "success");
+
+      const metricsOnly = createTypeSafeClassifier({
+        apiKey: "key",
+        observe: (value) => metrics.push(value),
+        fetchImpl: async () => new Response(JSON.stringify(payload()), { status: 200 }),
+      });
+      assert.equal((await metricsOnly({ prompt: "x", tiers: ["quick", "general", "frontier"], criteria }, undefined, () => { throw new Error("request observer failure"); }))?.tier, "general");
+      assert.equal(metrics.length, 2);
+      assert.deepEqual(metrics.map((value) => value.outcome), ["success", "success"]);
+    } finally {
+      console.error = originalError;
+    }
+  });
+
+  it("freezes the shared observation before either observer can alter it", async () => {
+    const originalError = console.error;
+    console.error = () => {};
+    try {
+      let metricsCalls = 0;
+      let requestCalls = 0;
+      let fetchCalls = 0;
+      const observations: TypeSafeObservation[] = [];
+      const classifier = createTypeSafeClassifier({
+        apiKey: "key",
+        observe: (observation) => {
+          metricsCalls++;
+          Object.assign(observation, { outcome: "network", model: "altered/model" });
+        },
+        fetchImpl: async () => {
+          fetchCalls++;
+          return new Response(JSON.stringify(payload()), { status: 200 });
+        },
+      });
+      const result = await classifier(
+        { prompt: "x", tiers: ["quick", "general", "frontier"], criteria },
+        undefined,
+        (observation) => { requestCalls++; observations.push(observation); },
+      );
+      assert.equal(result?.tier, "general");
+      assert.equal(fetchCalls, 1);
+      assert.equal(metricsCalls, 1);
+      assert.equal(requestCalls, 1);
+      assert.equal(observations[0]?.outcome, "success");
+      assert.equal(observations[0]?.model, TYPESAFE_MODEL);
+      assert.equal(Object.isFrozen(observations[0]), true);
+    } finally {
+      console.error = originalError;
+    }
   });
 
   it("returns miss without API key", async () => {
@@ -128,6 +278,32 @@ describe("TypeSafe classifier", () => {
     assert.deepEqual(outcomes, ["timeout"]);
   });
 
+  it("does not let a stuck body cancellation outlive the classification signal", async () => {
+    // A custom fetchImpl can return a teed response whose other branch stays
+    // open, so reader.cancel() never settles. Cleanup stays bounded by the
+    // same abort signal instead of holding the classification call open.
+    let requestSignal: AbortSignal | undefined;
+    const outcomes: string[] = [];
+    const body = new ReadableStream<Uint8Array>({
+      cancel: () => new Promise<void>(() => {}),
+    });
+    const classifier = createTypeSafeClassifier({
+      apiKey: "key",
+      timeoutMs: 50,
+      maxAttempts: 1,
+      observe: ({ outcome }) => outcomes.push(outcome),
+      fetchImpl: async (_url, init) => {
+        requestSignal = init?.signal ?? undefined;
+        return new Response(body, { status: 200 });
+      },
+    });
+    const started = performance.now();
+    assert.equal(await classifier({ prompt: "x", tiers: ["general"], criteria: { general: "normal" } }), undefined);
+    assert.ok(performance.now() - started < 2_000, "cancellation must not outlive the aborted signal");
+    assert.equal(requestSignal?.aborted, true);
+    assert.deepEqual(outcomes, ["timeout"]);
+  });
+
   it("abandons a half-open trial when caller aborts", async () => {
     const key = `classifier/typesafe/${TYPESAFE_MODEL}`;
     const now = Date.now();
@@ -171,6 +347,48 @@ describe("TypeSafe classifier", () => {
       assert.doesNotMatch(trace, /prompt-sentinel|criteria-sentinel|api-key-sentinel|transport-error-sentinel/);
       assert.match(trace, /"event":"transport_error"/);
       assert.match(trace, /"category":"network"/);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("records a completed TypeSafe trace without request, response, or credential content", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-typesafe-success-trace-"));
+    const path = join(cwd, "trace.jsonl");
+    try {
+      setupDebug({ enabled: true, path }, cwd);
+      const classifier = createTypeSafeClassifier({
+        apiKey: "api-key-sentinel",
+        debug: true,
+        maxAttempts: 1,
+        fetchImpl: async () => new Response(JSON.stringify(payload("frontier", 0.92)), {
+          status: 200,
+          statusText: "response-sentinel",
+        }),
+      });
+      const judgment = await classifier({
+        prompt: "prompt-sentinel",
+        tiers: ["quick", "general", "frontier"],
+        criteria: { quick: "criteria-sentinel", general: "normal", frontier: "complex" },
+      });
+      await flushDebug();
+
+      assert.equal(judgment?.tier, "frontier");
+      const traceText = readFileSync(path, "utf8");
+      const trace = traceText.trim().split("\n").map((line) => JSON.parse(line));
+      const events = trace.map((entry) => entry.event);
+      assert.deepEqual(events, ["start", "attempt", "request", "response", "decoded", "success", "finish"]);
+      assert.equal(new Set(trace.map((entry) => entry.trace_id)).size, 1);
+      assert.deepEqual(trace.at(-1), {
+        ...trace.at(-1),
+        event: "finish",
+        outcome: "success",
+        attempts: 1,
+        tier: "frontier",
+        confidence: 0.92,
+      });
+      assert.equal(trace.find((entry) => entry.event === "decoded")?.valid, true);
+      assert.doesNotMatch(traceText, /prompt-sentinel|criteria-sentinel|api-key-sentinel|response-sentinel/);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

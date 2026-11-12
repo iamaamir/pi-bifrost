@@ -1,0 +1,377 @@
+import { describe, it, before, after } from "node:test";
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const EXTENSION = join(ROOT, "index.ts");
+const OUTBOUND_GUARD = join(ROOT, "scripts", "test-outbound-guard.cjs");
+let server;
+let port;
+
+function startFakeServer() {
+  const child = spawn("node", [join(ROOT, "scripts/fake-provider-server.mjs")], { stdio: ["ignore", "pipe", "ignore"] });
+  return new Promise((resolve, reject) => {
+    let output = "";
+    const timer = setTimeout(() => reject(new Error("fake provider start timeout")), 10_000);
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      output += chunk;
+      try {
+        const ready = JSON.parse(output);
+        if (ready.port) { clearTimeout(timer); resolve({ child, port: ready.port }); }
+      } catch { /* wait for complete readiness JSON */ }
+    });
+    child.once("error", reject);
+  });
+}
+
+function fixture() {
+  const root = mkdtempSync(join(tmpdir(), "bifrost-config-startup-"));
+  const home = join(root, "home");
+  const work = join(root, "work");
+  const agent = join(home, ".pi", "agent");
+  mkdirSync(agent, { recursive: true });
+  mkdirSync(join(work, ".pi"), { recursive: true });
+  const models = ["healthy", "classifier"].map((id) => ({
+    id, name: id, reasoning: false, input: ["text"],
+    cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 32000, maxTokens: 1000,
+  }));
+  writeFileSync(join(agent, "models.json"), JSON.stringify({ providers: { fake: {
+    baseUrl: `http://127.0.0.1:${port}/v1`, api: "openai-completions", apiKey: "fixture-only", models,
+  } } }));
+  writeFileSync(join(agent, "settings.json"), JSON.stringify({ retry: { enabled: false } }));
+  writeFileSync(join(work, "bifrost.json"), JSON.stringify({
+    enabled: true, default: "general", strategy: "first", models: { general: ["fake/healthy"] },
+    rules: [], classifier: { enabled: false }, cache: { enabled: false },
+  }));
+  writeFileSync(join(work, ".pi", "bifrost.json"), '{"schemaVersion":2,"tierPolicies":{"general":{"fallbackTiers":[]}}');
+  return { root, home, work, agent };
+}
+
+async function stats() {
+  const response = await fetch(`http://127.0.0.1:${port}/_stats`);
+  assert.equal(response.ok, true);
+  return response.json();
+}
+
+function runPi({ home, work }) {
+  const env = {
+    PATH: process.env.PATH,
+    HOME: home,
+    PI_CODING_AGENT_DIR: join(home, ".pi", "agent"),
+    PI_SKIP_VERSION_CHECK: "1",
+    PI_OFFLINE: "1",
+    NODE_OPTIONS: `--require=${OUTBOUND_GUARD}`,
+    BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${port}`,
+    BIFROST_TEST_NETWORK_VIOLATIONS: join(home, "network.log"),
+  };
+  return new Promise((resolve, reject) => {
+    const child = spawn("pi", ["-e", EXTENSION, "--approve", "--no-session", "--no-tools", "--model", "fake/healthy", "-p", "synthetic startup policy request"], {
+      cwd: work, env, stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    const timer = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("Pi startup acceptance timed out")); }, 30_000);
+    child.once("error", (error) => { clearTimeout(timer); reject(error); });
+    child.once("close", (code) => { clearTimeout(timer); resolve({ code, stdout, stderr }); });
+  });
+}
+
+function startRpc({ home, work }) {
+  const child = spawn("pi", ["-e", EXTENSION, "--approve", "--mode", "rpc", "--no-session", "--no-tools", "--model", "bifrost/auto"], {
+    cwd: work,
+    env: {
+      PATH: process.env.PATH, HOME: home, PI_CODING_AGENT_DIR: join(home, ".pi", "agent"),
+      PI_SKIP_VERSION_CHECK: "1", PI_OFFLINE: "1", NODE_OPTIONS: `--require=${OUTBOUND_GUARD}`,
+      BIFROST_TEST_ALLOWED_ORIGIN: `http://127.0.0.1:${port}`,
+      BIFROST_TEST_NETWORK_VIOLATIONS: join(home, "network.log"),
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const records = [];
+  let pending = "";
+  let stderr = "";
+  let wake;
+  let closed;
+  let spawnError;
+  const childClosed = new Promise((resolve) => child.once("close", (code) => { closed = code; wake?.(); resolve(code); }));
+  child.once("error", (error) => { spawnError = error; wake?.(); });
+  child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
+    const lines = `${pending}${chunk}`.split("\n"); pending = lines.pop();
+    for (const line of lines) { try { records.push(JSON.parse(line)); } catch { /* wait for the expected response */ } }
+    wake?.();
+  });
+  child.stderr.on("data", (chunk) => { stderr += chunk; wake?.(); });
+  const wait = (deadline) => new Promise((resolve) => {
+    const finish = () => { clearTimeout(timer); if (wake === finish) wake = undefined; resolve(); };
+    const timer = setTimeout(finish, Math.max(0, deadline - Date.now())); wake = finish;
+  });
+  async function prompt(message) {
+    const id = `config-acceptance-${Date.now()}-${records.length}`;
+    const start = records.length;
+    child.stdin.write(`${JSON.stringify({ id, type: "prompt", message })}\n`);
+    const deadline = Date.now() + 30_000;
+    let index = start;
+    let started = false;
+    while (Date.now() < deadline) {
+      while (index < records.length) {
+        const record = records[index++];
+        if (record.id === id && record.type === "response") {
+          assert.equal(record.success, true, JSON.stringify(record));
+          started = record.data?.disposition === "started";
+          if (!started) return;
+        }
+        if (started && record.type === "agent_settled") return;
+      }
+      assert.ifError(spawnError);
+      assert.equal(closed, undefined, `Pi RPC exited before handling: ${message}`);
+      await wait(deadline);
+    }
+    throw new Error(`Pi RPC timed out: ${message}\n${stderr}`);
+  }
+  async function close() {
+    child.stdin.end();
+    await Promise.race([childClosed, new Promise((resolve) => setTimeout(resolve, 2_000))]);
+    if (closed === undefined) { child.kill("SIGKILL"); await childClosed; }
+    assert.equal(closed, 0, stderr);
+  }
+  return { prompt, close, get stderr() { return stderr; }, get records() { return records; } };
+}
+
+describe("startup config source acceptance", { timeout: 60_000, concurrency: 1 }, () => {
+  before(async () => { const ready = await startFakeServer(); server = ready.child; port = ready.port; });
+  after(() => server?.kill("SIGTERM"));
+
+  it("blocks physical and Auto generation when provider scope denies all", async () => {
+    const paths = fixture();
+    try {
+      for (const schemaVersion of [2, 3]) {
+        writeFileSync(join(paths.work, ".pi", "bifrost.json"), JSON.stringify({ schemaVersion, routingScope: { providers: [] } }));
+        const before = await stats();
+        const result = await runPi(paths);
+        assert.deepEqual((await stats()).stats.slice(before.stats.length), [], `deny-all scope must block physical generation\n${result.stderr}`);
+        const rpc = startRpc(paths);
+        try {
+          const beforeAuto = await stats();
+          await rpc.prompt("synthetic denied Auto request");
+          assert.deepEqual((await stats()).stats.slice(beforeAuto.stats.length), [], "deny-all scope must block Auto generation");
+        } finally { await rpc.close(); }
+      }
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
+  it("keeps a prototype-named tier deny-all restriction across layers", async () => {
+    const paths = fixture();
+    try {
+      const workspace = join(paths.work, "bifrost.json");
+      const project = join(paths.work, ".pi", "bifrost.json");
+      writeFileSync(workspace, '{"schemaVersion":2,"default":"__proto__","models":{"__proto__":["fake/healthy"]},"classifier":{"enabled":false}}');
+      writeFileSync(project, JSON.stringify({ routingScope: { providers: ["fake"] } }));
+      const beforeAllowed = await stats();
+      const allowed = await runPi(paths);
+      assert.equal((await stats()).stats.slice(beforeAllowed.stats.length).filter((entry) => entry.kind === "generation").length, 1, `unrestricted tier must generate\n${allowed.stderr}`);
+      writeFileSync(workspace, '{"schemaVersion":2,"default":"__proto__","models":{"__proto__":["fake/healthy"]},"classifier":{"enabled":false},"routingScope":{"tiers":{"__proto__":{"providers":[]}}}}');
+      const before = await stats();
+      const result = await runPi(paths);
+      assert.deepEqual((await stats()).stats.slice(before.stats.length), [], `physical generation must remain blocked\n${result.stderr}`);
+      const rpc = startRpc(paths);
+      try {
+        const beforeAuto = await stats();
+        await rpc.prompt("synthetic denied Auto request");
+        assert.deepEqual((await stats()).stats.slice(beforeAuto.stats.length), [], "Auto generation must remain blocked");
+      } finally { await rpc.close(); }
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
+  it("does not degrade a fresh Auto turn to the previous model after scope narrows", async () => {
+    const paths = fixture();
+    const project = join(paths.work, ".pi", "bifrost.json");
+    writeFileSync(project, JSON.stringify({ schemaVersion: 2, routingScope: { providers: ["fake"] } }));
+    const rpc = startRpc(paths);
+    try {
+      const before = await stats();
+      await rpc.prompt("synthetic allowed Auto request");
+      assert.equal((await stats()).stats.slice(before.stats.length).filter((entry) => entry.kind === "generation").length, 1);
+      writeFileSync(project, JSON.stringify({ schemaVersion: 2, routingScope: { providers: [] } }));
+      await rpc.prompt("/bifrost reload");
+      const beforeDenied = await stats();
+      await rpc.prompt("synthetic denied Auto follow-up");
+      assert.deepEqual((await stats()).stats.slice(beforeDenied.stats.length), [], "fresh Auto turn must not reuse the previous provider");
+    } finally {
+      await rpc.close();
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+
+
+  it("rejects deeply nested config before generation", async () => {
+    const paths = fixture();
+    try {
+      writeFileSync(join(paths.work, ".pi", "bifrost.json"), '{"unknown":' + '{"x":'.repeat(5000) + '0' + '}'.repeat(5000) + '}');
+      const before = await stats();
+      const result = await runPi(paths);
+      assert.deepEqual((await stats()).stats.slice(before.stats.length), [], "deep config must not generate");
+      assert.match(result.stderr, /nesting depth/u);
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
+  it("routes a configured __proto__ tier without treating it as metadata", async () => {
+    const paths = fixture();
+    try {
+      writeFileSync(join(paths.work, ".pi", "bifrost.json"), '{"schemaVersion":2,"default":"__proto__","models":{"__proto__":["fake/healthy"]}}');
+      const before = await stats();
+      const result = await runPi(paths);
+      const requests = (await stats()).stats.slice(before.stats.length).filter((item) => item.kind === "generation");
+      assert.equal(requests.length, 1, result.stderr);
+      assert.equal(requests[0].model, "healthy");
+      assert.doesNotMatch(result.stderr, /unknown default|config.*error/iu);
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
+  it("blocks generation when capability enforcement is unsupported", async () => {
+    const paths = fixture();
+    try {
+      writeFileSync(join(paths.work, ".pi", "bifrost.json"), JSON.stringify({ schemaVersion: 2, requirements: { mode: "enforce" } }));
+      const before = await stats();
+      const result = await runPi(paths);
+      const requests = (await stats()).stats.slice(before.stats.length);
+      assert.deepEqual(requests, [], `unsupported enforcement must block generation: ${JSON.stringify(requests)}\n${result.stderr}`);
+      assert.match(result.stderr, /advisory-only|unsupported/u);
+      const rpc = startRpc(paths);
+      try {
+        const beforeAuto = await stats();
+        await rpc.prompt("synthetic blocked Auto request");
+        assert.deepEqual((await stats()).stats.slice(beforeAuto.stats.length), [], "unsupported enforcement must also block Auto");
+      } finally { await rpc.close(); }
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
+  it("blocks generation when a project config source is malformed", async () => {
+    const paths = fixture();
+    try {
+      const before = await stats();
+      const result = await runPi(paths);
+      const after = await stats();
+      const requests = after.stats.slice(before.stats.length);
+      assert.deepEqual(requests, [],
+        `malformed project policy must prevent probes, classification, and generation; got ${JSON.stringify(requests)}\n${result.stderr}`);
+      assert.match(result.stderr, /project config is not valid JSON/u);
+      if (existsSync(join(paths.home, "network.log"))) assert.equal(readFileSync(join(paths.home, "network.log"), "utf8"), "");
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
+  it("blocks paid setup and routing when a project source exceeds the config read bound", async () => {
+    const paths = fixture();
+    try {
+      writeFileSync(join(paths.work, ".pi", "bifrost.json"), Buffer.alloc(10_000_001, 0x20));
+      const before = await stats();
+      const result = await runPi(paths);
+      const requests = (await stats()).stats.slice(before.stats.length);
+      assert.deepEqual(requests, [],
+        `oversized project source must prevent probes, classification, and generation; got ${JSON.stringify(requests)}\n${result.stderr}`);
+      assert.match(result.stderr, /size limit/u);
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
+  it("blocks unsupported enforcement even when a higher layer is advisory", async () => {
+    const paths = fixture();
+    try {
+      writeFileSync(join(paths.work, "bifrost.json"), JSON.stringify({
+        schemaVersion: 2, enabled: true, default: "general", models: { general: ["fake/healthy"] },
+        classifier: { enabled: false }, requirements: { mode: "enforce" },
+      }));
+      writeFileSync(join(paths.work, ".pi", "bifrost.json"), JSON.stringify({ schemaVersion: 2, requirements: { mode: "advisory" } }));
+      const before = await stats();
+      const result = await runPi(paths);
+      assert.deepEqual((await stats()).stats.slice(before.stats.length), [], "higher advisory layer must not mask unsupported enforcement");
+      assert.match(result.stderr, /unsupported/u);
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
+  it("blocks unsupported requirement fields hidden under metadata names", async () => {
+    const paths = fixture();
+    try {
+      writeFileSync(join(paths.work, "bifrost.json"), JSON.stringify({ requirements: { description: { mode: "enforce" } } }));
+      writeFileSync(join(paths.work, ".pi", "bifrost.json"), JSON.stringify({ requirements: { mode: "advisory" } }));
+      const before = await stats();
+      const result = await runPi(paths);
+      assert.deepEqual((await stats()).stats.slice(before.stats.length), [], "unsupported authored requirements must block generation");
+      assert.match(result.stderr, /unsupported/u);
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
+  it("blocks generation when a higher supported schema masks an unsupported lower layer", async () => {
+    const paths = fixture();
+    try {
+      writeFileSync(join(paths.work, "bifrost.json"), JSON.stringify({
+        schemaVersion: 999, enabled: true, default: "general", strategy: "first",
+        models: { general: ["fake/healthy"] }, rules: [], classifier: { enabled: false },
+      }));
+      writeFileSync(join(paths.work, ".pi", "bifrost.json"), JSON.stringify({
+        schemaVersion: 2, models: { general: ["fake/healthy"] },
+      }));
+      const before = await stats();
+      const result = await runPi(paths);
+      const after = await stats();
+      const requests = after.stats.slice(before.stats.length);
+      assert.deepEqual(requests, [],
+        `unsupported workspace schema must prevent probes, classification, and generation; got ${JSON.stringify(requests)}\n${result.stderr}`);
+      assert.match(result.stderr, /workspace config schemaVersion is unsupported/u);
+    } finally { rmSync(paths.root, { recursive: true, force: true }); }
+  });
+
+  it("rejects unsupported enforcement on reload and retains the last valid configuration", async () => {
+    const paths = fixture();
+    const projectConfigPath = join(paths.work, ".pi", "bifrost.json");
+    writeFileSync(projectConfigPath, JSON.stringify({ schemaVersion: 2 }));
+    const rpc = startRpc(paths);
+    try {
+      await rpc.prompt("synthetic initial request");
+      writeFileSync(projectConfigPath, JSON.stringify({ schemaVersion: 2, requirements: { mode: "enforce" } }));
+      await rpc.prompt("/bifrost reload");
+      assert.match(JSON.stringify(rpc.records), /reload rejected|unsupported/u);
+      const before = await stats();
+      await rpc.prompt("synthetic last-good request");
+      assert.equal((await stats()).stats.slice(before.stats.length).filter((item) => item.kind === "generation").length, 1);
+    } finally {
+      await rpc.close();
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+
+  it("allows routing after reload repairs a malformed startup source", async () => {
+    const paths = fixture();
+    const projectConfigPath = join(paths.work, ".pi", "bifrost.json");
+    const originalBytes = readFileSync(projectConfigPath);
+    const rpc = startRpc(paths);
+    try {
+      const before = await stats();
+      await rpc.prompt("synthetic blocked request");
+      assert.deepEqual((await stats()).stats.slice(before.stats.length), [], "invalid source must not probe, classify, or generate");
+      assert.deepEqual(readFileSync(projectConfigPath), originalBytes, "startup must not rewrite the invalid source");
+
+      writeFileSync(projectConfigPath, JSON.stringify({
+        schemaVersion: 2,
+        models: { general: ["fake/healthy"] },
+        tierPolicies: { general: { fallbackTiers: [] } },
+      }));
+      await rpc.prompt("/bifrost reload");
+      const beforeRepairedPrompt = await stats();
+      await rpc.prompt("synthetic repaired request");
+      const afterRepairedPrompt = await stats();
+      assert.equal(afterRepairedPrompt.stats.slice(beforeRepairedPrompt.stats.length).filter((item) => item.kind === "generation").length, 1);
+    } finally {
+      await rpc.close();
+      rmSync(paths.root, { recursive: true, force: true });
+    }
+  });
+});

@@ -1,6 +1,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { performance } from "node:perf_hooks";
+import { spawnSync } from "node:child_process";
 import {
+  buildRouteDecisionSummary,
+  type ClassificationResult,
+} from "../classification-pipeline.ts";
+import {
+  buildTierResolutionOptions,
+  resolveConfiguredTier,
   findOneModel,
   findCandidates,
   selectModel,
@@ -13,11 +21,609 @@ import {
   classify,
   classifyCompiled,
   compileRules,
+  type TierResolutionConfig,
 } from "../routing.ts";
 import { emptyReliabilityState, recordModelFailure, DEFAULT_RELIABILITY } from "../reliability.ts";
+import { DEFAULT_RULES } from "../config.ts";
+import { compileRoutingScope } from "../routing-scope.ts";
 import { makeCtx, makeModel, withoutCost } from "./helpers.ts";
+import { emptyEconomicSnapshot, hasHardEconomicAdmission, publishEconomicObservation, type EconomicSignal, type ReservePolicy } from "../economic-signals.ts";
 
 describe("routing", () => {
+  describe("affinity observation", () => {
+    it("keeps the configured winner when the final eligible pool exceeds the advisory limit", () => {
+      const models = Array.from({ length: 514 }, (_, index) => makeModel("fixture", `model-${index}`));
+      const ctx = makeCtx(models);
+      const now = 1_000;
+      const reliabilityConfig = { ...DEFAULT_RELIABILITY, failureThreshold: 1, cooldownMinutes: 10 };
+      const reliability = recordModelFailure(
+        emptyReliabilityState(), "fixture/model-513", reliabilityConfig, now, "dispatch", "transport",
+      );
+      const patterns = models.map(modelKey);
+      let randomCalls = 0;
+
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: patterns },
+        strategy: "random",
+        affinity: { mode: "retain-within-tier" },
+      }, reliability, reliabilityConfig, now, undefined, () => { randomCalls += 1; return 0.75; }, {
+        targetOrigin: "automatic",
+        anchor: { modelKey: "fixture/model-513", provider: "fixture", lastSuccessfulDispatchAt: now - 100 },
+      }).resolution;
+
+      assert.equal(modelKey(result.selected), "fixture/model-384");
+      assert.equal(randomCalls, 1);
+      assert.equal(result.primary.selectionCandidates?.length, 513);
+      assert.equal(result.primary.skipped.some((candidate) => candidate.key === "fixture/model-513" && candidate.reason === "open_circuit"), true);
+      assert.equal(result.affinityObservation?.status, "not_applicable");
+      assert.equal(result.affinityObservation?.selection, "not_applicable");
+    });
+
+    it("keeps the configured winner when an affinity anchor is newer than the route snapshot", () => {
+      const ctx = makeCtx([makeModel("fixture", "strategy"), makeModel("fixture", "anchor")]);
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture/strategy", "fixture/anchor"] },
+        strategy: "first",
+        affinity: { mode: "retain-within-tier" },
+      }, undefined, undefined, 1_000, undefined, undefined, {
+        targetOrigin: "automatic",
+        anchor: { modelKey: "fixture/anchor", provider: "fixture", lastSuccessfulDispatchAt: 1_001 },
+      }).resolution;
+
+      assert.equal(modelKey(result.selected), "fixture/strategy");
+      assert.equal(result.affinityObservation?.status, "not_applicable");
+      assert.equal(result.affinityObservation?.selection, "not_applicable");
+    });
+
+    it("compares the unchanged random winner against the final eligible pool without another RNG call", () => {
+      const ctx = makeCtx([makeModel("fixture", "anchor"), makeModel("fixture", "other")]);
+      let randomCalls = 0;
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture/anchor", "fixture/other"] },
+        strategy: "random",
+        affinity: { mode: "observe", providerAdvisory: true },
+      }, undefined, undefined, 250, undefined, () => { randomCalls += 1; return 0.75; }, {
+        targetOrigin: "automatic",
+        anchor: { modelKey: "fixture/anchor", provider: "fixture", lastSuccessfulDispatchAt: 100 },
+      }).resolution;
+      assert.equal(modelKey(result.selected), "fixture/other");
+      assert.deepEqual(result.primary.healthyCandidates.map(modelKey), ["fixture/anchor", "fixture/other"]);
+      assert.equal(randomCalls, 1);
+      assert.deepEqual(result.affinityObservation, {
+        version: 1,
+        status: "current_eligible",
+        snapshotAsOf: 250,
+        anchor: { modelKey: "fixture/anchor", provider: "fixture", lastSuccessfulDispatchAt: 100, ageMs: 150 },
+        baseStrategyWinner: "fixture/other",
+        baseStrategyComparison: "selected_other",
+        sameProviderCandidateAvailable: true,
+        mode: "observe",
+        selection: "strategy",
+        strategyWinner: "fixture/other",
+        selectedModel: "fixture/other",
+        selectedTier: "general",
+      });
+    });
+
+    it("retains an automatic anchor only inside the selected tier's final strategy pool", () => {
+      const ctx = makeCtx([makeModel("fixture", "anchor"), makeModel("fixture", "strategy")]);
+      let randomCalls = 0;
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture/anchor", "fixture/strategy"] },
+        strategy: "random",
+        affinity: { mode: "retain-within-tier" as never },
+      }, undefined, undefined, 250, undefined, () => { randomCalls += 1; return 0.75; }, {
+        targetOrigin: "automatic",
+        anchor: { modelKey: "fixture/anchor", provider: "fixture", lastSuccessfulDispatchAt: 100 },
+      }).resolution;
+      assert.deepEqual(result.primary.selectionCandidates?.map(modelKey), ["fixture/anchor", "fixture/strategy"]);
+      assert.equal(modelKey(result.selected), "fixture/anchor");
+      assert.equal(randomCalls, 1);
+      assert.deepEqual(result.affinityObservation, {
+        version: 1,
+        status: "current_eligible",
+        snapshotAsOf: 250,
+        anchor: { modelKey: "fixture/anchor", provider: "fixture", lastSuccessfulDispatchAt: 100, ageMs: 150 },
+        baseStrategyWinner: "fixture/strategy",
+        baseStrategyComparison: "selected_other",
+        mode: "retain-within-tier",
+        selection: "retained_anchor",
+        strategyWinner: "fixture/strategy",
+        selectedModel: "fixture/anchor",
+        selectedTier: "general",
+      });
+    });
+
+    it("reports locality unknown without manufacturing an anchor and honors intrinsic explicit origins", () => {
+      const ctx = makeCtx([makeModel("fixture", "anchor")]);
+      const options = {
+        models: { general: ["fixture/anchor"] },
+        strategy: "first" as const,
+        affinity: { mode: "observe" as const },
+      };
+      const unknown = resolveConfiguredTier(ctx, "general", options, undefined, undefined, 250, undefined, undefined, {
+        targetOrigin: "automatic",
+      }).resolution;
+      assert.deepEqual(unknown.affinityObservation, {
+        version: 1, status: "locality_unknown", snapshotAsOf: 250, baseStrategyComparison: "no_anchor",
+        mode: "observe", selection: "no_anchor", strategyWinner: "fixture/anchor", selectedModel: "fixture/anchor", selectedTier: "general",
+      });
+      const explicit = resolveConfiguredTier(ctx, "general", options, undefined, undefined, 250, undefined, undefined, {
+        targetOrigin: "automatic",
+        intrinsicOrigin: "explicit_tier",
+      }).resolution;
+      assert.deepEqual(explicit.affinityObservation, {
+        version: 1, status: "not_applicable", snapshotAsOf: 250, mode: "observe", selection: "not_applicable",
+        strategyWinner: "fixture/anchor", selectedModel: "fixture/anchor", selectedTier: "general",
+      });
+    });
+
+    it("does not restore an anchor excluded by preferred-class selection or explicit intent", () => {
+      const now = 250;
+      const ctx = makeCtx([makeModel("fixture", "metered"), makeModel("fixture", "subscription")]);
+      const policy: ReservePolicy = {
+        mode: "policy",
+        scopes: {
+          metered: { kind: "model", model: "fixture/metered" },
+          subscription: { kind: "model", model: "fixture/subscription" },
+        },
+        sources: [
+          { id: "metered-fact", scopeRef: "metered", authority: "declared" },
+          { id: "subscription-fact", scopeRef: "subscription", authority: "declared" },
+        ],
+        sourceOrder: { metered: ["metered-fact"], subscription: ["subscription-fact"] },
+        admission: [],
+        preference: { billingClass: "subscription" },
+      };
+      let facts = emptyEconomicSnapshot();
+      for (const fact of [
+        { sourceId: "metered-fact", scopeRef: "metered", billing: "metered" },
+        { sourceId: "subscription-fact", scopeRef: "subscription", billing: "subscription" },
+      ]) {
+        const published = publishEconomicObservation(facts, policy, {
+          ...fact, observedAt: 100, expiresAt: 2_000, revision: 1, windows: [],
+        } as EconomicSignal);
+        assert.equal(published.accepted, true);
+        facts = published.snapshot;
+      }
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture/metered", "fixture/subscription"] },
+        strategy: "first",
+        affinity: { mode: "retain-within-tier" },
+      }, undefined, undefined, now, { policy, snapshot: facts }, undefined, {
+        targetOrigin: "automatic",
+        anchor: { modelKey: "fixture/metered", provider: "fixture", lastSuccessfulDispatchAt: 100 },
+      }).resolution;
+      assert.equal(modelKey(result.selected), "fixture/subscription");
+      assert.deepEqual(result.primary.selectionCandidates?.map(modelKey), ["fixture/subscription"]);
+      assert.equal(result.affinityObservation?.selection, "anchor_not_eligible");
+
+      const explicit = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture/metered", "fixture/subscription"] },
+        strategy: "first",
+        affinity: { mode: "retain-within-tier" },
+      }, undefined, undefined, now, undefined, undefined, {
+        targetOrigin: "automatic",
+        intrinsicOrigin: "direct",
+        anchor: { modelKey: "fixture/subscription", provider: "fixture", lastSuccessfulDispatchAt: 100 },
+      }).resolution;
+      assert.equal(modelKey(explicit.selected), "fixture/metered");
+      assert.equal(explicit.affinityObservation?.selection, "not_applicable");
+    });
+
+    it("omits affinity observation when mode is off or absent", () => {
+      const ctx = makeCtx([makeModel("fixture", "anchor")]);
+      for (const affinity of [undefined, { mode: "off" as const }, { mode: "observe" as const }]) {
+        const result = resolveConfiguredTier(ctx, "general", {
+          models: { general: ["fixture/anchor"] }, strategy: "first", ...(affinity ? { affinity } : {}),
+        }, undefined, undefined, 250, undefined, undefined, affinity?.mode === "observe" ? undefined : { targetOrigin: "automatic" }).resolution;
+        assert.equal(result.affinityObservation, undefined);
+      }
+    });
+  });
+
+  describe("economic reserve filtering", () => {
+    const now = 1_000;
+    const policy = (mode: ReservePolicy["mode"]): ReservePolicy => ({
+      mode,
+      scopes: { reserved: { kind: "model", model: "fixture/a" } },
+      sources: [{ id: "manual", scopeRef: "reserved", authority: "declared" }],
+      admission: [{ id: "daily", scopeRef: "reserved", windowId: "day", reserveRatio: 0.2, unknown: "block" }],
+    });
+    const observation: EconomicSignal = {
+      sourceId: "manual", scopeRef: "reserved", billing: "metered", observedAt: 100, expiresAt: 2_000, revision: 1,
+      windows: [{ id: "day", period: { id: "p1", sequence: 1 }, unit: "ratio", remaining: 0.1 }],
+    };
+
+    it("filters reserved models before selection in requested and legacy default pools", () => {
+      const ctx = makeCtx([makeModel("fixture", "a"), makeModel("fixture", "b")]);
+      const reservePolicy = policy("policy");
+      const snapshot = publishEconomicObservation(emptyEconomicSnapshot(), reservePolicy, observation).snapshot;
+      const result = resolveConfiguredTier(ctx, "restricted", {
+        default: "general", models: { restricted: ["fixture/a"], general: ["fixture/a", "fixture/b"] }, strategy: "first",
+      }, undefined, undefined, now, { policy: reservePolicy, snapshot }).resolution;
+      assert.equal(result.selected && modelKey(result.selected), "fixture/b");
+      assert.equal(result.selectedTier, "general");
+      assert.equal(result.primary.economic?.[0]?.evaluation.disposition, "rejected");
+      assert.equal(result.fallback?.healthyCandidates.map(modelKey).join(","), "fixture/b");
+    });
+
+    it("filters every tier in an explicit ordered fallback chain before strategy", () => {
+      const ctx = makeCtx([makeModel("fixture", "a"), makeModel("fixture", "b")]);
+      const reservePolicy = policy("policy");
+      const snapshot = publishEconomicObservation(emptyEconomicSnapshot(), reservePolicy, observation).snapshot;
+      const result = resolveConfiguredTier(ctx, "restricted", {
+        schemaVersion: 2,
+        default: "unvisited",
+        models: { restricted: ["fixture/a"], backup: ["fixture/a", "fixture/b"], unvisited: ["fixture/a"] },
+        tierPolicies: { restricted: { fallbackTiers: ["backup"] } },
+        strategy: "first",
+      }, undefined, undefined, now, { policy: reservePolicy, snapshot }).resolution;
+      assert.equal(result.selected && modelKey(result.selected), "fixture/b");
+      assert.deepEqual(result.attemptedTiers?.map(({ tier }) => tier), ["restricted", "backup"]);
+      assert.equal(result.explicitBoundary, true);
+    });
+
+    it("attributes a reserve-excluded legacy fallback when the requested tier is empty", () => {
+      const ctx = makeCtx([makeModel("fixture", "a")]);
+      const reservePolicy = policy("policy");
+      const snapshot = publishEconomicObservation(emptyEconomicSnapshot(), reservePolicy, observation).snapshot;
+      const result = resolveConfiguredTier(ctx, "restricted", {
+        default: "general",
+        models: { restricted: [], general: ["fixture/a"] },
+        strategy: "first",
+      }, undefined, undefined, now, { policy: reservePolicy, snapshot }).resolution;
+      assert.equal(result.selected, undefined);
+      assert.equal(result.fallback?.economic?.[0]?.evaluation.disposition, "rejected");
+      assert.equal(result.fallbackReason, "requested_tier_excluded");
+      assert.equal(result.fallbackTier, "general");
+    });
+
+    it("does not report all-excluded explicit pools as unavailable", () => {
+      const ctx = makeCtx([makeModel("fixture", "a")]);
+      const reservePolicy = policy("policy");
+      const snapshot = publishEconomicObservation(emptyEconomicSnapshot(), reservePolicy, observation).snapshot;
+      const result = resolveConfiguredTier(ctx, "restricted", {
+        schemaVersion: 2,
+        models: { restricted: ["fixture/a"], backup: ["fixture/a"] },
+        tierPolicies: { restricted: { fallbackTiers: ["backup"] } },
+        strategy: "first",
+      }, undefined, undefined, now, { policy: reservePolicy, snapshot }).resolution;
+      assert.equal(result.selected, undefined);
+      assert.equal(result.fallbackReason, "requested_tier_excluded");
+    });
+
+    it("reports reliability blockers when reserve rejection also removed a candidate", () => {
+      const ctx = makeCtx([makeModel("fixture", "a"), makeModel("fixture", "b")]);
+      const reservePolicy = policy("policy");
+      const snapshot = publishEconomicObservation(emptyEconomicSnapshot(), reservePolicy, observation).snapshot;
+      const reliabilityConfig = { ...DEFAULT_RELIABILITY, failureThreshold: 1, cooldownMinutes: 10 };
+      const reliability = recordModelFailure(
+        emptyReliabilityState(), "fixture/b", reliabilityConfig, now, "dispatch", "timeout",
+      );
+      const routeConfig = { models: { restricted: ["fixture/a", "fixture/b"] }, strategy: "first" as const };
+      const result = resolveConfiguredTier(ctx, "restricted", routeConfig, reliability, reliabilityConfig, now, {
+        policy: reservePolicy, snapshot,
+      }).resolution;
+
+      assert.equal(result.selected, undefined);
+      assert.equal(result.primary.economic?.[0]?.evaluation.disposition, "rejected");
+      assert.deepEqual(result.primary.skipped.map(({ key, reason }) => ({ key, reason })), [
+        { key: "fixture/b", reason: "open_circuit" },
+      ]);
+      const summary = buildRouteDecisionSummary({ kind: "classified", tier: "restricted", source: "regex" }, {
+        resolution: result,
+        options: buildTierResolutionOptions("restricted", routeConfig),
+      });
+      assert.deepEqual(summary.requested?.candidates.map(({ model, exclusionEvidence }) => ({ model, exclusionEvidence })), [
+        { model: "fixture/a", exclusionEvidence: [{ code: "economic_reserve", source: "economic_snapshot" }] },
+        { model: "fixture/b", exclusionEvidence: [
+          { code: "open_circuit", source: "reliability_state" },
+        ] },
+      ]);
+      assert.equal(result.fallbackReason, "requested_tier_unhealthy");
+    });
+
+    it("attributes a reserve-blocked default to fallback when the requested tier is empty", () => {
+      const ctx = makeCtx([makeModel("fixture", "a")]);
+      const reservePolicy = policy("policy");
+      const snapshot = publishEconomicObservation(emptyEconomicSnapshot(), reservePolicy, observation).snapshot;
+      const cases: Array<{ label: string; config: TierResolutionConfig }> = [
+        {
+          label: "legacy default",
+          config: { default: "general", models: { quick: [], general: ["fixture/a"] }, strategy: "first" },
+        },
+        {
+          label: "strict fallback boundary",
+          config: {
+            schemaVersion: 2,
+            models: { quick: [], general: ["fixture/a"] },
+            tierPolicies: { quick: { fallbackTiers: ["general"] } },
+            strategy: "first",
+          },
+        },
+      ];
+      for (const { label, config } of cases) {
+        const result = resolveConfiguredTier(ctx, "quick", config, undefined, undefined, now,
+          { policy: reservePolicy, snapshot }).resolution;
+        assert.equal(result.selected, undefined, label);
+        assert.equal(result.fallbackReason, "requested_tier_excluded", label);
+        assert.equal(result.fallback?.economic?.[0]?.evaluation.disposition, "rejected", label);
+        assert.equal(result.fallbackTier, label === "legacy default" ? "general" : undefined, label);
+        assert.equal(result.attemptedTiers?.[1]?.tier, label === "strict fallback boundary" ? "general" : undefined, label);
+      }
+    });
+
+    it("observe mode records would-reject evidence without changing candidates or random calls", () => {
+      const ctx = makeCtx([makeModel("fixture", "a"), makeModel("fixture", "b")]);
+      const reservePolicy = policy("observe");
+      const snapshot = publishEconomicObservation(emptyEconomicSnapshot(), reservePolicy, observation).snapshot;
+      let randomCalls = 0;
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture/a", "fixture/b"] }, strategy: "random",
+      }, undefined, undefined, now, { policy: reservePolicy, snapshot }, () => { randomCalls += 1; return 0; }).resolution;
+      assert.equal(result.selected && modelKey(result.selected), "fixture/a");
+      assert.equal(result.primary.economic?.[0]?.evaluation.wouldReject, true);
+      assert.equal(result.primary.healthyCandidates.length, 2);
+      assert.equal(randomCalls, 1);
+      const summary = buildRouteDecisionSummary({ kind: "classified", tier: "general", source: "regex" }, {
+        resolution: result,
+        options: buildTierResolutionOptions("general", { models: { general: ["fixture/a", "fixture/b"] }, strategy: "random" }),
+      });
+      assert.deepEqual(summary.requested?.candidates[0]?.reserve, {
+        disposition: "observed", wouldReject: true, reasons: ["reserve_reached"],
+      });
+    });
+  });
+
+  describe("billing preference routing", () => {
+    const now = 1_000;
+    const basePolicy = (mode: ReservePolicy["mode"], admission: ReservePolicy["admission"] = []): ReservePolicy => ({
+      mode,
+      scopes: {
+        metered: { kind: "model", model: "fixture/metered" },
+        subscription: { kind: "model", model: "fixture/subscription" },
+      },
+      sources: [
+        { id: "metered-fact", scopeRef: "metered", authority: "declared" },
+        { id: "subscription-fact", scopeRef: "subscription", authority: "declared" },
+      ],
+      admission,
+      preference: { billingClass: "subscription" },
+      sourceOrder: { metered: ["metered-fact"], subscription: ["subscription-fact"] },
+    });
+    const publish = (policy: ReservePolicy, billing: { metered?: string; subscription?: string } = {}) => {
+      let snapshot = emptyEconomicSnapshot();
+      for (const observation of [
+        { sourceId: "metered-fact", scopeRef: "metered", billing: billing.metered ?? "metered" },
+        { sourceId: "subscription-fact", scopeRef: "subscription", billing: billing.subscription ?? "subscription" },
+      ]) {
+        const result = publishEconomicObservation(snapshot, policy, {
+          ...observation,
+          observedAt: 100,
+          expiresAt: 2_000,
+          revision: 1,
+          windows: [],
+        } as EconomicSignal);
+        assert.equal(result.accepted, true);
+        snapshot = result.snapshot;
+      }
+      return snapshot;
+    };
+    const routingConfig = (overrides: Partial<Parameters<typeof resolveConfiguredTier>[2]> = {}) => ({
+      models: { general: ["fixture/metered", "fixture/subscription"] },
+      strategy: "cheapest" as const,
+      ...overrides,
+    });
+
+    it("prefers a declared class within the chosen tier, then applies the existing strategy to that pool", () => {
+      const ctx = makeCtx([
+        makeModel("fixture", "metered", 0.01, 0.01),
+        makeModel("fixture", "subscription", 0.9, 0.9),
+      ]);
+      const policy = basePolicy("policy");
+      const result = resolveConfiguredTier(ctx, "general", routingConfig(), undefined, undefined, now, {
+        policy,
+        snapshot: publish(policy),
+      }).resolution;
+      assert.equal(modelKey(result.selected), "fixture/subscription");
+      assert.deepEqual(result.primary.healthyCandidates.map(modelKey), ["fixture/metered", "fixture/subscription"]);
+      assert.deepEqual(result.primary.selectionCandidates?.map(modelKey), ["fixture/subscription"]);
+      assert.equal(result.primary.billingPreference?.preferredCount, 1);
+      assert.equal(result.primary.billingPreference?.eligibleCount, 2);
+      assert.equal(result.primary.economic, undefined);
+      assert.equal(hasHardEconomicAdmission(policy), false);
+      const summary = buildRouteDecisionSummary({ kind: "classified", tier: "general", source: "regex" }, {
+        resolution: result,
+        options: buildTierResolutionOptions("general", routingConfig()),
+      });
+      assert.deepEqual(summary.requested?.billingPreference, {
+        mode: "policy",
+        preferredClass: "subscription",
+        eligibleCount: 2,
+        preferredCount: 1,
+        selectionCount: 1,
+        candidates: [
+          { model: "fixture/metered", billingClass: "metered", sourceAliases: ["metered-fact"], authorities: ["declared"], freshness: "fresh", effect: "baseline" },
+          { model: "fixture/subscription", billingClass: "subscription", sourceAliases: ["subscription-fact"], authorities: ["declared"], freshness: "fresh", effect: "preferred" },
+        ],
+      });
+      assert.equal(JSON.stringify(summary).includes("remaining"), false);
+    });
+
+    it("keeps observe mode order and random calls unchanged while reporting wouldPrefer", () => {
+      const ctx = makeCtx([
+        makeModel("fixture", "metered", 0.01, 0.01),
+        makeModel("fixture", "subscription", 0.9, 0.9),
+      ]);
+      const policy = basePolicy("observe");
+      let randomCalls = 0;
+      const result = resolveConfiguredTier(ctx, "general", { ...routingConfig(), strategy: "random" }, undefined, undefined, now, {
+        policy,
+        snapshot: publish(policy),
+      }, () => { randomCalls += 1; return 0; }).resolution;
+      assert.equal(modelKey(result.selected), "fixture/metered");
+      assert.deepEqual(result.primary.selectionCandidates?.map(modelKey), ["fixture/metered", "fixture/subscription"]);
+      assert.equal(result.primary.billingPreference?.mode, "observe");
+      assert.equal(result.primary.billingPreference?.preferredCount, 1);
+      assert.equal(result.primary.billingPreference?.selectionCount, 2);
+      assert.equal(randomCalls, 1);
+    });
+
+    it("runs the seeded random strategy only inside the preferred eligible subset", () => {
+      const ctx = makeCtx([
+        makeModel("fixture", "metered", 0.01, 0.01),
+        makeModel("fixture", "subscription", 0.9, 0.9),
+        makeModel("fixture", "subscription-2", 0.8, 0.8),
+      ]);
+      const policy: ReservePolicy = {
+        mode: "policy",
+        scopes: {
+          metered: { kind: "model", model: "fixture/metered" },
+          subscription: { kind: "model", model: "fixture/subscription" },
+          subscription2: { kind: "model", model: "fixture/subscription-2" },
+        },
+        sources: [
+          { id: "metered-fact", scopeRef: "metered", authority: "declared" },
+          { id: "subscription-fact", scopeRef: "subscription", authority: "declared" },
+          { id: "subscription2-fact", scopeRef: "subscription2", authority: "declared" },
+        ],
+        admission: [],
+        preference: { billingClass: "subscription" },
+        sourceOrder: { metered: ["metered-fact"], subscription: ["subscription-fact"], subscription2: ["subscription2-fact"] },
+      };
+      let snapshot = emptyEconomicSnapshot();
+      for (const fact of [
+        { sourceId: "metered-fact", scopeRef: "metered", billing: "metered" },
+        { sourceId: "subscription-fact", scopeRef: "subscription", billing: "subscription" },
+        { sourceId: "subscription2-fact", scopeRef: "subscription2", billing: "subscription" },
+      ]) {
+        const result = publishEconomicObservation(snapshot, policy, { ...fact, observedAt: 100, expiresAt: 2_000, revision: 1, windows: [] } as EconomicSignal);
+        assert.equal(result.accepted, true);
+        snapshot = result.snapshot;
+      }
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture/metered", "fixture/subscription", "fixture/subscription-2"] },
+        strategy: "random",
+      }, undefined, undefined, now, { policy, snapshot }, () => 0.75).resolution;
+      assert.equal(modelKey(result.selected), "fixture/subscription-2");
+      assert.deepEqual(result.primary.selectionCandidates?.map(modelKey), ["fixture/subscription", "fixture/subscription-2"]);
+    });
+
+    it("uses the full baseline pool when no preferred class is fresh and does not turn an empty tier into a route", () => {
+      const ctx = makeCtx([makeModel("fixture", "metered", 0.01, 0.01), makeModel("fixture", "subscription", 0.9, 0.9)]);
+      const policy = basePolicy("policy");
+      const result = resolveConfiguredTier(ctx, "general", routingConfig(), undefined, undefined, now, {
+        policy,
+        snapshot: emptyEconomicSnapshot(),
+      }).resolution;
+      assert.equal(modelKey(result.selected), "fixture/metered");
+      assert.equal(result.primary.billingPreference?.preferredCount, 0);
+      assert.equal(result.primary.selectionCandidates?.length, 2);
+      assert.equal(result.fallbackReason, undefined);
+
+      const noRoute = resolveConfiguredTier(ctx, "missing", {
+        default: undefined,
+        models: { missing: ["fixture/not-available"] },
+        strategy: "first",
+      }, undefined, undefined, now, { policy, snapshot: emptyEconomicSnapshot() }).resolution;
+      assert.equal(noRoute.selected, undefined);
+      assert.equal(noRoute.fallbackReason, "requested_tier_unavailable");
+    });
+
+    it("keeps malformed registry identities eligible when preference evidence is invalid", () => {
+      const invalidKey = makeModel("fixture provider", "subscription");
+      const baseline = makeModel("fixture", "metered");
+      const ctx = makeCtx([invalidKey, baseline]);
+      const policy = basePolicy("policy");
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture provider/subscription", "fixture/metered"] }, strategy: "first",
+      }, undefined, undefined, now, { policy, snapshot: publish(policy) }).resolution;
+      assert.equal(modelKey(result.selected), "fixture provider/subscription");
+      assert.deepEqual(result.primary.selectionCandidates?.map(modelKey), ["fixture provider/subscription", "fixture/metered"]);
+      assert.equal(result.primary.billingPreference?.preferredCount, 0);
+    });
+
+    it("explicitly bypasses soft preference for direct model and utility dispatch contexts", () => {
+      const ctx = makeCtx([
+        makeModel("fixture", "metered", 0.01, 0.01),
+        makeModel("fixture", "subscription", 0.9, 0.9),
+      ]);
+      const policy = basePolicy("policy");
+      const result = resolveConfiguredTier(ctx, "general", routingConfig(), undefined, undefined, now, {
+        policy,
+        snapshot: publish(policy),
+        preferenceBypassed: true,
+      }).resolution;
+      assert.equal(modelKey(result.selected), "fixture/metered");
+      assert.equal(result.primary.billingPreference, undefined);
+    });
+
+    it("does not cross a strict tier boundary to find a preferred class", () => {
+      const ctx = makeCtx([
+        makeModel("fixture", "metered", 0.01, 0.01),
+        makeModel("fixture", "subscription", 0.9, 0.9),
+      ]);
+      const policy = basePolicy("policy");
+      const result = resolveConfiguredTier(ctx, "quick", {
+        schemaVersion: 2,
+        models: { quick: ["fixture/metered"], general: ["fixture/subscription"] },
+        tierPolicies: { quick: { fallbackTiers: [] } },
+        default: "general",
+        strategy: "first",
+      }, undefined, undefined, now, { policy, snapshot: publish(policy) }).resolution;
+      assert.equal(modelKey(result.selected), "fixture/metered");
+      assert.equal(result.selectedTier, "quick");
+      assert.equal(result.primary.billingPreference?.preferredCount, 0);
+      assert.equal(result.fallback, undefined);
+    });
+
+    it("does not restore reserve- or circuit-excluded preferred models", () => {
+      const ctx = makeCtx([
+        makeModel("fixture", "metered", 0.2, 0.2),
+        makeModel("fixture", "subscription-reserved", 0.3, 0.3),
+        makeModel("fixture", "subscription-open", 0.4, 0.4),
+      ]);
+      const policy: ReservePolicy = {
+        mode: "policy",
+        scopes: {
+          reserved: { kind: "model", model: "fixture/subscription-reserved" },
+          open: { kind: "model", model: "fixture/subscription-open" },
+          metered: { kind: "model", model: "fixture/metered" },
+        },
+        sources: [
+          { id: "reserved-fact", scopeRef: "reserved", authority: "declared" },
+          { id: "open-fact", scopeRef: "open", authority: "declared" },
+          { id: "metered-fact", scopeRef: "metered", authority: "declared" },
+        ],
+        admission: [{ id: "reserve", scopeRef: "reserved", windowId: "day", reserveRatio: 0.2, unknown: "block" }],
+        preference: { billingClass: "subscription" },
+        sourceOrder: { reserved: ["reserved-fact"], open: ["open-fact"], metered: ["metered-fact"] },
+      };
+      let snapshot = emptyEconomicSnapshot();
+      for (const fact of [
+        { model: "fixture/subscription-reserved", sourceId: "reserved-fact", scopeRef: "reserved", billing: "subscription", windows: [{ id: "day", period: { id: "p1", sequence: 1 }, unit: "ratio", remaining: 0.1 }] },
+        { model: "fixture/subscription-open", sourceId: "open-fact", scopeRef: "open", billing: "subscription", windows: [] },
+        { model: "fixture/metered", sourceId: "metered-fact", scopeRef: "metered", billing: "metered", windows: [] },
+      ]) {
+        const result = publishEconomicObservation(snapshot, policy, { ...fact, observedAt: 100, expiresAt: 2_000, revision: 1 } as EconomicSignal);
+        assert.equal(result.accepted, true);
+        snapshot = result.snapshot;
+      }
+      let reliability = emptyReliabilityState();
+      const config = { ...DEFAULT_RELIABILITY, failureThreshold: 1, cooldownMinutes: 10 };
+      reliability = recordModelFailure(reliability, "fixture/subscription-open", config, now, "dispatch", "transport");
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["fixture/metered", "fixture/subscription-reserved", "fixture/subscription-open"] },
+        strategy: "first",
+      }, reliability, config, now, { policy, snapshot }).resolution;
+      assert.equal(modelKey(result.selected), "fixture/metered");
+      assert.deepEqual(result.primary.healthyCandidates.map(modelKey), ["fixture/metered"]);
+      assert.deepEqual(result.primary.selectionCandidates?.map(modelKey), ["fixture/metered"]);
+      assert.equal(result.primary.billingPreference?.preferredCount, 0);
+      assert.equal(result.primary.skipped.some((entry) => entry.key === "fixture/subscription-open"), true);
+    });
+  });
   describe("modelKey", () => {
     it("returns provider/id", () => {
       const m = makeModel("anthropic", "claude-opus", 15);
@@ -69,12 +675,33 @@ describe("routing", () => {
   });
 
   describe("findCandidates", () => {
-    it("excludes virtual entries from exact and fuzzy candidate pools", () => {
+    it("excludes virtual and classifier entries from exact and fuzzy candidate pools", () => {
       const virtual = { ...makeModel("bifrost", "auto"), api: "pi-virtual" } as ReturnType<typeof makeModel>;
+      const classifier = { ...makeModel("fixture", "classifier"), type: "classifier" } as never;
       const physical = makeModel("fixture", "auto-fast");
-      const ctx = makeCtx([virtual, physical]);
+      const ctx = makeCtx([virtual, classifier, physical] as never);
       assert.deepEqual(findCandidates(ctx, "bifrost/auto"), []);
       assert.deepEqual(findCandidates(ctx, "auto"), [physical]);
+      assert.deepEqual(findCandidates(ctx, "fixture/classifier"), []);
+      assert.deepEqual(findCandidates(ctx, "classifier"), []);
+    });
+
+    it("reports registry exclusions and unresolved patterns in route decisions", () => {
+      const virtual = { ...makeModel("bifrost", "auto"), api: "pi-virtual" } as ReturnType<typeof makeModel>;
+      const classifier = { ...makeModel("fixture", "classifier"), type: "classifier" } as never;
+      const routeConfig = { models: { restricted: ["bifrost/auto", "fixture/classifier", "fixture/missing"] }, strategy: "first" as const };
+      const resolved = resolveConfiguredTier(makeCtx([virtual, classifier] as never), "restricted", routeConfig).resolution;
+      const summary = buildRouteDecisionSummary({ kind: "classified", tier: "restricted", source: "regex" }, {
+        resolution: resolved,
+        options: buildTierResolutionOptions("restricted", routeConfig),
+      });
+      assert.deepEqual(summary.requested?.candidates, [
+        { model: "bifrost/auto", status: "excluded", exclusion: "virtual_model", exclusionEvidence: [{ code: "virtual_model", source: "registry_snapshot" }] },
+        { model: "fixture/classifier", status: "excluded", exclusion: "classifier_model", exclusionEvidence: [{ code: "classifier_model", source: "registry_snapshot" }] },
+      ]);
+      assert.deepEqual(summary.requested?.unresolvedPatterns, [
+        { pattern: "fixture/missing", exclusion: "model_unavailable", exclusionEvidence: [{ code: "model_unavailable", source: "registry_snapshot" }] },
+      ]);
     });
 
     it("returns multiple models for an array", () => {
@@ -95,7 +722,7 @@ describe("routing", () => {
         "anthropic/claude-opus",
         "anthropic/claude-opus",
       ]);
-      assert.equal(candidates.length, 1);
+      assert.deepEqual(candidates.map(modelKey), ["anthropic/claude-opus"]);
     });
 
     it("matches substring and exact together", () => {
@@ -104,7 +731,10 @@ describe("routing", () => {
         makeModel("lmstudio", "qwen/qwen3-vl-8b", 0),
       ]);
       const candidates = findCandidates(ctx, ["anthropic/claude-opus", "lmstudio"]);
-      assert.equal(candidates.length, 2);
+      assert.deepEqual(candidates.map(modelKey), [
+        "anthropic/claude-opus",
+        "lmstudio/qwen/qwen3-vl-8b",
+      ]);
     });
   });
 
@@ -261,10 +891,45 @@ describe("routing", () => {
     it("returns a random candidate", () => {
       const a = makeModel("a", "a", 0, 0);
       const b = makeModel("b", "b", 0, 0);
-      const results = new Set();
-      for (let i = 0; i < 20; i++) results.add(selectModel([a, b], "random")!.id);
-      assert.ok(results.has("a"));
-      assert.ok(results.has("b"));
+      const originalRandom = Math.random;
+      try {
+        Math.random = () => 0.75;
+        assert.equal(modelKey(selectModel([a, b], "random")), "b/b");
+        Math.random = () => 0;
+        assert.equal(modelKey(selectModel([a, b], "random")), "a/a");
+      } finally {
+        Math.random = originalRandom;
+      }
+    });
+
+    it("keeps the injectable random seam total when it returns 1", () => {
+      // Injected rng beyond [0,1) must not produce undefined (LOB-unbounded
+      // selection). Values outside [0,1) route to the last candidate.
+      const a = makeModel("a", "a", 0, 0);
+      const b = makeModel("b", "b", 0, 0);
+      assert.equal(modelKey(selectModel([a, b], "random", () => 1)), "b/b");
+      assert.equal(modelKey(selectModel([a, b], "random", () => -1)), "b/b");
+      assert.equal(modelKey(selectModel([a, b], "random", () => NaN)), "b/b");
+      assert.equal(modelKey(selectModel([a, b], "random", () => 0.999999)), "b/b");
+    });
+
+    it("keeps the injectable random seam inside [0,1) on the first candidate", () => {
+      const a = makeModel("a", "a", 0, 0);
+      const b = makeModel("b", "b", 0, 0);
+      assert.equal(modelKey(selectModel([a, b], "random", () => 0.4)), "a/a");
+      assert.equal(modelKey(selectModel([a, b], "random", () => 0.75)), "b/b");
+    });
+
+    it("keeps candidate order for fastest and metric ties", () => {
+      const first = makeModel("a", "first", 2, 3, 128_000);
+      const second = makeModel("b", "second", 2, 3, 128_000);
+      const tied = [first, second];
+
+      assert.equal(modelKey(selectModel(tied, "fastest")), "a/first");
+      assert.equal(modelKey(selectModel(tied, "cheapest")), "a/first");
+      assert.equal(modelKey(selectModel(tied, "cheapest_input")), "a/first");
+      assert.equal(modelKey(selectModel(tied, "cheapest_output")), "a/first");
+      assert.equal(modelKey(selectModel(tied, "largest_context")), "a/first");
     });
 
     it("returns undefined for empty candidates", () => {
@@ -388,6 +1053,400 @@ describe("routing", () => {
       assert.equal(result.selected, undefined);
       assert.equal(result.fallbackReason, "all_tiers_exhausted");
     });
+
+    it("keeps a primary circuit failure when the fallback pool is empty", () => {
+      const broken = makeModel("anthropic", "claude-opus", 15);
+      const ctx = makeCtx([broken]);
+      const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 60 };
+      const now = Date.UTC(2026, 0, 1, 12, 0, 0);
+      const state = recordModelFailure(emptyReliabilityState(), modelKey(broken), cfg, now, "probe", "timeout");
+      const result = resolveModelWithFallback(ctx, {
+        requestedTier: "frontier",
+        requestedPattern: ["anthropic/claude-opus"],
+        requestedStrategy: "first",
+        defaultTier: "economical",
+        defaultPattern: [],
+        defaultStrategy: "first",
+        reliabilityState: state,
+        reliabilityConfig: cfg,
+        now,
+      });
+      assert.equal(result.selected, undefined);
+      assert.equal(result.fallbackReason, "all_tiers_exhausted");
+    });
+  });
+
+  describe("provider routing scope", () => {
+    it("excludes a provider outside the global allowlist without touching reliability", () => {
+      const allowed = makeModel("anthropic", "claude-sonnet", 3);
+      const blocked = makeModel("openai", "gpt-4.1-mini", 1);
+      const ctx = makeCtx([allowed, blocked]);
+      const now = Date.UTC(2026, 0, 1);
+      const scope = compileRoutingScope({ providers: ["anthropic"] });
+
+      const result = resolveHealthyModel(
+        ctx, [modelKey(allowed), modelKey(blocked)], "first", undefined, undefined, now, undefined, undefined,
+        { scope: scope!, evaluatedTier: "general" },
+      );
+
+      assert.equal(modelKey(result.selected), "anthropic/claude-sonnet");
+      assert.deepEqual(result.skipped, [
+        { key: "openai/gpt-4.1-mini", reason: "provider_not_allowed", scope: "global" },
+      ]);
+      assert.deepEqual(result.healthyCandidates.map(modelKey), ["anthropic/claude-sonnet"]);
+    });
+
+    it("treats an explicit empty allowlist as deny-all", () => {
+      const ctx = makeCtx([makeModel("anthropic", "claude-sonnet", 3)]);
+      const result = resolveHealthyModel(
+        ctx, ["anthropic/claude-sonnet"], "first", undefined, undefined, Date.UTC(2026, 0, 1), undefined, undefined,
+        { scope: compileRoutingScope({ providers: [] })!, evaluatedTier: "general" },
+      );
+
+      assert.equal(result.selected, undefined);
+      assert.equal(result.skipped[0]?.reason, "provider_not_allowed");
+      assert.equal(result.skipped[0]?.scope, "global");
+    });
+
+    it("scopes every evaluated pool with its own tier allowlist", () => {
+      const anthropic = makeModel("anthropic", "claude-sonnet", 3);
+      const openai = makeModel("openai", "gpt-4.1-mini", 1);
+      const ctx = makeCtx([anthropic, openai]);
+      const scope = compileRoutingScope({
+        providers: ["anthropic", "openai"],
+        tiers: { frontier: { providers: ["anthropic"] }, economical: { providers: ["openai"] } },
+      });
+      const now = Date.UTC(2026, 0, 1);
+
+      const frontierRejected = resolveHealthyModel(
+        ctx, [modelKey(openai)], "first", undefined, undefined, now, undefined, undefined,
+        { scope: scope!, evaluatedTier: "frontier" },
+      );
+      assert.equal(frontierRejected.selected, undefined);
+      assert.equal(frontierRejected.skipped[0]?.scope, "tier");
+
+      // A different tier's allowlist never constrains this pool.
+      const economicalAllowed = resolveHealthyModel(
+        ctx, [modelKey(openai)], "first", undefined, undefined, now, undefined, undefined,
+        { scope: scope!, evaluatedTier: "economical" },
+      );
+      assert.equal(modelKey(economicalAllowed.selected), "openai/gpt-4.1-mini");
+    });
+
+    it("still excludes a fallback pool that its own tier scope rejects", () => {
+      const broken = makeModel("anthropic", "claude-sonnet", 3);
+      const openai = makeModel("openai", "gpt-4.1-mini", 1);
+      const ctx = makeCtx([broken, openai]);
+      const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 60 };
+      const now = Date.UTC(2026, 0, 1);
+      const state = recordModelFailure(emptyReliabilityState(), modelKey(broken), cfg, now, "probe", "timeout");
+      const scope = compileRoutingScope({
+        providers: ["anthropic", "openai"],
+        tiers: { economical: { providers: ["anthropic"] } },
+      });
+
+      const result = resolveModelWithFallback(ctx, {
+        requestedTier: "frontier",
+        requestedPattern: ["anthropic/claude-sonnet"],
+        requestedStrategy: "first",
+        defaultTier: "economical",
+        defaultPattern: ["openai/gpt-4.1-mini"],
+        defaultStrategy: "first",
+        reliabilityState: state,
+        reliabilityConfig: cfg,
+        now,
+        scope: scope!,
+      });
+
+      assert.equal(result.selected, undefined);
+      assert.deepEqual(result.fallback?.skipped, [
+        { key: "openai/gpt-4.1-mini", reason: "provider_not_allowed", scope: "tier" },
+      ]);
+    });
+
+    it("falls back within the scope and reports the provider exclusion as the reason", () => {
+      const anthropic = makeModel("anthropic", "claude-sonnet", 3);
+      const openai = makeModel("openai", "gpt-4.1-mini", 1);
+      const ctx = makeCtx([anthropic, openai]);
+      const scope = compileRoutingScope({
+        providers: ["anthropic", "openai"],
+        tiers: { frontier: { providers: ["openai"] } },
+      });
+
+      const result = resolveModelWithFallback(ctx, {
+        requestedTier: "frontier",
+        requestedPattern: ["anthropic/claude-sonnet"],
+        requestedStrategy: "first",
+        defaultTier: "economical",
+        defaultPattern: ["openai/gpt-4.1-mini"],
+        defaultStrategy: "first",
+        now: Date.UTC(2026, 0, 1),
+        scope: scope!,
+      });
+
+      assert.equal(modelKey(result.selected), "openai/gpt-4.1-mini");
+      assert.equal(result.selectedTier, "economical");
+      assert.equal(result.fallbackReason, "requested_tier_provider_excluded");
+      assert.deepEqual(result.primary.skipped, [
+        { key: "anthropic/claude-sonnet", reason: "provider_not_allowed", scope: "tier" },
+      ]);
+    });
+
+    it("applies scope before reliability so an excluded provider's open circuit is never reported", () => {
+      const broken = makeModel("openai", "gpt-4.1-mini", 1);
+      const allowed = makeModel("anthropic", "claude-sonnet", 3);
+      const ctx = makeCtx([broken, allowed]);
+      const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 60 };
+      const now = Date.UTC(2026, 0, 1);
+      const state = recordModelFailure(emptyReliabilityState(), modelKey(broken), cfg, now, "probe", "timeout");
+      const scope = compileRoutingScope({ providers: ["anthropic"] });
+
+      const result = resolveModelWithFallback(ctx, {
+        requestedTier: "general",
+        requestedPattern: ["openai/gpt-4.1-mini"],
+        requestedStrategy: "first",
+        defaultTier: "economical",
+        defaultPattern: ["anthropic/claude-sonnet"],
+        defaultStrategy: "first",
+        reliabilityState: state,
+        reliabilityConfig: cfg,
+        now,
+        scope: scope!,
+      });
+
+      assert.equal(modelKey(result.selected), "anthropic/claude-sonnet");
+      // Scope still runs first; the excluded provider never reaches reliability state.
+      assert.equal(result.fallbackReason, "requested_tier_provider_excluded");
+      assert.deepEqual(result.primary.skipped, [
+        { key: "openai/gpt-4.1-mini", reason: "provider_not_allowed", scope: "global" },
+      ]);
+    });
+
+    it("reports reliability when a requested pool has both an open circuit and a scope exclusion", () => {
+      const broken = makeModel("anthropic", "claude-sonnet", 3);
+      const blocked = makeModel("openai", "gpt-4.1-mini", 1);
+      const ctx = makeCtx([broken, blocked]);
+      const cfg = { ...DEFAULT_RELIABILITY, failureThreshold: 1, windowMinutes: 5, cooldownMinutes: 60 };
+      const now = Date.UTC(2026, 0, 1);
+      const state = recordModelFailure(emptyReliabilityState(), modelKey(broken), cfg, now, "probe", "timeout");
+      const scope = compileRoutingScope({
+        providers: ["anthropic", "openai"],
+        tiers: { general: { providers: ["anthropic"] } },
+      });
+
+      const result = resolveModelWithFallback(ctx, {
+        requestedTier: "general",
+        requestedPattern: ["anthropic/claude-sonnet", "openai/gpt-4.1-mini"],
+        requestedStrategy: "first",
+        defaultTier: "economical",
+        defaultPattern: [],
+        defaultStrategy: "first",
+        reliabilityState: state,
+        reliabilityConfig: cfg,
+        now,
+        scope: scope!,
+      });
+
+      assert.equal(result.selected, undefined);
+      assert.equal(result.fallbackReason, "all_tiers_exhausted");
+      // Every candidate keeps its own reason, so the scope rejection stays visible.
+      const skipped = new Map(result.primary.skipped.map((candidate) => [candidate.key, candidate]));
+      assert.equal(skipped.get("anthropic/claude-sonnet")?.reason, "open_circuit");
+      assert.deepEqual(skipped.get("openai/gpt-4.1-mini"), {
+        key: "openai/gpt-4.1-mini", reason: "provider_not_allowed", scope: "tier",
+      });
+    });
+
+    it("applies scope to every explicit fallback tier and reports the exclusion", () => {
+      const anthropic = makeModel("anthropic", "claude-sonnet", 3);
+      const openai = makeModel("openai", "gpt-4.1-mini", 1);
+      const ctx = makeCtx([anthropic, openai]);
+      const config: TierResolutionConfig = {
+        schemaVersion: 2,
+        models: { frontier: ["anthropic/claude-sonnet"], economical: ["openai/gpt-4.1-mini"] },
+        default: "economical",
+        tierPolicies: { frontier: { fallbackTiers: ["economical"] } },
+        routingScope: { providers: ["openai"] },
+      };
+
+      const result = resolveConfiguredTier(
+        ctx, "frontier", config, undefined, undefined, Date.UTC(2026, 0, 1),
+      ).resolution;
+
+      assert.equal(modelKey(result.selected), "openai/gpt-4.1-mini");
+      assert.equal(result.selectedTier, "economical");
+      assert.equal(result.fallbackReason, "requested_tier_provider_excluded");
+    });
+
+    it("applies only the global scope to a direct model rule without inventing a tier", () => {
+      const anthropic = makeModel("anthropic", "claude-sonnet", 3);
+      const ctx = makeCtx([anthropic]);
+      const config: TierResolutionConfig = {
+        models: { general: ["anthropic/claude-sonnet"] },
+        routingScope: { providers: ["openai"], tiers: { general: { providers: ["anthropic"] } } },
+      };
+
+      const result = resolveConfiguredTier(
+        ctx, "anthropic/claude-sonnet", config, undefined, undefined, Date.UTC(2026, 0, 1),
+      ).resolution;
+
+      assert.equal(result.selected, undefined);
+      assert.deepEqual(result.primary.skipped, [
+        { key: "anthropic/claude-sonnet", reason: "provider_not_allowed", scope: "global" },
+      ]);
+    });
+
+    it("never retains an affinity anchor outside the scope", () => {
+      const anchor = makeModel("anthropic", "claude-sonnet", 3);
+      const allowed = makeModel("openai", "gpt-4.1-mini", 1);
+      const ctx = makeCtx([anchor, allowed]);
+      const now = Date.UTC(2026, 0, 1);
+
+      const result = resolveConfiguredTier(ctx, "general", {
+        models: { general: ["anthropic/claude-sonnet", "openai/gpt-4.1-mini"] },
+        strategy: "first",
+        affinity: { mode: "retain-within-tier" },
+        routingScope: { providers: ["openai"] },
+      }, undefined, undefined, now, undefined, undefined, {
+        targetOrigin: "automatic",
+        anchor: { modelKey: "anthropic/claude-sonnet", provider: "anthropic", lastSuccessfulDispatchAt: now - 100 },
+      }).resolution;
+
+      assert.equal(modelKey(result.selected), "openai/gpt-4.1-mini");
+      assert.equal(result.affinityObservation?.selection, "anchor_not_eligible");
+      assert.equal(result.primary.skipped[0]?.reason, "provider_not_allowed");
+    });
+  });
+
+  describe("route decision summary", () => {
+    it("preserves structured exclusions, fallback strategy, and selection without prompt text", () => {
+      const blocked = makeModel("fixture", "blocked", 1, 1, 64_000);
+      const fallback = makeModel("fixture", "fallback", 2, 1, 128_000);
+      const ctx = makeCtx([blocked, fallback]);
+      const now = Date.UTC(2026, 0, 1);
+      const reliabilityState = {
+        version: 1 as const,
+        models: {
+          [modelKey(blocked)]: { failures: [now - 1_000], openUntil: now + 60_000, trialActive: false },
+        },
+      };
+      const config = {
+        models: { frontier: [modelKey(blocked)], quick: [modelKey(fallback)] },
+        categoryStrategies: { frontier: "largest_context" as const, quick: "cheapest_output" as const },
+        default: "quick",
+      };
+      const options = buildTierResolutionOptions("frontier", config);
+      const resolution = resolveModelWithFallback(ctx, {
+        ...options,
+        reliabilityState,
+        reliabilityConfig: DEFAULT_RELIABILITY,
+        now,
+      });
+      const classification: ClassificationResult = {
+        kind: "classified",
+        tier: "frontier",
+        source: "classifier",
+        judgment: { tier: "frontier", backend: "prompt", model: "fixture/classifier", confidence: 0.91 },
+      };
+
+      const summary = buildRouteDecisionSummary(classification, { resolution, options });
+
+      assert.equal(summary.outcome, "selected");
+      assert.deepEqual(summary.requested?.candidates, [
+        {
+          model: "fixture/blocked",
+          status: "excluded",
+          exclusion: "open_circuit",
+          exclusionEvidence: [{ code: "open_circuit", source: "reliability_state" }],
+        },
+      ]);
+      assert.equal(summary.requested?.strategy, "largest_context");
+      assert.equal(summary.fallback?.tier, "quick");
+      assert.equal(summary.fallback?.strategy, "cheapest_output");
+      assert.equal(summary.selected, "fixture/fallback");
+      assert.equal(summary.selectedStrategy, "cheapest_output");
+      assert.equal(JSON.stringify(summary).includes("private prompt words"), false);
+    });
+
+    it("keeps an unresolved configured pool visible without inventing a selection", () => {
+      const ctx = makeCtx([]);
+      const config = { models: { frontier: ["fixture/missing"] } };
+      const options = buildTierResolutionOptions("frontier", config);
+      const resolution = resolveModelWithFallback(ctx, { ...options });
+      const summary = buildRouteDecisionSummary(
+        { kind: "classified", tier: "frontier", source: "regex" },
+        { resolution, options },
+      );
+
+      assert.equal(summary.outcome, "unresolved");
+      assert.deepEqual(summary.requested?.patterns, ["fixture/missing"]);
+      assert.deepEqual(summary.requested?.candidates, []);
+      assert.equal("selected" in summary, false);
+    });
+  });
+
+  describe("tier resolution options across registry refresh", () => {
+    it("rebuilds the configured pool after an awaited refresh and config reload", async () => {
+      const available = [makeModel("fixture", "old")];
+      const ctx = makeCtx(available);
+      const config = { models: { quick: ["fixture/missing"] }, default: "quick" };
+      const beforeRefresh = resolveConfiguredTier(ctx, "quick", config);
+      assert.equal(beforeRefresh.resolution.selected, undefined);
+      assert.deepEqual(beforeRefresh.options.requestedPattern, ["fixture/missing"]);
+
+      await Promise.resolve().then(() => {
+        config.models.quick = ["fixture/new"];
+        available.splice(0, available.length, makeModel("fixture", "new"));
+      });
+      const afterRefresh = resolveConfiguredTier(ctx, "quick", config);
+
+      assert.equal(modelKey(afterRefresh.resolution.selected), "fixture/new");
+      assert.deepEqual(afterRefresh.options.requestedPattern, ["fixture/new"]);
+    });
+  });
+
+  describe("explicit tier fallback boundaries", () => {
+    it("tries only explicit fallback tiers in order and records every attempted pool", () => {
+      const preferred = makeModel("fixture", "preferred");
+      const legacyDefault = makeModel("fixture", "legacy-default");
+      const ctx = makeCtx([preferred, legacyDefault]);
+      const config = {
+        schemaVersion: 2,
+        default: "economical",
+        strategy: "first" as const,
+        models: { quick: ["fixture/missing"], frontier: ["fixture/preferred"], economical: ["fixture/legacy-default"] },
+        tierPolicies: { quick: { fallbackTiers: ["frontier", "economical"] } },
+      };
+
+      const result = resolveConfiguredTier(ctx, "quick", config);
+
+      assert.equal(modelKey(result.resolution.selected), "fixture/preferred");
+      assert.equal(result.resolution.selectedTier, "frontier");
+      assert.equal(result.resolution.explicitBoundary, true);
+      assert.deepEqual(result.resolution.attemptedTiers?.map((attempt) => attempt.tier), ["quick", "frontier"]);
+    });
+
+    it("treats an explicit empty list as a singleton and v2 without policy as legacy", () => {
+      const fallback = makeModel("fixture", "fallback");
+      const ctx = makeCtx([fallback]);
+      const emptyBoundary = resolveConfiguredTier(ctx, "quick", {
+        schemaVersion: 2,
+        default: "general",
+        models: { quick: ["fixture/missing"], general: ["fixture/fallback"] },
+        tierPolicies: { quick: { fallbackTiers: [] } },
+      });
+      assert.equal(emptyBoundary.resolution.selected, undefined);
+      assert.equal(emptyBoundary.resolution.explicitBoundary, true);
+      assert.deepEqual(emptyBoundary.resolution.attemptedTiers?.map((attempt) => attempt.tier), ["quick"]);
+
+      const legacy = resolveConfiguredTier(ctx, "quick", {
+        schemaVersion: 2,
+        default: "general",
+        models: { quick: ["fixture/missing"], general: ["fixture/fallback"] },
+      });
+      assert.equal(modelKey(legacy.resolution.selected), "fixture/fallback");
+      assert.equal(legacy.resolution.explicitBoundary, undefined);
+    });
   });
 
   describe("getStrategy", () => {
@@ -403,6 +1462,22 @@ describe("routing", () => {
 
     it("defaults to first", () => {
       assert.equal(getStrategy(undefined, undefined, "economical"), "first");
+    });
+
+    it("uses generic strategies for arbitrary custom tier keys across providers", () => {
+      const tier = "team-custom-priority";
+      const ctx = makeCtx([
+        makeModel("provider-a", "expensive", 5),
+        makeModel("provider-b", "cheap", 1),
+      ]);
+      const result = resolveConfiguredTier(ctx, tier, {
+        models: { [tier]: ["provider-a/expensive", "provider-b/cheap"] },
+        strategy: "first",
+        categoryStrategies: { [tier]: "cheapest" },
+      }).resolution;
+
+      assert.equal(result.selectedTier, tier);
+      assert.equal(modelKey(result.selected), "provider-b/cheap");
     });
   });
 
@@ -422,5 +1497,101 @@ describe("routing", () => {
       assert.equal(classify("bar foo", rules), "first");
       assert.equal(classifyCompiled("bar foo", compileRules(rules)), "first");
     });
+
+    it("drops rule patterns whose backtracking explodes on a small canary", () => {
+      // Security regression: a repo-provided rule with nested quantifiers
+      // hangs the host event loop synchronously before the message is sent.
+      // compileRules must drop the rule (fail closed to later rules/default)
+      // instead of shipping a pattern that cannot run within a bounded budget.
+      const compiled = compileRules([
+        { pattern: "^(a+)+$", model: "quick" },
+        { pattern: "hello", model: "general" },
+      ]);
+      assert.deepEqual(compiled.map((rule) => rule.model), ["general"]);
+    });
+
+    it("parity path drops the same catastrophic pattern", () => {
+      const rules = [{ pattern: "^(a+)+$", model: "quick" }];
+      assert.equal(classify("a".repeat(24) + "b", rules), undefined);
+      assert.equal(classifyCompiled("a".repeat(24) + "b", compileRules(rules)), undefined);
+    });
+
+    it("reports a rejected rule once across repeated classify calls", () => {
+      // classify() runs per message, so a rejected configured rule must be
+      // diagnosed once instead of logging on every classified prompt.
+      const messages: string[] = [];
+      const originalError = console.error;
+      console.error = (...values: unknown[]) => { messages.push(values.map(String).join(" ")); };
+      try {
+        const rules = [{ pattern: "^(zz+)+$", model: "quick" }];
+        assert.equal(classify("zzzzzzzzzzzzzzzzzzzzzzzzc", rules), undefined);
+        assert.equal(classify("zzzzzzzzzzzzzzzzzzzzzzzzc", rules), undefined);
+      } finally {
+        console.error = originalError;
+      }
+      const reported = messages.filter((line) => line.includes("rejecting rule pattern"));
+      assert.deepEqual(reported, ['[bifrost] rejecting rule pattern with unbounded backtracking or unverifiable safety: "^(zz+)+$"']);
+    });
+
+    it("still compiles every shipped default rule", () => {
+      assert.equal(compileRules(DEFAULT_RULES).length, DEFAULT_RULES.length);
+    });
+
+    it("rejects lookahead-anchored catastrophic patterns without paying the long probe", () => {
+      // A lookaround can keep every earlier canary cheap and detonate the guard's
+      // own longest probe, so the probe loop must not be the only defense:
+      // this includes the nested-quantifier test even past lookahead guards.
+      const started = performance.now();
+      const compiled = compileRules([
+        { pattern: "^(?=a{26}b)(a+)+$", model: "quick" },
+        { pattern: "^(?=a{32}b)(a+)+$", model: "quick" },
+      ]);
+      assert.deepEqual(compiled, []);
+      assert.ok(performance.now() - started < 250, "rejection must not pay a long probe");
+    });
+
+    it("bounds a disguised catastrophic rule while compiling", () => {
+      const moduleUrl = new URL("../routing.ts", import.meta.url).href;
+      const script = `const {compileRules} = await import(process.argv[1]); const rules = compileRules([{ pattern: "first literal", model: "first" }, { pattern: "^(?=a{32}b)(?:a|[a])+$", model: "quick" }, { pattern: "last literal", model: "last" }]); process.stdout.write(JSON.stringify(rules.map(rule => rule.model)));`;
+      const result = spawnSync(process.execPath, ["--experimental-strip-types", "--input-type=module", "-e", script, moduleUrl], { encoding: "utf8", timeout: 2500, killSignal: "SIGKILL" });
+      assert.equal(result.error, undefined, `compilation must finish: ${result.error}`);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(result.stdout), ["first", "last"]);
+    });
+
+    it("rejects deterministic-free catastrophic alternations without exec", () => {
+      // (a|aa)+ explodes through branch prefix-overlap, not nested quantifiers.
+      const compiled = compileRules([
+        { pattern: "^((a|aa)+)b", model: "quick" },
+        { pattern: "^(a+)+$", model: "quick" },
+        { pattern: "(?:ab?)+c", model: "quick" },
+      ]);
+      assert.deepEqual(compiled, []);
+    });
+
+    it("accepts lazy fixed repeats and still rejects lazy variable repeats", () => {
+      const safe = compileRules([{ pattern: "^(?:[0-9]{2}?)+$", model: "quick" }]);
+      assert.equal(classifyCompiled("1234", safe), "quick");
+      assert.equal(compileRules([{ pattern: "^(?:a+?)+$", model: "quick" }]).length, 0);
+    });
+
+    it("keeps benign quantified rules that shuttle variable tokens safely", () => {
+      // Fixed-length repetition and non-overlapping alternations must survive
+      // the structural filter untouched.
+      const compiled = compileRules([
+        { pattern: "(\\d{2}:\\d{2})*", model: "quick" },
+        { pattern: "class(?:room|rooms)?", model: "quick" },
+        { pattern: "(foo|bar)+", model: "quick" },
+        { pattern: "(a|b|c)+", model: "quick" },
+        // The `?` that opens a noncapturing group is group syntax, not an
+        // optional quantifier, so a repeated noncapturing group is as safe as
+        // its capturing equivalent and must survive the structural scan.
+        { pattern: "(?:foo)+", model: "quick" },
+        { pattern: "(?:foo|bar)+", model: "quick" },
+      ]);
+      assert.equal(compiled.length, 6);
+    });
+
+
   });
 });

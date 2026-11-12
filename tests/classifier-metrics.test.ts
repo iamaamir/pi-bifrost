@@ -35,6 +35,24 @@ describe("classifier metrics", () => {
     assert.doesNotMatch(persisted, /prompt|probabilit|api.?key|authorization/i);
   });
 
+  it("never persists a canary carried on a non-contract observation field", () => {
+    const memory = memoryIo();
+    const canary = "CANARY_METRICS_7f3d";
+    const store = new ClassifierMetricsStore({ cwd: "/project", io: memory.io, now: () => 1 });
+    store.record({
+      outcome: "success",
+      latencyMs: 1,
+      attempts: 1,
+      tier: "general",
+      confidence: 1,
+      prompt: canary,
+      response: canary,
+      endpoint: canary,
+    } as never);
+    const persisted = JSON.stringify(memory.saved());
+    assert.doesNotMatch(persisted, new RegExp(canary), "metrics projection must drop non-contract fields");
+  });
+
   it("never makes classification fail when persistence fails", () => {
     const store = new ClassifierMetricsStore({
       cwd: "/project",

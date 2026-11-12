@@ -21,11 +21,12 @@
   "cache": {
     "enabled": true,
     "maxEntries": 500,
-    "threshold": 0.88
+    "threshold": 1
   },
 
   "reliability": {
     "enabled": true,
+    "cooldownOnAllowanceExhausted": true,
     "failureThreshold": 3,
     "windowMinutes": 5,
     "cooldownMinutes": 60

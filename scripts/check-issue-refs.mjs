@@ -1,0 +1,214 @@
+#!/usr/bin/env node
+// Check that repository paths cited in issue bodies exist. Every cited path
+// must exist in the working tree; whether it is also readable from the default
+// branch of the repository being checked is reported, and only fails under
+// --require-remote.
+//
+// Usage:
+//   node scripts/check-issue-refs.mjs <issue-number> [more...]
+//   node scripts/check-issue-refs.mjs --ref v2 <issue-number> [more...]
+//   node scripts/check-issue-refs.mjs --offline <issue-number> [more...]
+//   node scripts/check-issue-refs.mjs --require-remote <issue-number> [more...]
+//
+// Local presence is required. A citation that exists locally but not on the
+// remote branch is reported as unpublished and does not fail, because this
+// project keeps some sources local-only by decision. Pass --require-remote when
+// a citation must be readable from the remote.
+import { execFileSync } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+// Extensions used by tracked files in this repository. The second alternative
+// below catches any other extension once the token already looks like a path,
+// so a cited file type outside this list is still checked rather than skipped.
+const KNOWN_EXTENSIONS = [
+  "md", "mdx", "mjs", "cjs", "js", "jsx", "ts", "tsx", "json", "jsonl",
+  "yml", "yaml", "toml", "ini", "sh", "bash", "py", "html", "css", "svg",
+  "txt", "cfg", "conf",
+].join("|");
+
+const CITED_PATH = new RegExp(
+  [
+    String.raw`(?<![\w/.-])`,
+    String.raw`(`,
+    String.raw`(?:[\w.-]+/)*[\w.-]+\.(?:${KNOWN_EXTENSIONS})`,
+    // Any other extension, but only when it contains a letter: a model name
+    // such as `opencode-go/glm-5.1` ends in a numeric segment, not a path.
+    String.raw`|(?:[\w.-]+/)+[\w.-]+\.[A-Za-z0-9]{0,7}[A-Za-z][A-Za-z0-9]{0,7}`,
+    String.raw`)`,
+    String.raw`(?![-\w/])`,
+  ].join(""),
+  "g",
+);
+
+/**
+ * Extract deduplicated repository paths cited in an issue body.
+ * Bare extensions, provider/model identifiers, version numbers and host names
+ * are not repository paths.
+ */
+export function extractCitedPaths(body) {
+  const paths = new Set();
+  const prose = String(body).replace(/^[^\r\n]*[├└│][^\r\n]*$/gm, "");
+  for (const match of prose.matchAll(CITED_PATH)) {
+    // A sentence-ending period is punctuation, not part of the path.
+    const path = match[1].replace(/^\.\//, "").replace(/\.+$/, "");
+    if (path.split("/").every((part) => part && part !== "." && part !== "..")) paths.add(path);
+  }
+  return [...paths].sort();
+}
+
+function isRepositoryPath(root, path) {
+  if (!existsSync(join(root, path))) return false;
+  const rootPath = realpathSync(root);
+  const candidate = realpathSync(join(root, path));
+  const relativePath = relative(rootPath, candidate);
+  return relativePath === "" || (!relativePath.startsWith(`..${sep}`) && relativePath !== ".." && !isAbsolute(relativePath));
+}
+
+/**
+ * Resolve each cited path against the working tree and an optional remote probe.
+ * `remote` stays null when no probe is supplied, so an offline run cannot claim
+ * a path is missing from the remote.
+ */
+export function checkReferences(paths, { root = REPO_ROOT, remoteExists = null } = {}) {
+  return paths.map((path) => ({
+    path,
+    local: isRepositoryPath(root, path),
+    remote: remoteExists ? Boolean(remoteExists(path)) : null,
+  }));
+}
+
+/**
+ * Pick the branch to probe. An explicit ref wins, offline needs none, and
+ * otherwise the default branch is resolved for the repository being checked —
+ * not for the checkout, which may be a different repository.
+ */
+export function resolveRef({ repo, offline, explicitRef = null, query }) {
+  if (offline) return "";
+  if (explicitRef) return explicitRef;
+  return query(repo);
+}
+
+/**
+ * Split the results into what actually blocks a check. A locally present path
+ * that is absent from the remote is unpublished, not missing; it only fails
+ * when remote publication is required.
+ */
+export function classify(results, { requireRemote = false } = {}) {
+  const missing = results.filter((result) => !result.local);
+  const unpublished = results.filter((result) => result.local && result.remote === false);
+  return { missing, unpublished, failures: requireRemote ? [...missing, ...unpublished] : missing };
+}
+
+/** Print the result table and return the references that are not readable. */
+export function report(results, stream = process.stdout) {
+  const width = Math.max(4, ...results.map((result) => result.path.length));
+  stream.write(`${"path".padEnd(width)}  local  remote\n`);
+  for (const result of results) {
+    const local = result.local ? "yes" : "NO";
+    const remote = result.remote === null ? "-" : result.remote ? "yes" : "NO";
+    stream.write(`${result.path.padEnd(width)}  ${local.padEnd(5)}  ${remote}\n`);
+  }
+  return results.filter((result) => !result.local || result.remote === false);
+}
+
+function gh(args) {
+  return execFileSync("gh", args, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+
+export function remoteProbe(repo, ref, request = (args) => execFileSync("gh", args, {
+  stdio: ["ignore", "ignore", "pipe"],
+})) {
+  return (path) => {
+    try {
+      request(["api", `repos/${repo}/contents/${path}?ref=${encodeURIComponent(ref)}`]);
+      return true;
+    } catch (error) {
+      if (/\bHTTP 404\b/u.test(String(error.stderr ?? error.message))) return false;
+      throw error;
+    }
+  };
+}
+
+export function parseArgs(argv) {
+  const issues = [];
+  let offline = false;
+  let requireRemote = false;
+  let ref = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === "--offline") offline = true;
+    else if (argument === "--require-remote") requireRemote = true;
+    else if (argument === "--ref") {
+      ref = argv[index + 1] ?? "";
+      index += 1;
+    } else if (argument.startsWith("--")) return { error: `unknown option: ${argument}` };
+    else issues.push(argument);
+  }
+  if (issues.length === 0) return { error: "no issue numbers supplied" };
+  if (issues.some((issue) => !/^\d+$/.test(issue))) return { error: "issue numbers must be numeric" };
+  if (ref !== null && ref.trim() === "") return { error: "--ref needs a branch name" };
+  if (offline && requireRemote) return { error: "--offline cannot be combined with --require-remote" };
+  return { issues, offline, ref, requireRemote };
+}
+
+function main(argv) {
+  const parsed = parseArgs(argv);
+  if (parsed.error) {
+    process.stderr.write(`usage: node scripts/check-issue-refs.mjs [--ref <branch>] [--offline] <issue-number> [...]\n${parsed.error}\n`);
+    return 2;
+  }
+  const { issues, offline, requireRemote } = parsed;
+
+  const repo = process.env.BIFROST_TRACKER_REPO ?? gh(["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]);
+  const ref = resolveRef({
+    repo,
+    offline,
+    explicitRef: parsed.ref,
+    query: (target) => gh(["repo", "view", target, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]),
+  });
+  if (!offline && !ref) {
+    process.stderr.write("the default branch could not be resolved; rerun with --offline to check the working tree only\n");
+    return 2;
+  }
+
+  const cited = new Set();
+  for (const issue of issues) {
+    const body = gh(["issue", "view", issue, "-R", repo, "--json", "body", "-q", ".body"]);
+    for (const path of extractCitedPaths(body)) cited.add(path);
+  }
+
+  let results;
+  try {
+    results = checkReferences([...cited].sort(), {
+      remoteExists: offline ? null : remoteProbe(repo, ref),
+    });
+  } catch (error) {
+    process.stderr.write(`remote check failed: ${error.message}\n`);
+    return 2;
+  }
+  report(results);
+  const { missing, unpublished, failures } = classify(results, { requireRemote });
+
+  if (unpublished.length > 0 && !requireRemote) {
+    const paths = unpublished.map((result) => result.path).join(", ");
+    process.stderr.write(
+      `\n${unpublished.length} cited path(s) are local-only and absent from ${repo}@${ref}: ${paths}\n` +
+        "Local sources are allowed; pass --require-remote to treat them as failures.\n",
+    );
+  }
+  if (failures.length === 0) return 0;
+
+  const where = requireRemote ? `not readable from ${repo}@${ref}` : "missing from the working tree";
+  const paths = failures.map((result) => result.path).join(", ");
+  process.stderr.write(`\n${failures.length} cited path(s) ${where}: ${paths}\n`);
+  if (!requireRemote) process.stderr.write("An agent on this checkout cannot follow them.\n");
+  return 1;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  process.exitCode = main(process.argv.slice(2));
+}

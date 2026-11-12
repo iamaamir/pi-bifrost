@@ -71,6 +71,18 @@ describe("ux status helpers", () => {
     assert.equal(calls[0]?.kind, "status");
     assert.equal(calls[0]?.key, "bifrost-state");
     assert.match(String(calls[0]?.value ?? ""), /Bifrost · pinned/);
+
+    calls.length = 0;
+    setBifrostModeStatus(ctx as never, { enabled: true, pinned: false, classifierEnabled: true, economicMode: "observe" });
+    assert.match(String(calls[0]?.value ?? ""), /on · reserve observe/);
+
+    calls.length = 0;
+    setBifrostModeStatus(ctx as never, { enabled: true, pinned: false, classifierEnabled: true, economicMode: "policy" });
+    assert.match(String(calls[0]?.value ?? ""), /on · reserve policy/);
+
+    calls.length = 0;
+    setBifrostModeStatus(ctx as never, { enabled: true, pinned: true, classifierEnabled: true, economicMode: "policy", economicPolicyValid: false });
+    assert.match(String(calls[0]?.value ?? ""), /Bifrost · pinned/);
   });
 
   it("refreshes when there is no prior refresh", () => {

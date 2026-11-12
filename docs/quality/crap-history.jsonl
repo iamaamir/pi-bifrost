@@ -1,0 +1,1 @@
+{"at":"2026-10-14T09:50:29.806Z","revision":"6fec456","dirty":false,"threshold":30,"coverageKind":"statement","functions":1517,"flagged":113,"percentFlagged":7.4,"max":6051,"worst":"economic-signals.ts:279 validateEconomicPolicy"}

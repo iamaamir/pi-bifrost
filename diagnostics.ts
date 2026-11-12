@@ -1,0 +1,424 @@
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { classifierConfigErrors, validateConfig, type BifrostConfig } from "./config.ts";
+import type { ClassifierBackend } from "./classifier-backends.ts";
+import { validateEffectiveConfigStructure } from "./config-schema.ts";
+import { findCandidates, modelKey } from "./routing.ts";
+import { getCircuitState, type ReliabilityConfig, type ReliabilityState } from "./reliability.ts";
+import { isVirtualModel } from "./virtual-model.ts";
+import type { RuntimeStateIssue } from "./runtime-state.ts";
+
+export type DiagnosticSeverity = "error" | "warning" | "info";
+
+export interface BifrostDiagnostic {
+  readonly code: string;
+  readonly severity: DiagnosticSeverity;
+  readonly repair: string;
+  readonly path?: string;
+  readonly tier?: string;
+  readonly entryIndex?: number;
+  readonly ruleIndex?: number;
+  readonly model?: string;
+}
+
+export interface DiagnosticRegistry {
+  getAll(): Model<Api>[];
+  getAvailable(): Model<Api>[];
+  find(provider: string, modelId: string): Model<Api> | undefined;
+  getProviderAuthStatus(provider: string): { configured: boolean; source?: string; label?: string };
+}
+
+export interface ValidateDiagnosticsInput {
+  /** The effective, already-loaded config. Disk edits appear after reload. */
+  readonly config: BifrostConfig;
+  readonly registry?: DiagnosticRegistry;
+  readonly classifierEnabled?: boolean;
+  readonly classifierEnablementSource?: ClassifierDiagnosticStatus["source"];
+  readonly effectiveClassifierBackend?: ClassifierBackend;
+  readonly classifierConflict?: { readonly saved: boolean; readonly configured: boolean };
+  readonly classifierRuntimeStateIssue?: RuntimeStateIssue;
+}
+
+export interface ValidateDiagnosticsReport {
+  readonly version: 1;
+  readonly kind: "validation";
+  readonly configSource: "loaded-effective-config";
+  readonly diagnostics: readonly BifrostDiagnostic[];
+  readonly classifier: ClassifierDiagnosticStatus;
+}
+
+export interface ClassifierDiagnosticStatus {
+  readonly enabled: boolean;
+  readonly configuredEnabled: boolean;
+  readonly source: "configuration" | "session" | "legacy-conflict" | "runtime-state-invalid" | "diagnostic";
+  readonly backend?: ClassifierBackend;
+  readonly readiness: "inactive" | "ready" | "blocked";
+  readonly errors: readonly string[];
+  readonly legacyConflict?: { readonly saved: boolean; readonly configured: boolean };
+  readonly runtimeStateIssue?: RuntimeStateIssue;
+}
+
+export type AuthObservability = "configured" | "not_configured" | "unknown";
+export type CandidateCircuit = "disabled" | "open" | "trial_active" | "half_open" | "closed" | "unknown";
+
+export interface InspectedCandidate {
+  readonly model: string;
+  readonly available: boolean | "unknown";
+  readonly auth: AuthObservability;
+  readonly circuit: CandidateCircuit;
+  readonly openUntil?: number;
+  readonly failureEvidence?: {
+    readonly category: "allowance_exhausted";
+    readonly evidence: "structured" | "text_heuristic";
+    readonly scope: "model-only";
+  };
+}
+
+export interface InspectedTier {
+  readonly tier: string;
+  readonly configuredEntryCount: number;
+  readonly candidates: readonly InspectedCandidate[];
+}
+
+export interface InspectDiagnosticsInput {
+  readonly config: BifrostConfig;
+  readonly registry: DiagnosticRegistry;
+  readonly reliabilityState: ReliabilityState;
+  readonly reliabilityConfig?: ReliabilityConfig;
+  readonly now?: number;
+  /** Bifrost's local refresh completion time, not a provider-data timestamp. */
+  readonly lastRegistryRefreshAt?: number;
+  readonly classifierEnabled?: boolean;
+  readonly classifierEnablementSource?: ClassifierDiagnosticStatus["source"];
+  readonly effectiveClassifierBackend?: ClassifierBackend;
+  readonly classifierConflict?: { readonly saved: boolean; readonly configured: boolean };
+  readonly classifierRuntimeStateIssue?: RuntimeStateIssue;
+}
+
+export interface InspectDiagnosticsReport {
+  readonly version: 1;
+  readonly kind: "inspection";
+  readonly observedAt: number;
+  readonly registry: {
+    readonly knownModelCount: number | "unknown";
+    readonly availableModelCount: number | "unknown";
+    readonly bifrostLastRefreshAgeMs?: number;
+  };
+  readonly tiers: readonly InspectedTier[];
+  readonly reliabilityPolicy: {
+    readonly enabled: boolean;
+    readonly cooldownOnAllowanceExhausted: boolean;
+    readonly allowanceCooldownScope: "provider" | "model";
+  };
+  readonly classifier: ClassifierDiagnosticStatus;
+  readonly diagnostics: readonly BifrostDiagnostic[];
+}
+
+const CONFIG_REPAIR = "Review the active configuration and run validation again.";
+const REFERENCE_REPAIR = "Check this pool entry against Pi's current model registry.";
+
+const configIssueMap: Readonly<Record<string, { code: string; repair: string }>> = {
+  "config.schema_version_unsupported": { code: "config.schema_version_unsupported", repair: "Set schemaVersion to a supported version." },
+  "config.requirements_unsupported": { code: "config.requirements_unsupported", repair: "Remove capability enforcement or unsupported requirement fields; this release supports advisory mode only." },
+  "config.tier_policies_requires_v2": { code: "config.tier_policies_requires_v2", repair: "Set schemaVersion to 2 or later, or remove tierPolicies." },
+  "config.v3_reserved_description": { code: "config.v3_reserved_description", repair: "Rename the user-defined key, or keep schemaVersion 2 so it stays a user-defined key." },
+  "config.tier_policies_invalid": { code: "config.tier_policies_invalid", repair: "Set tierPolicies to an object keyed by configured tier." },
+  "config.tier_policy_invalid": { code: "config.tier_policy_invalid", repair: "Set each tier policy to an object with a fallbackTiers array." },
+  "config.tier_policy_unknown_field": { code: "config.tier_policy_unknown_field", repair: "Remove unsupported fields from this tier policy." },
+  "config.tier_policy_unknown_tier": { code: "config.tier_policy_unknown_tier", repair: "Use a tier name that exists in models." },
+  "config.tier_policy_fallback_invalid": { code: "config.tier_policy_fallback_invalid", repair: "Set fallbackTiers to an array of tier names." },
+  "config.tier_policy_unknown_fallback": { code: "config.tier_policy_unknown_fallback", repair: "Use fallback tier names that exist in models." },
+  "config.tier_policy_self_fallback": { code: "config.tier_policy_self_fallback", repair: "Remove the tier from its own fallback list." },
+  "config.tier_policy_duplicate_fallback": { code: "config.tier_policy_duplicate_fallback", repair: "List each fallback tier only once." },
+  "config.tier_policy_cycle": { code: "config.tier_policy_cycle", repair: "Remove a fallback edge to break the cycle." },
+  "config.routing_scope_requires_v2": { code: "config.routing_scope_requires_v2", repair: "Set schemaVersion to 2 or remove routingScope." },
+  "config.routing_scope_invalid": { code: "config.routing_scope_invalid", repair: "Set routingScope to an object with optional providers and tiers." },
+  "config.routing_scope_unknown_field": { code: "config.routing_scope_unknown_field", repair: "Remove unsupported fields from routingScope." },
+  "config.routing_scope_providers_invalid": { code: "config.routing_scope_providers_invalid", repair: "Set each provider allowlist to an array of provider ids." },
+  "config.routing_scope_provider_invalid": { code: "config.routing_scope_provider_invalid", repair: "Use exact provider ids without surrounding whitespace or \"/\"." },
+  "config.routing_scope_duplicate_provider": { code: "config.routing_scope_duplicate_provider", repair: "List each provider id only once." },
+  "config.routing_scope_tier_invalid": { code: "config.routing_scope_tier_invalid", repair: "Set each tier scope to an object with a providers array." },
+  "config.routing_scope_unknown_tier": { code: "config.routing_scope_unknown_tier", repair: "Use a tier name that exists in models." },
+  "config.routing_scope_conflict": { code: "config.routing_scope_conflict", repair: "Make the global and tier provider allowlists intersect." },
+};
+
+function safeConfigIssuePath(value: unknown): string | undefined {
+  if (value === "schemaVersion" || value === "tierPolicies" || value === "requirements") return value;
+  if (value === "tierPolicies.*" || value === "tierPolicies.*.fallbackTiers") return value;
+  if (value === "routingScope" || value === "routingScope.providers" || value === "routingScope.tiers") return value;
+  if (value === "routingScope.tiers.*" || value === "routingScope.tiers.*.providers") return value;
+  if (typeof value !== "string" || value.length > 280) return undefined;
+  const match = /^tierPolicies\.([A-Za-z0-9_-][A-Za-z0-9._-]{0,127})(?:\.fallbackTiers)?$/.exec(value);
+  return match ? value : undefined;
+}
+
+function modelPoolEntries(config: BifrostConfig, tier: string): readonly string[] {
+  const raw = config.models?.[tier];
+  const entries = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw];
+  return entries.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+}
+
+function registryContext(registry: DiagnosticRegistry): ExtensionContext {
+  // SAFETY: findCandidates only reads modelRegistry; this adapter supplies every registry method it uses.
+  return { modelRegistry: registry } as unknown as ExtensionContext;
+}
+
+function knownModelSnapshot(registry: DiagnosticRegistry, knownModels: readonly Model<Api>[]): DiagnosticRegistry {
+  const models = [...knownModels];
+  return {
+    getAll: () => models,
+    // Routing's existing substring expander uses `getAvailable`. For offline
+    // inventory, give it the frozen known-model set and report availability
+    // separately; this does not change runtime routing semantics.
+    getAvailable: () => models,
+    find: (provider, modelId) => models.find((model) => model.provider === provider && model.id === modelId),
+    getProviderAuthStatus: (provider) => registry.getProviderAuthStatus(provider),
+  };
+}
+
+function uniqueDiagnostics(items: readonly BifrostDiagnostic[]): BifrostDiagnostic[] {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    const key = [item.severity, item.code, item.path, item.tier, item.entryIndex, item.ruleIndex, item.model, item.repair].join("\u0000");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function safeClassifierErrors(config: BifrostConfig, effectiveClassifierBackend?: ClassifierBackend, classifierEnabled?: boolean): string[] {
+  try {
+    return [...new Set(classifierConfigErrors(config, effectiveClassifierBackend, classifierEnabled).map((message) => {
+      const lower = message.toLowerCase();
+      if (lower.includes("criteria missing for tier")) return "Classifier criteria are missing for a configured tier.";
+      if (lower.includes("criteria") || lower.includes("criterion")) return "Classifier criteria have an invalid shape or tier reference.";
+      if (lower.includes("unknown classifier backend")) return "Classifier backend is unsupported.";
+      if (lower.includes("minconfidence")) return "Classifier confidence is outside its supported range.";
+      if (lower.includes("timeout")) return "Classifier timeout settings are invalid.";
+      return "Classifier configuration is invalid.";
+    }))];
+  } catch {
+    return ["Classifier validation is unavailable."];
+  }
+}
+
+function issueDiagnostics(config: BifrostConfig, effectiveClassifierBackend?: ClassifierBackend, classifierEnabled?: boolean): BifrostDiagnostic[] {
+  try {
+    return validateConfig(config, { effectiveClassifierBackend, classifierEnabled }).map((issue) => {
+      // Messages can contain user regexes, names, or arbitrary invalid values.
+      // Only consume static codes and separately sanitized field paths.
+      const metadata = issue as typeof issue & { readonly code?: unknown; readonly path?: unknown };
+      const mapped = typeof metadata.code === "string" ? configIssueMap[metadata.code] : undefined;
+      const path = mapped ? safeConfigIssuePath(metadata.path) : undefined;
+      return {
+        code: mapped?.code ?? (issue.severity === "error" ? "config.invalid" : "config.warning"),
+        severity: issue.severity,
+        repair: mapped?.repair ?? CONFIG_REPAIR,
+        ...(path ? { path } : {}),
+      };
+    });
+  } catch {
+    return [{ code: "config.validation_unavailable", severity: "error", repair: CONFIG_REPAIR }];
+  }
+}
+
+function registryPoolDiagnostics(config: BifrostConfig, registry: DiagnosticRegistry): BifrostDiagnostic[] {
+  const diagnostics: BifrostDiagnostic[] = [];
+  const ctx = registryContext(registry);
+  for (const [tier, rawPool] of Object.entries(config.models ?? {})) {
+    const rawEntries = Array.isArray(rawPool) ? rawPool : rawPool === undefined ? [] : [rawPool];
+    const entries = modelPoolEntries(config, tier);
+    if (entries.length === 0) {
+      diagnostics.push({ code: "pool.empty", severity: "warning", tier, repair: "Add a model pattern to this tier or leave it intentionally unused." });
+      continue;
+    }
+    for (let entryIndex = 0; entryIndex < rawEntries.length; entryIndex += 1) {
+      const pattern = rawEntries[entryIndex];
+      if (typeof pattern !== "string" || pattern.trim().length === 0) continue;
+      const candidates = findCandidates(ctx, pattern);
+      if (candidates.length > 0) continue;
+      const exact = pattern.includes("/");
+      diagnostics.push({
+        code: exact ? "model.reference_unresolved" : "pool.pattern_unresolved",
+        severity: "warning",
+        tier,
+        entryIndex,
+        repair: REFERENCE_REPAIR,
+      });
+    }
+  }
+  for (let ruleIndex = 0; ruleIndex < (config.rules ?? []).length; ruleIndex += 1) {
+    const model = config.rules?.[ruleIndex]?.model;
+    if (typeof model !== "string" || model.trim().length === 0) continue;
+    if (Object.hasOwn(config.models ?? {}, model) || findCandidates(ctx, model).length > 0) continue;
+    diagnostics.push({
+      code: "rule.target_unresolved",
+      severity: "warning",
+      ruleIndex,
+      repair: "Check this rule target against configured tiers and Pi's current model registry.",
+    });
+  }
+  return diagnostics;
+}
+
+/** Structural findings for the loaded effective config. They are warnings
+ * here for the same reason they are warnings at load: an unknown field or an
+ * invalid value does not by itself make routing unsafe, and the semantic
+ * issues below decide the fail-closed cases. Users and agents checking a
+ * configuration must still see them, so they travel with the report and its
+ * JSON form. */
+function structuralDiagnostics(config: BifrostConfig): BifrostDiagnostic[] {
+  return validateEffectiveConfigStructure(config).map((issue) => ({
+    code: issue.code ?? "config.schema_invalid",
+    severity: "warning" as const,
+    repair: "Correct this path to match the shipped schema.json, then reload the configuration.",
+    ...(typeof issue.path === "string" && issue.path.length > 0 && issue.path.length <= 280 ? { path: issue.path } : {}),
+  }));
+}
+
+/** Validate only the active merged snapshot and synchronous registry reads. */
+export function validateDiagnostics(input: ValidateDiagnosticsInput): ValidateDiagnosticsReport {
+  const classifierEnabled = input.classifierEnabled ?? input.config.classifier?.enabled !== false;
+  const classifierErrors = safeClassifierErrors(input.config, input.effectiveClassifierBackend, classifierEnabled);
+  const diagnostics = [...issueDiagnostics(input.config, input.effectiveClassifierBackend, classifierEnabled), ...structuralDiagnostics(input.config)];
+  if (!input.registry) {
+    diagnostics.push({ code: "registry.unavailable", severity: "info", repair: "Registry reference checks are unavailable until Pi exposes its local registry snapshot." });
+  } else {
+    try {
+      const knownModels = input.registry.getAll().filter((model) => !isVirtualModel(model));
+      diagnostics.push(...registryPoolDiagnostics(input.config, knownModelSnapshot(input.registry, knownModels)));
+    } catch {
+      diagnostics.push({ code: "registry.snapshot_unavailable", severity: "warning", repair: "Refresh Pi's model registry explicitly, then validate again." });
+    }
+  }
+  return {
+    version: 1,
+    kind: "validation",
+    configSource: "loaded-effective-config",
+    classifier: {
+      enabled: classifierEnabled,
+      configuredEnabled: input.config.classifier?.enabled !== false,
+      source: input.classifierEnablementSource ?? (input.classifierConflict ? "legacy-conflict" : input.classifierEnabled === undefined ? "diagnostic" : "configuration"),
+      ...(input.effectiveClassifierBackend ? { backend: input.effectiveClassifierBackend } : {}),
+      readiness: !classifierEnabled ? (input.classifierRuntimeStateIssue ? "blocked" : "inactive") : classifierErrors.length > 0 ? "blocked" : "ready",
+      errors: classifierErrors,
+      ...(input.classifierConflict ? { legacyConflict: input.classifierConflict } : {}),
+      ...(input.classifierRuntimeStateIssue ? { runtimeStateIssue: input.classifierRuntimeStateIssue } : {}),
+    },
+    diagnostics: uniqueDiagnostics(diagnostics),
+  };
+}
+
+function authStatus(registry: DiagnosticRegistry, provider: string): AuthObservability {
+  try {
+    const status = registry.getProviderAuthStatus(provider);
+    if (!status || typeof status.configured !== "boolean") return "unknown";
+    return status.configured ? "configured" : "not_configured";
+  } catch {
+    return "unknown";
+  }
+}
+
+function circuitStatus(
+  reliabilityState: ReliabilityState,
+  reliabilityConfig: ReliabilityConfig | undefined,
+  key: string,
+  now: number,
+): { status: CandidateCircuit; openUntil?: number } {
+  if (reliabilityConfig?.enabled === false) return { status: "disabled" };
+  try {
+    const state = getCircuitState(reliabilityState, key, now, reliabilityConfig);
+    if (state.open) return { status: "open", ...(state.openUntil ? { openUntil: state.openUntil } : {}) };
+    if (state.trialActive) return { status: "trial_active" };
+    if (state.halfOpen) return { status: "half_open", ...(state.openUntil ? { openUntil: state.openUntil } : {}) };
+    return { status: "closed" };
+  } catch {
+    return { status: "unknown" };
+  }
+}
+
+function allowanceFailureEvidence(reason: unknown): InspectedCandidate["failureEvidence"] {
+  if (reason === "allowance_exhausted:structured:model-only") {
+    return { category: "allowance_exhausted", evidence: "structured", scope: "model-only" };
+  }
+  if (reason === "allowance_exhausted:text_heuristic:model-only") {
+    return { category: "allowance_exhausted", evidence: "text_heuristic", scope: "model-only" };
+  }
+  return undefined;
+}
+
+/** Build an offline snapshot without route selection, random ranking, or reservation. */
+export function inspectDiagnostics(input: InspectDiagnosticsInput): InspectDiagnosticsReport {
+  const now = input.now ?? Date.now();
+  const classifierEnabled = input.classifierEnabled ?? input.config.classifier?.enabled !== false;
+  const classifierErrors = safeClassifierErrors(input.config, input.effectiveClassifierBackend, classifierEnabled);
+  let knownModels: Model<Api>[] | undefined;
+  let availableModels: Model<Api>[] | undefined;
+  const diagnostics: BifrostDiagnostic[] = [];
+  try {
+    knownModels = input.registry.getAll().filter((model) => !isVirtualModel(model));
+    availableModels = input.registry.getAvailable().filter((model) => !isVirtualModel(model));
+  } catch {
+    diagnostics.push({ code: "registry.snapshot_unavailable", severity: "warning", repair: "Refresh Pi's model registry explicitly, then inspect again." });
+  }
+  const availableKeys = new Set(availableModels?.map(modelKey) ?? []);
+  const snapshot = knownModelSnapshot(input.registry, knownModels ?? []);
+  const authByProvider = new Map<string, AuthObservability>();
+  const tiers: InspectedTier[] = [];
+  for (const [tier, pattern] of Object.entries(input.config.models ?? {})) {
+    let candidates: Model<Api>[] = [];
+    try {
+      candidates = findCandidates(registryContext(snapshot), pattern);
+    } catch {
+      diagnostics.push({ code: "registry.snapshot_unavailable", severity: "warning", tier, repair: "Refresh Pi's model registry explicitly, then inspect again." });
+    }
+    const inspected: InspectedCandidate[] = candidates.map((model) => {
+      const key = modelKey(model);
+      const circuit = circuitStatus(input.reliabilityState, input.reliabilityConfig, key, now);
+      const failureEvidence = allowanceFailureEvidence(input.reliabilityState.models[key]?.lastFailureReason);
+      let auth = authByProvider.get(model.provider);
+      if (auth === undefined) {
+        auth = authStatus(input.registry, model.provider);
+        authByProvider.set(model.provider, auth);
+      }
+      return {
+        model: key,
+        available: availableModels ? availableKeys.has(key) : "unknown",
+        auth,
+        circuit: circuit.status,
+        ...(circuit.openUntil !== undefined ? { openUntil: circuit.openUntil } : {}),
+        ...(failureEvidence ? { failureEvidence } : {}),
+      };
+    });
+    tiers.push({ tier, configuredEntryCount: modelPoolEntries(input.config, tier).length, candidates: inspected });
+  }
+  return {
+    version: 1,
+    kind: "inspection",
+    observedAt: now,
+    registry: {
+      knownModelCount: knownModels?.length ?? "unknown",
+      availableModelCount: availableModels?.length ?? "unknown",
+      ...(input.lastRegistryRefreshAt !== undefined && Number.isFinite(input.lastRegistryRefreshAt)
+        ? { bifrostLastRefreshAgeMs: Math.max(0, now - input.lastRegistryRefreshAt) }
+        : {}),
+    },
+    tiers,
+    reliabilityPolicy: {
+      enabled: input.config.reliability?.enabled !== false,
+      cooldownOnAllowanceExhausted: input.config.reliability?.cooldownOnAllowanceExhausted ?? true,
+      allowanceCooldownScope: input.config.reliability?.allowanceCooldownScope ?? "provider",
+    },
+    classifier: {
+      enabled: classifierEnabled,
+      configuredEnabled: input.config.classifier?.enabled !== false,
+      source: input.classifierEnablementSource ?? (input.classifierConflict ? "legacy-conflict" : input.classifierEnabled === undefined ? "diagnostic" : "configuration"),
+      ...(input.effectiveClassifierBackend ? { backend: input.effectiveClassifierBackend } : {}),
+      readiness: !classifierEnabled ? (input.classifierRuntimeStateIssue ? "blocked" : "inactive") : classifierErrors.length > 0 ? "blocked" : "ready",
+      errors: classifierErrors,
+      ...(input.classifierConflict ? { legacyConflict: input.classifierConflict } : {}),
+      ...(input.classifierRuntimeStateIssue ? { runtimeStateIssue: input.classifierRuntimeStateIssue } : {}),
+    },
+    diagnostics: uniqueDiagnostics(diagnostics),
+  };
+}

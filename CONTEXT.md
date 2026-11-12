@@ -30,14 +30,14 @@ Freeze the current model and stop automatic routing. Triggered automatically whe
 **Config layer**:
 One of four config sources merged in order: extension default → global (`~/.pi/agent/`) → project-local (`.pi/`) → project root. Later layers override earlier ones. The rules file (`bifrost-routes.json`) is loaded separately and overrides inline `rules` in `bifrost.json`.
 
-**Fuzzy cache**:
-Persisted classification cache using Jaccard token-set similarity. Stores `(normalizedPrompt, tier)` pairs in `.pi/bifrost-cache.jsonl`. On cache hit, skips the classifier entirely. Eviction is LRU by last-use timestamp.
+**Classification cache**:
+Persisted cache stores `(normalizedPrompt, tier)` pairs in `.pi/bifrost-cache.jsonl`. Exact ordered prompt matches are the default. Set `cache.threshold` below `1` to opt into fuzzy Jaccard token-set matching. Cache hits skip the classifier. Eviction is LRU by last-use timestamp.
 
 ## Example dialogue
 
 **Dev:** "User types 'help me debug this race condition in my Go backend.' What happens?"
 
-**Expert:** "Prompt enters the pipeline. First, fuzzy cache check — has Bifrost seen a similar prompt? If yes, reuse the cached tier, skip the classifier. If no, the LLM classifier reads the prompt and ideally returns `frontier` — 'debug' and 'race condition' are strong frontier signals. If the classifier is down, regex rules catch it — both 'debug' and 'race condition' hit the frontier rule. Once we have the tier, we look up the frontier model patterns, resolve candidates from the registry, apply the strategy — say `cheapest` — and switch pi's model."
+**Expert:** "Prompt enters the pipeline. First, exact cache check — has Bifrost seen this ordered prompt? If yes, reuse its cached tier and skip the classifier. Fuzzy Jaccard matching is available only when `cache.threshold` is below `1`. On a miss, the LLM classifier reads the prompt and ideally returns `frontier` — 'debug' and 'race condition' are strong frontier signals. If the classifier is down, regex rules catch it. Once we have a tier, we look up its model patterns, resolve candidates from the registry, apply the strategy — say `cheapest` — and switch Pi's model."
 
 **Dev:** "And if nothing matches?"
 
@@ -49,7 +49,7 @@ Persisted classification cache using Jaccard token-set similarity. Stores `(norm
 
 **Dev:** "So the classifier costs tokens on every prompt?"
 
-**Expert:** "Only on cache misses. The classifier model is configured to be cheap — typically a local Ollama model or a free-tier cloud model. Max 20 output tokens. And the fuzzy cache means repeat or near-repeat prompts skip it entirely. With threshold 0.85, 'debug the race condition' and 'help me debug a race condition' share a cache entry."
+**Expert:** "Only on cache misses. The classifier model is configured to be cheap — typically a local Ollama model or a free-tier cloud model. Max 20 output tokens. Exact repeat prompts skip classification by default. If you set threshold to 0.85, similar prompts can share a cache entry."
 
 ## Flagged ambiguities
 

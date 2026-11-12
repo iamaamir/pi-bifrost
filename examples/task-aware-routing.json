@@ -1,6 +1,6 @@
 {
   "$schema": "../schema.json",
-  "_comment": "TEMPLATE: 14-category task-aware routing. Replace every provider/id placeholder with models available in your Pi registry, then copy to .pi/bifrost.json.",
+  "description": "TEMPLATE: 14-category task-aware routing. Replace every provider/id placeholder with models available in your Pi registry, then copy to .pi/bifrost.json.",
   "enabled": true,
   "default": "general",
   "strategy": "first",

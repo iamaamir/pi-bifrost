@@ -4,12 +4,22 @@
   "description": "Route Pi turns through models you choose, with configured tiers and opt-in per-request dispatch.",
   "files": [
     "*.ts",
+    "dist/router/",
     "bifrost.json",
     "schema.json",
     "examples/",
+    "skills/configure-bifrost/",
+    "docs/router-api.md",
     "CHANGELOG.md"
   ],
   "type": "module",
+  "exports": {
+    "./router": {
+      "types": "./dist/router/router.d.ts",
+      "import": "./dist/router/router.js"
+    },
+    "./*": "./*"
+  },
   "license": "MIT",
   "author": {
     "name": "Aamir",
@@ -37,28 +47,96 @@
     "extensions": [
       "./index.ts"
     ],
+    "skills": [
+      "./skills/configure-bifrost"
+    ],
     "minPiVersion": "1.0.1",
     "image": "https://iamaamir.github.io/pi-bifrost/social-card.png"
   },
+  "crap": {
+    "threshold": 30,
+    "coverage": "coverage/coverage-final.json",
+    "history": "docs/quality/crap-history.jsonl"
+  },
   "scripts": {
+    "build:router": "node scripts/build-router.mjs",
+    "prepack": "npm run build:router",
     "test": "node --test --experimental-strip-types \"tests/*.test.ts\" \"tests/*.test.mjs\"",
+    "test:coverage": "c8 --reporter=json --reporter=text node --test --experimental-strip-types \"tests/*.test.ts\" \"tests/*.test.mjs\"",
+    "crap": "npm run test:coverage && node scripts/crap-report.mjs",
+    "crap:record": "npm run test:coverage && node scripts/crap-report.mjs --record",
+    "crap:trend": "node scripts/crap-report.mjs --trend",
+    "test:mutation": "stryker run",
     "test:integration": "node --test --experimental-strip-types tests/integration/*.test.mjs",
     "test:ui": "python3 scripts/ui-smoke.py",
     "test:ui:agent-tui": "bash scripts/ui-smoke-agent-tui.sh",
     "test:ui:reliability": "bash scripts/ui-reliability-fake-provider.sh",
+    "verify:release": "node scripts/verify-release.mjs",
+    "check:issue-refs": "node scripts/check-issue-refs.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "benchmark:jev": "node --experimental-strip-types scripts/jev-benchmark.ts",
-    "release": "node --experimental-strip-types scripts/release.mjs"
+    "release": "node --experimental-strip-types scripts/release.mjs",
+    "acceptance": "node scripts/acceptance.mjs",
+    "acceptance:deterministic": "node scripts/acceptance-deterministic.mjs",
+    "acceptance:verify": "node scripts/verify-release.mjs",
+    "check:arch": "node scripts/toolbox.mjs arch",
+    "check:dead-code": "node scripts/toolbox.mjs dead-code",
+    "check:ast": "node scripts/toolbox.mjs ast",
+    "ast:scan": "ast-grep scan --config sgconfig.yml",
+    "ast:test": "ast-grep test --skip-snapshot-tests",
+    "check:actions": "node scripts/toolbox.mjs actions",
+    "check:sast": "node scripts/toolbox.mjs sast",
+    "check:secrets": "node scripts/toolbox.mjs secrets",
+    "check:secrets:history": "node scripts/toolbox.mjs secrets-history",
+    "check:deps": "node scripts/toolbox.mjs deps",
+    "toolbox:doctor": "node scripts/toolbox.mjs doctor",
+    "bench": "node scripts/bench.mjs route",
+    "bench:projection": "node scripts/bench.mjs projection",
+    "profile:cpu": "node scripts/profile.mjs cpu",
+    "profile:heap": "node scripts/profile.mjs heap"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-ai": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@earendil-works/pi-tui": {
+      "optional": true
+    }
+  },
+  "overrides": {
+    "typed-rest-client": {
+      "qs": "6.16.1"
+    },
+    "undici": "^8.12.2",
+    "test-exclude": {
+      "glob": "14.0.4"
+    }
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "1.0.1",
-    "@earendil-works/pi-coding-agent": "1.0.1",
+    "@ast-grep/cli": "^0.51.0",
+    "@earendil-works/pi-ai": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.4.0",
+    "@earendil-works/pi-tui": "1.4.0",
+    "@stryker-mutator/core": "^10.0.0",
     "@types/node": "^26.1.1",
-    "agent-tui": "^1.1.0"
+    "agent-tui": "^1.1.0",
+    "c8": "^12.0.0",
+    "dependency-cruiser": "^18.7.0",
+    "fast-check": "4.10.2",
+    "knip": "^6.42.1",
+    "typebox": "1.3.27",
+    "typescript": "6.0.3"
+  },
+  "dependencies": {
+    "ajv": "^8.20.0"
   }
 }

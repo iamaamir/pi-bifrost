@@ -1,0 +1,19 @@
+id: no-focused-or-skipped-test-javascript
+language: JavaScript
+severity: error
+message: >-
+  The acceptance runner rejects skipped, TODO, and focused tests. Remove the
+  focus/skip modifier and fix or delete the case.
+rule:
+  any:
+    - pattern: test.skip($$$ARGS)
+    - pattern: test.todo($$$ARGS)
+    - pattern: test.only($$$ARGS)
+    - pattern: it.skip($$$ARGS)
+    - pattern: it.todo($$$ARGS)
+    - pattern: it.only($$$ARGS)
+    - pattern: describe.skip($$$ARGS)
+    - pattern: describe.only($$$ARGS)
+files:
+  - "tests/**/*.mjs"
+  - "tests/**/*.js"

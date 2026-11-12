@@ -10,7 +10,8 @@ export type ClassifierBackend = typeof CLASSIFIER_BACKEND_IDS[keyof typeof CLASS
 /** Provider-neutral classifier result retained through policy and UI layers. */
 export interface ClassificationJudgment {
   readonly tier: string;
-  readonly backend: ClassifierBackend;
+  /** Observed backend identity; configuring/invoking a backend still uses ClassifierBackend. */
+  readonly backend: string;
   readonly model?: string;
   readonly confidence?: number;
   readonly probabilities?: Readonly<Record<string, number>>;

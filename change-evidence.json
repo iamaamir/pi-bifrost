@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "base": "56be0335284ed0db00533b816adb40a03584d164",
+  "contracts": [
+    {
+      "id": "release-evidence-feature-refresh",
+      "requirement": "R16",
+      "files": [
+        "release-evidence.json"
+      ],
+      "boundary": "Update the main-bound release declaration to cover the merged provider sign-in warning and terminal-capture parser changes.",
+      "assertions": "Provider sign-in and terminal-wrap changes retain their own boundary, invariant and fault witnesses. Unchanged release contracts remain preserved; the added UI test is included in exact main-diff coverage.",
+      "boundaryTest": {
+        "file": "tests/config-agent.test.ts",
+        "name": "reports a stored sign-in that cannot be resolved and warns without blocking the write"
+      },
+      "invariant": {
+        "file": "tests/ui-smoke-screen.test.mjs",
+        "name": "keeps a padded frame anchored across redraws"
+      },
+      "fault": {
+        "file": "tests/integration/config-agent-acceptance.test.mjs",
+        "name": "fault control: dropping the sign-in warning turns the named assertion RED"
+      }
+    },
+    {
+      "id": "evidence-caller-unmatched-base",
+      "requirement": "R16",
+      "files": [
+        "tests/acceptance-runner.test.mjs"
+      ],
+      "boundary": "The real acceptance caller must use a negative-control base that matches neither the routine nor release declaration.",
+      "assertions": "Named selector witnesses check exact-base selection; the actual merged, single-commit and main-base callers were also run directly to check event propagation, unmatched-base rejection and restored success.",
+      "boundaryTest": {
+        "file": "tests/change-evidence.test.mjs",
+        "name": "selects exactly one fixed declaration by event base and covers a changed non-selected manifest"
+      },
+      "invariant": {
+        "file": "tests/change-evidence.test.mjs",
+        "name": "main release and later ordinary pushes select declarations by their own event.before"
+      },
+      "fault": {
+        "exception": "The actual main-base caller failed before the correction and passed afterward. Declaring the caller or its outer caller fixtures as manifest witnesses would nest the caller proof recursively or multiply its runtime."
+      }
+    }
+  ]
+}

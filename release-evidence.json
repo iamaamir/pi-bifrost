@@ -1,0 +1,656 @@
+{
+  "schemaVersion": 1,
+  "base": "74775776e5214e8182150cd8d0f4761482b06f6b",
+  "contracts": [
+    {
+      "id": "event-bound-acceptance",
+      "requirement": "R16",
+      "files": [
+        "change-evidence.json",
+        "scripts/acceptance-deterministic.mjs",
+        "scripts/acceptance.mjs",
+        "scripts/acceptance/change-evidence.mjs",
+        "scripts/acceptance/core.mjs",
+        "scripts/acceptance/evidence-rebind.mjs",
+        "scripts/acceptance/evidence-selection.mjs",
+        "scripts/acceptance/journeys.mjs",
+        "scripts/acceptance/profiles/contract.mjs",
+        "scripts/acceptance/profiles/live.mjs",
+        "scripts/acceptance/test-event-reporter.mjs",
+        "scripts/campaign-run.mjs",
+        "scripts/check-issue-refs.mjs",
+        "scripts/ci-report-publish.mjs",
+        "scripts/ci-report.mjs",
+        "scripts/crap-report.mjs",
+        "scripts/merge-controller.mjs",
+        "scripts/merge-eligibility.mjs",
+        "scripts/verify-release.mjs",
+        "tests/acceptance-journeys.test.mjs",
+        "tests/acceptance-live.test.mjs",
+        "tests/acceptance-runner.test.mjs",
+        "tests/campaign-run.test.mjs",
+        "tests/campaign-seed.test.mjs",
+        "tests/change-evidence.test.mjs",
+        "tests/check-issue-refs.test.mjs",
+        "tests/ci-report-publish.test.mjs",
+        "tests/ci-report.test.mjs",
+        "tests/crap-report.test.mjs",
+        "tests/evidence-rebind.test.mjs",
+        "tests/fixtures/ci-report/real-53-pass-1-block.json",
+        "tests/merge-ancestry.test.mjs",
+        "tests/merge-controller.test.mjs",
+        "tests/merge-eligibility.test.mjs",
+        "tests/preload/fast-check-seed.mjs",
+        "tests/verify-release.test.mjs"
+      ],
+      "boundary": "Event-derived release/routine evidence selection, acceptance event collection, and release preflight.",
+      "assertions": "Named tests cover trusted push bases, PR/push failure behavior, changed non-selected declaration coverage, and an event.before mutation control. This does not establish product release readiness or substitute for the full acceptance profile.",
+      "boundaryTest": {
+        "file": "tests/change-evidence.test.mjs",
+        "name": "main release and later ordinary pushes select declarations by their own event.before"
+      },
+      "invariant": {
+        "file": "tests/change-evidence.test.mjs",
+        "name": "selects exactly one fixed declaration by event base and covers a changed non-selected manifest"
+      },
+      "fault": {
+        "file": "tests/change-evidence.test.mjs",
+        "name": "fault control: selecting HEAD parent instead of event.before turns push base RED"
+      }
+    },
+    {
+      "id": "ci-security-tooling",
+      "requirement": "R16",
+      "files": [
+        ".dependency-cruiser.cjs",
+        ".github/workflows/acceptance-report.yml",
+        ".github/workflows/report-publisher-checks.yml",
+        ".github/workflows/security-audit.yml",
+        ".github/workflows/static-analysis.yml",
+        ".github/workflows/verification.yml",
+        ".gitignore",
+        ".gitleaks.toml",
+        ".gitleaksignore",
+        ".semgrepignore",
+        "knip.jsonc",
+        "renovate.json",
+        "rule-tests/no-console-log-in-extension-test.yml",
+        "rule-tests/no-focused-or-skipped-test-javascript-test.yml",
+        "rule-tests/no-focused-or-skipped-test-typescript-test.yml",
+        "rule-tests/no-process-exit-in-extension-test.yml",
+        "rules/no-console-log-in-extension.yml",
+        "rules/no-focused-or-skipped-test-javascript.yml",
+        "rules/no-focused-or-skipped-test-typescript.yml",
+        "rules/no-process-exit-in-extension.yml",
+        "scripts/scan-gitleaks-pr-history.sh",
+        "scripts/test-config-approval-tui.py",
+        "scripts/test-gitleaks-pr-boundaries.sh",
+        "scripts/test-outbound-guard.cjs",
+        "scripts/toolbox.mjs",
+        "scripts/ui-acceptance-first-use.sh",
+        "scripts/ui-reliability-fake-provider.sh",
+        "semgrep/bifrost-no-eval.yml",
+        "semgrep/bifrost-no-shell-true.yml",
+        "semgrep/bifrost-no-tls-verification-disable.yml",
+        "sgconfig.yml",
+        "tests/semgrep/targets/bifrost-no-eval.js",
+        "tests/semgrep/targets/bifrost-no-shell-true.js",
+        "tests/semgrep/targets/bifrost-no-tls-verification-disable.js",
+        "tests/toolbox.test.mjs",
+        "tests/tooling-config.test.mjs",
+        "tests/verification-workflow.test.mjs"
+      ],
+      "boundary": "Static workflow, action, Semgrep, Gitleaks, and toolbox policy changes.",
+      "assertions": "Named Node tests inspect static permissions and rule wiring. The Gitleaks shell boundary control is run separately. No hosted workflow dispatch, remote scan, or release gate result is claimed.",
+      "boundaryTest": {
+        "file": "tests/tooling-config.test.mjs",
+        "name": "every workflow declares explicit permissions"
+      },
+      "invariant": {
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the committed Semgrep rules and fixtures share exact rule identifiers and file names"
+      },
+      "fault": {
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the credential-persistence check rejects a checkout that omits the setting"
+      }
+    },
+    {
+      "id": "documentation-inventory",
+      "requirement": "R16",
+      "files": [
+        "AGENTS.md",
+        "CHANGELOG.md",
+        "CONTEXT.md",
+        "DEVELOPMENT.md",
+        "IMPLEMENTATION.md",
+        "PRD.md",
+        "README.md",
+        "RELEASE-PLAN.md",
+        "ROADMAP.md",
+        "docs/acceptance-ci-report.md",
+        "docs/acceptance-coverage.md",
+        "docs/adr/0007-decision-traces.md",
+        "docs/adr/0015-pinned-ephemeral.md",
+        "docs/adr/0021-explicit-tier-fallback-boundaries.md",
+        "docs/adr/0023-bounded-allowance-recovery.md",
+        "docs/adr/0024-provider-usage-and-rate-pauses.md",
+        "docs/adr/0025-automatic-first-use-configuration-save.md",
+        "docs/dev-tooling.md",
+        "docs/guide/auto-routing.md",
+        "docs/guide/classifiers.md",
+        "docs/guide/commands.md",
+        "docs/guide/configuration.md",
+        "docs/guide/getting-started.md",
+        "docs/guide/index.md",
+        "docs/guide/prompt-caching.md",
+        "docs/guide/reliability-and-cache.md",
+        "docs/guide/routing-controls.md",
+        "docs/guide/troubleshooting.md",
+        "docs/index.html",
+        "docs/llms.txt",
+        "docs/merge-controller.md",
+        "docs/mutation-evidence-62/boundary-kills-focused-binding.jsonl",
+        "docs/mutation-evidence-62/classifier-semantics-all-consumers-survivors.jsonl",
+        "docs/mutation-evidence-62/controlled-mutant-red-green.txt",
+        "docs/mutation-evidence-62/run-manifest.json",
+        "docs/mutation-evidence-62/survivors-focused-binding.jsonl",
+        "docs/mutation-testing.md",
+        "docs/prd-delivery-plan.md",
+        "docs/product-philosophy.md",
+        "docs/quality/crap-history.jsonl",
+        "docs/router-api.md",
+        "docs/site.js",
+        "docs/terminal-demo.js",
+        "docs/testing-coverage.md",
+        "docs/tracker-workflow.md",
+        "docs/verification-campaign.md"
+      ],
+      "boundary": "Documentation and historical artifacts are included only to make the release diff inventory complete.",
+      "assertions": "No claims are made about document accuracy, ADR conclusions, historical mutation records, or site rendering.",
+      "boundaryTest": {
+        "exception": "Documentation was explicitly out of scope for this code-based review; no document contents were read or tested."
+      },
+      "invariant": {
+        "exception": "No documentation invariant is asserted."
+      },
+      "fault": {
+        "exception": "No behavior fault is applicable to the documentation and historical artifact paths."
+      }
+    },
+    {
+      "id": "routing-and-dispatch",
+      "requirement": "R11",
+      "files": [
+        "affinity.ts",
+        "index.ts",
+        "router.ts",
+        "routing-scope.ts",
+        "routing.ts",
+        "runtime-affinity.ts",
+        "tests/affinity-auto-default-runtime.test.ts",
+        "tests/affinity-retention-eval.test.ts",
+        "tests/affinity.test.ts",
+        "tests/corpus/affinity-retention/scenarios.json",
+        "tests/corpus/routing-release/scenarios.json",
+        "tests/discovery-properties.test.ts",
+        "tests/integration/affinity-lifecycle-acceptance.test.mjs",
+        "tests/integration/affinity-policy-acceptance.test.mjs",
+        "tests/integration/auto-bootstrap-selection.test.mjs",
+        "tests/integration/auto-missing-route-fault.test.mjs",
+        "tests/integration/auto-virtual.test.mjs",
+        "tests/integration/decision-parity-acceptance.test.mjs",
+        "tests/integration/dispatch-identity-later-handler.mjs",
+        "tests/integration/dispatch-identity-observer.mjs",
+        "tests/integration/dispatch-identity.test.mjs",
+        "tests/integration/integration.test.mjs",
+        "tests/integration/legacy-behavior.test.mjs",
+        "tests/model-selection-properties.test.ts",
+        "tests/router.test.ts",
+        "tests/routing-release-corpus.test.ts",
+        "tests/routing-scope.test.ts",
+        "tests/routing.test.ts",
+        "tests/runtime-affinity.test.ts",
+        "tests/strict-runtime.test.ts",
+        "tests/virtual-config-reload.test.ts",
+        "tests/virtual-routing.test.ts",
+        "virtual-model.ts",
+        "virtual-routing.ts"
+      ],
+      "boundary": "Route resolution, configured tier/fallback behavior, virtual dispatch, and entry-point routing integration.",
+      "assertions": "Named tests exercise advisory affinity, exclusion preservation, and a missing-route boundary control. They do not prove every route-policy combination or every changed path individually.",
+      "boundaryTest": {
+        "file": "tests/router.test.ts",
+        "name": "exposes caller-owned affinity as advisory evidence without changing selection or RNG"
+      },
+      "invariant": {
+        "file": "tests/routing.test.ts",
+        "name": "does not restore reserve- or circuit-excluded preferred models"
+      },
+      "fault": {
+        "file": "tests/integration/auto-missing-route-fault.test.mjs",
+        "name": "proves missing Auto targets cannot escape an explicit boundary through sticky or fallback dispatch"
+      }
+    },
+    {
+      "id": "classifier-pipeline",
+      "requirement": "R06",
+      "files": [
+        "classification-pipeline.ts",
+        "classifier-backends.ts",
+        "classifier-pi-native.ts",
+        "classifier-semantics.ts",
+        "classifier.ts",
+        "tests/classifier-cache-key.test.ts",
+        "tests/classifier-deadline-runtime.test.ts",
+        "tests/classifier-degradation-runtime.test.ts",
+        "tests/classifier-effective-validation.test.ts",
+        "tests/classifier-metrics.test.ts",
+        "tests/classifier-pi-native.test.ts",
+        "tests/classifier-properties.test.ts",
+        "tests/classifier-session-runtime.test.ts",
+        "tests/classifier.test.ts",
+        "tests/fixtures/native-classifier-child.mjs",
+        "tests/integration/classifier-transport-acceptance.test.mjs",
+        "tests/integration/native-classifier.test.mjs",
+        "tests/pipeline.test.ts",
+        "tests/typesafe-classifier.test.ts",
+        "tests/typesafe-prompt-precedence.test.ts",
+        "typesafe-classifier.ts"
+      ],
+      "boundary": "Classifier transports, validation, cancellation, prompt handling, and metrics.",
+      "assertions": "Named tests cover injected endpoint transport, cancellation without paid fallback, and an isolated source-copy fault control. No live paid-provider behavior is claimed.",
+      "boundaryTest": {
+        "file": "tests/integration/classifier-transport-acceptance.test.mjs",
+        "name": "classifies through the configured HTTP endpoint transport with one injected request"
+      },
+      "invariant": {
+        "file": "tests/classifier.test.ts",
+        "name": "propagates caller abort to registry classification and skips paid fallbacks"
+      },
+      "fault": {
+        "file": "tests/integration/classifier-transport-acceptance.test.mjs",
+        "name": "fault control: removing the aborted-session guard starts a forbidden fallback prompt"
+      }
+    },
+    {
+      "id": "configuration-and-setup",
+      "requirement": "R09",
+      "files": [
+        "auto-setup.ts",
+        "bifrost.json",
+        "config-approval.ts",
+        "config-load.ts",
+        "config-migration.ts",
+        "config-schema.ts",
+        "config.ts",
+        "examples/advanced-classifier-prompt.json",
+        "examples/reliability-v2-auto.json",
+        "examples/task-aware-routing.json",
+        "schema-version.ts",
+        "schema.json",
+        "skills/configure-bifrost/SKILL.md",
+        "skills/configure-bifrost/references/configuration-reference.md",
+        "tests/auto-bootstrap-runtime.test.ts",
+        "tests/auto-setup.test.ts",
+        "tests/config-approval.test.ts",
+        "tests/config-load.test.ts",
+        "tests/config-migration.test.ts",
+        "tests/config-schema.test.ts",
+        "tests/config-skill.test.ts",
+        "tests/config-source-override.test.ts",
+        "tests/config.test.ts",
+        "tests/fixtures/config-approval-extension.ts",
+        "tests/integration/config-approval-tui.test.mjs",
+        "tests/integration/config-startup-acceptance.test.mjs",
+        "tests/integration/init-regression.test.mjs",
+        "tests/integration/preview-invalid-config-acceptance.test.mjs",
+        "tests/integration/preview-offline-acceptance.test.mjs",
+        "tests/schema.test.ts"
+      ],
+      "boundary": "Configuration loading/schema/migration, setup, preview, approval, and config-facing examples.",
+      "assertions": "Named tests cover malformed startup rejection, approved write/reload, and an isolated approval-summary fault control. Examples are inventory members; this does not verify every schema field.",
+      "boundaryTest": {
+        "file": "tests/integration/config-startup-acceptance.test.mjs",
+        "name": "blocks generation when a project config source is malformed"
+      },
+      "invariant": {
+        "file": "tests/config-agent.test.ts",
+        "name": "writes the approved candidate and verifies the reload"
+      },
+      "fault": {
+        "file": "tests/integration/config-approval-tui.test.mjs",
+        "name": "detects a faulty summary that hides classifier disablement in an isolated Pi copy"
+      }
+    },
+    {
+      "id": "reliability-and-lifecycle",
+      "requirement": "R08",
+      "files": [
+        "failure-observations.ts",
+        "provider-cooldowns.ts",
+        "reliability-migration.ts",
+        "reliability-observation-projection.ts",
+        "reliability-store.ts",
+        "reliability-v1-fence.ts",
+        "reliability-v2-routing.ts",
+        "reliability-v2-store.ts",
+        "reliability-v2.ts",
+        "reliability.ts",
+        "runtime-reliability-v2.ts",
+        "runtime-reliability.ts",
+        "runtime-state.ts",
+        "session-fallback.ts",
+        "tests/failure-observations.test.ts",
+        "tests/fixtures/child-auto-descendant-cli.mjs",
+        "tests/fixtures/child-auto-inline-extension.mjs",
+        "tests/fixtures/child-auto-inline-harness.mjs",
+        "tests/fixtures/child-auto-normal-close-cli.mjs",
+        "tests/fixtures/child-auto-pipe-race-descendant-cli.mjs",
+        "tests/fixtures/child-auto-runner-worker.mjs",
+        "tests/fixtures/concurrent-sessions-child.mjs",
+        "tests/fixtures/native-activation-cancel-child.mjs",
+        "tests/fixtures/native-faux-lifecycle-child.mjs",
+        "tests/fixtures/native-faux-provider-child.mjs",
+        "tests/fixtures/native-tool-continuation-child.mjs",
+        "tests/fixtures/replay-fault-control.mjs",
+        "tests/integration/activation-cancellation-acceptance.test.mjs",
+        "tests/integration/child-auto-finally-propagation.test.mjs",
+        "tests/integration/child-auto-inline.test.mjs",
+        "tests/integration/concurrent-sessions.test.mjs",
+        "tests/integration/native-activation-cancel.test.mjs",
+        "tests/integration/native-faux-lifecycle.test.mjs",
+        "tests/integration/native-faux-provider.test.mjs",
+        "tests/integration/native-lifecycle-cleanup.test.mjs",
+        "tests/integration/native-tool-continuation.test.mjs",
+        "tests/integration/provider-control-acceptance.test.mjs",
+        "tests/integration/release-acceptance.test.mjs",
+        "tests/integration/reliability-migration-acceptance.test.mjs",
+        "tests/integration/reliability-v2-auto.test.mjs",
+        "tests/integration/replay-fault-lifecycle.test.mjs",
+        "tests/provider-cooldown-runtime.test.ts",
+        "tests/provider-cooldowns.test.ts",
+        "tests/reliability-filter-properties.test.ts",
+        "tests/reliability-migration.test.ts",
+        "tests/reliability-observation-projection.test.ts",
+        "tests/reliability-state-machine.test.ts",
+        "tests/reliability-store.test.ts",
+        "tests/reliability-v2-routing.test.ts",
+        "tests/reliability-v2-runtime.test.ts",
+        "tests/reliability-v2-state-machine.test.ts",
+        "tests/reliability-v2-store.test.ts",
+        "tests/reliability-v2.test.ts",
+        "tests/reliability.test.ts",
+        "tests/runtime-reliability-hooks.test.ts",
+        "tests/runtime-reliability-tracker.test.ts",
+        "tests/runtime-reliability.test.ts",
+        "tests/runtime-state.test.ts",
+        "tests/session-fallback.test.ts"
+      ],
+      "boundary": "Reliability persistence/migration, provider pauses, failure observations, lifecycle recovery, and session fallback.",
+      "assertions": "Named tests cover restart behavior, half-open expiry, and migration ordering under a source-copy control. No claim that every provider/runtime combination was exercised.",
+      "boundaryTest": {
+        "file": "tests/reliability-v2-state-machine.test.ts",
+        "name": "continues meaningful operations after a real v2 store restart"
+      },
+      "invariant": {
+        "file": "tests/reliability-v2-state-machine.test.ts",
+        "name": "predicts exact half-open lease expiry boundaries"
+      },
+      "fault": {
+        "file": "tests/integration/reliability-migration-acceptance.test.mjs",
+        "name": "RED-proves the migration mutation-before-validation guard in an isolated source copy"
+      }
+    },
+    {
+      "id": "economic-policy",
+      "requirement": "R10",
+      "files": [
+        "economic-config.ts",
+        "economic-preferences.ts",
+        "economic-signals.ts",
+        "examples/economic-billing-preference.json",
+        "examples/economic-reserve-observe.json",
+        "tests/economic-config.test.ts",
+        "tests/economic-preferences.test.ts",
+        "tests/economic-runtime.test.ts",
+        "tests/economic-signals.test.ts",
+        "tests/integration/economic-policy-acceptance.test.mjs"
+      ],
+      "boundary": "Economic preference/reserve observations and bounded routing decisions.",
+      "assertions": "Named tests cover allowed-model selection, excluded-model behavior, and equality-boundary control. No external quota or billing facts were fetched or verified.",
+      "boundaryTest": {
+        "file": "tests/integration/economic-policy-acceptance.test.mjs",
+        "name": "dispatches the reserve-positive candidate and records the exact allowed-model set"
+      },
+      "invariant": {
+        "file": "tests/economic-runtime.test.ts",
+        "name": "does not let Auto degrade to a previously dispatched reserve-excluded model"
+      },
+      "fault": {
+        "file": "tests/integration/economic-policy-acceptance.test.mjs",
+        "name": "fails the named reserve-equality assertion under a hard-filter-bypass fault in an isolated copy"
+      }
+    },
+    {
+      "id": "cache-storage-reconciliation",
+      "requirement": "R12",
+      "files": [
+        "cache.ts",
+        "reconciliation-command.ts",
+        "reconciliation-store.ts",
+        "reconciliation.ts",
+        "storage.ts",
+        "tests/cache-properties.test.ts",
+        "tests/cache.test.ts",
+        "tests/integration/cache-lifecycle-acceptance.test.mjs",
+        "tests/reconciliation-command-router.test.ts",
+        "tests/reconciliation-command.test.ts",
+        "tests/reconciliation-store.test.ts",
+        "tests/reconciliation.test.ts",
+        "tests/storage.test.ts"
+      ],
+      "boundary": "Prompt-cache persistence, storage, and reconciliation commands/state.",
+      "assertions": "Named tests cover restart, normalized cache content, and semantic-key invalidation under a source-copy control. No response-cache behavior is claimed.",
+      "boundaryTest": {
+        "file": "tests/integration/cache-lifecycle-acceptance.test.mjs",
+        "name": "restart preserves the cache hit with empty network violations"
+      },
+      "invariant": {
+        "file": "tests/integration/cache-lifecycle-acceptance.test.mjs",
+        "name": "persists normalized prompt words and no response content"
+      },
+      "fault": {
+        "file": "tests/integration/cache-lifecycle-acceptance.test.mjs",
+        "name": "fault control: removing the semantic-key guard turns the named invalidation assertion RED"
+      }
+    },
+    {
+      "id": "commands-and-diagnostics",
+      "requirement": "R14",
+      "files": [
+        "commands.ts",
+        "debug.ts",
+        "diagnostics.ts",
+        "tests/bifrost-commands.test.ts",
+        "tests/commands.test.ts",
+        "tests/debug.test.ts",
+        "tests/diagnostics.test.ts",
+        "tests/integration/command-policy-acceptance.test.mjs",
+        "tests/integration/command-privacy-acceptance.test.mjs",
+        "tests/ux-status.test.ts",
+        "ux-status.ts"
+      ],
+      "boundary": "Commands, status, debugging, diagnostics, and privacy projections.",
+      "assertions": "Named tests cover allowlisted output, absent-snapshot uncertainty, and a canary control. No claim that all UI surfaces or every diagnostic field were exercised.",
+      "boundaryTest": {
+        "file": "tests/integration/command-privacy-acceptance.test.mjs",
+        "name": "keeps the debug trace inside an explicit key allowlist and free of canaries"
+      },
+      "invariant": {
+        "file": "tests/diagnostics.test.ts",
+        "name": "does not fabricate auth, freshness, or circuit results when snapshots are unavailable"
+      },
+      "fault": {
+        "file": "tests/integration/command-privacy-acceptance.test.mjs",
+        "name": "fault control: leaking the prompt projection turns the named redaction assertion RED"
+      }
+    },
+    {
+      "id": "probe-and-registry",
+      "requirement": "R15",
+      "files": [
+        "probe.ts",
+        "registry-refresh.ts",
+        "tests/integration/provider-scope-acceptance.test.mjs",
+        "tests/probe.test.ts",
+        "tests/registry-refresh-evidence.test.ts",
+        "tests/registry-refresh.test.ts"
+      ],
+      "boundary": "Provider probing, registry refresh, cache acceptance, cancellation, and catalog filtering.",
+      "assertions": "Named tests cover complete-report validation and refresh cancellation. No live provider probes were run; fault-sensitivity for this subsystem remains unverified.",
+      "boundaryTest": {
+        "file": "tests/probe.test.ts",
+        "name": "accepts only a complete, unique report for the current physical catalog"
+      },
+      "invariant": {
+        "file": "tests/registry-refresh.test.ts",
+        "name": "returns promptly when cancelled and handles late rejection"
+      },
+      "fault": {
+        "exception": "No dedicated source-mutant fault witness was found for probing/registry changes in this bounded pass. Negative-input and cancellation tests exist, but are not represented as mutation proof."
+      }
+    },
+    {
+      "id": "distribution-and-examples",
+      "requirement": "R13",
+      "files": [
+        "examples/README.md",
+        "examples/host-adapter.mjs",
+        "examples/router-standalone.mjs",
+        "package-lock.json",
+        "package.json",
+        "scripts/build-router.mjs",
+        "tests/fixtures/pack-lock.mjs",
+        "tests/pack-lock.test.mjs",
+        "tests/release-package.test.mjs",
+        "tests/router-package.test.mjs",
+        "tsconfig.router-build.json"
+      ],
+      "boundary": "Package contents, router build, and standalone examples.",
+      "assertions": "Named tests exercise packed consumer resolution, shipped example execution, and dependency-injection control. No benchmark result or performance improvement is claimed.",
+      "boundaryTest": {
+        "file": "tests/router-package.test.mjs",
+        "name": "compiles and runs the shipped examples in a clean standalone consumer with no Pi packages installed"
+      },
+      "invariant": {
+        "file": "tests/router-package.test.mjs",
+        "name": "installs the packed JS API and resolves without loader flags on Node 22.19+"
+      },
+      "fault": {
+        "file": "tests/router-package.test.mjs",
+        "name": "rejects a Pi dependency injected into the actual packed router graph and restores it"
+      }
+    },
+    {
+      "id": "performance-tooling",
+      "requirement": "R16",
+      "files": [
+        "scripts/bench.mjs",
+        "scripts/perf-workload.mjs",
+        "scripts/profile.mjs",
+        "scripts/provider-projection-benchmark.mjs",
+        "scripts/routing-release-benchmark.ts",
+        "stryker.config.classifier-semantics.mjs",
+        "stryker.config.mjs",
+        "tests/performance-tooling.test.mjs"
+      ],
+      "boundary": "Benchmark and profiling command construction, workload selection, and tool integration.",
+      "assertions": "Named tests cover stable deterministic output, allowlisted workload plans, and a source-copy allowlist fault control. No benchmark timings or performance improvement are asserted.",
+      "boundaryTest": {
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "the deterministic routing workload reports a stable checksum"
+      },
+      "invariant": {
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "builds Hyperfine plans for allowlisted workloads"
+      },
+      "fault": {
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "RED-proves the Hyperfine workload allowlist implementation fault in an isolated source copy"
+      }
+    },
+    {
+      "id": "fake-provider-test-infrastructure",
+      "requirement": "R16",
+      "files": [
+        "scripts/fake-provider-server.mjs",
+        "tests/fixtures/controlled-source-fault.mjs",
+        "tests/fixtures/faux-harness.mjs",
+        "tests/fixtures/http-pi-harness.mjs",
+        "tests/fixtures/provider-scope-faux-child.mjs",
+        "tests/integration/fake-provider-ownership.test.mjs"
+      ],
+      "boundary": "Shared fake-provider and child-process test harness support used by integration suites.",
+      "assertions": "These named tests validate fixture ownership and its cancellation control. They do not establish product behavior for every integration test importing the harness.",
+      "boundaryTest": {
+        "file": "tests/integration/fake-provider-ownership.test.mjs",
+        "name": "owns the fake provider across owner cancellation (baseline GREEN, bypass RED, restored GREEN)"
+      },
+      "invariant": {
+        "file": "tests/integration/fake-provider-ownership.test.mjs",
+        "name": "keeps one fake-provider owner in the two former leak paths"
+      },
+      "fault": {
+        "file": "tests/integration/fake-provider-ownership.test.mjs",
+        "name": "owns the fake provider across owner cancellation (baseline GREEN, bypass RED, restored GREEN)"
+      }
+    },
+    {
+      "id": "config-agent-provider-signin",
+      "requirement": "R07",
+      "files": [
+        "config-agent-report.ts",
+        "config-agent.ts",
+        "tests/config-agent.test.ts",
+        "tests/integration/config-agent-acceptance.test.mjs"
+      ],
+      "boundary": "Report a stored provider credential that cannot be resolved, warn when a proposed tier routes to it, and keep the advisory candidate writable.",
+      "assertions": "A fake registry whose provider status says configured but whose credential resolution throws produces an invalid sign-in report, a check warning on the referencing tier, and a repeated warning in the approval summary while check stays ok and write eligible. A provider that resolves cleanly emits no warning, and a stored credential Pi resolves to nothing is reported as invalid instead of ready, because Pi returns an empty resolution rather than throwing for an unusable credential. A pool naming a provider whose models Pi removed from its catalog still warns when the stored sign-in is dead, an unconfigured prefix with no matching model does not; a bare pool entry names no provider, so the warning follows the models it matches in the known catalog, hidden ones included, and a provider the tier's routingScope excludes never warns because it can never be selected. A provider named only by the stored config is always probed, because a candidate replaces one source and a patch leaves unnamed tiers in place: inspect reports its dead sign-in instead of a clean inventory, a patch that leaves such a tier in place warns, and a candidate warns for the workspace tier it inherits. A controlled source mutation that drops the sign-in warnings turns the named boundary assertion RED and restoring it returns GREEN. Provider error text is flattened, stripped of terminal escapes, and bounded before it reaches the model-facing report. The invalid sign-in path has no real-Pi end-to-end assertion because the fake-provider fixture cannot express it: a stored credential on a custom models.json provider resolves through getAuth instead of failing, and Pi drops a provider it cannot authenticate from both getAvailable() and getAll(), so `inspect` reports no sign-in section and a request against it fails with `No API key found` before any tool call. Custom providers only support the built-in `oauth: \"radius\"` flow, so an offline refresh cannot be made to fail. Coverage for the invalid state therefore stays at the unit boundary, where a registry stub supplies it.",
+      "boundaryTest": {
+        "file": "tests/config-agent.test.ts",
+        "name": "reports a stored sign-in that cannot be resolved and warns without blocking the write"
+      },
+      "invariant": {
+        "file": "tests/config-agent.test.ts",
+        "name": "warns only for providers a tier can actually select"
+      },
+      "fault": {
+        "file": "tests/integration/config-agent-acceptance.test.mjs",
+        "name": "fault control: dropping the sign-in warning turns the named assertion RED"
+      }
+    },
+    {
+      "id": "ui-smoke-capture-wrap",
+      "requirement": "R16",
+      "files": [
+        "scripts/ui-smoke.py",
+        "tests/ui-smoke-screen.test.mjs"
+      ],
+      "boundary": "The snapshot parser defers the line wrap until the next printable character, so a padded TUI frame keeps its row alignment across redraws.",
+      "assertions": "Replaying frames through the real Screen class keeps a padded row's successor anchored and leaves no blank row between them.  The eager-wrap fault is applied to a copy of the production parser itself, and that copy loses the anchor while the real parser keeps it, so a parser change that makes the assertion insensitive fails the fault control, and the previous implementation fails both behavioral cases. Importing the parser loads with Pillow unavailable, so the default test command works on the documented `npm ci` setup; only image rendering needs Pillow.",
+      "boundaryTest": {
+        "file": "tests/ui-smoke-screen.test.mjs",
+        "name": "defers the wrap at the terminal edge"
+      },
+      "invariant": {
+        "file": "tests/ui-smoke-screen.test.mjs",
+        "name": "keeps a padded frame anchored across redraws"
+      },
+      "fault": {
+        "file": "tests/ui-smoke-screen.test.mjs",
+        "name": "fault control: an eager wrap moves the anchored row"
+      }
+    }
+  ]
+}

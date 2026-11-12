@@ -14,12 +14,160 @@ describe("shipped JSON artifacts", () => {
     assert.ok(schema !== null && typeof schema === "object" && "$schema" in schema);
   });
 
+  it("documents capability requirements as advisory-only in this release", () => {
+    const schema = readJson("schema.json") as {
+      properties?: { requirements?: { additionalProperties?: boolean; properties?: { mode?: { enum?: string[]; default?: string } } } };
+    };
+    const requirements = schema.properties?.requirements;
+    assert.equal(requirements?.additionalProperties, false);
+    assert.deepEqual(requirements?.properties?.mode?.enum, ["advisory"]);
+    assert.equal(requirements?.properties?.mode?.default, "advisory");
+  });
+
+  it("requires schemaVersion 2 or later whenever tierPolicies is present", () => {
+    const schema = readJson("schema.json") as {
+      properties?: { schemaVersion?: { enum?: number[] } };
+      allOf?: Array<{
+        if?: { required?: string[] };
+        then?: { required?: string[]; properties?: { schemaVersion?: { enum?: number[] } } };
+      }>;
+    };
+    assert.deepEqual(schema.properties?.schemaVersion?.enum, [1, 2, 3]);
+    const gate = schema.allOf?.find((item) => item.if?.required?.includes("tierPolicies"));
+    assert.deepEqual(gate?.then?.required, ["schemaVersion"]);
+    assert.deepEqual(gate?.then?.properties?.schemaVersion?.enum, [2, 3]);
+  });
+
+  it("allows an optional bounded total classifier timeout without a default", () => {
+    const schema = readJson("schema.json") as {
+      definitions?: { ClassifierConfig?: { properties?: { totalTimeoutMs?: { type?: string; minimum?: number; maximum?: number; default?: number } } } };
+    };
+    const timeout = schema.definitions?.ClassifierConfig?.properties?.totalTimeoutMs;
+    assert.equal(timeout?.type, "integer");
+    assert.equal(timeout?.minimum, 1);
+    assert.equal(timeout?.maximum, 60_000);
+    assert.equal(timeout?.default, undefined);
+  });
+
+  it("requires schemaVersion 2 or later for reliability state versions without forcing reliability on", () => {
+    const schema = readJson("schema.json") as { allOf?: Array<{ if?: unknown; then?: unknown }> };
+    const gate = schema.allOf?.find((item) => {
+      const condition = item.if as { properties?: { reliability?: { required?: string[] } }; required?: string[] } | undefined;
+      return condition?.required?.includes("reliability") && condition.properties?.reliability?.required?.includes("stateVersion");
+    });
+    const then = gate?.then as { required?: string[]; properties?: { schemaVersion?: { enum?: number[] }; reliability?: { properties?: { enabled?: { const?: boolean } } } } } | undefined;
+    assert.deepEqual(then?.required, ["schemaVersion"]);
+    assert.deepEqual(then?.properties?.schemaVersion?.enum, [2, 3]);
+    assert.equal(then?.properties?.reliability?.properties?.enabled?.const, undefined);
+  });
+
+  it("requires schemaVersion 2 or later for economics and only permits static non-authoritative scopes", () => {
+    const schema = readJson("schema.json") as Record<string, unknown>;
+    const allOf = schema.allOf as Array<{ if?: { required?: string[] }; then?: { required?: string[]; properties?: { schemaVersion?: { enum?: number[] } } } }>;
+    const definitions = schema.definitions as {
+      EconomicsConfig?: {
+        properties?: {
+          sources?: { items?: { properties?: { authority?: { enum?: string[] } } } };
+          scopes?: { additionalProperties?: { oneOf?: Array<{ properties?: { kind?: { const?: string } } }> } };
+          preference?: { type?: string; additionalProperties?: boolean; required?: string[]; properties?: { billingClass?: { enum?: string[] } } };
+        };
+      };
+    };
+    const gate = allOf.find((item) => item.if?.required?.includes("economics"));
+    assert.deepEqual(gate?.then?.required, ["schemaVersion"]);
+    assert.deepEqual(gate?.then?.properties?.schemaVersion?.enum, [2, 3]);
+    assert.deepEqual(definitions.EconomicsConfig?.properties?.sources?.items?.properties?.authority?.enum, ["declared", "estimated"]);
+    assert.deepEqual(definitions.EconomicsConfig?.properties?.scopes?.additionalProperties?.oneOf
+      ?.map((item) => item.properties?.kind?.const)
+      .filter((kind): kind is string => kind !== undefined), ["model", "provider"]);
+    assert.deepEqual(definitions.EconomicsConfig?.properties?.preference?.properties?.billingClass?.enum, ["subscription", "metered", "free"]);
+  });
+
+  it("gates explicit affinity overrides behind schemaVersion 2 or later without claiming one surface default", () => {
+    const schema = readJson("schema.json") as Record<string, unknown>;
+    const allOf = schema.allOf as Array<{ if?: { required?: string[] }; then?: { required?: string[]; properties?: { schemaVersion?: { enum?: number[] } } } }>;
+    const affinity = schema.definitions as { AffinityConfig?: { additionalProperties?: boolean; required?: string[]; properties?: { mode?: { enum?: string[]; default?: string }; providerAdvisory?: { type?: string } } } };
+    const gate = allOf.find((item) => item.if?.required?.includes("affinity"));
+    assert.deepEqual(gate?.then?.required, ["schemaVersion"]);
+    assert.deepEqual(gate?.then?.properties?.schemaVersion?.enum, [2, 3]);
+    assert.equal(affinity.AffinityConfig?.additionalProperties, false);
+    assert.deepEqual(affinity.AffinityConfig?.properties?.mode?.enum, ["off", "observe", "retain-within-tier"]);
+    assert.equal(affinity.AffinityConfig?.properties?.mode?.default, undefined);
+    assert.equal(affinity.AffinityConfig?.properties?.providerAdvisory?.type, "boolean");
+  });
+
+  it("allows explicit reliability v1 without schemaVersion 2 and gates only v2", () => {
+    const schema = readJson("schema.json") as Record<string, unknown>;
+    const definition = (schema.definitions as { ReliabilityConfig?: { properties?: { stateVersion?: { enum?: number[] } } } }).ReliabilityConfig;
+    assert.deepEqual(definition?.properties?.stateVersion?.enum, [1, 2]);
+    const allOf = schema.allOf as Array<{ if?: { properties?: { reliability?: { properties?: { stateVersion?: { const?: number } } } } }; then?: { properties?: { schemaVersion?: { enum?: number[] } } } }>;
+    assert.ok(allOf.some((item) => item.if?.properties?.reliability?.properties?.stateVersion?.const === 2
+      && item.then?.properties?.schemaVersion?.enum?.join(",") === "2,3"));
+  });
+
+  it("documents the default-on provider usage/billing cooldown and explicit opt-out", () => {
+    const schema = readJson("schema.json") as {
+      definitions?: { ReliabilityConfig?: { properties?: {
+        allowanceCooldownScope?: { enum?: unknown[]; default?: unknown };
+        cooldownOnAllowanceExhausted?: { type?: string; default?: unknown; description?: string };
+      } } };
+    };
+    const property = schema.definitions?.ReliabilityConfig?.properties?.cooldownOnAllowanceExhausted;
+    const scope = schema.definitions?.ReliabilityConfig?.properties?.allowanceCooldownScope;
+    assert.equal(property?.type, "boolean");
+    assert.equal(property?.default, true);
+    assert.deepEqual(scope?.enum, ["provider", "model"]);
+    assert.equal(scope?.default, "provider");
+    assert.match(String(property?.description), /usage-allowance or billing failure/);
+    assert.match(String(property?.description), /ordinary 429 rate limits use a short provider throttle/);
+  });
+
+  it("documents the opt-in, bounded zero-effect allowance retry", () => {
+    const schema = readJson("schema.json") as {
+      definitions?: { ReliabilityConfig?: { properties?: { retryOnAllowanceExhausted?: { type?: string; default?: unknown; description?: string } } } };
+    };
+    const property = schema.definitions?.ReliabilityConfig?.properties?.retryOnAllowanceExhausted;
+    assert.equal(property?.type, "boolean");
+    assert.equal(property?.default, false);
+    assert.match(String(property?.description), /at most once/);
+    assert.match(String(property?.description), /no assistant content/);
+    assert.match(String(property?.description), /tool results/);
+  });
+
+  it("requires schemaVersion 2 or 3 for routingScope and keeps the allowlists exact", () => {
+    const schema = readJson("schema.json") as Record<string, unknown>;
+    const allOf = schema.allOf as Array<{ if?: { required?: string[] }; then?: { required?: string[]; properties?: { schemaVersion?: { enum?: number[] } } } }>;
+    const gate = allOf.find((item) => item.if?.required?.includes("routingScope"));
+    assert.deepEqual(gate?.then?.required, ["schemaVersion"]);
+    assert.deepEqual(gate?.then?.properties?.schemaVersion?.enum, [2, 3]);
+
+    const definition = (schema.definitions as {
+      RoutingScope?: {
+        additionalProperties?: boolean;
+        properties?: {
+          providers?: { type?: string; items?: { type?: string; minLength?: number } };
+          tiers?: { additionalProperties?: { oneOf?: Array<{ required?: string[]; additionalProperties?: boolean; properties?: { providers?: { type?: string } } }> } };
+        };
+      };
+    }).RoutingScope;
+    assert.equal(definition?.additionalProperties, false);
+    assert.equal(definition?.properties?.providers?.type, "array");
+    assert.equal(definition?.properties?.providers?.items?.minLength, 1);
+    const tier = definition?.properties?.tiers?.additionalProperties?.oneOf?.[0];
+    assert.equal(tier?.required, undefined, "omitted tier providers impose no restriction");
+    assert.equal(tier?.additionalProperties, false);
+    assert.equal(tier?.properties?.providers?.type, "array");
+  });
+
   it("keeps checked-in examples parseable", () => {
     for (const path of [
       "bifrost.json",
       "examples/economical-frontier.json",
       "examples/economical-frontier-reliability.json",
       "examples/large-context.json",
+      "examples/economic-reserve-observe.json",
+      "examples/economic-billing-preference.json",
+      "examples/reliability-v2-auto.json",
     ]) {
       assert.doesNotThrow(() => readJson(path), path);
     }

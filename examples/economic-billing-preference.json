@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 2,
+  "default": "general",
+  "strategy": "cheapest",
+  "models": {
+    "general": ["provider-a/model-metered", "provider-b/model-subscription"]
+  },
+  "economics": {
+    "mode": "policy",
+    "scopes": {
+      "metered-model": { "kind": "model", "model": "provider-a/model-metered" },
+      "subscription-model": { "kind": "model", "model": "provider-b/model-subscription" }
+    },
+    "sources": [
+      { "id": "metered-declaration", "scopeRef": "metered-model", "authority": "declared" },
+      { "id": "subscription-declaration", "scopeRef": "subscription-model", "authority": "declared" }
+    ],
+    "sourceOrder": {
+      "metered-model": ["metered-declaration"],
+      "subscription-model": ["subscription-declaration"]
+    },
+    "admission": [],
+    "preference": { "billingClass": "subscription" },
+    "observations": [
+      {
+        "sourceId": "metered-declaration",
+        "scopeRef": "metered-model",
+        "billing": "metered",
+        "observedAt": 1,
+        "expiresAt": 4102444800000,
+        "revision": 1,
+        "windows": []
+      },
+      {
+        "sourceId": "subscription-declaration",
+        "scopeRef": "subscription-model",
+        "billing": "subscription",
+        "observedAt": 1,
+        "expiresAt": 4102444800000,
+        "revision": 1,
+        "windows": []
+      }
+    ]
+  }
+}

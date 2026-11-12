@@ -1,33 +1,62 @@
 import type { ModelSelectSource } from "@earendil-works/pi-coding-agent";
+import { lstatSync, readFileSync } from "node:fs";
 import { resolveStoragePath, readJsonFile, writeJsonFile } from "./storage.ts";
 
 /**
- * Runtime mode state that must survive extension reload and Pi restart.
- * Persisted separately from bifrost.json (config) so user runtime toggles
- * (`/bifrost on|off`, `/bifrost pin|unpin`, `/bifrost classifier on|off`)
- * are not clobbered by config reloads.
+ * Global Bifrost mode survives reload and restart. Classifier enablement now
+ * comes from config or an explicit session override; classifierEnabled in old
+ * runtime files is read only to detect and explain a privacy-sensitive conflict.
  */
+export type ClassifierEnablementSource = "configuration" | "session" | "legacy-conflict" | "runtime-state-invalid";
+export type RuntimeStateIssue = "unreadable" | "invalid-json" | "invalid-shape";
+
+export interface ClassifierEnablement {
+  readonly enabled: boolean;
+  readonly source: ClassifierEnablementSource;
+  readonly legacyConflict?: { readonly saved: boolean; readonly configured: boolean };
+  readonly runtimeStateIssue?: RuntimeStateIssue;
+}
+
 export interface RuntimeModeState {
   enabled: boolean;
   pinned: boolean;
   classifierEnabled: boolean;
+  classifierSource: ClassifierEnablementSource;
+  legacyClassifierEnabled?: boolean;
+  classifierConflict?: { readonly saved: boolean; readonly configured: boolean };
+  runtimeStateIssue?: RuntimeStateIssue;
 }
 
-/**
- * Subset of runtime state that is persisted across extension reload and Pi
- * restart. `pinned` is deliberately excluded — it is session-local only and
- * must not be read from or written to disk (ADR-0015).
- */
+/** Only Bifrost's global on/off mode remains durable. */
 export interface PersistedModeState {
-  enabled: boolean;
-  classifierEnabled: boolean;
+  /** Omit to remove the runtime override and return to the config default. */
+  enabled?: boolean;
 }
 
 export const DEFAULT_RUNTIME_STATE: RuntimeModeState = {
   enabled: true,
   pinned: false,
   classifierEnabled: true,
+  classifierSource: "configuration",
 };
+
+/** Explicit session choice wins; an ambiguous legacy conflict pauses classification. */
+export function resolveClassifierEnablement(
+  configured: boolean,
+  legacySaved?: boolean,
+  sessionOverride?: boolean,
+  runtimeStateIssue?: RuntimeStateIssue,
+): ClassifierEnablement {
+  const legacyConflict = legacySaved !== undefined && legacySaved !== configured
+    ? { saved: legacySaved, configured }
+    : undefined;
+  if (runtimeStateIssue) return { enabled: false, source: "runtime-state-invalid", runtimeStateIssue };
+  if (sessionOverride !== undefined) {
+    return { enabled: sessionOverride, source: "session", ...(legacyConflict ? { legacyConflict } : {}) };
+  }
+  if (legacyConflict) return { enabled: false, source: "legacy-conflict", legacyConflict };
+  return { enabled: configured, source: "configuration" };
+}
 
 /** Session restore replays a recorded selection — it is not a user action. */
 export function isPassiveModelSelection(source: ModelSelectSource): boolean {
@@ -64,28 +93,70 @@ export function runtimeStatePath(cwd: string): string {
   return resolveStoragePath(cwd, undefined, ".pi/bifrost-state.json");
 }
 
-export function loadRuntimeState(path: string, fallback: RuntimeModeState = DEFAULT_RUNTIME_STATE): RuntimeModeState {
-  try {
-    const parsed = readJsonFile<Partial<RuntimeModeState>>(path);
-    if (!parsed) return { ...fallback };
-    return {
-      enabled: typeof parsed.enabled === "boolean" ? parsed.enabled : fallback.enabled,
-      pinned: false, // pinned is ephemeral — session-local, never inherit from file
-      classifierEnabled:
-        typeof parsed.classifierEnabled === "boolean"
-          ? parsed.classifierEnabled
-          : fallback.classifierEnabled,
-    };
-  } catch (err) {
-    console.error(`[bifrost] failed to load runtime state: ${err}`);
-    return { ...fallback };
-  }
+function validRuntimeState(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (!Object.hasOwn(record, "enabled") || typeof record.enabled === "boolean")
+    && (!Object.hasOwn(record, "classifierEnabled") || typeof record.classifierEnabled === "boolean");
 }
 
-export function saveRuntimeState(path: string, state: PersistedModeState): void {
+export function loadRuntimeState(path: string, fallback: RuntimeModeState = DEFAULT_RUNTIME_STATE): RuntimeModeState {
+  let stat;
   try {
-    writeJsonFile(path, state);
+    stat = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ...fallback };
+    return invalidRuntimeState(fallback, "unreadable");
+  }
+  if (!stat.isFile()) return invalidRuntimeState(fallback, "invalid-shape");
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  } catch (error) {
+    return invalidRuntimeState(fallback, error instanceof SyntaxError ? "invalid-json" : "unreadable");
+  }
+  if (!validRuntimeState(parsed)) return invalidRuntimeState(fallback, "invalid-shape");
+  const record = parsed;
+  const legacyClassifierEnabled = record.classifierEnabled as boolean | undefined;
+  const classifier = resolveClassifierEnablement(fallback.classifierEnabled, legacyClassifierEnabled);
+  return {
+    enabled: record.enabled as boolean | undefined ?? fallback.enabled,
+    pinned: false, // pinned is ephemeral — session-local, never inherit from file
+    classifierEnabled: classifier.enabled,
+    classifierSource: classifier.source,
+    ...(legacyClassifierEnabled !== undefined ? { legacyClassifierEnabled } : {}),
+    ...(classifier.legacyConflict ? { classifierConflict: classifier.legacyConflict } : {}),
+  };
+}
+
+function invalidRuntimeState(fallback: RuntimeModeState, issue: RuntimeStateIssue): RuntimeModeState {
+  console.error(`[bifrost] runtime state is invalid (${issue}); classifier is paused until the file is repaired`);
+  return {
+    enabled: fallback.enabled,
+    pinned: false,
+    classifierEnabled: false,
+    classifierSource: "runtime-state-invalid",
+    runtimeStateIssue: issue,
+  };
+}
+
+export function saveRuntimeState(path: string, state: PersistedModeState): boolean {
+  try {
+    const current = readJsonFile<unknown>(path);
+    if (current !== undefined && !validRuntimeState(current)) {
+      throw new Error("runtime state has invalid shape");
+    }
+    const existing = current;
+    const next = state.enabled === undefined
+      ? Object.fromEntries(Object.entries(existing ?? {}).filter(([key]) => key !== "enabled"))
+      : { ...existing, enabled: state.enabled };
+    if (current === undefined && Object.keys(next).length === 0) return true;
+    // Preserve legacy classifier state and unknown fields. Atomic replacement is not cross-process CAS.
+    writeJsonFile(path, next);
+    return true;
   } catch (err) {
     console.error(`[bifrost] failed to save runtime state: ${err}`);
+    return false;
   }
 }

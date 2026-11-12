@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { MAX_REPORT_BYTES, makeReportData, renderCiReport } from "./ci-report.mjs";
+import { MAX_CASES, MAX_REPORT_BYTES, makeReportData, renderCiReport } from "./ci-report.mjs";
 
 export const COMMENT_MARKER = "<!-- bifrost-acceptance-report:v1 -->";
 const WORKFLOW_PATH = ".github/workflows/verification.yml";
@@ -12,8 +12,10 @@ const isFingerprint = (value) => typeof value === "string" && /^[a-f0-9]{64}$/i.
 const safeRepo = (value) => typeof value === "string" && /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value);
 
 export function validateReportData(payload) {
+  const evidence = isObject(payload?.evidence) ? payload.evidence : payload;
+  if (!Array.isArray(evidence?.cases) || evidence.cases.length > MAX_CASES) return null;
   try {
-    const data = makeReportData(isObject(payload?.evidence) ? payload.evidence : payload);
+    const data = makeReportData(evidence);
     if (data?.evidence?.profile !== "deterministic") return null;
     const source = data.evidence.source;
     if (!isSha(source.revisionAtStart) || !isSha(source.revisionAtEnd)
@@ -81,6 +83,7 @@ export async function publishWorkflowRun({ event, repository, serverUrl, api, re
       repository,
       serverUrl,
       conclusion: event.action === "in_progress" ? "in_progress" : confirmed.run.conclusion ?? "failure",
+      crapHistory: Array.isArray(reportData?.crapHistory) ? reportData.crapHistory : undefined,
     });
     const body = `${COMMENT_MARKER}\n${rendered.markdown}`;
     if (Buffer.byteLength(body) > 65_000) throw new Error("Rendered CI report exceeds the GitHub comment limit");

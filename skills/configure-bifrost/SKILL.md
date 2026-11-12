@@ -1,0 +1,228 @@
+---
+name: configure-bifrost
+description: Compose and safely apply Pi-Bifrost routing configuration from a plain-language goal — pick tiers and strategies for cheap coding, strong reasoning, review or multi-agent workflows, cost limits, and subscription-only preferences. Use when asked to configure Bifrost for my workflow, optimize Bifrost routing for cost or quality, set up model tiers from my available models, prefer subscription models and avoid metered fallback, improve or explain my current routing config, or create a quality-first, budget-conscious, or multi-agent routing policy.
+---
+
+# Configure Bifrost
+
+Turn a routing goal in plain language into a **valid, reviewed, ordinary
+`bifrost.json`**. Bifrost owns the primitives, validation, and write safety. You
+own the goal, the composition, and the explanation.
+
+You never invent configuration fields, models, prices, or guarantees. If the
+goal needs something Bifrost does not do, say so.
+
+## Workflow
+
+1. **Read the goal.** Extract: primary objective (quality, cost, latency,
+   reliability, continuity), kind of work (coding, review, debugging,
+   architecture, routine automation), model preferences and restrictions,
+   billing constraints, and how much routing flexibility is wanted. If the
+   request already answers these, do not ask anything.
+2. **Inspect before proposing.** Call `bifrost_config` with
+   `{"operation":"inspect"}`. This returns the real model inventory with exact
+   `provider/id` keys, cost and context metadata, the config layers with their
+   precedence, the current effective policy, the baseline tiers, and current
+   restrictions. Never use a model id from memory or from documentation. When the
+   inventory is long, repeat inspect with `"provider": "<id>"` to list one
+   provider's models, and page further with `"offset": 40`, then `80`, and so
+   on; the filter and offset only narrow what is reported. Inspect also reports
+   effective classifier runtime state, configured state, backend, and any
+   legacy-state conflict; use runtime state, not `classifier.enabled` alone,
+   when describing whether classification is active. It reports each provider's
+   sign-in state too. A provider marked `invalid` cannot route, and Pi may hide
+   its models from the inventory entirely: do not put a tier on it unless the
+   user has said they will sign in again first, and say what you avoided.
+   `not_configured` providers cannot route at all.
+3. **Preserve existing policy while composing.** See
+   [references/configuration-reference.md](references/configuration-reference.md)
+   for the fields, strategies, and worked examples. Start from the user's
+   current source and effective config. Keep existing tiers, rules, classifier
+   settings, and fallbacks unless the stated goal needs a specific change.
+   `patch` merges only top-level keys: changing `models`, `rules`,
+   `classifier`, or `tierPolicies` replaces that entire value in the selected
+   source. Read that source file and carry forward its unrelated entries before
+   replacing one of those fields. Do not flatten inherited settings from other
+   layers unless the user asks. Prefer a focused `patch` over a complete
+   `candidate`; `patch` merges top-level fields only, so a nested object such as
+   `classifier` is replaced as a whole. Preserve its unrelated members when
+   changing one nested setting.
+
+   A valid candidate can still discard unrelated policy. After `check`, compare
+   every reported replacement/removal and the effective before/after values
+   with the user's goal. Restore any unrelated tier, rule, classifier setting,
+   or fallback that disappeared. If you cannot tell whether a removal is
+   necessary, ask; do not present it as an assumed tradeoff. A passing check
+   proves validity, not that the candidate matches the goal.
+4. **Check the candidate.** Call `bifrost_config` with
+   `{"operation":"check", ...}`. Fix every reported error. Check reports the
+   effective classifier backend and whether classification is enabled for
+   this session. Malformed authored criteria fail check; missing criteria are
+   required only for the direct backend that is actually enabled. Config
+   `classifier.enabled=false` overrides a legacy saved `true`. A legacy saved
+   `false` against config `true` pauses classification until the user chooses
+   `/bifrost classifier on` or `off` for this session. Use the reported runtime
+   state; never treat a legacy value as current approval to send prompts.
+   Read warnings, pool references, and `newlyEligibleModels` before showing
+   anything to the user. A `config.provider_auth_invalid` or
+   `config.provider_auth_not_configured` warning means a tier you are adding
+   will fail on its first routed turn even though check returns `ok`: report it,
+   and either move that tier to a provider whose sign-in resolves or ask the user
+   to sign in before applying. Never apply such a tier silently.
+5. **Preview routing outcomes.** Call `bifrost_config` with
+   `{"operation":"preview", ...}` and 2–5 representative prompts drawn from the
+   user's real work. To preview current disk configuration, omit candidate and patch. Preview is offline: it sends nothing anywhere. Read each
+   requested tier, selected tier/model, and fallback reason. Keep empty
+   inherited tiers: they can be intentional no-route boundaries. Do not fill,
+   filter, or invent fallbacks to make a preview succeed.
+6. **Explain impact and tradeoffs.** Name changed tiers and model pools, rule
+   additions/removals, classifier changes, and fallback changes. Explain why
+   each removal or broad behavior change is necessary. If any existing setting
+   must be replaced, say so before approval. Do not present a summary as the
+   complete config or claim unchanged policy when values changed. No JSON dump
+   unless the user asks. These instructions guide the model; they do not enforce
+   its choices. Verify the proposed candidate and the approval summary instead
+   of claiming the model will preserve settings.
+7. **Ask, then apply.** Get explicit approval in the conversation, then call
+   `bifrost_config` with `{"operation":"apply", "proposalHandle":"..."}` using
+   the session-local handle from the latest successful check. Pass no candidate
+   or other fields with the handle. The tool retains the candidate and all stale
+   guards; a later successful check replaces the handle, but a failed check does not.
+   Never use an earlier handle for a different candidate. For exact changes within the current 2,000,000-character
+   approval bound, the tool shows a concise impact summary first. Larger exact
+   changes fail closed before the dialog; no summary is shown and nothing is
+   written. Do not retry or split the same proposal into multiple writes to evade
+   the bound. Ask the user to narrow the change, then check and seek approval again.
+   The user may apply the summary explicitly with `a`, or choose `d` to
+   inspect every exact change page before applying. State clearly that summary
+   approval does not mean the user inspected every value. The exact view is
+   sequential; `n` advances, `p` returns, `b` returns to summary, and `a` applies
+   from the final exact page. Escape cancels and writes nothing. A cancelled or
+   declined dialog is not an apply; report it as cancelled/declined. Classifier
+   enable/disable commands are session-only; an explicit `on` choice validates
+   the effective backend and may send current prompt text to that backend. Tell
+   the user before recommending that choice. The approval dialog also rechecks
+   classifier runtime state while open. If the summary flags classifier, rules,
+   model pools, or fallbacks, explain those impacts in conversation too.
+   Never apply without the user's agreement or after check reports an error. RPC and other
+   non-TUI sessions return `approval_required` without writing. In that case,
+   ask the user to re-check and approve in a TUI session. Keep the proposal
+   unchanged and do not bypass this gate with shell tools.
+
+`check`, `preview`, and `apply` all take the same candidate form:
+
+```json
+{ "operation": "check",
+  "source": "project",
+  "patch": { "default": "implement", "models": { "implement": ["provider/cheap-model"] } },
+  "remove": ["tierPolicies"] }
+```
+
+- `source`: `project` (`.pi/bifrost.json`, default), `workspace`
+  (`./bifrost.json`), or `user` (`~/.pi/agent/bifrost.json`).
+- `patch`: top-level fields to merge into the selected source.
+- `candidate`: the complete new content of the selected source (mutually
+  exclusive with `patch`).
+- `remove`: top-level fields to delete; only with `patch`.
+
+## Rules that change what you can propose
+
+**Layers merge; the baseline never disappears.** The bundled extension config is
+the lowest layer and always contributes the baseline tiers `quick`, `general`,
+and `frontier` (empty pools until a user or init fills them) plus their
+`categoryStrategies` entries and the default `rules`. Consequences:
+
+- Custom tier names are *additive*. A candidate that lists only `orchestrator`,
+  `implement`, and `review` still has the three baseline tiers, with empty pools.
+- `default` must name a tier that exists in the merged config.
+- Every key of `categoryStrategies` must exist in the merged `models`.
+- The bundled default `rules` route to `quick`, `general`, and `frontier`. A
+  policy with custom roles should supply its own `rules`, or use the baseline
+  tier names, or the user's review prompts will fall back to the default tier.
+- A file-based `.pi/bifrost-routes.json` (or `./bifrost-routes.json`) overrides
+  `rules` entirely while it exists. `inspect` reports it.
+
+**A proposed source replaces only what the user asked for.** Use `patch` to add
+or change named top-level fields; the other sources and unrelated keys stay
+untouched. Nested objects within a replaced field must carry forward unrelated
+members. `apply` writes exactly one source atomically, and reports the exact
+fields it adds, replaces, and removes.
+
+**Only claim what Bifrost does.** Read
+[references/configuration-reference.md](references/configuration-reference.md)
+before describing behavior. In particular:
+
+- Bifrost enforces no spending cap. Economic settings are declared or estimated
+  facts that inform routing; they are not a budget.
+- Price metadata cannot predict cost per successful task and does not prove
+  savings. Say "cheaper per token for the models you have", never "guaranteed
+  cheaper".
+- Bifrost does not manage provider prompt caches and cannot promise cache reuse.
+  Session affinity keeps a proven same-tier model for continuity, but it stays
+  inside the tier that resolved last and does not cross tiers.
+- Preview is not execution. No prompt is sent, no model is called, no classifier
+  runs.
+- Auto affinity, reliability v2, and allowance recovery have their own limits;
+  do not present them as general guarantees.
+
+**Uncertainty is normal.** When the catalog metadata cannot tell you which model
+is better, use the user's stated preference, or a defensible conservative default
+(the model the user already pays for, or the stronger model for the riskier
+role), and say what you could not determine.
+
+## Composing a policy
+
+Pick the shape from the goal, then the smallest set of primitives:
+
+| Goal signal | Shape |
+| --- | --- |
+| Fixed roles (orchestrator, implementer, reviewer) | One tier per role and explicit routing rules; retain the current classifier unless the user asks to replace its judgment with fully specified rules |
+| "Cheap by default, strong when it matters" | A cheap default tier with a `cheapest`/`cheapest_input` strategy plus a reasoning tier reached by rules |
+| "Never silently spend more" | Explicit `tierPolicies[tier].fallbackTiers`; an empty list is terminal |
+| Several eligible models in one role | Ordered pool plus `first`, `cheapest`, `largest_context`, or `random` |
+| Long sessions, model continuity | Consider `affinity.mode` and explain its limits; do not promise cache reuse |
+| Subscription-first with metered fallbacks | `economics.preference.billingClass` with declared observations, and say that it is a preference, not a cap |
+| Mixed requests that need judgment | Keep the classifier enabled and give every custom tier explicit `classifier.criteria` |
+
+Leave out anything the goal does not need. Do not disable an existing
+classifier only because the goal mentions fixed roles. Disable it only when the
+user requests rule-only routing or the stated goal requires a fully deterministic
+rule set and every relevant prompt has an explicit route. If the classifier
+stays enabled, provide criteria for each custom tier. Do not add economics,
+affinity, or reliability fields as decoration.
+
+## Reporting
+
+Aim for five to ten lines:
+
+```text
+Tiers: orchestrator -> provider/strong (first)
+       implement -> provider/cheap (cheapest), fallback: review
+       review -> provider/reviewer (first), no fallback
+Classifier: unchanged (existing setting retained)
+Tradeoff: review prompts that do not match a rule use the default tier.
+Not covered: Bifrost cannot cap spending; the metered preference is advisory.
+Apply to .pi/bifrost.json? (adds models, default, rules, schemaVersion)
+```
+
+After a successful apply, state that the configuration is saved and active, or
+that `/bifrost reload` is required, and name the tier prefixes or rules the user
+can use per turn. Offer to open the saved file only when the host exposes a
+real open-file API; do not use a scratch editor, shell command, or inferred
+capability as a substitute. Current Pi extension UI exposes text editing but
+no API for opening a config path, so report the saved path instead of claiming
+it was opened.
+
+## Do not
+
+- Do not edit configuration files by hand or with shell tools; use the tool so
+  validation, layering, and writes stay safe.
+- Do not run `/bifrost init`, model probing, or a registry refresh to satisfy a
+  goal: those operations can send provider requests and spend credits. Work with
+  the inventory `inspect` reports, including its provider sign-in state.
+- Do not retry `apply` after a `stale` result with the same digests. Re-inspect,
+  re-check, and re-confirm with the user. A project with no configuration yet
+  can receive Bifrost's automatic first-use starter pools while you work, so a
+  proposal made before that save goes stale — re-run check and confirm again.
+- Do not claim Bifrost controls a model that another orchestration extension
+  pins explicitly.
