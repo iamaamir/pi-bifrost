@@ -5,6 +5,55 @@ useDefault = true
 
 [[rules]]
 id = "generic-api-key"
-[rules.allowlist]
+[[rules.allowlists]]
 description = "Exact synthetic credential canaries used by redaction fixtures."
 regexes = ['''^sk-live-should-never-print$''', '''^eyJhbGciOiJIUzI1NiJ9\.payload\.signature$''']
+
+[[rules.allowlists]]
+description = "Reviewed synthetic fixture in tests/acceptance-runner.test.mjs"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^tests/acceptance-runner\.test\.mjs$''']
+regexes = ['''^sk-CANARY_ACCEPTANCE_7d1e$''']
+
+[[rules.allowlists]]
+description = "Reviewed synthetic fixture in tests/bifrost-commands.test.ts"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^tests/bifrost-commands\.test\.ts$''']
+regexes = ['''^fixture/known$''']
+
+[[rules.allowlists]]
+description = "Reviewed synthetic fixture in tests/classifier-cache-key.test.ts"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^tests/classifier-cache-key\.test\.ts$''']
+regexes = ['''^20ca1b5fb50ff561c09ac4a56fcdb53dfa9b49fbed7420d07bc72278027b009a$''']
+
+[[rules.allowlists]]
+description = "Reviewed synthetic fixture in tests/diagnostics.test.ts"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^tests/diagnostics\.test\.ts$''']
+regexes = ['''^fixture/allowed$''']
+
+[[rules.allowlists]]
+description = "Reviewed synthetic fixture in tests/integration/command-privacy-acceptance.test.mjs"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^tests/integration/command-privacy-acceptance\.test\.mjs$''']
+regexes = ['''^sk-CANARY_SECRET_9b2e$''']
+
+[[rules.allowlists]]
+description = "Reviewed synthetic fixture in tests/reconciliation.test.ts"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^tests/reconciliation\.test\.ts$''']
+regexes = ['''^anthropic/new$''']
+
+[[rules.allowlists]]
+description = "Reviewed synthetic fixture in tests/routing.test.ts"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^tests/routing\.test\.ts$''']
+regexes = ['''^fixture/anchor$''']

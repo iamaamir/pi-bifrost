@@ -130,7 +130,15 @@ function gitleaksScopeProblems(config) {
   if (!/^\s*\[\[rules\]\]\s*$/m.test(config)) problems.push("no rule-scoped allowlist");
   if (!/^\s*id = "generic-api-key"\s*$/m.test(config)) problems.push("allowlist must target generic-api-key");
   if (!/regexes = \[\s*'''\^sk-live-should-never-print\$'''/.test(config)) problems.push("allowlist must contain the exact synthetic canary");
-  if (/paths\s*=/.test(config)) problems.push("allowlist must not exempt a path");
+  const allowlists = config.split(/^\s*\[\[rules\.allowlists\]\]\s*$/m).slice(1);
+  for (const allowlist of allowlists.slice(1)) {
+    if (!/^condition\s*=\s*"AND"\s*$/m.test(allowlist)
+      || !/^regexTarget\s*=\s*"secret"\s*$/m.test(allowlist)
+      || !/^paths\s*=\s*\['''\^tests\/[a-zA-Z0-9_/-]+(?:\\\.[a-zA-Z0-9_-]+)+\$'''\]\s*$/m.test(allowlist)
+      || !/^regexes\s*=\s*\['''\^[^'\n|*+?\[\]{}]+\$'''\]\s*$/m.test(allowlist)) {
+      problems.push("fixture allowlists must require an exact test path and exact secret");
+    }
+  }
   return problems;
 }
 
@@ -141,6 +149,13 @@ test("the secret allowlist is scoped to the generic API key rule and exact value
 test("the secret allowlist check rejects a broad top-level allowlist", () => {
   const broad = "[extend]\nuseDefault = true\n\n[allowlist]\npaths = ['''tests/''']\n";
   assert.equal(gitleaksScopeProblems(broad).includes("a top-level allowlist would suppress every rule"), true);
+});
+
+test("the secret allowlist check rejects weakening fixture path and value matching", () => {
+  const config = readFileSync(join(root, ".gitleaks.toml"), "utf8");
+  assert.ok(gitleaksScopeProblems(config.replace('condition = "AND"', 'condition = "OR"')).length > 0);
+  assert.ok(gitleaksScopeProblems(config.replace("^tests/", "^tests/.*")).length > 0);
+  assert.ok(gitleaksScopeProblems(config.replace(/^paths\s*=.*\n/m, "")).length > 0);
 });
 
 test("Renovate pins action digests and requires approval for major upgrades", () => {

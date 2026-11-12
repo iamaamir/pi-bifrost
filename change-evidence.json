@@ -48,22 +48,27 @@
       }
     },
     {
-      "id": "squash-fixture-fingerprints",
+      "id": "scoped-fixture-allowlists",
       "requirement": "R16",
       "files": [
         ".gitleaksignore",
-        "scripts/test-gitleaks-pr-boundaries.sh"
+        ".gitleaks.toml",
+        "scripts/test-gitleaks-pr-boundaries.sh",
+        "tests/tooling-config.test.mjs"
       ],
-      "boundary": "Secret scanning of the actual squash commit recognizes only the previously reviewed exact fixture fingerprints.",
-      "assertions": "The actual squash range fails without the allowlist and passes with the exact entries; the separate new-commit and merge-resolution secret controls still fail closed.",
+      "boundary": "The scanner suppresses only the reviewed generic-key fixtures at their exact test paths, independently of commit and line.",
+      "assertions": "Actual historical and squash scans pass with scoped exceptions and fail with default rules; same fixture in a new commit is accepted while a different secret in the same file and the fixture at another path are detected.",
       "boundaryTest": {
-        "exception": "The executable shell scanner boundary suite runs the actual squash scan and its no-ignore control; it is not a Node test event."
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the secret allowlist is scoped to the generic API key rule and exact values"
       },
       "invariant": {
-        "exception": "The same shell suite verifies a reused fixture in a new commit and a merge-resolution-only secret are still detected."
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the secret allowlist check rejects a broad top-level allowlist"
       },
       "fault": {
-        "exception": "Removing the exact ignore file makes the actual squash scan return the finding exit code in the shell boundary suite."
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the secret allowlist check rejects weakening fixture path and value matching"
       }
     }
   ]
