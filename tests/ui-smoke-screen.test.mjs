@@ -5,6 +5,9 @@
 // smoke job installs Pillow separately for the snapshots themselves.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
@@ -13,7 +16,7 @@ const WIDTH = 12;
 
 const RENDER = `
 import importlib.util, sys
-spec = importlib.util.spec_from_file_location("ui_smoke", "scripts/ui-smoke.py")
+spec = importlib.util.spec_from_file_location("ui_smoke", sys.argv[3])
 module = importlib.util.module_from_spec(spec)
 sys.modules["ui_smoke"] = module
 spec.loader.exec_module(module)
@@ -22,9 +25,9 @@ screen.parse(sys.stdin.buffer.read().decode("utf-8", "replace"))
 print("\\n".join(screen.lines()), end="")
 `;
 
-/** Replay ANSI bytes through the real capture parser and return its rows. */
-function render(ansi, height = 4) {
-  return execFileSync("python3", ["-B", "-c", RENDER, String(WIDTH), String(height)], {
+/** Replay ANSI bytes through a capture parser and return its rows. */
+function render(ansi, height = 4, parser = join(ROOT, "scripts", "ui-smoke.py")) {
+  return execFileSync("python3", ["-B", "-c", RENDER, String(WIDTH), String(height), parser], {
     cwd: ROOT, input: ansi, encoding: "utf8",
   }).split("\n");
 }
@@ -77,19 +80,27 @@ print("|".join(screen.lines()), end="")
 
   it("fault control: an eager wrap moves the anchored row", () => {
     // The defect this guards against: wrapping as soon as the last column is
-    // written. The same fixture must then lose the anchor's row.
-    let row = 0;
-    let col = 0;
-    const lines = ["", "", "", ""];
-    const write = (ch) => {
-      if (ch === "\x1b") return;
-      if (ch === "\r") { col = 0; return; }
-      if (ch === "\n") { row += 1; col = 0; return; }
-      if (row < lines.length) lines[row] = (lines[row] ?? "").padEnd(col) + ch;
-      col += 1;
-      if (col >= WIDTH) { col = 0; row += 1; } // eager wrap
-    };
-    for (const ch of frame.repeat(4)) write(ch);
-    assert.notEqual(lines[1], "anchor", "an eager wrap must not satisfy the anchor assertion");
+    // written. The mutation is applied to the production parser itself, so a
+    // parser change that makes the anchor assertion insensitive shows up here
+    // as a fault control that no longer goes RED.
+    const source = readFileSync(join(ROOT, "scripts", "ui-smoke.py"), "utf8");
+    const deferred = `        if self.col + 1 >= self.width:\n            self.col = self.width - 1\n            self.wrap_pending = True`;
+    assert.ok(source.includes(deferred), "the deferred-wrap anchor must exist in the parser");
+    const mutated = source.replace(deferred, `        if self.col + 1 >= self.width:\n            self.newline()`);
+    const dir = mkdtempSync(join(tmpdir(), "bifrost-ui-fault-"));
+    try {
+      const parser = join(dir, "ui-smoke.py");
+      writeFileSync(parser, mutated);
+      // A taller screen keeps the redraws from scrolling, so the shifted row
+      // is read directly instead of through a scroll offset.
+      const rows = render(frame.repeat(4), 8, parser);
+      assert.notEqual(rows[1], "anchor", "an eager wrap must move the anchored row");
+      assert.equal(rows[2], "anchor", "the eager wrap pushes the anchor down one row");
+      // The same fixture through the real parser keeps the anchor, so the
+      // difference comes from the mutation and not from the fixture.
+      assert.equal(render(frame.repeat(4), 8)[1], "anchor");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

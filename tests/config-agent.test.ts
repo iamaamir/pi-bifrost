@@ -85,7 +85,9 @@ function freshHarness(options: HarnessOptions = {}) {
     find: (provider: string, id: string) => available.find((model) => model.provider === provider && model.id === id),
     getProviderAuthStatus: (provider: string) => options.providerAuthStatus?.(provider) ?? { configured: true, source: "stored" },
     getProviderAuth: async (provider: string) => {
-      const result = options.providerAuthResult?.(provider);
+      // Default to a resolved credential: Pi's registry returns nothing only
+      // when no usable credential exists, which is its own case below.
+      const result = options.providerAuthResult ? options.providerAuthResult(provider) : { auth: { apiKey: "resolved" } };
       if (result instanceof Error) throw result;
       return result;
     },
@@ -411,6 +413,51 @@ describe("provider sign-in state", () => {
       const warning = checked.issues.find((issue) => issue.code === "config.provider_auth_invalid" && issue.path === "models.dead");
       assert.match(warning?.message ?? "", /retired\/only would fail when selected/);
       assert.match(warning?.message ?? "", /token refresh failed/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("warns when a stored sign-in resolves to nothing", async () => {
+    // Pi's getAuth resolves an unusable credential to undefined instead of
+    // throwing, so an empty resolution on a stored credential is a dead sign-in.
+    const harness = freshHarness({ providerAuthResult: () => undefined });
+    try {
+      const inspected = detailsOf<ConfigAgentInspectResult>(await harness.run({ operation: "inspect" }));
+      const alpha = inspected.providerAuth.find((entry) => entry.provider === "alpha");
+      assert.equal(alpha?.state, "invalid");
+      assert.equal(alpha?.reason, "the stored sign-in cannot be used for this provider");
+
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+      }));
+      const warning = checked.issues.find((issue) => issue.code === "config.provider_auth_invalid");
+      assert.equal(warning?.path, "models.review");
+      assert.equal(checked.writeEligible, true);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("warns for a bare pool entry whose provider Pi hid from the catalog", async () => {
+    // "only" names no provider, and Pi kept the model out of the available
+    // inventory because the stored sign-in is dead. The provider comes from the
+    // known catalog, so the warning is not lost with the hidden model.
+    const harness = freshHarness({
+      knownOnly: [makeModel("hidden", "only", 1, 1, 64_000)],
+      providerAuthResult: (provider) => provider === "hidden"
+        ? new Error("token refresh failed")
+        : { auth: { apiKey: "resolved" } },
+    });
+    try {
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["only"] } },
+      }));
+      const warning = checked.issues.find((issue) => issue.code === "config.provider_auth_invalid");
+      assert.equal(warning?.path, "models.review");
+      assert.match(warning?.message ?? "", /hidden\/only would fail when selected/);
     } finally {
       harness.cleanup();
     }

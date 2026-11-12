@@ -568,6 +568,10 @@ async function resolveProviderAuth(
   const resolved: ConfigAgentProviderAuth[] = [];
   for (const provider of [...new Set(providers)].sort()) {
     let source: string | undefined;
+    // Whether Pi reports a credential on disk for this provider. Pi resolves a
+    // credential it cannot use to nothing rather than throwing, so only a
+    // stored credential makes an empty resolution a finding.
+    let stored = false;
     try {
       const status = registry.getProviderAuthStatus?.(provider);
       if (status) {
@@ -575,6 +579,7 @@ async function resolveProviderAuth(
           resolved.push({ provider, state: "not_configured" });
           continue;
         }
+        stored = status.configured === true;
         source = status.source;
       }
     } catch {
@@ -585,7 +590,15 @@ async function resolveProviderAuth(
       continue;
     }
     try {
-      await registry.getProviderAuth(provider);
+      const auth = await registry.getProviderAuth(provider);
+      if (auth === undefined || auth === null) {
+        // No usable credential came back: a stored one is broken, and without
+        // one there is nothing to report beyond a name the catalog does not know.
+        resolved.push(stored
+          ? { provider, state: "invalid", ...(source ? { source } : {}), reason: "the stored sign-in cannot be used for this provider" }
+          : { provider, state: "unknown", ...(source ? { source } : {}) });
+        continue;
+      }
       resolved.push({ provider, state: "ready", ...(source ? { source } : {}) });
     } catch (error) {
       resolved.push({ provider, state: "invalid", ...(source ? { source } : {}), reason: boundedAuthReason(error) });
@@ -1849,14 +1862,24 @@ const ConfigAgentParameters = Type.Object({
  * inventory alone cannot tell Bifrost that the candidate points at a provider
  * whose stored sign-in is dead.
  */
-function requestProviders(request: ConfigAgentRequest): string[] {
+function requestProviders(request: ConfigAgentRequest, catalog: ConfigAgentCatalog): string[] {
   const providers = new Set<string>();
+  const addProvider = (key: string) => {
+    const slash = key.indexOf("/");
+    if (slash > 0) providers.add(key.slice(0, slash));
+  };
   for (const pools of [request.candidate?.models, request.patch?.models]) {
     if (!pools || typeof pools !== "object" || Array.isArray(pools)) continue;
     for (const value of Object.values(pools as Record<string, unknown>)) {
       for (const entry of poolEntries(value as string | string[] | undefined)) {
         const slash = entry.indexOf("/");
-        if (slash > 0) providers.add(entry.slice(0, slash));
+        if (slash > 0) {
+          providers.add(entry.slice(0, slash));
+          continue;
+        }
+        // A bare entry names no provider, so the provider comes from the models
+        // it matches in the known catalog, hidden ones included.
+        for (const key of knownPoolMatches(catalog, entry)) addProvider(key);
       }
     }
   }
@@ -1931,7 +1954,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
       // reported as advisory state rather than an error.
       const providerAuth = await resolveProviderAuth(ctx.modelRegistry, [
         ...catalog.available.map((model) => model.provider),
-        ...requestProviders(request),
+        ...requestProviders(request, catalog),
       ]);
       const classifierRuntime = deps.classifierRuntime
         ? (config: BifrostConfig) => deps.classifierRuntime!(config, ctx)
