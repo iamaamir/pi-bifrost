@@ -25,10 +25,11 @@
       "id": "main-release-evidence-declaration",
       "requirement": "R16",
       "files": [
-        "release-evidence.json"
+        "release-evidence.json",
+        "tests/acceptance-runner.test.mjs"
       ],
       "boundary": "Provide a separate, main-base-bound integration declaration while retaining per-change evidence for v2.",
-      "assertions": "Preflight selects by the event base and requires exact diff coverage including the changed non-selected declaration. The release declaration separately records named subsystem witnesses and explicit coverage gaps.",
+      "assertions": "Preflight selects by the event base and requires exact diff coverage including the changed non-selected declaration. The release declaration separately records named subsystem witnesses and explicit coverage gaps. The owned release caller excludes the selected declaration itself from the declared changed-file set.",
       "boundaryTest": {
         "file": "tests/change-evidence.test.mjs",
         "name": "selects exactly one fixed declaration by event base and covers a changed non-selected manifest"

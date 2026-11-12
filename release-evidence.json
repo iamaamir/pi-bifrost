@@ -181,7 +181,7 @@
     },
     {
       "id": "routing-and-dispatch",
-      "requirement": "R16",
+      "requirement": "R11",
       "files": [
         "affinity.ts",
         "index.ts",
@@ -235,7 +235,7 @@
     },
     {
       "id": "classifier-pipeline",
-      "requirement": "R16",
+      "requirement": "R06",
       "files": [
         "classification-pipeline.ts",
         "classifier-backends.ts",
@@ -276,7 +276,7 @@
     },
     {
       "id": "configuration-and-setup",
-      "requirement": "R16",
+      "requirement": "R09",
       "files": [
         "auto-setup.ts",
         "bifrost.json",
@@ -330,7 +330,7 @@
     },
     {
       "id": "reliability-and-lifecycle",
-      "requirement": "R16",
+      "requirement": "R08",
       "files": [
         "failure-observations.ts",
         "provider-cooldowns.ts",
@@ -409,7 +409,7 @@
     },
     {
       "id": "economic-policy",
-      "requirement": "R16",
+      "requirement": "R10",
       "files": [
         "economic-config.ts",
         "economic-preferences.ts",
@@ -439,7 +439,7 @@
     },
     {
       "id": "cache-storage-reconciliation",
-      "requirement": "R16",
+      "requirement": "R12",
       "files": [
         "cache.ts",
         "reconciliation-command.ts",
@@ -472,7 +472,7 @@
     },
     {
       "id": "commands-and-diagnostics",
-      "requirement": "R16",
+      "requirement": "R14",
       "files": [
         "commands.ts",
         "debug.ts",
@@ -503,7 +503,7 @@
     },
     {
       "id": "probe-and-registry",
-      "requirement": "R16",
+      "requirement": "R15",
       "files": [
         "probe.ts",
         "registry-refresh.ts",
@@ -528,7 +528,7 @@
     },
     {
       "id": "distribution-and-examples",
-      "requirement": "R16",
+      "requirement": "R13",
       "files": [
         "examples/README.md",
         "examples/host-adapter.mjs",

@@ -636,7 +636,8 @@ describe("acceptance runner boundary", () => {
     const witnessFile = "tests/workflow-caller-fixture.test.mjs";
     const witnessName = "owned workflow declaration witness";
     writeFileSync(join(checkout, witnessFile), 'import { test } from "node:test"; import assert from "node:assert/strict";\ntest(' + JSON.stringify(witnessName) + ', () => assert.ok(["push", "pull_request"].includes(process.env.GITHUB_EVENT_NAME)));\n');
-    const fixtureFiles = [...git("diff", "--name-only", "--no-renames", predecessor).split("\n").filter(Boolean), witnessFile];
+    const fixtureFiles = [...new Set([...git("diff", "--name-only", "--no-renames", predecessor).split("\n")
+      .filter((file) => file && file !== "release-evidence.json"), "change-evidence.json", witnessFile])];
     const fixtureContract = {
       id: "owned-workflow-caller", requirement: "R16", files: fixtureFiles,
       boundary: "owned actual workflow caller declaration", assertions: "Exact selected witness and event context reach the real validator",
