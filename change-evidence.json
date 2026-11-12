@@ -6,10 +6,11 @@
       "id": "release-evidence-feature-refresh",
       "requirement": "R16",
       "files": [
-        "release-evidence.json"
+        "release-evidence.json",
+        "tests/acceptance-runner.test.mjs"
       ],
-      "boundary": "Update the main-bound release declaration to cover the merged provider sign-in warning and terminal-capture parser changes.",
-      "assertions": "Provider sign-in and terminal-wrap changes retain their own boundary, invariant and fault witnesses. Unchanged release contracts remain preserved; the added UI test is included in exact main-diff coverage.",
+      "boundary": "Update the main-bound release declaration to cover the merged provider sign-in warning and terminal-capture parser changes. The real caller negative control uses an ancestor that matches neither evidence declaration.",
+      "assertions": "Provider sign-in and terminal-wrap changes retain their own boundary, invariant and fault witnesses. Unchanged release contracts remain preserved; the added UI test is included in exact main-diff coverage. The caller still proves that a truly unmatched base fails and that the correct base is restored.",
       "boundaryTest": {
         "file": "tests/config-agent.test.ts",
         "name": "reports a stored sign-in that cannot be resolved and warns without blocking the write"

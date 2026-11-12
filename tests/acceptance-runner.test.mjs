@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer } from "node:http";
 import { gateDirectory, gitTruth, installedToolVersions, matchNamedTestEvent, parseArgs, sourceFingerprint, summarizeCases } from "../scripts/acceptance/core.mjs";
 import { acceptanceEvidenceSelection, buildGateEvidenceCases, manifestEvidenceGate, registerTerminationHandlers, runChild, supportingTestCase, terminateProcessGroup, verificationGateEnvironment, writeNodeTestEventsArtifact } from "../scripts/acceptance.mjs";
-import { eventEvidenceBase, selectEvidenceManifest } from "../scripts/acceptance/evidence-selection.mjs";
+import { EVIDENCE_MANIFESTS, eventEvidenceBase, selectEvidenceManifest } from "../scripts/acceptance/evidence-selection.mjs";
 import { evidenceCoverageProblems } from "../scripts/acceptance/evidence-rebind.mjs";
 
 const temporary = [];
@@ -917,12 +917,14 @@ describe("acceptance runner boundary", () => {
       }
     };
     runCaller(predecessor, "passed", head);
-    const intermediate = git("rev-list", "--ancestry-path", `${predecessor}..HEAD`).split("\n").find((sha) => sha !== head);
-    // A candidate can be a single commit. The owned merged-push fixture above
-    // guarantees a real intermediate witness; the direct single-commit caller
-    // instead proves that HEAD itself cannot replace the event predecessor.
+    const declaredBases = new Set(EVIDENCE_MANIFESTS.filter((file) => existsSync(join(root, file)))
+      .map((file) => JSON.parse(readFileSync(join(root, file), "utf8")).base));
+    const intermediate = git("rev-list", "--ancestry-path", `${predecessor}..HEAD`).split("\n")
+      .find((sha) => sha && sha !== head && !declaredBases.has(sha));
+    // Another declaration may legitimately match an intermediate base. Use an
+    // unmatched ancestor, or HEAD when no such ancestor exists.
     const wrongBase = intermediate ?? head;
-    assert.notEqual(wrongBase, predecessor, "negative base must differ from event.before");
+    assert.ok(!declaredBases.has(wrongBase), "negative base must not match any declaration");
     runCaller(wrongBase, "failed", predecessor);
     runCaller(predecessor, "passed", wrongBase, "pull_request");
   });
