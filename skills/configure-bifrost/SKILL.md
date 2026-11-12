@@ -30,10 +30,10 @@ goal needs something Bifrost does not do, say so.
    effective classifier runtime state, configured state, backend, and any
    legacy-state conflict; use runtime state, not `classifier.enabled` alone,
    when describing whether classification is active. It reports each provider's
-   sign-in state too. A provider marked `invalid` still lists its models but
-   cannot route: do not put a tier on it unless the user has said they will sign
-   in again first, and say what you avoided. `not_configured` providers cannot
-   route at all.
+   sign-in state too. A provider marked `invalid` cannot route, and Pi may hide
+   its models from the inventory entirely: do not put a tier on it unless the
+   user has said they will sign in again first, and say what you avoided.
+   `not_configured` providers cannot route at all.
 3. **Preserve existing policy while composing.** See
    [references/configuration-reference.md](references/configuration-reference.md)
    for the fields, strategies, and worked examples. Start from the user's

@@ -6,14 +6,15 @@
       "id": "config-agent-provider-signin",
       "requirement": "R07",
       "files": [
-        "config-agent.ts",
-        "config-agent-report.ts",
-        "tests/config-agent.test.ts",
         "CHANGELOG.md",
-        "skills/configure-bifrost/SKILL.md"
+        "config-agent-report.ts",
+        "config-agent.ts",
+        "skills/configure-bifrost/SKILL.md",
+        "tests/config-agent.test.ts",
+        "tests/integration/config-agent-acceptance.test.mjs"
       ],
       "boundary": "Report a stored provider credential that cannot be resolved, warn when a proposed tier routes to it, and keep the advisory candidate writable.",
-      "assertions": "A fake registry whose provider status says configured but whose credential resolution throws produces an invalid sign-in report, a check warning on the referencing tier, and a repeated warning in the approval summary while check stays ok and write eligible. A provider that resolves cleanly emits no warning. Provider error text is flattened, stripped of terminal escapes, and bounded before it reaches the model-facing report.",
+      "assertions": "A fake registry whose provider status says configured but whose credential resolution throws produces an invalid sign-in report, a check warning on the referencing tier, and a repeated warning in the approval summary while check stays ok and write eligible. A provider that resolves cleanly emits no warning. A pool naming a provider whose models Pi removed from its catalog still warns when the stored sign-in is dead, an unconfigured prefix with no matching model does not, and a provider the tier's routingScope excludes never warns because it can never be selected. A controlled source mutation that drops the sign-in warnings turns the named boundary assertion RED and restoring it returns GREEN. Provider error text is flattened, stripped of terminal escapes, and bounded before it reaches the model-facing report.",
       "boundaryTest": {
         "file": "tests/config-agent.test.ts",
         "name": "reports a stored sign-in that cannot be resolved and warns without blocking the write"
@@ -23,8 +24,8 @@
         "name": "warns only for providers a tier can actually select"
       },
       "fault": {
-        "file": "tests/config-agent.test.ts",
-        "name": "fault control: a provider that resolves cleanly emits no sign-in warning"
+        "file": "tests/integration/config-agent-acceptance.test.mjs",
+        "name": "fault control: dropping the sign-in warning turns the named assertion RED"
       }
     },
     {
@@ -35,7 +36,7 @@
         "tests/ui-smoke-screen.test.mjs"
       ],
       "boundary": "The snapshot parser defers the line wrap until the next printable character, so a padded TUI frame keeps its row alignment across redraws.",
-      "assertions": "Replaying frames through the real Screen class keeps a padded row's successor anchored and leaves no blank row between them. The eager-wrap fault model on the same fixture loses the anchor, and the previous implementation fails both behavioral cases.",
+      "assertions": "Replaying frames through the real Screen class keeps a padded row's successor anchored and leaves no blank row between them. The eager-wrap fault model on the same fixture loses the anchor, and the previous implementation fails both behavioral cases. Importing the parser loads with Pillow unavailable, so the default test command works on the documented `npm ci` setup; only image rendering needs Pillow.",
       "boundaryTest": {
         "file": "tests/ui-smoke-screen.test.mjs",
         "name": "defers the wrap at the terminal edge"

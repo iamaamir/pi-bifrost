@@ -1,7 +1,8 @@
 // Deterministic coverage for the terminal-screen parser that renders Bifrost's
 // UI snapshots. The parser is Python, so each case replays a small ANSI fixture
-// through the real `scripts/ui-smoke.py` Screen class; Pillow is imported by
-// that module, and CI installs it for the UI smoke job already.
+// through the real `scripts/ui-smoke.py` Screen class. Only image rendering
+// needs Pillow, so these cases run on the documented `npm ci` setup; the UI
+// smoke job installs Pillow separately for the snapshots themselves.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -35,6 +36,30 @@ const padded = (text) => `${text}${" ".repeat(Math.max(0, WIDTH - text.length))}
 const frame = `\x1b[H${"R".repeat(WIDTH)}\r\n${padded("anchor")}\r\n`;
 
 describe("ui-smoke screen parser", () => {
+  it("loads and parses without Pillow installed", () => {
+    // `npm test` discovers this file on a machine that only ran `npm ci`, which
+    // does not install Pillow. Importing the module must not require it.
+    const script = `
+import importlib.abc, importlib.util, sys
+class BlockPillow(importlib.abc.MetaPathFinder):
+    def find_spec(self, name, path=None, target=None):
+        if name == "PIL" or name.startswith("PIL."):
+            raise ModuleNotFoundError("No module named 'PIL'")
+        return None
+sys.meta_path.insert(0, BlockPillow())
+sys.modules.pop("PIL", None)
+spec = importlib.util.spec_from_file_location("ui_smoke", "scripts/ui-smoke.py")
+module = importlib.util.module_from_spec(spec)
+sys.modules["ui_smoke"] = module
+spec.loader.exec_module(module)
+screen = module.Screen(4, 2)
+screen.parse("abcd")
+print("|".join(screen.lines()), end="")
+`;
+    const rows = execFileSync("python3", ["-B", "-c", script], { cwd: ROOT, encoding: "utf8" });
+    assert.equal(rows, "abcd|", "the parser must work with no image renderer installed");
+  });
+
   it("defers the wrap at the terminal edge", () => {
     const rows = render(`${"A".repeat(WIDTH)}\r\n${"B"}`);
     assert.equal(rows[0], "A".repeat(WIDTH));

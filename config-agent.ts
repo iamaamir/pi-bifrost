@@ -38,6 +38,7 @@ import type { ClassifierBackend } from "./classifier-backends.ts";
 import { validateConfigSourceStructure } from "./config-schema.ts";
 import { reconcileEconomicSnapshot } from "./economic-config.ts";
 import { findCandidates } from "./routing.ts";
+import { checkProviderScope, compileRoutingScope } from "./routing-scope.ts";
 import { createRouter, type RouterModel, type RouterRegistrySnapshot, type RouterSnapshot } from "./router.ts";
 import { writeTextFile } from "./storage.ts";
 import { isGenerativeModel } from "./virtual-model.ts";
@@ -593,8 +594,8 @@ async function resolveProviderAuth(
   return resolved;
 }
 
-function registryContext(catalog: ConfigAgentCatalog): ExtensionContext {
-  const models = catalog.available.map((model) => ({
+function registryContext(catalog: ConfigAgentCatalog, source: readonly ConfigAgentModel[] = catalog.available): ExtensionContext {
+  const models = source.map((model) => ({
     provider: model.provider,
     id: model.id,
     cost: { input: model.inputCost, output: model.outputCost },
@@ -612,6 +613,11 @@ function registryContext(catalog: ConfigAgentCatalog): ExtensionContext {
 /** Reuse the production pool matcher so a reference check cannot drift from routing. */
 function poolMatches(catalog: ConfigAgentCatalog, entry: string): string[] {
   return findCandidates(registryContext(catalog), entry).map((model) => `${model.provider}/${model.id}`);
+}
+
+/** The same matcher over the known catalog, including models Pi cannot route right now. */
+function knownPoolMatches(catalog: ConfigAgentCatalog, entry: string): string[] {
+  return findCandidates(registryContext(catalog, catalog.known), entry).map((model) => `${model.provider}/${model.id}`);
 }
 
 function poolEntries(pool: string | string[] | undefined): string[] {
@@ -658,24 +664,48 @@ function providerAuthIssues(
   const providerOfModel = new Map<string, string>();
   for (const model of catalog.known) providerOfModel.set(model.key, model.provider);
   for (const model of catalog.available) providerOfModel.set(model.key, model.provider);
+  // A dead sign-in removes the provider's models from every catalog Pi
+  // exposes, so a pool entry has to be matched against the known catalog and
+  // against the provider its `provider/model` prefix names: that is exactly
+  // the case this warning exists for.
+  const candidateKeys = (entry: string): string[] => [...new Set([
+    ...poolMatches(catalog, entry),
+    ...knownPoolMatches(catalog, entry),
+  ])];
+  // `routingScope` is a hard eligibility filter, so a provider it forbids for
+  // this tier can never be selected and its dead sign-in is not this tier's
+  // problem. Reporting it would push the user toward an unnecessary change.
+  const scope = compileRoutingScope(config.routingScope);
   const issues: ConfigAgentIssueSummary[] = [];
   const reported = new Set<string>();
   for (const [tier, pool] of Object.entries(config.models ?? {})) {
     for (const entry of poolEntries(pool)) {
-      for (const key of poolMatches(catalog, entry)) {
-        const provider = providerOfModel.get(key);
-        const auth = provider ? problem.get(provider) : undefined;
-        if (!provider || !auth) continue;
+      const keys = candidateKeys(entry);
+      const slash = entry.indexOf("/");
+      const named = slash > 0 ? entry.slice(0, slash) : undefined;
+      const providers = new Set(keys.map((key) => providerOfModel.get(key)).filter((provider): provider is string => provider !== undefined));
+      if (named) providers.add(named);
+      for (const provider of providers) {
+        const auth = problem.get(provider);
+        if (!auth) continue;
+        const matched = keys.find((key) => providerOfModel.get(key) === provider);
+        // An unconfigured provider only earns a warning when a real model
+        // matched; a bare entry prefix could also just be a typo. A stored
+        // credential Pi cannot resolve is evidence on its own: Pi hides those
+        // models from the catalog, so the name is all that is left.
+        if (!matched && auth.state !== "invalid") continue;
+        if (!checkProviderScope(scope, provider, { tier }).allowed) continue;
         const dedupe = `${tier}:${provider}:${auth.state}`;
         if (reported.has(dedupe)) continue;
         reported.add(dedupe);
+        const reference = matched ?? entry;
         issues.push({
           severity: "warning",
           code: auth.state === "invalid" ? "config.provider_auth_invalid" : "config.provider_auth_not_configured",
           path: `models.${tier}`,
           message: auth.state === "invalid"
-            ? `Provider "${provider}" sign-in cannot be resolved (${auth.reason ?? "unknown error"}), so ${key} would fail when selected. Sign in to ${provider} in Pi again before relying on tier "${tier}".`
-            : `Provider "${provider}" has no configured sign-in, so ${key} cannot route. Set up ${provider} in Pi or remove it from tier "${tier}".`,
+            ? `Provider "${provider}" sign-in cannot be resolved (${auth.reason ?? "unknown error"}), so ${reference} would fail when selected. Sign in to ${provider} in Pi again before relying on tier "${tier}".`
+            : `Provider "${provider}" has no configured sign-in, so ${reference} cannot route. Set up ${provider} in Pi or remove it from tier "${tier}".`,
         });
       }
     }
@@ -1813,6 +1843,26 @@ const ConfigAgentParameters = Type.Object({
   classifierRuntimeDigest: Type.Optional(Type.String({ description: "classifierRuntimeDigest returned by check or preview; apply refuses if runtime classifier state changes." })),
 });
 
+/**
+ * Provider ids a request's pools name explicitly. Pi removes a provider's
+ * models from `getAvailable()` once its credential stops resolving, so the
+ * inventory alone cannot tell Bifrost that the candidate points at a provider
+ * whose stored sign-in is dead.
+ */
+function requestProviders(request: ConfigAgentRequest): string[] {
+  const providers = new Set<string>();
+  for (const pools of [request.candidate?.models, request.patch?.models]) {
+    if (!pools || typeof pools !== "object" || Array.isArray(pools)) continue;
+    for (const value of Object.values(pools as Record<string, unknown>)) {
+      for (const entry of poolEntries(value as string | string[] | undefined)) {
+        const slash = entry.indexOf("/");
+        if (slash > 0) providers.add(entry.slice(0, slash));
+      }
+    }
+  }
+  return [...providers].sort();
+}
+
 function readRequest(params: {
   readonly source?: ConfigAgentSource;
   readonly candidate?: Record<string, unknown>;
@@ -1873,11 +1923,16 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
       }
       const cwd = cwdOf();
       const catalog = catalogFromContext(ctx);
-      // Resolve sign-in for every provider the inventory offers. Pi's status
-      // only proves a credential is stored, so a dead OAuth refresh stays
-      // invisible until something resolves it; this is that resolution, done
-      // once per call and reported as advisory state rather than an error.
-      const providerAuth = await resolveProviderAuth(ctx.modelRegistry, catalog.available.map((model) => model.provider));
+      // Resolve sign-in for every provider the inventory offers, plus every
+      // provider the request itself names, so a dead credential Pi already hid
+      // from the inventory is still reported. Pi's status only proves a
+      // credential is stored, so a dead OAuth refresh stays invisible until
+      // something resolves it; this is that resolution, done once per call and
+      // reported as advisory state rather than an error.
+      const providerAuth = await resolveProviderAuth(ctx.modelRegistry, [
+        ...catalog.available.map((model) => model.provider),
+        ...requestProviders(request),
+      ]);
       const classifierRuntime = deps.classifierRuntime
         ? (config: BifrostConfig) => deps.classifierRuntime!(config, ctx)
         : undefined;

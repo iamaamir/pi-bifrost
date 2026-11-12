@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "screenshots" / "ui-smoke"
@@ -293,6 +292,7 @@ class Screen:
         return ["".join(cell.ch for cell in row).rstrip() for row in self.rows]
 
     def draw(self, path: Path) -> None:
+        Image, ImageDraw, _ = pillow()
         font = load_font(18)
         cell_w = int(max(10, font.getbbox("M")[2] - font.getbbox("M")[0] + 1))
         cell_h = int(max(18, font.getbbox("Ag")[3] - font.getbbox("Ag")[1] + 4))
@@ -350,6 +350,22 @@ BG_8 = {
 }
 
 
+def pillow():
+    """Import Pillow where it is used.
+
+    The parser tests replay ANSI bytes without rendering an image, so importing
+    this module must not require Pillow: `npm test` discovers them on a
+    contributor machine that only ran `npm ci`.
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ModuleNotFoundError as error:  # pragma: no cover - environment guard
+        raise SystemExit(
+            "Pillow is required to render UI snapshots. Install it with `python3 -m pip install Pillow`."
+        ) from error
+    return Image, ImageDraw, ImageFont
+
+
 def load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     candidates = [
         "/System/Library/Fonts/Menlo.ttc",
@@ -359,6 +375,7 @@ def load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
         "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
     ]
+    _, _, ImageFont = pillow()
     for item in candidates:
         if Path(item).exists():
             try:

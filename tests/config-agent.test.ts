@@ -399,6 +399,70 @@ describe("provider sign-in state", () => {
     }
   });
 
+  it("warns for a dead stored sign-in whose models Pi removed from the catalog", async () => {
+    // Pi drops a provider from its catalog once the stored credential stops
+    // resolving, so the warning has to come from the provider the pool names.
+    const harness = freshHarness({ providerAuthResult: () => new Error("token refresh failed") });
+    try {
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"], dead: ["retired/only"] } },
+      }));
+      const warning = checked.issues.find((issue) => issue.code === "config.provider_auth_invalid" && issue.path === "models.dead");
+      assert.match(warning?.message ?? "", /retired\/only would fail when selected/);
+      assert.match(warning?.message ?? "", /token refresh failed/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("keeps an unconfigured prefix out of the warnings when no model matched it", async () => {
+    // A tier may name a provider that does not exist; that is a reference
+    // finding, not a sign-in finding, so the sign-in pass stays silent.
+    const harness = freshHarness({ providerAuthStatus: () => ({ configured: false }) });
+    try {
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["ghost/only"] } },
+      }));
+      assert.equal(checked.issues.some((issue) => issue.code?.startsWith("config.provider_auth_")), false,
+        JSON.stringify(checked.issues));
+      assert.equal(checked.references.some((reference) => reference.status === "unknown"), true);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("stays silent about a provider the tier's routing scope excludes", async () => {
+    // `routingScope` is a hard eligibility filter. A pool can name two
+    // providers while the tier allowlist permits only the healthy one; warning
+    // about the excluded provider would push the user toward a change that
+    // cannot affect the route.
+    const harness = freshHarness({ providerAuthStatus: (provider) => ({ configured: provider !== "alpha" }) });
+    try {
+      const pool = ["alpha/strong", "beta/code"];
+      const scoped = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: pool }, routingScope: { tiers: { review: { providers: ["beta"] } } } },
+      }));
+      assert.equal(scoped.issues.some((issue) => issue.code?.startsWith("config.provider_auth_")), false,
+        JSON.stringify(scoped.issues));
+      assert.equal(scoped.status, "ok");
+
+      // The same pool without the allowlist does name a dead provider, so the
+      // silence above comes from the scope and not from a broken harness.
+      const unscoped = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: pool } },
+      }));
+      const warning = unscoped.issues.find((issue) => issue.code === "config.provider_auth_not_configured");
+      assert.equal(warning?.path, "models.review");
+      assert.match(warning?.message ?? "", /alpha/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("fault control: a provider that resolves cleanly emits no sign-in warning", async () => {
     const harness = freshHarness({ providerAuthResult: () => ({ auth: { apiKey: "resolved" } }) });
     try {
