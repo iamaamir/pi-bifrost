@@ -89,7 +89,6 @@
         "scripts/toolbox.mjs",
         "scripts/ui-acceptance-first-use.sh",
         "scripts/ui-reliability-fake-provider.sh",
-        "scripts/ui-smoke.py",
         "semgrep/bifrost-no-eval.yml",
         "semgrep/bifrost-no-shell-true.yml",
         "semgrep/bifrost-no-tls-verification-disable.yml",
@@ -280,8 +279,6 @@
       "files": [
         "auto-setup.ts",
         "bifrost.json",
-        "config-agent-report.ts",
-        "config-agent.ts",
         "config-approval.ts",
         "config-load.ts",
         "config-migration.ts",
@@ -296,7 +293,6 @@
         "skills/configure-bifrost/references/configuration-reference.md",
         "tests/auto-bootstrap-runtime.test.ts",
         "tests/auto-setup.test.ts",
-        "tests/config-agent.test.ts",
         "tests/config-approval.test.ts",
         "tests/config-load.test.ts",
         "tests/config-migration.test.ts",
@@ -305,7 +301,6 @@
         "tests/config-source-override.test.ts",
         "tests/config.test.ts",
         "tests/fixtures/config-approval-extension.ts",
-        "tests/integration/config-agent-acceptance.test.mjs",
         "tests/integration/config-approval-tui.test.mjs",
         "tests/integration/config-startup-acceptance.test.mjs",
         "tests/integration/init-regression.test.mjs",
@@ -609,6 +604,52 @@
       "fault": {
         "file": "tests/integration/fake-provider-ownership.test.mjs",
         "name": "owns the fake provider across owner cancellation (baseline GREEN, bypass RED, restored GREEN)"
+      }
+    },
+    {
+      "id": "config-agent-provider-signin",
+      "requirement": "R07",
+      "files": [
+        "config-agent-report.ts",
+        "config-agent.ts",
+        "tests/config-agent.test.ts",
+        "tests/integration/config-agent-acceptance.test.mjs"
+      ],
+      "boundary": "Report a stored provider credential that cannot be resolved, warn when a proposed tier routes to it, and keep the advisory candidate writable.",
+      "assertions": "A fake registry whose provider status says configured but whose credential resolution throws produces an invalid sign-in report, a check warning on the referencing tier, and a repeated warning in the approval summary while check stays ok and write eligible. A provider that resolves cleanly emits no warning, and a stored credential Pi resolves to nothing is reported as invalid instead of ready, because Pi returns an empty resolution rather than throwing for an unusable credential. A pool naming a provider whose models Pi removed from its catalog still warns when the stored sign-in is dead, an unconfigured prefix with no matching model does not; a bare pool entry names no provider, so the warning follows the models it matches in the known catalog, hidden ones included, and a provider the tier's routingScope excludes never warns because it can never be selected. A provider named only by the stored config is always probed, because a candidate replaces one source and a patch leaves unnamed tiers in place: inspect reports its dead sign-in instead of a clean inventory, a patch that leaves such a tier in place warns, and a candidate warns for the workspace tier it inherits. A controlled source mutation that drops the sign-in warnings turns the named boundary assertion RED and restoring it returns GREEN. Provider error text is flattened, stripped of terminal escapes, and bounded before it reaches the model-facing report. The invalid sign-in path has no real-Pi end-to-end assertion because the fake-provider fixture cannot express it: a stored credential on a custom models.json provider resolves through getAuth instead of failing, and Pi drops a provider it cannot authenticate from both getAvailable() and getAll(), so `inspect` reports no sign-in section and a request against it fails with `No API key found` before any tool call. Custom providers only support the built-in `oauth: \"radius\"` flow, so an offline refresh cannot be made to fail. Coverage for the invalid state therefore stays at the unit boundary, where a registry stub supplies it.",
+      "boundaryTest": {
+        "file": "tests/config-agent.test.ts",
+        "name": "reports a stored sign-in that cannot be resolved and warns without blocking the write"
+      },
+      "invariant": {
+        "file": "tests/config-agent.test.ts",
+        "name": "warns only for providers a tier can actually select"
+      },
+      "fault": {
+        "file": "tests/integration/config-agent-acceptance.test.mjs",
+        "name": "fault control: dropping the sign-in warning turns the named assertion RED"
+      }
+    },
+    {
+      "id": "ui-smoke-capture-wrap",
+      "requirement": "R16",
+      "files": [
+        "scripts/ui-smoke.py",
+        "tests/ui-smoke-screen.test.mjs"
+      ],
+      "boundary": "The snapshot parser defers the line wrap until the next printable character, so a padded TUI frame keeps its row alignment across redraws.",
+      "assertions": "Replaying frames through the real Screen class keeps a padded row's successor anchored and leaves no blank row between them.  The eager-wrap fault is applied to a copy of the production parser itself, and that copy loses the anchor while the real parser keeps it, so a parser change that makes the assertion insensitive fails the fault control, and the previous implementation fails both behavioral cases. Importing the parser loads with Pillow unavailable, so the default test command works on the documented `npm ci` setup; only image rendering needs Pillow.",
+      "boundaryTest": {
+        "file": "tests/ui-smoke-screen.test.mjs",
+        "name": "defers the wrap at the terminal edge"
+      },
+      "invariant": {
+        "file": "tests/ui-smoke-screen.test.mjs",
+        "name": "keeps a padded frame anchored across redraws"
+      },
+      "fault": {
+        "file": "tests/ui-smoke-screen.test.mjs",
+        "name": "fault control: an eager wrap moves the anchored row"
       }
     }
   ]

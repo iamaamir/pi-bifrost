@@ -1,27 +1,22 @@
 {
   "schemaVersion": 1,
-  "base": "30579183248ebd7285cf5c22b54fc42b9c5ff202",
+  "base": "56be0335284ed0db00533b816adb40a03584d164",
   "contracts": [
     {
-      "id": "config-agent-provider-signin",
-      "requirement": "R07",
+      "id": "release-evidence-feature-refresh",
+      "requirement": "R16",
       "files": [
-        "CHANGELOG.md",
-        "config-agent-report.ts",
-        "config-agent.ts",
-        "skills/configure-bifrost/SKILL.md",
-        "tests/config-agent.test.ts",
-        "tests/integration/config-agent-acceptance.test.mjs"
+        "release-evidence.json"
       ],
-      "boundary": "Report a stored provider credential that cannot be resolved, warn when a proposed tier routes to it, and keep the advisory candidate writable.",
-      "assertions": "A fake registry whose provider status says configured but whose credential resolution throws produces an invalid sign-in report, a check warning on the referencing tier, and a repeated warning in the approval summary while check stays ok and write eligible. A provider that resolves cleanly emits no warning, and a stored credential Pi resolves to nothing is reported as invalid instead of ready, because Pi returns an empty resolution rather than throwing for an unusable credential. A pool naming a provider whose models Pi removed from its catalog still warns when the stored sign-in is dead, an unconfigured prefix with no matching model does not; a bare pool entry names no provider, so the warning follows the models it matches in the known catalog, hidden ones included, and a provider the tier's routingScope excludes never warns because it can never be selected. A provider named only by the stored config is always probed, because a candidate replaces one source and a patch leaves unnamed tiers in place: inspect reports its dead sign-in instead of a clean inventory, a patch that leaves such a tier in place warns, and a candidate warns for the workspace tier it inherits. A controlled source mutation that drops the sign-in warnings turns the named boundary assertion RED and restoring it returns GREEN. Provider error text is flattened, stripped of terminal escapes, and bounded before it reaches the model-facing report. The invalid sign-in path has no real-Pi end-to-end assertion because the fake-provider fixture cannot express it: a stored credential on a custom models.json provider resolves through getAuth instead of failing, and Pi drops a provider it cannot authenticate from both getAvailable() and getAll(), so `inspect` reports no sign-in section and a request against it fails with `No API key found` before any tool call. Custom providers only support the built-in `oauth: \"radius\"` flow, so an offline refresh cannot be made to fail. Coverage for the invalid state therefore stays at the unit boundary, where a registry stub supplies it.",
+      "boundary": "Update the main-bound release declaration to cover the merged provider sign-in warning and terminal-capture parser changes.",
+      "assertions": "Provider sign-in and terminal-wrap changes retain their own boundary, invariant and fault witnesses. Unchanged release contracts remain preserved; the added UI test is included in exact main-diff coverage.",
       "boundaryTest": {
         "file": "tests/config-agent.test.ts",
         "name": "reports a stored sign-in that cannot be resolved and warns without blocking the write"
       },
       "invariant": {
-        "file": "tests/config-agent.test.ts",
-        "name": "warns only for providers a tier can actually select"
+        "file": "tests/ui-smoke-screen.test.mjs",
+        "name": "keeps a padded frame anchored across redraws"
       },
       "fault": {
         "file": "tests/integration/config-agent-acceptance.test.mjs",
@@ -29,25 +24,23 @@
       }
     },
     {
-      "id": "ui-smoke-capture-wrap",
+      "id": "evidence-caller-unmatched-base",
       "requirement": "R16",
       "files": [
-        "scripts/ui-smoke.py",
-        "tests/ui-smoke-screen.test.mjs"
+        "tests/acceptance-runner.test.mjs"
       ],
-      "boundary": "The snapshot parser defers the line wrap until the next printable character, so a padded TUI frame keeps its row alignment across redraws.",
-      "assertions": "Replaying frames through the real Screen class keeps a padded row's successor anchored and leaves no blank row between them.  The eager-wrap fault is applied to a copy of the production parser itself, and that copy loses the anchor while the real parser keeps it, so a parser change that makes the assertion insensitive fails the fault control, and the previous implementation fails both behavioral cases. Importing the parser loads with Pillow unavailable, so the default test command works on the documented `npm ci` setup; only image rendering needs Pillow.",
+      "boundary": "The real acceptance caller must use a negative-control base that matches neither the routine nor release declaration.",
+      "assertions": "Named selector witnesses check exact-base selection; the actual merged, single-commit and main-base callers were also run directly to check event propagation, unmatched-base rejection and restored success.",
       "boundaryTest": {
-        "file": "tests/ui-smoke-screen.test.mjs",
-        "name": "defers the wrap at the terminal edge"
+        "file": "tests/change-evidence.test.mjs",
+        "name": "selects exactly one fixed declaration by event base and covers a changed non-selected manifest"
       },
       "invariant": {
-        "file": "tests/ui-smoke-screen.test.mjs",
-        "name": "keeps a padded frame anchored across redraws"
+        "file": "tests/change-evidence.test.mjs",
+        "name": "main release and later ordinary pushes select declarations by their own event.before"
       },
       "fault": {
-        "file": "tests/ui-smoke-screen.test.mjs",
-        "name": "fault control: an eager wrap moves the anchored row"
+        "exception": "The actual main-base caller failed before the correction and passed afterward. Declaring the caller or its outer caller fixtures as manifest witnesses would nest the caller proof recursively or multiply its runtime."
       }
     }
   ]
