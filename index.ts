@@ -3374,12 +3374,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       // Opt-in live check for the configuration tool. `probe.ts` owns the
       // transport; this adapter only maps catalog keys to models and back, so
       // core policy never sends a provider request on its own.
-      probeModels: async (models, ctx) => {
+      probeModels: async (models, ctx, signal) => {
         const wanted = new Set(models);
         const targets = ctx.modelRegistry.getAll()
           .filter((model) => wanted.has(`${model.provider}/${model.id}`));
         if (targets.length === 0) return [];
-        const { results } = await runProbe(ctx, { models: targets });
+        const { results } = await runProbe(ctx, { models: targets, signal });
         return results.map((result) => ({
           model: `${result.provider}/${result.model}`,
           status: result.status,

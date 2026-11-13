@@ -48,7 +48,7 @@ interface HarnessOptions {
   /** Resolve sign-in; return an Error to simulate a dead OAuth refresh token. */
   readonly providerAuthResult?: (provider: string) => unknown;
   /** Live probe outcomes for the opt-in check; omit to leave the host without one. */
-  readonly probeModels?: (models: readonly string[]) => readonly ConfigAgentProbeResult[];
+  readonly probeModels?: (models: readonly string[], signal?: AbortSignal) => readonly ConfigAgentProbeResult[];
   readonly legacyClassifierEnabled?: boolean;
   readonly classifierSessionOverride?: boolean;
   readonly runtimeStateIssue?: "invalid-json";
@@ -132,6 +132,7 @@ function freshHarness(options: HarnessOptions = {}) {
   } as unknown as ExtensionToolContext;
 
   const probeCalls: string[][] = [];
+  const probeSignals: (AbortSignal | undefined)[] = [];
   const tool = createBifrostConfigTool({
     extensionDir,
     render: reportText,
@@ -140,9 +141,10 @@ function freshHarness(options: HarnessOptions = {}) {
       return reloadResult;
     },
     ...(options.probeModels ? {
-      probeModels: async (models: readonly string[]) => {
+      probeModels: async (models: readonly string[], _ctx: unknown, signal?: AbortSignal) => {
         probeCalls.push([...models]);
-        return options.probeModels!(models);
+        probeSignals.push(signal);
+        return options.probeModels!(models, signal);
       },
     } : {}),
     ...(options.write ? { write: options.write } : {}),
@@ -200,6 +202,7 @@ function freshHarness(options: HarnessOptions = {}) {
     setLegacyClassifierEnabled(value: boolean | undefined) { legacyClassifierEnabled = value; },
     confirmations: () => confirmations,
     probeCalls: () => probeCalls,
+    probeSignals: () => probeSignals,
     classifyCalls: () => classifyCalls,
     reloadCalls: () => reloadCalls,
     projectConfigPath: () => join(cwd, ".pi", "bifrost.json"),
@@ -660,6 +663,87 @@ describe("provider sign-in state", () => {
       const plain = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", candidate }));
       assert.equal(harness.probeCalls().length, 1);
       assert.equal(plain.liveProbe, undefined);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("never probes a provider the tier's routing scope excludes", async () => {
+    // The scope is a hard eligibility filter, so a probe of an excluded
+    // provider would spend a request on a model that can never be selected.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+    });
+    try {
+      await harness.run({
+        operation: "check",
+        candidate: {
+          schemaVersion: 2,
+          default: "review",
+          models: { review: ["alpha/strong", "beta/code"] },
+          routingScope: { tiers: { review: { providers: ["beta"] } } },
+        },
+        probe: true,
+      });
+      assert.deepEqual(harness.probeCalls(), [["beta/code"]]);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("forwards the caller's cancellation to the probe transport", async () => {
+    const controller = new AbortController();
+    const harness = freshHarness({
+      signal: controller.signal,
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+    });
+    try {
+      await harness.run({ operation: "check", candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } }, probe: true });
+      assert.equal(harness.probeSignals()[0], controller.signal);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("does not start a probe after the caller cancels", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const harness = freshHarness({
+      signal: controller.signal,
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+    });
+    try {
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+        probe: true,
+      }));
+      assert.deepEqual(harness.probeCalls(), []);
+      assert.match(checked.notes.join(" "), /Live probe cancelled before it started/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("renders probe totals and only the failed models so long reports keep warnings", async () => {
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: () => [
+        { model: "alpha/strong", status: "ok" },
+        { model: "beta/code", status: "error", reason: "401 unauthorized" },
+      ],
+    });
+    try {
+      const result = await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } },
+        probe: true,
+      });
+      const text = contentOf(result);
+      assert.match(text, /live probe \(one tiny prompt per model\): 1\/2 answered/);
+      assert.match(text, /beta\/code: error -- 401 unauthorized/);
+      assert.doesNotMatch(text, /alpha\/strong: ok/);
     } finally {
       harness.cleanup();
     }
