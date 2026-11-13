@@ -187,6 +187,7 @@ test("Knip treats Hyperfine as an optional host binary", () => {
 });
 
 function assertScopedGitleaksGuidance(text) {
+  assert.match(text, /two exact synthetic canary values used by redaction fixtures\s+regardless of file path/u);
   assert.match(text, /additional reviewed fixture values only when their exact test-file paths also match/u);
   assert.match(text, /It does not allowlist whole files or other rules\./u);
 }
@@ -201,6 +202,9 @@ test("fault control: outdated Gitleaks guidance fails the scoped policy assertio
   const mutant = guide.replace("additional reviewed fixture values only when their exact test-file paths also match", "other fixture values regardless of file path");
   assert.notEqual(mutant, guide);
   assert.throws(() => assertScopedGitleaksGuidance(mutant), { code: "ERR_ASSERTION" });
+  const missingGlobal = guide.replace("two exact synthetic canary values used by redaction fixtures regardless of file path", "some fixture values");
+  assert.notEqual(missingGlobal, guide, "the global-canary mutation must apply");
+  assert.throws(() => assertScopedGitleaksGuidance(missingGlobal), { code: "ERR_ASSERTION" });
 });
 
 test("the developer guide names the committed tool configuration files", () => {
