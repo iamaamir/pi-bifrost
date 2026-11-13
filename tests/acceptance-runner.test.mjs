@@ -619,21 +619,19 @@ describe("acceptance runner boundary", () => {
     cpSync(join(process.cwd(), "package-lock.json"), join(root, "package-lock.json"));
     cpSync(join(process.cwd(), ".gitignore"), join(root, ".gitignore"));
     symlinkSync(realpathSync(join(process.cwd(), "node_modules")), join(root, "node_modules"), "dir");
-    const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
-    git("init", "-q"); git("config", "user.email", "test@example.invalid"); git("config", "user.name", "Test");
-    mkdirSync(join(root, "empty-hooks")); git("config", "commit.gpgsign", "false"); git("config", "core.hooksPath", join(root, "empty-hooks"));
-    writeFileSync(join(root, "candidate.txt"), "first\n"); git("add", "candidate.txt"); git("commit", "-qm", "first");
-    const before = git("rev-parse", "HEAD");
-    writeFileSync(join(root, "candidate.txt"), "second\n"); git("add", "candidate.txt"); git("commit", "-qm", "second");
-    writeFileSync(join(root, "candidate.txt"), "third\n"); git("add", "candidate.txt"); git("commit", "-qm", "third");
-    const after = git("rev-parse", "HEAD");
-    assert.notEqual(before, git("rev-parse", "HEAD^"), "event.before must precede HEAD^ in this multi-commit fixture");
-
-    const eventPath = join(root, "event.json");
-    writeFileSync(eventPath, JSON.stringify({ before, after, ref: "refs/heads/main" }));
+    // This owned copy stubs expensive release gates and makes unrelated
+    // support rows optional, so the process exit is controlled by push binding
+    // and source stability alone. The submitted acceptance code stays intact.
+    const acceptancePath = join(root, "scripts", "acceptance.mjs");
+    let acceptanceSource = readFileSync(acceptancePath, "utf8");
+    acceptanceSource = acceptanceSource.replace(/const SUPPORTING_TESTS = \[([\s\S]*?)\n\];/u, "const SUPPORTING_TESTS = [];");
+    assert.notEqual(acceptanceSource, readFileSync(acceptancePath, "utf8"), "fixture must narrow unrelated support rows");
+    acceptanceSource = acceptanceSource.replace(/(id: "node-test-event-capture"[\s\S]*?required:) true/u, "$1 false")
+      .replace(/(id: "terminal-captures"[\s\S]*?required:) true/u, "$1 false");
+    writeFileSync(acceptancePath, acceptanceSource);
     writeFileSync(join(root, "scripts", "verify-release.mjs"), "export async function runVerification() { return { gates: [] }; }\n");
     writeFileSync(join(root, "scripts", "acceptance", "journeys.mjs"), "export async function runJourneys() { return { cases: [] }; }\n");
-    const script = join(root, "scripts", "acceptance.mjs");
+    const script = acceptancePath;
     const cli = join(root, "cli.mjs");
     writeFileSync(cli, [
       'import { fileURLToPath } from "node:url";',
@@ -641,6 +639,23 @@ describe("acceptance runner boundary", () => {
       'process.argv[1] = fileURLToPath(script);',
       'await import(script.href);',
     ].join("\n") + "\n");
+    const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+    git("init", "-q"); git("config", "user.email", "test@example.invalid"); git("config", "user.name", "Test");
+    const emptyHooks = mkdtempSync(join(tmpdir(), "bifrost-empty-hooks-"));
+    temporary.push(emptyHooks);
+    git("config", "commit.gpgsign", "false"); git("config", "core.hooksPath", emptyHooks);
+    git("add", "scripts", "package.json", "package-lock.json", ".gitignore", "cli.mjs"); git("commit", "-qm", "fixture baseline");
+    writeFileSync(join(root, "candidate.txt"), "first\n"); git("add", "candidate.txt"); git("commit", "-qm", "first");
+    const before = git("rev-parse", "HEAD");
+    writeFileSync(join(root, "candidate.txt"), "second\n"); git("add", "candidate.txt"); git("commit", "-qm", "second");
+    writeFileSync(join(root, "candidate.txt"), "third\n"); git("add", "candidate.txt"); git("commit", "-qm", "third");
+    const after = git("rev-parse", "HEAD");
+    assert.notEqual(before, git("rev-parse", "HEAD^"), "event.before must precede HEAD^ in this multi-commit fixture");
+
+    const eventDir = mkdtempSync(join(tmpdir(), "bifrost-push-event-"));
+    temporary.push(eventDir);
+    const eventPath = join(eventDir, "event.json");
+    writeFileSync(eventPath, JSON.stringify({ before, after, ref: "refs/heads/main" }));
     const env = { PATH: process.env.PATH, HOME: process.env.HOME, CI: "true", GITHUB_EVENT_NAME: "push", GITHUB_EVENT_PATH: eventPath };
     const invoke = () => spawnSync(process.execPath, [cli, "--profile", "deterministic"], {
       cwd: root, env, encoding: "utf8", timeout: 20_000,
@@ -651,20 +666,27 @@ describe("acceptance runner boundary", () => {
       const evidencePath = join(root, relativeEvidence);
       const evidence = JSON.parse(readFileSync(evidencePath, "utf8"));
       const pushCase = evidence.cases.find((item) => item.id === "push-revision");
+      assert.equal(evidence.cases.find((item) => item.id === "candidate-stable")?.status, "passed",
+        JSON.stringify(evidence.cases.filter((item) => item.required && item.status !== "passed")));
       rmSync(dirname(evidencePath), { recursive: true, force: true });
-      return pushCase;
+      return { evidence, pushCase };
     };
     const green = invoke();
     assert.equal(green.error, undefined, green.stderr);
-    assert.equal(readPushCase(green)?.status, "passed", green.stderr + green.stdout);
-    t.diagnostic(JSON.stringify({ before, after, green: "passed" }));
+    const greenResult = readPushCase(green);
+    assert.equal(green.status, 0, green.stderr + green.stdout);
+    assert.equal(greenResult.pushCase?.status, "passed", green.stderr + green.stdout);
+    assert.equal(greenResult.evidence.exitCode, 0);
+    t.diagnostic(JSON.stringify({ before, after, green: "passed", exitCode: green.status }));
 
     writeFileSync(eventPath, JSON.stringify({ before, after: "f".repeat(40), ref: "refs/heads/main" }));
     const red = invoke();
     assert.equal(red.error, undefined, red.stderr);
-    const failedCase = readPushCase(red);
-    assert.equal(failedCase?.status, "failed", JSON.stringify(failedCase));
-    assert.match(failedCase.detail, /after SHA does not match/u);
-    t.diagnostic(JSON.stringify({ before, after: "f".repeat(40), red: "failed" }));
+    const redResult = readPushCase(red);
+    assert.notEqual(red.status, 0, red.stderr + red.stdout);
+    assert.equal(redResult.evidence.exitCode, 1);
+    assert.equal(redResult.pushCase?.status, "failed", JSON.stringify(redResult.pushCase));
+    assert.match(redResult.pushCase.detail, /after SHA does not match/u);
+    t.diagnostic(JSON.stringify({ before, after: "f".repeat(40), red: "failed", exitCode: red.status }));
   });
 });
