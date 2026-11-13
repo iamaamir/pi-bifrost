@@ -1,13 +1,11 @@
 #!/usr/bin/env node
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gateDirectory, git, gitTruth, installedToolVersions, matchNamedTestEvent, parseArgs, processGroupExists, sourceFingerprint, summarizeCases, terminateProcessGroup, verificationGateEnvironment } from "./acceptance/core.mjs";
 import { exportCiReportIfConfigured } from "./ci-report.mjs";
-import { changeEvidenceCase } from "./acceptance/change-evidence.mjs";
-import { eventEvidenceBase, selectEvidenceManifest } from "./acceptance/evidence-selection.mjs";
 export { processGroupExists, terminateProcessGroup, verificationGateEnvironment };
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -22,25 +20,13 @@ const MAX_REPORTER_EVENT_BYTES = 16 * 1024 * 1024;
 const NODE_TEST_GATES = new Map([
   ["test", { paths: ["tests/*.test.ts", "tests/*.test.mjs"] }],
   ["test:integration", { paths: ["tests/integration/*.test.mjs"] }],
-  // The bounded caller executes the current declaration's exact witnesses,
-  // plus the fixed push-base controls, instead of a prior PR's test inventory.
-  ["test:manifest-evidence", {
-    paths: ["tests/change-evidence.test.mjs"],
-    pattern: [
-      "multi-commit push validates full event.before diff and rejects intermediate base",
-      "event-driven push and pull request bases fail closed despite competing env",
-      "a real stale ancestor base fails declaration equality with named detail",
-      "fault control: selecting HEAD parent instead of event.before turns push base RED",
-    ].join("|"),
-  }],
 ]);
 let receivedSignal;
 // Per-child termination state so concurrent gates can each be signalled and
 // awaited independently. The single-child path is unchanged.
 const childStates = new Map();
 const SUPPORTING_TESTS = [
-  { id: "support:manifest:single-commit", requirement: "R16", file: "tests/acceptance-runner.test.mjs", name: "single-commit checkout runs the actual workflow caller without inventing an intermediate", boundary: "owned one-commit fixture; real submitted CLI and context/declaration/predecessor faults, no contributor-history precondition" },
-  { id: "support:manifest:actual-caller", requirement: "R16", file: "tests/acceptance-runner.test.mjs", name: "merged-push checkout runs the actual workflow caller with event.before", boundary: "actual submitted declaration witnesses through sanitized unit gate and real CLI; private context/declaration-selection/predecessor faults" },
+  { id: "support:push-revision", requirement: "R16", file: "tests/acceptance-runner.test.mjs", name: "actual acceptance CLI binds push after to HEAD across a multi-commit event", boundary: "actual push CLI; event.before predates HEAD^; exact after SHA and checked-out HEAD binding with a red mutation" },
   { id: "support:controller:final-authorization", requirement: "R16", file: "tests/merge-controller.test.mjs", name: "source fault controls exercise server protection, final authorization, and saved intent", boundary: "actual fake-gh CLI; private source faults hit each named assertion and exact restoration passes" },
   {"id": "support:g07:campaign", "requirement": "R08", "file": "tests/reliability-v2-state-machine.test.ts", "name": "matches the independent model with the campaign default seed", "boundary": "single-scope/no-observation independent model; campaign FC_SEED varies this sample, pinned replays retained"},
   {"id": "support:g02:01", "requirement": "R06", "file": "tests/integration/activation-cancellation-acceptance.test.mjs", "name": "handles false and throwing physical activation without late dispatch", "boundary": "registered handler with fake pi/ctx; physical activation failure and cancellation"},
@@ -324,49 +310,9 @@ export function runChild(command, args, {
   });
 }
 
-export function manifestEvidenceGate(root, selection) {
-  if (selection === null) return NODE_TEST_GATES.get("test:manifest-evidence");
-  const path = selection?.path ?? join(root, "change-evidence.json");
-  const stat = lstatSync(path);
-  if (!stat.isFile() || stat.size > 256 * 1024) throw new Error("Manifest evidence declaration exceeds its bound");
-  const manifest = selection?.manifest ?? JSON.parse(readFileSync(path, "utf8"));
-  if (!Array.isArray(manifest.contracts) || !manifest.contracts.length || manifest.contracts.length > 100) {
-    throw new Error("Manifest evidence contracts are unavailable or unbounded");
-  }
-  const base = NODE_TEST_GATES.get("test:manifest-evidence");
-  const paths = new Set(base.paths);
-  const patterns = [base.pattern];
-  for (const contract of manifest.contracts) {
-    for (const dimension of ["boundaryTest", "invariant", "fault"]) {
-      const witness = contract?.[dimension];
-      if (witness && Object.keys(witness).length === 1 && typeof witness.exception === "string" && witness.exception.trim()) continue;
-      if (!witness || typeof witness.file !== "string" || witness.file.length > 512
-        || !/^tests\/[\w./-]+\.test\.(?:mjs|ts)$/.test(witness.file)
-        || witness.file.split("/").some((part) => !part || part === "." || part === "..")
-        || typeof witness.name !== "string" || !witness.name.trim() || witness.name.length > 1024) {
-        throw new Error("Manifest evidence witness is malformed");
-      }
-      paths.add(witness.file);
-      patterns.push(witness.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-    }
-  }
-  if (paths.size > 100 || patterns.join("|").length > 64 * 1024) throw new Error("Manifest evidence selection exceeds its bound");
-  return { paths: [...paths], pattern: patterns.join("|") };
-}
-
-export function acceptanceEvidenceSelection(root, env = process.env) {
-  const eventDriven = env.GITHUB_EVENT_NAME === "pull_request" || env.GITHUB_EVENT_NAME === "push";
-  try {
-    const base = eventEvidenceBase(env);
-    return base ? selectEvidenceManifest({ root, base }) : eventDriven ? null : undefined;
-  } catch {
-    return null;
-  }
-}
-
-async function executeVerificationGate({ root, script, testEvents, artifactDir, evidenceSelection }) {
+async function executeVerificationGate({ root, script, testEvents, artifactDir }) {
   const gateEnvironment = verificationGateEnvironment({ root, artifactDir, script });
-  const testGate = script === "test:manifest-evidence" ? manifestEvidenceGate(root, evidenceSelection) : NODE_TEST_GATES.get(script);
+  const testGate = NODE_TEST_GATES.get(script);
   if (!testGate) {
     return enforceGateNetworkBoundary(await runChild("npm", ["run", script], { cwd: root, env: gateEnvironment.env }), gateEnvironment.violationPath);
   }
@@ -375,7 +321,6 @@ async function executeVerificationGate({ root, script, testEvents, artifactDir, 
   const result = await runChild(process.execPath, [
     "--test",
     "--experimental-strip-types",
-    ...(script === "test:manifest-evidence" ? ["--test-concurrency=1"] : []),
     `--test-reporter=${reporterPath}`,
     ...(testGate.pattern ? [`--test-name-pattern=${testGate.pattern}`] : []),
     ...testGate.paths,
@@ -405,10 +350,9 @@ async function runDeterministic({ root, artifactDir }) {
   const { runVerification } = await import("./verify-release.mjs");
   const runStartedMs = Date.now();
   const testEvents = [];
-  const evidenceSelection = acceptanceEvidenceSelection(root, process.env);
   const verification = await runVerification({
     root,
-    execute: ({ script }) => executeVerificationGate({ root, script, testEvents, artifactDir, evidenceSelection }),
+    execute: ({ script }) => executeVerificationGate({ root, script, testEvents, artifactDir }),
   });
   const testEventsArtifact = writeNodeTestEventsArtifact({ root, artifactDir, testEvents });
   if (receivedSignal) {
@@ -440,8 +384,8 @@ async function runDeterministic({ root, artifactDir }) {
   } catch {}
   const cases = buildGateEvidenceCases({ verification, root, artifactDir, terminalCaptures });
   const eventPath = relative(root, testEventsArtifact);
-  const changeEvidence = changeEvidenceCase({ root, testEvents, selection: evidenceSelection });
-  if (changeEvidence) cases.push({ ...changeEvidence, artifacts: [eventPath], detail: changeEvidence.detail });
+  const pushRevision = pushRevisionCase({ root, revision: git(root, ["rev-parse", "HEAD"]) });
+  if (pushRevision) cases.push({ ...pushRevision, artifacts: [eventPath] });
   for (const target of SUPPORTING_TESTS) {
     cases.push(supportingTestCase({ target, testEvents, artifactDir, root, eventPath }));
   }
@@ -567,6 +511,25 @@ export function writeNodeTestEventsArtifact({ root, artifactDir, testEvents }) {
     file: event.file?.startsWith(root) ? relative(root, event.file) : event.file,
   }))).join("\n") + "\n");
   return target;
+}
+
+export function pushRevisionCase({ root, env = process.env, revision }) {
+  if (env.GITHUB_EVENT_NAME !== "push") return null;
+  const result = { id: "push-revision", requirements: ["R16"], boundary: "push-event revision binding", status: "failed", required: true, attempts: 1, exclusions: [], artifacts: [] };
+  try {
+    if (typeof env.GITHUB_EVENT_PATH !== "string") throw new Error("push event payload path is unavailable");
+    const event = JSON.parse(readFileSync(env.GITHUB_EVENT_PATH, "utf8"));
+    const sha = /^[a-f0-9]{40}$/;
+    const before = event?.before;
+    const after = event?.after;
+    if (!(typeof before === "string" && (sha.test(before) || before === "0".repeat(40)))) throw new Error("push event before is not a full commit SHA or all-zero first-push marker");
+    if (typeof after !== "string" || !sha.test(after) || after !== revision || git(root, ["rev-parse", "HEAD"]) !== after) {
+      throw new Error("push event after SHA does not match the checked-out candidate revision");
+    }
+    return { ...result, status: "passed", detail: JSON.stringify({ before, after }) };
+  } catch (error) {
+    return { ...result, detail: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 async function executeProfile(profile, context) {

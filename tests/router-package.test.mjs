@@ -122,7 +122,7 @@ function compileTypeConsumer(consumer, source) {
 describe("packed experimental router consumer", () => {
   // `npm pack` runs the `prepack` build, which replaces this checkout's shared
   // `dist/router` in place. The unit suite runs this file while the acceptance
-  // runner's manifest-evidence gate runs the same file in a child process, so
+  // runner's full unit gate runs the same file in a child process, so
   // without a cross-process lock one pack archives a tree the other is
   // rebuilding (CI saw ENOENT dist/router and TS2307 on ./routing.ts).
   let releasePackLock;

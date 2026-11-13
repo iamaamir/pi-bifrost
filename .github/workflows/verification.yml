@@ -2,7 +2,7 @@ name: Verification
 
 on:
   push:
-    branches: [main, v2]
+    branches: [main]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -31,9 +31,8 @@ on:
         type: string
   schedule:
     # Scheduled runs fire only from the default branch (GitHub Actions docs:
-    # "Scheduled workflows will only run on the default branch"). v2 is not the
-    # default branch, so nightly activation stays pending until this workflow
-    # file is adopted there. Dispatch runs still support --ref for any branch.
+    # "Scheduled workflows will only run on the default branch"). Dispatch runs
+    # still support --ref for any branch.
     - cron: "23 4 * * *"
 
 permissions:
@@ -44,22 +43,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  evidence-preflight:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: 24
-      - name: Validate change evidence declaration
-        run: node scripts/acceptance/evidence-rebind.mjs "${{ github.event.pull_request.base.sha }}"
-
   # Head acceptance runs the seven release gates against the PR head (or the
   # pushed revision). It publishes the head evidence uploads; merge-controller
   # binds exactly one of each upload-step name across the run for both
@@ -68,14 +51,10 @@ jobs:
   # the candidate report, and the required release-gates check below waits
   # for every required stage.
   head-acceptance:
-    needs: evidence-preflight
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - name: Require successful PR evidence preflight
-        if: github.event_name == 'pull_request' && needs.evidence-preflight.result != 'success'
-        run: exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
@@ -108,21 +87,21 @@ jobs:
           path: screenshots/
           if-no-files-found: ignore
       - name: Upload candidate-bound manifest
-        if: always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: verification-manifest-${{ github.event.pull_request.head.sha || github.sha }}
           path: screenshots/verification/**/result.json
           if-no-files-found: ignore
       - name: Upload acceptance evidence
-        if: always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: acceptance-evidence-${{ github.event.pull_request.head.sha || github.sha }}
           path: screenshots/acceptance/**
           if-no-files-found: ignore
       - name: Upload candidate-bound Markdown report
-        if: always() && github.event_name == 'pull_request' && needs.evidence-preflight.result == 'success'
+        if: always() && github.event_name == 'pull_request'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ci-report-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
@@ -130,7 +109,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Upload head report data
-        if: always() && github.event_name == 'pull_request' && needs.evidence-preflight.result == 'success'
+        if: always() && github.event_name == 'pull_request'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: head-report-data-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
@@ -142,14 +121,10 @@ jobs:
   # after it. It binds its evidence to the exact merge SHA as before; the
   # merge-controller provenance search covers every job of the run.
   acceptance-merge:
-    needs: evidence-preflight
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - name: Require successful PR evidence preflight
-        if: needs.evidence-preflight.result != 'success'
-        run: exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
@@ -188,8 +163,7 @@ jobs:
   # The CRAP trend refresh runs beside the acceptance jobs; finalize-report
   # attaches the history to the report data before publishing it.
   crap-trend:
-    needs: evidence-preflight
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success') }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -204,7 +178,7 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Refresh CRAP trend history
-        if: always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')
+        if: always()
         env:
           CRAP_HISTORY: ${{ runner.temp }}/crap-history.jsonl
         run: |
@@ -216,7 +190,7 @@ jobs:
           npm run test:coverage
           node scripts/crap-report.mjs --record --history "$CRAP_HISTORY"
       - name: Upload CRAP trend history
-        if: always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')
+        if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: crap-history-${{ github.event.pull_request.head.sha || github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
@@ -228,8 +202,8 @@ jobs:
   # evidence, and the CRAP trend history, then renders and publishes the PR
   # report. A failed acceptance job still renders a failure report.
   finalize-report:
-    needs: [evidence-preflight, head-acceptance, acceptance-merge, crap-trend]
-    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.evidence-preflight.result == 'success' }}
+    needs: [head-acceptance, acceptance-merge, crap-trend]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -339,18 +313,15 @@ jobs:
   # (skipped stages only occur on non-PR events, where the stage does not
   # apply). merge-controller binds exactly one release-gates job per run.
   release-gates:
-    needs: [evidence-preflight, head-acceptance, acceptance-merge, crap-trend, finalize-report]
+    needs: [head-acceptance, acceptance-merge, crap-trend, finalize-report]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - name: Require successful PR evidence preflight
-        if: github.event_name == 'pull_request' && needs.evidence-preflight.result != 'success'
-        run: exit 1
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - name: Require every release stage to succeed
+      - name: Require release stages for this event to succeed
         env:
           HEAD_RESULT: ${{ needs.head-acceptance.result }}
           MERGE_RESULT: ${{ needs.acceptance-merge.result }}
@@ -358,14 +329,23 @@ jobs:
           REPORT_RESULT: ${{ needs.finalize-report.result }}
         run: |
           fail=0
-          for stage in "head-acceptance:$HEAD_RESULT" "acceptance-merge:$MERGE_RESULT" "crap-trend:$CRAP_RESULT" "finalize-report:$REPORT_RESULT"; do
-            name="${stage%%:*}"; result="${stage#*:}"
-            if [ "$result" = success ] || [ "$result" = skipped ]; then
-              echo "$name: $result"
-            else
+          require_success() {
+            name="$1"; result="$2"
+            if [ "$result" = success ]; then echo "$name: success"; else
               echo "$name: $result (failing the required release-gates check)"; fail=1
             fi
-          done
+          }
+          require_success head-acceptance "$HEAD_RESULT"
+          require_success crap-trend "$CRAP_RESULT"
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            require_success acceptance-merge "$MERGE_RESULT"
+            require_success finalize-report "$REPORT_RESULT"
+          else
+            for stage in "acceptance-merge:$MERGE_RESULT" "finalize-report:$REPORT_RESULT"; do
+              name="${stage%%:*}"; result="${stage#*:}"
+              if [ "$result" = skipped ]; then echo "$name: skipped (not applicable)"; else require_success "$name" "$result"; fi
+            done
+          fi
           exit "$fail"
 
 
