@@ -6,21 +6,24 @@
       "id": "ci-trap-negative-control",
       "requirement": "R16",
       "files": [
-        "provider-cooldowns.ts"
+        "crap-trap.ts",
+        "provider-cooldowns.ts",
+        "routing-scope.ts",
+        "ux-status.ts"
       ],
-      "boundary": "DELIBERATE DEFECT (negative control, do not merge): projectProviderCooldownsForRouting's healthy-provider guard is flipped from && to ||, so routing projections drop provider cooldown state for every provider that is not simultaneously pause-open AND trial-active. The planted fault must be rejected by CI: this PR is expected to go red and must not be merged.",
-      "assertions": "The unit suite pins exact projection outcomes, so the planted guard flip deterministically reddens three named assertions: the preserved-entry deepEqual (trialActive must merge as true), the same-provider trialActive pin, and the provider-b rate-pause openUntil pin (f.now() + 59_899). No test, type, lint, or structural gate was weakened; the declaration honestly declares the one changed file.",
+      "boundary": "DELIBERATE DEFECTS (negative control, do not merge): one planted defect per CI gate class. provider-cooldowns.ts flips the healthy-provider guard (&& to ||) so routing projections drop cooldown state — the unit and integration gates must catch it. routing-scope.ts swaps Map.set arguments so a ReadonlySet lands in the string key slot — only the typecheck gate must catch it. ux-status.ts rewords the classifier status (on · classifier off to on · classifier: off) — only the pinned UI smoke gates assert that exact footer text. crap-trap.ts adds a complexity-6 function with zero coverage behind a BIFROST_CRAP_TRAP env gate — the CRAP report must flag it above the threshold of 30. Every planted fault must be rejected by CI; this PR is expected to go red and must not be merged.",
+      "assertions": "Each defect is verified locally before push: the projection guard flip reddens three exact-pin assertions plus the inspect projection and the inferred-429 integration scenarios; the argument swap produces exactly one TS2345 error in tsc --noEmit; the status rewording passes reliability smoke scenarios 1-3 and fails scenario 4 on the pinned footer wait; the spike function scores 34.3 (CC 6, 8% coverage) in the local CRAP report. As currently wired, the crap-trend job reddens via the coverage run and the spike is visible in the rendered report; score-based blocking would be the separate fail-above policy step. No test, type, lint, or structural gate was weakened; the declaration honestly declares all four changed files.",
       "boundaryTest": {
         "file": "tests/provider-cooldowns.test.ts",
         "name": "loads one validated snapshot for a routing projection and preserves provider pause semantics"
       },
       "invariant": {
-        "file": "tests/provider-cooldowns.test.ts",
-        "name": "projects one provider pause onto its models while another provider remains eligible"
+        "file": "tests/bifrost-commands.test.ts",
+        "name": "projects provider cooldowns into inspect for v1 and v2 without writing or refreshing"
       },
       "fault": {
-        "file": "tests/provider-cooldowns.test.ts",
-        "name": "loads one validated snapshot for a routing projection and preserves provider pause semantics"
+        "file": "tests/integration/reliability-v2-auto.test.mjs",
+        "name": "temporarily avoids a provider for inferred 429 (1, rate-limit-429, auto)"
       }
     }
   ]
