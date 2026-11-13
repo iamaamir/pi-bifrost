@@ -1416,6 +1416,9 @@ export async function previewConfigCandidate(input: ConfigAgentPreviewInput): Pr
 export interface ConfigAgentApplyInput extends ConfigAgentCheckInput {
   /** Must return true only after the user explicitly approved this exact proposal. */
   readonly confirm: (title: string, summary: string, details: string) => Promise<boolean> | boolean;
+  /** Warnings the user already saw on the checked proposal, such as a live
+   * probe failure. Approval repeats them so apply never re-sends a request. */
+  readonly checkedIssues?: readonly ConfigAgentIssueSummary[];
   readonly write?: (path: string, text: string) => void;
   readonly reload: () => boolean;
   /** Re-derives the model inventory when apply revalidates after approval. */
@@ -1653,6 +1656,12 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
     routing: null,
   };
   const checked = checkConfigCandidate(input);
+  // Approval rebuilds the offline check, which cannot reproduce a live probe:
+  // its warnings travel with the proposal so the user sees at the dialog what
+  // the check reported. They describe the same candidate, never a new request.
+  const reviewed: ConfigAgentCheckResult = input.checkedIssues && input.checkedIssues.length > 0
+    ? { ...checked, issues: [...checked.issues, ...input.checkedIssues] }
+    : checked;
   const withCheck = {
     ...base,
     source: checked.source,
@@ -1715,14 +1724,14 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
     }
   }
 
-  const message = approvalDetails(checked);
+  const message = approvalDetails(reviewed);
   if (message === null) {
     return { ...withCheck, status: "rejected", reason: "the full change is too large to show for approval", notes: ["Nothing was written. Make a smaller change or edit the config manually."] };
   }
   let approved: boolean;
   let approvalFailed = false;
   try {
-    approved = await confirm("Apply this Bifrost configuration?", approvalSummary(checked), message);
+    approved = await confirm("Apply this Bifrost configuration?", approvalSummary(reviewed), message);
   } catch {
     approved = false;
     approvalFailed = true;
@@ -2065,7 +2074,13 @@ function readRequest(params: {
 export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefinition<typeof ConfigAgentParameters, ConfigAgentToolResult, unknown> {
   const cwdOf = deps.cwd ?? (() => process.cwd());
   const nowOf = deps.now ?? (() => Date.now());
-  const proposals = new WeakMap<object, { sessionId: string; handle: string; request: ConfigAgentRequest }>();
+  const proposals = new WeakMap<object, {
+    sessionId: string;
+    handle: string;
+    request: ConfigAgentRequest;
+    /** Live-probe warnings the check showed; apply cannot rebuild them offline. */
+    probeIssues: readonly ConfigAgentIssueSummary[];
+  }>();
   return {
     name: BIFROST_CONFIG_TOOL_NAME,
     label: "Bifrost config",
@@ -2087,6 +2102,10 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
       const sessionId = typeof sessionManager?.getSessionId === "function" ? sessionManager.getSessionId() : undefined;
       const saved = sessionId === undefined ? undefined : proposals.get(sessionManager);
       const handleOnly = Object.keys(params).every((key) => key === "operation" || key === "proposalHandle");
+      const savedProbeIssues = operation === "apply" && params.proposalHandle
+        && saved && saved.sessionId === sessionId && saved.handle === params.proposalHandle && handleOnly
+        ? saved.probeIssues
+        : [];
       if (operation === "apply" && params.proposalHandle && saved && saved.sessionId === sessionId && saved.handle === params.proposalHandle && handleOnly) {
         request = saved.request;
       }
@@ -2171,6 +2190,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
           }
           result = await applyConfigCandidate({
             ...input,
+            ...(savedProbeIssues.length > 0 ? { checkedIssues: savedProbeIssues } : {}),
             confirm: (title, summary, details) => approveConfig(ctx, title, summary, details, signal),
             reload: () => deps.reload(ctx),
             liveCatalog: () => catalogFromContext(ctx),
@@ -2197,6 +2217,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
         const handle = randomBytes(6).toString("hex");
         proposals.set(sessionManager, {
           sessionId, handle,
+          probeIssues: result.issues.filter((issue) => issue.code === "config.probe_failed"),
           request: structuredClone({
             ...request,
             proposalDigest: result.proposalDigest,

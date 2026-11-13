@@ -668,6 +668,33 @@ describe("provider sign-in state", () => {
     }
   });
 
+  it("repeats the checked proposal's probe warning in the approval dialog", async () => {
+    // The probe warning is evidence the check gathered. Apply rebuilds its
+    // offline check for the stamps, so without carrying the warning with the
+    // handle it would silently drop and the user would approve blind.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: (models) => models.map((model) => model === "beta/code"
+        ? { model, status: "error" as const, reason: "401 unauthorized" }
+        : { model, status: "ok" as const }),
+    });
+    try {
+      const candidate = { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } };
+      const checked = await harness.run({ operation: "check", candidate, probe: true });
+      const handle = contentOf(checked).match(/proposalHandle: ([a-f0-9]{12})/)?.[1];
+      assert.ok(handle, "a writable probe check must mint a handle");
+
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run({ operation: "apply", proposalHandle: handle }));
+      assert.equal(applied.applied, true);
+      const [confirmation] = harness.confirmations();
+      assert.match(confirmation?.details ?? "", /Warning: Live probe of beta\/code failed: 401 unauthorized/);
+      assert.match(confirmation?.summary ?? "", /WARNING: Live probe of beta\/code failed: 401 unauthorized/);
+      assert.equal(harness.probeCalls().length, 1, "apply must repeat the warning without sending another request");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("never probes a provider the tier's routing scope excludes", async () => {
     // The scope is a hard eligibility filter, so a probe of an excluded
     // provider would spend a request on a model that can never be selected.
