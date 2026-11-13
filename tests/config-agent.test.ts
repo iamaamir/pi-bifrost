@@ -17,6 +17,7 @@ import {
   configAgentConfigDigest,
   type ConfigAgentApplyResult,
   type ConfigAgentCheckResult,
+  type ConfigAgentProbeResult,
   type ConfigAgentInspectResult,
   type ConfigAgentPreviewResult,
 } from "../config-agent.ts";
@@ -46,6 +47,8 @@ interface HarnessOptions {
   readonly providerAuthStatus?: (provider: string) => { configured: boolean; source?: string };
   /** Resolve sign-in; return an Error to simulate a dead OAuth refresh token. */
   readonly providerAuthResult?: (provider: string) => unknown;
+  /** Live probe outcomes for the opt-in check; omit to leave the host without one. */
+  readonly probeModels?: (models: readonly string[]) => readonly ConfigAgentProbeResult[];
   readonly legacyClassifierEnabled?: boolean;
   readonly classifierSessionOverride?: boolean;
   readonly runtimeStateIssue?: "invalid-json";
@@ -128,6 +131,7 @@ function freshHarness(options: HarnessOptions = {}) {
     modelRegistry: registry,
   } as unknown as ExtensionToolContext;
 
+  const probeCalls: string[][] = [];
   const tool = createBifrostConfigTool({
     extensionDir,
     render: reportText,
@@ -135,6 +139,12 @@ function freshHarness(options: HarnessOptions = {}) {
       reloadCalls += 1;
       return reloadResult;
     },
+    ...(options.probeModels ? {
+      probeModels: async (models: readonly string[]) => {
+        probeCalls.push([...models]);
+        return options.probeModels!(models);
+      },
+    } : {}),
     ...(options.write ? { write: options.write } : {}),
     ...(options.runtimeAware ? {
       classifierRuntime: (config: BifrostConfig) => {
@@ -189,6 +199,7 @@ function freshHarness(options: HarnessOptions = {}) {
     setReload(value: boolean) { reloadResult = value; },
     setLegacyClassifierEnabled(value: boolean | undefined) { legacyClassifierEnabled = value; },
     confirmations: () => confirmations,
+    probeCalls: () => probeCalls,
     classifyCalls: () => classifyCalls,
     reloadCalls: () => reloadCalls,
     projectConfigPath: () => join(cwd, ".pi", "bifrost.json"),
@@ -614,6 +625,79 @@ describe("provider sign-in state", () => {
       const [confirmation] = harness.confirmations();
       assert.match(confirmation?.summary ?? "", /WARNING: Provider "alpha" sign-in cannot be resolved/);
       assert.match(confirmation?.details ?? "", /Warning: Provider "alpha" sign-in cannot be resolved/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("probes live only when asked and warns without blocking the write", async () => {
+    // The issue asked for a live check before proposing a tier. Probing by
+    // default would spend credits on every check, so it stays opt-in: the
+    // caller passes `probe: true` after the user agrees, and a failure is
+    // evidence about the provider rather than a reason to reject the write.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: (models) => models.map((model) => model === "beta/code"
+        ? { model, status: "error" as const, reason: "401 unauthorized" }
+        : { model, status: "ok" as const }),
+    });
+    try {
+      const candidate = { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } };
+      const checked = await harness.run({ operation: "check", candidate, probe: true });
+      const probed = detailsOf<ConfigAgentCheckResult>(checked);
+      assert.deepEqual(harness.probeCalls(), [["alpha/strong", "beta/code"]]);
+      assert.deepEqual(
+        probed.liveProbe?.map((entry) => `${entry.model}:${entry.status}`),
+        ["alpha/strong:ok", "beta/code:error"],
+      );
+      const warning = probed.issues.find((issue) => issue.code === "config.probe_failed");
+      assert.match(warning?.message ?? "", /beta\/code failed: 401 unauthorized/);
+      assert.equal(probed.status, "ok");
+      assert.equal(probed.writeEligible, true);
+      assert.match(contentOf(checked), /live probe \(one tiny prompt per model\):/);
+
+      // Without the flag nothing is sent, so a plain check keeps costing nothing.
+      const plain = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", candidate }));
+      assert.equal(harness.probeCalls().length, 1);
+      assert.equal(plain.liveProbe, undefined);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("fault control: a live probe that throws reports it and never blocks the write", async () => {
+    // A probe failure is evidence about the provider, not a validation error.
+    // Throwing transport must not escape the tool or make the candidate
+    // unwritable, because the user may still apply and sign in afterwards.
+    const harness = freshHarness({
+      probeModels: () => { throw new Error("provider transport refused"); },
+    });
+    try {
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+        probe: true,
+      }));
+      assert.equal(checked.status, "ok");
+      assert.equal(checked.liveProbe, undefined);
+      assert.equal(checked.writeEligible, true);
+      assert.match(checked.notes.join(" "), /Live probe could not run \(provider transport refused\)/);
+      assert.equal(harness.readFile(".pi/bifrost.json"), undefined);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("reports that the host cannot live-probe instead of pretending it ran", async () => {
+    const harness = freshHarness();
+    try {
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+        probe: true,
+      }));
+      assert.equal(checked.liveProbe, undefined);
+      assert.match(checked.notes.join(" "), /Live probe is unavailable in this host/);
     } finally {
       harness.cleanup();
     }
@@ -1743,7 +1827,7 @@ describe("tool surface", () => {
       const properties = (harness.tool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
       assert.deepEqual(Object.keys(properties).sort(), [
         "candidate", "catalogDigest", "classifierRuntimeDigest", "effectiveDigest", "offset", "operation", "patch",
-        "prompts", "proposalDigest", "proposalHandle", "provider", "remove", "source", "sourceDigest",
+        "probe", "prompts", "proposalDigest", "proposalHandle", "provider", "remove", "source", "sourceDigest",
       ]);
     } finally {
       harness.cleanup();

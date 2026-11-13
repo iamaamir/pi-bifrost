@@ -3371,6 +3371,21 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     pi.registerTool(createBifrostConfigTool({
       extensionDir,
       reload: (ctx) => reloadBifrostConfig(state, ctx),
+      // Opt-in live check for the configuration tool. `probe.ts` owns the
+      // transport; this adapter only maps catalog keys to models and back, so
+      // core policy never sends a provider request on its own.
+      probeModels: async (models, ctx) => {
+        const wanted = new Set(models);
+        const targets = ctx.modelRegistry.getAll()
+          .filter((model) => wanted.has(`${model.provider}/${model.id}`));
+        if (targets.length === 0) return [];
+        const { results } = await runProbe(ctx, { models: targets });
+        return results.map((result) => ({
+          model: `${result.provider}/${result.model}`,
+          status: result.status,
+          ...(result.error ? { reason: result.error } : {}),
+        }));
+      },
       classifierRuntime: (targetConfig, ctx) => {
         const sessionOverride = classifierSessionFor(ctx.sessionManager).override;
         const projectedEnabled = targetConfig.classifier?.enabled !== false;

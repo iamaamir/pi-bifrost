@@ -254,6 +254,13 @@ export interface ConfigAgentRoutingSummary {
   readonly economics: { readonly configured: boolean; readonly spendCap: false };
 }
 
+/** One live-check outcome for a model the candidate routes to. */
+export interface ConfigAgentProbeResult {
+  readonly model: string;
+  readonly status: "ok" | "error" | "timeout" | "skipped";
+  readonly reason?: string;
+}
+
 export interface ConfigAgentCheckResult {
   readonly operation: "check";
   readonly status: ConfigAgentStatus;
@@ -276,6 +283,8 @@ export interface ConfigAgentCheckResult {
   readonly removedModels: readonly string[];
   readonly writeEligible: boolean;
   readonly notes: readonly string[];
+  /** Live probe outcomes, present only when the caller asked for one. */
+  readonly liveProbe?: readonly ConfigAgentProbeResult[];
 }
 
 export interface ConfigAgentPreviewCase {
@@ -724,6 +733,83 @@ function providerAuthIssues(
     }
   }
   return issues;
+}
+
+/**
+ * Exact catalog models a composed candidate routes to. A pool entry may be a
+ * bare id or name a model Pi hides right now, so both catalogs are consulted;
+ * a live probe only ever targets exact `provider/id` keys.
+ */
+function probeModelKeys(
+  pools: Iterable<string>,
+  catalog: ConfigAgentCatalog,
+): string[] {
+  const known = new Set([
+    ...catalog.available.map((model) => model.key),
+    ...catalog.known.map((model) => model.key),
+  ]);
+  const keys = new Set<string>();
+  for (const entry of pools) {
+    for (const key of poolMatches(catalog, entry)) if (known.has(key)) keys.add(key);
+    for (const key of knownPoolMatches(catalog, entry)) if (known.has(key)) keys.add(key);
+  }
+  return [...keys].sort();
+}
+
+/** Warning for a model the live check reached and could not answer. */
+function probeIssues(
+  probed: readonly ConfigAgentProbeResult[],
+): ConfigAgentIssueSummary[] {
+  return probed
+    .filter((entry) => entry.status === "error" || entry.status === "timeout")
+    .map((entry) => ({
+      severity: "warning" as const,
+      code: "config.probe_failed",
+      message: `Live probe of ${entry.model} ${entry.status === "timeout" ? "timed out" : "failed"}${entry.reason ? `: ${entry.reason}` : ""}. That model would fail when a tier selects it; the candidate is still writable.`,
+    }));
+}
+
+/**
+ * Run the opt-in live check against the models a candidate would route to.
+ * Advisory on purpose: a probe failure is evidence about the provider, not
+ * proof that the candidate is wrong, so it warns and leaves the write eligible.
+ */
+async function applyLiveProbe(
+  result: ConfigAgentCheckResult,
+  catalog: ConfigAgentCatalog,
+  deps: ConfigAgentToolDeps,
+  ctx: ExtensionContext,
+): Promise<ConfigAgentCheckResult> {
+  if (result.status !== "ok") {
+    return { ...result, notes: [...result.notes, "Live probe skipped: the candidate did not pass check."] };
+  }
+  const pools = (result.routingAfter?.tiers ?? []).flatMap((tier) => [...tier.pool]);
+  const models = probeModelKeys(pools, catalog);
+  if (models.length === 0) {
+    return { ...result, notes: [...result.notes, "Live probe skipped: this candidate routes to no model the catalog knows."] };
+  }
+  if (!deps.probeModels) {
+    return { ...result, notes: [...result.notes, "Live probe is unavailable in this host; nothing was sent."] };
+  }
+  let probed: readonly ConfigAgentProbeResult[];
+  try {
+    probed = await deps.probeModels(models, ctx);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ...result,
+      notes: [...result.notes, `Live probe could not run (${message}); nothing was written.`],
+    };
+  }
+  if (probed.length === 0) {
+    return { ...result, notes: [...result.notes, "Live probe returned no result; nothing was written."] };
+  }
+  return {
+    ...result,
+    liveProbe: probed,
+    issues: [...result.issues, ...probeIssues(probed)],
+    notes: [...result.notes, "Live probe sends one tiny prompt per model and spends a small amount of credit."],
+  };
 }
 
 // ── Effective config + routing summary ─────────────────────────
@@ -1803,6 +1889,15 @@ export interface ConfigAgentToolDeps {
   readonly write?: (path: string, text: string) => void;
   /** Resolve the currently effective session/config classifier state without network access. */
   readonly classifierRuntime?: (config: BifrostConfig, ctx: ExtensionToolContext) => ConfigAgentClassifierRuntime;
+  /**
+   * Send one tiny request to each named model and report what came back.
+   * Injected by the host so core policy never owns provider transport, and
+   * only called when the caller opts in with `probe: true`.
+   */
+  readonly probeModels?: (
+    models: readonly string[],
+    ctx: ExtensionContext,
+  ) => Promise<readonly ConfigAgentProbeResult[]>;
   /** Render a result for the model. Injected by the host entry so this module
    * owns policy and IO only and the presentation module stays a leaf. */
   readonly render: (result: ConfigAgentToolResult) => string;
@@ -1854,6 +1949,7 @@ const ConfigAgentParameters = Type.Object({
   effectiveDigest: Type.Optional(Type.String({ description: "effectiveDigest returned by check or preview for this exact candidate." })),
   catalogDigest: Type.Optional(Type.String({ description: "catalogDigest returned by check or preview for this exact candidate." })),
   classifierRuntimeDigest: Type.Optional(Type.String({ description: "classifierRuntimeDigest returned by check or preview; apply refuses if runtime classifier state changes." })),
+  probe: Type.Optional(Type.Boolean({ description: "Live-check the models this check would route to by sending one tiny prompt to each. Costs a small request per model, so ask the user before enabling it and never enable it on your own. Advisory: probe failures warn and the candidate stays writable." })),
 });
 
 /**
@@ -2006,6 +2102,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
           break;
         case "check":
           result = checkConfigCandidate(input);
+          if (params.probe === true) result = await applyLiveProbe(result, catalog, deps, ctx);
           break;
         case "preview":
           result = await previewConfigCandidate({ ...input, now: nowOf() });

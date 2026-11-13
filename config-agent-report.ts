@@ -153,6 +153,12 @@ function renderCheck(result: ConfigAgentCheckResult): string {
   }
   if (result.newlyEligibleModels.length > 0) lines.push(`newly referenced models that are available: ${result.newlyEligibleModels.join(", ")}`);
   if (result.removedModels.length > 0) lines.push(`models no longer referenced by any tier: ${result.removedModels.join(", ")}`);
+  if (result.liveProbe) {
+    lines.push("live probe (one tiny prompt per model):");
+    for (const entry of result.liveProbe) {
+      lines.push(`  ${entry.model}: ${entry.status}${entry.reason ? ` -- ${entry.reason}` : ""}`);
+    }
+  }
   const warnings = result.issues.filter((issue) => issue.severity === "warning");
   if (warnings.length > 0) {
     lines.push("warnings:");
