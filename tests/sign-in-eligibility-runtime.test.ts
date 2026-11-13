@@ -39,8 +39,9 @@ function fixture(options: FixtureOptions = {}) {
   const inventory = [...(options.models ?? [makeModel("dead", "one", 1), makeModel("live", "two", 2)])];
   const dead = new Set(options.deadProviders ?? ["dead"]);
   const authCalls: string[] = [];
+  const refreshHooks: Array<() => void> = [];
   let authGate: { provider: string; promise: Promise<void>; release: () => void } | undefined;
-  let commandHandler: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
+  let commandHandler: ((args: string, ctx: ExtensionContext) => Promise<unknown>) | undefined;
   const config = {
     schemaVersion: 2,
     enabled: true,
@@ -81,7 +82,12 @@ function fixture(options: FixtureOptions = {}) {
         if (dead.has(provider)) throw new Error("token refresh failed");
         return { auth: { apiKey: "resolved" } };
       },
-      refresh: async () => ({ refreshed: [], errors: new Map() }),
+      // A refresh is the moment the registry learns about models it did not
+      // report before, so it can make a configured provider selectable.
+      refresh: async () => {
+        for (const hook of refreshHooks.splice(0)) hook();
+        return { refreshed: [], errors: new Map() };
+      },
     },
     sessionManager,
     ui: { notify: () => {}, setStatus: () => {}, setWorkingMessage: () => {}, setWorkingVisible: () => {} },
@@ -90,8 +96,8 @@ function fixture(options: FixtureOptions = {}) {
   const pi = {
     registerVirtualModel: (definition: VirtualModelDefinition) => { routeDefinition = definition; },
     registerTool: () => {},
-    registerCommand: (_name: string, definition: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
-      commandHandler = definition.handler;
+    registerCommand: (_name: string, definition: { handler: (args: string, ctx: ExtensionContext) => Promise<unknown> }) => {
+      commandHandler = definition.handler as (args: string, ctx: ExtensionContext) => Promise<unknown>;
     },
     on: (event: string, handler: Hook) => { handlers.set(event, handler); return () => {}; },
     setModel: async (model: Model<Api>) => { dispatched.push(`${model.provider}/${model.id}`); return true; },
@@ -125,6 +131,10 @@ function fixture(options: FixtureOptions = {}) {
         release: () => { authGate = undefined; release(); },
       };
     },
+    /** Apply the next registry refresh to this fixture, as a real refresh would. */
+    onRefresh(hook: () => void): void {
+      refreshHooks.push(hook);
+    },
     markDead(...providers: string[]): void {
       for (const provider of providers) dead.add(provider);
     },
@@ -138,6 +148,19 @@ function fixture(options: FixtureOptions = {}) {
         messages: [userMessage],
         ...(options.previous === undefined ? {} : { previous: options.previous }),
       } as unknown as ModelRouteRequest, ctx);
+    },
+    /** Run the inline `/bifrost preview` command and capture its rendered lines. */
+    async preview(): Promise<string> {
+      assert.ok(commandHandler, "the extension must register the bifrost command");
+      const lines: string[] = [];
+      const realError = console.error;
+      console.error = (...args: unknown[]) => { lines.push(args.map(String).join(" ")); };
+      try {
+        await commandHandler("preview review the change", ctx);
+      } finally {
+        console.error = realError;
+      }
+      return lines.join("\n");
     },
     /** Run `body` with the sign-in cache already past its TTL. */
     async withExpiredCache<T>(body: () => Promise<T>): Promise<T> {
@@ -231,6 +254,41 @@ describe("pre-dispatch sign-in eligibility through the Auto route", { concurrenc
       assert.equal(`${second.model.provider}/${second.model.id}`, "live/two");
       assert.ok(h.authCalls.includes("dead2"), "the reloaded pool's provider must be resolved before dispatch");
       assert.deepEqual(h.dispatched, []);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("stops reporting an exclusion once the cached answer expires", async () => {
+    // Preview may only repeat an answer that is still current. After the TTL the
+    // next Auto turn checks again, so a stale exclusion would contradict it and
+    // hide that the provider was never re-checked.
+    const h = fixture({ eligibility: "exclude" });
+    try {
+      await h.route();
+      const fresh = await h.preview();
+      assert.match(fresh, /provider sign-in unavailable/);
+
+      const expired = await h.withExpiredCache(() => h.preview());
+      assert.doesNotMatch(expired, /provider sign-in unavailable/);
+      assert.match(expired, /not been resolved in this session/);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("checks a provider the empty-pool refresh makes selectable", async () => {
+    // A bare pool entry can match nothing until the registry refresh lands. The
+    // answer cached before that refresh covered no provider, so dispatching the
+    // newly visible one without a check would send the doomed request anyway.
+    const h = fixture({ eligibility: "exclude", models: [], pool: ["two"] });
+    try {
+      h.onRefresh(() => h.inventory.push(makeModel("dead", "two", 1), makeModel("live", "two", 2)));
+      h.markDead("dead");
+
+      const result = await h.route();
+      assert.equal(`${result.model.provider}/${result.model.id}`, "live/two");
+      assert.ok(h.authCalls.includes("dead"), "a provider the refresh made selectable must be resolved before dispatch");
     } finally {
       h.cleanup();
     }
