@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ── Release script ──────────────────────────────────────────
-// Usage: node --experimental-strip-types scripts/release.mjs [--patch|--minor|--major] [--publish]
+// Usage: node --experimental-strip-types scripts/release.mjs [--patch|--minor|--major] [--version X.Y.Z] [--dry-run] [--publish]
 //
 // Steps:
 //   1. Validate clean working tree
@@ -11,7 +11,7 @@
 //   6. npm publish (only with --publish; otherwise publish manually)
 
 import { execSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 const args = process.argv.slice(2);
 const SCRIPT_DIR = join(fileURLToPath(import.meta.url), "..");
 const ROOT = join(SCRIPT_DIR, "..");
+const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 function run(cmd, silent = false) {
   try {
@@ -59,7 +60,7 @@ function getLatestTag() {
 }
 
 // ── CLI entry point — only runs when invoked directly ─────
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && existsSync(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   main().catch((err) => {
     console.error(`[release] Unexpected error: ${err}`);
     process.exit(1);
@@ -71,19 +72,37 @@ async function main() {
   let bumpType = null;
   let customVersion = null;
   let shouldPublish = false;
+  let dryRun = false;
+  let showHelp = false;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--patch" || arg === "--minor" || arg === "--major") {
       bumpType = arg.slice(2);
-    } else if (arg === "--version" && args[i + 1]) {
+    } else if (arg === "--version") {
+      const value = args[i + 1];
+      if (!value || value.startsWith("--") || !VERSION_PATTERN.test(value)) {
+        console.error('[release] --version requires a semantic version in X.Y.Z format.');
+        process.exitCode = 2;
+        return;
+      }
       customVersion = args[++i];
     } else if (arg === "--publish") {
       shouldPublish = true;
+    } else if (arg === "--dry-run") {
+      dryRun = true;
     } else if (arg === "--help" || arg === "-h") {
-      console.log(`Usage: node --experimental-strip-types scripts/release.mjs [--patch|--minor|--major] [--version X.Y.Z] [--publish]`);
+      showHelp = true;
+    } else {
+      console.error(`[release] Unknown argument: ${arg}`);
+      process.exitCode = 2;
       return;
     }
+  }
+
+  if (showHelp) {
+    console.log(`Usage: node --experimental-strip-types scripts/release.mjs [--patch|--minor|--major] [--version X.Y.Z] [--dry-run] [--publish]`);
+    return;
   }
 
   // ── 0. Verify this is a git repo ────────────────────────────────
@@ -128,6 +147,11 @@ async function main() {
   }
 
   console.log(`[release] ${currentVersion} → ${newVersion}`);
+
+  if (dryRun) {
+    console.log(`[release] Dry run: would update package.json, create and push v${newVersion}${shouldPublish ? ', and publish to npm' : ''}.`);
+    return;
+  }
 
   // ── 4. Update package.json version ───────────────────────────────
   pkg.version = newVersion;
