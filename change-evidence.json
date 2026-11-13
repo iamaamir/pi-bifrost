@@ -10,11 +10,12 @@
         "scripts/acceptance/evidence-rebind.mjs",
         "scripts/merge-controller.mjs",
         "scripts/merge-eligibility.mjs",
+        "tests/evidence-rebind.test.mjs",
         "tests/merge-controller.test.mjs",
         "tests/merge-eligibility.test.mjs"
       ],
       "boundary": "After the v2 retirement the operator merge gate targets main: merge-controller's BASE_BRANCH default and the CLI --base default are main, merge-eligibility rejects PRs whose base branch is not main, the evidence-rebind CLI default base ref is origin/main, and the documented operator example shows the main base. Every base-branch discriminator in the fixtures stays a genuine mutation: the wrong-base rejection uses a branch name that differs from the default, the dependency-integration gate rejects a foreign base branch, and final revalidation distinguishes a moved base by both sha and ref name.",
-      "assertions": "The generated wrong-base rejection test and the renamed dependency-integration test pin the main-targeting gate in the declared test files; the base-movement revalidation test fails closed on a changed ref name even when the shas are unchanged; and the guard-removal controls prove the final-revalidation and receipt guards still turn red when disabled and pass when restored.",
+      "assertions": "The generated wrong-base rejection test and the renamed dependency-integration test pin the main-targeting gate in the declared test files; the base-movement revalidation test fails closed on a changed ref name even when the shas are unchanged; and the guard-removal controls prove the final-revalidation and receipt guards still turn red when disabled and pass when restored. A CLI case builds distinct origin/main and origin/v2 refs, calls the rebind CLI without an operand, and pins that the default resolves origin/main — a regression back to origin/v2 fails on the orphan v2 ref that is not inside HEAD.",
       "boundaryTest": {
         "file": "tests/merge-controller.test.mjs",
         "name": "rejects wrong PR base branch without invoking merge"
