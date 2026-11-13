@@ -3382,7 +3382,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         // The check promises one tiny prompt per model, so the streaming
         // attempt is the only request: an empty streamed answer is reported as
         // an error instead of falling back to a second session-backed prompt.
-        const { results } = await runProbe(ctx, { models: targets, signal, sessionFallback: false });
+        // Its results stay out of the init cache: they answer a narrower
+        // question, and `/bifrost init` must not inherit a failure for an hour.
+        const { results } = await runProbe(ctx, { models: targets, signal, sessionFallback: false, persist: false });
         return results.map((result) => ({
           model: `${result.provider}/${result.model}`,
           status: result.status,

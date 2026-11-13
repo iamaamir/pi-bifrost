@@ -142,6 +142,41 @@ describe("probe transport", () => {
     }
   });
 
+  it("does not write the init cache when the caller disables persistence", async () => {
+    // A candidate check asks a narrower question than `/bifrost init`, so its
+    // answer must not replace the init cache for the hour the cache lives.
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-probe-no-persist-"));
+    const model = { provider: "fixture", id: "candidate", api: "openai-completions", cost: { input: 0, output: 0 } };
+    const cwdBefore = process.cwd();
+    const ctx = {
+      modelRegistry: {
+        getAvailable: () => [model],
+        streamSimple: () => ({
+          result: async () => ({
+            role: "assistant",
+            api: "openai-completions",
+            provider: model.provider,
+            model: model.id,
+            content: [{ type: "text", text: "2" }],
+            usage: { totalTokens: 1 },
+            stopReason: "stop",
+            timestamp: Date.now(),
+          }),
+        }),
+      },
+    } as never;
+
+    try {
+      process.chdir(cwd);
+      const result = await runProbe(ctx, { promptWithSession: async () => "2", persist: false });
+      assert.equal(result.results[0]?.status, "ok");
+      assert.equal(existsSync(join(cwd, ".pi", "bifrost-probe.json")), false, "a candidate check must leave the init cache alone");
+    } finally {
+      process.chdir(cwdBefore);
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("does not send session fallback after a provider error, even when content is empty", async () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-probe-provider-error-"));
     const model = { provider: "fixture", id: "limited", api: "openai-completions", cost: { input: 0, output: 0 } };
