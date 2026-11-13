@@ -47,12 +47,10 @@ describe("config source override loading", () => {
 
       assert.deepEqual(loaded.diagnostics, []);
       assert.deepEqual(loaded.config.models, {
-        extension: ["extension/model"],
         general: ["project/model"],
         quick: ["candidate/quick"],
       });
       assert.deepEqual(loaded.sourceFields, [
-        { layer: "extension", fields: ["models"] },
         { layer: "global", fields: ["models"] },
         { layer: "workspace", fields: ["models"] },
         { layer: "project", fields: ["models"] },
@@ -121,7 +119,7 @@ describe("config source override loading", () => {
     });
   });
 
-  it("qualifies only exact bundled public extension defaults without exposing source values", () => {
+  it("does not load bundled public defaults as an active source", () => {
     withConfigTree(({ cwd, extensionDir }) => {
       const defaults = BUNDLED_PUBLIC_INIT_DEFAULTS;
       writeJson(join(extensionDir, "bifrost.json"), {
@@ -131,11 +129,8 @@ describe("config source override loading", () => {
       });
 
       const canonical = loadConfigWithSourceOverride(cwd, extensionDir, "project", Buffer.from("{}"));
-      assert.deepEqual(canonical.publicDefaultFields, ["classifier", "cache"]);
-      assert.deepEqual(canonical.sourceFields, [{
-        layer: "extension",
-        fields: ["cache", "classifier", "customNote"],
-      }, { layer: "project", fields: [] }]);
+      assert.deepEqual(canonical.publicDefaultFields, []);
+      assert.deepEqual(canonical.sourceFields, [{ layer: "project", fields: [] }]);
       assert.deepEqual(defaults.classifier, {
         enabled: true, method: "auto", maxTokens: 20, temperature: 0, fallbackToRegex: true,
       });
@@ -149,12 +144,8 @@ describe("config source override loading", () => {
       });
       const customized = loadConfigWithSourceOverride(cwd, extensionDir, "project", Buffer.from("{}"));
       assert.deepEqual(customized.publicDefaultFields, []);
-      assert.deepEqual(customized.sourceFields, [
-        { layer: "extension", fields: ["cache", "classifier"] },
-        { layer: "project", fields: [] },
-      ]);
-      assert.equal(JSON.stringify(customized.publicDefaultFields).includes("private custom prompt"), false);
-      assert.equal(JSON.stringify(customized.sourceFields).includes("private custom prompt"), false);
+      assert.deepEqual(customized.sourceFields, [{ layer: "project", fields: [] }]);
+      assert.deepEqual(customized.publicDefaultFields, []);
     });
   });
 
@@ -173,20 +164,17 @@ describe("config source override loading", () => {
       writeJson(join(cwd, ".pi", "bifrost.json"), { tierPolicies: { cycleA: { fallbackTiers: [] }, cycleB: { fallbackTiers: [] } } });
 
       const loaded = loadConfigForReload(cwd, extensionDir);
-      const extensionDiagnostics = loaded.diagnostics.filter(({ layer }) => layer === "extension");
-      assert.equal(extensionDiagnostics.length, 1);
-      assert.match(extensionDiagnostics[0]!.message, /source-local policy/u);
+      assert.equal(loaded.diagnostics.some(({ layer }) => layer === "extension"), false);
     });
   });
 
   it("checks every on-disk source layer and each prospective editable source", () => {
     const sourceFiles = {
-      extension: (extensionDir: string, _agentDir: string, _cwd: string) => join(extensionDir, "bifrost.json"),
       global: (_extensionDir: string, agentDir: string, _cwd: string) => join(agentDir, "bifrost.json"),
       workspace: (_extensionDir: string, _agentDir: string, cwd: string) => join(cwd, "bifrost.json"),
       project: (_extensionDir: string, _agentDir: string, cwd: string) => join(cwd, ".pi", "bifrost.json"),
     };
-    for (const source of ["extension", "global", "workspace", "project"] as const) {
+    for (const source of ["global", "workspace", "project"] as const) {
       withConfigTree(({ cwd, extensionDir, agentDir }) => {
         writeJson(sourceFiles[source](extensionDir, agentDir, cwd), {
           tierPolicies: { general: { fallbackTiers: ["general"] } },

@@ -1106,16 +1106,12 @@ async function handleInit(
     : {};
   const configLayers = loadConfigForReload(process.cwd(), state.extensionDir);
   const publicDefaults = BUNDLED_PUBLIC_INIT_DEFAULTS as unknown as Record<string, unknown>;
-  const layerOrder = ["extension", "global", "workspace", "project"] as const;
+  const layerOrder = ["global", "workspace", "project"] as const;
   const targetLayer = source.source === "project" ? "project" : source.source === "workspace" ? "workspace" : "global";
   const targetLayerIndex = layerOrder.indexOf(targetLayer);
   const inheritedFields = new Set(configLayers.sourceFields
-    .filter(({ layer }) => layer !== "extension" && layer !== "effective" && layerOrder.indexOf(layer) < targetLayerIndex)
+    .filter(({ layer }) => layer !== "effective" && layerOrder.indexOf(layer as typeof layerOrder[number]) < targetLayerIndex)
     .flatMap(({ fields }) => fields));
-  const extensionFields = configLayers.sourceFields.find(({ layer }) => layer === "extension")?.fields ?? [];
-  for (const key of extensionFields) {
-    if (key !== "models" && !configLayers.publicDefaultFields.includes(key)) inheritedFields.add(key);
-  }
   const detectedClassifier = state.effectiveClassifierBackend(initConfig, ctx);
   const classifierEnabled = classifierEnablementFor(state, ctx, initConfig).enabled;
   const needsDetectedPromptModel = classifierEnabled

@@ -30,6 +30,31 @@ describe("automatic first-run setup", () => {
     });
   });
 
+  it("writes strategies only for detected custom tiers", () => {
+    const saved = serializeBootstrapConfig(
+      {
+        models: {},
+        categoryStrategies: { quick: "random", general: "first", frontier: "first" },
+      },
+      "light",
+      {
+        trivial: ["fixture/trivial"],
+        light: ["fixture/light"],
+        heavy: ["fixture/heavy"],
+      },
+    );
+    assert.deepEqual(saved.models, {
+      trivial: ["fixture/trivial"],
+      light: ["fixture/light"],
+      heavy: ["fixture/heavy"],
+    });
+    assert.deepEqual(saved.categoryStrategies, {
+      trivial: "first",
+      light: "first",
+      heavy: "first",
+    });
+  });
+
   it("keeps supported extension settings but excludes inherited classifier prompt text from generated project config", () => {
     const extensionSettings: BifrostConfig = {
       enabled: true,
