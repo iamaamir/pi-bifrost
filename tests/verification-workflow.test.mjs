@@ -69,10 +69,11 @@ const CAMPAIGN_JOBS = ["campaign", "pi-compatibility", "mutation-experiment"];
 
 /**
  * The hard job-level budget of the release-gates job. GitHub enforces the
- * ceiling, and a green run must fit all four stages (acceptance, CRAP trend
- * refresh, proposed-merge acceptance, report uploads) inside the budget on
- * the slowest hosted runners observed; a 45-minute budget killed a fully
- * green run mid-stage.
+ * ceiling, and a green run must fit the head acceptance (seven gates plus
+ * journeys) inside the budget on the slowest hosted runners observed; a
+ * 45-minute budget killed a fully green run mid-stage. The proposed-merge
+ * acceptance and the CRAP trend refresh run in parallel jobs with their own
+ * bounds, and finalize-report joins them.
  */
 function releaseGateBudget(source) {
   const block = jobBlocks(source)["release-gates"];
@@ -85,12 +86,17 @@ function releaseGateBudget(source) {
   return minutes;
 }
 
+function assertPreflightGuard(block, { scoped = true } = {}) {
+  assert.ok(block, "release job must exist");
+  const condition = scoped ? "github\\.event_name == 'pull_request' && " : "";
+  assert.match(block, new RegExp(`name: Require successful PR evidence preflight\\n\\s+if: ${condition}needs\\.evidence-preflight\\.result != 'success'\\n\\s+run: exit 1\\n\\s+- uses: actions/checkout@`, "u"));
+}
+
 function assertPreflightGate(block) {
   assert.ok(block, "release-gates job must exist");
-  assert.match(block, /^ {4}needs: evidence-preflight$/mu);
+  assert.match(block, /^ {4}needs: \[evidence-preflight(?:, [a-z-]+)*\]$/mu);
   assert.equal(jobCondition(block), "${{ !cancelled() }}");
-  assert.match(block, /name: Require successful PR evidence preflight\n\s+if: github\.event_name == 'pull_request' && needs\.evidence-preflight\.result != 'success'\n\s+run: exit 1\n\s+- uses: actions\/checkout@/u);
-  assert.match(block, /name: Refresh CRAP trend history\n\s+if: always\(\) && \(github\.event_name != 'pull_request' \|\| needs\.evidence-preflight\.result == 'success'\)/u);
+  assertPreflightGuard(block);
 }
 
 test("release-gates fails closed on failed PR evidence preflight", () => {
@@ -99,7 +105,7 @@ test("release-gates fails closed on failed PR evidence preflight", () => {
   releaseGateBudget(workflow);
   const bypass = block.replace("${{ !cancelled() }}", "always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')");
   assert.throws(() => assertPreflightGate(bypass), "old skipped-required-check bypass must fail the assertion");
-  assert.throws(() => assertPreflightGate(block.replace("run: exit 1", "run: exit 0")), "disabled preflight failure must fail the assertion");
+  assert.throws(() => assertPreflightGuard(block.replace("run: exit 1", "run: exit 0")), "disabled preflight failure must fail the assertion");
 
   // Seven release gates, checked against both declaring modules.
   assert.deepEqual(requiredGatesFrom(ciReportSource), [
@@ -116,14 +122,80 @@ test("release-gates fails closed on failed PR evidence preflight", () => {
   ]);
   assert.match(mergeEligibilitySource, /const REQUIRED_JOB = "release-gates";/u);
 
-  // Ordinary PR/push/manual-default execution path stays intact.
-  assert.match(block, /id: acceptance\n/u);
-  assert.match(block, /run: npm run acceptance\n/u);
+  // Ordinary PR/push/manual-default execution path stays intact. The head
+  // acceptance publishes the acceptance evidence uploads; the required
+  // release-gates check waits for every required stage.
+  const head = jobs["head-acceptance"];
+  assert.ok(head, "head-acceptance job must exist");
+  assert.match(head, /id: acceptance\n/u);
+  assert.match(head, /run: npm run acceptance\n/u);
+  assert.match(head, /name: ci-report-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
+  assert.match(head, /name: head-report-data-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
+});
+
+test("a failed release stage turns the required release-gates check red", () => {
+  const block = jobs["release-gates"];
+  assert.ok(block, "release-gates job must exist");
+  const weakened = block.replace("echo \"$name: $result (failing the required release-gates check)\"; fail=1", "echo \"$name: $result\"");
+  assert.notEqual(weakened, block, "the fault must remove the stage-gate failure");
+  assert.throws(() => assert.match(weakened, /failing the required release-gates check/u),
+    "every failed release stage must fail the required check");
+});
+
+test("exactly one release-gates job exists per run", () => {
+  assert.equal([...workflow.matchAll(/^ {2}release-gates:$/gmu)].length, 1,
+    "merge-controller binds exactly one release-gates job per run and attempt");
+});
+
+test("the proposed-merge acceptance runs beside release-gates", () => {
+  const block = jobs["acceptance-merge"];
+  assert.ok(block, "acceptance-merge job must exist");
+  assert.equal(jobCondition(block), "${{ !cancelled() && github.event_name == 'pull_request' }}");
+  assert.match(block, /^ {4}needs: evidence-preflight$/mu);
+  assertPreflightGuard(block, { scoped: false });
+  assert.match(block, /ref: \$\{\{ github\.ref \}\}/u, "the merge job must check out the proposed merge ref");
+  assert.match(block, /id: merge-acceptance\n/u);
   assert.match(block, /run: npm run acceptance:deterministic\n/u);
-  assert.match(block, /if: always\(\) && github\.event_name == 'pull_request' && needs\.evidence-preflight\.result == 'success'\n/u);
-  assert.match(block, /name: ci-report-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
+  assert.match(block, /name: merge-result-evidence-\$\{\{ github\.sha \}\}/u);
+  // The merge controller binds the artifact to exactly one successful upload
+  // step by name across the run; the names must stay unique workflow-wide.
+  assert.equal([...workflow.matchAll(/^ {6}- name: Upload acceptance evidence$/gmu)].length, 1);
+  assert.equal([...workflow.matchAll(/^ {6}- name: Upload merge-result evidence$/gmu)].length, 1);
+
+  const weakened = block.replace("run: npm run acceptance:deterministic", "run: npm run acceptance");
+  assert.notEqual(weakened, block, "the fault must rewrite the merge acceptance command");
+  assert.throws(() => assert.match(weakened, /run: npm run acceptance:deterministic\n/u),
+    "the merge acceptance must stay on the deterministic profile");
+});
+
+test("the CRAP trend refresh runs beside the gates", () => {
+  const block = jobs["crap-trend"];
+  assert.ok(block, "crap-trend job must exist");
+  assert.match(block, /^ {4}needs: evidence-preflight$/mu);
+  assert.match(block, /name: Refresh CRAP trend history\n\s+if: always\(\) && \(github\.event_name != 'pull_request' \|\| needs\.evidence-preflight\.result == 'success'\)/u);
+  assert.match(block, /npm run test:coverage/u);
+  assert.match(block, /node scripts\/crap-report\.mjs --record --history/u);
+  assert.match(block, /name: crap-history-\$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
+});
+
+test("finalize-report joins the parallel evidence into the candidate report", () => {
+  const block = jobs["finalize-report"];
+  assert.ok(block, "finalize-report job must exist");
+  assert.equal(jobCondition(block), "${{ !cancelled() && github.event_name == 'pull_request' && needs.evidence-preflight.result == 'success' }}");
+  assert.match(block, /^ {4}needs: \[evidence-preflight, head-acceptance, acceptance-merge, crap-trend\]$/mu);
+  assert.match(block, /RELEASE_RESULT: \$\{\{ needs\.head-acceptance\.result == 'success' && needs\.acceptance-merge\.result == 'success' && needs\.crap-trend\.result == 'success' && 'success' \|\| 'failure' \}\}/u);
+  assert.match(block, /name: head-report-data-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
+  assert.match(block, /name: crap-history-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
   assert.match(block, /name: acceptance-report-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
   assert.match(block, /name: final-ci-report-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
+  assert.match(block, /renderCiReport\(data, \{/u);
+  assert.match(block, /appendFileSync\(process\.env\.GITHUB_STEP_SUMMARY, markdown\);/u);
+
+  // A failed acceptance job must still render a failure report, never skip it.
+  const skipping = block.replaceAll("        continue-on-error: true\n", "");
+  assert.notEqual(skipping, block, "the fault must remove the tolerant artifact downloads");
+  assert.throws(() => assert.match(skipping, /continue-on-error: true/u),
+    "artifact downloads must stay tolerant so a failed acceptance still renders");
 });
 
 test("evidence preflight runs only on pull requests before release gates", () => {
@@ -140,7 +212,7 @@ test("evidence preflight runs only on pull requests before release gates", () =>
 });
 
 test("campaign jobs never run on ordinary PR, push, or default manual dispatch", () => {
-  assert.deepEqual(Object.keys(jobs), ["evidence-preflight", "release-gates", "campaign", "pi-compatibility", "mutation-experiment"]);
+  assert.deepEqual(Object.keys(jobs), ["evidence-preflight", "head-acceptance", "acceptance-merge", "crap-trend", "finalize-report", "release-gates", "campaign", "pi-compatibility", "mutation-experiment"]);
   const cases = [
     ["pull_request", {}],
     ["push", {}],
@@ -209,6 +281,16 @@ test("Pi compatibility uses explicit matrix pins with an isolated install", () =
 test("release-gates keeps a hard budget that fits every release stage", () => {
   assert.ok(releaseGateBudget(workflow) >= 60,
     "release-gates must budget at least 60 minutes for the four release stages");
+});
+
+test("every parallel release job keeps a hard job-level bound", () => {
+  const bounds = { "acceptance-merge": 60, "crap-trend": 30, "finalize-report": 10 };
+  for (const [job, ceiling] of Object.entries(bounds)) {
+    const bound = jobs[job].match(/^ {4}timeout-minutes: (\d+)$/mu);
+    assert.ok(bound, `${job} must set timeout-minutes`);
+    const minutes = Number(bound[1]);
+    assert.ok(minutes >= 1 && minutes <= ceiling, `${job} bound must stay within ${ceiling} minutes, got ${minutes}`);
+  }
 });
 
 test("fault control: a 45-minute release-gates budget turns the named budget assertion red", () => {

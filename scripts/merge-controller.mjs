@@ -308,8 +308,14 @@ function testedSource(repo, run, artifacts, name, revision, stepName) {
   const artifact = matches[0];
   const started = Date.parse(run.run_started_at), ended = Date.parse(run.updated_at);
   const created = Date.parse(artifact?.created_at);
-  const steps = run.jobs.find((job) => job.name === REQUIRED_JOB)?.steps;
-  const uploads = Array.isArray(steps) ? steps.filter((step) => step.name === stepName && step.conclusion === "success") : [];
+  const steps = Array.isArray(run.jobs)
+    ? run.jobs.flatMap((job) => Array.isArray(job?.steps) ? job.steps : [])
+    : [];
+  // The head acceptance and the proposed-merge acceptance run in parallel
+  // jobs, so the upload step is bound by its unique name across every job of
+  // the run. Exactly one successful step with that name must have uploaded
+  // the artifact inside this run and attempt.
+  const uploads = steps.filter((step) => step.name === stepName && step.conclusion === "success");
   const uploadStart = Date.parse(uploads[0]?.started_at), uploadEnd = Date.parse(uploads[0]?.completed_at);
   if (matches.length !== 1 || !Number.isSafeInteger(artifact?.id) || artifact.expired !== false
     || !Number.isSafeInteger(artifact.size_in_bytes) || artifact.size_in_bytes <= 0 || artifact.size_in_bytes > 64*1024*1024

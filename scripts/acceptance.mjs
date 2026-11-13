@@ -34,9 +34,10 @@ const NODE_TEST_GATES = new Map([
     ].join("|"),
   }],
 ]);
-let activeChild;
-let activeTermination;
 let receivedSignal;
+// Per-child termination state so concurrent gates can each be signalled and
+// awaited independently. The single-child path is unchanged.
+const childStates = new Map();
 const SUPPORTING_TESTS = [
   { id: "support:manifest:single-commit", requirement: "R16", file: "tests/acceptance-runner.test.mjs", name: "single-commit checkout runs the actual workflow caller without inventing an intermediate", boundary: "owned one-commit fixture; real submitted CLI and context/declaration/predecessor faults, no contributor-history precondition" },
   { id: "support:manifest:actual-caller", requirement: "R16", file: "tests/acceptance-runner.test.mjs", name: "merged-push checkout runs the actual workflow caller with event.before", boundary: "actual submitted declaration witnesses through sanitized unit gate and real CLI; private context/declaration-selection/predecessor faults" },
@@ -166,13 +167,14 @@ function signalExitCode(signal) {
 
 function signalProcessGroup(child) {
   if (!child?.pid) return;
-  activeTermination ??= terminateProcessGroup(child);
+  const state = childStates.get(child);
+  if (state) state.termination ??= terminateProcessGroup(child);
 }
 
 export function registerTerminationHandlers() {
   const onSignal = (signal) => {
     receivedSignal ??= signal;
-    signalProcessGroup(activeChild);
+    for (const child of childStates.keys()) signalProcessGroup(child);
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
@@ -235,7 +237,8 @@ export function runChild(command, args, {
       return;
     }
     const child = spawn(command, args, { cwd, env, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
-    activeChild = child;
+    const state = { termination: undefined };
+    childStates.set(child, state);
     const stdout = createOutputCapture(captureLimit);
     const stderr = createOutputCapture(captureLimit);
     const decoder = new StringDecoder("utf8");
@@ -283,10 +286,9 @@ export function runChild(command, args, {
     child.on("error", async (error) => {
       clearTimeout(timeout);
       let cleanupFailed = false;
-      try { cleanupFailed = activeTermination !== undefined && !(await activeTermination); }
+      try { cleanupFailed = state.termination !== undefined && !(await state.termination); }
       catch { cleanupFailed = true; }
-      if (activeChild === child) activeChild = undefined;
-      activeTermination = undefined;
+      childStates.delete(child);
       resolveResult({
         status: 1,
         stdout: stdout.text(),
@@ -298,14 +300,13 @@ export function runChild(command, args, {
     });
     child.on("close", async (code, signal) => {
       clearTimeout(timeout);
-      if (!activeTermination && process.platform !== "win32" && processGroupExists(child.pid)) {
-        activeTermination = terminateProcessGroup(child);
+      if (!state.termination && process.platform !== "win32" && processGroupExists(child.pid)) {
+        state.termination = terminateProcessGroup(child);
       }
       let cleanupFailed = false;
-      try { cleanupFailed = activeTermination !== undefined && !(await activeTermination); }
+      try { cleanupFailed = state.termination !== undefined && !(await state.termination); }
       catch { cleanupFailed = true; }
-      if (activeChild === child) activeChild = undefined;
-      activeTermination = undefined;
+      childStates.delete(child);
       consumeStdoutText(decoder.end());
       if (reporterRemainder && Buffer.byteLength(reporterRemainder) > MAX_REPORTER_LINE_BYTES) reporterLineTooLarge = true;
       if (onStdoutLine && !reporterLineTooLarge && reporterRemainder) onStdoutLine(reporterRemainder.replace(/\r$/u, ""));
