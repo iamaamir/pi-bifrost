@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { after, before, describe, it } from "node:test";
+import { acquirePackLock } from "../fixtures/pack-lock.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const PI = join(ROOT, "node_modules", ".bin", "pi");
@@ -388,9 +389,18 @@ function installPackedRouter() {
   temporary.push(temp);
   const cache = join(temp, "npm-cache");
   const consumer = join(temp, "consumer");
-  const packed = JSON.parse(execFileSync("npm", ["pack", "--json", "--cache", cache, "--pack-destination", temp], {
-    cwd: ROOT, encoding: "utf8", timeout: 90_000,
-  }))[0];
+  // The root npm pack runs prepack and rewrites the shared dist/router that
+  // the parallel lane's router-build gate and package tests also touch; the
+  // shared pack lock keeps build and pack from overlapping across lanes.
+  const releasePackLock = acquirePackLock(ROOT, { timeoutMs: 300_000 });
+  let packed;
+  try {
+    packed = JSON.parse(execFileSync("npm", ["pack", "--json", "--cache", cache, "--pack-destination", temp], {
+      cwd: ROOT, encoding: "utf8", timeout: 90_000,
+    }))[0];
+  } finally {
+    releasePackLock();
+  }
   // Pack the runtime dependency closure from the local install so the offline
   // consumer install never needs the registry.
   const dependencyTarballs = [];

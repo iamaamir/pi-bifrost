@@ -5,6 +5,7 @@ import { lstatSync, mkdirSync, readFileSync, readlinkSync, writeFileSync } from 
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveTestBinary } from "./resolve-test-binary.mjs";
+import { withPackLock } from "../tests/fixtures/pack-lock.mjs";
 
 const REQUIRED_GATES = [
   ["unit", "test"],
@@ -13,6 +14,12 @@ const REQUIRED_GATES = [
   ["pinned-pi-integration", "test:integration"],
   ["pinned-pi-ui", "test:ui"],
   ["pinned-pi-reliability-ui", "test:ui:reliability"],
+];
+// Two lanes: the long integration gate runs beside the fast lane instead of
+// after it. Lane membership must partition REQUIRED_GATES by id exactly once.
+const GATE_LANES = [
+  ["unit", "typecheck", "router-build", "pinned-pi-ui", "pinned-pi-reliability-ui"],
+  ["pinned-pi-integration"],
 ];
 const MAX_LOG_BYTES = 256 * 1024;
 const MAX_STREAM_BYTES = (MAX_LOG_BYTES - 64) / 2;
@@ -96,8 +103,11 @@ function preflight(root) {
 function executeGate(root, script) {
   const stdout = captureStream();
   const stderr = captureStream();
-  const child = spawn("npm", ["run", script], { cwd: root, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
-  return new Promise((resolveResult) => {
+  // The router-build gate mutates the shared dist/router output that every
+  // npm pack/prepack reads; it must take the same pack lock as the packers
+  // running in the parallel lanes.
+  const run = () => new Promise((resolveResult) => {
+    const child = spawn("npm", ["run", script], { cwd: root, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
     let settled = false;
     let timedOut = false;
     let forceKill;
@@ -131,6 +141,10 @@ function executeGate(root, script) {
       stderr: timedOut ? "Verification gate timed out after 20 minutes." : signal ? `Process ended by ${signal}.` : "",
     }));
   });
+  // The lock is held until the gate promise settles; other gates are not
+  // build-mutating and skip the lock entirely.
+  if (script === "build:router") return withPackLock(root, run, { timeoutMs: 300_000 });
+  return run();
 }
 
 function workingTreeClean(root) {
@@ -175,17 +189,25 @@ export async function runVerification({
     }
     const logPath = relative(root, join(logDir, `${id}.log`));
     writeFileSync(join(root, logPath), boundedOutput(outcome));
-    results.push({ id, script, exitCode: outcome.status, startedAt: started, endedAt: new Date().toISOString(), logPath });
+    results.push({ index, id, script, exitCode: outcome.status, startedAt: started, endedAt: new Date().toISOString(), logPath });
     process.stdout.write(`[verify] ${id}: ${outcome.status === 0 ? "passed" : "failed"} (log: ${logPath})\n`);
     return outcome.status === 0;
   };
 
   try {
     if (missingGates.length) throw new Error(`Required verification scripts are missing: ${missingGates.join(", ")}`);
-    if (!(await record("preflight", null, -1))) throw new Error("Verification preflight failed; see its log.");
-    for (const [index, [id, script]] of REQUIRED_GATES.entries()) {
-      if (!(await record(id, script, index))) error = `${id} failed; see its log.`;
+    const laneIds = new Set(GATE_LANES.flat());
+    if (laneIds.size !== REQUIRED_GATES.length || !REQUIRED_GATES.every(([id]) => laneIds.has(id))) {
+      throw new Error("GATE_LANES must partition REQUIRED_GATES exactly once");
     }
+    if (!(await record("preflight", null, -1))) throw new Error("Verification preflight failed; see its log.");
+    const laneOf = new Map(GATE_LANES.flatMap((lane, laneIndex) => lane.map((id) => [id, laneIndex])));
+    await Promise.all(GATE_LANES.map((_, laneIndex) => (async () => {
+      for (const [index, [id, script]] of REQUIRED_GATES.entries()) {
+        if (laneOf.get(id) !== laneIndex) continue;
+        if (!(await record(id, script, index))) error = `${id} failed; see its log.`;
+      }
+    })()));
   } catch (cause) {
     error = cause instanceof Error ? cause.message : String(cause);
   }
@@ -193,6 +215,10 @@ export async function runVerification({
   const sourceHashAtEnd = sourceHash(root);
   const headShaAtEnd = git(root, ["rev-parse", "HEAD"]);
   const workingTreeCleanAtEnd = workingTreeClean(root);
+  // Concurrent lanes record gates in completion order; the manifest stays in
+  // REQUIRED_GATES declaration order so evidence ordering stays deterministic.
+  const orderedGates = [...results].sort((left, right) => left.index - right.index)
+    .map(({ index, ...gate }) => gate);
   const manifest = {
     version: 1,
     headSha,
@@ -207,9 +233,9 @@ export async function runVerification({
     endedAt: new Date().toISOString(),
     exitCode: error || !workingTreeCleanAtStart || !workingTreeCleanAtEnd
       || headSha !== headShaAtEnd || sourceHashAtStart !== sourceHashAtEnd
-      || results.some(({ exitCode }) => exitCode !== 0) ? 1 : 0,
+      || orderedGates.some(({ exitCode }) => exitCode !== 0) ? 1 : 0,
     ...(error ? { error } : {}),
-    gates: results,
+    gates: orderedGates,
   };
   writeFileSync(join(root, manifestPath), `${JSON.stringify(manifest, null, 2)}\n`);
   return { ...manifest, manifestPath };
