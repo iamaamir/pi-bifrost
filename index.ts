@@ -3379,7 +3379,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         const targets = ctx.modelRegistry.getAll()
           .filter((model) => wanted.has(`${model.provider}/${model.id}`));
         if (targets.length === 0) return [];
-        const { results } = await runProbe(ctx, { models: targets, signal });
+        // The check promises one tiny prompt per model, so the streaming
+        // attempt is the only request: an empty streamed answer is reported as
+        // an error instead of falling back to a second session-backed prompt.
+        const { results } = await runProbe(ctx, { models: targets, signal, sessionFallback: false });
         return results.map((result) => ({
           model: `${result.provider}/${result.model}`,
           status: result.status,

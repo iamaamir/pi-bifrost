@@ -749,6 +749,31 @@ describe("provider sign-in state", () => {
     }
   });
 
+  it("counts a cancelled probe as not answered instead of folding it into the total", async () => {
+    // A cancelled probe never reached the provider, so calling it "answered"
+    // would overstate what the check learned about the model.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: () => [
+        { model: "alpha/strong", status: "ok" },
+        { model: "beta/code", status: "skipped" },
+      ],
+    });
+    try {
+      const result = await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } },
+        probe: true,
+      });
+      const text = contentOf(result);
+      assert.match(text, /live probe \(one tiny prompt per model\): 1\/2 answered, 1 skipped/);
+      assert.match(text, /1 model not asked \(check cancelled before the request completed\)/);
+      assert.doesNotMatch(text, /2\/2 answered/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("fault control: a live probe that throws reports it and never blocks the write", async () => {
     // A probe failure is evidence about the provider, not a validation error.
     // Throwing transport must not escape the tool or make the candidate

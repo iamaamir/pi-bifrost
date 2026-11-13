@@ -53,6 +53,9 @@ export interface RunProbeOptions {
   models?: readonly Model<Api>[];
   shouldProbe?: (model: Model<Api>) => boolean;
   promptWithSession?: MinimalSessionPrompt;
+  /** Allow a second, session-backed request when the streaming attempt returns
+   * no text. Callers that promise exactly one request per model pass `false`. */
+  sessionFallback?: boolean;
   timeoutMs?: number;
   concurrency?: number;
   signal?: AbortSignal;
@@ -214,7 +217,7 @@ export async function runProbe(
   let cursor = 0;
   let completed = 0;
 
-  const { onProgress, promptWithSession = promptWithMinimalSession, timeoutMs = PROBE_TIMEOUT_MS, concurrency = DEFAULT_PROBE_CONCURRENCY, signal, shouldProbe } = options;
+  const { onProgress, promptWithSession = promptWithMinimalSession, sessionFallback = true, timeoutMs = PROBE_TIMEOUT_MS, concurrency = DEFAULT_PROBE_CONCURRENCY, signal, shouldProbe } = options;
 
   async function worker() {
     while (cursor < total && !signal?.aborted) {
@@ -224,7 +227,7 @@ export async function runProbe(
       try { eligible = shouldProbe?.(model) ?? true; }
       catch { eligible = false; }
       results[i] = eligible
-        ? await probeOne(ctx, model, promptWithSession, timeoutMs, signal)
+        ? await probeOne(ctx, model, promptWithSession, timeoutMs, signal, sessionFallback)
         : { provider: model.provider, model: model.id, cost_input: model.cost?.input ?? 0, cost_output: model.cost?.output ?? 0, status: "skipped", duration_ms: 0, error: "model is no longer eligible" };
       completed++;
       reportProbeResult(runId, results[i]);
@@ -270,7 +273,8 @@ async function probeOne(
   model: Model<Api>,
   promptWithSession: MinimalSessionPrompt,
   timeoutMs: number,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  sessionFallback: boolean,
 ): Promise<ProbeResult> {
   const base: ProbeResult = {
     provider: model.provider,
@@ -323,6 +327,11 @@ async function probeOne(
         return base;
       }
       const text = assistantText(response).trim();
+      if (!text && !sessionFallback) {
+        base.status = "error";
+        base.error = "empty response";
+        return base;
+      }
       if (!text) {
         const fallbackText = await promptWithSession(model, PROBE_PROMPT, {
           cwd: ctx.cwd,
