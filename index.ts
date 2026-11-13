@@ -1303,9 +1303,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   function bootstrapContextStillEligible(): boolean {
     const userFiles = hasUserBootstrapFiles(process.cwd(), getAgentDir(), CONFIG_DIR_NAME, join(extensionDir, "bifrost.json"));
     const runtimePreferencesChanged = hasBlockingRuntimePreferences(runtimeStateFile);
+    const emptyFirstUseConfig = configHasNoPools(state.config);
     return state.enabled && !state.pinned
       && state.tierPolicyValid !== false
-      && !validateConfig(state.config).some((issue) => issue.severity === "error")
+      // Empty code defaults are the input to first-use pool generation; the
+      // completed provisional config is validated after pools are installed.
+      && (emptyFirstUseConfig || !validateConfig(state.config).some((issue) => issue.severity === "error"))
       && canBootstrapModels({
         ...userFiles,
         runtimePreferences: runtimePreferencesChanged,

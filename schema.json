@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://pi.dev/schemas/bifrost.json",
   "title": "Bifrost Model Router Config",
-  "description": "Configuration for the pi-bifrost model router. Routes prompts to configured tiers or exact provider models. Optional classifiers can select a tier. Merged from extension defaults → global → project root → project config (.pi/bifrost.json), with later layers winning.",
+  "description": "Configuration for the pi-bifrost model router. Routes prompts to configured tiers or exact provider models. Optional classifiers can select a tier. Runtime layers are user-global, project root, and project config (.pi/bifrost.json); the bundled package bifrost.json is an init template only.",
   "type": "object",
   "additionalProperties": false,
   "properties": {

@@ -147,7 +147,7 @@ Reconciliation changes one source and one tier at a time. The default source is 
 /bifrost config reconcile --tier general --provider openai --apply --proposal <digest>
 ```
 
-Use `--source workspace` or `--source user` to select those config files. The other project, workspace, user, and extension layers remain part of prospective validation, so a higher layer may still override the selected source. Add `--json` to emit one `[bifrost-json] ` report line.
+Use `--source workspace` or `--source user` to select those config files. The other project, workspace, and user layers remain part of prospective validation, so a higher layer may still override the selected source. The bundled package template is not a runtime layer. Add `--json` to emit one `[bifrost-json] ` report line.
 
 An explicit catalog refresh is network-enabled and can incur provider requests. It cannot be combined with `--apply`; review its proposal and run a separate apply command:
 

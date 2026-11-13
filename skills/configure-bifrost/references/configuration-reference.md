@@ -12,15 +12,15 @@ fields (`models`, `categoryStrategies`, `tierPolicies`, `classifier`, `cache`,
 
 | Layer | Path | Writable |
 | --- | --- | --- |
-| extension | bundled `bifrost.json` in the extension directory | no (ships defaults) |
 | user | `~/.pi/agent/bifrost.json` (`$PI_CODING_AGENT_DIR`) | yes (`source: "user"`) |
 | workspace | `<cwd>/bifrost.json` | yes (`source: "workspace"`) |
 | project | `<cwd>/.pi/bifrost.json` | yes (`source: "project"`, default) |
 
-The bundled extension layer contributes `default: "general"`,
-`strategy: "first"`, `categoryStrategies: { quick: random, general: first, frontier: first }`,
-`models: { quick: [], general: [], frontier: [] }`, the default `rules`, and the
-public cache/reliability/classifier defaults. Empty pools are valid.
+Runtime scalar defaults are `enabled: true`, `default: "general"`, and
+`strategy: "first"`; built-in rules remain available when no rules file is
+configured. The bundled `bifrost.json` is an init template and does not add
+runtime tiers or settings. `/bifrost init` copies public starter settings into
+the selected writable source as needed.
 
 A `.pi/bifrost-routes.json` or `./bifrost-routes.json` file replaces `config.rules`
 while it exists; the first file found wins.
@@ -170,8 +170,7 @@ Budget-first with a quality escape hatch:
 }
 ```
 
-Both examples still inherit the bundled `quick`, `general`, and `frontier` tiers
-with empty pools, which is expected.
+Both examples define their own tiers and do not inherit bundled runtime tiers.
 
 ## Limitations to state honestly
 

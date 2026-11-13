@@ -182,12 +182,15 @@ Resume adaptive routing:
 
 ## Configuration locations
 
-Config merges in this order; later layers win:
+Config merges in this order; later writable layers win:
 
-1. extension default: `<extensionDir>/bifrost.json`
-2. user-global: `~/.pi/agent/bifrost.json`
-3. project root: `bifrost.json`
-4. project config: `.pi/bifrost.json`
+1. user-global: `~/.pi/agent/bifrost.json`
+2. project root: `bifrost.json`
+3. project config: `.pi/bifrost.json`
+
+The package's bundled `bifrost.json` is an init template, not an active
+runtime layer. Scalar runtime defaults come from Bifrost code; `/bifrost init`
+adds public starter settings to the selected writable config.
 
 Project-specific rules may also live in `bifrost-routes.json` or `.pi/bifrost-routes.json`; the `.pi` file wins.
 
