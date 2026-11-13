@@ -1,5 +1,22 @@
 # Release execution ledger
 
+## V2 regression status (13 November 2026)
+
+No release candidate is recorded for this checkpoint. At this checkpoint, `main` is `c1c60b983d4e2d3111b94a61be876a6c97918919`. Its [scheduled verification](https://github.com/iamaamir/pi-bifrost/actions/runs/43424968480) passed, including head acceptance, the campaign, and Pi 1.3.0 and 1.4.0 compatibility. Mutation was skipped. The [push verification](https://github.com/iamaamir/pi-bifrost/actions/runs/43424174924) for the same commit was cancelled. Automated checks do not establish release readiness or current live-provider coverage.
+
+The P1 fixes for queued steering and removed Auto models merged in [PR #203](https://github.com/iamaamir/pi-bifrost/pull/203). The inferred-rate-limit follow-up merged in [PR #204](https://github.com/iamaamir/pi-bifrost/pull/204). Both entered `main` through [PR #34](https://github.com/iamaamir/pi-bifrost/pull/34). Their earlier tests do not establish new execution on this revision. The inferred-text cooldown does not establish transport-level status or `Retry-After` propagation.
+
+Four P2 findings remain supported by source inspection at `c1c60b9`. Their earlier Pi reproductions were not rerun on this revision:
+
+- **Validation path:** the [diagnostic renderer](https://github.com/iamaamir/pi-bifrost/blob/c1c60b983d4e2d3111b94a61be876a6c97918919/commands.ts#L2170-L2175) and [display](https://github.com/iamaamir/pi-bifrost/blob/c1c60b983d4e2d3111b94a61be876a6c97918919/commands.ts#L2294-L2297) omit paths outside an allowlist, including `default`.
+- **Initial probe count:** the [announcement](https://github.com/iamaamir/pi-bifrost/blob/c1c60b983d4e2d3111b94a61be876a6c97918919/commands.ts#L2867-L2877) counts available models before [probe filtering](https://github.com/iamaamir/pi-bifrost/blob/c1c60b983d4e2d3111b94a61be876a6c97918919/probe.ts#L196-L198), so it can include the virtual Auto model.
+- **Cache statistics:** [the command](https://github.com/iamaamir/pi-bifrost/blob/c1c60b983d4e2d3111b94a61be876a6c97918919/commands.ts#L2949-L2954) loads entries without the configured retention period, so its count can include expired rows.
+- **Cache recovery:** [the loader](https://github.com/iamaamir/pi-bifrost/blob/c1c60b983d4e2d3111b94a61be876a6c97918919/cache.ts#L89-L115) can discard valid rows when another JSONL row is `null`.
+
+Thirteen other P2 findings from the regression notebook have not been reassessed. They are neither confirmed open nor confirmed fixed on current `main`. Earlier live TypeSafe, Pi-native, OpenAI Codex, OpenRouter, and Auto checks used a few synthetic prompts at PR #34 head `946669fc8e79bf756e1b92891f74e256761a4b1b`; they do not cover this revision or provider failure behavior.
+
+Before the next release, select a candidate SHA, decide which findings need reproduction or explicit deferral, and record any candidate-specific live-provider checks with their limits.
+
 Status: implementation authorized by the user on 7 October 2026. Scope is PRD.md and IMPLEMENTATION.md with image support excluded. This ledger records actual acceptance evidence; planned milestones are not completed features.
 
 ## Release-audit repair (11 October)
