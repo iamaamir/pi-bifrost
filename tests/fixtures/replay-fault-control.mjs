@@ -59,7 +59,7 @@ import { join } from "node:path";
 import { processGroupExists } from "../../scripts/acceptance/core.mjs";
 import { closeTracking, cleanupFailure, detachOwnedHandles, spawnOwned } from "./child-auto-inline-harness.mjs";
 
-export const REPLAY_GUARD_BASELINE_SHA256 = "cbe4683815d08caeb6c43f3d0b55e7ae648e492e76875c22e90a6e681b9a1815";
+export const REPLAY_GUARD_BASELINE_SHA256 = "64d8b1751a82f0da1952767652ae92ad03209df2086dc429eb0d35624700e89d";
 export const REPLAY_GUARD_FUNCTIONS = [
   "isSideEffectFreeAllowanceFailure",
   "allowanceRetryBoundaryStillSafe",
