@@ -87,7 +87,7 @@ die("unhandled: " + joined);
 function eligibilityWorld(overrides = {}) {
   return {
     repo: "org/repo",
-    pr: { headRefOid: E40_HEAD, baseRefName: "v2", baseRefOid: E40_BASE, isDraft: false, body: "Refs #41", author: { login: "author-bot" } },
+    pr: { headRefOid: E40_HEAD, baseRefName: "main", baseRefOid: E40_BASE, isDraft: false, body: "Refs #41", author: { login: "author-bot" } },
     workflowId: 123,
     ciRuns: [{ id: 10, run_attempt: 1, head_sha: E40_HEAD, event: "pull_request", workflow_id: 123,
       path: ".github/workflows/verification.yml", conclusion: "success", created_at: "2026-01-01T00:00:00Z" }],
@@ -129,7 +129,7 @@ function runEligibility(fixture, script = SCRIPT) {
 const head = "abc123";
 const valid = {
   pr: {
-    headRefOid: head, baseRefName: "v2", baseRefOid: "base456", isDraft: false, author: { login: "author" },
+    headRefOid: head, baseRefName: "main", baseRefOid: "base456", isDraft: false, author: { login: "author" },
     body: "Refs #41",
   },
   workflowFileMatchesBase: true,
@@ -191,15 +191,15 @@ test("rejects missing author identity and unknown draft state", () => {
   assert.equal(evaluate({ pr: { isDraft: true } }).eligible, false);
 });
 
-test("requires issue reference and all declared dependencies to be integrated into v2", () => {
+test("requires issue reference and all declared dependencies to be integrated into the base branch", () => {
   // Real `gh pr view --json state` shape for a merged PR is state:"MERGED".
-  const merged = { kind: "pr", number: 35, state: "MERGED", mergedAt: "2026-01-01T00:00:00Z", base: "v2", integrated: true };
+  const merged = { kind: "pr", number: 35, state: "MERGED", mergedAt: "2026-01-01T00:00:00Z", base: "main", integrated: true };
   assert.equal(evaluate({ dependencies: [merged] }).eligible, true);
   assert.equal(evaluate({ dependencies: [{ ...merged, state: "CLOSED" }] }).eligible, true);
   for (const dependency of [
     { ...merged, state: "OPEN", mergedAt: undefined },
     { ...merged, mergedAt: undefined },
-    { ...merged, base: "main" },
+    { ...merged, base: "feature-x" },
     { ...merged, integrated: false },
     { ...merged, state: "WEIRD" },
     { kind: "issue", number: 37, state: "OPEN" },
@@ -381,7 +381,7 @@ test("dependency parse failures throw a fixed diagnostic without echoing PR body
 
 test("terminal control PR-body text never reaches terminal diagnostics", () => {
   const world = eligibilityWorld({
-    pr: { headRefOid: E40_HEAD, baseRefName: "v2", baseRefOid: E40_BASE, isDraft: false, author: { login: "author-bot" },
+    pr: { headRefOid: E40_HEAD, baseRefName: "main", baseRefOid: E40_BASE, isDraft: false, author: { login: "author-bot" },
       body: "Refs #41\nDependencies: PWNED-BODY-TOKEN\u001b]0;evil\u0007 and #42" },
   });
   const result = runEligibility(scaffoldEligibility(world));
@@ -401,7 +401,7 @@ test("malformed GitHub JSON carrying untrusted text never reaches terminal diagn
   assert.doesNotMatch(result.stderr, /\u001b/u);
 });
 
-function bindingQuery({ freshPr = { headRefOid: E40_HEAD, baseRefName: "v2", baseRefOid: E40_BASE }, parents = null, mergeSha = E40_PROPOSED, commitTrees = null } = {}) {
+function bindingQuery({ freshPr = { headRefOid: E40_HEAD, baseRefName: "main", baseRefOid: E40_BASE }, parents = null, mergeSha = E40_PROPOSED, commitTrees = null } = {}) {
   let reads = 0;
   return (args) => {
     const joined = args.join(" ");
@@ -416,7 +416,7 @@ function bindingQuery({ freshPr = { headRefOid: E40_HEAD, baseRefName: "v2", bas
   };
 }
 
-const expectedBinding = { head: E40_HEAD, base: E40_BASE, baseRefName: "v2" };
+const expectedBinding = { head: E40_HEAD, base: E40_BASE, baseRefName: "main" };
 
 test("final revalidation returns no blocker when head, base, and proposed identity are unchanged", () => {
   const query = bindingQuery();
@@ -426,9 +426,9 @@ test("final revalidation returns no blocker when head, base, and proposed identi
 
 test("final revalidation blocks when head or base moved after evaluation", () => {
   for (const freshPr of [
-    { headRefOid: "9".repeat(40), baseRefName: "v2", baseRefOid: E40_BASE },
-    { headRefOid: E40_HEAD, baseRefName: "v2", baseRefOid: "8".repeat(40) },
-    { headRefOid: E40_HEAD, baseRefName: "main", baseRefOid: E40_BASE },
+    { headRefOid: "9".repeat(40), baseRefName: "main", baseRefOid: E40_BASE },
+    { headRefOid: E40_HEAD, baseRefName: "main", baseRefOid: "8".repeat(40) },
+    { headRefOid: E40_HEAD, baseRefName: "other", baseRefOid: E40_BASE },
   ]) {
     const query = bindingQuery({ freshPr });
     const initial = fetchProposedMergeIdentity("org/repo", 1, query);

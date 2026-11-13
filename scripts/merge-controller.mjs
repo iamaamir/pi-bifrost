@@ -22,7 +22,7 @@ import {
 
 const WORKFLOW_PATH = ".github/workflows/verification.yml";
 const REQUIRED_JOB = "release-gates";
-const BASE_BRANCH = "v2";
+const BASE_BRANCH = "main";
 const SHA40 = /^[0-9a-f]{40}$/;
 const SHA256_64 = /^[0-9a-f]{64}$/;
 const LIMITATIONS = [

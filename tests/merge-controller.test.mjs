@@ -145,7 +145,7 @@ function makeWorld(overrides = {}) {
   const proposed = artifact(102, "merge-result-evidence-", PROPOSED_SHA);
   return {
     repo: "org/repo",
-    pr: { headRefOid: HEAD, baseRefName: "v2", baseRefOid: BASE, isDraft: false, body: "Refs #1", author: { login: "author-bot" }, files: ["x"] },
+    pr: { headRefOid: HEAD, baseRefName: "main", baseRefOid: BASE, isDraft: false, body: "Refs #1", author: { login: "author-bot" }, files: ["x"] },
     diff: DIFF,
     effectiveRules: [{ type: "required_status_checks", ruleset_source_type: "Repository", ruleset_source: "org/repo", ruleset_id: 77,
       parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: "release-gates" }] } }],
@@ -270,7 +270,7 @@ const rejectionCases = [
   ["unresolved thread", (fixture) => { fixture.world.threads = [{ isResolved: false }]; writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /unresolved/],
   ["open dependency", (fixture) => { fixture.world.pr.body = "Refs #1\nDependencies: #9"; fixture.world.issues = { 9: { number: 9, state: "OPEN" } }; writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /dependency/],
   ["draft PR", (fixture) => { fixture.world.pr.isDraft = true; writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /draft/],
-  ["wrong PR base branch", (fixture) => { fixture.world.pr.baseRefName = "main"; writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /base branch/],
+  ["wrong PR base branch", (fixture) => { fixture.world.pr.baseRefName = "feature-x"; writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /base branch/],
   ["proposed merge parents mismatch", (fixture) => { fixture.world.commits[PROPOSED_SHA].parents = [{ sha: HEAD }, { sha: BASE }]; writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /proposed merge parents/],
 ];
 

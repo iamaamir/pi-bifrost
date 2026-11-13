@@ -92,7 +92,7 @@ export function evaluateEligibility({ pr, workflowFileMatchesBase, workflowRuns,
   const blockers = [];
   const head = pr?.headRefOid;
   if (!pr || typeof head !== "string" || !head) return { eligible: false, blockers: ["PR data or head SHA unavailable"], limitations: LIMITATIONS };
-  if (pr.baseRefName !== "v2") blockers.push("base branch is not v2");
+  if (pr.baseRefName !== "main") blockers.push("base branch is not main");
   if (typeof pr.baseRefOid !== "string" || !pr.baseRefOid) blockers.push("base commit unavailable");
   if (typeof pr.isDraft !== "boolean") blockers.push("draft state unavailable");
   else if (pr.isDraft) blockers.push("PR is draft");
