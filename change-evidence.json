@@ -1,32 +1,26 @@
 {
   "schemaVersion": 1,
-  "base": "d18ee673397e058e8a227b2ca9f0a614e0750c26",
+  "base": "9c87d4eac5ef1272af0183d737f15cf01a28ab34",
   "contracts": [
     {
-      "id": "verification-pipeline-parallelization",
+      "id": "ci-trap-negative-control",
       "requirement": "R16",
       "files": [
-        ".github/workflows/verification.yml",
-        "scripts/acceptance.mjs",
-        "scripts/merge-controller.mjs",
-        "scripts/verify-release.mjs",
-        "tests/verification-workflow.test.mjs",
-        "tests/integration/decision-parity-acceptance.test.mjs",
-        "tests/integration/command-policy-acceptance.test.mjs"
+        "provider-cooldowns.ts"
       ],
-      "boundary": "The verification workflow keeps a single required release-gates check that waits for every required stage: the head-acceptance job runs the seven release gates with two concurrent lanes, the proposed-merge acceptance and the CRAP trend refresh run as parallel jobs beside it, finalize-report joins the uploaded artifacts and renders the candidate report even when a gate fails, and the release-gates check job fails closed when any stage fails or is cancelled. The report publisher runs only in finalize-report, and merge-controller binds provenance to the unique evidence-upload step name across every job of the run.",
-      "assertions": "Structure witnesses pin exactly one release-gates job, the beside-runs of acceptance-merge and crap-trend, finalize-report joining artifacts, preflight-before-gates ordering, and bounded gate budgets; a fault control turns a 45-minute release-gates budget red and another turns a failed stage into a red required check. The partition-integrity check in verify-release fails closed if lane membership drifts from the declared required gates, and the manifest gates stay in declaration order. Concurrent lanes share one pack lock: the router-build gate and every npm pack/prepack serialize on it so dist/router is never rebuilt while another pack reads it. Lanes share the runner, so timing-sensitive integration RPCs keep serial-era deadline headroom (the command-policy JSON-report deadline stays generous; the tested contract is completion on the first report and a deadline rejection instead of a stale report on the second). Acceptance tracks each spawned child independently so concurrent lane children are terminated and reported individually.",
+      "boundary": "DELIBERATE DEFECT (negative control, do not merge): projectProviderCooldownsForRouting's healthy-provider guard is flipped from && to ||, so routing projections drop provider cooldown state for every provider that is not simultaneously pause-open AND trial-active. The planted fault must be rejected by CI: this PR is expected to go red and must not be merged.",
+      "assertions": "The unit suite pins exact projection outcomes, so the planted guard flip deterministically reddens three named assertions: the preserved-entry deepEqual (trialActive must merge as true), the same-provider trialActive pin, and the provider-b rate-pause openUntil pin (f.now() + 59_899). No test, type, lint, or structural gate was weakened; the declaration honestly declares the one changed file.",
       "boundaryTest": {
-        "file": "tests/verification-workflow.test.mjs",
-        "name": "the proposed-merge acceptance runs beside release-gates"
+        "file": "tests/provider-cooldowns.test.ts",
+        "name": "loads one validated snapshot for a routing projection and preserves provider pause semantics"
       },
       "invariant": {
-        "file": "tests/verification-workflow.test.mjs",
-        "name": "finalize-report joins the parallel evidence into the candidate report"
+        "file": "tests/provider-cooldowns.test.ts",
+        "name": "projects one provider pause onto its models while another provider remains eligible"
       },
       "fault": {
-        "file": "tests/verification-workflow.test.mjs",
-        "name": "fault control: a 45-minute release-gates budget turns the named budget assertion red"
+        "file": "tests/provider-cooldowns.test.ts",
+        "name": "loads one validated snapshot for a routing projection and preserves provider pause semantics"
       }
     }
   ]
