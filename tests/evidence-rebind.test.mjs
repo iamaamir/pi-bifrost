@@ -381,6 +381,20 @@ describe("evidence rebind helper", () => {
       }
     });
 
+    it("defaults the base operand to origin/main even when origin/v2 exists", () => {
+      const { root, base } = initRepo();
+      try {
+        const v2 = orphanCommit(root);
+        git(root, ["update-ref", "refs/remotes/origin/main", base]);
+        git(root, ["update-ref", "refs/remotes/origin/v2", v2]);
+        const result = runCli(root, []);
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(JSON.parse(result.stdout).base, base, "the default resolves origin/main, not origin/v2");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
     it("fault control: ignored evidence cannot make pre-push validation pass", () => {
       const { root, base } = initRepo();
       const mutantDir = mkdtempSync(join(tmpdir(), "evidence-pre-push-mutant-"));
