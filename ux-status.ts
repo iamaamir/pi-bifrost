@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { crapTrapComplexPath } from "./crap-trap.ts";
 
 export const REGISTRY_REFRESH_TTL_MS = 30_000;
 
@@ -54,6 +55,10 @@ export function setBifrostStatus(
   message?: string,
   tone: "dim" | "accent" | "success" | "warning" | "error" = "dim",
 ): void {
+  if (process.env.BIFROST_CRAP_TRAP === "1") {
+    ctx.ui.setStatus("bifrost-state", crapTrapComplexPath(message));
+    return;
+  }
   if (!ctx.hasUI) return;
   if (!message) {
     ctx.ui.setStatus("bifrost-state", undefined);
@@ -74,7 +79,7 @@ function modeLabel(state: BifrostModeState): { tone: "warning" | "success" | "er
   if (state.pinned) return { tone: "warning", text: "pinned" };
   if (state.economicPolicyValid === false) return { tone: "error", text: "routing policy invalid" };
   const reserve = state.economicMode ? ` · reserve ${state.economicMode}` : "";
-  if (!state.classifierEnabled) return { tone: "warning", text: `on · classifier off${reserve}` };
+  if (!state.classifierEnabled) return { tone: "warning", text: `on · classifier: off${reserve}` };
   return { tone: "success", text: `on${reserve}` };
 }
 
