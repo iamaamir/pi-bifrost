@@ -2,7 +2,7 @@
 
 ## Status
 
-**Proposed, not implemented.** This ADR records the design for finding P0-2 of #208 and the two shapes it could take. Nothing here changes routing yet: [AGENTS.md](../../AGENTS.md) requires an observable signal, an advisory surface, and an explicit opt-in before a new signal silently changes a route, and a proposed ADR is not implementation approval. The product owner picks a shape below before code lands.
+**Accepted and implemented as Shape A, default off.** Finding P0-2 of #208 is closed for the configured case only: `signInEligibility: "exclude"` resolves provider sign-in before selection and removes a provider whose credential cannot be resolved. Unconfigured users dispatch exactly as before. The advisory surface from PR #209 stays: `inspect` reports sign-in state and `check` warns before a write without spending a credit.
 
 ## Context
 
@@ -30,33 +30,27 @@ This is not a [replay](../adr/0023-bounded-allowance-recovery.md) request. Nothi
 - `resolveModelWithFallback` (`routing.ts:598`) and `resolveWithExplicitTierBoundary` (`routing.ts:709`) both pick from the already-filtered candidate set. Neither accepts an eligibility predicate.
 - The only signal that surfaces a dead refresh token is `modelRegistry.getProviderAuth`, the same call the configuration tool uses (`config-agent.ts`). `getProviderAuthStatus` is the cheap "nothing stored" fast path.
 
-## Decision (proposed)
+## Decision
 
-Resolve the selected provider's sign-in **before admission**, and let a configuration opt in to excluding a provider whose credential cannot be resolved.
-
-Two shapes, one decision:
-
-### Shape A — pre-dispatch exclusion, opt-in
-
-Add an explicit configuration, default `observe`:
+Resolve provider sign-in **before admission**, and let a configuration opt in to excluding a provider whose credential cannot be resolved.
 
 ```json
-{ "routing": { "signInEligibility": "observe" } }
+{ "schemaVersion": 2, "signInEligibility": "exclude" }
 ```
 
-- `observe`: once per Auto request, resolve the selected model's provider sign-in and put the result in the route explanation (`ready`, `not_configured`, `invalid`, `unknown`) without changing the selection. This is the advisory step.
-- `exclude`: a provider whose resolution is `invalid` or `not_configured` is excluded before admission. Selection repeats once within the same tier; it never crosses an explicit `fallbackTiers` boundary, and an empty boundary stays terminal.
-- `unknown` never excludes. An unresolved check is not proof that the credential is dead, and treating it as proof would route away from healthy providers on a transient failure.
+The closed set is `"off"` and `"exclude"`; absent means off. A typo is rejected by validation rather than read as off, because silently keeping a dead provider in the pool is the failure this decision exists to stop.
 
-The swap is visible: the route explanation names the excluded model, the provider, the observed state, and the reason string. It is not recorded as a circuit, because it is not a provider failure — the request never left the host.
+- `off`: no resolution, no network call, today's dispatch behavior.
+- `exclude`: once per Auto session, behind a 60-second cache, resolve the sign-in of every provider the configured pools name and treat `invalid` or `not_configured` as ineligible. The filter runs after the hard provider scope and before economic admission and reliability, so an excluded candidate is never scored, reserved, claimed, or dispatched.
+- The exclusion uses its own reason, `sign_in_unavailable`. It is not written to the reliability store: no circuit opens and no pause is recorded, because no provider failure happened. `/bifrost preview` and route errors surface the reason through the existing skipped-candidate reporting.
+- Selection continues inside the same tier. An explicit `fallbackTiers: []` boundary stays terminal; a configured fallback list is honored exactly as it is for any other ineligible candidate.
+- `unknown` never excludes. A resolution that could not run is not proof that the credential is dead, and treating it as proof would route away from healthy providers on a transient failure.
 
-### Shape B — leave dispatch terminal
+The advisory-only shape (`observe`) was dropped. The signal already exists in `inspect` and `check` without a per-request network call, so a mode that pays the resolution cost and changes no route would add a knob with no decision behind it.
 
-Keep dispatch as it is and rely on the configuration signal: a dead credential is loudly reported by `inspect` and warned about by `check`, and the skill refuses to build such a tier silently. The trade-off is that a config written before the credential died, or one the user applies against advice, still ends the turn.
+## Constraints
 
-## Constraints for either shape
-
-- **No resolution without a reason.** `getProviderAuth` may refresh an expired OAuth token, which is a network call. A per-request resolution on every Auto turn is a latency and side-effect cost that must be measured, not assumed. A short-lived per-session cache (with invalidation on provider failure) is the starting point; the measurement belongs in the implementation PR.
+- **No resolution without a reason.** `getProviderAuth` may refresh an expired OAuth token, which is a network call. Resolution therefore runs only when the configuration opts in, once per session per provider behind a 60-second cache, and never for a request that does not enter Auto.
 - **Same-tier only.** The swap may not borrow the allowance recovery path's cross-tier behavior. An explicit tier prefix keeps its tier, and an exhausted schema-v2 boundary stays exhausted.
 - **No state invention.** The exclusion must not write a fabricated circuit or pause, so `/bifrost inspect` and the reliability store never claim a provider failure that did not happen.
 - **No replay.** The rule holds that failed user work is never automatically rerun. Shape A acts strictly before dispatch; any failure after dispatch keeps today's behavior.
@@ -65,20 +59,13 @@ Keep dispatch as it is and rely on the configuration signal: a dead credential i
 
 ## Consequences
 
-Shape A removes the reported failure mode when a credential dies while its provider is still in a configured tier, and it keeps the dead provider visible instead of silently rewriting the user's configuration. It adds one auth resolution to the Auto path, needs a cache to stay cheap, and introduces a new eligibility reason that must stay explainable in preview, status, and the route trace.
+The reported failure mode is removed when a credential dies while its provider is still in a configured tier, and the dead provider stays visible instead of being rewritten out of the user's configuration. The cost is one auth resolution per provider per session-minute for users who opt in, plus a new eligibility reason that has to stay explainable wherever exclusions are printed. A session that signs in again may keep the exclusion for up to one cache window; `off` and a restart remove it immediately.
 
-Shape B costs nothing and leaves the failure in place for configs that predate the credential dying.
+The failure is still terminal when the configuration does not opt in, when the tier has no other eligible model and no configured fallback, or when resolution itself cannot run.
 
-## Verification plan (Shape A)
+## Verification
 
-- A fake registry whose `getProviderAuthStatus` says configured and whose `getProviderAuth` throws selects the next candidate in the same tier, and the route explanation names `sign_in_unavailable` with the provider and state.
-- A tier with `fallbackTiers: []` and one dead provider fails closed instead of borrowing another tier.
-- An explicit tier prefix never leaves its tier.
-- `unknown` resolution dispatches the originally selected model.
-- Mutation checks: removing the exclusion predicate, the same-tier guard, and the `unknown` guard each turn their named assertion RED.
-
-## Open questions for the product owner
-
-1. Shape A or shape B?
-2. If A: is `routing.signInEligibility` the right config surface, or does this belong under `reliability` (where pauses and allowances live) even though it is eligibility rather than failure?
-3. Is one same-tier hop the right bound, or should the swap require the tier to list an explicit `fallbackTiers` alternate before it may move at all?
+- `tests/sign-in-eligibility-runtime.test.ts` drives the real Auto route through registered Pi hooks: with `exclude` and a provider whose `getProviderAuth` throws, it dispatches the next model; with `off` it dispatches the doomed model and records zero auth resolutions; with a dead-only tier and `fallbackTiers: []` it rejects and dispatches nothing.
+- `tests/routing.test.ts` proves the resolver records `sign_in_unavailable`, keeps the explicit empty boundary terminal, and still selects the same model without the predicate (fault control).
+- `tests/config.test.ts` rejects an unknown value and requires schemaVersion 2.
+- Mutation checks: dropping the sign-in filter from the candidate pool, and widening the closed value set to accept anything, each turn their named assertions RED.

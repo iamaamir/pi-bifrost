@@ -118,6 +118,8 @@ export interface BifrostConfig {
   requirements?: { mode?: "advisory" | "enforce" };
   /** Hard provider allowlists for Bifrost-controlled routing. */
   routingScope?: RoutingScope;
+  /** Resolve provider sign-in before selection and exclude a dead credential. */
+  signInEligibility?: "off" | "exclude";
   enabled?: boolean;
   default?: string;
   strategy?: RoutingStrategy;
@@ -418,6 +420,7 @@ export function validateTierPolicyConfigInternal(config: BifrostConfig, maxIssue
   }
   issues.push(...validateEconomicConfig(config));
   issues.push(...validateRoutingScopeConfig(config));
+  issues.push(...validateSignInEligibilityConfig(config));
   return issues;
 }
 
@@ -513,6 +516,24 @@ export function validateEconomicConfig(config: BifrostConfig): ConfigIssue[] {
         snapshot = result.snapshot;
       }
     }
+  }
+  return issues;
+}
+
+/**
+ * Validate the opt-in sign-in eligibility filter. The value is a closed set on
+ * purpose: a typo must not read as "off" and silently keep dispatching to a
+ * provider whose credential cannot be resolved.
+ */
+export function validateSignInEligibilityConfig(config: BifrostConfig): ConfigIssue[] {
+  const raw = (config as unknown as Record<string, unknown>).signInEligibility;
+  if (raw === undefined) return [];
+  const issues: ConfigIssue[] = [];
+  if (!schemaVersionAtLeast(config.schemaVersion, 2)) {
+    issues.push({ severity: "error", code: "config.sign_in_eligibility_requires_v2", path: "signInEligibility", message: "signInEligibility requires schemaVersion 2 or 3." });
+  }
+  if (raw !== "off" && raw !== "exclude") {
+    issues.push({ severity: "error", code: "config.sign_in_eligibility_invalid", path: "signInEligibility", message: 'signInEligibility must be "off" or "exclude".' });
   }
   return issues;
 }

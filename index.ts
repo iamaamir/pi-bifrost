@@ -79,7 +79,7 @@ import {
 import { ReliabilityV2Store } from "./reliability-v2-store.ts";
 import { loadRuntimeState, resolveClassifierEnablement, runtimeStatePath, saveRuntimeState, isPassiveModelSelection, createSelfSelectTracker } from "./runtime-state.ts";
 import { createCommandRouter, getBifrostCommandCompletions, reloadBifrostConfig, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.ts";
-import { configAgentConfigDigest, createBifrostConfigTool } from "./config-agent.ts";
+import { configAgentConfigDigest, createBifrostConfigTool, resolveProviderAuth } from "./config-agent.ts";
 import { reportText } from "./config-agent-report.ts";
 import { setupDebug, debug, debugMeasure, isDebugEnabled, flushDebug } from "./debug.ts";
 import { parseInlineOverride } from "./inline-override.ts";
@@ -2525,6 +2525,74 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     }
   }
 
+  // ── Opt-in pre-dispatch sign-in eligibility (ADR 0026) ──────────────────
+  // Resolving a credential may refresh an expired OAuth token, so the signal
+  // is opt-in and cached per session: `signInEligibility: "exclude"` pays for
+  // one resolution per configured provider per minute, and every other config
+  // keeps dispatching exactly as before. A dead credential then excludes its
+  // provider from candidate pools before admission, so a tier whose only model
+  // is unreachable fails inside its own boundary instead of sending a request
+  // that Pi rejects after the turn started.
+  const SIGN_IN_ELIGIBILITY_TTL_MS = 60_000;
+  const signInEligibilityBySession = new WeakMap<object, { at: number; providers: ReadonlySet<string> }>();
+
+  function signInEligibilityConfig(ctx: ExtensionContext): BifrostConfig {
+    return bootstrapVerifiedSelectionConfig(ctx) ?? state.config;
+  }
+
+  /** Providers the configured pools name, including bare entries matched by model id. */
+  function configuredPoolProviders(
+    config: BifrostConfig,
+    registry: ExtensionContext["modelRegistry"],
+  ): string[] {
+    const providers = new Set<string>();
+    const catalog = typeof registry.getAll === "function" ? registry.getAll() ?? [] : registry.getAvailable() ?? [];
+    for (const pool of Object.values(config.models ?? {})) {
+      for (const entry of Array.isArray(pool) ? pool : [pool]) {
+        if (typeof entry !== "string") continue;
+        const slash = entry.indexOf("/");
+        if (slash > 0) {
+          providers.add(entry.slice(0, slash));
+          continue;
+        }
+        const lower = entry.toLowerCase();
+        for (const model of catalog) if (model.id.toLowerCase() === lower) providers.add(model.provider);
+      }
+    }
+    return [...providers];
+  }
+
+  /** Refresh the per-session exclusion set when the configuration asks for it. */
+  async function prepareSignInEligibility(ctx: ExtensionContext): Promise<void> {
+    const session = ctx.sessionManager;
+    if (signInEligibilityConfig(ctx).signInEligibility !== "exclude") {
+      signInEligibilityBySession.delete(session);
+      return;
+    }
+    const cached = signInEligibilityBySession.get(session);
+    if (cached && Date.now() - cached.at < SIGN_IN_ELIGIBILITY_TTL_MS) return;
+    const providers = configuredPoolProviders(signInEligibilityConfig(ctx), ctx.modelRegistry);
+    if (providers.length === 0) {
+      signInEligibilityBySession.set(session, { at: Date.now(), providers: new Set() });
+      return;
+    }
+    const resolved = await resolveProviderAuth(ctx.modelRegistry, providers);
+    // An unresolved check is not proof: only a resolution Pi reports as dead
+    // excludes, because a transient failure must not route away from a
+    // provider that would have answered.
+    const excluded = new Set(resolved
+      .filter((entry) => entry.state === "invalid" || entry.state === "not_configured")
+      .map((entry) => entry.provider));
+    signInEligibilityBySession.set(session, { at: Date.now(), providers: excluded });
+  }
+
+  function signInExclusionFor(ctx: ExtensionContext): ((model: Model<Api>) => boolean) | undefined {
+    if (signInEligibilityConfig(ctx).signInEligibility !== "exclude") return undefined;
+    const cached = signInEligibilityBySession.get(ctx.sessionManager);
+    if (!cached || cached.providers.size === 0) return undefined;
+    return (model) => cached.providers.has(model.provider);
+  }
+
   function resolveForTier(
     ctx: ExtensionContext,
     tier: string,
@@ -2576,6 +2644,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         : undefined,
       random,
       affinityContext,
+      signInExclusionFor(ctx),
     );
   }
 
@@ -2761,6 +2830,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       let classifierDispatchGuardEnabled = false;
       try {
       if (requestReason === "user" && state.enabled && !state.pinned) await joinAutoBootstrap(ctx);
+      // Cached: the first Auto request in a session pays for one resolution per
+      // configured provider, later requests reuse it for the TTL.
+      if (state.enabled && !state.pinned) await prepareSignInEligibility(ctx);
       if (v2Active) {
         if (!state.reliabilityV2ConfigValid) {
           rejectionCategory = "reliability_config_invalid";
