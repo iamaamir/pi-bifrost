@@ -56,6 +56,10 @@ export interface RunProbeOptions {
   /** Allow a second, session-backed request when the streaming attempt returns
    * no text. Callers that promise exactly one request per model pass `false`. */
   sessionFallback?: boolean;
+  /** Write the results to the `.pi/bifrost-probe.json` cache that `/bifrost init`
+   * reads. A one-off candidate check passes `false`: its narrow transport would
+   * otherwise replace the init answer for the whole TTL. */
+  persist?: boolean;
   timeoutMs?: number;
   concurrency?: number;
   signal?: AbortSignal;
@@ -217,7 +221,7 @@ export async function runProbe(
   let cursor = 0;
   let completed = 0;
 
-  const { onProgress, promptWithSession = promptWithMinimalSession, sessionFallback = true, timeoutMs = PROBE_TIMEOUT_MS, concurrency = DEFAULT_PROBE_CONCURRENCY, signal, shouldProbe } = options;
+  const { onProgress, promptWithSession = promptWithMinimalSession, sessionFallback = true, persist = true, timeoutMs = PROBE_TIMEOUT_MS, concurrency = DEFAULT_PROBE_CONCURRENCY, signal, shouldProbe } = options;
 
   async function worker() {
     while (cursor < total && !signal?.aborted) {
@@ -253,6 +257,10 @@ export async function runProbe(
   }
   if (!validateCompleteProbeReport(results, catalog)) {
     reportProbeCompletion(runId, results, catalog.length, { cache: "not_written", cacheReason: "incomplete_report" });
+    return { results, path: outputPath };
+  }
+  if (!persist) {
+    reportProbeCompletion(runId, results, catalog.length, { cache: "not_written", cacheReason: "persistence_disabled" });
     return { results, path: outputPath };
   }
   try {
