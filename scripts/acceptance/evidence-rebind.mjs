@@ -165,7 +165,7 @@ export function evaluateEvidenceRebind({ root, baseRef, apply = false }) {
 
 export function usage() {
   return `usage: node scripts/acceptance/evidence-rebind.mjs <base-ref> [--apply | --pre-push]\n`
-    + `  resolves <base-ref> (default origin/v2) and validates that ${MANIFEST}\n`
+    + `  resolves <base-ref> (default origin/main) and validates that ${MANIFEST}\n`
     + `  declares an ancestor base and a file list exactly covering diff(base, HEAD);\n`
     + `  --apply rewrites the declaration base commit to <base-ref> first.\n`
     + `  --pre-push requires an explicit base and a clean tracked candidate.`;
@@ -189,7 +189,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         requireValue(!git(root, ["status", "--porcelain", "--untracked-files=no"]), "commit tracked changes before pre-push validation");
         requireValue(!git(root, ["status", "--porcelain", "--untracked-files=all", "--ignored", "--", ...EVIDENCE_MANIFESTS]), "commit evidence declarations before pre-push validation");
       }
-      const result = evaluateEvidenceRebind({ root: process.cwd(), baseRef: operands[0] ?? "origin/v2", apply: applyFlags.length === 1 });
+      const result = evaluateEvidenceRebind({ root: process.cwd(), baseRef: operands[0] ?? "origin/main", apply: applyFlags.length === 1 });
       console.log(JSON.stringify(result, null, 2));
       process.exitCode = result.status === "passed" ? 0 : 1;
     } catch (error) {
