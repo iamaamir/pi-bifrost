@@ -39,6 +39,8 @@ function fixture(options: FixtureOptions = {}) {
   const inventory = [...(options.models ?? [makeModel("dead", "one", 1), makeModel("live", "two", 2)])];
   const dead = new Set(options.deadProviders ?? ["dead"]);
   const authCalls: string[] = [];
+  let authGate: { provider: string; promise: Promise<void>; release: () => void } | undefined;
+  let commandHandler: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
   const config = {
     schemaVersion: 2,
     enabled: true,
@@ -75,6 +77,7 @@ function fixture(options: FixtureOptions = {}) {
       getProviderAuthStatus: () => ({ configured: true, source: "stored" }),
       getProviderAuth: async (provider: string) => {
         authCalls.push(provider);
+        if (authGate?.provider === provider) await authGate.promise;
         if (dead.has(provider)) throw new Error("token refresh failed");
         return { auth: { apiKey: "resolved" } };
       },
@@ -87,7 +90,9 @@ function fixture(options: FixtureOptions = {}) {
   const pi = {
     registerVirtualModel: (definition: VirtualModelDefinition) => { routeDefinition = definition; },
     registerTool: () => {},
-    registerCommand: () => {},
+    registerCommand: (_name: string, definition: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) => {
+      commandHandler = definition.handler;
+    },
     on: (event: string, handler: Hook) => { handlers.set(event, handler); return () => {}; },
     setModel: async (model: Model<Api>) => { dispatched.push(`${model.provider}/${model.id}`); return true; },
   } as unknown as ExtensionAPI;
@@ -99,8 +104,30 @@ function fixture(options: FixtureOptions = {}) {
   return {
     cwd,
     ctx,
+    inventory,
     authCalls,
     dispatched,
+    /** Rewrite the pools on disk and run the extension's own reload path. */
+    async reload(entries: readonly string[], extraModels: readonly Model<Api>[] = []): Promise<void> {
+      for (const model of extraModels) {
+        if (!inventory.some((entry) => entry.provider === model.provider && entry.id === model.id)) inventory.push(model);
+      }
+      writeFileSync(join(cwd, ".pi", "bifrost.json"), JSON.stringify({ ...config, models: { review: [...entries] } }));
+      assert.ok(commandHandler, "the extension must register the bifrost command");
+      await commandHandler("reload", ctx);
+    },
+    /** Hold one provider's resolution open, so a configuration change can land mid-wait. */
+    holdAuth(provider: string) {
+      let release: () => void = () => {};
+      const promise = new Promise<void>((resolve) => { release = resolve; });
+      authGate = { provider, promise, release };
+      return {
+        release: () => { authGate = undefined; release(); },
+      };
+    },
+    markDead(...providers: string[]): void {
+      for (const provider of providers) dead.add(provider);
+    },
     async route(): Promise<{ model: Model<Api> }> {
       const route = routeDefinition?.route as ((request: ModelRouteRequest, ctx: ExtensionContext) => Promise<{ model: Model<Api> }>) | undefined;
       assert.ok(route, "the extension must register the Auto route");
@@ -154,6 +181,86 @@ describe("pre-dispatch sign-in eligibility through the Auto route", { concurrenc
       const result = await h.route();
       assert.equal(`${result.model.provider}/${result.model.id}`, "dead/one");
       assert.deepEqual(h.authCalls, []);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("re-checks a provider the registry only just made selectable", async () => {
+    // The cached answer named the providers it checked. A registry refresh that
+    // makes the bare entry "two" reach another provider must not let the TTL
+    // carry the old answer onto a provider nobody resolved.
+    const h = fixture({ eligibility: "exclude", models: [makeModel("live", "two", 2)], pool: ["two"] });
+    try {
+      const first = await h.route();
+      assert.equal(`${first.model.provider}/${first.model.id}`, "live/two");
+      assert.deepEqual(h.authCalls, ["live"]);
+
+      h.inventory.push(makeModel("dead", "two", 3));
+      h.markDead("dead");
+
+      const second = await h.route();
+      assert.equal(`${second.model.provider}/${second.model.id}`, "live/two");
+      assert.ok(h.authCalls.includes("dead"), "a provider the cached answer never checked must be resolved before dispatch");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("re-checks providers added by a reload instead of reusing the previous answer", async () => {
+    const h = fixture({ eligibility: "exclude" });
+    try {
+      const first = await h.route();
+      assert.equal(`${first.model.provider}/${first.model.id}`, "live/two");
+
+      await h.reload(["dead2/three", "dead/one", "live/two"], [makeModel("dead2", "three", 3)]);
+      h.markDead("dead2");
+
+      const second = await h.route();
+      assert.equal(`${second.model.provider}/${second.model.id}`, "live/two");
+      assert.ok(h.authCalls.includes("dead2"), "the reloaded pool's provider must be resolved before dispatch");
+      assert.deepEqual(h.dispatched, []);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("does not reuse an answer resolved under an earlier configuration", async () => {
+    // The cached set answered a question about the pools as they were. A reload
+    // that follows must not inherit that answer: here the provider was healthy
+    // when the answer was produced and is dead by the time it would be reused.
+    const h = fixture({ eligibility: "exclude", deadProviders: [] });
+    try {
+      const first = await h.route();
+      assert.equal(`${first.model.provider}/${first.model.id}`, "dead/one");
+
+      await h.reload(["dead/one", "live/two"]);
+      h.markDead("dead");
+
+      const next = await h.route();
+      assert.equal(`${next.model.provider}/${next.model.id}`, "live/two");
+      assert.equal(h.authCalls.filter((provider) => provider === "dead").length, 2, "the reload must force a fresh resolution");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("drops a resolution that lands after the configuration changed", async () => {
+    // The wait described the old pools. Caching it would let a provider that
+    // went dead during the reload look resolvable for the rest of the TTL.
+    const h = fixture({ eligibility: "exclude", deadProviders: [] });
+    try {
+      const held = h.holdAuth("dead");
+      const pending = h.route();
+      while (!h.authCalls.includes("dead")) await new Promise((resolve) => setImmediate(resolve));
+
+      await h.reload(["dead/one", "live/two"]);
+      held.release();
+      await pending;
+      h.markDead("dead");
+
+      const next = await h.route();
+      assert.equal(`${next.model.provider}/${next.model.id}`, "live/two");
     } finally {
       h.cleanup();
     }
