@@ -9,6 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const workflow = readFileSync(new URL("../.github/workflows/verification.yml", import.meta.url), "utf8");
@@ -86,26 +87,25 @@ function releaseGateBudget(source) {
   return minutes;
 }
 
-function assertPreflightGuard(block, { scoped = true } = {}) {
-  assert.ok(block, "release job must exist");
-  const condition = scoped ? "github\\.event_name == 'pull_request' && " : "";
-  assert.match(block, new RegExp(`name: Require successful PR evidence preflight\\n\\s+if: ${condition}needs\\.evidence-preflight\\.result != 'success'\\n\\s+run: exit 1\\n\\s+- uses: actions/checkout@`, "u"));
-}
-
-function assertPreflightGate(block) {
-  assert.ok(block, "release-gates job must exist");
-  assert.match(block, /^ {4}needs: \[evidence-preflight(?:, [a-z-]+)*\]$/mu);
-  assert.equal(jobCondition(block), "${{ !cancelled() }}");
-  assertPreflightGuard(block);
-}
-
-test("release-gates fails closed on failed PR evidence preflight", () => {
+test("release-gates requires every PR stage and allows only non-applicable skips", () => {
   const block = jobs["release-gates"];
-  assertPreflightGate(block);
+  assert.ok(block, "release-gates job must exist");
+  assert.equal(jobCondition(block), "${{ !cancelled() }}");
+  assert.match(block, /^ {4}needs: \[head-acceptance, acceptance-merge, crap-trend, finalize-report\]$/mu);
+  assert.doesNotMatch(workflow, /evidence-preflight|evidence-rebind|change-evidence\.json|release-evidence\.json/u);
   releaseGateBudget(workflow);
-  const bypass = block.replace("${{ !cancelled() }}", "always() && (github.event_name != 'pull_request' || needs.evidence-preflight.result == 'success')");
-  assert.throws(() => assertPreflightGate(bypass), "old skipped-required-check bypass must fail the assertion");
-  assert.throws(() => assertPreflightGuard(block.replace("run: exit 1", "run: exit 0")), "disabled preflight failure must fail the assertion");
+
+  const runBlock = block.match(/      - name: Require release stages for this event to succeed\n[\s\S]*?        run: \|\n((?:          .*\n)+)/u)?.[1];
+  assert.ok(runBlock, "release-gates must keep its event-aware stage check");
+  const script = runBlock.split("\n").filter(Boolean).map((line) => line.slice(10)).join("\n") + "\n";
+  const run = (eventName, merge, report) => spawnSync("bash", ["-e"], { input: script, encoding: "utf8", env: {
+    ...process.env, GITHUB_EVENT_NAME: eventName, HEAD_RESULT: "success", CRAP_RESULT: "success",
+    MERGE_RESULT: merge, REPORT_RESULT: report,
+  } });
+  assert.equal(run("pull_request", "success", "success").status, 0);
+  assert.notEqual(run("pull_request", "skipped", "success").status, 0, "a skipped proposed-merge check must fail PR release-gates");
+  assert.equal(run("push", "skipped", "skipped").status, 0, "merge/report skips are non-applicable on pushes");
+  assert.notEqual(run("push", "failure", "skipped").status, 0, "a failed non-applicable stage must still fail");
 
   // Seven release gates, checked against both declaring modules.
   assert.deepEqual(requiredGatesFrom(ciReportSource), [
@@ -129,6 +129,8 @@ test("release-gates fails closed on failed PR evidence preflight", () => {
   assert.ok(head, "head-acceptance job must exist");
   assert.match(head, /id: acceptance\n/u);
   assert.match(head, /run: npm run acceptance\n/u);
+  assert.match(head, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}/u, "push acceptance must check out the event SHA");
+  assert.match(workflow, /branches: \[main\]/u, "push verification runs only on main");
   assert.match(head, /name: ci-report-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
   assert.match(head, /name: head-report-data-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
 });
@@ -151,8 +153,6 @@ test("the proposed-merge acceptance runs beside release-gates", () => {
   const block = jobs["acceptance-merge"];
   assert.ok(block, "acceptance-merge job must exist");
   assert.equal(jobCondition(block), "${{ !cancelled() && github.event_name == 'pull_request' }}");
-  assert.match(block, /^ {4}needs: evidence-preflight$/mu);
-  assertPreflightGuard(block, { scoped: false });
   assert.match(block, /ref: \$\{\{ github\.ref \}\}/u, "the merge job must check out the proposed merge ref");
   assert.match(block, /id: merge-acceptance\n/u);
   assert.match(block, /run: npm run acceptance:deterministic\n/u);
@@ -171,8 +171,6 @@ test("the proposed-merge acceptance runs beside release-gates", () => {
 test("the CRAP trend refresh runs beside the gates", () => {
   const block = jobs["crap-trend"];
   assert.ok(block, "crap-trend job must exist");
-  assert.match(block, /^ {4}needs: evidence-preflight$/mu);
-  assert.match(block, /name: Refresh CRAP trend history\n\s+if: always\(\) && \(github\.event_name != 'pull_request' \|\| needs\.evidence-preflight\.result == 'success'\)/u);
   assert.match(block, /npm run test:coverage/u);
   assert.match(block, /node scripts\/crap-report\.mjs --record --history/u);
   assert.match(block, /name: crap-history-\$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
@@ -181,8 +179,8 @@ test("the CRAP trend refresh runs beside the gates", () => {
 test("finalize-report joins the parallel evidence into the candidate report", () => {
   const block = jobs["finalize-report"];
   assert.ok(block, "finalize-report job must exist");
-  assert.equal(jobCondition(block), "${{ !cancelled() && github.event_name == 'pull_request' && needs.evidence-preflight.result == 'success' }}");
-  assert.match(block, /^ {4}needs: \[evidence-preflight, head-acceptance, acceptance-merge, crap-trend\]$/mu);
+  assert.equal(jobCondition(block), "${{ !cancelled() && github.event_name == 'pull_request' }}");
+  assert.match(block, /^ {4}needs: \[head-acceptance, acceptance-merge, crap-trend\]$/mu);
   assert.match(block, /RELEASE_RESULT: \$\{\{ needs\.head-acceptance\.result == 'success' && needs\.acceptance-merge\.result == 'success' && needs\.crap-trend\.result == 'success' && 'success' \|\| 'failure' \}\}/u);
   assert.match(block, /name: head-report-data-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
   assert.match(block, /name: crap-history-\$\{\{ github\.event\.pull_request\.head\.sha \}\}-run-\$\{\{ github\.run_id \}\}-attempt-\$\{\{ github\.run_attempt \}\}/u);
@@ -198,21 +196,8 @@ test("finalize-report joins the parallel evidence into the candidate report", ()
     "artifact downloads must stay tolerant so a failed acceptance still renders");
 });
 
-test("evidence preflight runs only on pull requests before release gates", () => {
-  const block = jobs["evidence-preflight"];
-  assert.ok(block, "evidence preflight job must exist");
-  assert.equal(jobCondition(block), "github.event_name == 'pull_request'");
-  assert.match(block, /^ {4}timeout-minutes: 5$/mu);
-  assert.match(block, /uses: actions\/checkout@[0-9a-f]{40} # v4/u);
-  assert.match(block, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \}\}/u);
-  assert.match(block, /fetch-depth: 0/u);
-  assert.match(block, /node scripts\/acceptance\/evidence-rebind\.mjs "\$\{\{ github\.event\.pull_request\.base\.sha \}\}"/u);
-  assert.doesNotMatch(block, /--apply/u, "preflight must not rewrite evidence");
-  assert.doesNotMatch(block, /npm (ci|install)/u, "structural preflight must stay fast and read-only");
-});
-
 test("campaign jobs never run on ordinary PR, push, or default manual dispatch", () => {
-  assert.deepEqual(Object.keys(jobs), ["evidence-preflight", "head-acceptance", "acceptance-merge", "crap-trend", "finalize-report", "release-gates", "campaign", "pi-compatibility", "mutation-experiment"]);
+  assert.deepEqual(Object.keys(jobs), ["head-acceptance", "acceptance-merge", "crap-trend", "finalize-report", "release-gates", "campaign", "pi-compatibility", "mutation-experiment"]);
   const cases = [
     ["pull_request", {}],
     ["push", {}],

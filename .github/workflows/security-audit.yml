@@ -1,8 +1,7 @@
 name: Security audit
 
 on:
-  # GitHub schedules run only from default-branch workflow content. This v2
-  # workflow is dispatch-only until equivalent workflow content lands on main.
+  # This workflow is dispatch-only; scheduled workflows run from default-branch content.
   workflow_dispatch:
 
 permissions:
