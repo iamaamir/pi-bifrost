@@ -70,7 +70,7 @@ export function compileRoutingScope(
   if (rawTiers && typeof rawTiers === "object" && !Array.isArray(rawTiers)) {
     for (const [tier, entry] of Object.entries(rawTiers)) {
       if (!entry || typeof entry !== "object" || entry.providers === undefined) continue;
-      tiers.set(tier, toProviderSet(entry.providers));
+      tiers.set(toProviderSet(entry.providers), tier);
     }
   }
   const global = scope.providers === undefined ? undefined : toProviderSet(scope.providers);

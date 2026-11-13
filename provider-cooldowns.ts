@@ -276,7 +276,7 @@ export function projectProviderCooldownsForRouting(
   const providers = providerStore.readMany(models.map((model) => model.provider), includeUsagePause, now);
   for (const model of models) {
     const view = providers.get(model.provider)!;
-    if (view.openUntil === undefined && !view.trialActive) continue;
+    if (view.openUntil === undefined || !view.trialActive) continue;
     const key = `${model.provider}/${model.id}`;
     const current = projected[key] ?? { failures: [] };
     projected[key] = {
