@@ -1,18 +1,16 @@
 // ── Host configuration loading ─────────────────────────────────
-// Layered Bifrost configuration loading: bundled defaults, the user-level
-// agent config, a workspace bifrost.json, and the project `.pi/bifrost.json`.
-// Parsing and validation live in config.ts; this module owns host paths,
-// bounded file reads, and layer composition.
+// Layered Bifrost configuration loading: user-level agent config, workspace
+// bifrost.json, and project `.pi/bifrost.json`. The bundled bifrost.json is an
+// init template, not an active runtime layer. Parsing and validation live in
+// config.ts; this module owns host paths, bounded file reads, and composition.
 
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { closeSync, constants, existsSync, fstatSync, openSync, readSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { readJsonFile } from "./storage.ts";
 import type { RouteRule } from "./routing.ts";
 import { mergeRoutingScopeConflicts, type RoutingScope } from "./routing-scope.ts";
 import {
-  BUNDLED_PUBLIC_INIT_DEFAULTS,
   DEFAULT_RULES,
   DYNAMIC_CONFIG_MAP_PATHS,
   MAX_CONFIG_SOURCE_BYTES,
@@ -79,7 +77,7 @@ export function loadConfig(
   return loadConfigForReload(cwd, extensionDir).config;
 }
 
-/** File-backed configuration layers. `effective` never owns a source file, so it cannot appear here. */
+/** Runtime source paths plus bundled template path for inspection. `effective` never owns a source file, so it cannot appear here. */
 export type ConfigSourceLayer = "extension" | "global" | "workspace" | "project";
 
 export interface ConfigLoadDiagnostic {
@@ -250,6 +248,9 @@ function loadConfigLayers(
   const reservedKeys: Array<{ layer: ConfigLoadDiagnostic["layer"]; declaredVersion: unknown; paths: readonly string[] }> = [];
   let merged = defaultConfig();
   for (const [layer, path] of configLayerPaths(cwd, extensionDir)) {
+    // Package bifrost.json is an init template, not runtime policy. Keep its
+    // path available for inspection, but never parse or merge it here.
+    if (layer === "extension") continue;
     let text: string | undefined;
     if (replacement?.layer === layer) {
       if (replacement.bytes.byteLength > MAX_CONFIG_SOURCE_BYTES) {
@@ -339,11 +340,6 @@ function loadConfigLayers(
       continue;
     }
     sourceFields.push(Object.freeze({ layer, fields: Object.freeze(Object.keys(source)) }));
-    if (layer === "extension") {
-      publicDefaultFields.push(...Object.keys(BUNDLED_PUBLIC_INIT_DEFAULTS)
-        .filter((key) => Object.hasOwn(semantic, key)
-          && isDeepStrictEqual(semantic[key], BUNDLED_PUBLIC_INIT_DEFAULTS[key])));
-    }
     merged = mergeConfig(merged, semantic as BifrostConfig);
   }
   // schemaVersion 3 reserves `description` inside dynamically keyed maps. A
@@ -356,6 +352,15 @@ function loadConfigLayers(
       if (entry.declaredVersion === 3 || entry.paths.length === 0) continue;
       addDiagnostic(entry.layer, `${entry.layer} config defines ${entry.paths.join(", ")}, which schemaVersion 3 reserves for inline metadata; rename the user-defined key or declare schemaVersion 3 in that layer.`);
     }
+  }
+  if (!sourceFields.some(({ fields }) => fields.includes("rules"))) {
+    const configuredTiers = new Set(Object.keys(merged.models ?? {}));
+    merged = {
+      ...merged,
+      rules: configuredTiers.size === 0
+        ? DEFAULT_RULES
+        : DEFAULT_RULES.filter(({ model }) => configuredTiers.has(model)),
+    };
   }
   // The effective policy is validated for composition-dependent rules (for
   // example a version requirement satisfied by a different layer). These are
@@ -409,11 +414,6 @@ function defaultConfig(): BifrostConfig {
     enabled: true,
     default: "general",
     strategy: "first",
-    categoryStrategies: {
-      quick: "random",
-      general: "first",
-      frontier: "first",
-    },
     models: {},
     rules: DEFAULT_RULES,
   };
@@ -444,5 +444,5 @@ export function loadRules(cwd: string, config: BifrostConfig): RouteRule[] {
     if (rules) return rules;
   }
 
-  return config.rules?.length ? config.rules : DEFAULT_RULES;
+  return config.rules ?? DEFAULT_RULES;
 }

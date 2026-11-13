@@ -497,7 +497,7 @@ describe("bifrost command ui", () => {
     }
   });
 
-  it("does not pin extension-owned classifier or nondefault public settings", async () => {
+  it("uses bundled public init defaults without loading extension config", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-extension-ownership-"));
     const previousCwd = process.cwd();
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -522,16 +522,18 @@ describe("bifrost command ui", () => {
       state.extensionDir = extensionDir;
       await createCommandRouter(state as never)("init --write", ctx as never);
       const saved = JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8"));
-      for (const key of ["classifier", "cache", "reliability", "debug"]) {
-        assert.equal(Object.hasOwn(saved, key), false, `init pinned extension-owned ${key}`);
-      }
+      assert.equal(saved.classifier.enabled, true);
+      assert.equal(saved.cache.enabled, true);
+      assert.equal(saved.cache.maxEntries, 500);
+      assert.equal(saved.reliability.failureThreshold, 3);
+      assert.equal(saved.debug.enabled, false);
       const effective = loadConfigForReload(tempDir, extensionDir).config;
-      assert.equal(effective.classifier?.systemPrompt, "EXTENSION_PRIVATE_CANARY");
-      assert.equal(effective.classifier?.endpoint, "https://extension-private.invalid");
-      assert.equal(effective.cache?.enabled, false);
-      assert.equal(effective.cache?.maxEntries, 17);
-      assert.equal(effective.reliability?.failureThreshold, 19);
-      assert.equal(effective.debug?.enabled, true);
+      assert.equal(effective.classifier?.systemPrompt, undefined);
+      assert.equal(effective.classifier?.endpoint, undefined);
+      assert.equal(effective.cache?.enabled, true);
+      assert.equal(effective.cache?.maxEntries, 500);
+      assert.equal(effective.reliability?.failureThreshold, 3);
+      assert.equal(effective.debug?.enabled, false);
     } finally {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -540,7 +542,7 @@ describe("bifrost command ui", () => {
     }
   });
 
-  it("does not pin custom extension settings on forced fresh init", async () => {
+  it("uses bundled public init defaults on forced fresh init", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-extension-force-"));
     const previousCwd = process.cwd();
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -568,14 +570,16 @@ describe("bifrost command ui", () => {
       state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} };
       await createCommandRouter(state)("init -f --write", ctx);
       const saved = JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8"));
-      for (const key of ["classifier", "cache", "reliability", "debug"]) {
-        assert.equal(Object.hasOwn(saved, key), false, `forced init pinned extension-owned ${key}`);
-      }
+      assert.equal(saved.classifier.enabled, true);
+      assert.equal(saved.cache.enabled, true);
+      assert.equal(saved.cache.maxEntries, 500);
+      assert.equal(saved.reliability.failureThreshold, 3);
+      assert.equal(saved.debug.enabled, false);
       const effective = loadConfigForReload(tempDir, extensionDir).config;
-      assert.equal(effective.classifier?.systemPrompt, "EXTENSION_PRIVATE_CANARY");
-      assert.equal(effective.cache?.enabled, false);
-      assert.equal(effective.reliability?.failureThreshold, 19);
-      assert.equal(effective.debug?.enabled, true);
+      assert.equal(effective.classifier?.systemPrompt, undefined);
+      assert.equal(effective.cache?.enabled, true);
+      assert.equal(effective.reliability?.failureThreshold, 3);
+      assert.equal(effective.debug?.enabled, false);
     } finally {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;

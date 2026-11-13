@@ -1734,7 +1734,7 @@ export function inspectConfigAgent(input: ConfigAgentInspectInput): ConfigAgentI
   const layers = inspectLayers(cwd, extensionDir);
   const routeFile = routeFileFor(cwd);
   const restrictions = [
-    "Only the user, workspace, and project sources are writable. The bundled extension config is Bifrost's default and is never written.",
+    "Only the user, workspace, and project sources are writable. The bundled extension bifrost.json is an init template and is never loaded or written.",
     `Bifrost validates against schema versions ${SUPPORTED_SCHEMA_VERSIONS.join(", ")}; other values are rejected.`,
     "Unknown fields, invalid values, and wrong types load with a warning that names the path; they never change routing silently.",
     "A route file takes precedence over config `rules` when it exists.",

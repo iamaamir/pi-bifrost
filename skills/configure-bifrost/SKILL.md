@@ -22,8 +22,7 @@ goal needs something Bifrost does not do, say so.
 2. **Inspect before proposing.** Call `bifrost_config` with
    `{"operation":"inspect"}`. This returns the real model inventory with exact
    `provider/id` keys, cost and context metadata, the config layers with their
-   precedence, the current effective policy, the baseline tiers, and current
-   restrictions. Never use a model id from memory or from documentation. When the
+   precedence, the current effective policy, and current restrictions. Never use a model id from memory or from documentation. When the
    inventory is long, repeat inspect with `"provider": "<id>"` to list one
    provider's models, and page further with `"offset": 40`, then `80`, and so
    on; the filter and offset only narrow what is reported. Inspect also reports
@@ -127,18 +126,19 @@ goal needs something Bifrost does not do, say so.
 
 ## Rules that change what you can propose
 
-**Layers merge; the baseline never disappears.** The bundled extension config is
-the lowest layer and always contributes the baseline tiers `quick`, `general`,
-and `frontier` (empty pools until a user or init fills them) plus their
-`categoryStrategies` entries and the default `rules`. Consequences:
+**User, workspace, and project layers merge.** The bundled extension
+`bifrost.json` is an init template, not a runtime layer. Scalar runtime defaults
+come from code, and built-in rules apply only when no source or route file
+provides them. Consequences:
 
-- Custom tier names are *additive*. A candidate that lists only `orchestrator`,
-  `implement`, and `review` still has the three baseline tiers, with empty pools.
+- Custom tier names add no bundled baseline tiers. A candidate that lists only
+  `orchestrator`, `implement`, and `review` contributes those tiers; tiers
+  inherited from other writable layers remain in the merged configuration.
 - `default` must name a tier that exists in the merged config.
 - Every key of `categoryStrategies` must exist in the merged `models`.
-- The bundled default `rules` route to `quick`, `general`, and `frontier`. A
-  policy with custom roles should supply its own `rules`, or use the baseline
-  tier names, or the user's review prompts will fall back to the default tier.
+- Built-in `rules` route to `quick`, `general`, and `frontier` when no source
+  rules are configured. A policy with custom roles should supply its own `rules`,
+  or the user's review prompts will fall back to the default tier.
 - A file-based `.pi/bifrost-routes.json` (or `./bifrost-routes.json`) overrides
   `rules` entirely while it exists. `inspect` reports it.
 

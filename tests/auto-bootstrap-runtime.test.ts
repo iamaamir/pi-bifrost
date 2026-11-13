@@ -686,7 +686,7 @@ describe("automatic setup through registered Pi hooks", () => {
         source: "interactive",
         streamingBehavior: "steer",
       }, harness.ctx);
-      assert.deepEqual(first, { action: "transform", text: "do a small task" });
+      assert.deepEqual(first, { action: "continue" });
       assert.doesNotMatch(harness.notices.join("\n"), /in-memory pools/);
       harness.setAvailable([harness.model]);
       await harness.handlers.get("input")!({
