@@ -128,15 +128,26 @@ function fixture(options: FixtureOptions = {}) {
     markDead(...providers: string[]): void {
       for (const provider of providers) dead.add(provider);
     },
-    async route(): Promise<{ model: Model<Api> }> {
+    async route(options: { reason?: string; previous?: { model: Model<Api>; thinkingLevel: "low" } } = {}): Promise<{ model: Model<Api> }> {
       const route = routeDefinition?.route as ((request: ModelRouteRequest, ctx: ExtensionContext) => Promise<{ model: Model<Api> }>) | undefined;
       assert.ok(route, "the extension must register the Auto route");
       return route({
         model: ctx.model,
-        reason: "user",
+        reason: options.reason ?? "user",
         thinkingLevel: "low",
         messages: [userMessage],
+        ...(options.previous === undefined ? {} : { previous: options.previous }),
       } as unknown as ModelRouteRequest, ctx);
+    },
+    /** Run `body` with the sign-in cache already past its TTL. */
+    async withExpiredCache<T>(body: () => Promise<T>): Promise<T> {
+      const real = Date.now;
+      Date.now = () => real() + 120_000;
+      try {
+        return await body();
+      } finally {
+        Date.now = real;
+      }
     },
     cleanup: () => {
       process.chdir(previousCwd);
@@ -220,6 +231,26 @@ describe("pre-dispatch sign-in eligibility through the Auto route", { concurrenc
       assert.equal(`${second.model.provider}/${second.model.id}`, "live/two");
       assert.ok(h.authCalls.includes("dead2"), "the reloaded pool's provider must be resolved before dispatch");
       assert.deepEqual(h.dispatched, []);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("does not resolve sign-in for a continuation that keeps its model", async () => {
+    // A continuation dispatches the previous model without touching the pools,
+    // so exclusions cannot apply to it. Resolving every provider again after
+    // the TTL expires would only make the user wait before a sticky dispatch.
+    const h = fixture({ eligibility: "exclude" });
+    try {
+      const first = await h.route();
+      assert.equal(`${first.model.provider}/${first.model.id}`, "live/two");
+      const resolved = h.authCalls.length;
+
+      const continued = await h.withExpiredCache(() =>
+        h.route({ reason: "continuation", previous: { model: first.model, thinkingLevel: "low" } }));
+
+      assert.equal(`${continued.model.provider}/${continued.model.id}`, "live/two");
+      assert.equal(h.authCalls.length, resolved, "a continuation must not spend a sign-in resolution");
     } finally {
       h.cleanup();
     }
