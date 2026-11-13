@@ -40,7 +40,9 @@ function createReleaseFixture(extraEnv = {}) {
   };
 }
 
-describe("release CLI side effects", () => {
+describe("release CLI side effects", {
+  skip: process.platform === "win32" ? "POSIX-only: command stubs use shell scripts and PATH separators" : false,
+}, () => {
   it("rejects unknown options before invoking Git or npm", () => {
     const fixture = createReleaseFixture();
     const before = fixture.packageText();
