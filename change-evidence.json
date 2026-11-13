@@ -1,96 +1,31 @@
 {
   "schemaVersion": 1,
-  "base": "44c77c8f0155facd57c77e78e93ffa61fd207df1",
+  "base": "d18ee673397e058e8a227b2ca9f0a614e0750c26",
   "contracts": [
     {
-      "id": "trusted-publisher-dependency-boundary",
+      "id": "verification-pipeline-parallelization",
       "requirement": "R16",
       "files": [
-        "scripts/ci-report.mjs",
-        "scripts/crap-history.mjs",
-        "scripts/crap-report.mjs",
-        "tests/ci-report-publish.test.mjs"
+        ".github/workflows/verification.yml",
+        "scripts/acceptance.mjs",
+        "scripts/merge-controller.mjs",
+        "scripts/verify-release.mjs",
+        "tests/verification-workflow.test.mjs",
+        "tests/integration/decision-parity-acceptance.test.mjs"
       ],
-      "boundary": "The trusted publisher executes its real CLI without installed project dependencies.",
-      "assertions": "A push event is ignored successfully in an isolated dependency-free checkout; injecting a TypeScript import makes the same assertion fail. Existing trend rendering remains unchanged.",
+      "boundary": "The verification workflow keeps a single required release-gates check that waits for every required stage: the head-acceptance job runs the seven release gates with two concurrent lanes, the proposed-merge acceptance and the CRAP trend refresh run as parallel jobs beside it, finalize-report joins the uploaded artifacts and renders the candidate report even when a gate fails, and the release-gates check job fails closed when any stage fails or is cancelled. The report publisher runs only in finalize-report, and merge-controller binds provenance to the unique evidence-upload step name across every job of the run.",
+      "assertions": "Structure witnesses pin exactly one release-gates job, the beside-runs of acceptance-merge and crap-trend, finalize-report joining artifacts, preflight-before-gates ordering, and bounded gate budgets; a fault control turns a 45-minute release-gates budget red and another turns a failed stage into a red required check. The partition-integrity check in verify-release fails closed if lane membership drifts from the declared required gates, and the manifest gates stay in declaration order. Concurrent lanes share one pack lock: the router-build gate and every npm pack/prepack serialize on it so dist/router is never rebuilt while another pack reads it. Acceptance tracks each spawned child independently so concurrent lane children are terminated and reported individually.",
       "boundaryTest": {
-        "file": "tests/ci-report-publish.test.mjs",
-        "name": "publisher starts from a dependency-free checkout for a push workflow event"
+        "file": "tests/verification-workflow.test.mjs",
+        "name": "the proposed-merge acceptance runs beside release-gates"
       },
       "invariant": {
-        "file": "tests/crap-report.test.mjs",
-        "name": "renderTrend shows per-snapshot rows and the overall direction"
+        "file": "tests/verification-workflow.test.mjs",
+        "name": "finalize-report joins the parallel evidence into the candidate report"
       },
       "fault": {
-        "file": "tests/ci-report-publish.test.mjs",
-        "name": "publisher starts from a dependency-free checkout for a push workflow event"
-      }
-    },
-    {
-      "id": "owned-merged-push-fixture",
-      "requirement": "R16",
-      "files": [
-        "tests/acceptance-runner.test.mjs"
-      ],
-      "boundary": "The actual acceptance caller handles an owned multi-commit push independent of checkout history.",
-      "assertions": "The fixture creates its own intermediate commit and the real caller passes, fails for context, witness and predecessor faults, then passes after restoration.",
-      "boundaryTest": {
-        "file": "tests/acceptance-runner.test.mjs",
-        "name": "merged-push checkout runs the actual workflow caller with event.before"
-      },
-      "invariant": {
-        "file": "tests/acceptance-runner.test.mjs",
-        "name": "single-commit checkout runs the actual workflow caller without inventing an intermediate"
-      },
-      "fault": {
-        "file": "tests/acceptance-runner.test.mjs",
-        "name": "merged-push checkout runs the actual workflow caller with event.before"
-      }
-    },
-    {
-      "id": "scoped-fixture-allowlists",
-      "requirement": "R16",
-      "files": [
-        ".gitleaksignore",
-        ".gitleaks.toml",
-        "scripts/test-gitleaks-pr-boundaries.sh",
-        "tests/tooling-config.test.mjs"
-      ],
-      "boundary": "The scanner suppresses only the reviewed generic-key fixtures at their exact test paths, independently of commit and line.",
-      "assertions": "Owned multi-commit and squash histories pass with the scoped exception and fail under default rules; the same fixture in a new commit is accepted while a different secret in the same file and the fixture at another path are detected.",
-      "boundaryTest": {
-        "file": "tests/tooling-config.test.mjs",
-        "name": "the secret allowlist is scoped to the generic API key rule and exact values"
-      },
-      "invariant": {
-        "file": "tests/tooling-config.test.mjs",
-        "name": "the secret allowlist check rejects a broad top-level allowlist"
-      },
-      "fault": {
-        "file": "tests/tooling-config.test.mjs",
-        "name": "the secret allowlist check rejects weakening fixture path and value matching"
-      }
-    },
-    {
-      "id": "gitleaks-policy-guidance",
-      "requirement": "R16",
-      "files": [
-        "docs/dev-tooling.md",
-        "tests/performance-tooling.test.mjs"
-      ],
-      "boundary": "Developer guidance matches the configured generic-key fixture exceptions.",
-      "assertions": "The guide describes both existing global exact canaries and the additional exact path-and-value exceptions; obsolete value-only guidance fails the named assertion.",
-      "boundaryTest": {
-        "file": "tests/performance-tooling.test.mjs",
-        "name": "the developer guide describes scoped Gitleaks fixture exceptions"
-      },
-      "invariant": {
-        "file": "tests/tooling-config.test.mjs",
-        "name": "the secret allowlist is scoped to the generic API key rule and exact values"
-      },
-      "fault": {
-        "file": "tests/performance-tooling.test.mjs",
-        "name": "fault control: outdated Gitleaks guidance fails the scoped policy assertion"
+        "file": "tests/verification-workflow.test.mjs",
+        "name": "fault control: a 45-minute release-gates budget turns the named budget assertion red"
       }
     }
   ]
