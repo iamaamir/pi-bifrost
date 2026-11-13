@@ -9,7 +9,7 @@ node scripts/merge-controller.mjs <pr-number> \
   --receipt <trusted-path-outside-candidate-checkout> \
   --expected-reviewer <agent-id> \
   --expected-implementer <agent-id> \
-  --repo <owner/name> [--base v2] \
+  --repo <owner/name> [--base main] \
   [--outcome <trusted-outcome-path>] [--apply | --check]
 ```
 
