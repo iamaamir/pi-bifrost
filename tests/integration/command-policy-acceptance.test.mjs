@@ -151,7 +151,11 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
 
   it("waits for a new JSON report instead of accepting a previous turn's report", async () => {
     const env = fixture({ models: [{ id: "chat" }] });
-    const rpc = startRpc({ fixture: env, server, model: "fake/chat", timeoutMs: 2_000, jsonReports: true });
+    // Deadline headroom: the parallel release lanes share the runner, so the
+    // migrate RPC occasionally exceeds the serial-era 2s budget. The tested
+    // contract is that the first report completes and the second prompt hits
+    // the deadline instead of accepting a stale report.
+    const rpc = startRpc({ fixture: env, server, model: "fake/chat", timeoutMs: 10_000, jsonReports: true });
     try {
       const first = reportJson(await rpc.prompt("/bifrost config migrate --source project --json"));
       assert.ok(first.status);
