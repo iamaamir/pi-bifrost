@@ -161,8 +161,11 @@ function renderCheck(result: ConfigAgentCheckResult): string {
   // Failures only, plus a count. A succeeded probe carries no decision, and one
   // line per model would push the warnings above it out of the bounded report.
   if (result.liveProbe) {
+    const answered = result.liveProbe.filter((entry) => entry.status === "ok");
+    const skipped = result.liveProbe.filter((entry) => entry.status === "skipped");
     const failed = result.liveProbe.filter((entry) => entry.status === "error" || entry.status === "timeout");
-    lines.push(`live probe (one tiny prompt per model): ${result.liveProbe.length - failed.length}/${result.liveProbe.length} answered`);
+    lines.push(`live probe (one tiny prompt per model): ${answered.length}/${result.liveProbe.length} answered${skipped.length > 0 ? `, ${skipped.length} skipped` : ""}`);
+    if (skipped.length > 0) lines.push(`  ${skipped.length} model${skipped.length === 1 ? "" : "s"} not asked (check cancelled before the request completed)`);
     for (const entry of failed) {
       lines.push(`  ${entry.model}: ${entry.status}${entry.reason ? ` -- ${entry.reason}` : ""}`);
     }
