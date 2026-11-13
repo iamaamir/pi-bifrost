@@ -2537,7 +2537,15 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   // is unreachable fails inside its own boundary instead of sending a request
   // that Pi rejects after the turn started.
   const SIGN_IN_ELIGIBILITY_TTL_MS = 60_000;
-  const signInEligibilityBySession = new WeakMap<object, { at: number; providers: ReadonlySet<string> }>();
+  interface SignInEligibilityEntry {
+    readonly at: number;
+    /** Configuration generation the answer describes. */
+    readonly generation: number;
+    /** Providers the answer looked at; a new pool provider makes it stale. */
+    readonly checked: ReadonlySet<string>;
+    readonly excluded: ReadonlySet<string>;
+  }
+  const signInEligibilityBySession = new WeakMap<object, SignInEligibilityEntry>();
 
   function signInEligibilityConfig(ctx: ExtensionContext): BifrostConfig {
     return bootstrapVerifiedSelectionConfig(ctx) ?? state.config;
@@ -2564,34 +2572,53 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   /** Refresh the per-session exclusion set when the configuration asks for it. */
   async function prepareSignInEligibility(ctx: ExtensionContext): Promise<void> {
     const session = ctx.sessionManager;
-    if (signInEligibilityConfig(ctx).signInEligibility !== "exclude") {
+    const config = signInEligibilityConfig(ctx);
+    if (config.signInEligibility !== "exclude") {
       signInEligibilityBySession.delete(session);
       return;
     }
+    const generation = state.configGeneration ?? 0;
+    const providers = configuredPoolProviders(config, ctx);
     const cached = signInEligibilityBySession.get(session);
-    if (cached && Date.now() - cached.at < SIGN_IN_ELIGIBILITY_TTL_MS) return;
-    const providers = configuredPoolProviders(signInEligibilityConfig(ctx), ctx);
+    // A cached answer only describes the configuration and the pools it was
+    // resolved from. A reload, or a registry refresh that makes a newly added
+    // provider selectable, has to be checked before that provider is dispatched.
+    if (cached
+      && cached.generation === generation
+      && Date.now() - cached.at < SIGN_IN_ELIGIBILITY_TTL_MS
+      && providers.every((provider) => cached.checked.has(provider))) return;
     if (providers.length === 0) {
-      signInEligibilityBySession.set(session, { at: Date.now(), providers: new Set() });
+      signInEligibilityBySession.set(session, { at: Date.now(), generation, checked: new Set(), excluded: new Set() });
       return;
     }
     const resolved = await resolveProviderAuth(ctx.modelRegistry, providers, { signal: ctx.signal });
     // A cancelled wait is not a result: caching it would pin an empty exclusion
     // set for the TTL and hide a dead provider the next turn could have found.
     if (ctx.signal?.aborted) return;
+    // The wait outlived the pools it described: a reload during resolution
+    // invalidates the answer, and caching it would hide the new configuration.
+    if ((state.configGeneration ?? 0) !== generation) return;
     // An unresolved check is not proof: only a resolution Pi reports as dead
     // excludes, because a transient failure must not route away from a
     // provider that would have answered.
     const excluded = new Set(resolved
       .filter((entry) => entry.state === "invalid" || entry.state === "not_configured")
       .map((entry) => entry.provider));
-    signInEligibilityBySession.set(session, { at: Date.now(), providers: excluded });
+    signInEligibilityBySession.set(session, { at: Date.now(), generation, checked: new Set(providers), excluded });
   }
 
   /** Exclusions the router may apply now: the cached set, never a new request. */
   function cachedSignInExclusions(ctx: ExtensionContext): ReadonlySet<string> | undefined {
     if (signInEligibilityConfig(ctx).signInEligibility !== "exclude") return undefined;
-    return signInEligibilityBySession.get(ctx.sessionManager)?.providers;
+    const entry = signInEligibilityBySession.get(ctx.sessionManager);
+    if (!entry) return undefined;
+    // Never apply an answer resolved from a configuration that has since been
+    // replaced: it describes pools the reload may have changed.
+    if (entry.generation !== (state.configGeneration ?? 0)) {
+      signInEligibilityBySession.delete(ctx.sessionManager);
+      return undefined;
+    }
+    return entry.excluded;
   }
 
   function signInExclusionFor(ctx: ExtensionContext): ((model: Model<Api>) => boolean) | undefined {

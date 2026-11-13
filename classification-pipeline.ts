@@ -63,7 +63,15 @@ export type ClassificationResult =
   | { readonly kind: "unclassified"; readonly classificationOutcome?: ClassificationOutcome; readonly classifierAttempt?: ClassifierAttemptSummary };
 
 export type RouteDecisionExclusionCode = SkippedCandidate["reason"] | CandidateDiscoveryExclusion["reason"] | UnresolvedCandidatePattern["reason"] | "economic_reserve";
-export type RouteDecisionEvidenceSource = "reliability_state" | "economic_snapshot" | "registry_snapshot" | "config_snapshot";
+export type RouteDecisionEvidenceSource = "reliability_state" | "economic_snapshot" | "registry_snapshot" | "config_snapshot" | "sign_in_check";
+
+/** Where an exclusion was observed. A dead sign-in is not reliability state:
+ * no request was made and no failure was recorded, so the trace says so. */
+function evidenceSourceForExclusion(code: RouteDecisionExclusionCode): RouteDecisionEvidenceSource {
+  if (code === "provider_not_allowed") return "config_snapshot";
+  if (code === "sign_in_unavailable") return "sign_in_check";
+  return "reliability_state";
+}
 
 export interface RouteDecisionExclusionEvidence {
   readonly code: RouteDecisionExclusionCode;
@@ -178,7 +186,7 @@ function summarizePool(
       const reserve = reserveEvaluations.get(model);
       const hardExcluded = reserve?.mode === "policy" && reserve.disposition === "rejected";
       const exclusionEvidence = [
-        ...(exclusion ? [{ code: exclusion, source: exclusion === "provider_not_allowed" ? "config_snapshot" as const : "reliability_state" as const }] : []),
+        ...(exclusion ? [{ code: exclusion, source: evidenceSourceForExclusion(exclusion) }] : []),
         ...(hardExcluded ? [{ code: "economic_reserve" as const, source: "economic_snapshot" as const }] : []),
       ];
       return {

@@ -1613,6 +1613,22 @@ describe("opt-in sign-in eligibility (ADR 0026)", () => {
     assert.deepEqual(result.skipped, [{ key: "dead/one", reason: "sign_in_unavailable" }]);
   });
 
+  it("traces the skip to the sign-in check rather than to reliability state", () => {
+    // The provider was skipped before any request, so no circuit opened and no
+    // failure was recorded: naming reliability state would send the user to a
+    // store that holds nothing about this exclusion.
+    const ctx = makeCtx([dead, live]);
+    const routeConfig = { models: { review: ["dead/one", "live/two"] }, strategy: "first" as const };
+    const resolution = resolveConfiguredTier(ctx, "review", routeConfig, undefined, undefined, undefined, undefined, undefined, undefined, (model) => model.provider === "dead").resolution;
+    const summary = buildRouteDecisionSummary({ kind: "classified", tier: "review", source: "regex" }, {
+      resolution,
+      options: buildTierResolutionOptions("review", routeConfig),
+    });
+    const candidate = summary.requested?.candidates.find((entry) => entry.model === "dead/one");
+    assert.deepEqual(candidate?.exclusionEvidence, [{ code: "sign_in_unavailable", source: "sign_in_check" }]);
+    assert.notDeepEqual(candidate?.exclusionEvidence, [{ code: "sign_in_unavailable", source: "reliability_state" }]);
+  });
+
   it("fault control: without the predicate the same pool still selects the dead provider", () => {
     // Proves the skip above comes from the eligibility function, not from the
     // fixture or from a default exclusion.
