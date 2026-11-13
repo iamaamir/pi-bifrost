@@ -2865,8 +2865,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       try {
       if (requestReason === "user" && state.enabled && !state.pinned) await joinAutoBootstrap(ctx);
       // Cached: the first Auto request in a session pays for one resolution per
-      // configured provider, later requests reuse it for the TTL.
-      if (state.enabled && !state.pinned) await prepareSignInEligibility(ctx);
+      // configured provider, later requests reuse it for the TTL. Only a new
+      // user turn selects a model; continuations, retries, and direct requests
+      // dispatch the sticky or fallback model, so those waits would buy nothing.
+      if (requestReason === "user" && state.enabled && !state.pinned) await prepareSignInEligibility(ctx);
       if (v2Active) {
         if (!state.reliabilityV2ConfigValid) {
           rejectionCategory = "reliability_config_invalid";
