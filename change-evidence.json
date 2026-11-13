@@ -1,28 +1,96 @@
 {
   "schemaVersion": 1,
-  "base": "d501d118160d295e307943a683b3fa5679809b35",
+  "base": "44c77c8f0155facd57c77e78e93ffa61fd207df1",
   "contracts": [
     {
-      "id": "pre-push-evidence-check",
+      "id": "trusted-publisher-dependency-boundary",
       "requirement": "R16",
       "files": [
-        "package.json",
-        "scripts/acceptance/evidence-rebind.mjs",
-        "tests/evidence-rebind.test.mjs"
+        "scripts/ci-report.mjs",
+        "scripts/crap-history.mjs",
+        "scripts/crap-report.mjs",
+        "tests/ci-report-publish.test.mjs"
       ],
-      "boundary": "Validate committed PR candidate evidence locally against the explicit target base before pushing.",
-      "assertions": "The pre-push CLI rejects missing or stale bases, dirty tracked files and uncommitted declarations, and detects undeclared committed changes.",
+      "boundary": "The trusted publisher executes its real CLI without installed project dependencies.",
+      "assertions": "A push event is ignored successfully in an isolated dependency-free checkout; injecting a TypeScript import makes the same assertion fail. Existing trend rendering remains unchanged.",
       "boundaryTest": {
-        "file": "tests/evidence-rebind.test.mjs",
-        "name": "pre-push validates a committed candidate against an explicit base"
+        "file": "tests/ci-report-publish.test.mjs",
+        "name": "publisher starts from a dependency-free checkout for a push workflow event"
       },
       "invariant": {
-        "file": "tests/evidence-rebind.test.mjs",
-        "name": "exits 0 with the passed report and exits 1 on a stale diff report"
+        "file": "tests/crap-report.test.mjs",
+        "name": "renderTrend shows per-snapshot rows and the overall direction"
       },
       "fault": {
-        "file": "tests/evidence-rebind.test.mjs",
-        "name": "fault control: ignored evidence cannot make pre-push validation pass"
+        "file": "tests/ci-report-publish.test.mjs",
+        "name": "publisher starts from a dependency-free checkout for a push workflow event"
+      }
+    },
+    {
+      "id": "owned-merged-push-fixture",
+      "requirement": "R16",
+      "files": [
+        "tests/acceptance-runner.test.mjs"
+      ],
+      "boundary": "The actual acceptance caller handles an owned multi-commit push independent of checkout history.",
+      "assertions": "The fixture creates its own intermediate commit and the real caller passes, fails for context, witness and predecessor faults, then passes after restoration.",
+      "boundaryTest": {
+        "file": "tests/acceptance-runner.test.mjs",
+        "name": "merged-push checkout runs the actual workflow caller with event.before"
+      },
+      "invariant": {
+        "file": "tests/acceptance-runner.test.mjs",
+        "name": "single-commit checkout runs the actual workflow caller without inventing an intermediate"
+      },
+      "fault": {
+        "file": "tests/acceptance-runner.test.mjs",
+        "name": "merged-push checkout runs the actual workflow caller with event.before"
+      }
+    },
+    {
+      "id": "scoped-fixture-allowlists",
+      "requirement": "R16",
+      "files": [
+        ".gitleaksignore",
+        ".gitleaks.toml",
+        "scripts/test-gitleaks-pr-boundaries.sh",
+        "tests/tooling-config.test.mjs"
+      ],
+      "boundary": "The scanner suppresses only the reviewed generic-key fixtures at their exact test paths, independently of commit and line.",
+      "assertions": "Owned multi-commit and squash histories pass with the scoped exception and fail under default rules; the same fixture in a new commit is accepted while a different secret in the same file and the fixture at another path are detected.",
+      "boundaryTest": {
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the secret allowlist is scoped to the generic API key rule and exact values"
+      },
+      "invariant": {
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the secret allowlist check rejects a broad top-level allowlist"
+      },
+      "fault": {
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the secret allowlist check rejects weakening fixture path and value matching"
+      }
+    },
+    {
+      "id": "gitleaks-policy-guidance",
+      "requirement": "R16",
+      "files": [
+        "docs/dev-tooling.md",
+        "tests/performance-tooling.test.mjs"
+      ],
+      "boundary": "Developer guidance matches the configured generic-key fixture exceptions.",
+      "assertions": "The guide describes both existing global exact canaries and the additional exact path-and-value exceptions; obsolete value-only guidance fails the named assertion.",
+      "boundaryTest": {
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "the developer guide describes scoped Gitleaks fixture exceptions"
+      },
+      "invariant": {
+        "file": "tests/tooling-config.test.mjs",
+        "name": "the secret allowlist is scoped to the generic API key rule and exact values"
+      },
+      "fault": {
+        "file": "tests/performance-tooling.test.mjs",
+        "name": "fault control: outdated Gitleaks guidance fails the scoped policy assertion"
       }
     }
   ]

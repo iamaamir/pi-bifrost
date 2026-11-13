@@ -186,10 +186,25 @@ test("Knip treats Hyperfine as an optional host binary", () => {
   assert.match(knipConfig, /"ignoreBinaries"\s*:\s*\[[\s\S]*?"hyperfine"/u);
 });
 
-test("the developer guide documents Gitleaks canaries as value-only", () => {
+function assertScopedGitleaksGuidance(text) {
+  assert.match(text, /two exact synthetic canary values used by redaction fixtures\s+regardless of file path/u);
+  assert.match(text, /additional reviewed fixture values only when their exact test-file paths also match/u);
+  assert.match(text, /It does not allowlist whole files or other rules\./u);
+}
+
+test("the developer guide describes scoped Gitleaks fixture exceptions", () => {
   assert.match(gitleaksConfig, /id = "generic-api-key"/u);
-  assert.doesNotMatch(gitleaksConfig, /\bpaths\s*=/u);
-  assert.match(guide, /covers only the `generic-api-key`\s+rule\. It ignores two exact synthetic canary values used by redaction fixtures,\s+regardless of file path\. It does not allowlist other values or rules\./u);
+  assert.match(gitleaksConfig, /condition = "AND"[\s\S]*?regexTarget = "secret"[\s\S]*?paths = /u);
+  assertScopedGitleaksGuidance(guide);
+});
+
+test("fault control: outdated Gitleaks guidance fails the scoped policy assertion", () => {
+  const mutant = guide.replace("additional reviewed fixture values only when their exact test-file paths also match", "other fixture values regardless of file path");
+  assert.notEqual(mutant, guide);
+  assert.throws(() => assertScopedGitleaksGuidance(mutant), { code: "ERR_ASSERTION" });
+  const missingGlobal = guide.replace("two exact synthetic canary values used by redaction fixtures regardless of file path", "some fixture values");
+  assert.notEqual(missingGlobal, guide, "the global-canary mutation must apply");
+  assert.throws(() => assertScopedGitleaksGuidance(missingGlobal), { code: "ERR_ASSERTION" });
 });
 
 test("the developer guide names the committed tool configuration files", () => {

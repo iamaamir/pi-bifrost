@@ -2,7 +2,7 @@
 import { appendFileSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readHistory, renderTrend } from "./crap-report.mjs";
+import { readHistory, renderTrend } from "./crap-history.mjs";
 
 const REPORT_SCHEMA_VERSION = 1;
 const MAX_INPUT_BYTES = 8 * 1024 * 1024;
