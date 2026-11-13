@@ -135,7 +135,7 @@ function gitleaksScopeProblems(config) {
     if (!/^condition\s*=\s*"AND"\s*$/m.test(allowlist)
       || !/^regexTarget\s*=\s*"secret"\s*$/m.test(allowlist)
       || !/^paths\s*=\s*\['''\^tests\/[a-zA-Z0-9_/-]+(?:\\\.[a-zA-Z0-9_-]+)+\$'''\]\s*$/m.test(allowlist)
-      || !/^regexes\s*=\s*\['''\^[^'\n|*+?\[\]{}]+\$'''\]\s*$/m.test(allowlist)) {
+      || !/^regexes\s*=\s*\['''\^(?:\\[\\.^$*+?()[\]{}|]|[^'\\\n.^$*+?()[\]{}|])+\$'''\]\s*$/m.test(allowlist)) {
       problems.push("fixture allowlists must require an exact test path and exact secret");
     }
   }
@@ -156,6 +156,12 @@ test("the secret allowlist check rejects weakening fixture path and value matchi
   assert.ok(gitleaksScopeProblems(config.replace('condition = "AND"', 'condition = "OR"')).length > 0);
   assert.ok(gitleaksScopeProblems(config.replace("^tests/", "^tests/.*")).length > 0);
   assert.ok(gitleaksScopeProblems(config.replace(/^paths\s*=.*\n/m, "")).length > 0);
+  const wildcard = config.replace("^fixture/anchor$", "^fixture/anch.r$");
+  assert.notEqual(wildcard, config, "the secret-pattern mutation must apply");
+  assert.ok(gitleaksScopeProblems(wildcard).length > 0);
+  const escapedDot = config.replace("^fixture/anchor$", "^fixture/anch\\.r$");
+  assert.notEqual(escapedDot, config, "the escaped-punctuation control must apply");
+  assert.deepEqual(gitleaksScopeProblems(escapedDot), []);
 });
 
 test("Renovate pins action digests and requires approval for major upgrades", () => {
