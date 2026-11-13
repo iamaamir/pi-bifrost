@@ -770,6 +770,31 @@ function probeIssues(
 }
 
 /**
+ * Models a live probe may target: the resolved pools of the composed config,
+ * minus every candidate a hard provider scope forbids for its tier. Probing an
+ * excluded provider would spend a request on a model that can never be
+ * selected, which is exactly the credit the opt-in is meant to account for.
+ */
+function probeTargets(
+  result: ConfigAgentCheckResult,
+  catalog: ConfigAgentCatalog,
+): string[] {
+  const scope = compileRoutingScope(((result.effectiveAfter ?? {}) as BifrostConfig).routingScope);
+  const providerOf = new Map<string, string>();
+  for (const model of catalog.known) providerOf.set(model.key, model.provider);
+  for (const model of catalog.available) providerOf.set(model.key, model.provider);
+  const targets = new Set<string>();
+  for (const tier of result.routingAfter?.tiers ?? []) {
+    for (const key of probeModelKeys(tier.pool, catalog)) {
+      const provider = providerOf.get(key);
+      if (provider !== undefined && !checkProviderScope(scope, provider, { tier: tier.tier }).allowed) continue;
+      targets.add(key);
+    }
+  }
+  return [...targets].sort();
+}
+
+/**
  * Run the opt-in live check against the models a candidate would route to.
  * Advisory on purpose: a probe failure is evidence about the provider, not
  * proof that the candidate is wrong, so it warns and leaves the write eligible.
@@ -779,21 +804,26 @@ async function applyLiveProbe(
   catalog: ConfigAgentCatalog,
   deps: ConfigAgentToolDeps,
   ctx: ExtensionContext,
+  signal?: AbortSignal,
 ): Promise<ConfigAgentCheckResult> {
   if (result.status !== "ok") {
     return { ...result, notes: [...result.notes, "Live probe skipped: the candidate did not pass check."] };
   }
-  const pools = (result.routingAfter?.tiers ?? []).flatMap((tier) => [...tier.pool]);
-  const models = probeModelKeys(pools, catalog);
+  const models = probeTargets(result, catalog);
   if (models.length === 0) {
     return { ...result, notes: [...result.notes, "Live probe skipped: this candidate routes to no model the catalog knows."] };
   }
   if (!deps.probeModels) {
     return { ...result, notes: [...result.notes, "Live probe is unavailable in this host; nothing was sent."] };
   }
+  // A cancelled call must not start more provider requests; the transport gets
+  // the same signal so it can stop queued work it already owns.
+  if (signal?.aborted) {
+    return { ...result, notes: [...result.notes, "Live probe cancelled before it started; nothing was sent."] };
+  }
   let probed: readonly ConfigAgentProbeResult[];
   try {
-    probed = await deps.probeModels(models, ctx);
+    probed = await deps.probeModels(models, ctx, signal);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
@@ -804,11 +834,16 @@ async function applyLiveProbe(
   if (probed.length === 0) {
     return { ...result, notes: [...result.notes, "Live probe returned no result; nothing was written."] };
   }
+  const cancelled = signal?.aborted === true;
   return {
     ...result,
     liveProbe: probed,
-    issues: [...result.issues, ...probeIssues(probed)],
-    notes: [...result.notes, "Live probe sends one tiny prompt per model and spends a small amount of credit."],
+    // Partial results after a cancellation are shown but not turned into
+    // warnings: a stopped probe says nothing about the model it never reached.
+    issues: cancelled ? result.issues : [...result.issues, ...probeIssues(probed)],
+    notes: [...result.notes, cancelled
+      ? "Live probe was cancelled; the reported outcomes are partial and were not turned into warnings."
+      : "Live probe sends one tiny prompt per model and spends a small amount of credit."],
   };
 }
 
@@ -1897,6 +1932,7 @@ export interface ConfigAgentToolDeps {
   readonly probeModels?: (
     models: readonly string[],
     ctx: ExtensionContext,
+    signal?: AbortSignal,
   ) => Promise<readonly ConfigAgentProbeResult[]>;
   /** Render a result for the model. Injected by the host entry so this module
    * owns policy and IO only and the presentation module stays a leaf. */
@@ -2102,7 +2138,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
           break;
         case "check":
           result = checkConfigCandidate(input);
-          if (params.probe === true) result = await applyLiveProbe(result, catalog, deps, ctx);
+          if (params.probe === true) result = await applyLiveProbe(result, catalog, deps, ctx, signal);
           break;
         case "preview":
           result = await previewConfigCandidate({ ...input, now: nowOf() });

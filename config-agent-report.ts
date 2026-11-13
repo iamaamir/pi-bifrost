@@ -153,16 +153,19 @@ function renderCheck(result: ConfigAgentCheckResult): string {
   }
   if (result.newlyEligibleModels.length > 0) lines.push(`newly referenced models that are available: ${result.newlyEligibleModels.join(", ")}`);
   if (result.removedModels.length > 0) lines.push(`models no longer referenced by any tier: ${result.removedModels.join(", ")}`);
-  if (result.liveProbe) {
-    lines.push("live probe (one tiny prompt per model):");
-    for (const entry of result.liveProbe) {
-      lines.push(`  ${entry.model}: ${entry.status}${entry.reason ? ` -- ${entry.reason}` : ""}`);
-    }
-  }
   const warnings = result.issues.filter((issue) => issue.severity === "warning");
   if (warnings.length > 0) {
     lines.push("warnings:");
     for (const warning of warnings) lines.push(`  ${warning.message}`);
+  }
+  // Failures only, plus a count. A succeeded probe carries no decision, and one
+  // line per model would push the warnings above it out of the bounded report.
+  if (result.liveProbe) {
+    const failed = result.liveProbe.filter((entry) => entry.status === "error" || entry.status === "timeout");
+    lines.push(`live probe (one tiny prompt per model): ${result.liveProbe.length - failed.length}/${result.liveProbe.length} answered`);
+    for (const entry of failed) {
+      lines.push(`  ${entry.model}: ${entry.status}${entry.reason ? ` -- ${entry.reason}` : ""}`);
+    }
   }
   for (const note of result.notes) lines.push(`note: ${note}`);
   lines.push(`write eligible: ${result.writeEligible}`);
