@@ -1595,3 +1595,53 @@ describe("routing", () => {
 
   });
 });
+
+describe("opt-in sign-in eligibility (ADR 0026)", () => {
+  const dead = makeModel("dead", "one", 1);
+  const live = makeModel("live", "two", 2);
+
+  it("skips a provider whose sign-in cannot be resolved and selects the next candidate", () => {
+    const ctx = makeCtx([dead, live]);
+    const result = resolveModelWithFallback(ctx, {
+      requestedTier: "review",
+      requestedPattern: ["dead/one", "live/two"],
+      requestedStrategy: "first",
+      excludedBySignIn: (model) => model.provider === "dead",
+    });
+    assert.equal(modelKey(result.selected), "live/two");
+    assert.deepEqual(result.skipped, [{ key: "dead/one", reason: "sign_in_unavailable" }]);
+  });
+
+  it("fault control: without the predicate the same pool still selects the dead provider", () => {
+    // Proves the skip above comes from the eligibility function, not from the
+    // fixture or from a default exclusion.
+    const ctx = makeCtx([dead, live]);
+    const result = resolveModelWithFallback(ctx, {
+      requestedTier: "review",
+      requestedPattern: ["dead/one", "live/two"],
+      requestedStrategy: "first",
+    });
+    assert.equal(modelKey(result.selected), "dead/one");
+    assert.deepEqual(result.skipped, []);
+  });
+
+  it("keeps an explicit empty fallback boundary terminal when sign-in leaves the tier empty", () => {
+    const ctx = makeCtx([dead]);
+    const { resolution } = resolveConfiguredTier(
+      ctx,
+      "review",
+      { schemaVersion: 2, default: "review", models: { review: ["dead/one"] }, tierPolicies: { review: { fallbackTiers: [] } } },
+      undefined,
+      { ...DEFAULT_RELIABILITY, enabled: false },
+      Date.now(),
+      undefined,
+      undefined,
+      undefined,
+      (model) => model.provider === "dead",
+    );
+    assert.equal(resolution.selected, undefined);
+    assert.equal(resolution.explicitBoundary, true);
+    assert.ok(resolution.attemptedTiers?.every((attempt) => attempt.resolution.selected === undefined));
+    assert.deepEqual(resolution.attemptedTiers?.[0]?.resolution.skipped, [{ key: "dead/one", reason: "sign_in_unavailable" }]);
+  });
+});

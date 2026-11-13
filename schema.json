@@ -67,6 +67,11 @@
       "$ref": "#/definitions/RoutingScope",
       "description": "Hard provider allowlists for Bifrost-controlled routing. This is an eligibility filter, not a preference: no strategy, affinity anchor, fallback, or recovery may select a provider outside the effective scope. Omitted means no additional restriction; an empty array means deny-all. Configuration layers intersect, so a later source can only narrow. Requires schemaVersion 2 or 3."
     },
+    "signInEligibility": {
+      "type": "string",
+      "enum": ["off", "exclude"],
+      "description": "Provider sign-in eligibility for Bifrost-controlled routing. `exclude` resolves each configured provider's sign-in, which may refresh an expired OAuth token, once per Auto request behind a short-lived per-session cache, then removes a provider whose credential cannot be resolved from every candidate pool before selection. A tier whose only model is dead then fails inside its own boundary instead of ending the turn on the provider error. An unresolved check never excludes. Omitted or `off` dispatches exactly as before. Requires schemaVersion 2 or 3."
+    },
     "enabled": {
       "type": "boolean",
       "description": "Enable or disable routing. When disabled, Bifrost does not switch models for new turns. Pi uses the selected physical model.",
@@ -628,6 +633,14 @@
           "categoryStrategies": { "properties": { "description": { "type": "string", "description": "Inline section metadata. Reserved in schemaVersion 3; never a tier name." } } },
           "classifier": { "properties": { "criteria": { "properties": { "description": { "type": "string", "description": "Inline section metadata. Reserved in schemaVersion 3; never a criterion." } } } } }
         }
+      }
+    },
+    {
+      "x-bifrost-effective-only": true,
+      "if": { "required": ["signInEligibility"] },
+      "then": {
+        "properties": { "schemaVersion": { "enum": [2, 3] } },
+        "required": ["schemaVersion"]
       }
     },
     {

@@ -99,7 +99,7 @@ export interface ConfigAgentProviderAuth {
 }
 
 /** The registry surface auth resolution needs; both members are optional on older hosts. */
-interface ConfigAgentAuthRegistry {
+export interface ConfigAgentAuthRegistry {
   getProviderAuthStatus?(provider: string): { configured: boolean; source?: string };
   getProviderAuth?(provider: string): Promise<unknown>;
 }
@@ -580,7 +580,7 @@ export function catalogDigest(catalog: ConfigAgentCatalog): string {
  * an expired token; it never sends a model request. Failures are reported, not
  * thrown: this signal is advisory.
  */
-async function resolveProviderAuth(
+export async function resolveProviderAuth(
   registry: ConfigAgentAuthRegistry,
   providers: readonly string[],
   options: { signal?: AbortSignal } = {},
