@@ -48,6 +48,7 @@ import { loadConfigForReload, loadRules } from "./config-load.ts";
 import {
   resolveConfiguredTier,
   findCandidates,
+  lastModelFallbackAllowed,
   modelKey,
   type ConfiguredTierResolution,
   type RoutedModelResolution,
@@ -1086,6 +1087,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     classifierMetricsStore,
     extensionDir,
     getAffinityAnchor: affinityAnchor,
+    // Read-only: a command view never triggers a credential resolution.
+    getSignInExclusions: cachedSignInExclusions,
     effectiveClassifierBackend: (targetConfig, ctx) => ctx
       ? effectiveClassifierFor(ctx, targetConfig)
       : effectiveBackendOf(targetConfig, detectionEngine),
@@ -2540,23 +2543,19 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return bootstrapVerifiedSelectionConfig(ctx) ?? state.config;
   }
 
-  /** Providers the configured pools name, including bare entries matched by model id. */
-  function configuredPoolProviders(
-    config: BifrostConfig,
-    registry: ExtensionContext["modelRegistry"],
-  ): string[] {
+  /**
+   * Providers the configured pools can select. Discovery goes through the same
+   * `findCandidates` the router uses, so a bare entry that matches by substring
+   * of a model id or provider name (`"dead"`) resolves to the providers it can
+   * actually reach; matching only exact ids here would let an unchecked
+   * provider through the exclusion.
+   */
+  function configuredPoolProviders(config: BifrostConfig, ctx: ExtensionContext): string[] {
     const providers = new Set<string>();
-    const catalog = typeof registry.getAll === "function" ? registry.getAll() ?? [] : registry.getAvailable() ?? [];
     for (const pool of Object.values(config.models ?? {})) {
       for (const entry of Array.isArray(pool) ? pool : [pool]) {
-        if (typeof entry !== "string") continue;
-        const slash = entry.indexOf("/");
-        if (slash > 0) {
-          providers.add(entry.slice(0, slash));
-          continue;
-        }
-        const lower = entry.toLowerCase();
-        for (const model of catalog) if (model.id.toLowerCase() === lower) providers.add(model.provider);
+        if (typeof entry !== "string" || entry.trim() === "") continue;
+        for (const model of findCandidates(ctx, entry)) providers.add(model.provider);
       }
     }
     return [...providers];
@@ -2571,12 +2570,15 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     }
     const cached = signInEligibilityBySession.get(session);
     if (cached && Date.now() - cached.at < SIGN_IN_ELIGIBILITY_TTL_MS) return;
-    const providers = configuredPoolProviders(signInEligibilityConfig(ctx), ctx.modelRegistry);
+    const providers = configuredPoolProviders(signInEligibilityConfig(ctx), ctx);
     if (providers.length === 0) {
       signInEligibilityBySession.set(session, { at: Date.now(), providers: new Set() });
       return;
     }
-    const resolved = await resolveProviderAuth(ctx.modelRegistry, providers);
+    const resolved = await resolveProviderAuth(ctx.modelRegistry, providers, { signal: ctx.signal });
+    // A cancelled wait is not a result: caching it would pin an empty exclusion
+    // set for the TTL and hide a dead provider the next turn could have found.
+    if (ctx.signal?.aborted) return;
     // An unresolved check is not proof: only a resolution Pi reports as dead
     // excludes, because a transient failure must not route away from a
     // provider that would have answered.
@@ -2586,11 +2588,16 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     signInEligibilityBySession.set(session, { at: Date.now(), providers: excluded });
   }
 
-  function signInExclusionFor(ctx: ExtensionContext): ((model: Model<Api>) => boolean) | undefined {
+  /** Exclusions the router may apply now: the cached set, never a new request. */
+  function cachedSignInExclusions(ctx: ExtensionContext): ReadonlySet<string> | undefined {
     if (signInEligibilityConfig(ctx).signInEligibility !== "exclude") return undefined;
-    const cached = signInEligibilityBySession.get(ctx.sessionManager);
-    if (!cached || cached.providers.size === 0) return undefined;
-    return (model) => cached.providers.has(model.provider);
+    return signInEligibilityBySession.get(ctx.sessionManager)?.providers;
+  }
+
+  function signInExclusionFor(ctx: ExtensionContext): ((model: Model<Api>) => boolean) | undefined {
+    const cached = cachedSignInExclusions(ctx);
+    if (!cached || cached.size === 0) return undefined;
+    return (model) => cached.has(model.provider);
   }
 
   function resolveForTier(
@@ -3145,7 +3152,16 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               reason: resolved.fallbackReason,
               skipped: resolved.skipped,
               reserveExcluded: reserveExclusionSummary(resolved),
-              explicitBoundary: !!activeRecoveryToken || resolved.explicitBoundary || hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config) || v2Active || blockedStickyModel || (!!lastPhysical && !configuredLastModel),
+              // A dead provider the sign-in check excluded must not be revived by
+              // the keep-last-model path: that path exists to reuse a working
+              // model, not to re-send a request the filter just ruled out.
+              explicitBoundary: !!activeRecoveryToken || resolved.explicitBoundary || hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config) || v2Active || blockedStickyModel
+                || (!!lastPhysical && !configuredLastModel)
+                || (lastPhysical !== undefined && !lastModelFallbackAllowed({
+                  lastPhysical,
+                  candidates: [...resolved.primary.candidates, ...(resolved.fallback?.candidates ?? [])],
+                  excludedBySignIn: signInExclusionFor(ctx),
+                })),
               ...(blockedStickyModel ? {
                 message: `Bifrost: the last dispatched model is on an active model-only allowance cooldown and no configured alternative resolved for tier ${classification.tier}; no model was dispatched.`,
               } : {}),

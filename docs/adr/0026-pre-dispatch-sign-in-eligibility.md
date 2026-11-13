@@ -55,7 +55,7 @@ The advisory-only shape (`observe`) was dropped. The signal already exists in `i
 - **No state invention.** The exclusion must not write a fabricated circuit or pause, so `/bifrost inspect` and the reliability store never claim a provider failure that did not happen.
 - **No replay.** The rule holds that failed user work is never automatically rerun. Shape A acts strictly before dispatch; any failure after dispatch keeps today's behavior.
 - **Physical selection stays physical.** A pinned model is never swapped.
-- **Default off.** `observe` is the default; `exclude` is explicit configuration.
+- **Default off.** Absent or `"off"` disables the check; `"exclude"` is explicit configuration.
 
 ## Consequences
 

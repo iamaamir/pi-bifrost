@@ -15,6 +15,7 @@ import {
   buildConfigAgentCatalog,
   createBifrostConfigTool,
   configAgentConfigDigest,
+  resolveProviderAuth,
   type ConfigAgentApplyResult,
   type ConfigAgentCheckResult,
   type ConfigAgentInspectResult,
@@ -2269,5 +2270,34 @@ describe("effective classifier runtime in the agent tool", () => {
     } finally {
       harness.cleanup();
     }
+  });
+});
+
+describe("resolveProviderAuth waits", () => {
+  it("reports a slow resolution as unknown rather than a dead sign-in", async () => {
+    // Pre-dispatch resolution may not outlast the caller's patience: a budget
+    // that ends must not turn a slow refresh into an exclusion.
+    const result = await resolveProviderAuth(
+      { getProviderAuth: () => new Promise((resolve) => setTimeout(() => resolve({ auth: { apiKey: "late" } }), 50)) } as any,
+      ["slow"],
+      { timeoutMs: 5 },
+    );
+    assert.equal(result.length, 1);
+    assert.equal(result[0].state, "unknown");
+    assert.match(result[0].reason ?? "", /did not resolve within 5ms/);
+  });
+
+  it("stops asking after the caller cancels", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let calls = 0;
+    const result = await resolveProviderAuth(
+      { getProviderAuth: async () => { calls += 1; return null; } } as any,
+      ["alpha"],
+      { signal: controller.signal },
+    );
+    assert.equal(calls, 0);
+    assert.equal(result[0].state, "unknown");
+    assert.match(result[0].reason ?? "", /cancelled before sign-in could be resolved/);
   });
 });

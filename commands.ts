@@ -101,6 +101,12 @@ export interface BifrostState {
   onManualControl?: (session: ExtensionContext["sessionManager"], action?: "on" | "off" | "pin" | "unpin") => void;
   /** Read-only projection of the current branch-local successful Auto anchor. */
   getAffinityAnchor?: (ctx: ExtensionContext) => AffinityAnchor | undefined;
+  /**
+   * Providers Auto would currently skip for sign-in reasons, read from the
+   * session cache. Absent until a turn has resolved it, so a view can say the
+   * signal is unresolved instead of implying every provider is ready.
+   */
+  getSignInExclusions?: (ctx: ExtensionContext) => ReadonlySet<string> | undefined;
   classifierMetricsStore: ClassifierMetricsStore;
   extensionDir: string;
   /** Uses the extension instance's sticky detector without locking on context-free facts. */
@@ -291,6 +297,9 @@ function formatCandidateLines(
     const reserve = reserves.get(key);
     if (skippedCandidate) {
       if (skippedCandidate.reason === "provider_not_allowed") return `xx ${key} (${reasonLabel("provider_not_allowed")})`;
+      // Sign-in and every other non-circuit skip carry no openUntil; printing
+      // "open circuit until unknown" for them was a lie in the old code.
+      if (skippedCandidate.reason === "sign_in_unavailable") return `xx ${key} (${reasonLabel("sign_in_unavailable")})`;
       const until = skippedCandidate.openUntil
         ? new Date(skippedCandidate.openUntil).toISOString()
         : "unknown";
@@ -320,6 +329,8 @@ export type BifrostTierDisplay = {
   fallbackReason?: string;
   requestedCandidateLines: string[];
   fallbackCandidateLines: string[];
+  /** Set when the configured sign-in check has no session result to apply. */
+  signInNote?: string;
   defaultTier?: string;
   explicitBoundary?: true;
   attemptedTiers?: Array<{ tier: string; strategy: string; candidates: string[] }>;
@@ -353,7 +364,7 @@ function inspectAffinity(state: BifrostState, ctx: ExtensionContext): AffinityIn
   };
 }
 
-function resolveTierDisplay(
+export function resolveTierDisplay(
   tier: string,
   state: BifrostState,
   ctx: ExtensionContext,
@@ -380,6 +391,17 @@ function resolveTierDisplay(
         && state.config.reliability?.allowanceCooldownScope !== "model",
     );
   }
+  // Preview reuses the session's cached exclusions instead of resolving auth
+  // again: the command stays offline, and the model it names is the model the
+  // next Auto turn would actually select.
+  const signInMode = state.enabled && state.config.signInEligibility === "exclude";
+  const signInExcluded = signInMode ? state.getSignInExclusions?.(ctx) : undefined;
+  const excludedBySignIn = signInExcluded && signInExcluded.size > 0
+    ? (model: { readonly provider: string }) => signInExcluded.has(model.provider)
+    : undefined;
+  const signInNote = signInMode && signInExcluded === undefined
+    ? "sign-in eligibility is enabled but has not been resolved in this session; this view may name a provider the next Auto turn skips"
+    : undefined;
   const { options, resolution: resolved } = resolveConfiguredTier(
     ctx,
     tier,
@@ -392,6 +414,7 @@ function resolveTierDisplay(
       : undefined,
     undefined,
     affinity,
+    excludedBySignIn,
   );
   const explicitBoundary = resolved.explicitBoundary === true;
   const defaultTier = explicitBoundary ? undefined : options.defaultTier;
@@ -417,6 +440,7 @@ function resolveTierDisplay(
     fallbackReason: resolved.fallbackReason,
     requestedCandidateLines,
     fallbackCandidateLines,
+    ...(signInNote ? { signInNote } : {}),
     defaultTier,
     ...(explicitBoundary ? {
       explicitBoundary: true as const,
@@ -1650,6 +1674,8 @@ export type BifrostPreviewSuccess = {
   readonly fallbackReason?: string;
   readonly requestedCandidates: string[];
   readonly fallbackCandidates: string[];
+  /** Present when the sign-in check is configured but unresolved in this session. */
+  readonly signInNote?: string;
   readonly defaultTier?: string;
   readonly selected?: string;
   readonly fallbackBoundary?: "explicit";
@@ -1727,6 +1753,7 @@ export function buildPreviewReport(input: {
     ...(display.fallbackReason !== undefined ? { fallbackReason: display.fallbackReason } : {}),
     requestedCandidates: display.requestedCandidateLines,
     fallbackCandidates: display.fallbackCandidateLines,
+    ...(display.signInNote !== undefined ? { signInNote: display.signInNote } : {}),
     ...(display.defaultTier !== undefined ? { defaultTier: display.defaultTier } : {}),
     ...(display.selected !== undefined ? { selected: display.selected } : {}),
     ...(display.explicitBoundary ? {
@@ -1826,6 +1853,7 @@ export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
     `strategy:  ${report.strategy}`,
     `selected tier: ${report.selectedTier ?? PREVIEW_NONE}`,
     ...(report.fallbackReason ? [`fallback:  ${report.fallbackReason}`] : []),
+    ...(report.signInNote ? [`sign-in:  ${report.signInNote}`] : []),
     `requested candidates (${report.tier}):`,
     ...report.requestedCandidates,
     ...(report.fallbackCandidates.length > 0 && report.defaultTier && report.defaultTier !== report.tier
