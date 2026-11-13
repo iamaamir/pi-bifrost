@@ -12,25 +12,11 @@ Some contracts need a different boundary. The resolve-only API uses an installed
 
 Two local provider fixtures exist. `scripts/fake-provider-server.mjs` is an HTTP server. Use it to check transport behavior: HTTP status codes, `retry-after`, stream failures, and full `pi` CLI runs. Pi's `fauxProvider` runs in-process. Use it to check dispatch identity, because it reports an exact `callCount` and the exact model argument. Reach it through `tests/fixtures/faux-harness.mjs`. That harness runs a fixture child behind the outbound guard with a credential-scrubbed environment, then opens a real AgentSession with the real Bifrost extension.
 
-Before review, run `npm run verify:release` on a clean, frozen candidate. Attach its result manifest to the reviewed revision. If source changes during the run, rerun the full command on the final candidate. Partial reruns do not replace a failed manifest. The reviewer checks this map against the changed behavior and checks that assertions can fail for the reported regression.
+Before review, run `npm run verify:release` on a clean, frozen candidate. Attach its result manifest to the reviewed revision. If source changes during the run, rerun the full command on the final candidate. Partial reruns do not replace a failed manifest. Run `npm run acceptance` for the deterministic acceptance profile; it checks its retained required named tests against completed Node test events. For pull requests, CI runs acceptance on the PR head and proposed merge; push acceptance binds to the pushed `after` SHA. Review the results against the changed behavior. There is no per-file automated coverage mapping. The reviewer decides whether tests and assertions are relevant and can detect the reported regression.
 
-## Per-change executed evidence
+## Per-change review evidence
 
-PR acceptance requires a tracked `change-evidence.json` declaration. Set `schemaVersion` to `1` and `base` to the PR base commit's full SHA. Update the branch when that base is no longer an ancestor. The declaration must match the current PR base; an older declaration fails.
-
-Each entry in `contracts` has a unique `id`, a requirement (`R01` through `R17`), exact changed `files`, a `boundary`, and observable `assertions`. Cover every changed file, including tests, documentation and workflows. The declaration itself is excluded from this list. File renames count as deletion and addition.
-
-Each contract declares `boundaryTest`, `invariant`, and `fault`. Each dimension is either `{ "file": "tests/example.test.ts", "name": "exact Node test name" }` or `{ "exception": "specific reason this dimension does not apply" }`. The fault case must assert that a controlled faulty implementation fails the intended assertion. A failure caused by invalid input alone does not establish fault sensitivity.
-
-The existing deterministic acceptance run checks each test reference against its completed Node events. Missing, duplicate, failed, skipped and TODO cases fail acceptance. References use exact repository-relative paths and exact case names. This first version supports the Node unit and integration events already captured by the runner. For a boundary outside that capture, document the exception and its separate evidence for review.
-
-For a local run, set `BIFROST_EVIDENCE_BASE` to the full base SHA and run `npm run acceptance`. CI reads the PR base from the GitHub event instead. Acceptance records the declaration in its result, alongside the existing start/end revision and source fingerprints. The declaration does not embed its own commit SHA, which would change whenever the declaration is committed.
-
-After merging a published base into a branch, rebind and check the declaration with `node scripts/acceptance/evidence-rebind.mjs <base-ref> --apply`. The helper resolves the base as a real commit, validates that it is an ancestor of HEAD, rewrites the declaration's `base` when `--apply` is given, and reports every declared file that is outside the candidate diff and every changed file that is undeclared. It checks the candidate-diff structure only; the acceptance run still validates named test references against real test events.
-
-Take a merge through its local checks after committing it. The workflow-acceptance tests compute the merge predecessor from committed history, and the candidate-stable gate refuses a dirty working tree, so an uncommitted merge fails them misleadingly.
-
-The validator checks declared test execution, not semantic adequacy. An independent reviewer must judge contract completeness, assertions, fault controls and exception rationales on the exact head. A declaration is not an approval. This change does not activate automatic merging or alter branch protection. Push and manual runs without an explicit base retain the existing release gates. The PR workflow must first be adopted before this requirement is operational; existing PRs are not modified by this local implementation.
+Describe the changed behavior, relevant test boundaries, and checks actually run. Include failures and limitations. The retained named checks validate execution, not semantic adequacy or file coverage. The reviewer must judge whether tests exercise the changed behavior and whether assertions can detect the reported regression. Use a focused fault control when needed. Do not claim automatic coverage from the acceptance runner.
 
 ## Release feature map
 

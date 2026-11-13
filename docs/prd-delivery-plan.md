@@ -1,6 +1,6 @@
 # PRD delivery execution plan
 
-**Status:** active — CI required for current PR branch tip; see PR #186 checks
+**Status:** archived historical plan for PR #186; its operational steps are obsolete
 
 **Base:** `origin/v2`
 
@@ -8,7 +8,7 @@
 
 **Last updated:** 2026-10-24
 
-This is a durable runbook for completing feasible PRD acceptance work. It is not release approval. `docs/acceptance-coverage.md` remains the requirement-status record; `change-evidence.json` remains the per-change evidence contract.
+This document records the PR #186 delivery plan and its historical recovery log. Do not use its old per-change evidence or rebind steps as current instructions. See [`testing-coverage.md`](testing-coverage.md) for current review evidence guidance. This document is not release approval.
 
 ## Delivery graph
 
