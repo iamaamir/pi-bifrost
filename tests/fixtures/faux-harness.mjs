@@ -361,7 +361,7 @@ function resolveModel(runtime, key) {
  *
  * Returns per-provider faux handles plus the recorded dispatch invocations.
  */
-export async function startFauxHarness({ scratch, bifrost, providers, startModel, selectModel, wipeEnv = false, preserveEnv = [] }) {
+export async function startFauxHarness({ scratch, bifrost, providers, startModel, selectModel, wipeEnv = false, preserveEnv = [], uncredentialedProviders = [] }) {
   assertCredentialsAbsent("faux");
   const previous = { cwd: process.cwd(), env: { ...process.env } };
   if (wipeEnv) {
@@ -403,6 +403,26 @@ export async function startFauxHarness({ scratch, bifrost, providers, startModel
     for (const faux of handles) {
       runtime.registerNativeProvider(faux.provider);
       await runtime.setRuntimeApiKey(faux.provider.id, "fixture-only");
+    }
+    // An `uncredentialedProviders` entry is a configured provider with no
+    // credential at all: Pi's auth status reports it as not configured and its
+    // auth does not resolve. A native faux provider always resolves, so this is
+    // the only honest way to give a real session a dead sign-in.
+    for (const { provider, models } of uncredentialedProviders) {
+      runtime.registerProvider(provider, {
+        name: provider,
+        api: "openai-completions",
+        baseUrl: "http://127.0.0.1:9/v1",
+        models: models.map(({ id }) => ({
+          id,
+          name: id,
+          reasoning: false,
+          input: ["text"],
+          contextWindow: 8_000,
+          maxTokens: 1_000,
+          cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+        })),
+      });
     }
     await runtime.refresh({ allowNetwork: false });
     const { default: bifrostExtension } = await import(join(REPO_ROOT, "index.ts"));
