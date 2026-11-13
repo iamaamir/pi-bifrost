@@ -111,6 +111,8 @@ describe("configure-bifrost skill packaging", () => {
     assert.match(text, /For exact changes within the current 2,000,000-character\s+approval bound/);
     assert.match(text, /Larger exact\s+changes fail closed before the dialog; no summary is shown and nothing is\s+written/);
     assert.match(text, /Do not retry or split the same proposal into multiple writes/);
+    assert.match(text, /Run the live probe only after the user agrees/);
+    assert.match(text, /sends one tiny prompt per model/);
   });
 
   it("treats preservation guidance as advisory and requires candidate-by-candidate review", () => {
