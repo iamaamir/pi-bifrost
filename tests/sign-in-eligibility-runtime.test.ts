@@ -24,6 +24,8 @@ interface FixtureOptions {
   readonly models?: readonly Model<Api>[];
   readonly fallbackTiers?: readonly string[];
   readonly deadProviders?: readonly string[];
+  /** Pool entries verbatim; default names every inventory model in full. */
+  readonly pool?: readonly string[];
 }
 
 function fixture(options: FixtureOptions = {}) {
@@ -43,7 +45,7 @@ function fixture(options: FixtureOptions = {}) {
     default: "review",
     strategy: "first",
     ...(options.eligibility === undefined ? {} : { signInEligibility: options.eligibility }),
-    models: { review: inventory.map((model) => `${model.provider}/${model.id}`) },
+    models: { review: [...(options.pool ?? inventory.map((model) => `${model.provider}/${model.id}`))] },
     ...(options.fallbackTiers === undefined
       ? {}
       : { tierPolicies: { review: { fallbackTiers: [...options.fallbackTiers] } } }),
@@ -125,6 +127,20 @@ describe("pre-dispatch sign-in eligibility through the Auto route", { concurrenc
       const result = await h.route();
       assert.equal(`${result.model.provider}/${result.model.id}`, "live/two");
       assert.ok(h.authCalls.includes("dead"), "the dead provider must be resolved before dispatch");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("checks a provider reached only by a bare pool entry", async () => {
+    // Routing matches a bare entry against provider and model-id substrings, so
+    // "dead" can select dead/one. Discovery for the check must use the same
+    // rules or that provider escapes the exclusion entirely.
+    const h = fixture({ eligibility: "exclude", pool: ["dead", "live"] });
+    try {
+      const result = await h.route();
+      assert.equal(`${result.model.provider}/${result.model.id}`, "live/two");
+      assert.ok(h.authCalls.includes("dead"), "the bare entry's provider must be resolved before dispatch");
     } finally {
       h.cleanup();
     }

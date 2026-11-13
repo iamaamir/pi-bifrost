@@ -183,6 +183,25 @@ export function findCandidates<M extends RoutingModelBase>(
   return findCandidatePool(ctx, pattern).candidates;
 }
 
+/**
+ * Whether the keep-last-model path may still dispatch `lastPhysicalKey`.
+ *
+ * That path exists to reuse a model that was working and is still configured.
+ * A model the sign-in check excluded is neither: re-sending to it spends the
+ * request the exclusion was meant to prevent, so exclusion wins over "it was
+ * last time's model". An absent last model means there is no path to allow.
+ */
+export function lastModelFallbackAllowed<M extends RoutingModelBase>(input: {
+  lastPhysical: M | undefined;
+  candidates: readonly M[];
+  excludedBySignIn?: (candidate: M) => boolean | undefined;
+}): boolean {
+  if (input.lastPhysical === undefined) return false;
+  if (input.excludedBySignIn?.(input.lastPhysical) === true) return false;
+  const key = modelKey(input.lastPhysical);
+  return input.candidates.some((candidate) => modelKey(candidate) === key);
+}
+
 /** First element achieving the minimum score — matches stable-sort[0] tie-breaking.
  * Precondition: scores are finite numbers (Model cost/contextWindow are typed finite).
  * Unlike sort, the score function is not invoked for a single candidate. */
