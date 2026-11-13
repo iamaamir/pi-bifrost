@@ -2618,6 +2618,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       signInEligibilityBySession.delete(ctx.sessionManager);
       return undefined;
     }
+    // An expired answer is not evidence either: preview must report the
+    // signal as unresolved instead of repeating an exclusion the next Auto
+    // turn is already due to re-check.
+    if (Date.now() - entry.at >= SIGN_IN_ELIGIBILITY_TTL_MS) return undefined;
     return entry.excluded;
   }
 
@@ -3044,6 +3048,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               state.lastRegistryRefreshAt = Date.now();
               state.forceRegistryRefresh = false;
               discardAllClassifierPipelines();
+              // The refresh can make a configured provider selectable for the
+              // first time, and the answer cached before it covered the pools
+              // as they were. Ask again before those pools can pick it.
+              await prepareSignInEligibility(ctx);
             } catch (error) {
               updateRegistryInventoryEvidence(state, ctx);
               if (signal?.aborted) {
@@ -3149,6 +3157,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               state.lastRegistryRefreshAt = Date.now();
               state.forceRegistryRefresh = false;
               discardAllClassifierPipelines();
+              // An empty pool can become selectable only because of this
+              // refresh, so the pre-refresh sign-in answer cannot cover it.
+              await prepareSignInEligibility(ctx);
               routeStart = performance.now();
               attempt = resolveForTier(ctx, classification.tier, affinity);
               routingDurationMs += +(performance.now() - routeStart).toFixed(3);
