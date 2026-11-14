@@ -441,9 +441,11 @@ export function loadRules(cwd: string, config: BifrostConfig): RouteRule[] {
   ];
 
   for (const p of routeFiles) {
+    if (!existsSync(p)) continue;
     const rules = readJson<RouteRule[]>(p);
-    // A mistyped route file must not reach compileRules, which iterates rules.
-    if (Array.isArray(rules)) return rules;
+    // An existing override owns precedence even when malformed; fail closed
+    // instead of silently activating lower-priority or configured rules.
+    return Array.isArray(rules) ? rules : [];
   }
 
   return Array.isArray(config.rules) ? config.rules : DEFAULT_RULES;

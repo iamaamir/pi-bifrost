@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { Worker } from "node:worker_threads";
 import {
   chmodSync,
+  existsSync,
   fsyncSync,
   mkdtempSync,
   readFileSync,
@@ -15,10 +16,12 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  createTextFile,
   readJsonFile,
   resolveStoragePath,
   writeJsonFile,
   writeTextFile,
+  writeTextFileExclusiveWithOperations,
   writeTextFileWithOperations,
   type AtomicWriteOperations,
 } from "../storage.ts";
@@ -81,6 +84,43 @@ describe("storage", () => {
       if (process.platform !== "win32") assert.equal(statSync(path).mode & 0o777, 0o600);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("creates an exclusive managed file without replacing an existing target", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-storage-"));
+    try {
+      const path = join(cwd, "receipt.json");
+      createTextFile(path, "complete receipt");
+      assert.throws(() => createTextFile(path, "replacement"), (error: NodeJS.ErrnoException) => error.code === "EEXIST");
+      assert.equal(readFileSync(path, "utf8"), "complete receipt");
+      assert.deepEqual(tempFiles(cwd), []);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("does not publish an exclusive managed file after write or fsync failure", () => {
+    for (const [name, overrides] of [
+      ["write", {
+        writeFileSync: ((fd: number) => {
+          writeFileSync(fd, "partial", "utf8");
+          throw new Error("injected exclusive write failure");
+        }) as AtomicWriteOperations["writeFileSync"],
+      }],
+      ["fsync", {
+        fsyncSync: (() => { throw new Error("injected exclusive fsync failure"); }) as AtomicWriteOperations["fsyncSync"],
+      }],
+    ] as const) {
+      const cwd = mkdtempSync(join(tmpdir(), `bifrost-storage-${name}-`));
+      try {
+        const path = join(cwd, "receipt.json");
+        assert.throws(() => writeTextFileExclusiveWithOperations(path, "complete receipt", overrides));
+        assert.equal(existsSync(path), false);
+        assert.deepEqual(tempFiles(cwd), []);
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
     }
   });
 

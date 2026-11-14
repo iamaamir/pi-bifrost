@@ -150,7 +150,7 @@ Set one global fallback and override individual tiers. In `.pi/bifrost.json`:
 }
 ```
 
-`random` occurs only when configured explicitly, and the built-in default does configure it: `quick` uses `random`, while `general` and `frontier` use `first`. Set a tier's strategy yourself if you want a stable choice there. `fastest` is not live latency routing; it behaves as `first` over current list order.
+`random` occurs only when configured explicitly. `/bifrost init` proposes `random` for `quick` and `first` for `general` and `frontier`; runtime config that omits `categoryStrategies` uses the global `strategy` instead. `fastest` is not live latency routing; it behaves as `first` over current list order.
 
 ## Tier rules
 
@@ -171,7 +171,9 @@ Regex rules are case-insensitive and evaluated in configured order. First match 
 }
 ```
 
-Despite the property name `model`, a rule value without `/` names a tier.
+Despite the property name `model`, a rule value without `/` names a tier. When no source defines `rules`, built-in rules are retained only for tier names present in `models`; custom tier sets therefore do not inherit rules for absent `quick`, `general`, or `frontier` tiers.
+
+A route-file override owns its precedence even when malformed. If `.pi/bifrost-routes.json` exists but is not a JSON array, Bifrost logs the parse error when applicable and disables regex rules instead of falling through to `bifrost-routes.json` or configured rules.
 
 Rules run synchronously on Pi's event loop, so a pattern that can backtrack without bound is rejected instead of being matched. Bifrost logs the rejection and skips that rule, and the prompt falls through to the next rule, the classifier, or the default tier. Rejected shapes are a quantified group whose body carries another variable quantifier (for example `(a+)+`) and an alternation whose branches split the same text ambiguously (for example `(a|aa)+`). Fixed-brace repetition, single-letter alternations such as `(a|b)+`, and noncapturing groups keep working. Test a rule with `/bifrost preview <prompt>` before committing it.
 

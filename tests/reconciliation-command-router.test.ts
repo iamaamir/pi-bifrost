@@ -291,14 +291,17 @@ describe("config reconciliation command router", () => {
     await withCwd(async (cwd) => {
       const configDir = join(cwd, ".pi");
       fs.mkdirSync(configDir, { recursive: true });
-      fs.writeFileSync(join(configDir, "bifrost.json"), JSON.stringify({ models: { general: ["openai/cached-model", "manual/legacy"] } }));
+      const configPath = join(configDir, "bifrost.json");
+      const originalConfig = Buffer.from('{ "models" : { "general" : ["openai/cached-model", "manual/legacy"] } }\n');
+      fs.writeFileSync(configPath, originalConfig);
       writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
         { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
       ]);
       const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
       await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
-      const config = JSON.parse(fs.readFileSync(join(configDir, "bifrost.json"), "utf8")) as { models: Record<string, string[]> };
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models: Record<string, string[]> };
       const receipt = JSON.parse(fs.readFileSync(join(configDir, "bifrost-reconcile-ownership.json"), "utf8"));
+      assert.deepEqual(fs.readFileSync(configPath), originalConfig);
       assert.deepEqual(receipt.sources, {});
       assert.equal(config.models.general.includes("openai/cached-model"), true);
       assert.equal(config.models.general.includes("manual/legacy"), true);

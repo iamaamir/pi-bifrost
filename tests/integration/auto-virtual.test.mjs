@@ -561,12 +561,24 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
         assert.deepEqual(saved.models, { quick: ["fake/healthy"], frontier: [] });
         assert.equal(saved.enabled, true);
         assert.equal(saved.strategy, "first");
-        assert.deepEqual(saved.categoryStrategies, { quick: "first", frontier: "first" });
-        // Public baseline settings stay in code defaults; only user-provided
-        // values are serialized into the starter config.
-        assert.equal(saved.cache, undefined);
-        assert.equal(saved.reliability, undefined);
-        assert.equal(saved.debug, undefined);
+        assert.deepEqual(saved.categoryStrategies, { quick: "random", frontier: "first" });
+        assert.deepEqual(saved.classifier, {
+          enabled: true,
+          model: "fake/healthy",
+          method: "auto",
+          maxTokens: 20,
+          temperature: 0,
+          fallbackToRegex: true,
+        });
+        assert.deepEqual(saved.cache, { enabled: true, maxEntries: 500, threshold: 1 });
+        assert.deepEqual(saved.reliability, {
+          enabled: true,
+          cooldownOnAllowanceExhausted: true,
+          failureThreshold: 3,
+          windowMinutes: 5,
+          cooldownMinutes: 60,
+        });
+        assert.deepEqual(saved.debug, { enabled: false });
 
         const beforeVerifiedTurn = await fakeStats(server.port);
         await rpc.userTurn("frontier say after verification");

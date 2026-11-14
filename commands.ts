@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { constants, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { loadRuntimeState, runtimeStatePath, type ClassifierEnablement, type RuntimeStateIssue } from "./runtime-state.ts";
+import { createTextFile } from "./storage.ts";
 import type { BifrostConfig, ClassifierConfig } from "./config.ts";
 import { BUNDLED_PUBLIC_INIT_DEFAULTS, DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, MAX_CONFIG_SOURCE_BYTES, PROMPT_ONLY_FIELDS, classifierConfigErrors, classifierTotalTimeoutIssue, schemaVersionAtLeast, validateConfig, validateEconomicConfig, validateTierPolicyConfig } from "./config.ts";
 import { loadConfigForReload, loadConfigWithSourceOverride, readBoundedConfigText, type ConfigLoadDiagnostic } from "./config-load.ts";
@@ -1250,7 +1251,18 @@ async function handleInit(
           };
           changes = [];
         } else {
-          log(ctx, "The refreshed catalog has no safe membership or settings changes; no files were changed.");
+          if (source.ownershipBytes !== null) {
+            log(ctx, "The refreshed catalog has no safe membership or settings changes; no files were changed.");
+            return;
+          }
+          // Empty ownership claims make existing entries explicitly manual without rewriting config.
+          const ownershipText = JSON.stringify({ version: 1, sources: {} }, null, 2) + "\n";
+          try { createTextFile(source.ownershipPath, ownershipText); }
+          catch {
+            log(ctx, "Init could not safely create the ownership receipt; existing config was preserved.", "error");
+            return;
+          }
+          log(ctx, "Created the ownership receipt; existing config was preserved.");
           return;
         }
       } else {
