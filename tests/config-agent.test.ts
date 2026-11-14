@@ -275,12 +275,11 @@ describe("agent-facing configuration inspection", () => {
 
       assert.equal(details.routing.defaultTier, "fast");
       assert.equal(details.routing.schemaVersion, 2);
-      // The bundled extension layer always contributes the three baseline tiers.
       const tiers = new Map(details.routing.tiers.map((tier) => [tier.tier, tier]));
       assert.deepEqual(tiers.get("fast")?.pool, ["beta/code"]);
       assert.deepEqual(tiers.get("strict")?.pool, ["alpha/strong"]);
       assert.deepEqual(tiers.get("strict")?.fallbackTiers, []);
-      assert.deepEqual(tiers.get("general")?.pool, []);
+      assert.equal(tiers.has("general"), false);
       assert.equal(details.issues.filter((issue) => issue.severity === "error").length, 0);
 
       // The inventory mirrors the registry, including cost and context metadata.
@@ -847,6 +846,7 @@ describe("preview is offline, deterministic, and non-mutating", () => {
           default: "implement",
           models: { implement: ["beta/code"], review: ["gamma/review"] },
           classifier: { enabled: true },
+          rules: [{ pattern: "\\breview\\b", model: "review" }],
         },
         prompts: ["make the change", "please review this diff"],
       }));
@@ -1675,9 +1675,9 @@ describe("tool surface", () => {
     const harness = freshHarness();
     try {
       const preview = detailsOf<ConfigAgentPreviewResult>(await harness.run({ operation: "preview", prompts: ["hello"] }));
-      assert.equal(preview.status, "ok");
+      assert.equal(preview.status, "blocked");
       assert.equal(preview.proposalDigest, null);
-      const checked = await harness.run({ operation: "check", patch: { default: "quick" } });
+      const checked = await harness.run({ operation: "check", patch: { default: "quick", models: { quick: ["beta/code"] } } });
       const handle = contentOf(checked).match(/proposalHandle: ([a-f0-9]{12})/)?.[1];
       assert.ok(handle);
       const applied = detailsOf<ConfigAgentApplyResult>(await harness.run({ operation: "apply", proposalHandle: handle }));
@@ -1689,7 +1689,7 @@ describe("tool surface", () => {
   it("retains the last successful handle after a failed check", async () => {
     const harness = freshHarness({ confirm: false });
     try {
-      const checked = await harness.run({ operation: "check", patch: { default: "quick" } });
+      const checked = await harness.run({ operation: "check", patch: { default: "quick", models: { quick: ["beta/code"] } } });
       const handle = contentOf(checked).match(/proposalHandle: ([a-f0-9]{12})/)?.[1];
       assert.ok(handle);
       const invalid = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", patch: { classifier: { criteria: 42 } } }));
@@ -1703,7 +1703,7 @@ describe("tool surface", () => {
   it("rejects handles across session replacement and with extra candidate fields", async () => {
     const harness = freshHarness();
     try {
-      const checked = await harness.run({ operation: "check", source: "workspace", patch: { default: "quick" } });
+      const checked = await harness.run({ operation: "check", source: "workspace", patch: { default: "quick", models: { quick: ["beta/code"] } } });
       const handle = contentOf(checked).match(/proposalHandle: ([a-f0-9]{12})/)?.[1];
       assert.ok(handle);
       const extra = detailsOf<ConfigAgentApplyResult>(await harness.run({ operation: "apply", proposalHandle: handle, patch: { default: "general" } }));
@@ -1722,7 +1722,7 @@ describe("tool surface", () => {
   it("rejects a stale handle without writing", async () => {
     const harness = freshHarness();
     try {
-      const checked = await harness.run({ operation: "check", patch: { default: "quick" } });
+      const checked = await harness.run({ operation: "check", patch: { default: "quick", models: { quick: ["beta/code"] } } });
       const handle = contentOf(checked).match(/proposalHandle: ([a-f0-9]{12})/)?.[1];
       assert.ok(handle);
       harness.writeFile(".pi/bifrost.json", { default: "general" });

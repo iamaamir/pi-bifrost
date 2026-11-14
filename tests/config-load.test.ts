@@ -13,6 +13,41 @@ function writeJson(path: string, value: unknown): void {
 }
 
 describe("config load", () => {
+  it("falls back to built-in rules when configured rules are not an array", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
+    const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
+    try {
+      writeJson(join(cwd, ".pi", "bifrost.json"), {
+        default: "quick",
+        models: { quick: ["fixture/quick"] },
+        rules: { pattern: "mistyped", model: "quick" },
+      });
+      const config = loadConfig(cwd, extensionDir);
+      assert.deepEqual(loadRules(cwd, config), DEFAULT_RULES);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(extensionDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to configured rules when a route file is not an array", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
+    const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
+    try {
+      writeJson(join(cwd, ".pi", "bifrost.json"), {
+        default: "quick",
+        models: { quick: ["fixture/quick"] },
+        rules: [],
+      });
+      writeJson(join(cwd, ".pi", "bifrost-routes.json"), { pattern: "mistyped", model: "quick" });
+      const config = loadConfig(cwd, extensionDir);
+      assert.deepEqual(loadRules(cwd, config), []);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(extensionDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses in-code defaults when config files missing", () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
     const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
@@ -25,11 +60,7 @@ describe("config load", () => {
     try {
       const config = loadConfig(cwd, extensionDir);
       assert.equal(config.default, "general");
-      assert.deepEqual(config.categoryStrategies, {
-        quick: "random",
-        general: "first",
-        frontier: "first",
-      });
+      assert.equal(config.categoryStrategies, undefined);
       assert.deepEqual(config.models, {});
       assert.equal(config.rules, DEFAULT_RULES);
       assert.deepEqual(loadRules(cwd, config), DEFAULT_RULES);
@@ -42,7 +73,7 @@ describe("config load", () => {
     }
   });
 
-  it("merges extension, global, cwd, and project configs in order", () => {
+  it("does not let the package starter file add runtime tiers to custom config", () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
     const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
     const home = mkdtempSync(join(tmpdir(), "bifrost-home-"));
@@ -54,15 +85,62 @@ describe("config load", () => {
     try {
       writeJson(join(extensionDir, "bifrost.json"), {
         enabled: false,
-        default: "quick",
-        strategy: "cheapest",
-        categoryStrategies: { quick: "cheapest" },
+        default: "general",
+        models: { quick: [], general: [], frontier: [] },
+        categoryStrategies: { quick: "random", general: "first", frontier: "first" },
+      });
+      writeJson(join(cwd, ".pi", "bifrost.json"), {
+        default: "light",
         models: {
-          quick: ["ext-quick"],
-          general: ["ext-general"],
+          trivial: ["fixture/trivial"],
+          light: ["fixture/light"],
+          heavy: ["fixture/heavy"],
+          critical: ["fixture/critical"],
+        },
+        categoryStrategies: {
+          trivial: "first",
+          light: "first",
+          heavy: "first",
+          critical: "first",
         },
       });
 
+      const config = loadConfig(cwd, extensionDir);
+      assert.equal(config.enabled, true);
+      assert.equal(config.default, "light");
+      assert.deepEqual(config.models, {
+        trivial: ["fixture/trivial"],
+        light: ["fixture/light"],
+        heavy: ["fixture/heavy"],
+        critical: ["fixture/critical"],
+      });
+      assert.deepEqual(config.categoryStrategies, {
+        trivial: "first",
+        light: "first",
+        heavy: "first",
+        critical: "first",
+      });
+      assert.deepEqual(config.rules, []);
+      assert.deepEqual(loadRules(cwd, config), []);
+    } finally {
+      process.env.HOME = oldHome;
+      process.env.PI_CODING_AGENT_DIR = oldAgentDir;
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(extensionDir, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("merges global, cwd, and project configs in order", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
+    const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
+    const home = mkdtempSync(join(tmpdir(), "bifrost-home-"));
+    const agentDir = join(home, "agent");
+    const oldHome = process.env.HOME;
+    const oldAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.HOME = home;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
       writeJson(join(getAgentDir(), "bifrost.json"), {
         default: "frontier",
         categoryStrategies: { general: "cheapest" },
@@ -85,9 +163,7 @@ describe("config load", () => {
       assert.equal(config.default, "frontier");
       assert.equal(config.strategy, "random");
       assert.deepEqual(config.categoryStrategies, {
-        quick: "cheapest",
         general: "cheapest",
-        frontier: "first",
       });
       assert.deepEqual(config.models, {
         quick: ["project-quick"],
@@ -113,11 +189,11 @@ describe("config load", () => {
     process.env.HOME = home;
     process.env.PI_CODING_AGENT_DIR = agentDir;
     try {
-      writeJson(join(extensionDir, "bifrost.json"), { classifier: { criteria: {
+      writeJson(join(getAgentDir(), "bifrost.json"), { classifier: { criteria: {
         quick: { what: "bounded", examples: ["format"] },
         frontier: "complex",
+        general: "normal",
       } } });
-      writeJson(join(getAgentDir(), "bifrost.json"), { classifier: { criteria: { general: "normal" } } });
       writeJson(join(cwd, "bifrost.json"), { classifier: { criteria: {
         quick: { notFor: "architecture" },
         frontier: null,
@@ -347,7 +423,7 @@ describe("config load", () => {
   it("bounds config reads while following symlinks to regular config files", () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
     const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
-    const configPath = join(extensionDir, "bifrost.json");
+    const configPath = join(cwd, "bifrost.json");
     const targetPath = join(extensionDir, "linked-config.json");
     try {
       writeJson(targetPath, { models: { general: ["fixture/linked"] } });

@@ -101,7 +101,7 @@ describe("direct classifier degradation at the registered Auto route", () => {
         if (fetchMode === "success") {
           const payload = {
             model: "jev-1.13.0",
-            answers: { tier: { type: "choice", choice: "quick", confidence: 0.95, probabilities: { quick: 0.95, general: 0.025, frontier: 0.025 } } },
+            answers: { tier: { type: "choice", choice: "quick", confidence: 0.95, probabilities: { quick: 1 } } },
           };
           return new Response(JSON.stringify(payload), { status: 200 });
         }

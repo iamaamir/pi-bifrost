@@ -101,10 +101,12 @@ export function serializeBootstrapConfig(
   if (typeof source.enabled === "boolean") result.enabled = source.enabled;
   if (typeof source.strategy === "string" && strategySet.has(source.strategy)) result.strategy = source.strategy;
   const categoryStrategies = plainRecord(source.categoryStrategies);
-  if (categoryStrategies) {
-    result.categoryStrategies = Object.fromEntries(Object.entries(categoryStrategies)
-      .filter((entry) => typeof entry[1] === "string" && strategySet.has(entry[1])));
-  }
+  result.categoryStrategies = Object.fromEntries(Object.keys(generatedModels).map((tier) => [
+    tier,
+    typeof categoryStrategies?.[tier] === "string" && strategySet.has(categoryStrategies[tier] as string)
+      ? categoryStrategies[tier]
+      : "first",
+  ]));
   if (Array.isArray(source.rules)) {
     const rules = source.rules.filter((rule) => !!rule && typeof rule.pattern === "string" && typeof rule.model === "string")
       .map(({ pattern, model }) => ({ pattern, model }));
