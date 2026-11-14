@@ -16,9 +16,15 @@ const live = process.env.BIFROST_SIGN_IN_LIVE;
 const dead = process.env.BIFROST_SIGN_IN_DEAD;
 const order = JSON.parse(process.env.BIFROST_SIGN_IN_ORDER ?? "[]");
 const mode = process.env.BIFROST_SIGN_IN_MODE === "exclude" ? "exclude" : "off";
+// The terminal-boundary scenario: only a provider that cannot sign in, and an
+// explicit empty fallback list. The turn must fail closed rather than borrow
+// another tier or send the request the check exists to stop.
+const terminal = process.env.BIFROST_SIGN_IN_TERMINAL === "1";
 assert.ok(live && dead, "BIFROST_SIGN_IN_LIVE and BIFROST_SIGN_IN_DEAD are required by the parent");
 
-it(mode === "exclude"
+it(terminal
+  ? `fails closed when sign-in leaves the ${dead} tier empty at an explicit boundary`
+  : mode === "exclude"
   ? `dispatches the ${live} provider and never calls the unauthenticated ${dead} provider`
   : `fault control: without the opt-in the unauthenticated ${dead} provider is attempted`, async () => {
   assertCredentialsAbsent("sign-in-eligibility");
@@ -30,7 +36,7 @@ it(mode === "exclude"
       default: "general",
       strategy: "first",
       signInEligibility: mode,
-      models: { general: order },
+      models: { general: terminal ? [dead] : order },
       rules: [],
       classifier: { enabled: false },
       cache: { enabled: false },
@@ -48,6 +54,16 @@ it(mode === "exclude"
     selectModel: "bifrost/auto",
   });
   try {
+    if (terminal) {
+      // An explicit `fallbackTiers: []` boundary is terminal: no request is sent
+      // and no other tier is borrowed to hide the dead provider.
+      await harness.session.prompt("synthetic sign-in eligibility request");
+      // Nothing was dispatched and nothing answered: the boundary is terminal.
+      assert.equal(harness.session.getLastAssistantText(), undefined);
+      assert.deepEqual(harness.invocations, []);
+      assertProviderCallCounts(harness.providers, { [live]: 0 });
+      return;
+    }
     if (mode === "off") {
       // The dead provider heads the pool, so the unchecked route selects it and
       // the missing credential ends the turn. That failed turn is the control: it
