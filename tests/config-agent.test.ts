@@ -16,6 +16,7 @@ import {
   createBifrostConfigTool,
   configAgentConfigDigest,
   resolveProviderAuth,
+  PROBE_OUTPUT_TOKEN_CAP,
   type ConfigAgentApplyResult,
   type ConfigAgentCheckResult,
   type ConfigAgentProbeResult,
@@ -23,6 +24,7 @@ import {
   type ConfigAgentPreviewResult,
 } from "../config-agent.ts";
 import { reportText } from "../config-agent-report.ts";
+import { PROBE_MAX_TOKENS } from "../probe.ts";
 import type { ConfigApproval } from "../config-approval.ts";
 import { SUPPORTED_SCHEMA_VERSIONS, type BifrostConfig } from "../config.ts";
 import { loadConfigForReload } from "../config-load.ts";
@@ -778,6 +780,13 @@ describe("provider sign-in state", () => {
     } finally {
       approved.cleanup();
     }
+  });
+
+  it("states the same output cap the probe transport enforces", () => {
+    // Policy states the number; the adapter enforces it. They are separate
+    // modules by the architecture rule, so this is the seam that keeps the
+    // consent text honest if either number moves.
+    assert.equal(PROBE_OUTPUT_TOKEN_CAP, PROBE_MAX_TOKENS);
   });
 
   it("counts a probe against what it requested, not what came back", async () => {
