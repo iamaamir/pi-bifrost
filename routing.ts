@@ -339,7 +339,7 @@ export interface RoutedModelResolution<M extends RoutingModelBase = RoutingModel
   selected: M | undefined;
   strategy: RoutingStrategy;
   skipped: SkippedCandidate[];
-  fallbackReason?: "requested_tier_unhealthy" | "requested_tier_unavailable" | "requested_tier_excluded" | "requested_tier_provider_excluded" | "all_tiers_exhausted";
+  fallbackReason?: "requested_tier_unhealthy" | "requested_tier_unavailable" | "requested_tier_excluded" | "requested_tier_provider_excluded" | "sign_in_unavailable" | "all_tiers_exhausted";
   primary: HealthyModelResolution<M>;
   fallback?: HealthyModelResolution<M>;
   /** Ordered pools attempted when an explicit tierPolicies boundary is active. */
@@ -617,11 +617,21 @@ function scopeRejected(pool: HealthyModelResolution): boolean {
   return pool.skipped.some((candidate) => candidate.reason === "provider_not_allowed");
 }
 
+/**
+ * Every skipped candidate was stopped by sign-in eligibility. Such a pool is
+ * empty for a reason the reliability store knows nothing about, so calling it
+ * unhealthy would send the user to the wrong place.
+ */
+function signInOnlySkipped(pool: HealthyModelResolution): boolean {
+  return pool.skipped.length > 0 && pool.skipped.every((candidate) => candidate.reason === "sign_in_unavailable");
+}
+
 /** Distinguish reliability, provider-scope, and reserve exclusions for one pool. */
 function tierExclusionReason(
   pool: HealthyModelResolution,
   reserveExcludedPool: boolean,
 ): RoutedModelResolution["fallbackReason"] {
+  if (signInOnlySkipped(pool)) return "sign_in_unavailable";
   if (unreliableSkipped(pool) > 0) return "requested_tier_unhealthy";
   if (scopeRejected(pool)) return "requested_tier_provider_excluded";
   if (reserveExcludedPool) return "requested_tier_excluded";

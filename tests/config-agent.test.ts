@@ -2733,6 +2733,27 @@ describe("resolveProviderAuth waits", () => {
     assert.match(result[0].reason ?? "", /did not resolve within 5ms/);
   });
 
+  it("bounds the whole resolution, not just each provider", async () => {
+    // Sequential per-provider waits alone scale with configuration size: thirty
+    // unresponsive providers would hold the turn for two minutes. The total
+    // budget ends the wait, and every provider it did not reach stays `unknown`,
+    // which never excludes.
+    const providers = Array.from({ length: 6 }, (_, index) => `hang${index}`);
+    const started = Date.now();
+    let calls = 0;
+    const result = await resolveProviderAuth(
+      { getProviderAuthStatus: () => ({ configured: true }), getProviderAuth: () => { calls += 1; return new Promise(() => {}); } } as any,
+      providers,
+      { timeoutMs: 40, totalBudgetMs: 100 },
+    );
+    const elapsed = Date.now() - started;
+    assert.equal(result.length, providers.length);
+    assert.ok(elapsed < 400, `resolution must stop at the total budget, took ${elapsed}ms`);
+    assert.ok(calls < providers.length, `the budget must stop asking, asked ${calls} times`);
+    assert.deepEqual(result.map((entry) => entry.state), providers.map(() => "unknown"));
+    assert.match(result.at(-1)?.reason ?? "", /reached its 100ms budget before this provider was checked/);
+  });
+
   it("stops asking after the caller cancels", async () => {
     const controller = new AbortController();
     controller.abort();

@@ -601,6 +601,14 @@ function boundedAuthReason(error: unknown): string {
 export const SIGN_IN_RESOLUTION_TIMEOUT_MS = 4_000;
 
 /**
+ * How long the whole resolution may take. Per-provider waits alone bound a wait
+ * by provider count (N x 4s), which is unbounded in practice for a large
+ * configuration; this caps the total regardless of size. Providers that the
+ * budget does not reach are reported `unknown`, which never excludes.
+ */
+export const SIGN_IN_TOTAL_BUDGET_MS = 8_000;
+
+/**
  * Resolve each provider's stored sign-in through Pi's registry. Pi's
  * synchronous auth status only reports that a credential is stored, not that it
  * works, so a dead OAuth refresh is invisible to `getProviderAuthStatus` and
@@ -616,13 +624,26 @@ export const SIGN_IN_RESOLUTION_TIMEOUT_MS = 4_000;
 export async function resolveProviderAuth(
   registry: ConfigAgentAuthRegistry,
   providers: readonly string[],
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  options: { signal?: AbortSignal; timeoutMs?: number; totalBudgetMs?: number } = {},
 ): Promise<ConfigAgentProviderAuth[]> {
   const timeoutMs = options.timeoutMs ?? SIGN_IN_RESOLUTION_TIMEOUT_MS;
+  const totalBudgetMs = options.totalBudgetMs ?? SIGN_IN_TOTAL_BUDGET_MS;
+  const started = Date.now();
   const resolved: ConfigAgentProviderAuth[] = [];
   for (const provider of [...new Set(providers)].sort()) {
     if (options.signal?.aborted) {
       resolved.push({ provider, state: "unknown", reason: "the request was cancelled before sign-in could be resolved" });
+      continue;
+    }
+    // Stop waiting once the total budget is spent: the remaining providers are
+    // reported unchecked, not assumed dead, and dispatch is not held longer.
+    const spent = Date.now() - started;
+    if (spent >= totalBudgetMs) {
+      resolved.push({
+        provider,
+        state: "unknown",
+        reason: `sign-in resolution reached its ${totalBudgetMs}ms budget before this provider was checked`,
+      });
       continue;
     }
     let source: string | undefined;
@@ -648,7 +669,9 @@ export async function resolveProviderAuth(
       continue;
     }
     try {
-      const auth = await withTimeout(registry.getProviderAuth(provider), timeoutMs, options.signal);
+      // A provider may only consume what is left of the total budget.
+      const waitMs = Math.max(1, Math.min(timeoutMs, totalBudgetMs - spent));
+      const auth = await withTimeout(registry.getProviderAuth(provider), waitMs, options.signal);
       if (auth === AUTH_WAIT_ENDED) {
         resolved.push({
           provider,
@@ -656,7 +679,7 @@ export async function resolveProviderAuth(
           ...(source ? { source } : {}),
           reason: options.signal?.aborted
             ? "the request was cancelled before sign-in could be resolved"
-            : `sign-in did not resolve within ${timeoutMs}ms`,
+            : `sign-in did not resolve within ${waitMs}ms`,
         });
         continue;
       }

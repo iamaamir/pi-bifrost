@@ -26,6 +26,10 @@ interface FixtureOptions {
   readonly deadProviders?: readonly string[];
   /** Pool entries verbatim; default names every inventory model in full. */
   readonly pool?: readonly string[];
+  /** Configured regex rules (direct-model or tier). */
+  readonly rules?: readonly { readonly pattern: string; readonly model: string }[];
+  /** Simulate a host whose registry cannot resolve sign-in at all. */
+  readonly withoutAuthResolver?: boolean;
 }
 
 function fixture(options: FixtureOptions = {}) {
@@ -48,10 +52,10 @@ function fixture(options: FixtureOptions = {}) {
     default: "review",
     strategy: "first",        ...(options.eligibility === undefined ? {} : { signInEligibility: options.eligibility }),
     models: { review: [...(options.pool ?? inventory.map((model) => `${model.provider}/${model.id}`))] },
+    rules: [...(options.rules ?? [])],
     ...(options.fallbackTiers === undefined
       ? {}
       : { tierPolicies: { review: { fallbackTiers: [...options.fallbackTiers] } } }),
-    rules: [],
     classifier: { enabled: false },
     reliability: { enabled: true },
   };
@@ -75,12 +79,14 @@ function fixture(options: FixtureOptions = {}) {
       getAll: () => inventory,
       find: (provider: string, id: string) => inventory.find((model) => model.provider === provider && model.id === id),
       getProviderAuthStatus: () => ({ configured: true, source: "stored" }),
-      getProviderAuth: async (provider: string) => {
-        authCalls.push(provider);
-        if (authGate?.provider === provider) await authGate.promise;
-        if (dead.has(provider)) throw new Error("token refresh failed");
-        return { auth: { apiKey: "resolved" } };
-      },
+      ...(options.withoutAuthResolver ? {} : {
+        getProviderAuth: async (provider: string) => {
+          authCalls.push(provider);
+          if (authGate?.provider === provider) await authGate.promise;
+          if (dead.has(provider)) throw new Error("token refresh failed");
+          return { auth: { apiKey: "resolved" } };
+        },
+      }),
       // A refresh is the moment the registry learns about models it did not
       // report before, so it can make a configured provider selectable.
       refresh: async () => {
@@ -148,6 +154,11 @@ function fixture(options: FixtureOptions = {}) {
         ...(options.previous === undefined ? {} : { previous: options.previous }),
       } as unknown as ModelRouteRequest, ctx);
     },
+    /** Run one `/bifrost <line>` command the way the command router would. */
+    async command(line: string): Promise<unknown> {
+      assert.ok(commandHandler, "the extension must register the bifrost command");
+      return commandHandler(line, ctx);
+    },
     /** Run the inline `/bifrost preview` command and capture its rendered lines. */
     async preview(): Promise<string> {
       assert.ok(commandHandler, "the extension must register the bifrost command");
@@ -201,6 +212,23 @@ describe("pre-dispatch sign-in eligibility through the Auto route", { concurrenc
       const result = await h.route();
       assert.equal(`${result.model.provider}/${result.model.id}`, "live/two");
       assert.ok(h.authCalls.includes("dead"), "the bare entry's provider must be resolved before dispatch");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("checks a provider reached only by a direct-model rule", async () => {
+    // A regex rule pointing at `provider/id` bypasses the tier pools, so the
+    // sign-in check must enumerate it separately; otherwise that provider is
+    // never resolved and can be dispatched unchecked.
+    const h = fixture({
+      eligibility: "exclude",
+      pool: ["live/two"],
+      rules: [{ pattern: "review", model: "dead/one" }],
+    });
+    try {
+      try { await h.route(); } catch { /* excluded direct model yields no route */ }
+      assert.ok(h.authCalls.includes("dead"), "the direct rule's provider must be resolved before dispatch");
     } finally {
       h.cleanup();
     }
@@ -353,6 +381,65 @@ describe("pre-dispatch sign-in eligibility through the Auto route", { concurrenc
       assert.equal(h.authCalls.filter((provider) => provider === "dead").length, 2,
         "the reload must force a fresh resolution inside the same turn");
       assert.ok(!h.dispatched.includes("dead/one"), "the reloaded pool's dead provider must not dispatch");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("resolves nothing for a pinned session and leaves the model alone", async () => {
+    // Pin means the user chose the model. Swapping it would be the one thing the
+    // manual control exists to prevent, so preparation never even starts.
+    const h = fixture({ eligibility: "exclude" });
+    try {
+      await h.command("pin");
+      // Pinning itself selects the physical model; the routed turn must add no
+      // dispatch and spend no resolution, because there is nothing to swap.
+      const dispatchedAtPin = h.dispatched.length;
+      await assert.rejects(h.route(), /virtual auto is disabled or pinned/);
+      assert.deepEqual(h.authCalls, [], "a pinned session must not spend a sign-in resolution");
+      assert.equal(h.dispatched.length, dispatchedAtPin);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("keeps a provider eligible when the host cannot resolve sign-in at all", async () => {
+    // `unknown` is not proof of a dead credential. A registry with no resolver
+    // must leave the configured order intact instead of excluding everything.
+    const h = fixture({ eligibility: "exclude", withoutAuthResolver: true });
+    try {
+      const result = await h.route();
+      assert.equal(`${result.model.provider}/${result.model.id}`, "dead/one");
+      assert.deepEqual(h.authCalls, []);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("does not revive an excluded model as the last-model fallback", async () => {
+    // The keep-last path exists to reuse a model that was working. One the
+    // exclusion ruled out is not that, so the fallback may not spend the request
+    // the exclusion was meant to prevent.
+    const h = fixture({ eligibility: "exclude" });
+    try {
+      const previous = h.inventory.find((model) => model.provider === "dead")!;
+      const result = await h.route({ previous: { model: previous, thinkingLevel: "low" } });
+      assert.equal(`${result.model.provider}/${result.model.id}`, "live/two");
+      assert.ok(!h.dispatched.includes("dead/one"), "the excluded model must not be revived");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("names sign-in when preview explains why a tier is empty", async () => {
+    // The preview reads the settled answer from the cache, so the turn above has
+    // to have produced one. What matters is that the exclusion is attributed to
+    // sign-in rather than to the reliability store.
+    const h = fixture({ eligibility: "exclude", models: [makeModel("dead", "only", 1)] });
+    try {
+      await assert.rejects(h.route());
+      const preview = await h.preview();
+      assert.match(preview, /provider sign-in unavailable/);
     } finally {
       h.cleanup();
     }
