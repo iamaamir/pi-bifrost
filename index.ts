@@ -3541,6 +3541,32 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     pi.registerTool(createBifrostConfigTool({
       extensionDir,
       reload: (ctx) => reloadBifrostConfig(state, ctx),
+      // Opt-in live check for the configuration tool. `probe.ts` owns the
+      // transport; this adapter only maps catalog keys to models and back, so
+      // core policy never sends a provider request on its own.
+      probeModels: async (models, ctx, signal) => {
+        const wanted = new Set(models);
+        const targets = ctx.modelRegistry.getAll()
+          .filter((model) => wanted.has(`${model.provider}/${model.id}`));
+        if (targets.length === 0) return [];
+        // The check promises one tiny prompt per model, so the streaming
+        // attempt is the only request: an empty streamed answer is reported as
+        // an error instead of falling back to a second session-backed prompt.
+        // Its results stay out of the init cache: they answer a narrower
+        // question, and `/bifrost init` must not inherit a failure for an hour.
+        const { results } = await runProbe(ctx, {
+          ...probeOptionsFromConfig(state.config.probe),
+          models: targets,
+          signal,
+          sessionFallback: false,
+          persist: false,
+        });
+        return results.map((result) => ({
+          model: `${result.provider}/${result.model}`,
+          status: result.status,
+          ...(result.error ? { reason: result.error } : {}),
+        }));
+      },
       classifierRuntime: (targetConfig, ctx) => {
         const sessionOverride = classifierSessionFor(ctx.sessionManager).override;
         const projectedEnabled = targetConfig.classifier?.enabled !== false;

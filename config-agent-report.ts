@@ -158,6 +158,29 @@ function renderCheck(result: ConfigAgentCheckResult): string {
     lines.push("warnings:");
     for (const warning of warnings) lines.push(`  ${warning.message}`);
   }
+  // Scope and cost are stated whether or not the probe ran, so a caller can ask
+  // before spending anything. The denominator is what was requested, not what
+  // came back: a transport that returned fewer outcomes must not read as a full
+  // pass.
+  if (result.probePlan && result.probePlan.length > 0) {
+    const planned = result.liveProbe ? "live probe targets" : "live probe not run";
+    lines.push(`${planned}: ${result.probePlan.length} model(s), one request each -- ${result.probePlan.join(", ")}`);
+    if (!result.liveProbe) lines.push("  run it only with probe: true after the user agrees; a plain check sends nothing");
+  }
+  // Failures only, plus a count. A succeeded probe carries no decision, and one
+  // line per model would push the warnings above it out of the bounded report.
+  if (result.liveProbe) {
+    const answered = result.liveProbe.filter((entry) => entry.status === "ok");
+    const skipped = result.liveProbe.filter((entry) => entry.status === "skipped");
+    const failed = result.liveProbe.filter((entry) => entry.status === "error" || entry.status === "timeout");
+    const requested = result.probePlan?.length ?? result.liveProbe.length;
+    lines.push(`live probe (one tiny prompt per model): ${answered.length}/${requested} answered${skipped.length > 0 ? `, ${skipped.length} skipped` : ""}${result.liveProbe.length < requested ? `, ${requested - result.liveProbe.length} without a reported outcome` : ""}`);
+    if (skipped.length > 0) lines.push(`  ${skipped.length} model${skipped.length === 1 ? "" : "s"} not asked (check cancelled before the request completed)`);
+    if (result.liveProbe.length < requested) lines.push(`  ${requested - result.liveProbe.length} model${requested - result.liveProbe.length === 1 ? "" : "s"} were requested but produced no outcome; treat them as unverified, not as passing`);
+    for (const entry of failed) {
+      lines.push(`  ${entry.model}: ${entry.status}${entry.reason ? ` -- ${entry.reason}` : ""}`);
+    }
+  }
   for (const note of result.notes) lines.push(`note: ${note}`);
   lines.push(`write eligible: ${result.writeEligible}`);
   const tail = [

@@ -69,6 +69,21 @@ goal needs something Bifrost does not do, say so.
    will fail on its first routed turn even though check returns `ok`: report it,
    and either move that tier to a provider whose sign-in resolves or ask the user
    to sign in before applying. Never apply such a tier silently.
+
+   When a provider's sign-in state is `unknown`, or the user asks for proof that
+   a tier really answers before you apply it, the check can run a live probe:
+   one request per model the candidate routes to, each capped at 5 output
+   tokens. Plain check never probes; it reports `probePlan` with the exact
+   models and count the probe would cover. Show that plan to the user, and only
+   then repeat check with `"probe":true`. In the TUI the host asks for a second,
+   explicit confirmation before sending anything; if the user declines, nothing
+   is sent. On a host with no dialog (RPC or headless) your `"probe":true` is
+   the authorization, so never pass it before the user agrees in the
+   conversation, and say plainly that you asked for it. Report each model's
+   outcome. A `config.probe_failed` warning means that model did not answer; it
+   does not block the write, so say what failed and let the user decide. A probe
+   that reports fewer outcomes than targets leaves the rest unverified, not
+   passing.
 5. **Preview routing outcomes.** Call `bifrost_config` with
    `{"operation":"preview", ...}` and 2–5 representative prompts drawn from the
    user's real work. To preview current disk configuration, omit candidate and patch. Preview is offline: it sends nothing anywhere. Read each
@@ -217,9 +232,12 @@ it was opened.
 
 - Do not edit configuration files by hand or with shell tools; use the tool so
   validation, layering, and writes stay safe.
-- Do not run `/bifrost init`, model probing, or a registry refresh to satisfy a
-  goal: those operations can send provider requests and spend credits. Work with
-  the inventory `inspect` reports, including its provider sign-in state.
+- Do not run `/bifrost init`, model probing, or a registry refresh on your own
+  initiative to satisfy a goal: those operations can send provider requests and
+  spend credits. Work with the inventory `inspect` reports, including its
+  provider sign-in state. The one exception is the tool's own live probe, which
+  stays opt-in: ask first, say that it sends one tiny prompt per model, and pass
+  `"probe":true` only after the user agrees.
 - Do not retry `apply` after a `stale` result with the same digests. Re-inspect,
   re-check, and re-confirm with the user. A project with no configuration yet
   can receive Bifrost's automatic first-use starter pools while you work, so a
