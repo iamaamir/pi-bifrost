@@ -2607,8 +2607,14 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     signInEligibilityBySession.set(session, { at: Date.now(), generation, checked: new Set(providers), excluded });
   }
 
-  /** Exclusions the router may apply now: the cached set, never a new request. */
-  function cachedSignInExclusions(ctx: ExtensionContext): ReadonlySet<string> | undefined {
+  /**
+   * The answer routing applies: what this turn's `prepareSignInEligibility`
+   * resolved, kept for the whole turn. Age is not a routing concern, because
+   * prepare runs first and re-checks an entry that is close to its limit; a
+   * wall-clock read here could instead drop a known-dead provider between
+   * preparation and selection.
+   */
+  function sessionSignInExclusions(ctx: ExtensionContext): ReadonlySet<string> | undefined {
     if (signInEligibilityConfig(ctx).signInEligibility !== "exclude") return undefined;
     const entry = signInEligibilityBySession.get(ctx.sessionManager);
     if (!entry) return undefined;
@@ -2618,15 +2624,24 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       signInEligibilityBySession.delete(ctx.sessionManager);
       return undefined;
     }
-    // An expired answer is not evidence either: preview must report the
-    // signal as unresolved instead of repeating an exclusion the next Auto
-    // turn is already due to re-check.
-    if (Date.now() - entry.at >= SIGN_IN_ELIGIBILITY_TTL_MS) return undefined;
     return entry.excluded;
   }
 
+  /**
+   * Preview's view of the same answer. A report is only worth showing while the
+   * next Auto turn would not re-check it, so the age limit applies here and
+   * nowhere else: an expired exclusion is reported as unresolved instead.
+   */
+  function cachedSignInExclusions(ctx: ExtensionContext): ReadonlySet<string> | undefined {
+    const exclusions = sessionSignInExclusions(ctx);
+    const entry = signInEligibilityBySession.get(ctx.sessionManager);
+    if (!entry || exclusions === undefined) return undefined;
+    if (Date.now() - entry.at >= SIGN_IN_ELIGIBILITY_TTL_MS) return undefined;
+    return exclusions;
+  }
+
   function signInExclusionFor(ctx: ExtensionContext): ((model: Model<Api>) => boolean) | undefined {
-    const cached = cachedSignInExclusions(ctx);
+    const cached = sessionSignInExclusions(ctx);
     if (!cached || cached.size === 0) return undefined;
     return (model) => cached.has(model.provider);
   }

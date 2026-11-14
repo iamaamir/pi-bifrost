@@ -46,8 +46,7 @@ function fixture(options: FixtureOptions = {}) {
     schemaVersion: 2,
     enabled: true,
     default: "review",
-    strategy: "first",
-    ...(options.eligibility === undefined ? {} : { signInEligibility: options.eligibility }),
+    strategy: "first",        ...(options.eligibility === undefined ? {} : { signInEligibility: options.eligibility }),
     models: { review: [...(options.pool ?? inventory.map((model) => `${model.provider}/${model.id}`))] },
     ...(options.fallbackTiers === undefined
       ? {}
