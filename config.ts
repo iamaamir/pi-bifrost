@@ -26,12 +26,17 @@ export const DEFAULT_CLASSIFIER_CRITERIA: Record<string, TierCriterion> = {
   frontier: "Complex debugging, architecture, security, concurrency, high ambiguity, or high-consequence work. Not routine bounded edits.",
 };
 
-/** Public settings in the bundled bifrost.json; private classifier templates are intentionally absent. */
-export const BUNDLED_PUBLIC_INIT_DEFAULTS: Readonly<Record<string, unknown>> = Object.freeze({
+/**
+ * Public scalar settings with one owner: runtime defaults and init defaults both
+ * derive from this object, so the bundled bifrost.json is only a template.
+ * Category strategies and model tiers are deliberately absent: they describe
+ * user-configured routing, not baseline policy.
+ */
+export const DEFAULT_RUNTIME_SETTINGS: Readonly<Required<Pick<BifrostConfig,
+  "enabled" | "default" | "strategy" | "classifier" | "cache" | "reliability" | "debug">>> = Object.freeze({
   enabled: true,
   default: "general",
   strategy: "first",
-  categoryStrategies: Object.freeze({ quick: "random", general: "first", frontier: "first" }),
   classifier: Object.freeze({ enabled: true, method: "auto", maxTokens: 20, temperature: 0, fallbackToRegex: true }),
   cache: Object.freeze({ enabled: true, maxEntries: 500, threshold: 1 }),
   reliability: Object.freeze({
@@ -42,6 +47,12 @@ export const BUNDLED_PUBLIC_INIT_DEFAULTS: Readonly<Record<string, unknown>> = O
     cooldownMinutes: 60,
   }),
   debug: Object.freeze({ enabled: false }),
+});
+
+/** Public settings advertised by `/bifrost init`; private classifier templates are intentionally absent. */
+export const BUNDLED_PUBLIC_INIT_DEFAULTS: Readonly<Record<string, unknown>> = Object.freeze({
+  ...DEFAULT_RUNTIME_SETTINGS,
+  categoryStrategies: Object.freeze({ quick: "random", general: "first", frontier: "first" }),
 });
 
 export interface ProbeConfig {
