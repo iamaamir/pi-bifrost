@@ -80,10 +80,17 @@ goal needs something Bifrost does not do, say so.
    is sent. On a host with no dialog (RPC or headless) your `"probe":true` is
    the authorization, so never pass it before the user agrees in the
    conversation, and say plainly that you asked for it. Report each model's
-   outcome. A `config.probe_failed` warning means that model did not answer; it
-   does not block the write, so say what failed and let the user decide. A probe
+   outcome. A `config.probe_failed` warning means that model did not answer on
+   this run; it is one observed result, not proof it always fails, and it does
+   not block the write, so say what failed and let the user decide. A probe
    that reports fewer outcomes than targets leaves the rest unverified, not
    passing.
+
+   Probe measures raw model reachability of the configured candidates. When
+   `signInEligibility` is `"exclude"`, models that sign-in eligibility removes
+   for this session are listed separately in `probePlan`'s notes and are not
+   probed; they are excluded from routing, not reported as probe failures.
+   Do not treat a skipped (sign-in-excluded) model as probed or as failed.
 5. **Preview routing outcomes.** Call `bifrost_config` with
    `{"operation":"preview", ...}` and 2–5 representative prompts drawn from the
    user's real work. To preview current disk configuration, omit candidate and patch. Preview is offline: it sends nothing anywhere. Read each
