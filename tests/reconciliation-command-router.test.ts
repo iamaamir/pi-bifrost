@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, createCommandRouter, type BifrostState } from "../commands.ts";
+import { BUNDLED_PUBLIC_INIT_DEFAULTS, DEFAULT_RULES } from "../config.ts";
 import { buildInitOwnershipReceipt } from "../reconciliation-command.ts";
 import { makeModel } from "./helpers.ts";
 
@@ -292,7 +293,12 @@ describe("config reconciliation command router", () => {
       const configDir = join(cwd, ".pi");
       fs.mkdirSync(configDir, { recursive: true });
       const configPath = join(configDir, "bifrost.json");
-      const originalConfig = Buffer.from('{ "models" : { "general" : ["openai/cached-model", "manual/legacy"] } }\n');
+      const originalConfig = Buffer.from(JSON.stringify({
+        ...BUNDLED_PUBLIC_INIT_DEFAULTS,
+        categoryStrategies: { general: "first" },
+        models: { general: ["openai/cached-model", "manual/legacy"] },
+        rules: DEFAULT_RULES,
+      }) + "\n");
       fs.writeFileSync(configPath, originalConfig);
       writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
         { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
