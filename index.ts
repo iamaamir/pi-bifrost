@@ -2594,8 +2594,15 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     // pools above, so their providers must be checked here too; otherwise a
     // provider sign-in eligibility excludes at runtime would never be resolved
     // and the model could be dispatched unchecked.
-    for (const rule of config.rules ?? []) {
+    //
+    // The classifier resolves rules through `loadRules`, which lets a route file
+    // replace inline `config.rules`. Reading `config.rules` here would leave a
+    // model reachable only through the effective route file unchecked.
+    const tierNames = new Set(Object.keys(config.models ?? {}));
+    for (const rule of loadRules(process.cwd(), config)) {
       if (typeof rule?.model !== "string" || !rule.model.includes("/")) continue;
+      // A rule naming a tier is an alias, not a direct model.
+      if (tierNames.has(rule.model)) continue;
       const [provider, ...idParts] = rule.model.split("/");
       const model = ctx.modelRegistry.find(provider, idParts.join("/"));
       if (!model) continue;

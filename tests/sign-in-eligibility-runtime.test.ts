@@ -28,6 +28,10 @@ interface FixtureOptions {
   readonly pool?: readonly string[];
   /** Configured regex rules (direct-model or tier). */
   readonly rules?: readonly { readonly pattern: string; readonly model: string }[];
+  /** Write effective rules to `.pi/bifrost-routes.json`, overriding `rules`. */
+  readonly routeFileRules?: readonly { readonly pattern: string; readonly model: string }[];
+  /** Hard provider scope applied to the configured pools. */
+  readonly routingScope?: { readonly providers?: string[]; readonly tiers?: Record<string, { readonly providers: string[] }> };
   /** Simulate a host whose registry cannot resolve sign-in at all. */
   readonly withoutAuthResolver?: boolean;
 }
@@ -58,8 +62,12 @@ function fixture(options: FixtureOptions = {}) {
       : { tierPolicies: { review: { fallbackTiers: [...options.fallbackTiers] } } }),
     classifier: { enabled: false },
     reliability: { enabled: true },
+    ...(options.routingScope === undefined ? {} : { routingScope: options.routingScope }),
   };
   writeFileSync(join(cwd, ".pi", "bifrost.json"), JSON.stringify(config));
+  if (options.routeFileRules) {
+    writeFileSync(join(cwd, ".pi", "bifrost-routes.json"), JSON.stringify(options.routeFileRules));
+  }
   process.chdir(cwd);
   process.env.PI_CODING_AGENT_DIR = agentDir;
 
@@ -217,18 +225,95 @@ describe("pre-dispatch sign-in eligibility through the Auto route", { concurrenc
     }
   });
 
-  it("checks a provider reached only by a direct-model rule", async () => {
+  it("checks a provider reached only by a direct-model rule and never selects it", async () => {
     // A regex rule pointing at `provider/id` bypasses the tier pools, so the
     // sign-in check must enumerate it separately; otherwise that provider is
-    // never resolved and can be dispatched unchecked.
+    // never resolved and the excluded model is the one that gets dispatched.
     const h = fixture({
       eligibility: "exclude",
-      pool: ["live/two"],
+      pool: [],
       rules: [{ pattern: "review", model: "dead/one" }],
     });
     try {
-      try { await h.route(); } catch { /* excluded direct model yields no route */ }
+      await assert.rejects(h.route());
       assert.ok(h.authCalls.includes("dead"), "the direct rule's provider must be resolved before dispatch");
+      assert.deepEqual(h.dispatched, [], "the excluded model must never be dispatched");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("checks a provider reachable only through the effective route file", async () => {
+    // `loadRules` lets `.pi/bifrost-routes.json` replace inline rules. A check
+    // that read `config.rules` would leave this rule's provider unresolved while
+    // the classifier still dispatches the model it names.
+    const h = fixture({
+      eligibility: "exclude",
+      pool: [],
+      routeFileRules: [{ pattern: "review", model: "dead/one" }],
+    });
+    try {
+      await assert.rejects(h.route());
+      assert.ok(h.authCalls.includes("dead"), "the route file's provider must be resolved before dispatch");
+      assert.deepEqual(h.dispatched, [], "the excluded model must never be dispatched");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("follows the route file instead of an inline rule it overrides", async () => {
+    // Both rules match. The route file wins at classification time, so only its
+    // provider is relevant: checking the inline rule's provider instead would
+    // spend a resolution on a model that is never selected and miss the one that is.
+    const h = fixture({
+      eligibility: "exclude",
+      pool: ["live/two"],
+      rules: [{ pattern: "review", model: "live/two" }],
+      routeFileRules: [{ pattern: "review", model: "dead/one" }],
+    });
+    try {
+      const result = await h.route();
+      assert.ok(h.authCalls.includes("dead"), "the overriding route file's provider must be resolved");
+      assert.notEqual(`${result.model.provider}/${result.model.id}`, "dead/one",
+        "an excluded direct model must not be selected");
+      assert.deepEqual(h.dispatched, []);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("does not let a tier-scoped restriction suppress a global direct-model check", async () => {
+    // A direct model has no owning tier, so a restriction on the `review` tier
+    // says nothing about it. Skipping its provider on a tier decision would let
+    // the model be dispatched without a sign-in resolution.
+    const h = fixture({
+      eligibility: "exclude",
+      pool: [],
+      rules: [{ pattern: "review", model: "dead/one" }],
+      routingScope: { tiers: { review: { providers: ["live"] } } },
+    });
+    try {
+      await assert.rejects(h.route());
+      assert.ok(h.authCalls.includes("dead"), "tier scope must not hide a direct model's provider");
+      assert.deepEqual(h.dispatched, []);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("does not resolve a direct-model provider the global scope forbids", async () => {
+    // A hard global scope means the model can never be selected, so waiting on
+    // its sign-in would delay the turn for a request the router will refuse.
+    const h = fixture({
+      eligibility: "exclude",
+      pool: [],
+      rules: [{ pattern: "review", model: "dead/one" }],
+      routingScope: { providers: ["live"] },
+    });
+    try {
+      await assert.rejects(h.route());
+      assert.ok(!h.authCalls.includes("dead"), "a globally forbidden provider must not spend a resolution");
+      assert.deepEqual(h.dispatched, []);
     } finally {
       h.cleanup();
     }
