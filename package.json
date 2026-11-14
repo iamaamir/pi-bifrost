@@ -61,8 +61,8 @@
   "scripts": {
     "build:router": "node scripts/build-router.mjs",
     "prepack": "npm run build:router",
-    "test": "node --test --experimental-strip-types \"tests/*.test.ts\" \"tests/*.test.mjs\"",
-    "test:coverage": "c8 --reporter=json --reporter=text node --test --experimental-strip-types \"tests/*.test.ts\" \"tests/*.test.mjs\"",
+    "test": "node --test --test-concurrency=1 --experimental-strip-types \"tests/*.test.ts\" \"tests/*.test.mjs\"",
+    "test:coverage": "c8 --reporter=json --reporter=text node --test --test-concurrency=1 --experimental-strip-types \"tests/*.test.ts\" \"tests/*.test.mjs\"", 
     "crap": "npm run test:coverage && node scripts/crap-report.mjs",
     "crap:record": "npm run test:coverage && node scripts/crap-report.mjs --record",
     "crap:trend": "node scripts/crap-report.mjs --trend",
