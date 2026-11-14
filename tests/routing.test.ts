@@ -1661,6 +1661,41 @@ describe("opt-in sign-in eligibility (ADR 0026)", () => {
     assert.ok(resolution.attemptedTiers?.every((attempt) => attempt.resolution.selected === undefined));
     assert.deepEqual(resolution.attemptedTiers?.[0]?.resolution.skipped, [{ key: "dead/one", reason: "sign_in_unavailable" }]);
   });
+
+  it("reports sign-in as the tier's reason instead of calling it unhealthy", () => {
+    // A pool emptied only by sign-in has no reliability event behind it. Naming
+    // it unhealthy sends the user to a store that holds nothing about it.
+    const ctx = makeCtx([dead]);
+    const resolution = resolveConfiguredTier(
+      ctx,
+      "review",
+      { schemaVersion: 2, default: "review", models: { review: ["dead/one"] }, tierPolicies: { review: { fallbackTiers: [] } } },
+      undefined,
+      { ...DEFAULT_RELIABILITY, enabled: false },
+      Date.now(),
+      undefined,
+      undefined,
+      undefined,
+      (model) => model.provider === "dead",
+    ).resolution;
+    assert.equal(resolution.fallbackReason, "sign_in_unavailable");
+
+    // Mixed evidence keeps the reliability wording: a circuit also skipped
+    // something, so the tier really is unhealthy.
+    const mixed = resolveConfiguredTier(
+      makeCtx([dead, makeModel("paused", "three", 3)]),
+      "review",
+      { schemaVersion: 2, default: "review", models: { review: ["dead/one", "paused/three"] }, tierPolicies: { review: { fallbackTiers: [] } } },
+      undefined,
+      { ...DEFAULT_RELIABILITY, enabled: true },
+      Date.now(),
+      undefined,
+      undefined,
+      undefined,
+      (model) => model.provider === "dead",
+    ).resolution;
+    assert.notEqual(mixed.fallbackReason, "sign_in_unavailable");
+  });
 });
 
 describe("keep-last-model fallback boundary", () => {
