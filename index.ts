@@ -2726,9 +2726,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     failedModelKey: string,
     randomValue: number,
     explicitTier = false,
+    preparedSignIn?: ReadonlySet<string>,
   ): { model: Model<Api>; selectedTier: string; attempt: ReturnType<typeof resolveForTier> } | undefined {
     const random = () => randomValue;
-    const firstAttempt = resolveForTier(ctx, requestedTier, undefined, false, random);
+    const firstAttempt = resolveForTier(ctx, requestedTier, undefined, false, random, preparedSignIn);
     const first = firstAttempt.resolution;
     if (first.selected && modelKey(first.selected) !== failedModelKey
       && (!explicitTier || first.selectedTier === requestedTier)) {
@@ -2740,7 +2741,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const orderedTiers = [state.config.default, ...Object.keys(state.config.models ?? {})]
       .filter((tier, index, tiers): tier is string => typeof tier === "string" && tier !== requestedTier && tiers.indexOf(tier) === index);
     for (const tier of orderedTiers) {
-      const attempt = resolveForTier(ctx, tier, undefined, false, random);
+      const attempt = resolveForTier(ctx, tier, undefined, false, random, preparedSignIn);
       const result = attempt.resolution;
       if (!result.selected || modelKey(result.selected) === failedModelKey) continue;
       return { model: result.selected, selectedTier: result.selectedTier ?? tier, attempt };
@@ -3166,7 +3167,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             ...(activeRouteOrigin === "automatic" && affinityStore ? (() => { const anchor = affinityAnchor(ctx); return anchor ? { anchor } : {}; })() : {}),
           };
           let recoveryResolution = activeRecoveryToken
-            ? resolveAllowanceAlternative(ctx, activeRecoveryToken.requestedTier, activeRecoveryToken.failedModelKey, activeRecoveryToken.randomValue, activeRecoveryToken.explicitTier)
+            ? resolveAllowanceAlternative(ctx, activeRecoveryToken.requestedTier, activeRecoveryToken.failedModelKey, activeRecoveryToken.randomValue, activeRecoveryToken.explicitTier, turnSignInExclusions)
             : undefined;
           if (activeRecoveryToken && !recoveryResolution) {
             terminalRouteCategory = "allowance_retry_candidate_unavailable";
@@ -3238,7 +3239,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
                 || (lastPhysical !== undefined && !lastModelFallbackAllowed({
                   lastPhysical,
                   candidates: [...resolved.primary.candidates, ...(resolved.fallback?.candidates ?? [])],
-                  excludedBySignIn: signInExclusionFor(ctx),
+                  // The same evidence the selection above used: a slow classifier
+                  // can put the turn past the cache TTL, and reading the clock here
+                  // would then revive the provider this turn already excluded.
+                  excludedBySignIn: signInExclusionFor(ctx, turnSignInExclusions),
                 })),
               ...(blockedStickyModel ? {
                 message: `Bifrost: the last dispatched model is on an active model-only allowance cooldown and no configured alternative resolved for tier ${classification.tier}; no model was dispatched.`,
