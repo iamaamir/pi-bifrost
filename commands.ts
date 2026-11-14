@@ -847,6 +847,23 @@ async function handleInit(
   ctx: ExtensionContext,
   state: BifrostState,
 ): Promise<void> {
+  const tokens = args.trim().split(/\s+/).slice(1);
+  let selectedSource: ReconciliationConfigSource = "project";
+  let sourceSpecified = false;
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index];
+    if (token === "-f" || token === "--write") continue;
+    if (token === "--source" && !sourceSpecified) {
+      const value = tokens[++index];
+      if (value === "project" || value === "workspace" || value === "user") {
+        selectedSource = value;
+        sourceSpecified = true;
+        continue;
+      }
+    }
+    log(ctx, "usage: /bifrost init [-f] [--write] [--source project|workspace|user]", "warning");
+    return;
+  }
   const bootstrapOriginalConfig = state.onInitStarted?.(ctx.sessionManager);
   const initConfig = bootstrapOriginalConfig ?? state.config;
   clearBifrostWidgets(ctx);
@@ -1044,7 +1061,7 @@ async function handleInit(
   }
 
   let source: ReconciliationSourceSnapshot;
-  try { source = selectInitSource(); }
+  try { source = readReconciliationSource(selectedSource); }
   catch {
     log(ctx, "Init could not safely snapshot the current config; no files were changed.", "error");
     return;
@@ -1302,7 +1319,7 @@ async function handleInit(
   ].filter(Boolean));
 
   if (uncategorized.length > 0) {
-    log(ctx, `${uncategorized.length} model(s) uncategorized — edit .pi/bifrost.json to assign them.`);
+    log(ctx, `${uncategorized.length} model(s) uncategorized — edit ${source.configPath} to assign them.`);
   }
 
   const writeWithoutPrompt = args.trim().split(/\s+/).includes("--write");
@@ -1343,7 +1360,7 @@ async function handleInit(
     return;
   }
   let currentSource: ReconciliationSourceSnapshot;
-  try { currentSource = selectInitSource(); }
+  try { currentSource = readReconciliationSource(selectedSource); }
   catch {
     log(ctx, "The config destination changed while Init was awaiting confirmation; no files were changed.", "warning");
     return;
