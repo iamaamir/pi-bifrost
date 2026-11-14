@@ -42,7 +42,7 @@ Provider usage and billing pauses use Pi's configured provider ID. Bifrost does 
 
 Init remains available to refresh the catalog or reconcile model lists. It reuses probe results from the last hour unless you pass `-f`. Init preserves settings and handwritten model entries in the file it edits. Settings from other files remain inherited. It does not copy private classifier templates or pin inherited user settings into the edited file. Its summary does not show every model ID, selection rule, or default tier. After init saves, inspect the lists and status. Edit the saved configuration before a model answers if needed.
 
-Init displays its save target. It updates an existing project `.pi/bifrost.json`, workspace `bifrost.json`, or user `~/.pi/agent/bifrost.json` in that order. When none exists, it creates project `.pi/bifrost.json`.
+Init displays its save target. It saves to project `.pi/bifrost.json` by default, or to user `~/.pi/agent/bifrost.json` when you pass `-g`.
 
 For safe migration, follow the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state).
 
