@@ -216,6 +216,61 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
   before(async () => { port = await startFakeProvider(); });
   after(async () => { await new Promise((resolve) => server?.close(resolve)); });
 
+  for (const selected of ["default", "default-global-only", "project", "workspace", "user"]) {
+    it(`saves init to the ${selected} source without changing other layers`, async () => {
+      requests = [];
+      const env = fixture(port, ["healthy"]);
+      const paths = {
+        project: join(env.work, ".pi", "bifrost.json"),
+        workspace: join(env.work, "bifrost.json"),
+        user: join(env.home, ".pi", "agent", "bifrost.json"),
+      };
+      const original = Buffer.from('{"cache":{"enabled":false},"classifier":{"enabled":false}}\n');
+      writeFileSync(paths.user, original);
+      if (selected !== "default-global-only") writeFileSync(paths.workspace, original);
+      try {
+        const args = `--write${selected.startsWith("default") ? "" : ` --source ${selected}`}`;
+        const result = await runInit({ ...env, args });
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(result.violations, "");
+        const target = selected.startsWith("default") ? "project" : selected;
+        assert.match(result.stdout + result.stderr, new RegExp(`save target: ${target}`));
+        assert.ok(JSON.parse(readFileSync(paths[target], "utf8")).models);
+        for (const layer of ["workspace", "user"]) {
+          if (layer === "workspace" && selected === "default-global-only") {
+            assert.equal(existsSync(paths.workspace), false);
+          } else if (layer !== target) assert.deepEqual(readFileSync(paths[layer]), original);
+        }
+        if (target !== "project") assert.equal(existsSync(paths.project), false);
+        if (target === "project") {
+          const saved = JSON.parse(readFileSync(paths.project, "utf8"));
+          assert.equal(Object.hasOwn(saved, "cache"), false);
+          assert.equal(Object.hasOwn(saved, "classifier"), false);
+        }
+      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+    });
+  }
+
+  for (const args of ["--source", "--source invalid", "--source --write", "--source user --source project", "--unknown"]) {
+    it(`rejects invalid init arguments ${args} before probing or writing`, async () => {
+      requests = [];
+      const env = fixture(port, ["healthy"]);
+      const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+      const original = Buffer.from('{"classifier":{"enabled":false}}\n');
+      writeFileSync(globalPath, original);
+      try {
+        const result = await runInit({ ...env, args });
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(result.violations, "");
+        assert.match(result.stdout + result.stderr, /usage: \/bifrost init/i);
+        assert.deepEqual(requests, []);
+        assert.deepEqual(readFileSync(globalPath), original);
+        assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
+        assert.equal(existsSync(join(env.work, ".pi", "bifrost-probe.json")), false);
+      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+    });
+  }
+
   it("probes on ordinary init and saves only successful models", async () => {
     const env = fixture(port, ["healthy", "credits-exhausted"]);
     writeFileSync(join(env.work, ".pi", "bifrost-routes.json"), "[]\n");

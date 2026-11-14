@@ -155,7 +155,7 @@ An explicit catalog refresh is network-enabled and can incur provider requests. 
 
 Reconciliation updates only exact model keys owned by its sidecar. Existing manual entries are never adopted as generated membership. Incomplete, stale, or auth-unknown inventory cannot authorize removals. Apply uses a journal and keeps exact backups. `/bifrost config reconcile --recover` resumes or reports a pending journal. If a process crashed while holding a lock, recovery does not steal it: first verify that no Bifrost writer is active, inspect the exact lock files, and remove only locks proven stale before retrying recovery.
 
-On first use, Bifrost loads provisional pools from Pi's available chat-model catalog and checks them in the background. It saves only successful generated pools and keeps manual entries and other configuration fields. Probe requests can use provider credits or reach rate limits. `/bifrost init` refreshes the catalog, reuses probe results from the last hour, or probes before proposing pools. Pass `-f` to force fresh probes.
+On first use, Bifrost loads provisional pools from Pi's available chat-model catalog and checks them in the background. It saves only successful generated pools and keeps manual entries and other configuration fields. Probe requests can use provider credits or reach rate limits. `/bifrost init` refreshes the catalog, reuses probe results from the last hour, or probes before proposing pools. Pass `-f` to force fresh probes. Init saves to `.pi/bifrost.json` by default; use `--source project`, `--source workspace`, or `--source user` to select a destination explicitly. The target is shown before confirmation. Settings from lower configuration layers remain inherited.
 
 ### Diagnose unavailable models
 

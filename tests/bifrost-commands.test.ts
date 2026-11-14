@@ -1067,7 +1067,7 @@ describe("bifrost command ui", () => {
         rules: [{ pattern: "workspace strict", model: "frontier" }],
         tierPolicies: { frontier: { fallbackTiers: [] } },
       };
-      await createCommandRouter(state as never)("init", ctx as never);
+      await createCommandRouter(state as never)("init --source workspace", ctx as never);
 
       assert.deepEqual(confirmArgs, ["Save Bifrost setup?", "Save memberships: +1 / -0 (quick: +1/-0) to workspace (bifrost.json)?"]);
       assert.equal(calls.some((call) => call.kind === "select"), false);
@@ -1983,6 +1983,36 @@ describe("preview route trace", () => {
 });
 
 describe("command aliases", () => {
+  it("shows the selected init destination in the confirmation and respects cancellation", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-confirm-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const { ctx } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      const confirmations: string[] = [];
+      (ctx as any).ui.confirm = async (_title: string, message: string) => { confirmations.push(message); return false; };
+      for (const args of ["init", "init --source workspace", "init --source user"]) {
+        await createCommandRouter(makeState() as never)(args, ctx);
+      }
+      assert.match(confirmations[0], /project \(\.pi\/bifrost\.json\)/);
+      assert.match(confirmations[1], /workspace \(bifrost\.json\)/);
+      assert.match(confirmations[2], /user \(.+bifrost\.json\)/);
+      assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
+      assert.equal(existsSync(join(tempDir, "bifrost.json")), false);
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("declares init -f as an alias of init", () => {
     const init = BIFROST_COMMAND_OPTIONS.find((c) => c.value === "init");
     assert.deepEqual(init?.aliases, ["init -f"]);
