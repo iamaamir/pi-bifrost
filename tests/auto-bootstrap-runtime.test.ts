@@ -211,6 +211,34 @@ describe("automatic setup through registered Pi hooks", () => {
     } finally { harness.cleanup(); }
   });
 
+  it("installs the same generated category strategy that it saves", async () => {
+    const harness = freshHarness(false, undefined, true);
+    const originalRandom = Math.random;
+    try {
+      const alternate = makeModel("fixture-alt", "quick", 0.3, 0.3);
+      harness.setAvailable([harness.model, alternate]);
+      harness.setImmediateProbeSuccessProvider(alternate.provider);
+      await harness.handlers.get("session_start")!({}, harness.ctx);
+      await harness.probeStarted;
+      harness.completeProbe();
+      for (let i = 0; i < 100 && !existsSync(join(process.cwd(), ".pi", "bifrost.json")); i++) await flushImmediate();
+      const saved = JSON.parse(readFileSync(join(process.cwd(), ".pi", "bifrost.json"), "utf8"));
+      assert.deepEqual(saved.models.quick, ["fixture-alt/quick", "fixture/quick"]);
+      assert.equal(saved.categoryStrategies.quick, "random");
+
+      Math.random = () => 0.99;
+      await harness.handlers.get("input")!({
+        text: "quick use the generated policy",
+        source: "interactive",
+        streamingBehavior: "steer",
+      }, harness.ctx);
+      assert.equal(harness.selected(), "fixture/quick");
+    } finally {
+      Math.random = originalRandom;
+      harness.cleanup();
+    }
+  });
+
   it("does not notify from a provider cooldown write after its session shuts down", async () => {
     const harness = freshHarness(false, undefined, true);
     const originalSetScopeCooldown = ReliabilityV2Store.prototype.setScopeCooldown;

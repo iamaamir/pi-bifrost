@@ -63,6 +63,13 @@ describe("config load", () => {
       assert.equal(config.default, "general");
       assert.equal(config.categoryStrategies, undefined);
       assert.deepEqual(config.models, {});
+      assert.deepEqual(config.classifier, {
+        enabled: true,
+        method: "auto",
+        maxTokens: 20,
+        temperature: 0,
+        fallbackToRegex: true,
+      });
       assert.equal(config.rules, DEFAULT_RULES);
       assert.deepEqual(loadRules(cwd, config), DEFAULT_RULES);
     } finally {

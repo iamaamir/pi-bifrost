@@ -11,12 +11,25 @@ import { makeModel } from "./helpers.ts";
 
 function withCwd<T>(run: (directory: string) => Promise<T>): Promise<T> {
   const prior = process.cwd();
+  const priorAgentDir = process.env.PI_CODING_AGENT_DIR;
   const directory = fs.mkdtempSync(join(tmpdir(), "bifrost-reconcile-command-"));
+  process.env.PI_CODING_AGENT_DIR = join(directory, "agent");
   process.chdir(directory);
   return run(directory).finally(() => {
     process.chdir(prior);
+    if (priorAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = priorAgentDir;
     fs.rmSync(directory, { recursive: true, force: true });
   });
+}
+
+function noChangeConfig(): Buffer {
+  return Buffer.from(JSON.stringify({
+    ...BUNDLED_PUBLIC_INIT_DEFAULTS,
+    categoryStrategies: { general: "first" },
+    models: { general: ["openai/cached-model", "manual/legacy"] },
+    rules: DEFAULT_RULES,
+  }) + "\n");
 }
 
 function writeRecentProbeCache(path: string, results: unknown): void {
@@ -293,12 +306,7 @@ describe("config reconciliation command router", () => {
       const configDir = join(cwd, ".pi");
       fs.mkdirSync(configDir, { recursive: true });
       const configPath = join(configDir, "bifrost.json");
-      const originalConfig = Buffer.from(JSON.stringify({
-        ...BUNDLED_PUBLIC_INIT_DEFAULTS,
-        categoryStrategies: { general: "first" },
-        models: { general: ["openai/cached-model", "manual/legacy"] },
-        rules: DEFAULT_RULES,
-      }) + "\n");
+      const originalConfig = noChangeConfig();
       fs.writeFileSync(configPath, originalConfig);
       writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
         { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
@@ -311,6 +319,76 @@ describe("config reconciliation command router", () => {
       assert.deepEqual(receipt.sources, {});
       assert.equal(config.models.general.includes("openai/cached-model"), true);
       assert.equal(config.models.general.includes("manual/legacy"), true);
+    });
+  });
+
+  it("does not create a no-change receipt without explicit save permission", async () => {
+    await withCwd(async (cwd) => {
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(join(configDir, "bifrost.json"), noChangeConfig());
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
+      await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+      assert.equal(fs.existsSync(join(configDir, "bifrost-reconcile-ownership.json")), false);
+    });
+  });
+
+  it("does not create a no-change receipt when TUI confirmation is declined", async () => {
+    await withCwd(async (cwd) => {
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(join(configDir, "bifrost.json"), noChangeConfig());
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
+      const ctx = h.ctx as unknown as {
+        hasUI: boolean;
+        ui: { confirm: () => Promise<boolean>; notify: () => void };
+      };
+      ctx.hasUI = true;
+      ctx.ui = { confirm: async () => false, notify: () => {} };
+      await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+      assert.equal(fs.existsSync(join(configDir, "bifrost-reconcile-ownership.json")), false);
+    });
+  });
+
+  it("blocks no-change receipt creation behind journals and reconciliation locks", async () => {
+    for (const blocker of ["bifrost-reconcile.journal", "bifrost.json.bifrost-reconcile.lock"]) {
+      await withCwd(async (cwd) => {
+        const configDir = join(cwd, ".pi");
+        fs.mkdirSync(configDir, { recursive: true });
+        fs.writeFileSync(join(configDir, "bifrost.json"), noChangeConfig());
+        fs.writeFileSync(join(configDir, blocker), "active writer");
+        writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+          { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+        ]);
+        const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
+        await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
+        assert.equal(fs.existsSync(join(configDir, "bifrost-reconcile-ownership.json")), false, blocker);
+      });
+    }
+  });
+
+  it("writes default rules only for generated tiers", async () => {
+    await withCwd(async (cwd) => {
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "cheap", cost_input: 0.1, cost_output: 0.1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({ models: [makeModel("openai", "cheap", 0.1, 0.1)] });
+      await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
+      const saved = JSON.parse(fs.readFileSync(join(configDir, "bifrost.json"), "utf8")) as {
+        models: Record<string, string[]>;
+        rules: Array<{ model: string }>;
+      };
+      assert.deepEqual(Object.keys(saved.models), ["quick"]);
+      assert(saved.rules.length > 0);
+      assert(saved.rules.every(({ model }) => model === "quick"));
     });
   });
 
