@@ -30,7 +30,17 @@ export const PROBE_PROMPT_TEXT = PROBE_PROMPT;
 export const PROBE_CACHE_TTL_MS = 60 * 60 * 1000;
 const MAX_PROBE_CACHE_BYTES = 10_000_000;
 const PROBE_TIMEOUT_MS = 10_000;
-const PROBE_MAX_TOKENS = 5;
+/** Output bound per probe request; exported so consent text states the real cap. */
+export const PROBE_MAX_TOKENS = 5;
+/** Provider error text is untrusted and can be arbitrarily long: a live check
+ * copies it into a report and an approval message, where a huge body would push
+ * an otherwise fine candidate past the approval size limit. */
+export const MAX_PROBE_ERROR_CHARS = 200;
+
+function boundProbeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length <= MAX_PROBE_ERROR_CHARS ? message : `${message.slice(0, MAX_PROBE_ERROR_CHARS - 1)}…`;
+}
 /** Default worker count. Override via config `probe.concurrency` —
  * lower it if a provider rate-limits burst traffic. */
 export const DEFAULT_PROBE_CONCURRENCY = 50;
@@ -53,6 +63,13 @@ export interface RunProbeOptions {
   models?: readonly Model<Api>[];
   shouldProbe?: (model: Model<Api>) => boolean;
   promptWithSession?: MinimalSessionPrompt;
+  /** Allow a second, session-backed request when the streaming attempt returns
+   * no text. Callers that promise exactly one request per model pass `false`. */
+  sessionFallback?: boolean;
+  /** Write the results to the `.pi/bifrost-probe.json` cache that `/bifrost init`
+   * reads. A one-off candidate check passes `false`: its narrow transport would
+   * otherwise replace the init answer for the whole TTL. */
+  persist?: boolean;
   timeoutMs?: number;
   concurrency?: number;
   signal?: AbortSignal;
@@ -214,7 +231,7 @@ export async function runProbe(
   let cursor = 0;
   let completed = 0;
 
-  const { onProgress, promptWithSession = promptWithMinimalSession, timeoutMs = PROBE_TIMEOUT_MS, concurrency = DEFAULT_PROBE_CONCURRENCY, signal, shouldProbe } = options;
+  const { onProgress, promptWithSession = promptWithMinimalSession, sessionFallback = true, persist = true, timeoutMs = PROBE_TIMEOUT_MS, concurrency = DEFAULT_PROBE_CONCURRENCY, signal, shouldProbe } = options;
 
   async function worker() {
     while (cursor < total && !signal?.aborted) {
@@ -224,7 +241,7 @@ export async function runProbe(
       try { eligible = shouldProbe?.(model) ?? true; }
       catch { eligible = false; }
       results[i] = eligible
-        ? await probeOne(ctx, model, promptWithSession, timeoutMs, signal)
+        ? await probeOne(ctx, model, promptWithSession, timeoutMs, signal, sessionFallback)
         : { provider: model.provider, model: model.id, cost_input: model.cost?.input ?? 0, cost_output: model.cost?.output ?? 0, status: "skipped", duration_ms: 0, error: "model is no longer eligible" };
       completed++;
       reportProbeResult(runId, results[i]);
@@ -252,6 +269,10 @@ export async function runProbe(
     reportProbeCompletion(runId, results, catalog.length, { cache: "not_written", cacheReason: "incomplete_report" });
     return { results, path: outputPath };
   }
+  if (!persist) {
+    reportProbeCompletion(runId, results, catalog.length, { cache: "not_written", cacheReason: "persistence_disabled" });
+    return { results, path: outputPath };
+  }
   try {
     writeJsonFile(outputPath, results);
   } catch (err) {
@@ -270,7 +291,8 @@ async function probeOne(
   model: Model<Api>,
   promptWithSession: MinimalSessionPrompt,
   timeoutMs: number,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  sessionFallback: boolean,
 ): Promise<ProbeResult> {
   const base: ProbeResult = {
     provider: model.provider,
@@ -319,10 +341,15 @@ async function probeOne(
       base.duration_ms = +(performance.now() - start).toFixed(1);
       if (response.stopReason === "error") {
         base.status = "error";
-        base.error = response.errorMessage ?? "model error";
+        base.error = boundProbeError(response.errorMessage ?? "model error");
         return base;
       }
       const text = assistantText(response).trim();
+      if (!text && !sessionFallback) {
+        base.status = "error";
+        base.error = "empty response";
+        return base;
+      }
       if (!text) {
         const fallbackText = await promptWithSession(model, PROBE_PROMPT, {
           cwd: ctx.cwd,
@@ -359,7 +386,7 @@ async function probeOne(
     base.status = err instanceof DOMException && err.name === "AbortError"
       ? "timeout"
       : "error";
-    base.error = String(err).slice(0, 200);
+    base.error = boundProbeError(err);
   }
 
   return base;

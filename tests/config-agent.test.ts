@@ -15,12 +15,15 @@ import {
   buildConfigAgentCatalog,
   createBifrostConfigTool,
   configAgentConfigDigest,
+  PROBE_OUTPUT_TOKEN_CAP,
   type ConfigAgentApplyResult,
   type ConfigAgentCheckResult,
+  type ConfigAgentProbeResult,
   type ConfigAgentInspectResult,
   type ConfigAgentPreviewResult,
 } from "../config-agent.ts";
 import { reportText } from "../config-agent-report.ts";
+import { PROBE_MAX_TOKENS } from "../probe.ts";
 import type { ConfigApproval } from "../config-approval.ts";
 import { SUPPORTED_SCHEMA_VERSIONS, type BifrostConfig } from "../config.ts";
 import { loadConfigForReload } from "../config-load.ts";
@@ -46,6 +49,11 @@ interface HarnessOptions {
   readonly providerAuthStatus?: (provider: string) => { configured: boolean; source?: string };
   /** Resolve sign-in; return an Error to simulate a dead OAuth refresh token. */
   readonly providerAuthResult?: (provider: string) => unknown;
+  /** Live probe outcomes for the opt-in check; omit to leave the host without one. */
+  readonly probeModels?: (models: readonly string[], signal?: AbortSignal) => readonly ConfigAgentProbeResult[];
+  /** Answer the live-probe dialog; omit to leave the host without a dialog. */
+  readonly probeConfirm?: boolean;
+  readonly probeConfirmError?: boolean;
   readonly legacyClassifierEnabled?: boolean;
   readonly classifierSessionOverride?: boolean;
   readonly runtimeStateIssue?: "invalid-json";
@@ -78,6 +86,7 @@ function freshHarness(options: HarnessOptions = {}) {
   let reloadCalls = 0;
   let sessionId = "test-session";
   const confirmations: { title: string; summary: string; details: string }[] = [];
+  const probeConfirmations: { title: string; message: string }[] = [];
 
   const registry = {
     getAvailable: () => available,
@@ -124,10 +133,21 @@ function freshHarness(options: HarnessOptions = {}) {
         return result;
       },
       notify: () => {},
+      ...(options.probeConfirm !== undefined || options.probeConfirmError
+        ? {
+          confirm: async (title: string, message: string) => {
+            probeConfirmations.push({ title, message });
+            if (options.probeConfirmError) throw new Error("dialog unavailable");
+            return options.probeConfirm === true;
+          },
+        }
+        : {}),
     },
     modelRegistry: registry,
   } as unknown as ExtensionToolContext;
 
+  const probeCalls: string[][] = [];
+  const probeSignals: (AbortSignal | undefined)[] = [];
   const tool = createBifrostConfigTool({
     extensionDir,
     render: reportText,
@@ -135,6 +155,13 @@ function freshHarness(options: HarnessOptions = {}) {
       reloadCalls += 1;
       return reloadResult;
     },
+    ...(options.probeModels ? {
+      probeModels: async (models: readonly string[], _ctx: unknown, signal?: AbortSignal) => {
+        probeCalls.push([...models]);
+        probeSignals.push(signal);
+        return options.probeModels!(models, signal);
+      },
+    } : {}),
     ...(options.write ? { write: options.write } : {}),
     ...(options.runtimeAware ? {
       classifierRuntime: (config: BifrostConfig) => {
@@ -189,6 +216,9 @@ function freshHarness(options: HarnessOptions = {}) {
     setReload(value: boolean) { reloadResult = value; },
     setLegacyClassifierEnabled(value: boolean | undefined) { legacyClassifierEnabled = value; },
     confirmations: () => confirmations,
+    probeCalls: () => probeCalls,
+    probeSignals: () => probeSignals,
+    probeConfirmations: () => [...probeConfirmations],
     classifyCalls: () => classifyCalls,
     reloadCalls: () => reloadCalls,
     projectConfigPath: () => join(cwd, ".pi", "bifrost.json"),
@@ -614,6 +644,383 @@ describe("provider sign-in state", () => {
       const [confirmation] = harness.confirmations();
       assert.match(confirmation?.summary ?? "", /WARNING: Provider "alpha" sign-in cannot be resolved/);
       assert.match(confirmation?.details ?? "", /Warning: Provider "alpha" sign-in cannot be resolved/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("probes live only when asked and warns without blocking the write", async () => {
+    // The issue asked for a live check before proposing a tier. Probing by
+    // default would spend credits on every check, so it stays opt-in: the
+    // caller passes `probe: true` after the user agrees, and a failure is
+    // evidence about the provider rather than a reason to reject the write.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: (models) => models.map((model) => model === "beta/code"
+        ? { model, status: "error" as const, reason: "401 unauthorized" }
+        : { model, status: "ok" as const }),
+    });
+    try {
+      const candidate = { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } };
+      const checked = await harness.run({ operation: "check", candidate, probe: true });
+      const probed = detailsOf<ConfigAgentCheckResult>(checked);
+      assert.deepEqual(harness.probeCalls(), [["alpha/strong", "beta/code"]]);
+      assert.deepEqual(
+        probed.liveProbe?.map((entry) => `${entry.model}:${entry.status}`),
+        ["alpha/strong:ok", "beta/code:error"],
+      );
+      const warning = probed.issues.find((issue) => issue.code === "config.probe_failed");
+      assert.match(warning?.message ?? "", /beta\/code failed: 401 unauthorized/);
+      assert.equal(probed.status, "ok");
+      assert.equal(probed.writeEligible, true);
+      assert.match(contentOf(checked), /live probe \(one tiny prompt per model\):/);
+
+      // Without the flag nothing is sent, so a plain check keeps costing nothing.
+      const plain = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", candidate }));
+      assert.equal(harness.probeCalls().length, 1);
+      assert.equal(plain.liveProbe, undefined);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("states a probe's scope and cost before it runs, and spends only on an answer", async () => {
+    // Section A of the review: a plain check must never send, and money must not
+    // leave on an assumption. The plan is computed for every writable check; the
+    // dialog decides; a host with no dialog records delegated consent in words.
+    const candidate = { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } };
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+      probeConfirm: false,
+    });
+    try {
+      const plain = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", candidate }));
+      assert.deepEqual(plain.probePlan, ["alpha/strong", "beta/code"]);
+      assert.equal(plain.liveProbe, undefined);
+      assert.equal(harness.probeCalls().length, 0);
+      assert.equal(harness.probeConfirmations().length, 0, "a plain check must not even ask");
+      assert.match(contentOf(await harness.run({ operation: "check", candidate })), /live probe not run: 2 model\(s\), one request each -- alpha\/strong, beta\/code/);
+
+      // A declined dialog sends nothing and says so.
+      const declined = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", candidate, probe: true }));
+      assert.equal(harness.probeCalls().length, 0);
+      assert.match(declined.notes.join("\n"), /Live probe was declined; nothing was sent\./);
+      const [question] = harness.probeConfirmations();
+      assert.match(question?.message ?? "", /one request of at most 5 output tokens to each of 2 model\(s\): alpha\/strong, beta\/code/);
+    } finally {
+      harness.cleanup();
+    }
+
+    // A dialog that fails is not an approval either.
+    const failing = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000)],
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+      probeConfirmError: true,
+    });
+    try {
+      const refused = detailsOf<ConfigAgentCheckResult>(await failing.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+        probe: true,
+      }));
+      assert.equal(failing.probeCalls().length, 0);
+      assert.match(refused.notes.join("\n"), /declined/);
+    } finally {
+      failing.cleanup();
+    }
+
+    // With no dialog the caller's opt-in is the authorization, and the result
+    // must never imply the user approved it.
+    const delegated = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000)],
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+      mode: "rpc",
+    });
+    try {
+      const ran = detailsOf<ConfigAgentCheckResult>(await delegated.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+        probe: true,
+      }));
+      assert.deepEqual(delegated.probeCalls(), [["alpha/strong"]]);
+      assert.match(ran.notes.join("\n"), /delegated consent: this host has no approval dialog/);
+    } finally {
+      delegated.cleanup();
+    }
+
+    // Approved at the dialog: the probe runs, and apply still never probes even
+    // when the caller repeats the flag on the write.
+    const approved = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000)],
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+      probeConfirm: true,
+    });
+    try {
+      const checked = await approved.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+        probe: true,
+      });
+      const details = detailsOf<ConfigAgentCheckResult>(checked);
+      assert.deepEqual(approved.probeCalls(), [["alpha/strong"]]);
+      assert.match(details.notes.join("\n"), /ran with dialog approval/);
+      const applied = detailsOf<ConfigAgentApplyResult>(await approved.run({
+        ...applyParams(details, { candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } } }),
+        probe: true,
+      }));
+      assert.equal(applied.applied, true);
+      assert.equal(approved.probeCalls().length, 1, "apply must never send a probe request");
+    } finally {
+      approved.cleanup();
+    }
+  });
+
+  it("states the same output cap the probe transport enforces", () => {
+    // Policy states the number; the adapter enforces it. They are separate
+    // modules by the architecture rule, so this is the seam that keeps the
+    // consent text honest if either number moves.
+    assert.equal(PROBE_OUTPUT_TOKEN_CAP, PROBE_MAX_TOKENS);
+  });
+
+  it("counts a probe against what it requested, not what came back", async () => {
+    // A transport that answers for fewer models than were asked must not render
+    // as a full pass: the denominator is the plan, and the gap is called out.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: () => [{ model: "alpha/strong", status: "ok" }],
+    });
+    try {
+      const checked = await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } },
+        probe: true,
+      });
+      const content = contentOf(checked);
+      assert.match(content, /live probe \(one tiny prompt per model\): 1\/2 answered, 1 without a reported outcome/);
+      assert.match(content, /treat them as unverified, not as passing/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("repeats the checked proposal's probe warning in the approval dialog", async () => {
+    // The probe warning is evidence the check gathered. Apply rebuilds its
+    // offline check for the stamps, so without carrying the warning with the
+    // handle it would silently drop and the user would approve blind.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: (models) => models.map((model) => model === "beta/code"
+        ? { model, status: "error" as const, reason: "401 unauthorized" }
+        : { model, status: "ok" as const }),
+    });
+    try {
+      const candidate = { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } };
+      const checked = await harness.run({ operation: "check", candidate, probe: true });
+      const handle = contentOf(checked).match(/proposalHandle: ([a-f0-9]{12})/)?.[1];
+      assert.ok(handle, "a writable probe check must mint a handle");
+
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run({ operation: "apply", proposalHandle: handle }));
+      assert.equal(applied.applied, true);
+      const [confirmation] = harness.confirmations();
+      assert.match(confirmation?.details ?? "", /Warning: Live probe of beta\/code failed: 401 unauthorized/);
+      assert.match(confirmation?.summary ?? "", /WARNING: Live probe of beta\/code failed: 401 unauthorized/);
+      assert.equal(harness.probeCalls().length, 1, "apply must repeat the warning without sending another request");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("repeats the warning when the caller applies the checked candidate by digest", async () => {
+    // The supported alternative to the handle is copying the printed digests.
+    // That request names the same candidate, so dropping the warning there would
+    // make the dialog depend on which of the two forms the caller used.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: (models) => models.map((model) => model === "beta/code"
+        ? { model, status: "error" as const, reason: "401 unauthorized" }
+        : { model, status: "ok" as const }),
+    });
+    try {
+      const candidate = { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } };
+      const { details } = await checkedCandidate(harness, { candidate, probe: true });
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
+      assert.equal(applied.applied, true);
+      const [confirmation] = harness.confirmations();
+      assert.match(confirmation?.details ?? "", /Warning: Live probe of beta\/code failed: 401 unauthorized/);
+      assert.equal(harness.probeCalls().length, 1, "a digest apply must not send another probe");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("bounds a huge provider error so it cannot block approval", async () => {
+    // Provider text reaches an approval message whose size is capped. An error
+    // body over that cap would turn an advisory probe failure into a refusal to
+    // apply a candidate that is otherwise fine.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: (models) => models.map((model) => model === "beta/code"
+        ? { model, status: "error" as const, reason: `<html>${"x".repeat(5_000)}</html>` }
+        : { model, status: "ok" as const }),
+    });
+    try {
+      const candidate = { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } };
+      const checked = await harness.run({ operation: "check", candidate, probe: true });
+      const probed = detailsOf<ConfigAgentCheckResult>(checked);
+      const warning = probed.issues.find((issue) => issue.code === "config.probe_failed");
+      assert.ok(warning, "a failed probe must warn");
+      assert.ok(warning!.message.length < 400, `warning must stay bounded, got ${warning!.message.length} chars`);
+      assert.match(warning!.message, /^Live probe of beta\/code failed: <html>x+…/);
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run({
+        operation: "apply",
+        proposalHandle: contentOf(checked).match(/proposalHandle: ([a-f0-9]{12})/)?.[1],
+      }));
+      assert.equal(applied.applied, true, "a long provider error must not make the candidate unwritable");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("never probes a provider the tier's routing scope excludes", async () => {
+    // The scope is a hard eligibility filter, so a probe of an excluded
+    // provider would spend a request on a model that can never be selected.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+    });
+    try {
+      await harness.run({
+        operation: "check",
+        candidate: {
+          schemaVersion: 2,
+          default: "review",
+          models: { review: ["alpha/strong", "beta/code"] },
+          routingScope: { tiers: { review: { providers: ["beta"] } } },
+        },
+        probe: true,
+      });
+      assert.deepEqual(harness.probeCalls(), [["beta/code"]]);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("forwards the caller's cancellation to the probe transport", async () => {
+    const controller = new AbortController();
+    const harness = freshHarness({
+      signal: controller.signal,
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+    });
+    try {
+      await harness.run({ operation: "check", candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } }, probe: true });
+      assert.equal(harness.probeSignals()[0], controller.signal);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("does not start a probe after the caller cancels", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const harness = freshHarness({
+      signal: controller.signal,
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+    });
+    try {
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+        probe: true,
+      }));
+      assert.deepEqual(harness.probeCalls(), []);
+      assert.match(checked.notes.join(" "), /Live probe cancelled before it started/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("renders probe totals and only the failed models so long reports keep warnings", async () => {
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: () => [
+        { model: "alpha/strong", status: "ok" },
+        { model: "beta/code", status: "error", reason: "401 unauthorized" },
+      ],
+    });
+    try {
+      const result = await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } },
+        probe: true,
+      });
+      const text = contentOf(result);
+      assert.match(text, /live probe \(one tiny prompt per model\): 1\/2 answered/);
+      assert.match(text, /beta\/code: error -- 401 unauthorized/);
+      assert.doesNotMatch(text, /alpha\/strong: ok/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("counts a cancelled probe as not answered instead of folding it into the total", async () => {
+    // A cancelled probe never reached the provider, so calling it "answered"
+    // would overstate what the check learned about the model.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: () => [
+        { model: "alpha/strong", status: "ok" },
+        { model: "beta/code", status: "skipped" },
+      ],
+    });
+    try {
+      const result = await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } },
+        probe: true,
+      });
+      const text = contentOf(result);
+      assert.match(text, /live probe \(one tiny prompt per model\): 1\/2 answered, 1 skipped/);
+      assert.match(text, /1 model not asked \(check cancelled before the request completed\)/);
+      assert.doesNotMatch(text, /2\/2 answered/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("fault control: a live probe that throws reports it and never blocks the write", async () => {
+    // A probe failure is evidence about the provider, not a validation error.
+    // Throwing transport must not escape the tool or make the candidate
+    // unwritable, because the user may still apply and sign in afterwards.
+    const harness = freshHarness({
+      probeModels: () => { throw new Error("provider transport refused"); },
+    });
+    try {
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+        probe: true,
+      }));
+      assert.equal(checked.status, "ok");
+      assert.equal(checked.liveProbe, undefined);
+      assert.equal(checked.writeEligible, true);
+      assert.match(checked.notes.join(" "), /Live probe could not run \(provider transport refused\)/);
+      assert.equal(harness.readFile(".pi/bifrost.json"), undefined);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("reports that the host cannot live-probe instead of pretending it ran", async () => {
+    const harness = freshHarness();
+    try {
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+        probe: true,
+      }));
+      assert.equal(checked.liveProbe, undefined);
+      assert.match(checked.notes.join(" "), /Live probe is unavailable in this host/);
     } finally {
       harness.cleanup();
     }
@@ -1743,7 +2150,7 @@ describe("tool surface", () => {
       const properties = (harness.tool.parameters as { properties?: Record<string, unknown> }).properties ?? {};
       assert.deepEqual(Object.keys(properties).sort(), [
         "candidate", "catalogDigest", "classifierRuntimeDigest", "effectiveDigest", "offset", "operation", "patch",
-        "prompts", "proposalDigest", "proposalHandle", "provider", "remove", "source", "sourceDigest",
+        "probe", "prompts", "proposalDigest", "proposalHandle", "provider", "remove", "source", "sourceDigest",
       ]);
     } finally {
       harness.cleanup();

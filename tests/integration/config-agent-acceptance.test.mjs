@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { after, before, describe, it } from "node:test";
 import { createServer } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,6 +22,7 @@ const OUTBOUND_GUARD = join(ROOT, "scripts", "test-outbound-guard.cjs");
 
 let server;
 let requests;
+let probeRequests;
 let scripted;
 let lastApplyReport;
 let lastCheckReport;
@@ -62,6 +63,7 @@ function toolCallSse(response, name, args) {
 // turn 3 ends the turn with plain text.
 function startFakeProvider() {
   requests = [];
+  probeRequests = 0;
   scripted = [];
   server = createServer((request, response) => {
     response.on("error", () => {});
@@ -75,6 +77,13 @@ function startFakeProvider() {
       const payload = JSON.parse(body || "{}");
       requests.push({ model: payload.model });
       const text = JSON.stringify(payload.messages ?? []);
+      // The live probe sends the same tiny prompt on the same transport the
+      // candidate would use, so it must look like a normal answer, not a tool
+      // call: a probe is one bounded request per model.
+      if (text.includes("1+1=")) {
+        probeRequests += 1;
+        return textSse(response, "2");
+      }
       if (text.includes("bifrost configuration apply")) {
         scripted.push("final");
         lastApplyReport = text.match(/--- bifrost configuration apply ---[\s\S]{0,1200}/)?.[0] ?? text.slice(-1500);
@@ -97,7 +106,9 @@ function startFakeProvider() {
         return toolCallSse(response, "bifrost_config", { operation: "apply", source: "project", patch: PATCH, ...digests });
       }
       scripted.push("check");
-      return toolCallSse(response, "bifrost_config", { operation: "check", source: "project", patch: PATCH });
+      // Ask for the opt-in live probe on the one check this turn runs, so the
+      // report the model copies digests from is the probed one.
+      return toolCallSse(response, "bifrost_config", { operation: "check", source: "project", patch: PATCH, probe: true });
     });
   });
   return new Promise((resolve, reject) => {
@@ -299,6 +310,13 @@ describe("config agent tool Pi acceptance", { concurrency: 1, timeout: 180_000 }
       assert.deepEqual(dialogs, [], "RPC apply must not request a weaker approval");
       assert.match(lastCheckReport ?? "", /classifier runtime now: disabled \(legacy-conflict\).*configured=off; backend=prompt/i);
       assert.match(lastCheckReport ?? "", /configured false overrides legacy classifierEnabled=true/);
+      // The opt-in probe ran on real Pi against the local fixture: one request
+      // for the one routed model, reported as answered, and kept out of the
+      // init cache that `/bifrost init` reuses for an hour.
+      assert.match(lastCheckReport ?? "", /live probe \(one tiny prompt per model\): 1\/1 answered/);
+      assert.equal(probeRequests, 1, "the check must send exactly one probe request");
+      assert.equal(existsSync(join(env.work, ".pi", "bifrost-probe.json")), false,
+        "a candidate probe must not replace the init cache");
       assert.match(lastApplyReport ?? "", /approval_required/);
       assert.equal(readFileSync(savedPath, "utf8"), before, "RPC apply must preserve exact source bytes");
       assert.equal(readFileSync(statePath, "utf8"), stateBefore, "config inspection and apply must preserve legacy runtime bytes");

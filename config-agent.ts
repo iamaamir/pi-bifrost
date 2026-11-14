@@ -254,6 +254,13 @@ export interface ConfigAgentRoutingSummary {
   readonly economics: { readonly configured: boolean; readonly spendCap: false };
 }
 
+/** One live-check outcome for a model the candidate routes to. */
+export interface ConfigAgentProbeResult {
+  readonly model: string;
+  readonly status: "ok" | "error" | "timeout" | "skipped";
+  readonly reason?: string;
+}
+
 export interface ConfigAgentCheckResult {
   readonly operation: "check";
   readonly status: ConfigAgentStatus;
@@ -276,6 +283,14 @@ export interface ConfigAgentCheckResult {
   readonly removedModels: readonly string[];
   readonly writeEligible: boolean;
   readonly notes: readonly string[];
+  /**
+   * Exact models a live probe would target for this candidate. Present on every
+   * writable check, so the caller can state the scope and the cost before
+   * agreeing; computing it sends nothing.
+   */
+  readonly probePlan?: readonly string[];
+  /** Live probe outcomes, present only when the caller asked for one. */
+  readonly liveProbe?: readonly ConfigAgentProbeResult[];
 }
 
 export interface ConfigAgentPreviewCase {
@@ -724,6 +739,172 @@ function providerAuthIssues(
     }
   }
   return issues;
+}
+
+/**
+ * Exact catalog models a composed candidate routes to. A pool entry may be a
+ * bare id or name a model Pi hides right now, so both catalogs are consulted;
+ * a live probe only ever targets exact `provider/id` keys.
+ */
+function probeModelKeys(
+  pools: Iterable<string>,
+  catalog: ConfigAgentCatalog,
+): string[] {
+  const known = new Set([
+    ...catalog.available.map((model) => model.key),
+    ...catalog.known.map((model) => model.key),
+  ]);
+  const keys = new Set<string>();
+  for (const entry of pools) {
+    for (const key of poolMatches(catalog, entry)) if (known.has(key)) keys.add(key);
+    for (const key of knownPoolMatches(catalog, entry)) if (known.has(key)) keys.add(key);
+  }
+  return [...keys].sort();
+}
+
+/** Provider error text copied into a warning: bounded, so a verbose error body
+ * cannot push the approval message past its size cap and refuse a fine candidate. */
+const MAX_PROBE_REASON_CHARS = 200;
+
+function boundedProbeReason(reason: string): string {
+  return reason.length <= MAX_PROBE_REASON_CHARS ? reason : `${reason.slice(0, MAX_PROBE_REASON_CHARS - 1)}…`;
+}
+
+/** Warning for a model the live check reached and could not answer. */
+function probeIssues(
+  probed: readonly ConfigAgentProbeResult[],
+): ConfigAgentIssueSummary[] {
+  return probed
+    .filter((entry) => entry.status === "error" || entry.status === "timeout")
+    .map((entry) => ({
+      severity: "warning" as const,
+      code: "config.probe_failed",
+      message: `Live probe of ${entry.model} ${entry.status === "timeout" ? "timed out" : "failed"}${entry.reason ? `: ${boundedProbeReason(entry.reason)}` : ""}. This is one observed result for this run, not proof the model always fails; the candidate is still writable.`,
+    }));
+}
+
+/**
+ * Models a live probe may target: the resolved pools of the composed config,
+ * minus every candidate a hard provider scope forbids for its tier. Probing an
+ * excluded provider would spend a request on a model that can never be
+ * selected, which is exactly the credit the opt-in is meant to account for.
+ */
+function probeTargets(
+  result: ConfigAgentCheckResult,
+  catalog: ConfigAgentCatalog,
+): string[] {
+  const scope = compileRoutingScope(((result.effectiveAfter ?? {}) as BifrostConfig).routingScope);
+  const providerOf = new Map<string, string>();
+  for (const model of catalog.known) providerOf.set(model.key, model.provider);
+  for (const model of catalog.available) providerOf.set(model.key, model.provider);
+  const targets = new Set<string>();
+  for (const tier of result.routingAfter?.tiers ?? []) {
+    for (const key of probeModelKeys(tier.pool, catalog)) {
+      const provider = providerOf.get(key);
+      if (provider !== undefined && !checkProviderScope(scope, provider, { tier: tier.tier }).allowed) continue;
+      targets.add(key);
+    }
+  }
+  return [...targets].sort();
+}
+
+/**
+ * Output cap per probe request, stated in the terms a user agrees to. The
+ * transport enforces it (`probe.ts`); policy owns the wording, and the
+ * architecture rule forbids this module from importing the adapter. A test
+ * pins the two numbers together so the consent text cannot drift from what is
+ * actually sent.
+ */
+export const PROBE_OUTPUT_TOKEN_CAP = 5;
+
+/**
+ * What a live probe will do, in the terms a user needs to agree to it: the exact
+ * models, the request count, and the output bound.
+ */
+function probeConsentText(models: readonly string[]): string {
+  const shown = models.length > 8
+    ? `${models.slice(0, 8).join(", ")}, and ${models.length - 8} more`
+    : models.join(", ");
+  return `Send one request of at most ${PROBE_OUTPUT_TOKEN_CAP} output tokens to each of ${models.length} model(s): ${shown}. A result describes this provider now; a pass is not a promise for later.`;
+}
+
+/** How a live probe was authorized. */
+type ProbeConsent = "ui" | "delegated" | "declined";
+
+/**
+ * Ask the human when the host can ask one. Pi exposes no consent channel to a
+ * headless or RPC tool call, so there the caller's opt-in is the authorization —
+ * the result says so rather than implying a user approved it.
+ */
+async function requestProbeConsent(ctx: ExtensionContext, models: readonly string[]): Promise<ProbeConsent> {
+  if (!ctx.hasUI || ctx.mode !== "tui" || typeof ctx.ui?.confirm !== "function") return "delegated";
+  try {
+    return await ctx.ui.confirm("Run the live probe?", probeConsentText(models)) ? "ui" : "declined";
+  } catch {
+    // A dialog that failed is not an approval; do not spend on a guess.
+    return "declined";
+  }
+}
+
+/**
+ * Run the opt-in live check against the models a candidate would route to.
+ * Advisory on purpose: a probe failure is evidence about the provider, not
+ * proof that the candidate is wrong, so it warns and leaves the write eligible.
+ */
+async function applyLiveProbe(
+  result: ConfigAgentCheckResult,
+  catalog: ConfigAgentCatalog,
+  deps: ConfigAgentToolDeps,
+  ctx: ExtensionContext,
+  signal?: AbortSignal,
+): Promise<ConfigAgentCheckResult> {
+  if (result.status !== "ok") {
+    return { ...result, notes: [...result.notes, "Live probe skipped: the candidate did not pass check."] };
+  }
+  const models = probeTargets(result, catalog);
+  if (models.length === 0) {
+    return { ...result, notes: [...result.notes, "Live probe skipped: this candidate routes to no model the catalog knows."] };
+  }
+  if (!deps.probeModels) {
+    return { ...result, notes: [...result.notes, "Live probe is unavailable in this host; nothing was sent."] };
+  }
+  // A cancelled call must not start more provider requests; the transport gets
+  // the same signal so it can stop queued work it already owns.
+  if (signal?.aborted) {
+    return { ...result, notes: [...result.notes, "Live probe cancelled before it started; nothing was sent."] };
+  }
+  // Spending a request needs an answer, not an assumption. Where a dialog exists
+  // it decides; where it does not, the opt-in is recorded as delegated below.
+  const consent = await requestProbeConsent(ctx, models);
+  if (consent === "declined") {
+    return { ...result, notes: [...result.notes, "Live probe was declined; nothing was sent."] };
+  }
+  let probed: readonly ConfigAgentProbeResult[];
+  try {
+    probed = await deps.probeModels(models, ctx, signal);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ...result,
+      notes: [...result.notes, `Live probe could not run (${message}); nothing was written.`],
+    };
+  }
+  if (probed.length === 0) {
+    return { ...result, notes: [...result.notes, "Live probe returned no result; nothing was written."] };
+  }
+  const cancelled = signal?.aborted === true;
+  return {
+    ...result,
+    liveProbe: probed,
+    // Partial results after a cancellation are shown but not turned into
+    // warnings: a stopped probe says nothing about the model it never reached.
+    issues: cancelled ? result.issues : [...result.issues, ...probeIssues(probed)],
+    notes: [...result.notes, cancelled
+      ? "Live probe was cancelled; the reported outcomes are partial and were not turned into warnings."
+      : consent === "ui"
+        ? `Live probe ran with dialog approval: ${models.length} request(s), at most ${PROBE_OUTPUT_TOKEN_CAP} output tokens each.`
+        : `Live probe ran under delegated consent: this host has no approval dialog, so the caller is responsible for the user's agreement. ${models.length} request(s), at most ${PROBE_OUTPUT_TOKEN_CAP} output tokens each.`],
+  };
 }
 
 // ── Effective config + routing summary ─────────────────────────
@@ -1295,6 +1476,9 @@ export async function previewConfigCandidate(input: ConfigAgentPreviewInput): Pr
 export interface ConfigAgentApplyInput extends ConfigAgentCheckInput {
   /** Must return true only after the user explicitly approved this exact proposal. */
   readonly confirm: (title: string, summary: string, details: string) => Promise<boolean> | boolean;
+  /** Warnings the user already saw on the checked proposal, such as a live
+   * probe failure. Approval repeats them so apply never re-sends a request. */
+  readonly checkedIssues?: readonly ConfigAgentIssueSummary[];
   readonly write?: (path: string, text: string) => void;
   readonly reload: () => boolean;
   /** Re-derives the model inventory when apply revalidates after approval. */
@@ -1532,6 +1716,12 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
     routing: null,
   };
   const checked = checkConfigCandidate(input);
+  // Approval rebuilds the offline check, which cannot reproduce a live probe:
+  // its warnings travel with the proposal so the user sees at the dialog what
+  // the check reported. They describe the same candidate, never a new request.
+  const reviewed: ConfigAgentCheckResult = input.checkedIssues && input.checkedIssues.length > 0
+    ? { ...checked, issues: [...checked.issues, ...input.checkedIssues] }
+    : checked;
   const withCheck = {
     ...base,
     source: checked.source,
@@ -1594,14 +1784,14 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
     }
   }
 
-  const message = approvalDetails(checked);
+  const message = approvalDetails(reviewed);
   if (message === null) {
     return { ...withCheck, status: "rejected", reason: "the full change is too large to show for approval", notes: ["Nothing was written. Make a smaller change or edit the config manually."] };
   }
   let approved: boolean;
   let approvalFailed = false;
   try {
-    approved = await confirm("Apply this Bifrost configuration?", approvalSummary(checked), message);
+    approved = await confirm("Apply this Bifrost configuration?", approvalSummary(reviewed), message);
   } catch {
     approved = false;
     approvalFailed = true;
@@ -1803,6 +1993,16 @@ export interface ConfigAgentToolDeps {
   readonly write?: (path: string, text: string) => void;
   /** Resolve the currently effective session/config classifier state without network access. */
   readonly classifierRuntime?: (config: BifrostConfig, ctx: ExtensionToolContext) => ConfigAgentClassifierRuntime;
+  /**
+   * Send one tiny request to each named model and report what came back.
+   * Injected by the host so core policy never owns provider transport, and
+   * only called when the caller opts in with `probe: true`.
+   */
+  readonly probeModels?: (
+    models: readonly string[],
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ) => Promise<readonly ConfigAgentProbeResult[]>;
   /** Render a result for the model. Injected by the host entry so this module
    * owns policy and IO only and the presentation module stays a leaf. */
   readonly render: (result: ConfigAgentToolResult) => string;
@@ -1854,6 +2054,7 @@ const ConfigAgentParameters = Type.Object({
   effectiveDigest: Type.Optional(Type.String({ description: "effectiveDigest returned by check or preview for this exact candidate." })),
   catalogDigest: Type.Optional(Type.String({ description: "catalogDigest returned by check or preview for this exact candidate." })),
   classifierRuntimeDigest: Type.Optional(Type.String({ description: "classifierRuntimeDigest returned by check or preview; apply refuses if runtime classifier state changes." })),
+  probe: Type.Optional(Type.Boolean({ description: "Live-check the models this check would route to: one request per model, each capped at 5 output tokens. Plain check never sends; it reports the exact targets in probePlan, so show that plan and ask the user first. probePlan measures raw model reachability of configured candidates; models that sign-in eligibility removes for this session are listed separately in probePlan notes and are not probed. The TUI host confirms again before sending; where no dialog exists this flag is the authorization. Advisory: probe failures are one observed result, not proof a model always fails, and the candidate stays writable." }))
 });
 
 /**
@@ -1933,7 +2134,13 @@ function readRequest(params: {
 export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefinition<typeof ConfigAgentParameters, ConfigAgentToolResult, unknown> {
   const cwdOf = deps.cwd ?? (() => process.cwd());
   const nowOf = deps.now ?? (() => Date.now());
-  const proposals = new WeakMap<object, { sessionId: string; handle: string; request: ConfigAgentRequest }>();
+  const proposals = new WeakMap<object, {
+    sessionId: string;
+    handle: string;
+    request: ConfigAgentRequest;
+    /** Live-probe warnings the check showed; apply cannot rebuild them offline. */
+    probeIssues: readonly ConfigAgentIssueSummary[];
+  }>();
   return {
     name: BIFROST_CONFIG_TOOL_NAME,
     label: "Bifrost config",
@@ -1955,9 +2162,20 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
       const sessionId = typeof sessionManager?.getSessionId === "function" ? sessionManager.getSessionId() : undefined;
       const saved = sessionId === undefined ? undefined : proposals.get(sessionManager);
       const handleOnly = Object.keys(params).every((key) => key === "operation" || key === "proposalHandle");
-      if (operation === "apply" && params.proposalHandle && saved && saved.sessionId === sessionId && saved.handle === params.proposalHandle && handleOnly) {
-        request = saved.request;
-      }
+      const handleMatch = !!saved && saved.sessionId === sessionId
+        && operation === "apply" && !!params.proposalHandle && saved.handle === params.proposalHandle && handleOnly;
+      if (handleMatch) request = saved!.request;
+      // The caller may also apply the checked candidate by copying its digests
+      // instead of the handle; that request names the same candidate, so the
+      // warnings the check showed still describe it. Compare the candidate, not
+      // the digests, because apply revalidates those separately and would refuse
+      // a request that no longer matches.
+      const sameCandidate = !!saved && saved.sessionId === sessionId && operation === "apply"
+        && saved.request.source === request.source
+        && canonicalJson(saved.request.candidate ?? null) === canonicalJson(request.candidate ?? null)
+        && canonicalJson(saved.request.patch ?? null) === canonicalJson(request.patch ?? null)
+        && canonicalJson(saved.request.remove ?? null) === canonicalJson(request.remove ?? null);
+      const savedProbeIssues = (handleMatch || sameCandidate) && saved ? saved.probeIssues : [];
       const cwd = cwdOf();
       const catalog = catalogFromContext(ctx);
       // Resolve sign-in for every provider the inventory offers, plus every
@@ -2004,9 +2222,23 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
             ...(classifierRuntime ? { classifierRuntime } : {}),
           });
           break;
-        case "check":
+        case "check": {
           result = checkConfigCandidate(input);
+          // State the scope and cost of a live probe on every check, so the
+          // caller can show them before agreeing. Computing this sends nothing.
+          if (result.status === "ok" && deps.probeModels) {
+            const plan = probeTargets(result, catalog);
+            if (plan.length > 0) {
+              result = {
+                ...result,
+                probePlan: plan,
+                notes: [...result.notes, `Live probe would target ${plan.length} model(s), one request each; it does not run unless the caller opts in with probe: true.`],
+              };
+            }
+          }
+          if (params.probe === true) result = await applyLiveProbe(result, catalog, deps, ctx, signal);
           break;
+        }
         case "preview":
           result = await previewConfigCandidate({ ...input, now: nowOf() });
           break;
@@ -2038,6 +2270,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
           }
           result = await applyConfigCandidate({
             ...input,
+            ...(savedProbeIssues.length > 0 ? { checkedIssues: savedProbeIssues } : {}),
             confirm: (title, summary, details) => approveConfig(ctx, title, summary, details, signal),
             reload: () => deps.reload(ctx),
             liveCatalog: () => catalogFromContext(ctx),
@@ -2064,6 +2297,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
         const handle = randomBytes(6).toString("hex");
         proposals.set(sessionManager, {
           sessionId, handle,
+          probeIssues: result.issues.filter((issue) => issue.code === "config.probe_failed"),
           request: structuredClone({
             ...request,
             proposalDigest: result.proposalDigest,
