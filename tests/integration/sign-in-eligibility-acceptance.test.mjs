@@ -73,4 +73,24 @@ describe("pre-dispatch sign-in eligibility dispatch", () => {
       assertNoViolations(violations, `${mode} sign-in run made a blocked outbound attempt`);
     });
   }
+
+  it("fails closed when sign-in is the only reason a terminal tier is empty", async () => {
+    // The tier names one provider and no fallback. Sign-in removes it, and the
+    // turn must end without a request rather than borrow another tier or send
+    // the dead provider the check exists to stop.
+    writeFileSync(violations, "");
+    await runFauxFixtureChild({
+      child: CHILD,
+      env: {
+        ...env,
+        BIFROST_FAUX_SCRATCH: scratch,
+        BIFROST_SIGN_IN_LIVE: "fake",
+        BIFROST_SIGN_IN_DEAD: "unauth",
+        BIFROST_SIGN_IN_ORDER: JSON.stringify(["unauth/chat"]),
+        BIFROST_SIGN_IN_MODE: "exclude",
+        BIFROST_SIGN_IN_TERMINAL: "1",
+      },
+    });
+    assertNoViolations(violations, "the terminal-boundary run made a blocked outbound attempt");
+  });
 });
