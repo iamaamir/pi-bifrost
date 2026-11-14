@@ -1903,6 +1903,35 @@ describe("preview route trace", () => {
 });
 
 describe("command aliases", () => {
+  it("does not save when an inherited config appears during init confirmation", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-inherited-race-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = join(tempDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      mkdirSync(agentDir);
+      writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      (ctx as any).ui.confirm = async () => {
+        writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({ models: { quick: ["manual/keep"] } }));
+        return true;
+      };
+      await createCommandRouter(makeState() as never)("init", ctx);
+      assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
+      assert.ok(calls.some((call) => String(call.value).includes("Inherited config changed")));
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("shows the selected init destination in the confirmation and respects cancellation", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-confirm-"));
     const previousCwd = process.cwd();

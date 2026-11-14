@@ -216,6 +216,42 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
   before(async () => { port = await startFakeProvider(); });
   after(async () => { await new Promise((resolve) => server?.close(resolve)); });
 
+  for (const layer of ["user", "workspace"]) {
+    for (const pool of [["manual/keep"], []]) {
+      it(`does not shadow an inherited ${layer} ${pool.length ? "manual" : "empty"} pool`, async () => {
+        const env = fixture(port, ["healthy"]);
+        const lowerPath = layer === "user" ? join(env.home, ".pi", "agent", "bifrost.json") : join(env.work, "bifrost.json");
+        const original = Buffer.from(JSON.stringify({ models: { quick: pool }, classifier: { enabled: false } }) + "\n");
+        writeFileSync(lowerPath, original);
+        try {
+          const result = await runInit({ ...env, args: "--write" });
+          assert.equal(result.code, 0, result.stderr);
+          assert.equal(result.violations, "");
+          assert.match(result.stdout + result.stderr, /inherited.*quick.*no configuration.*changed/i);
+          assert.deepEqual(readFileSync(lowerPath), original);
+          assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
+          assert.equal(existsSync(join(env.work, ".pi", "bifrost-reconcile-ownership.json")), false);
+        } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+      });
+    }
+  }
+
+  it("creates a project pool when inherited tiers do not overlap", async () => {
+    const env = fixture(port, ["healthy"]);
+    const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+    const original = Buffer.from('{"models":{"custom":["manual/keep"]},"classifier":{"enabled":false}}\n');
+    writeFileSync(globalPath, original);
+    try {
+      const result = await runInit({ ...env, args: "--write" });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.violations, "");
+      assert.deepEqual(readFileSync(globalPath), original);
+      const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
+      assert.ok(saved.models.quick.includes("fake/healthy"));
+      assert.equal(Object.hasOwn(saved.models, "custom"), false);
+    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+  });
+
   for (const selected of ["default", "default-global-only", "global"]) {
     it(`saves init to the ${selected} source without changing other layers`, async () => {
       requests = [];
