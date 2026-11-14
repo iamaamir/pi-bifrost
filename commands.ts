@@ -1074,12 +1074,12 @@ async function handleInit(
       return;
     }
   }
+  const sourceModels = sourceConfig.models && typeof sourceConfig.models === "object" && !Array.isArray(sourceConfig.models)
+    ? sourceConfig.models as Record<string, unknown> : {};
   const inheritedSources: { path: string; text: string | null }[] = [];
   const inheritedTiers = new Set<string>();
   if (selectedSource === "project") {
     try {
-      const projectModels = sourceConfig.models && typeof sourceConfig.models === "object" && !Array.isArray(sourceConfig.models)
-        ? sourceConfig.models as Record<string, unknown> : {};
       for (const layer of ["user", "workspace"] as const) {
         const path = reconciliationPaths(layer).configPath;
         const text = readInheritedConfigSnapshot(path);
@@ -1092,7 +1092,7 @@ async function handleInit(
           for (const tier of Object.keys(pools)) inheritedTiers.add(tier);
         }
       }
-      const conflict = Object.keys(models).filter((tier) => inheritedTiers.has(tier) && !Object.hasOwn(projectModels, tier));
+      const conflict = Object.keys(models).filter((tier) => inheritedTiers.has(tier) && !Object.hasOwn(sourceModels, tier));
       if (conflict.length) {
         log(ctx, `Init would shadow inherited model pools (${conflict.join(", ")}); no configuration was changed. Edit the existing source, use /bifrost init -g for global config, or review /bifrost config reconcile --source workspace.`, "warning");
         return;
@@ -1183,7 +1183,7 @@ async function handleInit(
       ?? proposedStrategies[tier]
       ?? "first",
   ]));
-  const finalTiers = new Set([...Object.keys(models), ...inheritedTiers]);
+  const finalTiers = new Set([...Object.keys(models), ...Object.keys(sourceModels), ...inheritedTiers]);
   proposal.rules = sourceConfig.rules ?? DEFAULT_RULES.filter(({ model }) => finalTiers.has(model));
   const defaultTier = sourceConfig.default ?? publicDefaults.default;
   if (typeof defaultTier === "string" && models[defaultTier]?.length) proposal.default = defaultTier;

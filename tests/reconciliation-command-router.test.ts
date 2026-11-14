@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
+import { createPipeline } from "../classification-pipeline.ts";
 import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, createCommandRouter, type BifrostState } from "../commands.ts";
+import { loadConfigForReload, loadRules } from "../config-load.ts";
 import { BUNDLED_PUBLIC_INIT_DEFAULTS, DEFAULT_RULES } from "../config.ts";
 import { buildInitOwnershipReceipt } from "../reconciliation-command.ts";
 import { makeModel } from "./helpers.ts";
@@ -389,6 +391,48 @@ describe("config reconciliation command router", () => {
       assert.deepEqual(Object.keys(saved.models), ["quick"]);
       assert(saved.rules.length > 0);
       assert(saved.rules.every(({ model }) => model === "quick"));
+    });
+  });
+
+  it("keeps starter rules for manual tiers during no-change settings top-up", async () => {
+    await withCwd(async (cwd) => {
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      fs.writeFileSync(join(configDir, "bifrost.json"), JSON.stringify({
+        classifier: { enabled: false },
+        default: "quick",
+        models: {
+          quick: ["openai/cheap"],
+          frontier: ["manual/expensive"],
+        },
+      }));
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "cheap", cost_input: 0.1, cost_output: 0.1, duration_ms: 10 },
+      ]);
+      const extensionDir = join(cwd, "extension");
+      const routeReview = async () => {
+        const config = loadConfigForReload(cwd, extensionDir).config;
+        const rules = loadRules(cwd, config);
+        const result = await createPipeline({
+          cacheLookup: () => undefined,
+          classifierModels: [],
+          classifyWithLLM: async () => undefined,
+          regexRules: rules,
+          defaultTier: config.default,
+          tiers: Object.keys(config.models ?? {}),
+        }).classify("review this code");
+        return { rules, result };
+      };
+      const before = await routeReview();
+      assert(before.rules.some(({ model }) => model === "frontier"));
+      assert.deepEqual(before.result, { kind: "classified", tier: "frontier", source: "regex" });
+
+      const h = makeHarness({ models: [makeModel("openai", "cheap", 0.1, 0.1)] });
+      await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
+
+      const after = await routeReview();
+      assert(after.rules.some(({ model }) => model === "frontier"));
+      assert.deepEqual(after.result, { kind: "classified", tier: "frontier", source: "regex" });
     });
   });
 
