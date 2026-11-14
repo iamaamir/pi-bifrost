@@ -793,8 +793,8 @@ def capture(
                 raise AssertionError("manual init must ask exactly once to save the refreshed setup")
             if "choose classifier" in init_screen or "select classifier" in init_screen:
                 raise AssertionError("manual init opened a classifier picker after save")
-            if "save memberships: +2 / -0" not in init_screen or "to workspace (bifrost.json)" not in init_screen:
-                raise AssertionError("manual init did not preview the exact workspace membership changes")
+            if "save memberships: +2 / -0" not in init_screen or "to project (.pi/bifrost.json)" not in init_screen:
+                raise AssertionError("manual init did not preview the exact project membership changes")
 
         time.sleep(2.0)
         assert_no_network_violations(home)
