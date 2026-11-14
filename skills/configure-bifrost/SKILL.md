@@ -71,9 +71,10 @@ goal needs something Bifrost does not do, say so.
 
    When a provider's sign-in state is `unknown`, or the user asks for proof that
    a tier really answers before you apply it, the check can run a live probe:
-   one request per model the candidate routes to, each capped at 5 output
+   one request per model the candidate can select, each capped at 5 output
    tokens. Plain check never probes; it reports `probePlan` with the exact
-   models and count the probe would cover. Show that plan to the user, and only
+   models and count a probe would cover, plus `probeSkipped` for models the
+   host leaves out of this session. Show that plan to the user, and only
    then repeat check with `"probe":true`. In the TUI the host asks for a second,
    explicit confirmation before sending anything; if the user declines, nothing
    is sent. On a host with no dialog (RPC or headless) your `"probe":true` is
@@ -82,8 +83,8 @@ goal needs something Bifrost does not do, say so.
    outcome. A `config.probe_failed` warning means that model did not answer on
    this run; it is one observed result, not proof it always fails, and it does
    not block the write, so say what failed and let the user decide. A probe
-   that reports fewer outcomes than targets leaves the rest unverified, not
-   passing.
+   that reports fewer outcomes than `probePlan` leaves the rest unverified, not
+   passing; a model in `probeSkipped` was never asked.
 
    Probe targets the effective model pools and the effective direct-model
    rules, including a rule supplied by `.pi/bifrost-routes.json` rather than
