@@ -43,3 +43,12 @@ test("readiness, adjudication and review remain distinct from authorization", ()
   assert.match(axiom, /missing required check is a verification blocker/);
   assert.match(axiom, /code approval never authorizes merge or issue closure/);
 });
+
+
+test("reusable governance resolves ticket and planning context at handoff", () => {
+  const lifecycle = read("AGENTS.md").split("## Delivery lifecycle\n")[1]?.split("## Verification\n")[0];
+  assert.ok(lifecycle);
+  for (const text of [lifecycle, read("docs/agent-governance.md"), ...roles.map(role => read(`.agents/${role}.md`))]) {
+    assert.doesNotMatch(text, /(?:#|\/issues\/)\d+|roadmap[-\w]*\.md/i);
+  }
+});

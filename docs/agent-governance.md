@@ -21,12 +21,13 @@ need not trigger another review round. Keep cross-issue findings in the existing
 consolidated report and accepted local decisions on their owner tickets only
 when issue edits are authorized. This setup does not authorize such edits.
 
-For [#176](https://github.com/iamaamir/pi-bifrost/issues/176), fetch the current
-protocol, issue/comments, wave parent and native blockers before challenge.
-Require the local-only roadmap for programme execution; never commit it. Preserve
-all dependency, SDK-first, RED/GREEN, privacy and wave/promotion gates. Previously
-adjudicated facts need reconciliation with current source, not another full audit
-without new evidence. #146 remains baseline-only and source-change-free.
+Before challenge, obtain the current issue/comments, native blockers and any
+applicable parent plan or approved delivery protocol. Resolve required planning
+documents from that context; ask when they are missing and respect their privacy
+constraints. Preserve existing ownership, dependency, evidence and promotion
+gates. Reconcile prior adjudication with current source; repeat a full audit only
+when new evidence warrants it. An issue's non-goals, including source-change-free
+scope where specified, remain authoritative.
 
 ## Using the definitions
 
@@ -55,13 +56,14 @@ separate. Review/repair bounds never turn a missing gate into a pass.
 Replace angle-bracket fields with real revisions, snapshots and evidence. These
 are task templates, not commands or claims of an executed challenge/review.
 
-**Challenge (future #146 work, after governance approval):**
+**Challenge:**
 
 > Act as issue-challenger, independently of the author. Read AGENTS.md and
-> .agents/issue-challenger.md. Challenge #146 against <delivery branch and SHA>.
-> Inputs: <current #176 protocol, #146/comments, #169 and native blocker snapshot>,
-> <local roadmap path>, <prior adjudication/report>. Trace current owners and
-> map every acceptance criterion to evidence. Preserve source-change-free scope.
+> .agents/issue-challenger.md. Challenge <issue> against <delivery branch and SHA>.
+> Inputs: <current issue/comments and native blocker snapshot>, <applicable parent
+> plan, approved protocol and required planning documents>, <prior adjudication/report>.
+> Trace current owners and map every acceptance criterion to evidence. Preserve
+> the issue's non-goals.
 > Report readiness, material blockers, nonblocking observations and proof limits.
 > Do not edit files or issues, implement, run commands or approve a PR.
 
