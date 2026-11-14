@@ -12,6 +12,7 @@ import type { RouteRule } from "./routing.ts";
 import { mergeRoutingScopeConflicts, type RoutingScope } from "./routing-scope.ts";
 import {
   DEFAULT_RULES,
+  DEFAULT_RUNTIME_SETTINGS,
   DYNAMIC_CONFIG_MAP_PATHS,
   MAX_CONFIG_SOURCE_BYTES,
   SUPPORTED_SCHEMA_VERSIONS,
@@ -411,9 +412,9 @@ export function loadConfigWithSourceOverride(
 
 function defaultConfig(): BifrostConfig {
   return {
-    enabled: true,
-    default: "general",
-    strategy: "first",
+    enabled: DEFAULT_RUNTIME_SETTINGS.enabled,
+    default: DEFAULT_RUNTIME_SETTINGS.default,
+    strategy: DEFAULT_RUNTIME_SETTINGS.strategy,
     models: {},
     rules: DEFAULT_RULES,
   };
