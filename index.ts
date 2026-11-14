@@ -2573,6 +2573,19 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         }
       }
     }
+    // Direct-model rules (a rule whose `model` is `provider/id`) bypass the tier
+    // pools above, so their providers must be checked here too; otherwise a
+    // provider sign-in eligibility excludes at runtime would never be resolved
+    // and the model could be dispatched unchecked.
+    for (const rule of config.rules ?? []) {
+      if (typeof rule?.model !== "string" || !rule.model.includes("/")) continue;
+      const [provider, ...idParts] = rule.model.split("/");
+      const model = ctx.modelRegistry.find(provider, idParts.join("/"));
+      if (!model) continue;
+      // A direct model has no owning tier, so only the global scope governs.
+      if (!checkProviderScope(scope, model.provider, {}).allowed) continue;
+      providers.add(model.provider);
+    }
     return [...providers];
   }
 
