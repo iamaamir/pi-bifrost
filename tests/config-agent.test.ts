@@ -49,6 +49,9 @@ interface HarnessOptions {
   readonly providerAuthResult?: (provider: string) => unknown;
   /** Live probe outcomes for the opt-in check; omit to leave the host without one. */
   readonly probeModels?: (models: readonly string[], signal?: AbortSignal) => readonly ConfigAgentProbeResult[];
+  /** Answer the live-probe dialog; omit to leave the host without a dialog. */
+  readonly probeConfirm?: boolean;
+  readonly probeConfirmError?: boolean;
   readonly legacyClassifierEnabled?: boolean;
   readonly classifierSessionOverride?: boolean;
   readonly runtimeStateIssue?: "invalid-json";
@@ -81,6 +84,7 @@ function freshHarness(options: HarnessOptions = {}) {
   let reloadCalls = 0;
   let sessionId = "test-session";
   const confirmations: { title: string; summary: string; details: string }[] = [];
+  const probeConfirmations: { title: string; message: string }[] = [];
 
   const registry = {
     getAvailable: () => available,
@@ -127,6 +131,15 @@ function freshHarness(options: HarnessOptions = {}) {
         return result;
       },
       notify: () => {},
+      ...(options.probeConfirm !== undefined || options.probeConfirmError
+        ? {
+          confirm: async (title: string, message: string) => {
+            probeConfirmations.push({ title, message });
+            if (options.probeConfirmError) throw new Error("dialog unavailable");
+            return options.probeConfirm === true;
+          },
+        }
+        : {}),
     },
     modelRegistry: registry,
   } as unknown as ExtensionToolContext;
@@ -203,6 +216,7 @@ function freshHarness(options: HarnessOptions = {}) {
     confirmations: () => confirmations,
     probeCalls: () => probeCalls,
     probeSignals: () => probeSignals,
+    probeConfirmations: () => [...probeConfirmations],
     classifyCalls: () => classifyCalls,
     reloadCalls: () => reloadCalls,
     projectConfigPath: () => join(cwd, ".pi", "bifrost.json"),
@@ -663,6 +677,119 @@ describe("provider sign-in state", () => {
       const plain = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", candidate }));
       assert.equal(harness.probeCalls().length, 1);
       assert.equal(plain.liveProbe, undefined);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("states a probe's scope and cost before it runs, and spends only on an answer", async () => {
+    // Section A of the review: a plain check must never send, and money must not
+    // leave on an assumption. The plan is computed for every writable check; the
+    // dialog decides; a host with no dialog records delegated consent in words.
+    const candidate = { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } };
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+      probeConfirm: false,
+    });
+    try {
+      const plain = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", candidate }));
+      assert.deepEqual(plain.probePlan, ["alpha/strong", "beta/code"]);
+      assert.equal(plain.liveProbe, undefined);
+      assert.equal(harness.probeCalls().length, 0);
+      assert.equal(harness.probeConfirmations().length, 0, "a plain check must not even ask");
+      assert.match(contentOf(await harness.run({ operation: "check", candidate })), /live probe not run: 2 model\(s\), one request each -- alpha\/strong, beta\/code/);
+
+      // A declined dialog sends nothing and says so.
+      const declined = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", candidate, probe: true }));
+      assert.equal(harness.probeCalls().length, 0);
+      assert.match(declined.notes.join("\n"), /Live probe was declined; nothing was sent\./);
+      const [question] = harness.probeConfirmations();
+      assert.match(question?.message ?? "", /one request of at most 5 output tokens to each of 2 model\(s\): alpha\/strong, beta\/code/);
+    } finally {
+      harness.cleanup();
+    }
+
+    // A dialog that fails is not an approval either.
+    const failing = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000)],
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+      probeConfirmError: true,
+    });
+    try {
+      const refused = detailsOf<ConfigAgentCheckResult>(await failing.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+        probe: true,
+      }));
+      assert.equal(failing.probeCalls().length, 0);
+      assert.match(refused.notes.join("\n"), /declined/);
+    } finally {
+      failing.cleanup();
+    }
+
+    // With no dialog the caller's opt-in is the authorization, and the result
+    // must never imply the user approved it.
+    const delegated = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000)],
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+      mode: "rpc",
+    });
+    try {
+      const ran = detailsOf<ConfigAgentCheckResult>(await delegated.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+        probe: true,
+      }));
+      assert.deepEqual(delegated.probeCalls(), [["alpha/strong"]]);
+      assert.match(ran.notes.join("\n"), /delegated consent: this host has no approval dialog/);
+    } finally {
+      delegated.cleanup();
+    }
+
+    // Approved at the dialog: the probe runs, and apply still never probes even
+    // when the caller repeats the flag on the write.
+    const approved = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000)],
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+      probeConfirm: true,
+    });
+    try {
+      const checked = await approved.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+        probe: true,
+      });
+      const details = detailsOf<ConfigAgentCheckResult>(checked);
+      assert.deepEqual(approved.probeCalls(), [["alpha/strong"]]);
+      assert.match(details.notes.join("\n"), /ran with dialog approval/);
+      const applied = detailsOf<ConfigAgentApplyResult>(await approved.run({
+        ...applyParams(details, { candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } } }),
+        probe: true,
+      }));
+      assert.equal(applied.applied, true);
+      assert.equal(approved.probeCalls().length, 1, "apply must never send a probe request");
+    } finally {
+      approved.cleanup();
+    }
+  });
+
+  it("counts a probe against what it requested, not what came back", async () => {
+    // A transport that answers for fewer models than were asked must not render
+    // as a full pass: the denominator is the plan, and the gap is called out.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: () => [{ model: "alpha/strong", status: "ok" }],
+    });
+    try {
+      const checked = await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } },
+        probe: true,
+      });
+      const content = contentOf(checked);
+      assert.match(content, /live probe \(one tiny prompt per model\): 1\/2 answered, 1 without a reported outcome/);
+      assert.match(content, /treat them as unverified, not as passing/);
     } finally {
       harness.cleanup();
     }

@@ -72,11 +72,18 @@ goal needs something Bifrost does not do, say so.
 
    When a provider's sign-in state is `unknown`, or the user asks for proof that
    a tier really answers before you apply it, the check can run a live probe:
-   one tiny prompt per model the candidate routes to, which spends a small
-   amount of credit. Run the live probe only after the user agrees, by repeating
-   check with `"probe":true`, then report each model's outcome. A
-   `config.probe_failed` warning means that model did not answer; it does not
-   block the write, so say what failed and let the user decide.
+   one request per model the candidate routes to, each capped at 5 output
+   tokens. Plain check never probes; it reports `probePlan` with the exact
+   models and count the probe would cover. Show that plan to the user, and only
+   then repeat check with `"probe":true`. In the TUI the host asks for a second,
+   explicit confirmation before sending anything; if the user declines, nothing
+   is sent. On a host with no dialog (RPC or headless) your `"probe":true` is
+   the authorization, so never pass it before the user agrees in the
+   conversation, and say plainly that you asked for it. Report each model's
+   outcome. A `config.probe_failed` warning means that model did not answer; it
+   does not block the write, so say what failed and let the user decide. A probe
+   that reports fewer outcomes than targets leaves the rest unverified, not
+   passing.
 5. **Preview routing outcomes.** Call `bifrost_config` with
    `{"operation":"preview", ...}` and 2–5 representative prompts drawn from the
    user's real work. To preview current disk configuration, omit candidate and patch. Preview is offline: it sends nothing anywhere. Read each

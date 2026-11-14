@@ -30,7 +30,8 @@ export const PROBE_PROMPT_TEXT = PROBE_PROMPT;
 export const PROBE_CACHE_TTL_MS = 60 * 60 * 1000;
 const MAX_PROBE_CACHE_BYTES = 10_000_000;
 const PROBE_TIMEOUT_MS = 10_000;
-const PROBE_MAX_TOKENS = 5;
+/** Output bound per probe request; exported so consent text states the real cap. */
+export const PROBE_MAX_OUTPUT_TOKENS = 5;
 /** Provider error text is untrusted and can be arbitrarily long: a live check
  * copies it into a report and an approval message, where a huge body would push
  * an otherwise fine candidate past the approval size limit. */
@@ -328,7 +329,7 @@ async function probeOne(
           messages: [{ role: "user", content: PROBE_PROMPT, timestamp: Date.now() }],
         },
         {
-          maxTokens: PROBE_MAX_TOKENS,
+          maxTokens: PROBE_MAX_OUTPUT_TOKENS,
           signal: controller.signal,
           cacheRetention: "none",
         },

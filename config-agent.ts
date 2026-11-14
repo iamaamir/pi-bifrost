@@ -43,6 +43,7 @@ import { createRouter, type RouterModel, type RouterRegistrySnapshot, type Route
 import { writeTextFile } from "./storage.ts";
 import { isGenerativeModel } from "./virtual-model.ts";
 import { approveConfig } from "./config-approval.ts";
+import { PROBE_MAX_OUTPUT_TOKENS } from "./probe.ts";
 
 // ── Limits ─────────────────────────────────────────────────────
 
@@ -283,6 +284,12 @@ export interface ConfigAgentCheckResult {
   readonly removedModels: readonly string[];
   readonly writeEligible: boolean;
   readonly notes: readonly string[];
+  /**
+   * Exact models a live probe would target for this candidate. Present on every
+   * writable check, so the caller can state the scope and the cost before
+   * agreeing; computing it sends nothing.
+   */
+  readonly probePlan?: readonly string[];
   /** Live probe outcomes, present only when the caller asked for one. */
   readonly liveProbe?: readonly ConfigAgentProbeResult[];
 }
@@ -803,6 +810,35 @@ function probeTargets(
 }
 
 /**
+ * What a live probe will do, in the terms a user needs to agree to it: the exact
+ * models, the request count, and the output bound.
+ */
+function probeConsentText(models: readonly string[]): string {
+  const shown = models.length > 8
+    ? `${models.slice(0, 8).join(", ")}, and ${models.length - 8} more`
+    : models.join(", ");
+  return `Send one request of at most ${PROBE_MAX_OUTPUT_TOKENS} output tokens to each of ${models.length} model(s): ${shown}. A result describes this provider now; a pass is not a promise for later.`;
+}
+
+/** How a live probe was authorized. */
+type ProbeConsent = "ui" | "delegated" | "declined";
+
+/**
+ * Ask the human when the host can ask one. Pi exposes no consent channel to a
+ * headless or RPC tool call, so there the caller's opt-in is the authorization —
+ * the result says so rather than implying a user approved it.
+ */
+async function requestProbeConsent(ctx: ExtensionContext, models: readonly string[]): Promise<ProbeConsent> {
+  if (!ctx.hasUI || ctx.mode !== "tui" || typeof ctx.ui?.confirm !== "function") return "delegated";
+  try {
+    return await ctx.ui.confirm("Run the live probe?", probeConsentText(models)) ? "ui" : "declined";
+  } catch {
+    // A dialog that failed is not an approval; do not spend on a guess.
+    return "declined";
+  }
+}
+
+/**
  * Run the opt-in live check against the models a candidate would route to.
  * Advisory on purpose: a probe failure is evidence about the provider, not
  * proof that the candidate is wrong, so it warns and leaves the write eligible.
@@ -829,6 +865,12 @@ async function applyLiveProbe(
   if (signal?.aborted) {
     return { ...result, notes: [...result.notes, "Live probe cancelled before it started; nothing was sent."] };
   }
+  // Spending a request needs an answer, not an assumption. Where a dialog exists
+  // it decides; where it does not, the opt-in is recorded as delegated below.
+  const consent = await requestProbeConsent(ctx, models);
+  if (consent === "declined") {
+    return { ...result, notes: [...result.notes, "Live probe was declined; nothing was sent."] };
+  }
   let probed: readonly ConfigAgentProbeResult[];
   try {
     probed = await deps.probeModels(models, ctx, signal);
@@ -851,7 +893,9 @@ async function applyLiveProbe(
     issues: cancelled ? result.issues : [...result.issues, ...probeIssues(probed)],
     notes: [...result.notes, cancelled
       ? "Live probe was cancelled; the reported outcomes are partial and were not turned into warnings."
-      : "Live probe sends one tiny prompt per model and spends a small amount of credit."],
+      : consent === "ui"
+        ? `Live probe ran with dialog approval: ${models.length} request(s), at most ${PROBE_MAX_OUTPUT_TOKENS} output tokens each.`
+        : `Live probe ran under delegated consent: this host has no approval dialog, so the caller is responsible for the user's agreement. ${models.length} request(s), at most ${PROBE_MAX_OUTPUT_TOKENS} output tokens each.`],
   };
 }
 
@@ -2002,7 +2046,7 @@ const ConfigAgentParameters = Type.Object({
   effectiveDigest: Type.Optional(Type.String({ description: "effectiveDigest returned by check or preview for this exact candidate." })),
   catalogDigest: Type.Optional(Type.String({ description: "catalogDigest returned by check or preview for this exact candidate." })),
   classifierRuntimeDigest: Type.Optional(Type.String({ description: "classifierRuntimeDigest returned by check or preview; apply refuses if runtime classifier state changes." })),
-  probe: Type.Optional(Type.Boolean({ description: "Live-check the models this check would route to by sending one tiny prompt to each. Costs a small request per model, so ask the user before enabling it and never enable it on your own. Advisory: probe failures warn and the candidate stays writable." })),
+  probe: Type.Optional(Type.Boolean({ description: "Live-check the models this check would route to: one request per model, each capped at 5 output tokens. Plain check never sends; it reports the exact targets in probePlan, so show that plan and ask the user first. The TUI host confirms again before sending; where no dialog exists this flag is the authorization. Advisory: probe failures warn and the candidate stays writable." })),
 });
 
 /**
@@ -2170,10 +2214,23 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
             ...(classifierRuntime ? { classifierRuntime } : {}),
           });
           break;
-        case "check":
+        case "check": {
           result = checkConfigCandidate(input);
+          // State the scope and cost of a live probe on every check, so the
+          // caller can show them before agreeing. Computing this sends nothing.
+          if (result.status === "ok" && deps.probeModels) {
+            const plan = probeTargets(result, catalog);
+            if (plan.length > 0) {
+              result = {
+                ...result,
+                probePlan: plan,
+                notes: [...result.notes, `Live probe would target ${plan.length} model(s), one request each; it does not run unless the caller opts in with probe: true.`],
+              };
+            }
+          }
           if (params.probe === true) result = await applyLiveProbe(result, catalog, deps, ctx, signal);
           break;
+        }
         case "preview":
           result = await previewConfigCandidate({ ...input, now: nowOf() });
           break;
