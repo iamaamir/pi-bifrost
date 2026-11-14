@@ -4,7 +4,6 @@ import { createHash } from "node:crypto";
 import { constants, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { loadRuntimeState, runtimeStatePath, type ClassifierEnablement, type RuntimeStateIssue } from "./runtime-state.ts";
-import { createTextFile } from "./storage.ts";
 import type { BifrostConfig, ClassifierConfig } from "./config.ts";
 import { BUNDLED_PUBLIC_INIT_DEFAULTS, DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, MAX_CONFIG_SOURCE_BYTES, PROMPT_ONLY_FIELDS, classifierConfigErrors, classifierTotalTimeoutIssue, schemaVersionAtLeast, validateConfig, validateEconomicConfig, validateTierPolicyConfig } from "./config.ts";
 import { loadConfigForReload, loadConfigWithSourceOverride, readBoundedConfigText, type ConfigLoadDiagnostic } from "./config-load.ts";
@@ -58,6 +57,7 @@ import {
 } from "./reconciliation-command.ts";
 import {
   applyReconciliationTransaction,
+  createReconciliationOwnershipReceipt,
   recoverReconciliationTransaction,
   ReconciliationStoreError,
 } from "./reconciliation-store.ts";
@@ -1183,10 +1183,11 @@ async function handleInit(
       ?? proposedStrategies[tier]
       ?? "first",
   ]));
-  proposal.rules = sourceConfig.rules ?? publicDefaults.rules ?? DEFAULT_RULES;
+  proposal.rules = sourceConfig.rules ?? DEFAULT_RULES.filter(({ model }) => Object.hasOwn(models, model));
   const defaultTier = sourceConfig.default ?? publicDefaults.default;
   if (typeof defaultTier === "string" && models[defaultTier]?.length) proposal.default = defaultTier;
   let transaction: Parameters<typeof applyReconciliationTransaction>[0];
+  let receiptOnly = false;
   let changes: readonly { kind: "add" | "remove"; tier: string; modelKey: string }[];
   let settingsAdded = false;
   if (source.configBytes !== null) {
@@ -1256,14 +1257,17 @@ async function handleInit(
             return;
           }
           // Empty ownership claims make existing entries explicitly manual without rewriting config.
-          const ownershipText = JSON.stringify({ version: 1, sources: {} }, null, 2) + "\n";
-          try { createTextFile(source.ownershipPath, ownershipText); }
-          catch {
-            log(ctx, "Init could not safely create the ownership receipt; existing config was preserved.", "error");
-            return;
-          }
-          log(ctx, "Created the ownership receipt; existing config was preserved.");
-          return;
+          receiptOnly = true;
+          transaction = {
+            configPath: source.configPath,
+            ownershipPath: source.ownershipPath,
+            journalPath: source.journalPath,
+            expectedConfigDigest: createHash("sha256").update(source.configBytes!).digest("hex"),
+            expectedOwnershipDigest: null,
+            nextConfigBytes: source.configBytes!,
+            nextOwnershipBytes: Buffer.from(JSON.stringify({ version: 1, sources: {} }, null, 2) + "\n", "utf8"),
+          };
+          changes = [];
         }
       } else {
       log(ctx, plan.status === "advisory"
@@ -1416,7 +1420,19 @@ async function handleInit(
   if (!existsSync(targetDirectory)) mkdirSync(targetDirectory, { recursive: true });
   const ownershipDirectory = dirname(source.ownershipPath);
   if (!existsSync(ownershipDirectory)) mkdirSync(ownershipDirectory, { recursive: true });
-  try { applyReconciliationTransaction(transaction); }
+  try {
+    if (receiptOnly) {
+      createReconciliationOwnershipReceipt({
+        configPath: transaction.configPath,
+        ownershipPath: transaction.ownershipPath,
+        journalPath: transaction.journalPath,
+        expectedConfigDigest: transaction.expectedConfigDigest!,
+        ownershipBytes: transaction.nextOwnershipBytes,
+      });
+    } else {
+      applyReconciliationTransaction(transaction);
+    }
+  }
   catch (error) {
     const locked = error instanceof ReconciliationStoreError && error.code === "locked";
     log(ctx, locked

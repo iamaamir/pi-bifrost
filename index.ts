@@ -1452,7 +1452,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       });
       if (ownsPersistence()) {
         record.configPersisted = true;
-        pendingBootstrapConfigBySession.set(session, { record, config: { ...nextConfig, models: generatedModels } });
+        pendingBootstrapConfigBySession.set(session, {
+          record,
+          config: { ...nextConfig, models: generatedModels, categoryStrategies: savedConfig.categoryStrategies },
+        });
         log(ctx, `Bifrost saved the detected starter pools to project config at ${configPath}.`);
       }
     } catch {

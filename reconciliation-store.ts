@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import { constants } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { createTextFile } from "./storage.ts";
 
 /**
  * Narrow journaled commit for one config file and its generated-membership sidecar.
@@ -37,6 +38,11 @@ export interface ApplyReconciliationTransactionInput extends ReconciliationStore
   readonly expectedOwnershipDigest: string | null;
   readonly nextConfigBytes: Uint8Array;
   readonly nextOwnershipBytes: Uint8Array;
+}
+
+export interface CreateReconciliationOwnershipReceiptInput extends ReconciliationStorePaths {
+  readonly expectedConfigDigest: string;
+  readonly ownershipBytes: Uint8Array;
 }
 
 export type RecoveryResult =
@@ -836,6 +842,40 @@ export function recoverReconciliationTransaction(
     } catch {
       return Object.freeze({ status: "conflict", transactionId: record.transactionId });
     }
+  } finally {
+    releaseLocks(held, operations);
+  }
+}
+
+/** Create a missing receipt under the reconciliation locks without rewriting config. */
+export function createReconciliationOwnershipReceipt(
+  input: CreateReconciliationOwnershipReceiptInput,
+): void {
+  const operations = DEFAULT_OPERATIONS;
+  if (!(input.ownershipBytes instanceof Uint8Array)) throw new ReconciliationStoreError("invalid_input");
+  const ownershipBytes = Buffer.from(input.ownershipBytes);
+  assertOwnershipPayload(ownershipBytes);
+  const paths = normalizePaths(input, operations);
+  const held = acquireLocks(paths, operations);
+  try {
+    if (readSnapshot(paths.journalPath, operations)) throw new ReconciliationStoreError("conflict");
+    const config = readSnapshot(paths.configPath, operations);
+    verifyExpected(config, input.expectedConfigDigest);
+    if (!config) throw new ReconciliationStoreError("conflict");
+    assertPlainJsonObject(config.bytes);
+    if (readSnapshot(paths.ownershipPath, operations)) throw new ReconciliationStoreError("conflict");
+    assertHeldLocks(held, operations);
+    try { createTextFile(paths.ownershipPath, ownershipBytes.toString("utf8")); }
+    catch (error) {
+      if (errorCode(error) === "EEXIST") throw new ReconciliationStoreError("conflict");
+      throw error;
+    }
+    const created = readSnapshot(paths.ownershipPath, operations);
+    if (!created || created.digest !== digest(ownershipBytes)) throw new ReconciliationStoreError("conflict");
+    assertHeldLocks(held, operations);
+  } catch (error) {
+    if (error instanceof ReconciliationStoreError) throw error;
+    throw new ReconciliationStoreError("io_failure");
   } finally {
     releaseLocks(held, operations);
   }

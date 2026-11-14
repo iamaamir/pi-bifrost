@@ -415,6 +415,7 @@ function defaultConfig(): BifrostConfig {
     enabled: DEFAULT_RUNTIME_SETTINGS.enabled,
     default: DEFAULT_RUNTIME_SETTINGS.default,
     strategy: DEFAULT_RUNTIME_SETTINGS.strategy,
+    classifier: DEFAULT_RUNTIME_SETTINGS.classifier,
     models: {},
     rules: DEFAULT_RULES,
   };
