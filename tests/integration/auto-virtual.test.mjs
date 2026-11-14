@@ -562,6 +562,10 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
         assert.equal(saved.enabled, true);
         assert.equal(saved.strategy, "first");
         assert.deepEqual(saved.categoryStrategies, { quick: "random", frontier: "first" });
+        assert.ok(saved.rules.length > 0);
+        assert.ok(saved.rules.every((rule) => Object.hasOwn(saved.models, rule.model)),
+          "automatic bootstrap rules must target only saved tiers");
+        assert.equal(saved.rules.some((rule) => rule.model === "general"), false);
         assert.deepEqual(saved.classifier, {
           enabled: true,
           model: "fake/healthy",

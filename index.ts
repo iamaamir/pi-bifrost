@@ -1454,7 +1454,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         record.configPersisted = true;
         pendingBootstrapConfigBySession.set(session, {
           record,
-          config: { ...nextConfig, models: generatedModels, categoryStrategies: savedConfig.categoryStrategies },
+          config: {
+            ...nextConfig,
+            models: generatedModels,
+            categoryStrategies: savedConfig.categoryStrategies,
+            rules: savedConfig.rules ?? [],
+          },
         });
         log(ctx, `Bifrost saved the detected starter pools to project config at ${configPath}.`);
       }

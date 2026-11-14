@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canBootstrapModels, buildBootstrapPools, hasBlockingRuntimePreferences, hasExplicitExtensionRoutingFile, hasExplicitExtensionRoutingOverride, hasUserBootstrapFiles, pathPresentOrUnsafe, serializeBootstrapConfig } from "../auto-setup.ts";
+import { createPipeline } from "../classification-pipeline.ts";
 import { makeModel } from "./helpers.ts";
 import { DEFAULT_RULES, type BifrostConfig } from "../config.ts";
 
@@ -53,6 +54,27 @@ describe("automatic first-run setup", () => {
       light: "first",
       heavy: "first",
     });
+  });
+
+  it("writes and routes with starter rules only for generated tiers", async () => {
+    const saved = serializeBootstrapConfig({
+      models: {},
+      rules: [
+        { pattern: "quick", model: "quick" },
+        { pattern: "tests?", model: "general" },
+      ],
+    }, "quick", { quick: ["fixture/verified"], frontier: [] });
+
+    assert.deepEqual(saved.rules, [{ pattern: "quick", model: "quick" }]);
+    const result = await createPipeline({
+      cacheLookup: () => undefined,
+      classifierModels: [],
+      classifyWithLLM: async () => undefined,
+      regexRules: saved.rules ?? [],
+      defaultTier: "quick",
+      tiers: Object.keys(saved.models ?? {}),
+    }).classify("write unit tests");
+    assert.deepEqual(result, { kind: "fallback", tier: "quick" });
   });
 
   it("keeps supported extension settings but excludes inherited classifier prompt text from generated project config", () => {
