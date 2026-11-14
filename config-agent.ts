@@ -756,6 +756,14 @@ function probeModelKeys(
   return [...keys].sort();
 }
 
+/** Provider error text copied into a warning: bounded, so a verbose error body
+ * cannot push the approval message past its size cap and refuse a fine candidate. */
+const MAX_PROBE_REASON_CHARS = 200;
+
+function boundedProbeReason(reason: string): string {
+  return reason.length <= MAX_PROBE_REASON_CHARS ? reason : `${reason.slice(0, MAX_PROBE_REASON_CHARS - 1)}…`;
+}
+
 /** Warning for a model the live check reached and could not answer. */
 function probeIssues(
   probed: readonly ConfigAgentProbeResult[],
@@ -765,7 +773,7 @@ function probeIssues(
     .map((entry) => ({
       severity: "warning" as const,
       code: "config.probe_failed",
-      message: `Live probe of ${entry.model} ${entry.status === "timeout" ? "timed out" : "failed"}${entry.reason ? `: ${entry.reason}` : ""}. That model would fail when a tier selects it; the candidate is still writable.`,
+      message: `Live probe of ${entry.model} ${entry.status === "timeout" ? "timed out" : "failed"}${entry.reason ? `: ${boundedProbeReason(entry.reason)}` : ""}. That model would fail when a tier selects it; the candidate is still writable.`,
     }));
 }
 
@@ -2102,13 +2110,20 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
       const sessionId = typeof sessionManager?.getSessionId === "function" ? sessionManager.getSessionId() : undefined;
       const saved = sessionId === undefined ? undefined : proposals.get(sessionManager);
       const handleOnly = Object.keys(params).every((key) => key === "operation" || key === "proposalHandle");
-      const savedProbeIssues = operation === "apply" && params.proposalHandle
-        && saved && saved.sessionId === sessionId && saved.handle === params.proposalHandle && handleOnly
-        ? saved.probeIssues
-        : [];
-      if (operation === "apply" && params.proposalHandle && saved && saved.sessionId === sessionId && saved.handle === params.proposalHandle && handleOnly) {
-        request = saved.request;
-      }
+      const handleMatch = !!saved && saved.sessionId === sessionId
+        && operation === "apply" && !!params.proposalHandle && saved.handle === params.proposalHandle && handleOnly;
+      if (handleMatch) request = saved!.request;
+      // The caller may also apply the checked candidate by copying its digests
+      // instead of the handle; that request names the same candidate, so the
+      // warnings the check showed still describe it. Compare the candidate, not
+      // the digests, because apply revalidates those separately and would refuse
+      // a request that no longer matches.
+      const sameCandidate = !!saved && saved.sessionId === sessionId && operation === "apply"
+        && saved.request.source === request.source
+        && canonicalJson(saved.request.candidate ?? null) === canonicalJson(request.candidate ?? null)
+        && canonicalJson(saved.request.patch ?? null) === canonicalJson(request.patch ?? null)
+        && canonicalJson(saved.request.remove ?? null) === canonicalJson(request.remove ?? null);
+      const savedProbeIssues = (handleMatch || sameCandidate) && saved ? saved.probeIssues : [];
       const cwd = cwdOf();
       const catalog = catalogFromContext(ctx);
       // Resolve sign-in for every provider the inventory offers, plus every
