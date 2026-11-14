@@ -2569,13 +2569,20 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return [...providers];
   }
 
-  /** Refresh the per-session exclusion set when the configuration asks for it. */
-  async function prepareSignInEligibility(ctx: ExtensionContext): Promise<void> {
+  /**
+   * Refresh the per-session exclusion set when the configuration asks for it,
+   * and return the answer this turn owns so selection can apply it without
+   * reading the clock again.
+   */
+  async function prepareSignInEligibility(
+    ctx: ExtensionContext,
+    attempt = 0,
+  ): Promise<ReadonlySet<string> | undefined> {
     const session = ctx.sessionManager;
     const config = signInEligibilityConfig(ctx);
     if (config.signInEligibility !== "exclude") {
       signInEligibilityBySession.delete(session);
-      return;
+      return undefined;
     }
     const generation = state.configGeneration ?? 0;
     const providers = configuredPoolProviders(config, ctx);
@@ -2586,18 +2593,23 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     if (cached
       && cached.generation === generation
       && Date.now() - cached.at < SIGN_IN_ELIGIBILITY_TTL_MS
-      && providers.every((provider) => cached.checked.has(provider))) return;
+      && providers.every((provider) => cached.checked.has(provider))) return cached.excluded;
     if (providers.length === 0) {
-      signInEligibilityBySession.set(session, { at: Date.now(), generation, checked: new Set(), excluded: new Set() });
-      return;
+      const empty = new Set<string>();
+      signInEligibilityBySession.set(session, { at: Date.now(), generation, checked: new Set(), excluded: empty });
+      return empty;
     }
     const resolved = await resolveProviderAuth(ctx.modelRegistry, providers, { signal: ctx.signal });
     // A cancelled wait is not a result: caching it would pin an empty exclusion
     // set for the TTL and hide a dead provider the next turn could have found.
-    if (ctx.signal?.aborted) return;
+    if (ctx.signal?.aborted) return undefined;
     // The wait outlived the pools it described: a reload during resolution
     // invalidates the answer, and caching it would hide the new configuration.
-    if ((state.configGeneration ?? 0) !== generation) return;
+    // The turn is still going to select from the reloaded pools, so check those
+    // before it does instead of leaving it with no exclusions at all.
+    if ((state.configGeneration ?? 0) !== generation) {
+      return attempt < 2 ? prepareSignInEligibility(ctx, attempt + 1) : undefined;
+    }
     // An unresolved check is not proof: only a resolution Pi reports as dead
     // excludes, because a transient failure must not route away from a
     // provider that would have answered.
@@ -2605,6 +2617,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       .filter((entry) => entry.state === "invalid" || entry.state === "not_configured")
       .map((entry) => entry.provider));
     signInEligibilityBySession.set(session, { at: Date.now(), generation, checked: new Set(providers), excluded });
+    return excluded;
   }
 
   /**
@@ -2628,9 +2641,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
   }
 
   /**
-   * Preview's view of the same answer. A report is only worth showing while the
-   * next Auto turn would not re-check it, so the age limit applies here and
-   * nowhere else: an expired exclusion is reported as unresolved instead.
+   * The settled answer for everything that is not the current Auto turn: an
+   * expired entry is not evidence, so physical routing and the preview report
+   * both stop applying it once the next turn would re-check.
    */
   function cachedSignInExclusions(ctx: ExtensionContext): ReadonlySet<string> | undefined {
     const exclusions = sessionSignInExclusions(ctx);
@@ -2640,8 +2653,13 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     return exclusions;
   }
 
-  function signInExclusionFor(ctx: ExtensionContext): ((model: Model<Api>) => boolean) | undefined {
-    const cached = sessionSignInExclusions(ctx);
+  function signInExclusionFor(
+    ctx: ExtensionContext,
+    prepared?: ReadonlySet<string>,
+  ): ((model: Model<Api>) => boolean) | undefined {
+    // A turn passes the answer it just prepared: it describes the pools that
+    // turn selects from, even if preparing them took the entry past the TTL.
+    const cached = prepared ?? cachedSignInExclusions(ctx);
     if (!cached || cached.size === 0) return undefined;
     return (model) => cached.has(model.provider);
   }
@@ -2652,6 +2670,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     affinityContext?: AffinityRoutingContext,
     bypassV2Snapshot = false,
     random?: () => number,
+    preparedSignIn?: ReadonlySet<string>,
   ): ConfiguredTierResolution<Model<Api>> {
     let reliabilityState = reliabilityV2Enabled() && !bypassV2Snapshot
       ? projectReliabilityV2ForRouting(
@@ -2697,7 +2716,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         : undefined,
       random,
       affinityContext,
-      signInExclusionFor(ctx),
+      signInExclusionFor(ctx, preparedSignIn),
     );
   }
 
@@ -2871,6 +2890,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       });
       let autoBoundary: AutoUserBoundary | undefined;
       let dispatchReceipt: AutoDispatchReceipt | undefined;
+      // The answer prepared for this user turn. Selection applies this set
+      // instead of re-reading the cache, so a slow turn cannot lose an
+      // exclusion it already proved.
+      let turnSignInExclusions: ReadonlySet<string> | undefined;
       let activeRouteTier: string | undefined;
       let activeRouteRequestedTier: string | undefined;
       let activeRouteExplicitTier = false;
@@ -2887,7 +2910,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       // configured provider, later requests reuse it for the TTL. Only a new
       // user turn selects a model; continuations, retries, and direct requests
       // dispatch the sticky or fallback model, so those waits would buy nothing.
-      if (requestReason === "user" && state.enabled && !state.pinned) await prepareSignInEligibility(ctx);
+      if (requestReason === "user" && state.enabled && !state.pinned) turnSignInExclusions = await prepareSignInEligibility(ctx);
       if (v2Active) {
         if (!state.reliabilityV2ConfigValid) {
           rejectionCategory = "reliability_config_invalid";
@@ -2993,7 +3016,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       });
       const route = createVirtualRoute({
         overrides: overrideFor(ctx),
-        fallback: () => routeFailure?.explicitBoundary || v2Active ? undefined : lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default).resolution.selected : undefined),
+        fallback: () => routeFailure?.explicitBoundary || v2Active ? undefined : lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default, undefined, false, undefined, turnSignInExclusions).resolution.selected : undefined),
         sticky: () => routeFailure?.explicitBoundary || v2Active ? undefined : lastDispatchedPhysical(ctx),
         select: async (prompt, forcedTier, signal) => {
           let activeRecoveryToken: AllowanceRetryToken | undefined;
@@ -3066,7 +3089,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               // The refresh can make a configured provider selectable for the
               // first time, and the answer cached before it covered the pools
               // as they were. Ask again before those pools can pick it.
-              await prepareSignInEligibility(ctx);
+              turnSignInExclusions = await prepareSignInEligibility(ctx);
             } catch (error) {
               updateRegistryInventoryEvidence(state, ctx);
               if (signal?.aborted) {
@@ -3154,7 +3177,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             });
             throw new Error("Bifrost: the prepared usage-limit retry has no eligible configured model now; no model was dispatched. The failed turn was not replayed.");
           }
-          let attempt = recoveryResolution?.attempt ?? resolveForTier(ctx, classification.tier, affinity);
+          let attempt = recoveryResolution?.attempt ?? resolveForTier(ctx, classification.tier, affinity, false, undefined, turnSignInExclusions);
           let routingDurationMs = +(performance.now() - routeStart).toFixed(3);
           let resolved = attempt.resolution;
           if (!activeRecoveryToken && !resolved.selected && resolved.primary.candidates.length === 0) {
@@ -3174,9 +3197,9 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               discardAllClassifierPipelines();
               // An empty pool can become selectable only because of this
               // refresh, so the pre-refresh sign-in answer cannot cover it.
-              await prepareSignInEligibility(ctx);
+              turnSignInExclusions = await prepareSignInEligibility(ctx);
               routeStart = performance.now();
-              attempt = resolveForTier(ctx, classification.tier, affinity);
+              attempt = resolveForTier(ctx, classification.tier, affinity, false, undefined, turnSignInExclusions);
               routingDurationMs += +(performance.now() - routeStart).toFixed(3);
               resolved = attempt.resolution;
             } catch (error) {

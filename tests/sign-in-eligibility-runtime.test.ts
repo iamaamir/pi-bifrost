@@ -335,7 +335,9 @@ describe("pre-dispatch sign-in eligibility through the Auto route", { concurrenc
 
   it("drops a resolution that lands after the configuration changed", async () => {
     // The wait described the old pools. Caching it would let a provider that
-    // went dead during the reload look resolvable for the rest of the TTL.
+    // went dead during the reload look resolvable for the rest of the TTL, and
+    // abandoning it would send this turn to the reloaded pool unchecked, so the
+    // turn re-checks the configuration it is actually going to select from.
     const h = fixture({ eligibility: "exclude", deadProviders: [] });
     try {
       const held = h.holdAuth("dead");
@@ -343,12 +345,14 @@ describe("pre-dispatch sign-in eligibility through the Auto route", { concurrenc
       while (!h.authCalls.includes("dead")) await new Promise((resolve) => setImmediate(resolve));
 
       await h.reload(["dead/one", "live/two"]);
-      held.release();
-      await pending;
       h.markDead("dead");
+      held.release();
 
-      const next = await h.route();
-      assert.equal(`${next.model.provider}/${next.model.id}`, "live/two");
+      const inFlight = await pending;
+      assert.equal(`${inFlight.model.provider}/${inFlight.model.id}`, "live/two");
+      assert.equal(h.authCalls.filter((provider) => provider === "dead").length, 2,
+        "the reload must force a fresh resolution inside the same turn");
+      assert.ok(!h.dispatched.includes("dead/one"), "the reloaded pool's dead provider must not dispatch");
     } finally {
       h.cleanup();
     }
