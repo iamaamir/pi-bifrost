@@ -80,6 +80,20 @@ Do not introduce a proxy as the default design. Do not build multi-agent orchest
 - Treat prototypes as throwaway. Mark them clearly; do not promote prototype code directly to production.
 - Validate a specification against running code before building on it. When a decision cannot be checked yet, prototype rather than committing to prose across several revisions. Unverified specs surface their errors late, during review, when they cost most to fix.
 
+## Delivery lifecycle
+
+Use risk-based **challenge → adjudication → implementation → independent review**.
+
+- Before non-trivial issue work, use an independent [Issue Challenger](.agents/issue-challenger.md) to check the premise, current owners, dependencies and acceptance evidence against the resolved delivery branch/SHA. Require this for routing, state, privacy, SDK/host boundaries or cross-issue contracts. For a trivial docs/wiring correction, record why a separate challenge adds no value; existing gates still apply.
+- The implementation owner adjudicates findings as ACCEPT / REJECT / DEFER / NEEDS EVIDENCE, with reasons, owners and proof limits. Resolve material contract conflicts before affected coding; escalate changes to scope, requirements or authorization to the human owner. Suggestions do not become requirements automatically.
+- Implement only the accepted, authorized contract in existing owners. Preserve acceptance gates and record revision-bound commands, actual output, failure controls and limitations under the coverage contract below.
+- Use a separate, non-author [Axiom](.agents/axiom.md) run for final PR review. Supply the exact base/head SHAs, changed-file list, accepted contract, adjudication and evidence. Axiom distinguishes evidenced blockers from nonblocking observations; author self-review is not independent review. Code approval, CI status and merge authorization are separate conclusions.
+- Default to one challenge and one final review, with at most two substantive correction rounds. Reopen settled decisions only for new evidence or a changed premise. At the bound, record unresolved material blockers and escalate; never waive them to end a loop. Changes to the candidate invalidate affected review evidence and require a revision-bound recheck.
+
+For issue work, read the current issue/comments, live blockers and any applicable parent plan or approved delivery protocol. Resolve the delivery branch and required planning documents from that context. If required context is missing, stop affected work and ask for it; do not reconstruct or publish private planning material. Preserve existing ownership, dependency/promotion gates and evidence/privacy rules. Readiness does not close acceptance gates; issue edits, paid evaluation and merging each require their existing authority.
+
+See [handoff examples and readiness dispositions](docs/agent-governance.md). These repository agents guide development; they add no runtime orchestration to Bifrost.
+
 ## Verification
 
 For feature and regression changes, follow [the coverage contract](docs/testing-coverage.md).
