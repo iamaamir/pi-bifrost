@@ -398,16 +398,10 @@ export async function runProfile({ root, artifactDir, options, dependencies = {}
     mkdirSync(join(workDir, ".pi"), { recursive: true, mode: 0o700 });
     mkdirSync(agentDir, { recursive: true, mode: 0o700 });
     clonePluginSources(root, pluginDir);
-    writeFileSync(join(pluginDir, "bifrost.json"), JSON.stringify({
-      enabled: true,
-      default: "general",
-      strategy: "first",
-      categoryStrategies: { quick: "random", general: "first", frontier: "first" },
-      classifier: { enabled: false },
-      cache: { enabled: false },
-      debug: { enabled: false },
-      models: { quick: [], general: [], frontier: [] },
-    }), { mode: 0o600 });
+    // The bundled bifrost.json is an init template, not a runtime layer, so
+    // these settings live in the runtime-state file: classifierEnabled is the
+    // one toggle shape that keeps first-use auto-bootstrap eligible.
+    writeFileSync(join(workDir, ".pi", "bifrost-state.json"), JSON.stringify({ enabled: true, classifierEnabled: false }), { mode: 0o600 });
     process.chdir(workDir);
 
     const selectedModel = models[0];

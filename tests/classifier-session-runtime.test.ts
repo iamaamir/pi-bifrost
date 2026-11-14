@@ -84,7 +84,7 @@ describe("classifier session isolation", () => {
     let releaseSessionB: ((response: Response) => void) | undefined;
     const choiceResponse = (choice: string): Response => new Response(JSON.stringify({
       model: "jev-1.13.0",
-      answers: { tier: { type: "choice", choice, confidence: 0.95, probabilities: { quick: choice === "quick" ? 0.95 : 0.025, general: choice === "general" ? 0.95 : 0.025, frontier: 0.025 } } },
+      answers: { tier: { type: "choice", choice, confidence: 0.95, probabilities: { quick: choice === "quick" ? 0.95 : 0.05, general: choice === "general" ? 0.95 : 0.05 } } },
     }), { status: 200 });
 
     try {

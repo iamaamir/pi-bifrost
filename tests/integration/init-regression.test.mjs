@@ -39,7 +39,9 @@ function startFakeProvider() {
         return json(response, 402, { error: { message: "No remaining credits" } });
       }
       response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(`data: ${JSON.stringify({ id: "fake", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: "general" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`);
+      // The bootstrap save holds only detected tiers, so the canned classifier
+      // reply must name a tier that exists in the saved config.
+      response.end(`data: ${JSON.stringify({ id: "fake", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: "quick" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`);
     });
   });
   return new Promise((resolve, reject) => {
@@ -351,7 +353,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       const preview = await runInit({ ...env, args: "", prompt: "/bifrost preview --json a prompt with no local rule" });
       assert.equal(preview.code, 0, preview.stderr);
       assert.equal(preview.violations, "");
-      assert.deepEqual(requests, ["healthy"], "ordinary preview should use the classifier model selected by init");
+      assert.deepEqual(requests, ["healthy"], `ordinary preview should use the classifier model selected by init :: ${JSON.stringify({ requests, stdout: preview.stdout, stderr: preview.stderr, config })}`);
       const report = JSON.parse(preview.stderr.split("[bifrost-json] ").at(-1));
       assert.equal(report.source, "classifier");
       assert.equal(report.model, "fake/healthy");
