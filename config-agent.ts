@@ -43,7 +43,7 @@ import { createRouter, type RouterModel, type RouterRegistrySnapshot, type Route
 import { writeTextFile } from "./storage.ts";
 import { isGenerativeModel } from "./virtual-model.ts";
 import { approveConfig } from "./config-approval.ts";
-import { PROBE_MAX_OUTPUT_TOKENS } from "./probe.ts";
+import { PROBE_MAX_TOKENS } from "./probe.ts";
 
 // ── Limits ─────────────────────────────────────────────────────
 
@@ -817,7 +817,7 @@ function probeConsentText(models: readonly string[]): string {
   const shown = models.length > 8
     ? `${models.slice(0, 8).join(", ")}, and ${models.length - 8} more`
     : models.join(", ");
-  return `Send one request of at most ${PROBE_MAX_OUTPUT_TOKENS} output tokens to each of ${models.length} model(s): ${shown}. A result describes this provider now; a pass is not a promise for later.`;
+  return `Send one request of at most ${PROBE_MAX_TOKENS} output tokens to each of ${models.length} model(s): ${shown}. A result describes this provider now; a pass is not a promise for later.`;
 }
 
 /** How a live probe was authorized. */
@@ -894,8 +894,8 @@ async function applyLiveProbe(
     notes: [...result.notes, cancelled
       ? "Live probe was cancelled; the reported outcomes are partial and were not turned into warnings."
       : consent === "ui"
-        ? `Live probe ran with dialog approval: ${models.length} request(s), at most ${PROBE_MAX_OUTPUT_TOKENS} output tokens each.`
-        : `Live probe ran under delegated consent: this host has no approval dialog, so the caller is responsible for the user's agreement. ${models.length} request(s), at most ${PROBE_MAX_OUTPUT_TOKENS} output tokens each.`],
+        ? `Live probe ran with dialog approval: ${models.length} request(s), at most ${PROBE_MAX_TOKENS} output tokens each.`
+        : `Live probe ran under delegated consent: this host has no approval dialog, so the caller is responsible for the user's agreement. ${models.length} request(s), at most ${PROBE_MAX_TOKENS} output tokens each.`],
   };
 }
 
