@@ -26,6 +26,8 @@ interface FixtureOptions {
   readonly deadProviders?: readonly string[];
   /** Pool entries verbatim; default names every inventory model in full. */
   readonly pool?: readonly string[];
+  /** Configured regex rules (direct-model or tier). */
+  readonly rules?: readonly { readonly pattern: string; readonly model: string }[];
   /** Simulate a host whose registry cannot resolve sign-in at all. */
   readonly withoutAuthResolver?: boolean;
 }
@@ -50,10 +52,10 @@ function fixture(options: FixtureOptions = {}) {
     default: "review",
     strategy: "first",        ...(options.eligibility === undefined ? {} : { signInEligibility: options.eligibility }),
     models: { review: [...(options.pool ?? inventory.map((model) => `${model.provider}/${model.id}`))] },
+    rules: [...(options.rules ?? [])],
     ...(options.fallbackTiers === undefined
       ? {}
       : { tierPolicies: { review: { fallbackTiers: [...options.fallbackTiers] } } }),
-    rules: [],
     classifier: { enabled: false },
     reliability: { enabled: true },
   };
@@ -210,6 +212,23 @@ describe("pre-dispatch sign-in eligibility through the Auto route", { concurrenc
       const result = await h.route();
       assert.equal(`${result.model.provider}/${result.model.id}`, "live/two");
       assert.ok(h.authCalls.includes("dead"), "the bare entry's provider must be resolved before dispatch");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("checks a provider reached only by a direct-model rule", async () => {
+    // A regex rule pointing at `provider/id` bypasses the tier pools, so the
+    // sign-in check must enumerate it separately; otherwise that provider is
+    // never resolved and can be dispatched unchecked.
+    const h = fixture({
+      eligibility: "exclude",
+      pool: ["live/two"],
+      rules: [{ pattern: "review", model: "dead/one" }],
+    });
+    try {
+      try { await h.route(); } catch { /* excluded direct model yields no route */ }
+      assert.ok(h.authCalls.includes("dead"), "the direct rule's provider must be resolved before dispatch");
     } finally {
       h.cleanup();
     }
