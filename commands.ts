@@ -1066,6 +1066,34 @@ async function handleInit(
       return;
     }
   }
+  const inheritedSources: { path: string; bytes: Uint8Array | null }[] = [];
+  if (selectedSource === "project") {
+    try {
+      const projectModels = sourceConfig.models && typeof sourceConfig.models === "object" && !Array.isArray(sourceConfig.models)
+        ? sourceConfig.models as Record<string, unknown> : {};
+      const inheritedTiers = new Set<string>();
+      for (const layer of ["user", "workspace"] as const) {
+        const path = reconciliationPaths(layer).configPath;
+        const bytes = readBoundedRegularSnapshot(path) ?? null;
+        inheritedSources.push({ path, bytes });
+        if (!bytes) continue;
+        const parsed: unknown = JSON.parse(Buffer.from(bytes).toString("utf8"));
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid inherited config");
+        const pools = (parsed as Record<string, unknown>).models;
+        if (pools && typeof pools === "object" && !Array.isArray(pools)) {
+          for (const tier of Object.keys(pools)) inheritedTiers.add(tier);
+        }
+      }
+      const conflict = Object.keys(models).filter((tier) => inheritedTiers.has(tier) && !Object.hasOwn(projectModels, tier));
+      if (conflict.length) {
+        log(ctx, `Init would shadow inherited model pools (${conflict.join(", ")}); no configuration was changed. Edit the existing source, use /bifrost init -g for global config, or review /bifrost config reconcile --source workspace.`, "warning");
+        return;
+      }
+    } catch {
+      log(ctx, "Init could not safely read inherited config; no configuration was changed.", "error");
+      return;
+    }
+  }
   const sourceClassifier = sourceConfig.classifier && typeof sourceConfig.classifier === "object" && !Array.isArray(sourceConfig.classifier)
     ? sourceConfig.classifier as Record<string, unknown>
     : {};
@@ -1352,6 +1380,18 @@ async function handleInit(
   try { currentSource = readReconciliationSource(selectedSource); }
   catch {
     log(ctx, "The config destination changed while Init was awaiting confirmation; no files were changed.", "warning");
+    return;
+  }
+  try {
+    for (const { path, bytes } of inheritedSources) {
+      const current = readBoundedRegularSnapshot(path) ?? null;
+      if ((bytes === null) !== (current === null) || bytes && current && !Buffer.from(bytes).equals(Buffer.from(current))) {
+        log(ctx, "Inherited config changed while Init was awaiting confirmation; no files were changed. Retry to review the new configuration.", "warning");
+        return;
+      }
+    }
+  } catch {
+    log(ctx, "Inherited config could not be checked; no files were changed.", "warning");
     return;
   }
   if (currentSource.source !== source.source || currentSource.configPath !== source.configPath) {

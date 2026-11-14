@@ -44,6 +44,8 @@ Init remains available to refresh the catalog or reconcile model lists. It reuse
 
 Init displays its save target. It saves to project `.pi/bifrost.json` by default, or to user `~/.pi/agent/bifrost.json` when you pass `-g`.
 
+If a proposed project pool would hide an inherited global or workspace pool, init stops without saving. Edit the existing source or review a workspace update with `/bifrost config reconcile --source workspace`; use `-g` when you intend to update the global source.
+
 For safe migration, follow the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state).
 
 ## Common workflows
