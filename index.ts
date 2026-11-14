@@ -3384,7 +3384,13 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         // an error instead of falling back to a second session-backed prompt.
         // Its results stay out of the init cache: they answer a narrower
         // question, and `/bifrost init` must not inherit a failure for an hour.
-        const { results } = await runProbe(ctx, { models: targets, signal, sessionFallback: false, persist: false });
+        const { results } = await runProbe(ctx, {
+          ...probeOptionsFromConfig(state.config.probe),
+          models: targets,
+          signal,
+          sessionFallback: false,
+          persist: false,
+        });
         return results.map((result) => ({
           model: `${result.provider}/${result.model}`,
           status: result.status,
