@@ -103,6 +103,28 @@ Inside dynamically keyed maps — `models`, `categoryStrategies`, `tierPolicies`
 
 `routingScope` controls Bifrost's own routing. It does not change Pi's model inventory, model picker, or manual model selection outside Bifrost. `/bifrost preview` and `/bifrost preview --trace` report an excluded candidate as `provider not allowed` with the rejecting level.
 
+### Provider sign-in eligibility (schema versions 2 and 3)
+
+A configured tier can name a provider whose stored credential has stopped working. Pi only reports that a credential is *stored*, so selection cannot see that the provider will reject the request, and the turn ends on the provider error. `signInEligibility: "exclude"` closes that gap before dispatch:
+
+```json
+{
+  "schemaVersion": 2,
+  "models": { "review": ["provider/dead-model", "other/live-model"] },
+  "signInEligibility": "exclude"
+}
+```
+
+- Absent or `"off"` keeps today's behavior and resolves nothing.
+- `"exclude"` resolves each configured provider's sign-in at the start of a user turn, behind a 60-second per-session cache, and removes a provider whose credential resolves as `invalid` or `not_configured` from every candidate pool before selection. Resolving may refresh an expired OAuth token; it never sends a model request. A turn re-checks when a reload changes the configuration or a registry refresh makes a new provider selectable, so an answer never covers a pool it did not see.
+- Resolution is bounded. Each provider gets 4 seconds and the whole set gets 8 seconds, so a configuration with many hanging credentials cannot stall a turn; a provider the budget does not reach is reported `unknown` and stays eligible. Providers a hard `routingScope` already forbids for the tier that names them are skipped before any wait, since they could never be selected.
+- An unresolved check stays eligible. A timeout, a cancelled turn, or a host without `getProviderAuth` reports `unknown`, and `unknown` is not proof that a credential is dead; routing away from a working provider on a transient failure would be its own bug. A resolution that *throws* is reported as `invalid` and does exclude: the failure this filter exists for is a thrown OAuth refresh, and a dead token cannot be told apart from a network error inside the refresh without parsing provider text.
+- The exclusion is reported as `provider sign-in unavailable` wherever excluded candidates are printed. It is not a circuit and records no provider failure, because no request reached the provider.
+- Selection continues inside the same tier. A configured `fallbackTiers` list is honored exactly as for any other ineligible candidate, and an empty list stays terminal.
+- The value is a closed set. An unknown value is a config error rather than a silent `off`.
+
+`inspect` reports sign-in state and `check` warns (`config.provider_auth_invalid`) without spending a credit, so the advisory path stays available before a configuration is written. See [ADR 0026](../adr/0026-pre-dispatch-sign-in-eligibility.md).
+
 ### Economic observations and billing preference (schema version 2)
 
 The optional `economics` namespace starts off when omitted. It accepts provider- or model-scoped facts that you enter in config. Sources must be marked `declared` or `estimated`; Pi does not read billing APIs or account scopes. Use `mode: "observe"` first. It records whether each rule would reject a candidate and leaves selection order and random selection unchanged.

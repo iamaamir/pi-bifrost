@@ -48,12 +48,14 @@ import { loadConfigForReload, loadRules } from "./config-load.ts";
 import {
   resolveConfiguredTier,
   findCandidates,
+  lastModelFallbackAllowed,
   modelKey,
   type ConfiguredTierResolution,
   type RoutedModelResolution,
   type SkippedCandidate,
   type AffinityRoutingContext,
 } from "./routing.ts";
+import { checkProviderScope, compileRoutingScope } from "./routing-scope.ts";
 import { reconcileEconomicSnapshot } from "./economic-config.ts";
 import { emptyEconomicSnapshot, hasHardEconomicAdmission } from "./economic-signals.ts";
 import { ReliabilityStore } from "./reliability-store.ts";
@@ -79,7 +81,7 @@ import {
 import { ReliabilityV2Store } from "./reliability-v2-store.ts";
 import { loadRuntimeState, resolveClassifierEnablement, runtimeStatePath, saveRuntimeState, isPassiveModelSelection, createSelfSelectTracker } from "./runtime-state.ts";
 import { createCommandRouter, getBifrostCommandCompletions, reloadBifrostConfig, runBifrostCommand, log, uiBusy, uiDone, syncBifrostModeStatus, clearBifrostWidgets, type BifrostState } from "./commands.ts";
-import { configAgentConfigDigest, createBifrostConfigTool } from "./config-agent.ts";
+import { configAgentConfigDigest, createBifrostConfigTool, resolveProviderAuth } from "./config-agent.ts";
 import { reportText } from "./config-agent-report.ts";
 import { setupDebug, debug, debugMeasure, isDebugEnabled, flushDebug } from "./debug.ts";
 import { parseInlineOverride } from "./inline-override.ts";
@@ -1086,6 +1088,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     classifierMetricsStore,
     extensionDir,
     getAffinityAnchor: affinityAnchor,
+    // Read-only: a command view never triggers a credential resolution.
+    getSignInExclusions: cachedSignInExclusions,
     effectiveClassifierBackend: (targetConfig, ctx) => ctx
       ? effectiveClassifierFor(ctx, targetConfig)
       : effectiveBackendOf(targetConfig, detectionEngine),
@@ -2525,12 +2529,168 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     }
   }
 
+  // ── Opt-in pre-dispatch sign-in eligibility (ADR 0026) ──────────────────
+  // Resolving a credential may refresh an expired OAuth token, so the signal
+  // is opt-in and cached per session: `signInEligibility: "exclude"` pays for
+  // one resolution per configured provider per minute, and every other config
+  // keeps dispatching exactly as before. A dead credential then excludes its
+  // provider from candidate pools before admission, so a tier whose only model
+  // is unreachable fails inside its own boundary instead of sending a request
+  // that Pi rejects after the turn started.
+  const SIGN_IN_ELIGIBILITY_TTL_MS = 60_000;
+  interface SignInEligibilityEntry {
+    readonly at: number;
+    /** Configuration generation the answer describes. */
+    readonly generation: number;
+    /** Providers the answer looked at; a new pool provider makes it stale. */
+    readonly checked: ReadonlySet<string>;
+    readonly excluded: ReadonlySet<string>;
+  }
+  const signInEligibilityBySession = new WeakMap<object, SignInEligibilityEntry>();
+
+  function signInEligibilityConfig(ctx: ExtensionContext): BifrostConfig {
+    return bootstrapVerifiedSelectionConfig(ctx) ?? state.config;
+  }
+
+  /**
+   * Providers the configured pools can select. Discovery goes through the same
+   * `findCandidates` the router uses, so a bare entry that matches by substring
+   * of a model id or provider name (`"dead"`) resolves to the providers it can
+   * actually reach; matching only exact ids here would let an unchecked
+   * provider through the exclusion.
+   */
+  function configuredPoolProviders(config: BifrostConfig, ctx: ExtensionContext): string[] {
+    const scope = compileRoutingScope(config.routingScope);
+    const providers = new Set<string>();
+    for (const [tier, pool] of Object.entries(config.models ?? {})) {
+      for (const entry of Array.isArray(pool) ? pool : [pool]) {
+        if (typeof entry !== "string" || entry.trim() === "") continue;
+        for (const model of findCandidates(ctx, entry)) {
+          // A provider a hard scope forbids for this tier can never be selected
+          // from it, so waiting on its sign-in only delays the turn.
+          if (!checkProviderScope(scope, model.provider, { tier }).allowed) continue;
+          providers.add(model.provider);
+        }
+      }
+    }
+    // Direct-model rules (a rule whose `model` is `provider/id`) bypass the tier
+    // pools above, so their providers must be checked here too; otherwise a
+    // provider sign-in eligibility excludes at runtime would never be resolved
+    // and the model could be dispatched unchecked.
+    for (const rule of config.rules ?? []) {
+      if (typeof rule?.model !== "string" || !rule.model.includes("/")) continue;
+      const [provider, ...idParts] = rule.model.split("/");
+      const model = ctx.modelRegistry.find(provider, idParts.join("/"));
+      if (!model) continue;
+      // A direct model has no owning tier, so only the global scope governs.
+      if (!checkProviderScope(scope, model.provider, {}).allowed) continue;
+      providers.add(model.provider);
+    }
+    return [...providers];
+  }
+
+  /**
+   * Refresh the per-session exclusion set when the configuration asks for it,
+   * and return the answer this turn owns so selection can apply it without
+   * reading the clock again.
+   */
+  async function prepareSignInEligibility(
+    ctx: ExtensionContext,
+    attempt = 0,
+  ): Promise<ReadonlySet<string> | undefined> {
+    const session = ctx.sessionManager;
+    const config = signInEligibilityConfig(ctx);
+    if (config.signInEligibility !== "exclude") {
+      signInEligibilityBySession.delete(session);
+      return undefined;
+    }
+    const generation = state.configGeneration ?? 0;
+    const providers = configuredPoolProviders(config, ctx);
+    const cached = signInEligibilityBySession.get(session);
+    // A cached answer only describes the configuration and the pools it was
+    // resolved from. A reload, or a registry refresh that makes a newly added
+    // provider selectable, has to be checked before that provider is dispatched.
+    if (cached
+      && cached.generation === generation
+      && Date.now() - cached.at < SIGN_IN_ELIGIBILITY_TTL_MS
+      && providers.every((provider) => cached.checked.has(provider))) return cached.excluded;
+    if (providers.length === 0) {
+      const empty = new Set<string>();
+      signInEligibilityBySession.set(session, { at: Date.now(), generation, checked: new Set(), excluded: empty });
+      return empty;
+    }
+    const resolved = await resolveProviderAuth(ctx.modelRegistry, providers, { signal: ctx.signal });
+    // A cancelled wait is not a result: caching it would pin an empty exclusion
+    // set for the TTL and hide a dead provider the next turn could have found.
+    if (ctx.signal?.aborted) return undefined;
+    // The wait outlived the pools it described: a reload during resolution
+    // invalidates the answer, and caching it would hide the new configuration.
+    // The turn is still going to select from the reloaded pools, so check those
+    // before it does instead of leaving it with no exclusions at all.
+    if ((state.configGeneration ?? 0) !== generation) {
+      return attempt < 2 ? prepareSignInEligibility(ctx, attempt + 1) : undefined;
+    }
+    // An unresolved check is not proof: only a resolution Pi reports as dead
+    // excludes, because a transient failure must not route away from a
+    // provider that would have answered.
+    const excluded = new Set(resolved
+      .filter((entry) => entry.state === "invalid" || entry.state === "not_configured")
+      .map((entry) => entry.provider));
+    signInEligibilityBySession.set(session, { at: Date.now(), generation, checked: new Set(providers), excluded });
+    return excluded;
+  }
+
+  /**
+   * The answer routing applies: what this turn's `prepareSignInEligibility`
+   * resolved, kept for the whole turn. Age is not a routing concern, because
+   * prepare runs first and re-checks an entry that is close to its limit; a
+   * wall-clock read here could instead drop a known-dead provider between
+   * preparation and selection.
+   */
+  function sessionSignInExclusions(ctx: ExtensionContext): ReadonlySet<string> | undefined {
+    if (signInEligibilityConfig(ctx).signInEligibility !== "exclude") return undefined;
+    const entry = signInEligibilityBySession.get(ctx.sessionManager);
+    if (!entry) return undefined;
+    // Never apply an answer resolved from a configuration that has since been
+    // replaced: it describes pools the reload may have changed.
+    if (entry.generation !== (state.configGeneration ?? 0)) {
+      signInEligibilityBySession.delete(ctx.sessionManager);
+      return undefined;
+    }
+    return entry.excluded;
+  }
+
+  /**
+   * The settled answer for everything that is not the current Auto turn: an
+   * expired entry is not evidence, so physical routing and the preview report
+   * both stop applying it once the next turn would re-check.
+   */
+  function cachedSignInExclusions(ctx: ExtensionContext): ReadonlySet<string> | undefined {
+    const exclusions = sessionSignInExclusions(ctx);
+    const entry = signInEligibilityBySession.get(ctx.sessionManager);
+    if (!entry || exclusions === undefined) return undefined;
+    if (Date.now() - entry.at >= SIGN_IN_ELIGIBILITY_TTL_MS) return undefined;
+    return exclusions;
+  }
+
+  function signInExclusionFor(
+    ctx: ExtensionContext,
+    prepared?: ReadonlySet<string>,
+  ): ((model: Model<Api>) => boolean) | undefined {
+    // A turn passes the answer it just prepared: it describes the pools that
+    // turn selects from, even if preparing them took the entry past the TTL.
+    const cached = prepared ?? cachedSignInExclusions(ctx);
+    if (!cached || cached.size === 0) return undefined;
+    return (model) => cached.has(model.provider);
+  }
+
   function resolveForTier(
     ctx: ExtensionContext,
     tier: string,
     affinityContext?: AffinityRoutingContext,
     bypassV2Snapshot = false,
     random?: () => number,
+    preparedSignIn?: ReadonlySet<string>,
   ): ConfiguredTierResolution<Model<Api>> {
     let reliabilityState = reliabilityV2Enabled() && !bypassV2Snapshot
       ? projectReliabilityV2ForRouting(
@@ -2576,6 +2736,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         : undefined,
       random,
       affinityContext,
+      signInExclusionFor(ctx, preparedSignIn),
     );
   }
 
@@ -2585,9 +2746,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     failedModelKey: string,
     randomValue: number,
     explicitTier = false,
+    preparedSignIn?: ReadonlySet<string>,
   ): { model: Model<Api>; selectedTier: string; attempt: ReturnType<typeof resolveForTier> } | undefined {
     const random = () => randomValue;
-    const firstAttempt = resolveForTier(ctx, requestedTier, undefined, false, random);
+    const firstAttempt = resolveForTier(ctx, requestedTier, undefined, false, random, preparedSignIn);
     const first = firstAttempt.resolution;
     if (first.selected && modelKey(first.selected) !== failedModelKey
       && (!explicitTier || first.selectedTier === requestedTier)) {
@@ -2599,7 +2761,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     const orderedTiers = [state.config.default, ...Object.keys(state.config.models ?? {})]
       .filter((tier, index, tiers): tier is string => typeof tier === "string" && tier !== requestedTier && tiers.indexOf(tier) === index);
     for (const tier of orderedTiers) {
-      const attempt = resolveForTier(ctx, tier, undefined, false, random);
+      const attempt = resolveForTier(ctx, tier, undefined, false, random, preparedSignIn);
       const result = attempt.resolution;
       if (!result.selected || modelKey(result.selected) === failedModelKey) continue;
       return { model: result.selected, selectedTier: result.selectedTier ?? tier, attempt };
@@ -2749,6 +2911,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       });
       let autoBoundary: AutoUserBoundary | undefined;
       let dispatchReceipt: AutoDispatchReceipt | undefined;
+      // The answer prepared for this user turn. Selection applies this set
+      // instead of re-reading the cache, so a slow turn cannot lose an
+      // exclusion it already proved.
+      let turnSignInExclusions: ReadonlySet<string> | undefined;
       let activeRouteTier: string | undefined;
       let activeRouteRequestedTier: string | undefined;
       let activeRouteExplicitTier = false;
@@ -2761,6 +2927,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       let classifierDispatchGuardEnabled = false;
       try {
       if (requestReason === "user" && state.enabled && !state.pinned) await joinAutoBootstrap(ctx);
+      // Cached: the first Auto request in a session pays for one resolution per
+      // configured provider, later requests reuse it for the TTL. Only a new
+      // user turn selects a model; continuations, retries, and direct requests
+      // dispatch the sticky or fallback model, so those waits would buy nothing.
+      if (requestReason === "user" && state.enabled && !state.pinned) turnSignInExclusions = await prepareSignInEligibility(ctx);
       if (v2Active) {
         if (!state.reliabilityV2ConfigValid) {
           rejectionCategory = "reliability_config_invalid";
@@ -2866,7 +3037,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       });
       const route = createVirtualRoute({
         overrides: overrideFor(ctx),
-        fallback: () => routeFailure?.explicitBoundary || v2Active ? undefined : lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default).resolution.selected : undefined),
+        fallback: () => routeFailure?.explicitBoundary || v2Active ? undefined : lastDispatchedPhysical(ctx) ?? (state.config.default ? resolveForTier(ctx, state.config.default, undefined, false, undefined, turnSignInExclusions).resolution.selected : undefined),
         sticky: () => routeFailure?.explicitBoundary || v2Active ? undefined : lastDispatchedPhysical(ctx),
         select: async (prompt, forcedTier, signal) => {
           let activeRecoveryToken: AllowanceRetryToken | undefined;
@@ -2936,6 +3107,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               state.lastRegistryRefreshAt = Date.now();
               state.forceRegistryRefresh = false;
               discardAllClassifierPipelines();
+              // The refresh can make a configured provider selectable for the
+              // first time, and the answer cached before it covered the pools
+              // as they were. Ask again before those pools can pick it.
+              turnSignInExclusions = await prepareSignInEligibility(ctx);
             } catch (error) {
               updateRegistryInventoryEvidence(state, ctx);
               if (signal?.aborted) {
@@ -3012,7 +3187,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             ...(activeRouteOrigin === "automatic" && affinityStore ? (() => { const anchor = affinityAnchor(ctx); return anchor ? { anchor } : {}; })() : {}),
           };
           let recoveryResolution = activeRecoveryToken
-            ? resolveAllowanceAlternative(ctx, activeRecoveryToken.requestedTier, activeRecoveryToken.failedModelKey, activeRecoveryToken.randomValue, activeRecoveryToken.explicitTier)
+            ? resolveAllowanceAlternative(ctx, activeRecoveryToken.requestedTier, activeRecoveryToken.failedModelKey, activeRecoveryToken.randomValue, activeRecoveryToken.explicitTier, turnSignInExclusions)
             : undefined;
           if (activeRecoveryToken && !recoveryResolution) {
             terminalRouteCategory = "allowance_retry_candidate_unavailable";
@@ -3023,7 +3198,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
             });
             throw new Error("Bifrost: the prepared usage-limit retry has no eligible configured model now; no model was dispatched. The failed turn was not replayed.");
           }
-          let attempt = recoveryResolution?.attempt ?? resolveForTier(ctx, classification.tier, affinity);
+          let attempt = recoveryResolution?.attempt ?? resolveForTier(ctx, classification.tier, affinity, false, undefined, turnSignInExclusions);
           let routingDurationMs = +(performance.now() - routeStart).toFixed(3);
           let resolved = attempt.resolution;
           if (!activeRecoveryToken && !resolved.selected && resolved.primary.candidates.length === 0) {
@@ -3041,8 +3216,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               state.lastRegistryRefreshAt = Date.now();
               state.forceRegistryRefresh = false;
               discardAllClassifierPipelines();
+              // An empty pool can become selectable only because of this
+              // refresh, so the pre-refresh sign-in answer cannot cover it.
+              turnSignInExclusions = await prepareSignInEligibility(ctx);
               routeStart = performance.now();
-              attempt = resolveForTier(ctx, classification.tier, affinity);
+              attempt = resolveForTier(ctx, classification.tier, affinity, false, undefined, turnSignInExclusions);
               routingDurationMs += +(performance.now() - routeStart).toFixed(3);
               resolved = attempt.resolution;
             } catch (error) {
@@ -3073,7 +3251,19 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               reason: resolved.fallbackReason,
               skipped: resolved.skipped,
               reserveExcluded: reserveExclusionSummary(resolved),
-              explicitBoundary: !!activeRecoveryToken || resolved.explicitBoundary || hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config) || v2Active || blockedStickyModel || (!!lastPhysical && !configuredLastModel),
+              // A dead provider the sign-in check excluded must not be revived by
+              // the keep-last-model path: that path exists to reuse a working
+              // model, not to re-send a request the filter just ruled out.
+              explicitBoundary: !!activeRecoveryToken || resolved.explicitBoundary || hasHardEconomicAdmission(state.economicPolicy) || hasHardProviderScope(state.config) || v2Active || blockedStickyModel
+                || (!!lastPhysical && !configuredLastModel)
+                || (lastPhysical !== undefined && !lastModelFallbackAllowed({
+                  lastPhysical,
+                  candidates: [...resolved.primary.candidates, ...(resolved.fallback?.candidates ?? [])],
+                  // The same evidence the selection above used: a slow classifier
+                  // can put the turn past the cache TTL, and reading the clock here
+                  // would then revive the provider this turn already excluded.
+                  excludedBySignIn: signInExclusionFor(ctx, turnSignInExclusions),
+                })),
               ...(blockedStickyModel ? {
                 message: `Bifrost: the last dispatched model is on an active model-only allowance cooldown and no configured alternative resolved for tier ${classification.tier}; no model was dispatched.`,
               } : {}),

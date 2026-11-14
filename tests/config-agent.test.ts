@@ -15,6 +15,7 @@ import {
   buildConfigAgentCatalog,
   createBifrostConfigTool,
   configAgentConfigDigest,
+  resolveProviderAuth,
   type ConfigAgentApplyResult,
   type ConfigAgentCheckResult,
   type ConfigAgentInspectResult,
@@ -2269,5 +2270,55 @@ describe("effective classifier runtime in the agent tool", () => {
     } finally {
       harness.cleanup();
     }
+  });
+});
+
+describe("resolveProviderAuth waits", () => {
+  it("reports a slow resolution as unknown rather than a dead sign-in", async () => {
+    // Pre-dispatch resolution may not outlast the caller's patience: a budget
+    // that ends must not turn a slow refresh into an exclusion.
+    const result = await resolveProviderAuth(
+      { getProviderAuth: () => new Promise((resolve) => setTimeout(() => resolve({ auth: { apiKey: "late" } }), 50)) } as any,
+      ["slow"],
+      { timeoutMs: 5 },
+    );
+    assert.equal(result.length, 1);
+    assert.equal(result[0].state, "unknown");
+    assert.match(result[0].reason ?? "", /did not resolve within 5ms/);
+  });
+
+  it("bounds the whole resolution, not just each provider", async () => {
+    // Sequential per-provider waits alone scale with configuration size: thirty
+    // unresponsive providers would hold the turn for two minutes. The total
+    // budget ends the wait, and every provider it did not reach stays `unknown`,
+    // which never excludes.
+    const providers = Array.from({ length: 6 }, (_, index) => `hang${index}`);
+    const started = Date.now();
+    let calls = 0;
+    const result = await resolveProviderAuth(
+      { getProviderAuthStatus: () => ({ configured: true }), getProviderAuth: () => { calls += 1; return new Promise(() => {}); } } as any,
+      providers,
+      { timeoutMs: 40, totalBudgetMs: 100 },
+    );
+    const elapsed = Date.now() - started;
+    assert.equal(result.length, providers.length);
+    assert.ok(elapsed < 400, `resolution must stop at the total budget, took ${elapsed}ms`);
+    assert.ok(calls < providers.length, `the budget must stop asking, asked ${calls} times`);
+    assert.deepEqual(result.map((entry) => entry.state), providers.map(() => "unknown"));
+    assert.match(result.at(-1)?.reason ?? "", /reached its 100ms budget before this provider was checked/);
+  });
+
+  it("stops asking after the caller cancels", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let calls = 0;
+    const result = await resolveProviderAuth(
+      { getProviderAuth: async () => { calls += 1; return null; } } as any,
+      ["alpha"],
+      { signal: controller.signal },
+    );
+    assert.equal(calls, 0);
+    assert.equal(result[0].state, "unknown");
+    assert.match(result[0].reason ?? "", /cancelled before sign-in could be resolved/);
   });
 });

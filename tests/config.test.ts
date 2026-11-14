@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { mergeConfig, validateConfig, validateTierPolicyConfig, validateRoutingScopeConfig, configHasNoPools, hasClassifierConfigErrors, type BifrostConfig } from "../config.ts";
+import { mergeConfig, validateConfig, validateTierPolicyConfig, validateRoutingScopeConfig, validateSignInEligibilityConfig, configHasNoPools, hasClassifierConfigErrors, type BifrostConfig } from "../config.ts";
 import type { RoutingStrategy } from "../routing.ts";
 
 const baseConfig: BifrostConfig = {
@@ -472,6 +472,38 @@ describe("validateConfig", () => {
       rules: [{ pattern: "[invalid", model: "frontier" }],
     });
     assert.equal(issues.length, 3);
+  });
+});
+
+describe("sign-in eligibility configuration", () => {
+  const versioned = (signInEligibility: unknown) => ({ ...baseConfig, schemaVersion: 2, signInEligibility }) as BifrostConfig;
+
+  it("treats an absent value as no eligibility filter", () => {
+    assert.deepEqual(validateSignInEligibilityConfig(baseConfig), []);
+    assert.deepEqual(validateSignInEligibilityConfig({ ...baseConfig, schemaVersion: 2 }), []);
+  });
+
+  it("accepts the closed set of values", () => {
+    assert.deepEqual(validateSignInEligibilityConfig(versioned("off")), []);
+    assert.deepEqual(validateSignInEligibilityConfig(versioned("exclude")), []);
+  });
+
+  it("rejects a typo instead of reading it as off", () => {
+    const issues = validateSignInEligibilityConfig(versioned("excludes"));
+    assert.ok(issues.some((issue) => issue.code === "config.sign_in_eligibility_invalid" && issue.path === "signInEligibility"));
+  });
+
+  it("requires schema version 2", () => {
+    const issues = validateSignInEligibilityConfig({ ...baseConfig, signInEligibility: "exclude" });
+    assert.ok(issues.some((issue) => issue.code === "config.sign_in_eligibility_requires_v2"));
+  });
+
+  it("surfaces a typo through the whole-config validation startup and reload reject", () => {
+    // The runtime reads the field as "exclude" or not, so an invalid value has
+    // to be an error the load path refuses; otherwise a typo silently keeps
+    // dispatching to a provider whose credential cannot be resolved.
+    assert.ok(validateConfig(versioned("excludes")).some((issue) => issue.severity === "error" && issue.code === "config.sign_in_eligibility_invalid"));
+    assert.ok(!validateConfig(versioned("exclude")).some((issue) => issue.severity === "error"));
   });
 });
 

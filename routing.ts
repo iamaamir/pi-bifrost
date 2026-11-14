@@ -183,6 +183,25 @@ export function findCandidates<M extends RoutingModelBase>(
   return findCandidatePool(ctx, pattern).candidates;
 }
 
+/**
+ * Whether the keep-last-model path may still dispatch `lastPhysicalKey`.
+ *
+ * That path exists to reuse a model that was working and is still configured.
+ * A model the sign-in check excluded is neither: re-sending to it spends the
+ * request the exclusion was meant to prevent, so exclusion wins over "it was
+ * last time's model". An absent last model means there is no path to allow.
+ */
+export function lastModelFallbackAllowed<M extends RoutingModelBase>(input: {
+  lastPhysical: M | undefined;
+  candidates: readonly M[];
+  excludedBySignIn?: (candidate: M) => boolean | undefined;
+}): boolean {
+  if (input.lastPhysical === undefined) return false;
+  if (input.excludedBySignIn?.(input.lastPhysical) === true) return false;
+  const key = modelKey(input.lastPhysical);
+  return input.candidates.some((candidate) => modelKey(candidate) === key);
+}
+
 /** First element achieving the minimum score — matches stable-sort[0] tie-breaking.
  * Precondition: scores are finite numbers (Model cost/contextWindow are typed finite).
  * Unlike sort, the score function is not invoked for a single candidate. */
@@ -251,7 +270,7 @@ export function resolveModel<M extends RoutingModelBase>(
 
 export interface SkippedCandidate {
   key: string;
-  reason: "open_circuit" | "trial_active" | "provider_not_allowed";
+  reason: "open_circuit" | "trial_active" | "provider_not_allowed" | "sign_in_unavailable";
   openUntil?: number;
   /** Which hard provider restriction rejected this candidate. */
   scope?: RoutingScopeOrigin;
@@ -320,7 +339,7 @@ export interface RoutedModelResolution<M extends RoutingModelBase = RoutingModel
   selected: M | undefined;
   strategy: RoutingStrategy;
   skipped: SkippedCandidate[];
-  fallbackReason?: "requested_tier_unhealthy" | "requested_tier_unavailable" | "requested_tier_excluded" | "requested_tier_provider_excluded" | "all_tiers_exhausted";
+  fallbackReason?: "requested_tier_unhealthy" | "requested_tier_unavailable" | "requested_tier_excluded" | "requested_tier_provider_excluded" | "sign_in_unavailable" | "all_tiers_exhausted";
   primary: HealthyModelResolution<M>;
   fallback?: HealthyModelResolution<M>;
   /** Ordered pools attempted when an explicit tierPolicies boundary is active. */
@@ -416,6 +435,7 @@ export function resolveConfiguredTier<M extends RoutingModelBase>(
   economic?: Omit<EconomicRouteContext, "now" | "requestedTier">,
   random?: () => number,
   affinity?: AffinityRoutingContext,
+  excludedBySignIn?: (candidate: M) => boolean,
 ): ConfiguredTierResolution<M> {
   const options = buildTierResolutionOptions(tier, config);
   const routeNow = now ?? Date.now();
@@ -423,8 +443,8 @@ export function resolveConfiguredTier<M extends RoutingModelBase>(
   const scope = compileRoutingScope(config.routingScope);
   const policy = schemaVersionAtLeast(config.schemaVersion, 2) ? config.tierPolicies?.[tier] : undefined;
   const resolution = policy && Array.isArray(policy.fallbackTiers)
-    ? resolveWithExplicitTierBoundary(ctx, options, policy.fallbackTiers, config, reliabilityState, reliabilityConfig, routeNow, economicContext, random, scope)
-    : resolveModelWithFallback(ctx, { ...options, reliabilityState, reliabilityConfig, now: routeNow, economic: economicContext, random, scope });
+    ? resolveWithExplicitTierBoundary(ctx, options, policy.fallbackTiers, config, reliabilityState, reliabilityConfig, routeNow, economicContext, random, scope, excludedBySignIn)
+    : resolveModelWithFallback(ctx, { ...options, reliabilityState, reliabilityConfig, now: routeNow, economic: economicContext, random, scope, excludedBySignIn });
   const affinityMode = config.affinity?.mode ?? affinity?.effectiveMode;
   if (affinityMode !== undefined && affinity !== undefined) {
     if (affinityMode === "off") {
@@ -496,6 +516,7 @@ export function resolveHealthyModel<M extends RoutingModelBase>(
   economic?: EconomicRouteContext & { readonly evaluatedTier: string },
   random: () => number = Math.random,
   scope?: RouteScopeContext,
+  excludedBySignIn?: (candidate: M) => boolean,
 ): HealthyModelResolution<M> {
   const pool = findCandidatePool(ctx, pattern);
   const configuredCandidates = pool.candidates;
@@ -512,8 +533,20 @@ export function resolveHealthyModel<M extends RoutingModelBase>(
       return false;
     })
     : configuredCandidates;
+  // A provider whose stored sign-in cannot be resolved is excluded before
+  // economic admission and reliability: the request could never leave the
+  // host. The reason is its own, so a dead credential is never reported as a
+  // circuit or a provider failure that did not happen.
+  const signInSkipped: SkippedCandidate[] = [];
+  const eligibleCandidates = excludedBySignIn
+    ? permittedCandidates.filter((candidate) => {
+      if (!excludedBySignIn(candidate)) return true;
+      signInSkipped.push({ key: modelKey(candidate), reason: "sign_in_unavailable" });
+      return false;
+    })
+    : permittedCandidates;
   const economicEvaluations = economic?.policy.admission.length
-    ? permittedCandidates.map((candidate): EconomicCandidateEvaluation => {
+    ? eligibleCandidates.map((candidate): EconomicCandidateEvaluation => {
       const key = modelKey(candidate);
       return {
         key,
@@ -533,15 +566,15 @@ export function resolveHealthyModel<M extends RoutingModelBase>(
     ?.filter(({ evaluation }) => evaluation.mode === "policy" && evaluation.disposition === "rejected")
     .map(({ key }) => key) ?? []);
   const candidates = rejected.size > 0
-    ? permittedCandidates.filter((candidate) => !rejected.has(modelKey(candidate)))
-    : permittedCandidates;
+    ? eligibleCandidates.filter((candidate) => !rejected.has(modelKey(candidate)))
+    : eligibleCandidates;
   if (!reliabilityState || reliabilityConfig?.enabled === false) {
     const selection = selectFromHealthyPool(candidates, strategy, random, economic);
     return {
       ...selection,
       candidates: configuredCandidates,
       healthyCandidates: candidates,
-      skipped: scopeSkipped,
+      skipped: [...scopeSkipped, ...signInSkipped],
       discoveryExclusions: pool.exclusions,
       unresolvedPatterns: pool.unresolved,
       ...(economicEvaluations ? { economic: economicEvaluations } : {}),
@@ -549,7 +582,7 @@ export function resolveHealthyModel<M extends RoutingModelBase>(
   }
 
   const healthyCandidates: M[] = [];
-  const skipped: SkippedCandidate[] = [...scopeSkipped];
+  const skipped: SkippedCandidate[] = [...scopeSkipped, ...signInSkipped];
   for (const candidate of candidates) {
     const circuit = getCircuitState(reliabilityState, modelKey(candidate), now, reliabilityConfig);
     if (circuit.open || circuit.trialActive) {
@@ -584,11 +617,21 @@ function scopeRejected(pool: HealthyModelResolution): boolean {
   return pool.skipped.some((candidate) => candidate.reason === "provider_not_allowed");
 }
 
+/**
+ * Every skipped candidate was stopped by sign-in eligibility. Such a pool is
+ * empty for a reason the reliability store knows nothing about, so calling it
+ * unhealthy would send the user to the wrong place.
+ */
+function signInOnlySkipped(pool: HealthyModelResolution): boolean {
+  return pool.skipped.length > 0 && pool.skipped.every((candidate) => candidate.reason === "sign_in_unavailable");
+}
+
 /** Distinguish reliability, provider-scope, and reserve exclusions for one pool. */
 function tierExclusionReason(
   pool: HealthyModelResolution,
   reserveExcludedPool: boolean,
 ): RoutedModelResolution["fallbackReason"] {
+  if (signInOnlySkipped(pool)) return "sign_in_unavailable";
   if (unreliableSkipped(pool) > 0) return "requested_tier_unhealthy";
   if (scopeRejected(pool)) return "requested_tier_provider_excluded";
   if (reserveExcludedPool) return "requested_tier_excluded";
@@ -610,6 +653,7 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
     economic?: EconomicRouteContext;
     random?: () => number;
     scope?: CompiledRoutingScope;
+    excludedBySignIn?: (candidate: M) => boolean;
   },
 ): RoutedModelResolution<M> {
   const now = options.now ?? Date.now();
@@ -625,6 +669,7 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
     options.scope
       ? { scope: options.scope, evaluatedTier: options.requestedTier }
       : undefined,
+    options.excludedBySignIn,
   );
   if (primary.selected) {
     return {
@@ -689,6 +734,7 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
     options.scope
       ? { scope: options.scope, evaluatedTier: options.defaultTier }
       : undefined,
+    options.excludedBySignIn,
   );
 
   return {
@@ -717,6 +763,7 @@ function resolveWithExplicitTierBoundary<M extends RoutingModelBase>(
   economic?: EconomicRouteContext,
   random?: () => number,
   scope?: CompiledRoutingScope,
+  excludedBySignIn?: (candidate: M) => boolean,
 ): RoutedModelResolution<M> {
   const tierOptions = [options.requestedTier, ...fallbackTiers].map((tier) => ({
     tier,
@@ -727,7 +774,7 @@ function resolveWithExplicitTierBoundary<M extends RoutingModelBase>(
   for (const { tier, pattern, strategy } of tierOptions) {
     const resolution = resolveHealthyModel(ctx, pattern, strategy, reliabilityState, reliabilityConfig, now,
       economic ? { ...economic, evaluatedTier: tier } : undefined, random,
-      scope ? { scope, evaluatedTier: tier } : undefined);
+      scope ? { scope, evaluatedTier: tier } : undefined, excludedBySignIn);
     attemptedTiers.push({ tier, strategy, pattern, resolution });
     if (resolution.selected) break;
   }

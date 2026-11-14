@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, buildTracePreview, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, renderTracePreview, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
+import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, buildTracePreview, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, renderTracePreview, resolveTierDisplay, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
 import { makeModel, makePiClassifierModel, makeRegistry } from "./helpers.ts";
 import { createPipeline } from "../classification-pipeline.ts";
 import { DEFAULT_THRESHOLD, lookupCache, touchCacheEntry, updateCache, type CacheEntry } from "../cache.ts";
@@ -3030,5 +3030,54 @@ describe("diagnostics commands", () => {
     assert.ok(h.calls.some((call) => call.kind === "notify" && String(call.value).includes("usage: /bifrost inspect [--json]")));
     assert.equal(lines.some((line) => line.startsWith(BIFROST_JSON_PREFIX)), false);
     assert.deepEqual(h.counters(), { registryReads: 0, networkCalls: 0, writes: 0 });
+  });
+});
+
+describe("preview parity with Auto sign-in exclusions", () => {
+  const models = [makeModel("dead", "one", 1), makeModel("live", "two", 2)];
+  const previewCtx = { modelRegistry: makeRegistry(models) } as unknown as import("@earendil-works/pi-coding-agent").ExtensionContext;
+
+  function stateWith(signInEligibility: "off" | "exclude", excluded?: ReadonlySet<string>) {
+    const state: any = makeState();
+    state.config = {
+      schemaVersion: 2,
+      default: "review",
+      strategy: "first",
+      models: { review: ["dead/one", "live/two"] },
+      reliability: { enabled: false },
+      signInEligibility,
+    };
+    state.getSignInExclusions = () => excluded;
+    return state;
+  }
+
+  it("renders the skip reason Auto would apply instead of claiming the provider is up", () => {
+    const display = resolveTierDisplay("review", stateWith("exclude", new Set(["dead"])), previewCtx);
+    assert.equal(display.selected, "live/two");
+    assert.ok(display.requestedCandidateLines.includes("xx dead/one (provider sign-in unavailable)"));
+    assert.equal(display.signInNote, undefined);
+  });
+
+  it("says the signal is unresolved instead of implying every provider is ready", () => {
+    const display = resolveTierDisplay("review", stateWith("exclude", undefined), previewCtx);
+    assert.match(display.signInNote ?? "", /not been resolved in this session/);
+    assert.equal(display.selected, "dead/one");
+  });
+
+  it("applies no exclusion when the configuration leaves the check off", () => {
+    const display = resolveTierDisplay("review", stateWith("off", new Set(["dead"])), previewCtx);
+    assert.equal(display.selected, "dead/one");
+    assert.equal(display.signInNote, undefined);
+  });
+
+  it("carries the unresolved note into the text and JSON views", () => {
+    const display = resolveTierDisplay("review", stateWith("exclude", undefined), previewCtx);
+    const report = buildPreviewReport({
+      prompt: "p",
+      classification: { kind: "classified", tier: "review", source: "regex" },
+      display,
+    });
+    assert.match(report.signInNote ?? "", /not been resolved/);
+    assert(renderPreviewReport(report).some((line) => line.startsWith("sign-in:")));
   });
 });

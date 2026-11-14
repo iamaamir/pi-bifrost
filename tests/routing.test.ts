@@ -11,6 +11,7 @@ import {
   resolveConfiguredTier,
   findOneModel,
   findCandidates,
+  lastModelFallbackAllowed,
   selectModel,
   resolveModel,
   resolveHealthyModel,
@@ -1593,5 +1594,162 @@ describe("routing", () => {
     });
 
 
+  });
+});
+
+describe("opt-in sign-in eligibility (ADR 0026)", () => {
+  const dead = makeModel("dead", "one", 1);
+  const live = makeModel("live", "two", 2);
+
+  it("skips a provider whose sign-in cannot be resolved and selects the next candidate", () => {
+    const ctx = makeCtx([dead, live]);
+    const result = resolveModelWithFallback(ctx, {
+      requestedTier: "review",
+      requestedPattern: ["dead/one", "live/two"],
+      requestedStrategy: "first",
+      excludedBySignIn: (model) => model.provider === "dead",
+    });
+    assert.equal(modelKey(result.selected), "live/two");
+    assert.deepEqual(result.skipped, [{ key: "dead/one", reason: "sign_in_unavailable" }]);
+  });
+
+  it("traces the skip to the sign-in check rather than to reliability state", () => {
+    // The provider was skipped before any request, so no circuit opened and no
+    // failure was recorded: naming reliability state would send the user to a
+    // store that holds nothing about this exclusion.
+    const ctx = makeCtx([dead, live]);
+    const routeConfig = { models: { review: ["dead/one", "live/two"] }, strategy: "first" as const };
+    const resolution = resolveConfiguredTier(ctx, "review", routeConfig, undefined, undefined, undefined, undefined, undefined, undefined, (model) => model.provider === "dead").resolution;
+    const summary = buildRouteDecisionSummary({ kind: "classified", tier: "review", source: "regex" }, {
+      resolution,
+      options: buildTierResolutionOptions("review", routeConfig),
+    });
+    const candidate = summary.requested?.candidates.find((entry) => entry.model === "dead/one");
+    assert.deepEqual(candidate?.exclusionEvidence, [{ code: "sign_in_unavailable", source: "sign_in_check" }]);
+    assert.notDeepEqual(candidate?.exclusionEvidence, [{ code: "sign_in_unavailable", source: "reliability_state" }]);
+  });
+
+  it("fault control: without the predicate the same pool still selects the dead provider", () => {
+    // Proves the skip above comes from the eligibility function, not from the
+    // fixture or from a default exclusion.
+    const ctx = makeCtx([dead, live]);
+    const result = resolveModelWithFallback(ctx, {
+      requestedTier: "review",
+      requestedPattern: ["dead/one", "live/two"],
+      requestedStrategy: "first",
+    });
+    assert.equal(modelKey(result.selected), "dead/one");
+    assert.deepEqual(result.skipped, []);
+  });
+
+  it("keeps an explicit empty fallback boundary terminal when sign-in leaves the tier empty", () => {
+    const ctx = makeCtx([dead]);
+    const { resolution } = resolveConfiguredTier(
+      ctx,
+      "review",
+      { schemaVersion: 2, default: "review", models: { review: ["dead/one"] }, tierPolicies: { review: { fallbackTiers: [] } } },
+      undefined,
+      { ...DEFAULT_RELIABILITY, enabled: false },
+      Date.now(),
+      undefined,
+      undefined,
+      undefined,
+      (model) => model.provider === "dead",
+    );
+    assert.equal(resolution.selected, undefined);
+    assert.equal(resolution.explicitBoundary, true);
+    assert.ok(resolution.attemptedTiers?.every((attempt) => attempt.resolution.selected === undefined));
+    assert.deepEqual(resolution.attemptedTiers?.[0]?.resolution.skipped, [{ key: "dead/one", reason: "sign_in_unavailable" }]);
+  });
+
+  it("reports sign-in as the tier's reason instead of calling it unhealthy", () => {
+    // A pool emptied only by sign-in has no reliability event behind it. Naming
+    // it unhealthy sends the user to a store that holds nothing about it.
+    const ctx = makeCtx([dead]);
+    const resolution = resolveConfiguredTier(
+      ctx,
+      "review",
+      { schemaVersion: 2, default: "review", models: { review: ["dead/one"] }, tierPolicies: { review: { fallbackTiers: [] } } },
+      undefined,
+      { ...DEFAULT_RELIABILITY, enabled: false },
+      Date.now(),
+      undefined,
+      undefined,
+      undefined,
+      (model) => model.provider === "dead",
+    ).resolution;
+    assert.equal(resolution.fallbackReason, "sign_in_unavailable");
+
+    // Mixed evidence keeps the reliability wording: a circuit also skipped
+    // something, so the tier really is unhealthy.
+    const mixed = resolveConfiguredTier(
+      makeCtx([dead, makeModel("paused", "three", 3)]),
+      "review",
+      { schemaVersion: 2, default: "review", models: { review: ["dead/one", "paused/three"] }, tierPolicies: { review: { fallbackTiers: [] } } },
+      undefined,
+      { ...DEFAULT_RELIABILITY, enabled: true },
+      Date.now(),
+      undefined,
+      undefined,
+      undefined,
+      (model) => model.provider === "dead",
+    ).resolution;
+    assert.notEqual(mixed.fallbackReason, "sign_in_unavailable");
+  });
+});
+
+describe("keep-last-model fallback boundary", () => {
+  const live = makeModel("live", "two", 2);
+  const other = makeModel("other", "three", 3);
+
+  it("allows the last dispatched model while it is configured and not excluded", () => {
+    assert.equal(lastModelFallbackAllowed({ lastPhysical: live, candidates: [live, other] }), true);
+  });
+
+  it("refuses a last dispatched model that is no longer configured", () => {
+    assert.equal(lastModelFallbackAllowed({ lastPhysical: live, candidates: [other] }), false);
+  });
+
+  it("refuses a last dispatched model the sign-in check excluded", () => {
+    // The path exists to reuse a working model; an excluded one would spend the
+    // request the filter was added to prevent.
+    assert.equal(lastModelFallbackAllowed({
+      lastPhysical: live,
+      candidates: [live, other],
+      excludedBySignIn: (model) => model.provider === "live",
+    }), false);
+  });
+
+  it("refuses when no model was dispatched last time", () => {
+    assert.equal(lastModelFallbackAllowed({ lastPhysical: undefined, candidates: [live] }), false);
+  });
+});
+
+describe("sign-in exclusion fault control", () => {
+  const dead = makeModel("dead", "one", 1);
+  const live = makeModel("live", "two", 2);
+
+  it("fault control: a no-op exclusion predicate selects the dead model, turning the guard's assertion red", () => {
+    // Controlled fault: the guard that excludes an unreachable provider is
+    // replaced by one that never excludes. The protected assertion — that the
+    // reachable model is selected — must fail on that mutant, which is what
+    // makes it sensitive to the guard rather than to the input.
+    const { resolution } = resolveConfiguredTier(
+      makeCtx([dead, live]),
+      "review",
+      { schemaVersion: 2, default: "review", models: { review: ["dead/one", "live/two"] } },
+      undefined,
+      { ...DEFAULT_RELIABILITY, enabled: false },
+      Date.now(),
+      undefined,
+      undefined,
+      undefined,
+      () => false,
+    );
+    assert.equal(modelKey(resolution.selected!), "dead/one");
+    assert.throws(
+      () => assert.equal(modelKey(resolution.selected!), "live/two"),
+      /Expected values to be strictly equal/,
+    );
   });
 });

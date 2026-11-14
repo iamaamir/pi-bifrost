@@ -99,7 +99,7 @@ export interface ConfigAgentProviderAuth {
 }
 
 /** The registry surface auth resolution needs; both members are optional on older hosts. */
-interface ConfigAgentAuthRegistry {
+export interface ConfigAgentAuthRegistry {
   getProviderAuthStatus?(provider: string): { configured: boolean; source?: string };
   getProviderAuth?(provider: string): Promise<unknown>;
 }
@@ -541,6 +541,35 @@ export function catalogDigest(catalog: ConfigAgentCatalog): string {
 
 const MAX_AUTH_REASON_CHARS = 200;
 
+/** Sentinel a timed-out or cancelled resolution resolves to, distinct from a null credential. */
+const AUTH_WAIT_ENDED = Symbol("auth-wait-ended");
+
+/**
+ * Await a promise no longer than `timeoutMs`, or until `signal` aborts. A wait
+ * that ends answers `AUTH_WAIT_ENDED`; the provider is then reported `unknown`
+ * rather than `invalid`, so a slow or cancelled refresh cannot exclude it.
+ */
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<T | typeof AUTH_WAIT_ENDED> {
+  if (signal?.aborted) return AUTH_WAIT_ENDED;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  const ended = new Promise<typeof AUTH_WAIT_ENDED>((resolve) => {
+    timer = setTimeout(() => resolve(AUTH_WAIT_ENDED), timeoutMs);
+    onAbort = () => resolve(AUTH_WAIT_ENDED);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([promise, ended]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
+  }
+}
+
 function boundedAuthReason(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   // Provider text is stripped of terminal escapes, flattened, and reduced to
@@ -553,6 +582,17 @@ function boundedAuthReason(error: unknown): string {
   return line.length <= MAX_AUTH_REASON_CHARS ? line : `${line.slice(0, MAX_AUTH_REASON_CHARS - 3)}...`;
 }
 
+/** How long one provider may hold up the whole resolution before it is skipped. */
+export const SIGN_IN_RESOLUTION_TIMEOUT_MS = 4_000;
+
+/**
+ * How long the whole resolution may take. Per-provider waits alone bound a wait
+ * by provider count (N x 4s), which is unbounded in practice for a large
+ * configuration; this caps the total regardless of size. Providers that the
+ * budget does not reach are reported `unknown`, which never excludes.
+ */
+export const SIGN_IN_TOTAL_BUDGET_MS = 8_000;
+
 /**
  * Resolve each provider's stored sign-in through Pi's registry. Pi's
  * synchronous auth status only reports that a credential is stored, not that it
@@ -560,13 +600,37 @@ function boundedAuthReason(error: unknown): string {
  * only surfaces when credentials are actually resolved. Resolving may refresh
  * an expired token; it never sends a model request. Failures are reported, not
  * thrown: this signal is advisory.
+ *
+ * Resolution runs before dispatch, so it may not outlast the caller's patience:
+ * each provider gets a bounded wait and a cancelled call stops asking. Both
+ * outcomes are reported as `unknown`, which never excludes, because a wait that
+ * ended says nothing about whether the provider would have answered.
  */
-async function resolveProviderAuth(
+export async function resolveProviderAuth(
   registry: ConfigAgentAuthRegistry,
   providers: readonly string[],
+  options: { signal?: AbortSignal; timeoutMs?: number; totalBudgetMs?: number } = {},
 ): Promise<ConfigAgentProviderAuth[]> {
+  const timeoutMs = options.timeoutMs ?? SIGN_IN_RESOLUTION_TIMEOUT_MS;
+  const totalBudgetMs = options.totalBudgetMs ?? SIGN_IN_TOTAL_BUDGET_MS;
+  const started = Date.now();
   const resolved: ConfigAgentProviderAuth[] = [];
   for (const provider of [...new Set(providers)].sort()) {
+    if (options.signal?.aborted) {
+      resolved.push({ provider, state: "unknown", reason: "the request was cancelled before sign-in could be resolved" });
+      continue;
+    }
+    // Stop waiting once the total budget is spent: the remaining providers are
+    // reported unchecked, not assumed dead, and dispatch is not held longer.
+    const spent = Date.now() - started;
+    if (spent >= totalBudgetMs) {
+      resolved.push({
+        provider,
+        state: "unknown",
+        reason: `sign-in resolution reached its ${totalBudgetMs}ms budget before this provider was checked`,
+      });
+      continue;
+    }
     let source: string | undefined;
     // Whether Pi reports a credential on disk for this provider. Pi resolves a
     // credential it cannot use to nothing rather than throwing, so only a
@@ -590,7 +654,20 @@ async function resolveProviderAuth(
       continue;
     }
     try {
-      const auth = await registry.getProviderAuth(provider);
+      // A provider may only consume what is left of the total budget.
+      const waitMs = Math.max(1, Math.min(timeoutMs, totalBudgetMs - spent));
+      const auth = await withTimeout(registry.getProviderAuth(provider), waitMs, options.signal);
+      if (auth === AUTH_WAIT_ENDED) {
+        resolved.push({
+          provider,
+          state: "unknown",
+          ...(source ? { source } : {}),
+          reason: options.signal?.aborted
+            ? "the request was cancelled before sign-in could be resolved"
+            : `sign-in did not resolve within ${waitMs}ms`,
+        });
+        continue;
+      }
       if (auth === undefined || auth === null) {
         // No usable credential came back: a stored one is broken, and without
         // one there is nothing to report beyond a name the catalog does not know.
