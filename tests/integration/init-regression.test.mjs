@@ -217,6 +217,27 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
   after(async () => { await new Promise((resolve) => server?.close(resolve)); });
 
   for (const layer of ["user", "workspace"]) {
+    for (const conflict of [false, true]) {
+      it(`handles a linked ${layer} config ${conflict ? "with an inherited pool" : "without an inherited pool"}`, async () => {
+        const env = fixture(port, ["healthy"]);
+        const link = layer === "user" ? join(env.home, ".pi", "agent", "bifrost.json") : join(env.work, "bifrost.json");
+        const target = join(env.home, "linked-config.json");
+        const original = Buffer.from(JSON.stringify({ classifier: { enabled: false }, ...(conflict ? { models: { quick: ["manual/keep"] } } : {}) }) + "\n");
+        writeFileSync(target, original);
+        symlinkSync(target, link);
+        try {
+          const result = await runInit({ ...env, args: "--write" });
+          assert.equal(result.code, 0, result.stderr);
+          assert.equal(result.violations, "");
+          assert.deepEqual(readFileSync(target), original);
+          assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), !conflict);
+          if (conflict) assert.match(result.stdout + result.stderr, /inherited.*quick.*no configuration.*changed/i);
+        } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+      });
+    }
+  }
+
+  for (const layer of ["user", "workspace"]) {
     for (const pool of [["manual/keep"], []]) {
       it(`does not shadow an inherited ${layer} ${pool.length ? "manual" : "empty"} pool`, async () => {
         const env = fixture(port, ["healthy"]);
