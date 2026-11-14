@@ -1075,11 +1075,11 @@ async function handleInit(
     }
   }
   const inheritedSources: { path: string; text: string | null }[] = [];
+  const inheritedTiers = new Set<string>();
   if (selectedSource === "project") {
     try {
       const projectModels = sourceConfig.models && typeof sourceConfig.models === "object" && !Array.isArray(sourceConfig.models)
         ? sourceConfig.models as Record<string, unknown> : {};
-      const inheritedTiers = new Set<string>();
       for (const layer of ["user", "workspace"] as const) {
         const path = reconciliationPaths(layer).configPath;
         const text = readInheritedConfigSnapshot(path);
@@ -1183,7 +1183,8 @@ async function handleInit(
       ?? proposedStrategies[tier]
       ?? "first",
   ]));
-  proposal.rules = sourceConfig.rules ?? DEFAULT_RULES.filter(({ model }) => Object.hasOwn(models, model));
+  const finalTiers = new Set([...Object.keys(models), ...inheritedTiers]);
+  proposal.rules = sourceConfig.rules ?? DEFAULT_RULES.filter(({ model }) => finalTiers.has(model));
   const defaultTier = sourceConfig.default ?? publicDefaults.default;
   if (typeof defaultTier === "string" && models[defaultTier]?.length) proposal.default = defaultTier;
   let transaction: Parameters<typeof applyReconciliationTransaction>[0];

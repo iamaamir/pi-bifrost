@@ -392,6 +392,35 @@ describe("config reconciliation command router", () => {
     });
   });
 
+  it("keeps starter rules for inherited tiers when init adds a new pool", async () => {
+    await withCwd(async (cwd) => {
+      const agentDir = process.env.PI_CODING_AGENT_DIR!;
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+        classifier: { enabled: false },
+        default: "general",
+        models: {
+          general: ["global/general"],
+          frontier: ["global/frontier"],
+        },
+      }));
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "cheap", cost_input: 0.1, cost_output: 0.1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({ models: [makeModel("openai", "cheap", 0.1, 0.1)] });
+      await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
+      const saved = JSON.parse(fs.readFileSync(join(configDir, "bifrost.json"), "utf8")) as {
+        models: Record<string, string[]>;
+        rules: Array<{ model: string }>;
+      };
+      assert.deepEqual(Object.keys(saved.models), ["quick"]);
+      assert(saved.rules.some(({ model }) => model === "general"));
+      assert(saved.rules.some(({ model }) => model === "frontier"));
+    });
+  });
+
   it("refreshes owned memberships and preserves the rest of config and ownership history", async () => {
     await withCwd(async (cwd) => {
       const configDir = join(cwd, ".pi");
