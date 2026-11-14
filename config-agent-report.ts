@@ -167,6 +167,12 @@ function renderCheck(result: ConfigAgentCheckResult): string {
     lines.push(`${planned}: ${result.probePlan.length} model(s), one request each -- ${result.probePlan.join(", ")}`);
     if (!result.liveProbe) lines.push("  run it only with probe: true after the user agrees; a plain check sends nothing");
   }
+  // A skipped model was never asked, so it is neither a pass nor a failure.
+  // Name it separately instead of folding it into the probe denominator.
+  if (result.probeSkipped && result.probeSkipped.length > 0) {
+    lines.push(`live probe skipped: ${result.probeSkipped.length} model(s) whose provider's sign-in does not resolve for this session -- ${result.probeSkipped.map((entry) => entry.model).join(", ")}`);
+    lines.push("  skipped is not a probe failure; these models were not asked");
+  }
   // Failures only, plus a count. A succeeded probe carries no decision, and one
   // line per model would push the warnings above it out of the bounded report.
   if (result.liveProbe) {

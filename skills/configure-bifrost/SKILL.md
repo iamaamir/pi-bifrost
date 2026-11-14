@@ -85,11 +85,12 @@ goal needs something Bifrost does not do, say so.
    that reports fewer outcomes than targets leaves the rest unverified, not
    passing.
 
-   Probe measures raw model reachability of the configured candidates. When
-   `signInEligibility` is `"exclude"`, models that sign-in eligibility removes
-   for this session are listed separately in `probePlan`'s notes and are not
-   probed; they are excluded from routing, not reported as probe failures.
-   Do not treat a skipped (sign-in-excluded) model as probed or as failed.
+   Probe targets the effective model pools and the effective direct-model
+   rules, including a rule supplied by `.pi/bifrost-routes.json` rather than
+   inline `rules`. Models whose provider's stored sign-in does not resolve for
+   this session are listed in `probeSkipped` and are not probed; they are
+   skipped, not reported as probe failures. A skipped model was never asked, so
+   it proves nothing about reachability. Do not treat it as probed or as failed.
 5. **Preview routing outcomes.** Call `bifrost_config` with
    `{"operation":"preview", ...}` and 2–5 representative prompts drawn from the
    user's real work. To preview current disk configuration, omit candidate and patch. Preview is offline: it sends nothing anywhere. Read each
