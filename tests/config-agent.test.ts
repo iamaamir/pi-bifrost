@@ -905,6 +905,99 @@ describe("provider sign-in state", () => {
     }
   });
 
+  it("skips models whose provider sign-in does not resolve and never counts them as failures", async () => {
+    // The adapter already resolved sign-in for the check; a provider whose
+    // credential cannot be resolved cannot prove model reachability. Probing it
+    // would spend a request on a guaranteed 401 and report an account problem
+    // as a model failure.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      providerAuthResult: (provider) => provider === "beta" ? new Error("token refresh failed") : { auth: { apiKey: "resolved" } },
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+    });
+    try {
+      const candidate = { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } };
+
+      // A plain check reports the split and still sends nothing.
+      const plain = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", candidate }));
+      assert.deepEqual(plain.probePlan, ["alpha/strong"]);
+      assert.deepEqual(plain.probeSkipped?.map((entry) => `${entry.model}:${entry.status}`), ["beta/code:skipped"]);
+      assert.deepEqual(harness.probeCalls(), []);
+      assert.equal(harness.probeConfirmations().length, 0);
+      assert.equal(plain.issues.some((issue) => issue.code === "config.probe_failed"), false,
+        "a skipped model must not be reported as a probe failure");
+
+      // The plan and the requests agree: the transport only receives the target
+      // that can actually answer.
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", candidate, probe: true }));
+      assert.deepEqual(harness.probeCalls(), [["alpha/strong"]]);
+      assert.deepEqual(checked.liveProbe?.map((entry) => `${entry.model}:${entry.status}`), ["alpha/strong:ok"]);
+      assert.deepEqual(checked.probeSkipped?.map((entry) => entry.model), ["beta/code"]);
+      assert.equal(checked.issues.some((issue) => issue.code === "config.probe_failed"), false);
+      assert.match(checked.notes.join("\n"), /not probed because their provider's sign-in does not resolve/);
+      const text = contentOf(await harness.run({ operation: "check", candidate, probe: true }));
+      assert.match(text, /live probe skipped: 1 model\(s\) whose provider's sign-in does not resolve/);
+      assert.match(text, /skipped is not a probe failure/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("runs no request when every target's provider is excluded for the session", async () => {
+    const harness = freshHarness({
+      available: [makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      providerAuthStatus: () => ({ configured: false }),
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+      probeConfirm: true,
+    });
+    try {
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["beta/code"] } },
+        probe: true,
+      }));
+      assert.deepEqual(harness.probeCalls(), []);
+      assert.equal(harness.probeConfirmations().length, 0, "nothing may be spent, so nothing is asked");
+      assert.equal(checked.liveProbe, undefined);
+      assert.deepEqual(checked.probeSkipped?.map((entry) => entry.model), ["beta/code"]);
+      assert.match(checked.notes.join("\n"), /every model this candidate routes to belongs to a provider whose sign-in does not resolve/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("probes a model reached only through the effective route-file rules", async () => {
+    // The classifier resolves rules through loadRules: a route file replaces the
+    // inline `rules` field entirely. A probe that read `config.rules` would miss
+    // the direct model the runtime actually dispatches, and would spend on one it
+    // never selects.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000), makeModel("gamma", "review", 2, 6, 128_000)],
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+    });
+    try {
+      harness.writeFile(".pi/bifrost-routes.json", [
+        { pattern: "review", model: "gamma/review" },
+      ]);
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: {
+          schemaVersion: 2,
+          default: "review",
+          models: { review: ["alpha/strong"] },
+          rules: [{ pattern: "review", model: "beta/code" }],
+        },
+        probe: true,
+      }));
+      assert.deepEqual(checked.probePlan, ["alpha/strong", "gamma/review"],
+        "the route file overrides inline rules, so its direct model must be the probe target");
+      assert.deepEqual(harness.probeCalls(), [["alpha/strong", "gamma/review"]]);
+      assert.equal(checked.probePlan?.includes("beta/code"), false, "an overridden inline rule is not a probe target");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("forwards the caller's cancellation to the probe transport", async () => {
     const controller = new AbortController();
     const harness = freshHarness({
@@ -1027,6 +1120,28 @@ describe("provider sign-in state", () => {
 });
 
 describe("candidate validation reuses Bifrost semantics", () => {
+  it("rejects an over-depth apply after a proposal instead of canonicalizing it", async () => {
+    // Apply first compares the incoming request with the saved proposal. That
+    // comparison canonicalizes, which recurses: doing it before the depth guard
+    // turns a validation rejection into a stack overflow.
+    const harness = freshHarness();
+    try {
+      const candidate = { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } };
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", candidate }));
+      assert.equal(checked.status, "ok");
+
+      let nested: unknown = 0;
+      for (let i = 0; i < 5000; i++) nested = { child: nested };
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run({ operation: "apply", candidate: { nested } }));
+      assert.equal(applied.status, "usage");
+      assert.equal(applied.reason, "configuration exceeds the nesting depth limit");
+      assert.equal(applied.applied, false);
+      assert.equal(harness.readFile(".pi/bifrost.json"), undefined);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("rejects deeply nested candidates and source files without throwing", async () => {
     const harness = freshHarness();
     try {

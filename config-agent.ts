@@ -289,6 +289,12 @@ export interface ConfigAgentCheckResult {
    * agreeing; computing it sends nothing.
    */
   readonly probePlan?: readonly string[];
+  /**
+   * Models whose provider the host excludes for this session, so they are not
+   * probed and are not probe failures. Reported separately from `liveProbe`
+   * because a skipped model was never asked and proves nothing.
+   */
+  readonly probeSkipped?: readonly ConfigAgentProbeResult[];
   /** Live probe outcomes, present only when the caller asked for one. */
   readonly liveProbe?: readonly ConfigAgentProbeResult[];
 }
@@ -362,6 +368,16 @@ function sha256(text: string): string {
 }
 
 /** Stable JSON encoding: object keys sorted at every level, so digests survive key order. */
+/**
+ * Compare two request fields for identity without canonicalizing unvalidated
+ * input. `canonicalJson` recurses, so an over-depth candidate can exhaust the
+ * stack before the validator that exists to reject it ever runs.
+ */
+function sameRequestField(left: unknown, right: unknown): boolean {
+  if (exceedsConfigNestingDepth(left) || exceedsConfigNestingDepth(right)) return false;
+  return canonicalJson(left) === canonicalJson(right);
+}
+
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
@@ -742,6 +758,22 @@ function providerAuthIssues(
 }
 
 /**
+ * Exact catalog models one pool entry resolves to. A bare id or name Pi hides
+ * right now still matches through the known catalog; a live probe only ever
+ * targets exact `provider/id` keys.
+ */
+function probeKeysForEntry(catalog: ConfigAgentCatalog, entry: string): string[] {
+  const known = new Set([
+    ...catalog.available.map((model) => model.key),
+    ...catalog.known.map((model) => model.key),
+  ]);
+  const keys = new Set<string>();
+  for (const key of poolMatches(catalog, entry)) if (known.has(key)) keys.add(key);
+  for (const key of knownPoolMatches(catalog, entry)) if (known.has(key)) keys.add(key);
+  return [...keys].sort();
+}
+
+/**
  * Exact catalog models a composed candidate routes to. A pool entry may be a
  * bare id or name a model Pi hides right now, so both catalogs are consulted;
  * a live probe only ever targets exact `provider/id` keys.
@@ -750,15 +782,8 @@ function probeModelKeys(
   pools: Iterable<string>,
   catalog: ConfigAgentCatalog,
 ): string[] {
-  const known = new Set([
-    ...catalog.available.map((model) => model.key),
-    ...catalog.known.map((model) => model.key),
-  ]);
   const keys = new Set<string>();
-  for (const entry of pools) {
-    for (const key of poolMatches(catalog, entry)) if (known.has(key)) keys.add(key);
-    for (const key of knownPoolMatches(catalog, entry)) if (known.has(key)) keys.add(key);
-  }
+  for (const entry of pools) for (const key of probeKeysForEntry(catalog, entry)) keys.add(key);
   return [...keys].sort();
 }
 
@@ -783,20 +808,54 @@ function probeIssues(
     }));
 }
 
+/** What a live probe would actually send to, and what it leaves alone. */
+interface ProbeTargetPlan {
+  /** Exact models the transport would be asked for; the only ones it may request. */
+  readonly models: readonly string[];
+  /** Models the host excludes for this session: never probed, never failures. */
+  readonly skipped: readonly ConfigAgentProbeResult[];
+}
+
 /**
- * Models a live probe may target: the resolved pools of the composed config,
- * minus every candidate a hard provider scope forbids for its tier. Probing an
- * excluded provider would spend a request on a model that can never be
- * selected, which is exactly the credit the opt-in is meant to account for.
+ * Models a live probe may target: the resolved pools and direct-model rules of
+ * the composed config, minus every candidate a hard provider scope forbids for
+ * its tier. Probing an excluded provider would spend a request on a model that
+ * can never be selected, which is exactly the credit the opt-in is meant to
+ * account for.
+ *
+ * A provider whose stored sign-in already failed resolution is skipped too.
+ * The adapter owns that answer (`providerAuth`), so this module never reads
+ * credentials or transport; it only receives the resolved state. A model that
+ * cannot authenticate today cannot prove reachability, and charging for its
+ * 401 would report an account problem as a model failure.
  */
 function probeTargets(
   result: ConfigAgentCheckResult,
   catalog: ConfigAgentCatalog,
-): string[] {
-  const scope = compileRoutingScope(((result.effectiveAfter ?? {}) as BifrostConfig).routingScope);
+  cwd: string,
+): ProbeTargetPlan {
+  const afterConfig = (result.effectiveAfter ?? {}) as BifrostConfig;
+  const scope = compileRoutingScope(afterConfig.routingScope);
   const providerOf = new Map<string, string>();
   for (const model of catalog.known) providerOf.set(model.key, model.provider);
   for (const model of catalog.available) providerOf.set(model.key, model.provider);
+  const unauthenticated = new Set(result.providerAuth
+    .filter((entry) => entry.state === "invalid" || entry.state === "not_configured")
+    .map((entry) => entry.provider));
+  const models: string[] = [];
+  const skipped: ConfigAgentProbeResult[] = [];
+  const consider = (key: string): void => {
+    const provider = providerOf.get(key);
+    if (provider !== undefined && unauthenticated.has(provider)) {
+      // A skipped model was never asked, so it is evidence of nothing beyond the
+      // sign-in state already reported. It must not read as a probe failure.
+      if (!skipped.some((entry) => entry.model === key)) {
+        skipped.push({ model: key, status: "skipped", reason: `provider "${provider}" sign-in does not resolve for this session` });
+      }
+      return;
+    }
+    if (!models.includes(key)) models.push(key);
+  };
   const targets = new Set<string>();
   for (const tier of result.routingAfter?.tiers ?? []) {
     for (const key of probeModelKeys(tier.pool, catalog)) {
@@ -805,7 +864,22 @@ function probeTargets(
       targets.add(key);
     }
   }
-  return [...targets].sort();
+  // A direct-model rule routes outside every tier pool, so a probe that only
+  // walked pools would leave the model a rule actually dispatches unverified.
+  // The classifier resolves rules through `loadRules`, so the probe must use the
+  // same effective rules rather than the inline `config.rules` field.
+  const tierNames = new Set(Object.keys(afterConfig.models ?? {}));
+  for (const rule of loadRules(cwd, afterConfig)) {
+    if (typeof rule?.model !== "string" || !rule.model.includes("/") || tierNames.has(rule.model)) continue;
+    for (const key of probeKeysForEntry(catalog, rule.model)) {
+      const provider = providerOf.get(key);
+      // A direct model has no owning tier, so only the global scope governs it.
+      if (provider !== undefined && !checkProviderScope(scope, provider, {}).allowed) continue;
+      targets.add(key);
+    }
+  }
+  for (const key of [...targets].sort()) consider(key);
+  return { models: models.sort(), skipped };
 }
 
 /**
@@ -853,7 +927,7 @@ async function requestProbeConsent(ctx: ExtensionContext, models: readonly strin
  */
 async function applyLiveProbe(
   result: ConfigAgentCheckResult,
-  catalog: ConfigAgentCatalog,
+  plan: ProbeTargetPlan,
   deps: ConfigAgentToolDeps,
   ctx: ExtensionContext,
   signal?: AbortSignal,
@@ -861,9 +935,16 @@ async function applyLiveProbe(
   if (result.status !== "ok") {
     return { ...result, notes: [...result.notes, "Live probe skipped: the candidate did not pass check."] };
   }
-  const models = probeTargets(result, catalog);
+  // The plan the caller was shown is the plan that runs: the transport is
+  // handed exactly these models, so a plan and a request can never disagree.
+  const models = plan.models;
   if (models.length === 0) {
-    return { ...result, notes: [...result.notes, "Live probe skipped: this candidate routes to no model the catalog knows."] };
+    return {
+      ...result,
+      notes: [...result.notes, plan.skipped.length > 0
+        ? "Live probe skipped: every model this candidate routes to belongs to a provider whose sign-in does not resolve for this session; nothing was sent."
+        : "Live probe skipped: this candidate routes to no model the catalog knows."],
+    };
   }
   if (!deps.probeModels) {
     return { ...result, notes: [...result.notes, "Live probe is unavailable in this host; nothing was sent."] };
@@ -903,7 +984,10 @@ async function applyLiveProbe(
       ? "Live probe was cancelled; the reported outcomes are partial and were not turned into warnings."
       : consent === "ui"
         ? `Live probe ran with dialog approval: ${models.length} request(s), at most ${PROBE_OUTPUT_TOKEN_CAP} output tokens each.`
-        : `Live probe ran under delegated consent: this host has no approval dialog, so the caller is responsible for the user's agreement. ${models.length} request(s), at most ${PROBE_OUTPUT_TOKEN_CAP} output tokens each.`],
+        : `Live probe ran under delegated consent: this host has no approval dialog, so the caller is responsible for the user's agreement. ${models.length} request(s), at most ${PROBE_OUTPUT_TOKEN_CAP} output tokens each.`,
+    ...(plan.skipped.length > 0
+      ? [`${plan.skipped.length} model(s) were not probed because their provider's sign-in does not resolve for this session; skipped is not a probe failure.`]
+      : [])],
   };
 }
 
@@ -2054,7 +2138,7 @@ const ConfigAgentParameters = Type.Object({
   effectiveDigest: Type.Optional(Type.String({ description: "effectiveDigest returned by check or preview for this exact candidate." })),
   catalogDigest: Type.Optional(Type.String({ description: "catalogDigest returned by check or preview for this exact candidate." })),
   classifierRuntimeDigest: Type.Optional(Type.String({ description: "classifierRuntimeDigest returned by check or preview; apply refuses if runtime classifier state changes." })),
-  probe: Type.Optional(Type.Boolean({ description: "Live-check the models this check would route to: one request per model, each capped at 5 output tokens. Plain check never sends; it reports the exact targets in probePlan, so show that plan and ask the user first. probePlan measures raw model reachability of configured candidates; models that sign-in eligibility removes for this session are listed separately in probePlan notes and are not probed. The TUI host confirms again before sending; where no dialog exists this flag is the authorization. Advisory: probe failures are one observed result, not proof a model always fails, and the candidate stays writable." }))
+  probe: Type.Optional(Type.Boolean({ description: "Live-check the models this check would route to: one request per model, each capped at 5 output tokens. Plain check never sends; it reports the exact targets in probePlan, so show that plan and ask the user first. Targets are the effective pools and direct-model rules. Models whose provider's stored sign-in does not resolve for this session are listed in probeSkipped and are not probed: a skipped model is not a probe failure. The TUI host confirms again before sending; where no dialog exists this flag is the authorization. Advisory: probe failures are one observed result, not proof a model always fails, and the candidate stays writable." }))
 });
 
 /**
@@ -2172,9 +2256,9 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
       // a request that no longer matches.
       const sameCandidate = !!saved && saved.sessionId === sessionId && operation === "apply"
         && saved.request.source === request.source
-        && canonicalJson(saved.request.candidate ?? null) === canonicalJson(request.candidate ?? null)
-        && canonicalJson(saved.request.patch ?? null) === canonicalJson(request.patch ?? null)
-        && canonicalJson(saved.request.remove ?? null) === canonicalJson(request.remove ?? null);
+        && sameRequestField(saved.request.candidate ?? null, request.candidate ?? null)
+        && sameRequestField(saved.request.patch ?? null, request.patch ?? null)
+        && sameRequestField(saved.request.remove ?? null, request.remove ?? null);
       const savedProbeIssues = (handleMatch || sameCandidate) && saved ? saved.probeIssues : [];
       const cwd = cwdOf();
       const catalog = catalogFromContext(ctx);
@@ -2226,17 +2310,26 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
           result = checkConfigCandidate(input);
           // State the scope and cost of a live probe on every check, so the
           // caller can show them before agreeing. Computing this sends nothing.
+          // One plan serves both purposes: the caller is shown the exact models
+          // a probe would send to, and the transport receives that same list.
+          const plan = result.status === "ok" ? probeTargets(result, catalog, cwd) : { models: [], skipped: [] };
           if (result.status === "ok" && deps.probeModels) {
-            const plan = probeTargets(result, catalog);
-            if (plan.length > 0) {
+            if (plan.models.length > 0 || plan.skipped.length > 0) {
               result = {
                 ...result,
-                probePlan: plan,
-                notes: [...result.notes, `Live probe would target ${plan.length} model(s), one request each; it does not run unless the caller opts in with probe: true.`],
+                ...(plan.models.length > 0 ? { probePlan: plan.models } : {}),
+                ...(plan.skipped.length > 0 ? { probeSkipped: plan.skipped } : {}),
+                notes: [...result.notes,
+                  ...(plan.models.length > 0
+                    ? [`Live probe would target ${plan.models.length} model(s), one request each; it does not run unless the caller opts in with probe: true.`]
+                    : []),
+                  ...(plan.skipped.length > 0
+                    ? [`${plan.skipped.length} model(s) are not probed because their provider's sign-in does not resolve for this session; they are skipped, not failures.`]
+                    : [])],
               };
             }
           }
-          if (params.probe === true) result = await applyLiveProbe(result, catalog, deps, ctx, signal);
+          if (params.probe === true) result = await applyLiveProbe(result, plan, deps, ctx, signal);
           break;
         }
         case "preview":
