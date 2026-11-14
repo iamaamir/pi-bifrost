@@ -497,6 +497,14 @@ describe("sign-in eligibility configuration", () => {
     const issues = validateSignInEligibilityConfig({ ...baseConfig, signInEligibility: "exclude" });
     assert.ok(issues.some((issue) => issue.code === "config.sign_in_eligibility_requires_v2"));
   });
+
+  it("surfaces a typo through the whole-config validation startup and reload reject", () => {
+    // The runtime reads the field as "exclude" or not, so an invalid value has
+    // to be an error the load path refuses; otherwise a typo silently keeps
+    // dispatching to a provider whose credential cannot be resolved.
+    assert.ok(validateConfig(versioned("excludes")).some((issue) => issue.severity === "error" && issue.code === "config.sign_in_eligibility_invalid"));
+    assert.ok(!validateConfig(versioned("exclude")).some((issue) => issue.severity === "error"));
+  });
 });
 
 describe("routingScope configuration", () => {
