@@ -1012,86 +1012,6 @@ describe("bifrost command ui", () => {
     }
   });
 
-  it("refreshes the workspace source without shadowing user config or replacing manual hard policy", async () => {
-    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-workspace-source-"));
-    const previousCwd = process.cwd();
-    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-    const agentDir = join(tempDir, "agent");
-    process.env.PI_CODING_AGENT_DIR = agentDir;
-    mkdirSync(agentDir, { recursive: true });
-    process.chdir(tempDir);
-    try {
-      const globalConfigPath = join(agentDir, "bifrost.json");
-      const globalBytes = Buffer.from(JSON.stringify({
-        models: { general: ["global/manual"], frontier: ["global/frontier"] },
-        userSetting: { preserve: true },
-      }, null, 2) + "\n");
-      const workspacePath = join(tempDir, "bifrost.json");
-      const workspaceBytes = Buffer.from(JSON.stringify({
-        schemaVersion: 2,
-        enabled: false,
-        default: "frontier",
-        strategy: "first",
-        models: { general: ["workspace/manual"] },
-        rules: [{ pattern: "workspace strict", model: "frontier" }],
-        tierPolicies: { frontier: { fallbackTiers: [] } },
-        classifier: { enabled: false, backend: "prompt", model: "manual/classifier", criteria: { frontier: "retain" } },
-      }, null, 2) + "\n");
-      writeFileSync(globalConfigPath, globalBytes);
-      writeFileSync(workspacePath, workspaceBytes);
-      mkdirSync(join(tempDir, ".pi"));
-      writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
-        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
-      ]);
-
-      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
-      const registry = (ctx as any).modelRegistry;
-      registry.getAll = () => [makeModel("fixture", "chat", 0.2, 0.2)];
-      registry.getAvailable = registry.getAll;
-      registry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
-      registry.refresh = async () => ({ aborted: false, errors: new Map() });
-      let confirmArgs: string[] = [];
-      (ctx as any).ui.confirm = async (title: string, body: string) => {
-        confirmArgs = [title, body];
-        return true;
-      };
-      const state = makeState();
-      (state as any).registryInventoryEvidence = { fixture: { status: "complete", refreshedAt: Date.now() } };
-      (state.config as any) = {
-        ...state.config,
-        schemaVersion: 2,
-        enabled: false,
-        default: "frontier",
-        models: { general: ["workspace/manual"], frontier: ["global/frontier"] },
-        classifier: { enabled: false, backend: "prompt", model: "manual/classifier", criteria: { frontier: "retain" } },
-        rules: [{ pattern: "workspace strict", model: "frontier" }],
-        tierPolicies: { frontier: { fallbackTiers: [] } },
-      };
-      await createCommandRouter(state as never)("init --source workspace", ctx as never);
-
-      assert.deepEqual(confirmArgs, ["Save Bifrost setup?", "Save memberships: +1 / -0 (quick: +1/-0) to workspace (bifrost.json)?"]);
-      assert.equal(calls.some((call) => call.kind === "select"), false);
-      assert.ok(calls.some((call) => call.kind === "widget" && call.lines?.includes("save target: workspace (bifrost.json)")));
-      assert.deepEqual(readFileSync(globalConfigPath), globalBytes);
-      const savedWorkspace = JSON.parse(readFileSync(workspacePath, "utf8"));
-      assert.equal(savedWorkspace.enabled, false);
-      assert.deepEqual(savedWorkspace.rules, [{ pattern: "workspace strict", model: "frontier" }]);
-      assert.deepEqual(savedWorkspace.tierPolicies, { frontier: { fallbackTiers: [] } });
-      assert.deepEqual(savedWorkspace.classifier, { enabled: false, backend: "prompt", model: "manual/classifier", criteria: { frontier: "retain" } });
-      assert.deepEqual(savedWorkspace.models.general, ["workspace/manual"]);
-      assert.deepEqual(savedWorkspace.models.quick, ["fixture/chat"]);
-      assert.deepEqual(savedWorkspace.models.frontier, ["global/frontier"]);
-      assert.deepEqual(savedWorkspace.userSetting, undefined);
-      assert.ok(existsSync(join(tempDir, ".pi", "bifrost-reconcile-workspace-ownership.json")));
-      assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
-    } finally {
-      process.chdir(previousCwd);
-      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-      rmSync(tempDir, { recursive: true, force: true });
-    }
-  });
-
   it("hides the pi-native backend on hosts without classification support", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-hide-native-"));
     const previousCwd = process.cwd();
@@ -1997,12 +1917,11 @@ describe("command aliases", () => {
       const { ctx } = makeCtx([{ provider: "fixture", id: "chat" }]);
       const confirmations: string[] = [];
       (ctx as any).ui.confirm = async (_title: string, message: string) => { confirmations.push(message); return false; };
-      for (const args of ["init", "init --source workspace", "init --source user"]) {
+      for (const args of ["init", "init -g"]) {
         await createCommandRouter(makeState() as never)(args, ctx);
       }
       assert.match(confirmations[0], /project \(\.pi\/bifrost\.json\)/);
-      assert.match(confirmations[1], /workspace \(bifrost\.json\)/);
-      assert.match(confirmations[2], /user \(.+bifrost\.json\)/);
+      assert.match(confirmations[1], /user \(.+bifrost\.json\)/);
       assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
       assert.equal(existsSync(join(tempDir, "bifrost.json")), false);
     } finally {

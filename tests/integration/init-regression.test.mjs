@@ -216,7 +216,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
   before(async () => { port = await startFakeProvider(); });
   after(async () => { await new Promise((resolve) => server?.close(resolve)); });
 
-  for (const selected of ["default", "default-global-only", "project", "workspace", "user"]) {
+  for (const selected of ["default", "default-global-only", "global"]) {
     it(`saves init to the ${selected} source without changing other layers`, async () => {
       requests = [];
       const env = fixture(port, ["healthy"]);
@@ -229,11 +229,11 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       writeFileSync(paths.user, original);
       if (selected !== "default-global-only") writeFileSync(paths.workspace, original);
       try {
-        const args = `--write${selected.startsWith("default") ? "" : ` --source ${selected}`}`;
+        const args = `--write${selected === "global" ? " -g" : ""}`;
         const result = await runInit({ ...env, args });
         assert.equal(result.code, 0, result.stderr);
         assert.equal(result.violations, "");
-        const target = selected.startsWith("default") ? "project" : selected;
+        const target = selected === "global" ? "user" : "project";
         assert.match(result.stdout + result.stderr, new RegExp(`save target: ${target}`));
         assert.ok(JSON.parse(readFileSync(paths[target], "utf8")).models);
         for (const layer of ["workspace", "user"]) {
@@ -251,7 +251,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
     });
   }
 
-  for (const args of ["--source", "--source invalid", "--source --write", "--source user --source project", "--unknown"]) {
+  for (const args of ["--source workspace", "--source user", "--unknown"]) {
     it(`rejects invalid init arguments ${args} before probing or writing`, async () => {
       requests = [];
       const env = fixture(port, ["healthy"]);
