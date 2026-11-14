@@ -3544,6 +3544,19 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       // Opt-in live check for the configuration tool. `probe.ts` owns the
       // transport; this adapter only maps catalog keys to models and back, so
       // core policy never sends a provider request on its own.
+      // A probe must answer for the models routing could actually select from
+      // this session. Pre-dispatch sign-in eligibility already knows which
+      // providers are dead, so those keys are dropped before any request.
+      signInExcluded: (models, ctx) => {
+        const predicates = signInExclusionFor(ctx);
+        if (!predicates) return new Set<string>();
+        const byKey = new Map<string, Model<Api>>();
+        for (const model of ctx.modelRegistry.getAll()) byKey.set(`${model.provider}/${model.id}`, model);
+        return new Set(models.filter((key) => {
+          const model = byKey.get(key);
+          return model !== undefined && predicates(model);
+        }));
+      },
       probeModels: async (models, ctx, signal) => {
         const wanted = new Set(models);
         const targets = ctx.modelRegistry.getAll()

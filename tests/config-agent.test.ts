@@ -50,6 +50,8 @@ interface HarnessOptions {
   readonly providerAuthResult?: (provider: string) => unknown;
   /** Live probe outcomes for the opt-in check; omit to leave the host without one. */
   readonly probeModels?: (models: readonly string[], signal?: AbortSignal) => readonly ConfigAgentProbeResult[];
+  /** Which catalog keys the host's sign-in eligibility already excludes. */
+  readonly signInExcluded?: (models: readonly string[]) => readonly string[];
   /** Answer the live-probe dialog; omit to leave the host without a dialog. */
   readonly probeConfirm?: boolean;
   readonly probeConfirmError?: boolean;
@@ -154,6 +156,9 @@ function freshHarness(options: HarnessOptions = {}) {
       reloadCalls += 1;
       return reloadResult;
     },
+    ...(options.signInExcluded ? {
+      signInExcluded: (models: readonly string[]) => new Set(options.signInExcluded!(models)),
+    } : {}),
     ...(options.probeModels ? {
       probeModels: async (models: readonly string[], _ctx: unknown, signal?: AbortSignal) => {
         probeCalls.push([...models]);
@@ -791,6 +796,40 @@ describe("provider sign-in state", () => {
       const content = contentOf(checked);
       assert.match(content, /live probe \(one tiny prompt per model\): 1\/2 answered, 1 without a reported outcome/);
       assert.match(content, /treat them as unverified, not as passing/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("combines sign-in eligibility with the live probe: only selectable models are asked", async () => {
+    // Both features on. A provider whose sign-in cannot resolve is excluded for
+    // the session, so probing it would spend the exact request the exclusion
+    // exists to save. The plan must shrink to what routing could select, and the
+    // omission must be named rather than silently missing from the count.
+    const harness = freshHarness({
+      available: [makeModel("unauth", "one", 1, 1, 8_000), makeModel("fake", "two", 1, 1, 8_000)],
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+      probeConfirm: true,
+      signInExcluded: (models) => models.filter((key) => key.startsWith("unauth/")),
+    });
+    try {
+      const candidate = {
+        schemaVersion: 2,
+        signInEligibility: "exclude",
+        default: "review",
+        models: { review: ["unauth/one", "fake/two"] },
+      };
+      const plain = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", candidate }));
+      assert.deepEqual(plain.probePlan, ["fake/two"]);
+      assert.match(plain.notes.join("\n"), /Live probe leaves out 1 model\(s\) that sign-in eligibility excludes for this session: unauth\/one\./);
+      assert.equal(harness.probeCalls().length, 0);
+      assert.equal(harness.probeConfirmations().length, 0);
+
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", candidate, probe: true }));
+      assert.deepEqual(harness.probeCalls(), [["fake/two"]], "the excluded provider must never be asked");
+      assert.deepEqual(checked.liveProbe?.map((entry) => entry.model), ["fake/two"]);
+      assert.match(contentOf(await harness.run({ operation: "check", candidate, probe: true })), /live probe \(one tiny prompt per model\): 1\/1 answered/);
+      assert.equal(harness.probeCalls().length, 2);
     } finally {
       harness.cleanup();
     }

@@ -838,29 +838,47 @@ function probeIssues(
     }));
 }
 
+interface ProbeTargets {
+  /** Models the probe would ask, in the order the report lists them. */
+  readonly targets: readonly string[];
+  /** Models dropped because pre-dispatch sign-in eligibility excludes them. */
+  readonly signInExcluded: readonly string[];
+}
+
 /**
  * Models a live probe may target: the resolved pools of the composed config,
- * minus every candidate a hard provider scope forbids for its tier. Probing an
- * excluded provider would spend a request on a model that can never be
- * selected, which is exactly the credit the opt-in is meant to account for.
+ * minus every candidate a hard provider scope forbids for its tier, and minus
+ * every model pre-dispatch sign-in eligibility has already ruled out. Probing
+ * an excluded model would spend a request on one that can never be selected,
+ * which is exactly the credit the opt-in is meant to account for.
  */
 function probeTargets(
   result: ConfigAgentCheckResult,
   catalog: ConfigAgentCatalog,
-): string[] {
+  ctx?: ExtensionContext,
+  deps?: ConfigAgentToolDeps,
+): ProbeTargets {
   const scope = compileRoutingScope(((result.effectiveAfter ?? {}) as BifrostConfig).routingScope);
   const providerOf = new Map<string, string>();
   for (const model of catalog.known) providerOf.set(model.key, model.provider);
   for (const model of catalog.available) providerOf.set(model.key, model.provider);
-  const targets = new Set<string>();
+  const considered = new Set<string>();
   for (const tier of result.routingAfter?.tiers ?? []) {
     for (const key of probeModelKeys(tier.pool, catalog)) {
       const provider = providerOf.get(key);
       if (provider !== undefined && !checkProviderScope(scope, provider, { tier: tier.tier }).allowed) continue;
-      targets.add(key);
+      considered.add(key);
     }
   }
-  return [...targets].sort();
+  const keys = [...considered].sort();
+  // The host owns sign-in state, so it answers which of these keys it has
+  // already excluded; core policy only reads the answer.
+  const excluded = ctx && deps?.signInExcluded ? deps.signInExcluded(keys, ctx) : undefined;
+  if (!excluded || excluded.size === 0) return { targets: keys, signInExcluded: [] };
+  return {
+    targets: keys.filter((key) => !excluded.has(key)),
+    signInExcluded: keys.filter((key) => excluded.has(key)),
+  };
 }
 
 /**
@@ -907,9 +925,20 @@ async function applyLiveProbe(
   if (result.status !== "ok") {
     return { ...result, notes: [...result.notes, "Live probe skipped: the candidate did not pass check."] };
   }
-  const models = probeTargets(result, catalog);
+  const plan = probeTargets(result, catalog, ctx, deps);
+  const models = plan.targets;
+  // Spending a request on a model sign-in eligibility rules out is the same
+  // waste the flag exists to avoid, so the omission is named rather than silent.
+  const omission = plan.signInExcluded.length > 0
+    ? [`Live probe skipped ${plan.signInExcluded.length} model(s) that sign-in eligibility excludes for this session: ${plan.signInExcluded.join(", ")}.`]
+    : [];
   if (models.length === 0) {
-    return { ...result, notes: [...result.notes, "Live probe skipped: this candidate routes to no model the catalog knows."] };
+    return {
+      ...result,
+      notes: [...result.notes, ...omission, plan.signInExcluded.length > 0
+        ? "Live probe skipped: every model this candidate routes to is excluded by sign-in eligibility; nothing was sent."
+        : "Live probe skipped: this candidate routes to no model the catalog knows."],
+    };
   }
   if (!deps.probeModels) {
     return { ...result, notes: [...result.notes, "Live probe is unavailable in this host; nothing was sent."] };
@@ -945,7 +974,7 @@ async function applyLiveProbe(
     // Partial results after a cancellation are shown but not turned into
     // warnings: a stopped probe says nothing about the model it never reached.
     issues: cancelled ? result.issues : [...result.issues, ...probeIssues(probed)],
-    notes: [...result.notes, cancelled
+    notes: [...result.notes, ...omission, cancelled
       ? "Live probe was cancelled; the reported outcomes are partial and were not turned into warnings."
       : consent === "ui"
         ? `Live probe ran with dialog approval: ${models.length} request(s), at most ${PROBE_MAX_OUTPUT_TOKENS} output tokens each.`
@@ -2049,6 +2078,15 @@ export interface ConfigAgentToolDeps {
     ctx: ExtensionContext,
     signal?: AbortSignal,
   ) => Promise<readonly ConfigAgentProbeResult[]>;
+  /**
+   * Which of these catalog keys the host's pre-dispatch sign-in eligibility has
+   * already excluded for this session. A probe must not spend a request on a
+   * model routing cannot select.
+   */
+  readonly signInExcluded?: (
+    models: readonly string[],
+    ctx: ExtensionContext,
+  ) => ReadonlySet<string>;
   /** Render a result for the model. Injected by the host entry so this module
    * owns policy and IO only and the presentation module stays a leaf. */
   readonly render: (result: ConfigAgentToolResult) => string;
@@ -2273,12 +2311,16 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
           // State the scope and cost of a live probe on every check, so the
           // caller can show them before agreeing. Computing this sends nothing.
           if (result.status === "ok" && deps.probeModels) {
-            const plan = probeTargets(result, catalog);
-            if (plan.length > 0) {
+            const plan = probeTargets(result, catalog, ctx, deps);
+            if (plan.targets.length > 0) {
               result = {
                 ...result,
-                probePlan: plan,
-                notes: [...result.notes, `Live probe would target ${plan.length} model(s), one request each; it does not run unless the caller opts in with probe: true.`],
+                probePlan: plan.targets,
+                notes: [...result.notes,
+                  `Live probe would target ${plan.targets.length} model(s), one request each; it does not run unless the caller opts in with probe: true.`,
+                  ...(plan.signInExcluded.length > 0
+                    ? [`Live probe leaves out ${plan.signInExcluded.length} model(s) that sign-in eligibility excludes for this session: ${plan.signInExcluded.join(", ")}.`]
+                    : [])],
               };
             }
           }
