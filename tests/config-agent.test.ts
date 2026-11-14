@@ -695,6 +695,57 @@ describe("provider sign-in state", () => {
     }
   });
 
+  it("repeats the warning when the caller applies the checked candidate by digest", async () => {
+    // The supported alternative to the handle is copying the printed digests.
+    // That request names the same candidate, so dropping the warning there would
+    // make the dialog depend on which of the two forms the caller used.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: (models) => models.map((model) => model === "beta/code"
+        ? { model, status: "error" as const, reason: "401 unauthorized" }
+        : { model, status: "ok" as const }),
+    });
+    try {
+      const candidate = { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } };
+      const { details } = await checkedCandidate(harness, { candidate, probe: true });
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
+      assert.equal(applied.applied, true);
+      const [confirmation] = harness.confirmations();
+      assert.match(confirmation?.details ?? "", /Warning: Live probe of beta\/code failed: 401 unauthorized/);
+      assert.equal(harness.probeCalls().length, 1, "a digest apply must not send another probe");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("bounds a huge provider error so it cannot block approval", async () => {
+    // Provider text reaches an approval message whose size is capped. An error
+    // body over that cap would turn an advisory probe failure into a refusal to
+    // apply a candidate that is otherwise fine.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: (models) => models.map((model) => model === "beta/code"
+        ? { model, status: "error" as const, reason: `<html>${"x".repeat(5_000)}</html>` }
+        : { model, status: "ok" as const }),
+    });
+    try {
+      const candidate = { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } };
+      const checked = await harness.run({ operation: "check", candidate, probe: true });
+      const probed = detailsOf<ConfigAgentCheckResult>(checked);
+      const warning = probed.issues.find((issue) => issue.code === "config.probe_failed");
+      assert.ok(warning, "a failed probe must warn");
+      assert.ok(warning!.message.length < 400, `warning must stay bounded, got ${warning!.message.length} chars`);
+      assert.match(warning!.message, /^Live probe of beta\/code failed: <html>x+…/);
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run({
+        operation: "apply",
+        proposalHandle: contentOf(checked).match(/proposalHandle: ([a-f0-9]{12})/)?.[1],
+      }));
+      assert.equal(applied.applied, true, "a long provider error must not make the candidate unwritable");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("never probes a provider the tier's routing scope excludes", async () => {
     // The scope is a hard eligibility filter, so a probe of an excluded
     // provider would spend a request on a model that can never be selected.
