@@ -30,15 +30,16 @@ describe("config load", () => {
     }
   });
 
-  it("falls back to configured rules when a route file is not an array", () => {
+  it("fails closed when the highest-priority route file is not an array", () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
     const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
     try {
       writeJson(join(cwd, ".pi", "bifrost.json"), {
         default: "quick",
         models: { quick: ["fixture/quick"] },
-        rules: [],
+        rules: [{ pattern: "configured", model: "quick" }],
       });
+      writeJson(join(cwd, "bifrost-routes.json"), [{ pattern: "lower-priority", model: "quick" }]);
       writeJson(join(cwd, ".pi", "bifrost-routes.json"), { pattern: "mistyped", model: "quick" });
       const config = loadConfig(cwd, extensionDir);
       assert.deepEqual(loadRules(cwd, config), []);

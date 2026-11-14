@@ -17,9 +17,10 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -366,7 +367,7 @@ def pillow():
     return Image, ImageDraw, ImageFont
 
 
-def load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+def load_font(size: int) -> Any:
     candidates = [
         "/System/Library/Fonts/Menlo.ttc",
         "/System/Library/Fonts/Supplemental/Menlo.ttc",
@@ -721,10 +722,18 @@ def capture(
             if "fake/healthy" not in memberships:
                 raise AssertionError("fresh background config did not save the catalog model")
             source = json.loads((ROOT / "bifrost.json").read_text())
-            for key in ("strategy", "categoryStrategies", "cache", "debug", "reliability"):
+            for key in ("strategy", "cache", "debug", "reliability"):
                 if key in source and saved.get(key) != source[key]:
                     raise AssertionError(f"fresh background config did not preserve supported {key} settings")
+            expected_strategies = {
+                tier: source.get("categoryStrategies", {}).get(tier, "first")
+                for tier in saved.get("models", {})
+            }
+            if saved.get("categoryStrategies") != expected_strategies:
+                raise AssertionError("fresh background config did not preserve generated-tier strategies")
             classifier = saved.get("classifier", {})
+            if any(classifier.get(key) != value for key, value in source.get("classifier", {}).items()):
+                raise AssertionError("fresh background config did not preserve public classifier settings")
             classifier_settings = {
                 "enabled", "backend", "model", "method", "maxTokens", "temperature", "fallbackToRegex",
                 "totalTimeoutMs", "minConfidence", "fallback", "apiKeyEnv", "typesafe", "piNative",

@@ -2,11 +2,11 @@
 
 ## Status
 
-**Accepted** (2026-07-29). Implementation gate locked; proceed when all checkboxes are green.
+**Accepted** (2026-07-29). **Runtime-layer premise superseded** (2026-11-14): the bundled `bifrost.json` is now an initialization template, not an active config layer. Its model-agnostic tiers and public settings still define `/bifrost init` and automatic first-use output.
 
 ## Context
 
-The default `bifrost.json` shipped with the extension determines the first-run experience for every new user. It is merged as the first config layer (before user-global and project-local overrides), so its shape and opinions leak into every install unless the user overrides everything.
+The default `bifrost.json` shipped with the extension originally determined the first-run experience by merging as the first config layer. That historical behavior motivated this decision. Current runtime loading no longer merges the bundled file; writable user and project layers own runtime policy, while the bundled values remain starter defaults for explicit and automatic initialization.
 
 Two problems exist today:
 

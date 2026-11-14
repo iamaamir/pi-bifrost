@@ -31,6 +31,7 @@ export interface AtomicWriteOperations {
   writeFileSync: typeof fs.writeFileSync;
   fsyncSync: typeof fs.fsyncSync;
   closeSync: typeof fs.closeSync;
+  linkSync: typeof fs.linkSync;
   renameSync: typeof fs.renameSync;
   unlinkSync: typeof fs.unlinkSync;
 }
@@ -145,6 +146,46 @@ export function writeTextFileWithOperations(
 
 export function writeTextFile(path: string, text: string): void {
   atomicWriteTextFile(path, text, fs);
+}
+
+function writeTextFileExclusive(path: string, text: string, operations: AtomicWriteOperations): void {
+  const dir = dirname(path);
+  operations.mkdirSync(dir, { recursive: true });
+  const tempPath = join(dir, `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
+  let fd: number | undefined;
+  let ownsTemp = false;
+  try {
+    fd = operations.openSync(tempPath, "wx", 0o600);
+    ownsTemp = true;
+    operations.fchmodSync(fd, 0o600);
+    operations.writeFileSync(fd, text, "utf-8");
+    operations.fsyncSync(fd);
+    operations.closeSync(fd);
+    fd = undefined;
+    operations.linkSync(tempPath, path);
+  } finally {
+    if (fd !== undefined) {
+      try { operations.closeSync(fd); } catch { /* Preserve original failure. */ }
+    }
+    if (ownsTemp) {
+      try { operations.unlinkSync(tempPath); }
+      catch (error) { if (errorCode(error) !== "ENOENT") reportTempCleanupFailure(); }
+    }
+  }
+  syncDirectory(dir, operations);
+}
+
+/** Create one managed file without replacing a concurrent or existing target. */
+export function writeTextFileExclusiveWithOperations(
+  path: string,
+  text: string,
+  overrides: Partial<AtomicWriteOperations>,
+): void {
+  writeTextFileExclusive(path, text, { ...fs, ...overrides });
+}
+
+export function createTextFile(path: string, text: string): void {
+  writeTextFileExclusive(path, text, fs);
 }
 
 export function readJsonFile<T>(path: string): T | undefined {

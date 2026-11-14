@@ -34,12 +34,14 @@ import {
 } from "./cache.ts";
 import {
   configHasNoPools,
+  BUNDLED_PUBLIC_INIT_DEFAULTS,
   DEFAULT_CLASSIFIER_CRITERIA,
   validateConfig,
   hasExplicitTierPolicy,
   hasExplicitTierPolicies,
   hasClassifierConfigErrors,
   classifierConfigErrors,
+  mergeConfig,
   validateTierPolicyConfig,
   validateEconomicConfig,
   type BifrostConfig,
@@ -1433,7 +1435,11 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         return;
       }
       const ownershipBytes = Buffer.from(JSON.stringify(ownership, null, 2) + "\n", "utf8");
-      const savedConfig = serializeBootstrapConfig(nextConfig, nextConfig.default ?? "general", generatedModels);
+      const savedConfig = serializeBootstrapConfig(
+        mergeConfig(BUNDLED_PUBLIC_INIT_DEFAULTS as BifrostConfig, nextConfig),
+        nextConfig.default ?? "general",
+        generatedModels,
+      );
       const configBytes = Buffer.from(JSON.stringify(savedConfig, null, 2) + "\n", "utf8");
       applyReconciliationTransaction({
         configPath,
