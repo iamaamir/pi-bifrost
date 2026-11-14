@@ -779,7 +779,7 @@ function probeIssues(
     .map((entry) => ({
       severity: "warning" as const,
       code: "config.probe_failed",
-      message: `Live probe of ${entry.model} ${entry.status === "timeout" ? "timed out" : "failed"}${entry.reason ? `: ${boundedProbeReason(entry.reason)}` : ""}. That model would fail when a tier selects it; the candidate is still writable.`,
+      message: `Live probe of ${entry.model} ${entry.status === "timeout" ? "timed out" : "failed"}${entry.reason ? `: ${boundedProbeReason(entry.reason)}` : ""}. This is one observed result for this run, not proof the model always fails; the candidate is still writable.`,
     }));
 }
 
@@ -2054,7 +2054,7 @@ const ConfigAgentParameters = Type.Object({
   effectiveDigest: Type.Optional(Type.String({ description: "effectiveDigest returned by check or preview for this exact candidate." })),
   catalogDigest: Type.Optional(Type.String({ description: "catalogDigest returned by check or preview for this exact candidate." })),
   classifierRuntimeDigest: Type.Optional(Type.String({ description: "classifierRuntimeDigest returned by check or preview; apply refuses if runtime classifier state changes." })),
-  probe: Type.Optional(Type.Boolean({ description: "Live-check the models this check would route to: one request per model, each capped at 5 output tokens. Plain check never sends; it reports the exact targets in probePlan, so show that plan and ask the user first. The TUI host confirms again before sending; where no dialog exists this flag is the authorization. Advisory: probe failures warn and the candidate stays writable." })),
+  probe: Type.Optional(Type.Boolean({ description: "Live-check the models this check would route to: one request per model, each capped at 5 output tokens. Plain check never sends; it reports the exact targets in probePlan, so show that plan and ask the user first. probePlan measures raw model reachability of configured candidates; models that sign-in eligibility removes for this session are listed separately in probePlan notes and are not probed. The TUI host confirms again before sending; where no dialog exists this flag is the authorization. Advisory: probe failures are one observed result, not proof a model always fails, and the candidate stays writable." }))
 });
 
 /**
