@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { loadRuntimeState, runtimeStatePath, type ClassifierEnablement, type RuntimeStateIssue } from "./runtime-state.ts";
 import type { BifrostConfig, ClassifierConfig } from "./config.ts";
 import { BUNDLED_PUBLIC_INIT_DEFAULTS, DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, MAX_CONFIG_SOURCE_BYTES, PROMPT_ONLY_FIELDS, classifierConfigErrors, classifierTotalTimeoutIssue, schemaVersionAtLeast, validateConfig, validateEconomicConfig, validateTierPolicyConfig } from "./config.ts";
-import { loadConfigForReload, loadConfigWithSourceOverride, type ConfigLoadDiagnostic } from "./config-load.ts";
+import { loadConfigForReload, loadConfigWithSourceOverride, readBoundedConfigText, type ConfigLoadDiagnostic } from "./config-load.ts";
 import { applyConfigMigration, ConfigMigrationError, parseConfigMigrationArgs, planConfigMigration, readConfigMigrationSource } from "./config-migration.ts";
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
@@ -508,6 +508,13 @@ function readReconciliationSource(source: ReconciliationConfigSource): Reconcili
     throw new Error("source exceeds reconciliation bounds");
   }
   return { ...paths, source, configBytes, ownershipBytes };
+}
+
+function readInheritedConfigSnapshot(path: string): string | null {
+  if (!existsSync(path)) return null;
+  const { text } = readBoundedConfigText(path);
+  if (text === undefined) throw new Error("unsafe inherited config");
+  return text;
 }
 
 function selectInitSource(): ReconciliationSourceSnapshot {
@@ -1066,7 +1073,7 @@ async function handleInit(
       return;
     }
   }
-  const inheritedSources: { path: string; bytes: Uint8Array | null }[] = [];
+  const inheritedSources: { path: string; text: string | null }[] = [];
   if (selectedSource === "project") {
     try {
       const projectModels = sourceConfig.models && typeof sourceConfig.models === "object" && !Array.isArray(sourceConfig.models)
@@ -1074,10 +1081,10 @@ async function handleInit(
       const inheritedTiers = new Set<string>();
       for (const layer of ["user", "workspace"] as const) {
         const path = reconciliationPaths(layer).configPath;
-        const bytes = readBoundedRegularSnapshot(path) ?? null;
-        inheritedSources.push({ path, bytes });
-        if (!bytes) continue;
-        const parsed: unknown = JSON.parse(Buffer.from(bytes).toString("utf8"));
+        const text = readInheritedConfigSnapshot(path);
+        inheritedSources.push({ path, text });
+        if (text === null) continue;
+        const parsed: unknown = JSON.parse(text);
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid inherited config");
         const pools = (parsed as Record<string, unknown>).models;
         if (pools && typeof pools === "object" && !Array.isArray(pools)) {
@@ -1383,9 +1390,8 @@ async function handleInit(
     return;
   }
   try {
-    for (const { path, bytes } of inheritedSources) {
-      const current = readBoundedRegularSnapshot(path) ?? null;
-      if ((bytes === null) !== (current === null) || bytes && current && !Buffer.from(bytes).equals(Buffer.from(current))) {
+    for (const { path, text } of inheritedSources) {
+      if (readInheritedConfigSnapshot(path) !== text) {
         log(ctx, "Inherited config changed while Init was awaiting confirmation; no files were changed. Retry to review the new configuration.", "warning");
         return;
       }

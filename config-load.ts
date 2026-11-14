@@ -181,7 +181,7 @@ function sourcePolicyDiagnostics(value: Record<string, unknown>): string[] {
   return diagnostics;
 }
 
-function readBoundedConfigText(path: string): { readonly text?: string; readonly oversized?: true; readonly invalidUtf8?: true } {
+export function readBoundedConfigText(path: string): { readonly text?: string; readonly oversized?: true; readonly invalidUtf8?: true } {
   const beforeOpen = statSync(path);
   if (!beforeOpen.isFile()) throw new Error("not a regular config file");
   if (beforeOpen.size > MAX_CONFIG_SOURCE_BYTES) return { oversized: true };
