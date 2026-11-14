@@ -848,22 +848,11 @@ async function handleInit(
   state: BifrostState,
 ): Promise<void> {
   const tokens = args.trim().split(/\s+/).slice(1);
-  let selectedSource: ReconciliationConfigSource = "project";
-  let sourceSpecified = false;
-  for (let index = 0; index < tokens.length; index++) {
-    const token = tokens[index];
-    if (token === "-f" || token === "--write") continue;
-    if (token === "--source" && !sourceSpecified) {
-      const value = tokens[++index];
-      if (value === "project" || value === "workspace" || value === "user") {
-        selectedSource = value;
-        sourceSpecified = true;
-        continue;
-      }
-    }
-    log(ctx, "usage: /bifrost init [-f] [--write] [--source project|workspace|user]", "warning");
+  if (tokens.some((token) => !["-f", "--write", "-g"].includes(token))) {
+    log(ctx, "usage: /bifrost init [-f] [--write] [-g]", "warning");
     return;
   }
+  const selectedSource: ReconciliationConfigSource = tokens.includes("-g") ? "user" : "project";
   const bootstrapOriginalConfig = state.onInitStarted?.(ctx.sessionManager);
   const initConfig = bootstrapOriginalConfig ?? state.config;
   clearBifrostWidgets(ctx);

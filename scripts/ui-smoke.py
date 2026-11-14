@@ -624,7 +624,9 @@ def capture(
         config["classifier"] = {"enabled": False, "backend": "prompt"}
         if config_override:
             config.update(config_override)
-        (workspace / "bifrost.json").write_text(json.dumps(config, indent=2) + "\n")
+        config_path = workspace / ".pi" / "bifrost.json" if name == "init-refresh" else workspace / "bifrost.json"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(json.dumps(config, indent=2) + "\n")
     home = workspace / "isolated-home"
     agent_dir = home / ".pi" / "agent"
     assert FAKE_PORT is not None
@@ -756,7 +758,7 @@ def capture(
             if name == "fresh-auto" and "bifrost auto:" not in first_run:
                 raise AssertionError("direct Auto first prompt did not visibly route through the discovered pool")
         if name == "init-refresh":
-            config_path = workspace / "bifrost.json"
+            config_path = workspace / ".pi" / "bifrost.json"
             if not config_path.exists():
                 raise AssertionError("manual init did not save refreshed membership")
             saved = json.loads(config_path.read_text())
@@ -765,7 +767,7 @@ def capture(
                 raise AssertionError("manual init did not preserve manual membership and add catalog membership")
             if "fake/classifier" not in memberships or "fake/usage-exhausted" in memberships:
                 raise AssertionError("manual init did not save only the successful probe memberships")
-            ownership_path = workspace / ".pi" / "bifrost-reconcile-workspace-ownership.json"
+            ownership_path = workspace / ".pi" / "bifrost-reconcile-ownership.json"
             if not ownership_path.is_file():
                 raise AssertionError("manual init did not save the generated-membership ownership receipt")
             receipt = json.loads(ownership_path.read_text())
@@ -837,7 +839,7 @@ def main() -> int:
         (
             "init-refresh",
             True,
-            [(0.5, "/bifrost init --source workspace\r"), (2.0, "\r")],
+            [(0.5, "/bifrost init\r"), (2.0, "\r")],
             {
                 "schemaVersion": 2,
                 "strategy": "first",
