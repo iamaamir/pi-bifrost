@@ -31,6 +31,15 @@ export const PROBE_CACHE_TTL_MS = 60 * 60 * 1000;
 const MAX_PROBE_CACHE_BYTES = 10_000_000;
 const PROBE_TIMEOUT_MS = 10_000;
 const PROBE_MAX_TOKENS = 5;
+/** Provider error text is untrusted and can be arbitrarily long: a live check
+ * copies it into a report and an approval message, where a huge body would push
+ * an otherwise fine candidate past the approval size limit. */
+export const MAX_PROBE_ERROR_CHARS = 200;
+
+function boundProbeError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length <= MAX_PROBE_ERROR_CHARS ? message : `${message.slice(0, MAX_PROBE_ERROR_CHARS - 1)}…`;
+}
 /** Default worker count. Override via config `probe.concurrency` —
  * lower it if a provider rate-limits burst traffic. */
 export const DEFAULT_PROBE_CONCURRENCY = 50;
@@ -331,7 +340,7 @@ async function probeOne(
       base.duration_ms = +(performance.now() - start).toFixed(1);
       if (response.stopReason === "error") {
         base.status = "error";
-        base.error = response.errorMessage ?? "model error";
+        base.error = boundProbeError(response.errorMessage ?? "model error");
         return base;
       }
       const text = assistantText(response).trim();
@@ -376,7 +385,7 @@ async function probeOne(
     base.status = err instanceof DOMException && err.name === "AbortError"
       ? "timeout"
       : "error";
-    base.error = String(err).slice(0, 200);
+    base.error = boundProbeError(err);
   }
 
   return base;
