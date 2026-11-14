@@ -13,6 +13,41 @@ function writeJson(path: string, value: unknown): void {
 }
 
 describe("config load", () => {
+  it("falls back to built-in rules when configured rules are not an array", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
+    const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
+    try {
+      writeJson(join(cwd, ".pi", "bifrost.json"), {
+        default: "quick",
+        models: { quick: ["fixture/quick"] },
+        rules: { pattern: "mistyped", model: "quick" },
+      });
+      const config = loadConfig(cwd, extensionDir);
+      assert.deepEqual(loadRules(cwd, config), DEFAULT_RULES);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(extensionDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to configured rules when a route file is not an array", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
+    const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));
+    try {
+      writeJson(join(cwd, ".pi", "bifrost.json"), {
+        default: "quick",
+        models: { quick: ["fixture/quick"] },
+        rules: [],
+      });
+      writeJson(join(cwd, ".pi", "bifrost-routes.json"), { pattern: "mistyped", model: "quick" });
+      const config = loadConfig(cwd, extensionDir);
+      assert.deepEqual(loadRules(cwd, config), []);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(extensionDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses in-code defaults when config files missing", () => {
     const cwd = mkdtempSync(join(tmpdir(), "bifrost-config-"));
     const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-extension-"));

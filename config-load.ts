@@ -442,8 +442,9 @@ export function loadRules(cwd: string, config: BifrostConfig): RouteRule[] {
 
   for (const p of routeFiles) {
     const rules = readJson<RouteRule[]>(p);
-    if (rules) return rules;
+    // A mistyped route file must not reach compileRules, which iterates rules.
+    if (Array.isArray(rules)) return rules;
   }
 
-  return config.rules ?? DEFAULT_RULES;
+  return Array.isArray(config.rules) ? config.rules : DEFAULT_RULES;
 }
