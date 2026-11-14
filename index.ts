@@ -55,6 +55,7 @@ import {
   type SkippedCandidate,
   type AffinityRoutingContext,
 } from "./routing.ts";
+import { checkProviderScope, compileRoutingScope } from "./routing-scope.ts";
 import { reconcileEconomicSnapshot } from "./economic-config.ts";
 import { emptyEconomicSnapshot, hasHardEconomicAdmission } from "./economic-signals.ts";
 import { ReliabilityStore } from "./reliability-store.ts";
@@ -2559,11 +2560,17 @@ export default function bifrostExtension(pi: ExtensionAPI) {
    * provider through the exclusion.
    */
   function configuredPoolProviders(config: BifrostConfig, ctx: ExtensionContext): string[] {
+    const scope = compileRoutingScope(config.routingScope);
     const providers = new Set<string>();
-    for (const pool of Object.values(config.models ?? {})) {
+    for (const [tier, pool] of Object.entries(config.models ?? {})) {
       for (const entry of Array.isArray(pool) ? pool : [pool]) {
         if (typeof entry !== "string" || entry.trim() === "") continue;
-        for (const model of findCandidates(ctx, entry)) providers.add(model.provider);
+        for (const model of findCandidates(ctx, entry)) {
+          // A provider a hard scope forbids for this tier can never be selected
+          // from it, so waiting on its sign-in only delays the turn.
+          if (!checkProviderScope(scope, model.provider, { tier }).allowed) continue;
+          providers.add(model.provider);
+        }
       }
     }
     return [...providers];
