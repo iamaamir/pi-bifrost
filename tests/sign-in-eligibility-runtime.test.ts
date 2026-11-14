@@ -412,6 +412,20 @@ describe("pre-dispatch sign-in eligibility through the Auto route", { concurrenc
     }
   });
 
+  it("names sign-in when preview explains why a tier is empty", async () => {
+    // The preview reads the settled answer from the cache, so the turn above has
+    // to have produced one. What matters is that the exclusion is attributed to
+    // sign-in rather than to the reliability store.
+    const h = fixture({ eligibility: "exclude", models: [makeModel("dead", "only", 1)] });
+    try {
+      await assert.rejects(h.route());
+      const preview = await h.preview();
+      assert.match(preview, /provider sign-in unavailable/);
+    } finally {
+      h.cleanup();
+    }
+  });
+
   it("fails closed inside an explicit empty fallback boundary instead of borrowing another tier", async () => {
     const h = fixture({
       eligibility: "exclude",
