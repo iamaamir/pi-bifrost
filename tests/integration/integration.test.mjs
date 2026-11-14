@@ -198,7 +198,7 @@ describe("bifrost integration", { timeout: 300_000, concurrency: 1 }, () => {
     mkdirSync(join(tempDir, ".pi"), { recursive: true });
     writeFileSync(
       join(tempDir, ".pi", "bifrost.json"),
-      JSON.stringify({ classifier: { enabled: false } }),
+      JSON.stringify({ classifier: { enabled: false }, default: "quick", models: { quick: [] } }),
     );
 
     try {

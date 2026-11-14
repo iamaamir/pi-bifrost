@@ -215,7 +215,6 @@ describe("Auto selection during first-use verification", { timeout: 120_000, con
 
         const saved = JSON.parse(readFileSync(configPath, "utf8"));
         assert.deepEqual(saved.models, {
-          quick: [],
           general: [`fake/${heldModel}`],
           frontier: ["fake/frontier-healthy"],
         });
@@ -343,8 +342,8 @@ describe("Auto selection during first-use verification", { timeout: 120_000, con
         await probeGate(server.port, "release", inaccessible);
         await waitFor("the completed first-use health check", () => existsSync(configPath));
         const saved = JSON.parse(readFileSync(configPath, "utf8"));
-        assert.deepEqual(saved.models, { quick: [], general: [], frontier: [`fake/${healthy}`] },
-          "the completed setup saves only the verified sibling");
+        assert.deepEqual(saved.models, { general: [], frontier: [`fake/${healthy}`] },
+          "the completed setup keeps detected tiers and saves only the verified sibling's pool");
         const nextTurn = await rpc.userTurn("synthetic independent request after verification");
         assert.ok(nextTurn.some((record) => record.type === "message_end" && record.message?.role === "assistant"
           && record.message.stopReason === "stop" && record.message.content?.some((item) => item.type === "text" && item.text?.includes("healthy"))),

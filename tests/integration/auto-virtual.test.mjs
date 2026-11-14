@@ -172,7 +172,7 @@ function runAuto({ home, work, messages, model = "bifrost/auto" }) {
   });
 }
 
-function createDebugExtension(directory, logPath, enabled = true, probeTimeoutMs = 250) {
+function createDebugExtension(directory, logPath, enabled = true) {
   mkdirSync(directory, { recursive: true });
   for (const entry of readdirSync(ROOT)) {
     if ([".git", "node_modules", "index.ts", "bifrost.json"].includes(entry)) continue;
@@ -180,11 +180,23 @@ function createDebugExtension(directory, logPath, enabled = true, probeTimeoutMs
   }
   symlinkSync(join(ROOT, "node_modules"), join(directory, "node_modules"));
   copyFileSync(EXTENSION_PATH, join(directory, "index.ts"));
-  const config = JSON.parse(readFileSync(join(ROOT, "bifrost.json"), "utf8"));
-  config.debug = { enabled, path: logPath };
-  config.probe = { ...config.probe, timeoutMs: probeTimeoutMs };
-  writeFileSync(join(directory, "bifrost.json"), JSON.stringify(config));
-  return join(directory, "index.ts");
+  // The package bifrost.json is an init template, not a runtime layer, so
+  // runtime settings cannot be injected through it. Debug logging is enabled
+  // programmatically by a wrapper after the real extension initializes.
+  writeFileSync(join(directory, "bifrost.json"), readFileSync(join(ROOT, "bifrost.json")));
+  const wrapper = [
+    'import bifrostExtension from "./index.ts";',
+    'import { setupDebug } from "./debug.ts";',
+    "",
+    "export default function (pi) {",
+    "  const extension = bifrostExtension(pi);",
+    enabled ? `  setupDebug({ enabled: true, path: ${JSON.stringify(logPath)} }, process.cwd());` : "",
+    "  return extension;",
+    "}",
+    "",
+  ].filter((line) => line !== "").join("\n");
+  writeFileSync(join(directory, "debug-wrapper.ts"), wrapper);
+  return join(directory, "debug-wrapper.ts");
 }
 
 async function waitFor(description, condition, timeoutMs = 15_000) {
@@ -516,7 +528,7 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
     const home = mkdtempSync(join(tmpdir(), "bifrost-background-home-"));
     const work = mkdtempSync(join(tmpdir(), "bifrost-background-work-"));
     const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-background-extension-"));
-    const extensionPath = createDebugExtension(extensionDir, ".pi/bifrost-debug.jsonl", false, 10_000);
+    const extensionPath = createDebugExtension(extensionDir, ".pi/bifrost-debug.jsonl", false);
     const configPath = join(work, ".pi", "bifrost.json");
     try {
       writePiModels({ home, port: server.port, models: [
@@ -546,13 +558,15 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
         await secondTurn;
         const saved = JSON.parse(readFileSync(configPath, "utf8"));
         assert.equal(saved.default, "quick");
-        assert.deepEqual(saved.models, { quick: ["fake/healthy"], general: [], frontier: [] });
+        assert.deepEqual(saved.models, { quick: ["fake/healthy"], frontier: [] });
         assert.equal(saved.enabled, true);
         assert.equal(saved.strategy, "first");
-        assert.deepEqual(saved.categoryStrategies, { quick: "random", general: "first", frontier: "first" });
-        assert.deepEqual(saved.cache, { enabled: true, maxEntries: 500, threshold: 1 });
-        assert.equal(saved.reliability.enabled, true);
-        assert.equal(saved.debug.enabled, false);
+        assert.deepEqual(saved.categoryStrategies, { quick: "first", frontier: "first" });
+        // Public baseline settings stay in code defaults; only user-provided
+        // values are serialized into the starter config.
+        assert.equal(saved.cache, undefined);
+        assert.equal(saved.reliability, undefined);
+        assert.equal(saved.debug, undefined);
 
         const beforeVerifiedTurn = await fakeStats(server.port);
         await rpc.userTurn("frontier say after verification");
@@ -1045,9 +1059,10 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
     const configPath = join(work, ".pi", "bifrost.json");
     const logPath = join(work, "probe-debug.jsonl");
     const extensionDir = mkdtempSync(join(tmpdir(), "bifrost-debug-extension-"));
-    // The timeout witness never responds; successful probes need no race
-    // against a 250ms wall-clock budget on a busy hosted runner.
-    const extensionPath = createDebugExtension(extensionDir, logPath, true, 3_000);
+    // The timeout witness never responds, so the probe window settles when
+    // the default 10s probe timeout aborts it; the config wait below allows
+    // for that full window on a busy hosted runner.
+    const extensionPath = createDebugExtension(extensionDir, logPath, true);
     const heldModel = "probe-background-held-timeout";
     const probeGate = async (action) => {
       const response = await fetch(`http://127.0.0.1:${server.port}/_probe-gate/${action}?model=${heldModel}`, {
@@ -1081,7 +1096,7 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
       const rpc = startRpc({ home, work, extensionPath });
       try {
         await rpc.userTurn("quick say ready");
-        await waitForFile(configPath, 10_000, async () => JSON.stringify(await fakeStats(server.port)));
+        await waitForFile(configPath, 15_000, async () => JSON.stringify(await fakeStats(server.port)));
         const saved = JSON.parse(readFileSync(configPath, "utf8"));
         assert.ok(saved.models.quick.includes("good/healthy"), "the successful healthy model remains in the saved quick pool");
         assert.ok(saved.models.quick.every((model) => !model.startsWith("fake/")), "saved pools omit every model from the quota-blocked provider");
