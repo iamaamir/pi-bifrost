@@ -108,7 +108,9 @@ export function serializeBootstrapConfig(
       : "first",
   ]));
   if (Array.isArray(source.rules)) {
-    const rules = source.rules.filter((rule) => !!rule && typeof rule.pattern === "string" && typeof rule.model === "string")
+    const generatedTiers = new Set(Object.keys(generatedModels));
+    const rules = source.rules.filter((rule) => !!rule && typeof rule.pattern === "string"
+        && typeof rule.model === "string" && generatedTiers.has(rule.model))
       .map(({ pattern, model }) => ({ pattern, model }));
     if (rules.length) result.rules = rules;
   }
