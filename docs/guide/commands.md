@@ -21,6 +21,7 @@
 | `/bifrost reliability` | Show active provider pauses and recovery trials |
 | `/bifrost reliability reset` | Clear one provider pause and its trial state with `--provider <exact-id>`. Model reliability records stay unchanged. |
 | `/bifrost cache stats` | Inspect local classification cache |
+| `/bifrost cost` | Show usage recorded in this Pi session and Pi-reported cost estimates |
 | `/bifrost cache clear` | Empty saved local classification-cache entries |
 | `/bifrost classifier` | Choose `prompt`, `typesafe`, or `pi-native`. The Pi-native picker can select a catalog model or use the default |
 | `/bifrost classifier on` | Enable classifier for this Pi session after backend validation |
@@ -39,6 +40,8 @@
 On first use, when no meaningful configuration, route file, runtime routing preference, or explicit routing override blocks setup, Bifrost loads provisional pools from Pi's catalog before generation. It checks model access in the background and saves only successful generated pools with an ownership receipt. An empty `{}` configuration does not block setup. If every probe fails or a safe save cannot finish, Bifrost leaves configuration unchanged and warns. Probe requests can use provider credits or reach rate limits.
 
 Provider usage and billing pauses use Pi's configured provider ID. Bifrost does not identify shared billing accounts. Use `/bifrost reliability` to see active pauses. The reset command accepts only one exact provider ID that Bifrost knows. It stops during an active recovery trial.
+
+`/bifrost cost` reads Pi's session entries on demand. It reports assistant and auxiliary usage separately, including compaction when Pi records it, and groups assistant responses by their reported model. It does not display or store prompt or tool content. Pi may retain copied fork history and alternate branches in the session entries, so totals count recorded entries rather than unique turns. Costs are Pi-reported estimates, not billing records; zero does not confirm free usage. Classifier and probe overhead may be outside the session or unknown. This report has no baseline and cannot establish net savings.
 
 Init remains available to refresh the catalog or reconcile model lists. It reuses probe results from the last hour unless you pass `-f`. Init preserves settings and handwritten model entries in the file it edits. Settings from other files remain inherited. It does not copy private classifier templates or pin inherited user settings into the edited file. Its summary does not show every model ID, selection rule, or default tier. After init saves, inspect the lists and status. Edit the saved configuration before a model answers if needed.
 

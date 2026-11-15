@@ -65,6 +65,7 @@ import { projectProviderRefreshEvidence, waitForRegistryRefresh } from "./regist
 import { REGISTRY_REFRESH_TTL_MS } from "./ux-status.ts";
 import { isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
 import { hasExplicitExtensionRoutingFile, hasUserBootstrapFiles } from "./auto-setup.ts";
+import { formatCostReport } from "./cost-report.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
@@ -2053,6 +2054,7 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "reliability migrate", description: "Prepare receipt-owned reliability v2", argumentHint: "[--fresh]" },
   // Everything else, in declaration order.
   { value: "cache stats", description: "Show classification cache" },
+  { value: "cost", description: "Show recorded session usage and cost estimate" },
   // Reachable from the dashboard now that the menu is derived from the
   // registry, and still unconfirmed: this writes the cache file immediately.
   // docs/ui-enhancements.md lists "Destructive confirmation - Confirm cache
@@ -2881,6 +2883,7 @@ export function createCommandRouter(
   state: BifrostState,
 ): (args: string, ctx: ExtensionContext) => Promise<void> {
   const routes: CommandEntry[] = [
+    exact("cost", async (_, ctx) => uiResult(ctx, "Bifrost cost", formatCostReport(ctx.sessionManager.getEntries()))),
     exact("on", (_, ctx) => {
       state.onManualControl?.(ctx.sessionManager, "on");
       state.enabled = true;

@@ -35,6 +35,8 @@ pi install npm:pi-bifrost
 
 Restart Pi if the extension is not loaded in the current session.
 
+To inspect usage Pi recorded for the current session, run `/bifrost cost`. The report separates assistant responses from compaction usage and shows Pi-reported cost estimates when valid. It counts retained session entries, which can include copied fork history and alternate branches. Estimates are not billing records; zero reported cost does not confirm free usage, and classifier or probe overhead may not be included.
+
 ## Understand four terms
 
 - **Tier:** named capability group such as `quick`, `general`, or `frontier`.
