@@ -2661,8 +2661,8 @@ describe("dashboard menu", () => {
     }
   });
 
-it("offers 26 rows", async () => {
-    assert.equal((await rowsFor()).length, 26);
+it("offers 27 rows", async () => {
+    assert.equal((await rowsFor()).length, 27);
   });
 
   it("keeps the top row actionable in every state combination", async () => {
