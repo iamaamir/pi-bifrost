@@ -3944,10 +3944,8 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     if (explicitSubagentChild) {
       debug("input", "subagent", {
         source: "PI-subagent",
-        agent: process.env.PI_SUBAGENT_CHILD_AGENT,
         model: modelKey(ctx.model),
         thinkingLevel: ctx.thinkingLevel,
-        depth: process.env.PI_SUBAGENT_PARENT_DEPTH,
       });
       routeBoundary = false;
       strictBoundary = false;

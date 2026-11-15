@@ -62,7 +62,7 @@ const RAW_LEAK_MARKERS = [...CANARIES];
 const DEBUG_KEY_ALLOWLIST = new Set([
   "ts", "module", "event", "entryType", "duration_ms", "_meta_error",
   "run_correlation_id", "session_correlation_id", "turn_correlation_id",
-  "pattern_run_id", "subagent_run_id",
+  "pattern_run_id",
   "extensionDir", "processId", "runtimeVersion", "routingMode", "reliabilityMode",
   "enabled", "pinned", "classifierEnabled", "reliabilityStateVersion",
   "routingEnabled", "budget_scope", "reason", "scope", "target", "action",
@@ -73,7 +73,7 @@ const DEBUG_KEY_ALLOWLIST = new Set([
   "trace_id", "runId", "kind", "source", "strategy", "skipped", "cacheHit",
   "classifierBackend", "classifierModel", "thinkingLevel", "fallback",
   "fallbackReason", "selectedTier", "decision", "request_correlation_id",
-  "backend", "attribution", "category", "pool", "errorCategory", "agent",
+  "backend", "attribution", "category", "pool", "errorCategory",
   "command", "resultCount", "failedModels",
 ]);
 
@@ -95,7 +95,7 @@ const SENSITIVE_KEYS = new Set([
 // TypeSafe service URL addressed by the gated `request` row; that row is only
 // reachable once a credential exists, so it is declared here rather than
 // exercised by the missing-credential witness.
-const DEBUG_BASE_KEYS = ["ts", "module", "event", "entryType", "pattern_run_id", "subagent_run_id", "_meta_error"];
+const DEBUG_BASE_KEYS = ["ts", "module", "event", "entryType", "pattern_run_id", "_meta_error"];
 const PI_NATIVE_TRACE_KEYS = new Set([
   ...DEBUG_BASE_KEYS,
   "trace_id", "model", "tiers", "prompt_length", "timeout_ms", "max_attempts",

@@ -88,6 +88,7 @@
     "acceptance:verify": "node scripts/verify-release.mjs",
     "check:arch": "node scripts/toolbox.mjs arch",
     "check:dead-code": "node scripts/toolbox.mjs dead-code",
+    "check:contracts": "node scripts/check-contracts.mjs",
     "check:ast": "node scripts/toolbox.mjs ast",
     "ast:scan": "ast-grep scan --config sgconfig.yml",
     "ast:test": "ast-grep test --skip-snapshot-tests",

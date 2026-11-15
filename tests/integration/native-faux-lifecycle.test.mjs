@@ -66,9 +66,21 @@ it("routes real AgentSession turns by direct rules, tier override precedence, an
       // Unmarked host explicitly selects Auto: expected physical routed target and inline handoff.
       { name: "auto-unmarked", env: {} },
       // Marked child host with an explicit physical model: never rerouted.
-      { name: "child-physical", env: { PI_SUBAGENT_CHILD: "1" } },
+      { name: "child-physical", env: {
+        PI_SUBAGENT_CHILD: "1",
+        PI_SUBAGENT_RUN_ID: "unsupported-run-id",
+        PI_SUBAGENT_CHILD_AGENT: "unsupported-agent",
+        PI_SUBAGENT_PARENT_DEPTH: "unsupported-depth",
+        BIFROST_PATTERN_RUN_ID: "supported-pattern-id",
+      } },
       // Same marked child host with an explicit Auto selection: ordinary routing plus inline handoff.
-      { name: "child-auto", env: { PI_SUBAGENT_CHILD: "1" } },
+      { name: "child-auto", env: {
+        PI_SUBAGENT_CHILD: "1",
+        PI_SUBAGENT_RUN_ID: "unsupported-run-id",
+        PI_SUBAGENT_CHILD_AGENT: "unsupported-agent",
+        PI_SUBAGENT_PARENT_DEPTH: "unsupported-depth",
+        BIFROST_PATTERN_RUN_ID: "supported-pattern-id",
+      } },
     ]) {
       const runScratch = join(scratch, scenario.name);
       mkdirSync(runScratch, { recursive: true });

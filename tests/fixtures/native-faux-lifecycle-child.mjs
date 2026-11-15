@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { it } from "node:test";
+import { flushDebug } from "../../debug.ts";
 import { assertCredentialsAbsent, assertNoViolations, assertProviderCallCounts, startFauxHarness } from "./faux-harness.mjs";
 
 // The parent owns scratch lifetime. This child never deletes scratch: the parent
@@ -86,9 +87,12 @@ it(`routes real AgentSession turns (${scenario})`, async () => {
     // A marked child host must keep the exact producer marker that the extension
     // reads; an unmarked host must not carry it at all.
     wipeEnv: true,
-    preserveEnv: childHost ? ["PI_SUBAGENT_CHILD", "PI_SUBAGENT_CHILD_AGENT"] : [],
+    preserveEnv: childHost
+      ? ["PI_SUBAGENT_CHILD", "PI_SUBAGENT_RUN_ID", "PI_SUBAGENT_CHILD_AGENT", "PI_SUBAGENT_PARENT_DEPTH", "BIFROST_PATTERN_RUN_ID"]
+      : [],
     bifrost: {
       enabled: true,
+      debug: { enabled: childHost, path: "lifecycle-debug.jsonl" },
       default: "quick",
       models: { quick: ["faux-default/physical"], frontier: ["faux-frontier/physical"] },
       classifier: { enabled: false },
@@ -130,6 +134,21 @@ it(`routes real AgentSession turns (${scenario})`, async () => {
     const expectedInvocations = current.turns.map((turn) => turn.model);
     assert.equal(new Set(expectedInvocations).size, expectedInvocations.length, "each scenario must invoke a distinct physical model at most once");
     assert.deepEqual(harness.invocations, expectedInvocations, "provider model arguments must match exact per-turn routing with no extra calls");
+    if (childHost && current.physicalSession) {
+      await flushDebug(1000);
+      const rows = readFileSync(`${harness.paths.cwd}/lifecycle-debug.jsonl`, "utf8")
+        .trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      const subagentRows = rows.filter((row) => row.module === "input" && row.event === "subagent");
+      assert.ok(subagentRows.length > 0, "marked child must emit an input/subagent debug record");
+      for (const row of subagentRows) {
+        assert.equal(row.pattern_run_id, "supported-pattern-id");
+        assert.equal(row.subagent_run_id, undefined);
+        assert.equal(row.agent, undefined);
+        assert.equal(row.depth, undefined);
+        assert.equal(row.model !== undefined, true, "subagent record must retain model identity");
+        assert.equal(row.thinkingLevel !== undefined, true, "subagent record must retain thinking level");
+      }
+    }
     assertNoViolations(violationPath, "socket, UDP, and fetch guard must record zero outbound attempts");
     assertProviderCallCounts(harness.providers, Object.fromEntries(
       expectedInvocations.map((model) => [model.slice(0, model.indexOf("/")), 1]),
