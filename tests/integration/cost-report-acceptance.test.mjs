@@ -35,6 +35,7 @@ describe("session cost command with real Pi", () => {
       config: { schemaVersion: 2, enabled: true, default: "general", strategy: "first", classifier: { enabled: false }, models: { general: ["fake/chat"] } },
     });
     const rpc = startRpc({ fixture, server, model: "fake/chat" });
+    let scenarioError;
     try {
       const beforeCost = await readStats(server.port);
       await rpc.prompt(`${PROMPT_CANARY} answer briefly`);
@@ -50,8 +51,18 @@ describe("session cost command with real Pi", () => {
       assert.deepEqual(statsEntriesDelta(afterGeneration, afterReport), [], "cost command must not make provider requests");
       assert.deepEqual(snapshotBifrostFiles([fixture.work, fixture.home]), bifrostFilesBefore, "cost command must not write Bifrost files");
       assert.equal(combined.includes(PROMPT_CANARY), false);
+    } catch (error) {
+      scenarioError = error;
+      throw error;
     } finally {
-      try { await rpc.close(); } finally { fixture.cleanup(); }
+      try {
+        const closed = await rpc.close({ assertClean: true });
+        assert.equal(closed.groupGone, true, "Pi RPC process group must be gone before fixture cleanup");
+        fixture.cleanup();
+      } catch (cleanupError) {
+        if (scenarioError) throw new AggregateError([scenarioError, cleanupError], "cost acceptance scenario and teardown failed");
+        throw cleanupError;
+      }
     }
   });
 });
