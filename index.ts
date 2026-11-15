@@ -2601,8 +2601,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     // the cached pipeline is not using, and a direct model the pipeline still
     // resolves could reach dispatch unchecked. The pipeline is the only source
     // that cannot disagree with classification.
+    //
+    // `compiledRules` is what classification actually matches. Raw rules would
+    // include a pattern compilation drops, making the turn spend a credential
+    // resolution on a model no prompt can select.
     const tierNames = new Set(Object.keys(config.models ?? {}));
-    for (const rule of getPipeline(ctx).rules) {
+    for (const rule of getPipeline(ctx).compiledRules) {
       if (typeof rule?.model !== "string" || !rule.model.includes("/")) continue;
       // A rule naming a tier is an alias, not a direct model.
       if (tierNames.has(rule.model)) continue;

@@ -536,6 +536,36 @@ describe("pre-dispatch sign-in eligibility through the Auto route", { concurrenc
     }
   });
 
+  it("does not resolve a provider named only by a rule compilation drops", async () => {
+    // Classification compiles rules and refuses an invalid pattern, so no
+    // prompt can ever select that direct model. Resolving its provider would
+    // spend the credential wait the opt-in is meant to bound.
+    const invalid = fixture({
+      eligibility: "exclude",
+      pool: [],
+      routeFileRules: [{ pattern: "(", model: "dead/one" }],
+    });
+    try {
+      await assert.rejects(invalid.route());
+      assert.deepEqual(invalid.authCalls, [], "a rule the classifier drops must not resolve a provider");
+    } finally {
+      invalid.cleanup();
+    }
+    // Control: the same direct model behind a pattern compilation keeps is
+    // checked, so the empty list above proves the filter rather than the setup.
+    const valid = fixture({
+      eligibility: "exclude",
+      pool: [],
+      routeFileRules: [{ pattern: "review", model: "dead/one" }],
+    });
+    try {
+      await assert.rejects(valid.route());
+      assert.deepEqual(valid.authCalls, ["dead"], "the valid rule's provider is still resolved");
+    } finally {
+      valid.cleanup();
+    }
+  });
+
   it("resolves nothing for a pinned session and leaves the model alone", async () => {
     // Pin means the user chose the model. Swapping it would be the one thing the
     // manual control exists to prevent, so preparation never even starts.
