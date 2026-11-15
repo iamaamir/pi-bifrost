@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { runVerification } from "../scripts/verify-release.mjs";
+import { fixtureGitEnv } from "./fixtures/git-env.mjs";
 
 const scripts = { test: "true", typecheck: "true", "build:router": "true", "test:integration": "true", "test:ui": "true", "test:ui:reliability": "true" };
 
@@ -14,9 +15,9 @@ function repository(packageScripts = scripts) {
   writeFileSync(join(root, ".gitignore"), "screenshots/\n");
   writeFileSync(join(root, "package.json"), JSON.stringify({ scripts: packageScripts }));
   writeFileSync(join(root, "scripts", "source.js"), "original\n");
-  execFileSync("git", ["init", "-q"], { cwd: root });
-  execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "add", "."], { cwd: root });
-  execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"], { cwd: root });
+  execFileSync("git", ["init", "-q"], { cwd: root, env: fixtureGitEnv() });
+  execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "add", "."], { cwd: root, env: fixtureGitEnv() });
+  execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-qm", "fixture"], { cwd: root, env: fixtureGitEnv() });
   return root;
 }
 
@@ -112,7 +113,7 @@ test("a HEAD-only change fails even when the source tree stays identical", async
   const root = repository();
   try {
     const result = await verify(root, { execute: async ({ index }) => {
-      if (index === 0) execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "empty"], { cwd: root });
+      if (index === 0) execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "--allow-empty", "-qm", "empty"], { cwd: root, env: fixtureGitEnv() });
       return { status: 0, stdout: "ok", stderr: "" };
     } });
     assert.equal(result.exitCode, 1);
