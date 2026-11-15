@@ -88,7 +88,12 @@ goal needs something Bifrost does not do, say so.
 
    Probe targets the effective model pools and the effective direct-model
    rules, including a rule supplied by `.pi/bifrost-routes.json` rather than
-   inline `rules`. Models whose provider's stored sign-in does not resolve for
+   inline `rules`. The plan is a safe superset, not a proof of reachability: a
+   direct rule shadowed by an earlier match can still be listed, because the
+   check does not solve regex reachability. Say so if the user asks why a model
+   they never see selected appears in the plan. A rule whose pattern routing
+   refuses to compile is not listed and is not probed. Models whose provider's
+   stored sign-in does not resolve for
    this session are listed in `probeSkipped` and are not probed; they are
    skipped, not reported as probe failures. A skipped model was never asked, so
    it proves nothing about reachability. Do not treat it as probed or as failed.
