@@ -9,9 +9,9 @@
  * capability and reserves `description` inside dynamically keyed maps. */
 export const SUPPORTED_SCHEMA_VERSIONS = [1, 2, 3] as const;
 
-/** True when the configured schemaVersion is at least `minimum`. An absent or
- * non-integer version counts as version 1 (legacy behavior). Version 3 keeps
- * all version 2 features, so gates written as `=== 2` must use this instead. */
+/** True when configured schemaVersion is an integer at least `minimum`.
+ * Absent and non-integer values fail the gate. Version 3 keeps all version 2
+ * features, so gates written as `=== 2` must use this instead. */
 export function schemaVersionAtLeast(version: unknown, minimum: number): boolean {
   return typeof version === "number" && Number.isInteger(version) && version >= minimum;
 }

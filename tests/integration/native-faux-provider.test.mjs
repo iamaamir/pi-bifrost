@@ -50,6 +50,8 @@ it("routes real AgentSession behind tested HTTP, HTTPS, TCP, and UDP outbound fe
         BIFROST_NATIVE_FAUX_SCRATCH: scratch,
         BIFROST_EXPECTED_MODEL: testCase.expectedModel,
       };
+      // Keep obsolete run IDs out of this fixture so only the verified child
+      // marker can affect routing; this is an isolation control, not a contract.
       delete childEnv.PI_SUBAGENT_RUN_ID;
       if (testCase.child === undefined) delete childEnv.PI_SUBAGENT_CHILD;
       else childEnv.PI_SUBAGENT_CHILD = testCase.child;

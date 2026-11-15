@@ -3933,11 +3933,10 @@ export default function bifrostExtension(pi: ExtensionAPI) {
       strictBoundary = false;
       return { action: "continue" };
     }
-    // pi-subagents 0.77.0 sets PI_SUBAGENT_CHILD=1 in its async child
-    // runner (src/runs/background/subagent-runner.js). Scope this bypass to
-    // that verified child-host marker; PI_SUBAGENT_RUN_ID is not a producer
-    // contract in the installed SDK and must not drive routing decisions.
-    // The bypass preserves a child host's fixed physical model identity, but
+    // pi-subagents 0.77.0 was verified to set PI_SUBAGENT_CHILD=1 in its async
+    // child runner (src/runs/background/subagent-runner.js). Treat that as the
+    // child-host contract; do not infer it from run IDs. The bypass preserves a
+    // child host's fixed physical model identity, but
     // an explicitly selected bifrost/auto child owns per-request virtual
     // dispatch (including the inline tier handoff below), so only physical
     // selections take the early return.
