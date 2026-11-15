@@ -1662,6 +1662,26 @@ describe("opt-in sign-in eligibility (ADR 0026)", () => {
     assert.deepEqual(resolution.attemptedTiers?.[0]?.resolution.skipped, [{ key: "dead/one", reason: "sign_in_unavailable" }]);
   });
 
+  it("reports sign-in instead of unhealthy without an explicit fallback policy", () => {
+    // The default policy path computed its own reason; it must use the same
+    // wording as the explicit boundary, not fall back to the reliability name.
+    const ctx = makeCtx([dead]);
+    const resolution = resolveConfiguredTier(
+      ctx,
+      "review",
+      { schemaVersion: 2, default: "review", models: { review: ["dead/one"] } },
+      undefined,
+      { ...DEFAULT_RELIABILITY, enabled: false },
+      Date.now(),
+      undefined,
+      undefined,
+      undefined,
+      (model) => model.provider === "dead",
+    ).resolution;
+    assert.equal(resolution.selected, undefined);
+    assert.equal(resolution.fallbackReason, "sign_in_unavailable");
+  });
+
   it("reports sign-in as the tier's reason instead of calling it unhealthy", () => {
     // A pool emptied only by sign-in has no reliability event behind it. Naming
     // it unhealthy sends the user to a store that holds nothing about it.
