@@ -608,9 +608,11 @@ export function resolveHealthyModel<M extends RoutingModelBase>(
   };
 }
 
-/** Reliability exclusions only; provider scope rejections are reported separately. */
+/** Reliability exclusions only; provider scope and sign-in rejections are
+ * reported separately and must not be counted as evidence of unreliability. */
 function unreliableSkipped(pool: HealthyModelResolution): number {
-  return pool.skipped.filter((candidate) => candidate.reason !== "provider_not_allowed").length;
+  return pool.skipped.filter((candidate) => candidate.reason !== "provider_not_allowed"
+    && candidate.reason !== "sign_in_unavailable").length;
 }
 
 function scopeRejected(pool: HealthyModelResolution): boolean {
@@ -618,12 +620,15 @@ function scopeRejected(pool: HealthyModelResolution): boolean {
 }
 
 /**
- * Every skipped candidate was stopped by sign-in eligibility. Such a pool is
- * empty for a reason the reliability store knows nothing about, so calling it
- * unhealthy would send the user to the wrong place.
+ * Every skipped candidate across the attempted pools was stopped by sign-in
+ * eligibility. Such an exhaustion has no reliability evidence behind it, so
+ * calling it unhealthy would send the user to the wrong place. Mixed skips
+ * answer false on purpose: one dead credential among open circuits must keep
+ * the reliability wording rather than claim sign-in alone ended the route.
  */
-function signInOnlySkipped(pool: HealthyModelResolution): boolean {
-  return pool.skipped.length > 0 && pool.skipped.every((candidate) => candidate.reason === "sign_in_unavailable");
+function signInOnlySkipped(...pools: readonly HealthyModelResolution[]): boolean {
+  const skipped = pools.flatMap((pool) => pool.skipped);
+  return skipped.length > 0 && skipped.every((candidate) => candidate.reason === "sign_in_unavailable");
 }
 
 /** Distinguish reliability, provider-scope, and reserve exclusions for one pool. */
@@ -710,7 +715,10 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
     if (requestedUnavailable && primary.skipped.length === 0 && !requestedExcluded && unavailable(fb)) {
       return "requested_tier_unavailable";
     }
-    if (signInOnlySkipped(fb) || (signInOnlySkipped(primary) && unreliableSkipped(fb) === 0)) return "sign_in_unavailable";
+    // Only a route where every attempted pool was stopped by sign-in may claim
+    // sign-in as the cause. A pool emptied by a circuit keeps the reliability
+    // wording even when the other pool is empty for lack of credentials.
+    if (signInOnlySkipped(primary, fb)) return "sign_in_unavailable";
     if (unreliableSkipped(fb) > 0 || requestedUnreliable > 0) return "all_tiers_exhausted";
     if (scopeRejected(fb) || requestedScopeRejected) return "requested_tier_provider_excluded";
     if (reserveExcluded(primary) || reserveExcluded(fb)) return "requested_tier_excluded";
@@ -792,6 +800,9 @@ function resolveWithExplicitTierBoundary<M extends RoutingModelBase>(
   const allPoolsUnavailable = attemptedTiers.every(({ resolution }) => resolution.candidates.length === 0 && resolution.skipped.length === 0);
   const anyUnreliable = attemptedTiers.some(({ resolution }) => unreliableSkipped(resolution) > 0);
   const anyScopeRejected = attemptedTiers.some(({ resolution }) => scopeRejected(resolution));
+  // Every attempted tier was emptied only by sign-in, so the boundary failed
+  // for lack of credentials rather than for an unavailable or unreliable tier.
+  const signInOnly = signInOnlySkipped(...attemptedTiers.map(({ resolution }) => resolution));
   const primaryExclusion = tierExclusionReason(primary, primaryReserveExcluded);
   const fallbackReason: RoutedModelResolution["fallbackReason"] = selectedAttempt
       ? selectedAttempt.tier === options.requestedTier
@@ -803,6 +814,8 @@ function resolveWithExplicitTierBoundary<M extends RoutingModelBase>(
       ? primaryExclusion ?? "requested_tier_unhealthy"
     : allPoolsUnavailable
       ? "requested_tier_unavailable"
+      : signInOnly
+        ? "sign_in_unavailable"
       : anyUnreliable
         ? "all_tiers_exhausted"
         : anyScopeRejected
