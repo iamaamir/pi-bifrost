@@ -21,7 +21,7 @@
 | `/bifrost reliability` | Show active provider pauses and recovery trials |
 | `/bifrost reliability reset` | Clear one provider pause and its trial state with `--provider <exact-id>`. Model reliability records stay unchanged. |
 | `/bifrost cache stats` | Inspect local classification cache |
-| `/bifrost cost` | Show usage recorded in this Pi session and Pi-reported cost estimates |
+| `/bifrost cost` | Browse usage recorded in this Pi session and Pi-reported cost estimates |
 | `/bifrost cache clear` | Empty saved local classification-cache entries |
 | `/bifrost classifier` | Choose `prompt`, `typesafe`, or `pi-native`. The Pi-native picker can select a catalog model or use the default |
 | `/bifrost classifier on` | Enable classifier for this Pi session after backend validation |
@@ -41,7 +41,7 @@ On first use, when no meaningful configuration, route file, runtime routing pref
 
 Provider usage and billing pauses use Pi's configured provider ID. Bifrost does not identify shared billing accounts. Use `/bifrost reliability` to see active pauses. The reset command accepts only one exact provider ID that Bifrost knows. It stops during an active recovery trial.
 
-`/bifrost cost` reads Pi's session entries on demand. It reports assistant and auxiliary usage separately, including compaction when Pi records it, and groups assistant responses by their reported model. It does not display or store prompt or tool content. Pi may retain copied fork history and alternate branches in the session entries, so totals count recorded entries rather than unique turns. Costs are Pi-reported estimates, not billing records; zero does not confirm free usage. Classifier and probe overhead may be outside the session or unknown. This report has no baseline and cannot establish net savings.
+`/bifrost cost` reads Pi's session entries on demand. In the interactive view, use **Tab** to switch between Requests and Models for the current branch, **Up/Down** to move, **Enter** to expand or collapse a group, and **Esc** to close. Requests are derived from user-message boundaries; they are not a routing trace. The separate all-retained total may include copied fork history and alternate branches. The report shows assistant responses by reported model and auxiliary usage when Pi records it, including compaction. Unknown costs remain unknown; a known-cost subtotal does not include them. The report does not display or store prompt or tool content, and historical routing reasons are unavailable. Costs are Pi-reported estimates, not billing records; zero does not confirm free usage. Classifier and probe overhead may be outside the session or unknown. The report has no baseline and makes no savings claim. When an interactive TUI is unavailable, the command prints a plain-text report.
 
 Init remains available to refresh the catalog or reconcile model lists. It reuses probe results from the last hour unless you pass `-f`. Init preserves settings and handwritten model entries in the file it edits. Settings from other files remain inherited. It does not copy private classifier templates or pin inherited user settings into the edited file. Its summary does not show every model ID, selection rule, or default tier. After init saves, inspect the lists and status. Edit the saved configuration before a model answers if needed.
 

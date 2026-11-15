@@ -1,0 +1,42 @@
+import assert from "node:assert/strict";
+import { it } from "node:test";
+import { getCostReportData } from "../cost-report.ts";
+import { CostView, formatCostText } from "../cost-view.ts";
+
+it("shows branch totals and expands mixed-model requests without exposing content", () => {
+  const usage = (cost: number | undefined) => ({ input: 10, output: 2, cacheRead: 3, cacheWrite: 4, cost: cost === undefined ? undefined : { total: cost } });
+  const branch = [
+    { type: "message", message: { role: "user", content: "PROMPT-CANARY" } },
+    { type: "message", message: { role: "assistant", provider: "p", model: "a", usage: usage(0.02) } },
+    { type: "message", message: { role: "assistant", provider: "p", model: "b", usage: usage(undefined) } },
+  ] as any;
+  const retained = [...branch, { type: "message", message: { role: "assistant", provider: "p", model: "c", usage: usage(0.03) } }] as any;
+  const data = getCostReportData(branch, retained);
+  let closed = false;
+  const size = { columns: 80, rows: 30 };
+  const view = new CostView(data, () => size, { fg: (_color, value) => value }, () => { closed = true; }, () => {});
+  let screen = view.render(70).join("\n");
+  assert.match(screen, /Current branch\s+\$0\.020000 known \+ unknown/);
+  assert.match(screen, /All retained\s+\$0\.050000 known \+ unknown/);
+  assert.doesNotMatch(screen, /p\/a|PROMPT-CANARY/);
+  view.handleInput("\r");
+  screen = view.render(70).join("\n");
+  assert.match(screen, /p\/a/);
+  assert.match(screen, /p\/b/);
+  assert.doesNotMatch(screen, /p\/c|PROMPT-CANARY/);
+  size.columns = 28;
+  screen = view.render(28).join("\n");
+  assert.match(screen, /0\.020000/);
+  view.handleInput("\t");
+  assert.match(view.render(28).join("\n"), /\[Models\]/);
+  view.handleInput("\x1b");
+  assert.equal(closed, true);
+  assert.doesNotMatch(formatCostText(data).join("\n"), /PROMPT-CANARY/);
+});
+
+it("does not report an invented zero subtotal when every price is missing", () => {
+  const entries = [{ type: "message", message: { role: "assistant", provider: "p", model: "m", usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 } } }] as any;
+  const text = formatCostText(getCostReportData(entries, entries)).join("\n");
+  assert.match(text, /Current branch: unavailable/);
+  assert.doesNotMatch(text, /\$0\.000000/);
+});

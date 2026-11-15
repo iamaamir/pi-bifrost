@@ -5,11 +5,49 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import bifrostExtension from "../index.ts";
-import { formatCostReport } from "../cost-report.ts";
+import { formatCostReport, getCostReportData } from "../cost-report.ts";
 
 const usage = (input: number, cost: number) => ({ input, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: input + 9, cost: { input: cost, output: 0, cacheRead: 0, cacheWrite: 0, total: cost } });
 
 describe("session cost report", () => {
+  it("groups active-branch responses by user boundary without merging mixed models", () => {
+    const firstUser = { type: "message", message: { role: "user", content: "PRIVATE PROMPT CANARY" } };
+    const entries = [
+      { type: "message", message: { role: "assistant", provider: "p", model: "before", usage: usage(1, 0.01) } },
+      firstUser,
+      { type: "message", message: { role: "assistant", provider: "p", model: "a", usage: usage(2, 0.02) } },
+      { type: "message", message: { role: "assistant", provider: "p", model: "b", usage: usage(3, 0.03) } },
+      { type: "message", message: { role: "user", content: "ANOTHER PRIVATE CANARY" } },
+      { type: "message", message: { role: "assistant", provider: "p", model: "a", usage: usage(4, 0.04) } },
+    ] as any;
+    const data = getCostReportData(entries, entries);
+    assert.equal(data.activeBranch.groups.length, 2);
+    assert.deepEqual(data.activeBranch.groups[0].responses.map(({ model }) => model), ["p/a", "p/b"]);
+    assert.equal(data.activeBranch.groups[0].totals.input, 5);
+    assert.equal(data.activeBranch.responses.find(({ model }) => model === "p/a")?.usage.input, 6);
+    assert.equal(data.unassigned.input, 1);
+    assert.equal(data.activeBranch.totals.input, 10);
+    assert.doesNotMatch(JSON.stringify(data), /PRIVATE PROMPT|CANARY/);
+  });
+
+  it("keeps active and retained totals separate from auxiliary breakdowns and counts unknown cost per entry", () => {
+    const active = [
+      { type: "message", message: { role: "user", content: "secret" } },
+      { type: "message", message: { role: "assistant", provider: "p", model: "m", usage: usage(2, 0.2) } },
+      { type: "message", message: { role: "assistant", provider: "p", model: "m", usage: { ...usage(3, 0), cost: undefined } } },
+      { type: "usage", usage: usage(5, 0.5) },
+    ] as any;
+    const retained = [...active, { type: "message", message: { role: "assistant", provider: "p", model: "old-branch", usage: usage(7, 0.7) } }] as any;
+    const data = getCostReportData(active, retained);
+    assert.equal(data.activeBranch.totals.input, 10);
+    assert.equal(data.activeBranch.auxiliary[0].usage.input, 5);
+    assert.equal(data.allRetained.totals.input, 17);
+    assert.equal(data.unknownCost.activeBranch, 1);
+    assert.equal(data.unknownCost.allRetained, 1);
+    assert.equal(data.unknownCost.knownSubtotal.activeBranch, 0.7);
+    assert.equal(data.unknownCost.knownSubtotal.allRetained, 1.4);
+  });
+
   it("separates response, compaction, and auxiliary records without content leakage", () => {
     const entries = [
       { type: "message", message: { role: "assistant", provider: "p", model: "alias", responseModel: "openai/gpt-4", content: [{ type: "toolCall", name: "secret-tool", arguments: { canary: "TOOL-ARGS-CANARY" } }], usage: usage(10, 0.5) } },
@@ -69,10 +107,10 @@ describe("session cost report", () => {
       setEditorText: () => {},
       custom: async (factory: (...args: any[]) => any, options: unknown) => {
         overlayOptions = options;
-        viewer = factory({ requestRender() {} }, { fg: (_color: string, text: string) => text }, {}, () => {});
+        viewer = factory({ terminal: { columns: 120, rows: 30 }, requestRender() {} }, { fg: (_color: string, text: string) => text }, {}, () => {});
       },
     };
-    const ctx = { cwd, mode: "rpc", hasUI: false, model: {}, modelRegistry: { getAvailable: () => [], find: () => undefined, getProviderAuthStatus: () => ({ configured: false }), refresh: async () => ({ refreshed: [], errors: [] }) }, sessionManager: { getEntries: () => recorded }, ui } as unknown as ExtensionContext;
+    const ctx = { cwd, mode: "rpc", hasUI: false, model: {}, modelRegistry: { getAvailable: () => [], find: () => undefined, getProviderAuthStatus: () => ({ configured: false }), refresh: async () => ({ refreshed: [], errors: [] }) }, sessionManager: { getEntries: () => recorded, getBranch: () => recorded }, ui } as unknown as ExtensionContext;
     let command: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
     const pi = {
       registerCommand: (name: string, options: { handler: (args: string, context: ExtensionContext) => Promise<void> }) => { if (name === "bifrost") command = options.handler; },
@@ -88,16 +126,18 @@ describe("session cost report", () => {
       assert.ok(command);
       await command("cost", ctx);
       await command("cost", ctx);
-      assert.equal(output.length, 12);
-      assert.equal(output.filter((value) => value.includes("whole session: recorded input 10")).length, 2);
+      assert.equal(output.filter((value) => value.includes("Current branch: $0.200000")).length, 2);
+      assert.equal(output.filter((value) => value.includes("Input 10 · Output 2")).length, 2);
 
       recorded = Array.from({ length: 16 }, (_, index) => ({ type: "message", message: { role: "assistant", provider: "fake", model: `model-${String(index).padStart(2, "0")}`, usage: usage(index, 0.1) } })) as any;
       const tuiCtx = Object.assign(ctx, { mode: "tui", hasUI: true });
       await command("cost", tuiCtx);
       assert.equal(overlayOptions.overlay, true);
-      assert.match(viewer.render(120).join("\n"), /↑↓\/jk scroll/);
+      assert.match(viewer.render(120).join("\n"), /Requests.*Models/);
+      viewer.handleInput("\t");
+      assert.match(viewer.render(120).join("\n"), /\[Models\]/);
       viewer.handleInput("\x1b[6~");
-      assert.match(viewer.render(120).join("\n"), /assistant fake\/model-15/);
+      assert.match(viewer.render(120).join("\n"), /fake\/model-15/);
     } finally {
       console.error = originalError;
       process.chdir(previousCwd);

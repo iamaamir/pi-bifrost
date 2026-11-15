@@ -42,10 +42,10 @@ describe("session cost command with real Pi", () => {
       const afterGeneration = await readStats(server.port);
       assert.equal((afterGeneration.attempts.chat ?? 0) - (beforeCost.attempts.chat ?? 0), 1);
       const bifrostFilesBefore = snapshotBifrostFiles([fixture.work, fixture.home]);
-      const report = await rpc.prompt("/bifrost cost");
+      const report = await rpc.prompt("/bifrost cost", { expectedStderr: "[bifrost]   No baseline is available to determine savings." });
       const combined = `${report.stderr}\n${report.response?.data?.content ?? ""}`;
-      assert.match(report.stderr, /whole session: recorded input \d+/);
-      assert.match(report.stderr, /assistant fake\/chat: recorded input \d+/);
+      assert.match(report.stderr, /Current branch: \$\d/);
+      assert.match(report.stderr, /fake\/chat/);
       assert.doesNotMatch(report.stderr, new RegExp(PROMPT_CANARY));
       const afterReport = await readStats(server.port);
       assert.deepEqual(statsEntriesDelta(afterGeneration, afterReport), [], "cost command must not make provider requests");

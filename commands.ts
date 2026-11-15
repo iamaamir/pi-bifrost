@@ -65,7 +65,8 @@ import { projectProviderRefreshEvidence, waitForRegistryRefresh } from "./regist
 import { REGISTRY_REFRESH_TTL_MS } from "./ux-status.ts";
 import { isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
 import { hasExplicitExtensionRoutingFile, hasUserBootstrapFiles } from "./auto-setup.ts";
-import { formatCostReport } from "./cost-report.ts";
+import { getCostReportData } from "./cost-report.ts";
+import { formatCostText, showCostView } from "./cost-view.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
@@ -2883,7 +2884,11 @@ export function createCommandRouter(
   state: BifrostState,
 ): (args: string, ctx: ExtensionContext) => Promise<void> {
   const routes: CommandEntry[] = [
-    exact("cost", async (_, ctx) => uiResult(ctx, "Bifrost cost", formatCostReport(ctx.sessionManager.getEntries()))),
+    exact("cost", async (_, ctx) => {
+      const entries = ctx.sessionManager.getEntries();
+      const data = getCostReportData(ctx.sessionManager.getBranch(), entries);
+      if (!await showCostView(ctx, data)) await uiResult(ctx, "Bifrost cost", formatCostText(data));
+    }),
     exact("on", (_, ctx) => {
       state.onManualControl?.(ctx.sessionManager, "on");
       state.enabled = true;
