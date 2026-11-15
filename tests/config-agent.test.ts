@@ -656,7 +656,9 @@ describe("provider sign-in state", () => {
     const harness = freshHarness({
       available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
       probeModels: (models) => models.map((model) => model === "beta/code"
-        ? { model, status: "error" as const, reason: "401 unauthorized" }
+        // Provider bodies arrive with newlines and padding; the warning must
+        // stay one line so it cannot push the bounded report apart.
+        ? { model, status: "error" as const, reason: "401\n  unauthorized  " }
         : { model, status: "ok" as const }),
     });
     try {
@@ -1055,9 +1057,10 @@ describe("provider sign-in state", () => {
     }
   });
 
-  it("counts a cancelled probe as not answered instead of folding it into the total", async () => {
-    // A cancelled probe never reached the provider, so calling it "answered"
-    // would overstate what the check learned about the model.
+  it("counts a cancelled probe as skipped instead of folding it into the total", async () => {
+    // A cancelled probe may already have sent the request, so calling it
+    // "answered" would overstate the result while "not asked" would understate
+    // what it may have cost.
     const harness = freshHarness({
       available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
       probeModels: () => [
@@ -1073,8 +1076,41 @@ describe("provider sign-in state", () => {
       });
       const text = contentOf(result);
       assert.match(text, /live probe \(one tiny prompt per model\): 1\/2 answered, 1 skipped/);
-      assert.match(text, /1 model not asked \(check cancelled before the request completed\)/);
+      assert.match(text, /1 model skipped: the check was cancelled, or the model was not asked; a cancelled request may already have been sent and charged/);
       assert.doesNotMatch(text, /2\/2 answered/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("keeps partial outcomes and adds no warning when the probe is cancelled mid-run", async () => {
+    // Cancellation is detected after the transport returns. The outcomes it did
+    // report are shown, but they are not turned into config.probe_failed
+    // warnings: stopping the run is not evidence about the models.
+    const controller = new AbortController();
+    const harness = freshHarness({
+      signal: controller.signal,
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: () => {
+        controller.abort();
+        return [
+          { model: "alpha/strong", status: "error", reason: "connection reset" },
+          { model: "beta/code", status: "timeout" },
+        ];
+      },
+    });
+    try {
+      const result = await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } },
+        probe: true,
+      });
+      const checked = detailsOf<ConfigAgentCheckResult>(result);
+      assert.deepEqual(checked.liveProbe?.map((entry) => entry.status), ["error", "timeout"]);
+      assert.equal(checked.issues.filter((issue) => issue.code === "config.probe_failed").length, 0,
+        "a cancelled run must not turn a partial outcome into a probe warning");
+      assert.match(checked.notes.join("\n"), /Live probe was cancelled; the reported outcomes are partial and were not turned into warnings\./);
+      assert.match(contentOf(result), /alpha\/strong: error -- connection reset/);
     } finally {
       harness.cleanup();
     }
