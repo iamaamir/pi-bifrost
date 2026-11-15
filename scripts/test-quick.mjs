@@ -21,7 +21,12 @@ if (files.length < 90) {
   process.exit(2);
 }
 console.error(`test:quick: typecheck + ${files.length} files (excluded: ${[...HEAVY].sort().join(", ")})`);
-const check = spawnSync("npm", ["run", "typecheck"], { stdio: "inherit" });
+const check = spawnSync("npm", ["run", "typecheck"], {
+  stdio: "inherit",
+  // npm is npm.cmd on Windows; Node refuses .cmd without a shell (CVE-2024-27980
+  // hardening). Args are constants, so the shell adds no injection surface.
+  shell: process.platform === "win32",
+});
 if (check.status !== 0) {
   console.error("test:quick: typecheck failed — skipping tests");
   process.exit(check.status ?? 1);
