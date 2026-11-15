@@ -4,9 +4,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fixtureGitEnv, withFixtureEnv } from "./fixtures/git-env.mjs";
-
-const REDIRECT_VARS = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_CONFIG"];
+import { fixtureGitEnv, REPO_REDIRECT_VARS, withFixtureEnv } from "./fixtures/git-env.mjs";
 
 test("fixtureGitEnv strips every repo-redirecting variable (issue #231)", () => {
   const leaky = {
@@ -24,7 +22,7 @@ test("fixtureGitEnv strips every repo-redirecting variable (issue #231)", () => 
   process.env = leaky;
   try {
     const env = fixtureGitEnv();
-    for (const name of REDIRECT_VARS) {
+    for (const name of REPO_REDIRECT_VARS) {
       assert.equal(name in env, false, `${name} must not leak into fixture git spawns`);
     }
     assert.equal(env.HOME, leaky.HOME); // non-redirecting vars pass through

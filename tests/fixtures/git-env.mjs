@@ -3,7 +3,11 @@
 // under a git hook (which exports GIT_DIR) or similar automation, a fixture
 // targeting a temp repo via `cwd` silently reads and writes the operator's
 // real repository instead (issue #231).
-const REPO_REDIRECT_VARS = [
+/**
+ * Environment variables that redirect git at another repository, taking
+ * precedence over `cwd`. Stripped from fixture git spawns (issue #231).
+ */
+export const REPO_REDIRECT_VARS = [
   "GIT_DIR",
   "GIT_WORK_TREE",
   "GIT_INDEX_FILE",
