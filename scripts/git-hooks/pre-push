@@ -1,0 +1,11 @@
+#!/bin/sh
+# Pre-push gate: run the quick tier (typecheck + fast tests) so a broken tree
+# rarely reaches CI. Bypass with `git push --no-verify`; enable per clone with:
+#   git config core.hooksPath scripts/git-hooks
+# Skip silently outside a prepared tree (fresh clone, CI, no node_modules).
+[ -d node_modules ] || exit 0
+# Hooks inherit GIT_DIR/GIT_WORK_TREE; child processes (tests that shell out to
+# git) would then target this repo instead of their own fixtures. Drop them so
+# the quick tier runs exactly as it does from a terminal.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+exec npm run test:quick

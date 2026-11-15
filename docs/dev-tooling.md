@@ -44,6 +44,7 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run check:deps` | Lockfile vulnerabilities (OSV) | osv-scanner |
 | `npm run toolbox:doctor` | Tool availability and install hints | none |
 | `npm run test:quick` | Quick local tier: typecheck + root tests minus the four heavy files (see `scripts/test-quick.mjs`) | `npm ci` |
+| `scripts/git-hooks/pre-push` | Optional pre-push gate running `test:quick`; enable with `git config core.hooksPath scripts/git-hooks`, bypass with `--no-verify` | `npm ci` |
 
 Add `--json` for a structured result:
 
