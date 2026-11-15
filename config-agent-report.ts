@@ -181,7 +181,7 @@ function renderCheck(result: ConfigAgentCheckResult): string {
     const failed = result.liveProbe.filter((entry) => entry.status === "error" || entry.status === "timeout");
     const requested = result.probePlan?.length ?? result.liveProbe.length;
     lines.push(`live probe (one tiny prompt per model): ${answered.length}/${requested} answered${skipped.length > 0 ? `, ${skipped.length} skipped` : ""}${result.liveProbe.length < requested ? `, ${requested - result.liveProbe.length} without a reported outcome` : ""}`);
-    if (skipped.length > 0) lines.push(`  ${skipped.length} model${skipped.length === 1 ? "" : "s"} not asked (check cancelled before the request completed)`);
+    if (skipped.length > 0) lines.push(`  ${skipped.length} model${skipped.length === 1 ? "" : "s"} skipped: the check was cancelled, or the model was not asked; a cancelled request may already have been sent and charged`);
     if (result.liveProbe.length < requested) lines.push(`  ${requested - result.liveProbe.length} model${requested - result.liveProbe.length === 1 ? "" : "s"} were requested but produced no outcome; treat them as unverified, not as passing`);
     for (const entry of failed) {
       lines.push(`  ${entry.model}: ${entry.status}${entry.reason ? ` -- ${entry.reason}` : ""}`);

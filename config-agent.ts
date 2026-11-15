@@ -792,7 +792,10 @@ function probeModelKeys(
 const MAX_PROBE_REASON_CHARS = 200;
 
 function boundedProbeReason(reason: string): string {
-  return reason.length <= MAX_PROBE_REASON_CHARS ? reason : `${reason.slice(0, MAX_PROBE_REASON_CHARS - 1)}…`;
+  // Provider error bodies arrive with newlines and padding; collapsing the
+  // whitespace keeps one warning on one line before the length cap applies.
+  const normalized = reason.replace(/\s+/g, " ").trim();
+  return normalized.length <= MAX_PROBE_REASON_CHARS ? normalized : `${normalized.slice(0, MAX_PROBE_REASON_CHARS - 1)}…`;
 }
 
 /** Warning for a model the live check reached and could not answer. */
