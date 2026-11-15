@@ -20,6 +20,8 @@ export class ExpandableRows {
   private readonly expanded = new Set<string>();
   private visible: { row: ExpandableRow; depth: number }[] = [];
   private selected = 0;
+  private selectedPart = 0;
+  private wrappedLineCounts: number[] = [];
   private offset = 0;
   private lastWidth = 0;
   private lastHeight = 0;
@@ -58,17 +60,26 @@ export class ExpandableRows {
       const text = `${row.label}${row.detail ? `  ${row.detail}` : ""}`;
       const available = Math.max(1, width - visibleWidth(prefix) - 2);
       const wrapped = wrapCells(text, available);
+      this.wrappedLineCounts[index] = wrapped.length;
+      if (index === this.selected) this.selectedPart = Math.min(this.selectedPart, wrapped.length - 1);
       return wrapped.map((part, line) => {
         const selected = index === this.selected;
         const left = line === 0 ? `${selected ? "› " : "  "}${prefix}` : "    ";
-        return { rowIndex: index, text: this.theme.fg(selected ? "accent" : "text", `${left}${part}`) };
+        return { rowIndex: index, part: line, text: this.theme.fg(selected ? "accent" : "text", `${left}${part}`) };
       });
     });
     const maxOffset = Math.max(0, lines.length - height);
     this.offset = Math.min(this.offset, maxOffset);
-    const selectedLine = lines.findIndex((line) => line.rowIndex === this.selected);
+    const selectedLine = lines.findIndex((line) => line.rowIndex === this.selected && line.part === this.selectedPart);
     if (selectedLine < this.offset) this.offset = selectedLine;
     else if (selectedLine >= this.offset + height) this.offset = selectedLine - height + 1;
+    const selectedCount = this.wrappedLineCounts[this.selected] ?? 0;
+    if (selectedCount <= height) {
+      const start = selectedLine - this.selectedPart;
+      const end = start + selectedCount;
+      if (start < this.offset) this.offset = start;
+      else if (end > this.offset + height) this.offset = end - height;
+    }
     const visible = lines.slice(this.offset, this.offset + height).map((line) => line.text);
     return [...visible, ...Array.from({ length: Math.max(0, height - visible.length) }, () => "")];
   }
@@ -76,8 +87,8 @@ export class ExpandableRows {
   handleInput(data: string): void {
     if (matchesKey(data, "up") || data === "k") this.move(-1);
     else if (matchesKey(data, "down") || data === "j") this.move(1);
-    else if (data === "\x1b[5~") this.move(-Math.max(1, this.lastHeight - 1));
-    else if (data === "\x1b[6~") this.move(Math.max(1, this.lastHeight - 1));
+    else if (data === "\x1b[5~") this.moveRow(-Math.max(1, this.lastHeight - 1));
+    else if (data === "\x1b[6~") this.moveRow(Math.max(1, this.lastHeight - 1));
     else if (matchesKey(data, "left") || data === "h") this.collapse();
     else if (matchesKey(data, "right") || data === "l") this.expand();
     else if (matchesKey(data, "enter")) {
@@ -86,6 +97,7 @@ export class ExpandableRows {
         if (this.expanded.has(row.id)) this.expanded.delete(row.id);
         else this.expanded.add(row.id);
         this.refreshVisible();
+        this.selectedPart = 0;
         this.requestRender();
       } else if (row) this.onSelect(row);
       return;
@@ -94,7 +106,18 @@ export class ExpandableRows {
   }
 
   private move(by: number): void {
-    this.selected = Math.max(0, Math.min(this.visible.length - 1, this.selected + by));
+    const lineCount = this.wrappedLineCounts[this.selected] ?? 1;
+    if (lineCount > Math.max(1, this.lastHeight) && by > 0 && this.selectedPart + 1 < lineCount) this.selectedPart++;
+    else if (lineCount > Math.max(1, this.lastHeight) && by < 0 && this.selectedPart > 0) this.selectedPart--;
+    else this.moveRow(by);
+  }
+
+  private moveRow(by: number): void {
+    const selected = Math.max(0, Math.min(this.visible.length - 1, this.selected + by));
+    if (selected !== this.selected) {
+      this.selected = selected;
+      this.selectedPart = by < 0 ? (this.wrappedLineCounts[this.selected] ?? 1) - 1 : 0;
+    }
   }
 
   private expand(): void {
@@ -102,13 +125,17 @@ export class ExpandableRows {
     if (row?.children?.length && !this.expanded.has(row.id)) {
       this.expanded.add(row.id);
       this.refreshVisible();
+      this.selectedPart = 0;
     }
   }
 
   private collapse(): void {
     const item = this.visible[this.selected];
     if (!item) return;
-    if (this.expanded.delete(item.row.id)) this.refreshVisible();
+    if (this.expanded.delete(item.row.id)) {
+      this.refreshVisible();
+      this.selectedPart = 0;
+    }
     else if (item.depth > 0) {
       const parent = this.visible.slice(0, this.selected).reverse().find((candidate) => candidate.depth === item.depth - 1);
       if (parent) this.selected = this.visible.indexOf(parent);
@@ -126,6 +153,8 @@ export class ExpandableRows {
     visit(this.rows, 0);
     this.visible = result;
     this.selected = Math.max(0, Math.min(this.selected, result.length - 1));
+    this.wrappedLineCounts.length = result.length;
+    this.selectedPart = Math.min(this.selectedPart, (this.wrappedLineCounts[this.selected] ?? 1) - 1);
     this.offset = Math.min(this.offset, Math.max(0, result.length - Math.max(1, this.lastHeight)));
   }
 

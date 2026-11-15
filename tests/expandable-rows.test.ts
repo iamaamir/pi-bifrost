@@ -39,6 +39,46 @@ describe("expandable rows", () => {
     assert.deepEqual(h.selected, ["next"]);
   });
 
+  it("scrolls through every wrapped line of a selected row at the end", () => {
+    const value = "third-row-value-that-wraps-across-many-lines";
+    const h = harness([
+      { id: "first", label: "first" },
+      { id: "second", label: "second" },
+      { id: "third", label: value },
+    ], { columns: 24, rows: 5 });
+    h.viewer.render(12);
+    h.viewer.handleInput("\x1b[B");
+    h.viewer.handleInput("\x1b[B");
+    let last: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      last = h.viewer.render(12);
+      h.viewer.handleInput("\x1b[B");
+    }
+    assert(last.some((line) => line.includes("ines")));
+  });
+
+  it("shows both lines of a selected row that fits the viewport", () => {
+    const h = harness([{ id: "a", label: "first" }, { id: "b", label: "second" }, { id: "c", label: "abcdefghijEND" }]);
+    h.viewer.render(12);
+    h.viewer.handleInput("\x1b[B");
+    h.viewer.render(12);
+    h.viewer.handleInput("\x1b[B");
+    const screen = h.viewer.render(12).join("\n");
+    assert.match(screen, /abcdef/);
+    assert.match(screen, /END/);
+  });
+
+  it("scrolls through a single selected row longer than the viewport", () => {
+    const value = "one-row-value-that-is-far-longer-than-the-viewport";
+    const h = harness([{ id: "only", label: value }], { columns: 24, rows: 5 });
+    let last: string[] = [];
+    for (let i = 0; i < 20; i++) {
+      last = h.viewer.render(12);
+      h.viewer.handleInput("\x1b[B");
+    }
+    assert(last.some((line) => line.includes("rt")));
+  });
+
   it("collapses with left and leaves escape for the overlay owner", () => {
     const h = harness([{ id: "group", label: "group", children: [{ id: "leaf", label: "leaf" }] }]);
     h.viewer.handleInput("\x1b[C");

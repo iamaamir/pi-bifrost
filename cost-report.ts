@@ -65,13 +65,13 @@ function account(entries: readonly SessionEntry[], assignGroups: boolean) {
       const message = entry.message;
       const response = bucket(responses, modelFor(message));
       add(response, message.usage);
-      if (assignGroups) {
-        if (active) {
-          add(bucket(active.responses, modelFor(message)), message.usage);
-          add(active.totals, message.usage);
-        } else add(unassigned, message.usage);
-      }
-    } else if (entry.type === "message" && entry.message?.role === "toolResult" && entry.message.usage !== undefined) {
+      if (!assignGroups) continue;
+      if (!active) { add(unassigned, message.usage); continue; }
+      add(bucket(active.responses, modelFor(message)), message.usage);
+      add(active.totals, message.usage);
+      continue;
+    }
+    if (entry.type === "message" && entry.message?.role === "toolResult" && entry.message.usage !== undefined) {
       add(bucket(auxiliary, "tool result"), entry.message.usage);
     } else if (entry.type === "compaction" && entry.usage !== undefined) add(bucket(auxiliary, "compaction (model unspecified)"), entry.usage);
     else if (entry.type === "branch_summary" && entry.usage !== undefined) add(bucket(auxiliary, "branch summary (model unspecified)"), entry.usage);
