@@ -855,6 +855,31 @@ describe("provider sign-in state", () => {
     }
   });
 
+  it("keeps the digest warning when the source default and an explicit project differ", async () => {
+    // An omitted source means the project layer. A check that omitted it and an
+    // apply that spells out "project" describe the same candidate, so the probe
+    // warning must survive instead of depending on the spelling.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("beta", "code", 0.5, 1.5, 128_000)],
+      probeModels: (models) => models.map((model) => model === "beta/code"
+        ? { model, status: "error" as const, reason: "401 unauthorized" }
+        : { model, status: "ok" as const }),
+    });
+    try {
+      const candidate = { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } };
+      const { details } = await checkedCandidate(harness, { candidate, probe: true });
+      const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(
+        applyParams(details, { candidate, source: "project" }),
+      ));
+      assert.equal(applied.applied, true);
+      const [confirmation] = harness.confirmations();
+      assert.match(confirmation?.details ?? "", /Warning: Live probe of beta\/code failed: 401 unauthorized/);
+      assert.equal(harness.probeCalls().length, 1, "a digest apply must not send another probe");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("bounds a huge provider error so it cannot block approval", async () => {
     // Provider text reaches an approval message whose size is capped. An error
     // body over that cap would turn an advisory probe failure into a refusal to
@@ -995,6 +1020,60 @@ describe("provider sign-in state", () => {
         "the route file overrides inline rules, so its direct model must be the probe target");
       assert.deepEqual(harness.probeCalls(), [["alpha/strong", "gamma/review"]]);
       assert.equal(checked.probePlan?.includes("beta/code"), false, "an overridden inline rule is not a probe target");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("resolves the provider of a rule-file-only model before the probe plan", async () => {
+    // A known model Pi does not offer can still be reached by a direct rule. Its
+    // provider must be resolved like any pool provider, or the probe cannot see
+    // that the sign-in is dead and spends a request on it.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000)],
+      knownOnly: [makeModel("delta", "legacy", 1, 1, 64_000)],
+      providerAuthResult: (provider) => provider === "delta" ? new Error("no usable token") : { auth: { apiKey: "resolved" } },
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+    });
+    try {
+      harness.writeFile(".pi/bifrost-routes.json", [{ pattern: "review", model: "delta/legacy" }]);
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } },
+      }));
+      assert.deepEqual(checked.probePlan, ["alpha/strong"]);
+      assert.deepEqual(checked.probeSkipped?.map((entry) => `${entry.model}:${entry.status}`), ["delta/legacy:skipped"],
+        "the rule-file model's dead sign-in must be reported as skipped, not probed");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("does not probe a direct rule routing would refuse to compile", async () => {
+    // The classifier compiles rules and drops an invalid pattern before it can
+    // match. A probe reading the raw rules would spend a request on a model no
+    // prompt can select.
+    const harness = freshHarness({
+      available: [makeModel("alpha", "strong", 5, 15, 200_000), makeModel("gamma", "review", 2, 6, 128_000)],
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+    });
+    try {
+      // A route file is not validated like a candidate, so its invalid pattern
+      // reaches `compileRules` and is dropped there — exactly the rule this test
+      // must not turn into a probe target.
+      harness.writeFile(".pi/bifrost-routes.json", [{ pattern: "(", model: "gamma/review" }]);
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: {
+          schemaVersion: 2,
+          default: "review",
+          models: { review: ["alpha/strong"] },
+        },
+        probe: true,
+      }));
+      assert.deepEqual(checked.probePlan, ["alpha/strong"],
+        "a rule routing drops must not become a probe target");
+      assert.deepEqual(harness.probeCalls(), [["alpha/strong"]]);
     } finally {
       harness.cleanup();
     }
