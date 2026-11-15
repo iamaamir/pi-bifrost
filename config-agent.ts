@@ -37,7 +37,7 @@ import {
 import type { ClassifierBackend } from "./classifier-backends.ts";
 import { validateConfigSourceStructure } from "./config-schema.ts";
 import { reconcileEconomicSnapshot } from "./economic-config.ts";
-import { findCandidates } from "./routing.ts";
+import { compileRules, findCandidates } from "./routing.ts";
 import { checkProviderScope, compileRoutingScope } from "./routing-scope.ts";
 import { createRouter, type RouterModel, type RouterRegistrySnapshot, type RouterSnapshot } from "./router.ts";
 import { writeTextFile } from "./storage.ts";
@@ -872,8 +872,12 @@ function probeTargets(
   // The classifier resolves rules through `loadRules`, so the probe must use the
   // same effective rules rather than the inline `config.rules` field.
   const tierNames = new Set(Object.keys(afterConfig.models ?? {}));
-  for (const rule of loadRules(cwd, afterConfig)) {
-    if (typeof rule?.model !== "string" || !rule.model.includes("/") || tierNames.has(rule.model)) continue;
+  // Routing compiles rules before matching and drops invalid or unsafe
+  // patterns. Reading the raw rules would probe a direct model that no prompt
+  // can ever select, which spends the request the opt-in is meant to bound.
+  const directRules = loadRules(cwd, afterConfig).filter((rule) =>
+    typeof rule?.model === "string" && rule.model.includes("/") && !tierNames.has(rule.model));
+  for (const rule of compileRules(directRules)) {
     for (const key of probeKeysForEntry(catalog, rule.model)) {
       const provider = providerOf.get(key);
       // A direct model has no owning tier, so only the global scope governs it.
@@ -2257,8 +2261,12 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
       // warnings the check showed still describe it. Compare the candidate, not
       // the digests, because apply revalidates those separately and would refuse
       // a request that no longer matches.
+      // An omitted source and an explicit "project" name the same layer; the
+      // check and the apply must not count that default as a different candidate,
+      // or the probe warning the user approved silently disappears.
+      const sameSource = (value: ConfigAgentSource | undefined): ConfigAgentSource => value ?? "project";
       const sameCandidate = !!saved && saved.sessionId === sessionId && operation === "apply"
-        && saved.request.source === request.source
+        && sameSource(saved.request.source) === sameSource(request.source)
         && sameRequestField(saved.request.candidate ?? null, request.candidate ?? null)
         && sameRequestField(saved.request.patch ?? null, request.patch ?? null)
         && sameRequestField(saved.request.remove ?? null, request.remove ?? null);
@@ -2288,6 +2296,34 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
         // The stored config is reported by the operation itself; a probe that
         // cannot read it must not turn into a failed call.
       }
+      // A direct-model rule routes outside every pool. A provider missing from
+      // this set would leave the probe unable to see that its sign-in is dead,
+      // so it would spend a request on it. Collect rule providers from the
+      // stored effective rules and from the candidate or patch that replaces
+      // them; over-collecting costs one resolution, under-collecting hides a
+      // dead provider.
+      const catalogProviders = new Set([
+        ...catalog.available.map((model) => model.provider),
+        ...catalog.known.map((model) => model.provider),
+      ]);
+      const addRuleProviders = (rules: unknown): void => {
+        if (!Array.isArray(rules)) return;
+        for (const entry of rules) {
+          const model = (entry as { model?: unknown } | null)?.model;
+          if (typeof model !== "string") continue;
+          const slash = model.indexOf("/");
+          if (slash <= 0) continue;
+          const provider = model.slice(0, slash);
+          if (catalogProviders.has(provider)) resolvedProviders.add(provider);
+        }
+      };
+      try {
+        addRuleProviders(loadRules(cwd, effectiveConfig(cwd, deps.extensionDir).config));
+      } catch {
+        // Same as above: an unreadable stored config is reported by the operation.
+      }
+      addRuleProviders((request.candidate as { rules?: unknown } | undefined)?.rules);
+      addRuleProviders((request.patch as { rules?: unknown } | undefined)?.rules);
       const providerAuth = await resolveProviderAuth(ctx.modelRegistry, [...resolvedProviders]);
       const classifierRuntime = deps.classifierRuntime
         ? (config: BifrostConfig) => deps.classifierRuntime!(config, ctx)
