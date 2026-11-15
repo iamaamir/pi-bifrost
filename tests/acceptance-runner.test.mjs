@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer } from "node:http";
 import { gateDirectory, gitTruth, installedToolVersions, matchNamedTestEvent, parseArgs, sourceFingerprint, summarizeCases } from "../scripts/acceptance/core.mjs";
 import { buildGateEvidenceCases, pushRevisionCase, registerTerminationHandlers, runChild, supportingTestCase, terminateProcessGroup, verificationGateEnvironment, writeNodeTestEventsArtifact } from "../scripts/acceptance.mjs";
-import { fixtureGitEnv } from "./fixtures/git-env.mjs";
+import { fixtureGitEnv, withFixtureEnv } from "./fixtures/git-env.mjs";
 
 const temporary = [];
 after(() => temporary.forEach((path) => rmSync(path, { recursive: true, force: true })));
@@ -505,11 +505,11 @@ describe("acceptance runner boundary", () => {
     writeFileSync(join(directory, "source.txt"), "before");
     execFileSync("git", ["add", "source.txt"], { cwd: directory, env: fixtureGitEnv() });
     execFileSync("git", ["-c", "user.name=Acceptance Test", "-c", "user.email=acceptance@example.invalid", "commit", "-qm", "fixture"], { cwd: directory, env: fixtureGitEnv() });
-    const before = sourceFingerprint(directory);
+    const before = withFixtureEnv(() => sourceFingerprint(directory));
     writeFileSync(join(directory, "source.txt"), "after");
     writeFileSync(join(directory, "fresh.txt"), "new");
-    assert.notEqual(sourceFingerprint(directory), before);
-    const dirty = gitTruth(directory).sort((left, right) => left.path.localeCompare(right.path));
+    assert.notEqual(withFixtureEnv(() => sourceFingerprint(directory)), before);
+    const dirty = withFixtureEnv(() => gitTruth(directory)).sort((left, right) => left.path.localeCompare(right.path));
     assert.deepEqual(dirty, [
       { index: "??", path: "fresh.txt" },
       { index: " M", path: "source.txt" },
