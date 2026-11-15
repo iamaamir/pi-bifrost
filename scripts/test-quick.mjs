@@ -1,7 +1,8 @@
-// Quick local test tier (#145): every root test file except the four heavy
-// ones, so local iteration stays ~30s instead of ~5min. Selection-based only —
-// no skip markers, no assertion changes; CI still runs the full suite.
-// Heavy files (measured in #145): run individually with `node --test tests/<file>`.
+// Quick local test tier (#145): typecheck plus every root test file except the
+// four heavy ones, so local iteration stays ~20s instead of ~5min.
+// Selection-based only — no skip markers, no assertion changes; CI still runs
+// the full suite. Heavy files (measured in #145): run individually with
+// `node --test tests/<file>`.
 import { readdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 
@@ -19,7 +20,12 @@ if (files.length < 90) {
   console.error(`test:quick: expected ~100 root test files, found ${files.length} — selection drifted, refusing to run`);
   process.exit(2);
 }
-console.error(`test:quick: ${files.length} files (excluded: ${[...HEAVY].sort().join(", ")})`);
+console.error(`test:quick: typecheck + ${files.length} files (excluded: ${[...HEAVY].sort().join(", ")})`);
+const check = spawnSync("npm", ["run", "typecheck"], { stdio: "inherit" });
+if (check.status !== 0) {
+  console.error("test:quick: typecheck failed — skipping tests");
+  process.exit(check.status ?? 1);
+}
 const result = spawnSync(process.execPath, ["--test", "--experimental-strip-types", ...files.map((f) => `tests/${f}`)], {
   stdio: "inherit",
 });

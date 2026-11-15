@@ -43,7 +43,7 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run check:secrets:history` | Full-history secret scan (slow) | gitleaks |
 | `npm run check:deps` | Lockfile vulnerabilities (OSV) | osv-scanner |
 | `npm run toolbox:doctor` | Tool availability and install hints | none |
-| `npm run test:quick` | Quick local tier: root tests minus the four heavy files (see `scripts/test-quick.mjs`) | `npm ci` |
+| `npm run test:quick` | Quick local tier: typecheck + root tests minus the four heavy files (see `scripts/test-quick.mjs`) | `npm ci` |
 
 Add `--json` for a structured result:
 
