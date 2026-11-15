@@ -1716,6 +1716,167 @@ describe("opt-in sign-in eligibility (ADR 0026)", () => {
     ).resolution;
     assert.notEqual(mixed.fallbackReason, "sign_in_unavailable");
   });
+
+  it("keeps the reliability wording when only the fallback lost its credentials", () => {
+    // The requested pool was stopped by an open circuit and the fallback by
+    // sign-in. Naming sign-in alone would hide the circuit the user has to
+    // clear, so the terminal reason must describe both pools.
+    const now = 1_000_000;
+    const reliabilityConfig = { ...DEFAULT_RELIABILITY, failureThreshold: 1, cooldownMinutes: 10 };
+    const reliability = recordModelFailure(
+      emptyReliabilityState(), "paused/three", reliabilityConfig, now, "dispatch", "transport",
+    );
+    const resolution = resolveConfiguredTier(
+      makeCtx([dead, live, makeModel("paused", "three", 3)]),
+      "review",
+      { schemaVersion: 2, default: "fallback", models: { review: ["paused/three"], fallback: ["dead/one"] } },
+      reliability,
+      reliabilityConfig,
+      now,
+      undefined,
+      undefined,
+      undefined,
+      (model) => model.provider === "dead",
+    ).resolution;
+    assert.equal(resolution.selected, undefined);
+    assert.equal(resolution.fallbackReason, "all_tiers_exhausted");
+  });
+
+  it("does not name sign-in when scope rejected the fallback pool", () => {
+    // The requested pool was empty for lack of credentials, but the fallback was
+    // forbidden by configuration. Reporting sign-in alone would blame the one
+    // cause the user cannot act on and hide the one they can.
+    const resolution = resolveConfiguredTier(
+      makeCtx([dead, live]),
+      "review",
+      {
+        schemaVersion: 2,
+        default: "fallback",
+        models: { review: ["dead/one"], fallback: ["live/two"] },
+        routingScope: { tiers: { fallback: { providers: ["other"] } } },
+      },
+      undefined,
+      { ...DEFAULT_RELIABILITY, enabled: false },
+      Date.now(),
+      undefined,
+      undefined,
+      undefined,
+      (model) => model.provider === "dead",
+    ).resolution;
+    assert.equal(resolution.selected, undefined);
+    assert.equal(resolution.fallbackReason, "requested_tier_provider_excluded");
+  });
+
+  it("names sign-in when every attempted pool was emptied only by credentials", () => {
+    const resolution = resolveConfiguredTier(
+      makeCtx([dead, live]),
+      "review",
+      { schemaVersion: 2, default: "fallback", models: { review: ["dead/one"], fallback: ["dead/two"] } },
+      undefined,
+      { ...DEFAULT_RELIABILITY, enabled: false },
+      Date.now(),
+      undefined,
+      undefined,
+      undefined,
+      (model) => model.provider === "dead",
+    ).resolution;
+    assert.equal(resolution.selected, undefined);
+    assert.equal(resolution.fallbackReason, "sign_in_unavailable");
+  });
+
+  it("keeps the selected fallback and explains the bypassed tier", () => {
+    const resolution = resolveConfiguredTier(
+      makeCtx([dead, live]),
+      "review",
+      { schemaVersion: 2, default: "fallback", models: { review: ["dead/one"], fallback: ["live/two"] } },
+      undefined,
+      { ...DEFAULT_RELIABILITY, enabled: false },
+      Date.now(),
+      undefined,
+      undefined,
+      undefined,
+      (model) => model.provider === "dead",
+    ).resolution;
+    assert.equal(modelKey(resolution.selected!), "live/two");
+    assert.equal(resolution.fallbackReason, "sign_in_unavailable",
+      "the selected model does not erase why its tier was bypassed");
+  });
+
+  it("names sign-in when an explicit fallback chain was emptied only by credentials", () => {
+    // Every allowed tier was resolved and every one was stopped by the same
+    // cause. Returning no reason would leave the terminal boundary unexplained.
+    const resolution = resolveConfiguredTier(
+      makeCtx([dead, live, makeModel("dead", "two", 2), makeModel("dead", "three", 3)]),
+      "review",
+      {
+        schemaVersion: 2,
+        default: "review",
+        models: { review: ["dead/one"], fallback: ["dead/two"], last: ["dead/three"] },
+        tierPolicies: { review: { fallbackTiers: ["fallback", "last"] } },
+      },
+      undefined,
+      { ...DEFAULT_RELIABILITY, enabled: false },
+      Date.now(),
+      undefined,
+      undefined,
+      undefined,
+      (model) => model.provider === "dead",
+    ).resolution;
+    assert.equal(resolution.selected, undefined);
+    assert.equal(resolution.explicitBoundary, true);
+    assert.equal(resolution.attemptedTiers?.length, 3);
+    assert.equal(resolution.fallbackReason, "sign_in_unavailable");
+  });
+
+  it("keeps the reliability wording when an explicit chain mixed the causes", () => {
+    const now = 2_000_000;
+    const reliabilityConfig = { ...DEFAULT_RELIABILITY, failureThreshold: 1, cooldownMinutes: 10 };
+    const reliability = recordModelFailure(
+      emptyReliabilityState(), "paused/three", reliabilityConfig, now, "dispatch", "transport",
+    );
+    const resolution = resolveConfiguredTier(
+      makeCtx([dead, makeModel("paused", "three", 3)]),
+      "review",
+      {
+        schemaVersion: 2,
+        default: "review",
+        models: { review: ["dead/one"], fallback: ["paused/three"] },
+        tierPolicies: { review: { fallbackTiers: ["fallback"] } },
+      },
+      reliability,
+      reliabilityConfig,
+      now,
+      undefined,
+      undefined,
+      undefined,
+      (model) => model.provider === "dead",
+    ).resolution;
+    assert.equal(resolution.selected, undefined);
+    assert.equal(resolution.fallbackReason, "all_tiers_exhausted");
+  });
+
+  it("selects inside an explicit chain and still names the bypassed sign-in", () => {
+    const resolution = resolveConfiguredTier(
+      makeCtx([dead, live, makeModel("dead", "two", 2)]),
+      "review",
+      {
+        schemaVersion: 2,
+        default: "review",
+        models: { review: ["dead/one"], fallback: ["dead/two"], last: ["live/two"] },
+        tierPolicies: { review: { fallbackTiers: ["fallback", "last"] } },
+      },
+      undefined,
+      { ...DEFAULT_RELIABILITY, enabled: false },
+      Date.now(),
+      undefined,
+      undefined,
+      undefined,
+      (model) => model.provider === "dead",
+    ).resolution;
+    assert.equal(modelKey(resolution.selected!), "live/two");
+    assert.equal(resolution.selectedTier, "last");
+    assert.equal(resolution.fallbackReason, "sign_in_unavailable");
+  });
 });
 
 describe("keep-last-model fallback boundary", () => {
