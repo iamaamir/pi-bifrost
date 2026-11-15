@@ -691,13 +691,18 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
   const requestedScopeRejected = scopeRejected(primary);
   let fallbackReason: RoutedModelResolution["fallbackReason"] = requestedUnavailable
     ? "requested_tier_unavailable"
-    : requestedUnreliable > 0
-      ? "requested_tier_unhealthy"
-      : requestedScopeRejected
-        ? "requested_tier_provider_excluded"
-        : requestedExcluded
-          ? "requested_tier_excluded"
-          : undefined;
+    // A pool emptied only by sign-in has no reliability evidence behind it.
+    // This path has no explicit policy, but the wording must stay the same as
+    // the explicit-boundary path: reliability state holds nothing about it.
+    : signInOnlySkipped(primary)
+      ? "sign_in_unavailable"
+      : requestedUnreliable > 0
+        ? "requested_tier_unhealthy"
+        : requestedScopeRejected
+          ? "requested_tier_provider_excluded"
+          : requestedExcluded
+            ? "requested_tier_excluded"
+            : undefined;
 
   // Compute final reason after evaluating fallback
   const resolveFinalReason = (fb: HealthyModelResolution<M>): RoutedModelResolution<M>["fallbackReason"] => {
@@ -705,6 +710,7 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
     if (requestedUnavailable && primary.skipped.length === 0 && !requestedExcluded && unavailable(fb)) {
       return "requested_tier_unavailable";
     }
+    if (signInOnlySkipped(fb) || (signInOnlySkipped(primary) && unreliableSkipped(fb) === 0)) return "sign_in_unavailable";
     if (unreliableSkipped(fb) > 0 || requestedUnreliable > 0) return "all_tiers_exhausted";
     if (scopeRejected(fb) || requestedScopeRejected) return "requested_tier_provider_excluded";
     if (reserveExcluded(primary) || reserveExcluded(fb)) return "requested_tier_excluded";
