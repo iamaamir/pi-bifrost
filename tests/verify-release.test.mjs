@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { runVerification } from "../scripts/verify-release.mjs";
-import { fixtureGitEnv } from "./fixtures/git-env.mjs";
+import { fixtureGitEnv, withFixtureEnv } from "./fixtures/git-env.mjs";
 
 const scripts = { test: "true", typecheck: "true", "build:router": "true", "test:integration": "true", "test:ui": "true", "test:ui:reliability": "true" };
 
@@ -26,7 +26,7 @@ function passingGates() {
 }
 
 async function verify(root, options = {}) {
-  return runVerification({ root, checkPreflight: () => "fixture preflight passed", execute: passingGates(), ...options });
+  return withFixtureEnv(() => runVerification({ root, checkPreflight: () => "fixture preflight passed", execute: passingGates(), ...options }));
 }
 
 test("a failed gate fails the result without source drift", async () => {
@@ -125,7 +125,7 @@ test("a HEAD-only change fails even when the source tree stays identical", async
 test("preflight failure is recorded with its actionable reason", async () => {
   const root = repository();
   try {
-    const result = await runVerification({ root, checkPreflight: () => { throw new Error("Pillow is missing"); } });
+    const result = await withFixtureEnv(() => runVerification({ root, checkPreflight: () => { throw new Error("Pillow is missing"); } }));
     assert.equal(result.exitCode, 1);
     assert.equal(result.gates[0].id, "preflight");
     assert.equal(result.gates[0].exitCode, 1);
@@ -156,7 +156,7 @@ test("large spawned gate output stays bounded and preserves its failure tail", a
   const marker = "UNIQUE_FAILTAIL_RELEASE_GATE";
   try {
     writeFileSync(join(root, "scripts", "large-output.mjs"), `process.stdout.write("x".repeat(1200000)); process.stderr.write("y".repeat(1200000) + "${marker}"); process.exitCode = 7;`);
-    const result = await runVerification({ root, checkPreflight: () => "fixture preflight passed" });
+    const result = await withFixtureEnv(() => runVerification({ root, checkPreflight: () => "fixture preflight passed" }));
     assert.equal(result.exitCode, 1);
     assert.equal(result.gates[1].exitCode, 7);
     const log = readFileSync(join(root, result.gates[1].logPath), "utf8");
@@ -168,7 +168,7 @@ test("large spawned gate output stays bounded and preserves its failure tail", a
 test("verification rejects a package missing any required gate", async () => {
   const root = repository({ test: "true", typecheck: "true" });
   try {
-    const result = await runVerification({ root, execute: async () => assert.fail("must not run gates") });
+    const result = await withFixtureEnv(() => runVerification({ root, execute: async () => assert.fail("must not run gates") }));
     assert.equal(result.exitCode, 1);
     assert.match(result.error, /build:router/);
   } finally { rmSync(root, { recursive: true, force: true }); }

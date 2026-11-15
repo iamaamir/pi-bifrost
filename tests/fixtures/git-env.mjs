@@ -24,3 +24,25 @@ export function fixtureGitEnv() {
   for (const name of REPO_REDIRECT_VARS) delete env[name];
   return env;
 }
+
+/**
+ * Runs `fn` with the repo-redirecting variables removed from process.env and
+ * restores them afterwards. For in-process helpers whose git children inherit
+ * the ambient env (runVerification, gitTruth, sourceFingerprint, controller
+ * children) — an `env` option only covers the test's own direct spawns.
+ */
+export async function withFixtureEnv(fn) {
+  const saved = {};
+  for (const name of REPO_REDIRECT_VARS) {
+    if (name in process.env) saved[name] = process.env[name];
+    delete process.env[name];
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const name of REPO_REDIRECT_VARS) {
+      if (name in saved) process.env[name] = saved[name];
+      else delete process.env[name];
+    }
+  }
+}
