@@ -595,9 +595,16 @@ function boundedAuthReason(error: unknown): string {
 async function resolveProviderAuth(
   registry: ConfigAgentAuthRegistry,
   providers: readonly string[],
+  options: { signal?: AbortSignal } = {},
 ): Promise<ConfigAgentProviderAuth[]> {
   const resolved: ConfigAgentProviderAuth[] = [];
   for (const provider of [...new Set(providers)].sort()) {
+    // A cancelled tool call must not keep waiting on providers it has not
+    // started. An unasked provider is unknown, never dead.
+    if (options.signal?.aborted) {
+      resolved.push({ provider, state: "unknown", reason: "the request was cancelled before sign-in could be resolved" });
+      continue;
+    }
     let source: string | undefined;
     // Whether Pi reports a credential on disk for this provider. Pi resolves a
     // credential it cannot use to nothing rather than throwing, so only a
@@ -903,10 +910,10 @@ export const PROBE_OUTPUT_TOKEN_CAP = 5;
  * models, the request count, and the output bound.
  */
 function probeConsentText(models: readonly string[]): string {
-  const shown = models.length > 8
-    ? `${models.slice(0, 8).join(", ")}, and ${models.length - 8} more`
-    : models.join(", ");
-  return `Send one request of at most ${PROBE_OUTPUT_TOKEN_CAP} output tokens to each of ${models.length} model(s): ${shown}. A result describes this provider now; a pass is not a promise for later.`;
+  // Every model the request will reach is named. A count plus a truncated
+  // prefix asks the user to approve targets they cannot see, and the plan is
+  // exactly what the caller was told to show.
+  return `Send one request of at most ${PROBE_OUTPUT_TOKEN_CAP} output tokens to each of ${models.length} model(s): ${models.join(", ")}. A result describes this provider now; a pass is not a promise for later.`;
 }
 
 /** How a live probe was authorized. */
@@ -2145,7 +2152,7 @@ const ConfigAgentParameters = Type.Object({
   effectiveDigest: Type.Optional(Type.String({ description: "effectiveDigest returned by check or preview for this exact candidate." })),
   catalogDigest: Type.Optional(Type.String({ description: "catalogDigest returned by check or preview for this exact candidate." })),
   classifierRuntimeDigest: Type.Optional(Type.String({ description: "classifierRuntimeDigest returned by check or preview; apply refuses if runtime classifier state changes." })),
-  probe: Type.Optional(Type.Boolean({ description: "Live-check the models this check would route to: one request per model, each capped at 5 output tokens. Plain check never sends; it reports the exact targets in probePlan, so show that plan and ask the user first. Targets are the effective pools and direct-model rules. Models whose provider's stored sign-in does not resolve for this session are listed in probeSkipped and are not probed: a skipped model is not a probe failure. The TUI host confirms again before sending; where no dialog exists this flag is the authorization. Advisory: probe failures are one observed result, not proof a model always fails, and the candidate stays writable." }))
+  probe: Type.Optional(Type.Boolean({ description: "Live-check the models this check would route to: one request per model, each capped at 5 output tokens. Plain check never sends; it reports the exact targets in probePlan, so show that plan and ask the user first. Targets are the effective pools and direct-model rules; a rule shadowed by an earlier match may still be listed, because the plan is a safe superset of what a prompt can reach. Models whose provider's stored sign-in does not resolve for this session are listed in probeSkipped and are not probed: a skipped model is not a probe failure. The TUI host confirms again before sending; where no dialog exists this flag is the authorization. Advisory: probe failures are one observed result, not proof a model always fails, and the candidate stays writable." }))
 });
 
 /**
@@ -2324,7 +2331,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
       }
       addRuleProviders((request.candidate as { rules?: unknown } | undefined)?.rules);
       addRuleProviders((request.patch as { rules?: unknown } | undefined)?.rules);
-      const providerAuth = await resolveProviderAuth(ctx.modelRegistry, [...resolvedProviders]);
+      const providerAuth = await resolveProviderAuth(ctx.modelRegistry, [...resolvedProviders], { signal });
       const classifierRuntime = deps.classifierRuntime
         ? (config: BifrostConfig) => deps.classifierRuntime!(config, ctx)
         : undefined;
@@ -2351,22 +2358,23 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
           // caller can show them before agreeing. Computing this sends nothing.
           // One plan serves both purposes: the caller is shown the exact models
           // a probe would send to, and the transport receives that same list.
+          // Planning is offline and independent of the transport: a host with
+          // no probe seam still reports exactly what a probe would target, so
+          // the documented plan exists wherever the check is writable.
           const plan = result.status === "ok" ? probeTargets(result, catalog, cwd) : { models: [], skipped: [] };
-          if (result.status === "ok" && deps.probeModels) {
-            if (plan.models.length > 0 || plan.skipped.length > 0) {
-              result = {
-                ...result,
-                ...(plan.models.length > 0 ? { probePlan: plan.models } : {}),
-                ...(plan.skipped.length > 0 ? { probeSkipped: plan.skipped } : {}),
-                notes: [...result.notes,
-                  ...(plan.models.length > 0
-                    ? [`Live probe would target ${plan.models.length} model(s), one request each; it does not run unless the caller opts in with probe: true.`]
-                    : []),
-                  ...(plan.skipped.length > 0
-                    ? [`${plan.skipped.length} model(s) are not probed because their provider's sign-in does not resolve for this session; they are skipped, not failures.`]
-                    : [])],
-              };
-            }
+          if (plan.models.length > 0 || plan.skipped.length > 0) {
+            result = {
+              ...result,
+              ...(plan.models.length > 0 ? { probePlan: plan.models } : {}),
+              ...(plan.skipped.length > 0 ? { probeSkipped: plan.skipped } : {}),
+              notes: [...result.notes,
+                ...(plan.models.length > 0
+                  ? [`Live probe would target ${plan.models.length} model(s), one request each; it does not run unless the caller opts in with probe: true.`]
+                  : []),
+                ...(plan.skipped.length > 0
+                  ? [`${plan.skipped.length} model(s) are not probed because their provider's sign-in does not resolve for this session; they are skipped, not failures.`]
+                  : [])],
+            };
           }
           if (params.probe === true) result = await applyLiveProbe(result, plan, deps, ctx, signal);
           break;
