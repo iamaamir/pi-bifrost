@@ -695,7 +695,7 @@ test("concurrent applies: exactly one claims outcome and the other refuses", asy
   const fixture = scaffold();
   const runOnce = () => new Promise((resolvePromise) => {
     const child = spawn(process.execPath, [SCRIPT, "1", "--outcome", fixture.outcomePath, "--receipt", fixture.receiptPath, "--expected-reviewer", "reviewer-agent", "--expected-implementer", "implementer-agent", "--apply"], {
-      env: controllerEnvironment(fixture, { ...process.env, GITHUB_REPOSITORY: "ambient/unrelated" }),
+      env: controllerEnvironment(fixture, { ...fixtureGitEnv(), GITHUB_REPOSITORY: "ambient/unrelated" }),
       encoding: "utf8",
     });
     let stdout = "", stderr = "";

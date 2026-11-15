@@ -498,18 +498,18 @@ describe("acceptance runner boundary", () => {
     assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
   });
 
-  it("fingerprints tracked source bytes and retains dirty Git paths", () => {
+  it("fingerprints tracked source bytes and retains dirty Git paths", async () => {
     const directory = mkdtempSync(join(tmpdir(), "bifrost-acceptance-runner-"));
     temporary.push(directory);
     execFileSync("git", ["init", "-q"], { cwd: directory, env: fixtureGitEnv() });
     writeFileSync(join(directory, "source.txt"), "before");
     execFileSync("git", ["add", "source.txt"], { cwd: directory, env: fixtureGitEnv() });
     execFileSync("git", ["-c", "user.name=Acceptance Test", "-c", "user.email=acceptance@example.invalid", "commit", "-qm", "fixture"], { cwd: directory, env: fixtureGitEnv() });
-    const before = withFixtureEnv(() => sourceFingerprint(directory));
+    const before = await withFixtureEnv(() => sourceFingerprint(directory));
     writeFileSync(join(directory, "source.txt"), "after");
     writeFileSync(join(directory, "fresh.txt"), "new");
-    assert.notEqual(withFixtureEnv(() => sourceFingerprint(directory)), before);
-    const dirty = withFixtureEnv(() => gitTruth(directory)).sort((left, right) => left.path.localeCompare(right.path));
+    assert.notEqual(await withFixtureEnv(() => sourceFingerprint(directory)), before);
+    const dirty = (await withFixtureEnv(() => gitTruth(directory))).sort((left, right) => left.path.localeCompare(right.path));
     assert.deepEqual(dirty, [
       { index: "??", path: "fresh.txt" },
       { index: " M", path: "source.txt" },
