@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fixtureGitEnv } from "./fixtures/git-env.mjs";
 
 const SCRIPT = new URL("../scripts/merge-controller.mjs", import.meta.url).pathname;
 const REPO_ROOT = new URL("..", import.meta.url).pathname;
@@ -417,7 +418,7 @@ test("guard removal control: bypassing receipt validation reddens the named asse
   assert.equal(rejected.mergeCalls.length, 0, "blocking findings must reject through the actual CLI validator");
   const root = join(fixture.dir, "source");
   mkdirSync(join(root, "scripts"), { recursive: true });
-  assert.equal(spawnSync("git", ["init", "--quiet"], { cwd: root }).status, 0);
+  assert.equal(spawnSync("git", ["init", "--quiet"], { cwd: root, env: fixtureGitEnv() }).status, 0);
   const copy = join(realpathSync(root), "scripts", "merge-controller.mjs");
   writeFileSync(join(root, "scripts", "merge-eligibility.mjs"), readFileSync(new URL("../scripts/merge-eligibility.mjs", import.meta.url)));
   const mutant = source.replace(guard, 'if (false) {');
@@ -513,7 +514,7 @@ test("candidate-owned receipt remains rejected independently of launch cwd", () 
   const inside = join(REPO_ROOT, "candidate-receipt-other-cwd.json");
   writeFileSync(inside, JSON.stringify(defaultReceipt())); cleanups.push(inside);
   const other = join(fixture.dir, "other"); mkdirSync(other);
-  assert.equal(spawnSync("git", ["init", "--quiet"], { cwd: other }).status, 0);
+  assert.equal(spawnSync("git", ["init", "--quiet"], { cwd: other, env: fixtureGitEnv() }).status, 0);
   const result = runController({ ...fixture, receiptPath: inside }, ["--apply"], other);
   assert.equal(result.stderr, "");
   assert.match(result.stdout, /candidate-owned review receipt rejected/);
@@ -558,7 +559,7 @@ test("third PR read receipt revocation rejects before intent or merge", (t) => {
   assert.notEqual(mutant, source);
   const root = join(fixture.dir, "source");
   mkdirSync(join(root, "scripts"), { recursive: true });
-  assert.equal(spawnSync("git", ["init", "--quiet"], { cwd: root }).status, 0);
+  assert.equal(spawnSync("git", ["init", "--quiet"], { cwd: root, env: fixtureGitEnv() }).status, 0);
   const copy = join(realpathSync(root), "scripts", "merge-controller.mjs");
   writeFileSync(join(root, "scripts", "merge-eligibility.mjs"), readFileSync(new URL("../scripts/merge-eligibility.mjs", import.meta.url)));
   writeFileSync(copy, mutant);
@@ -608,7 +609,7 @@ test("isolated Python ZIP reader ignores shadow zipfile in launch cwd", () => {
 
   const root = join(fixture.dir, "shadow-source");
   mkdirSync(join(root, "scripts"), { recursive: true });
-  assert.equal(spawnSync("git", ["init", "--quiet"], { cwd: root }).status, 0);
+  assert.equal(spawnSync("git", ["init", "--quiet"], { cwd: root, env: fixtureGitEnv() }).status, 0);
   const copy = join(realpathSync(root), "scripts", "merge-controller.mjs");
   writeFileSync(join(root, "scripts", "merge-eligibility.mjs"), readFileSync(new URL("../scripts/merge-eligibility.mjs", import.meta.url)));
   const source = readFileSync(SCRIPT, "utf8");
@@ -723,7 +724,7 @@ test("dry-run preserves existing apply intent", () => {
 test("entry executes from path containing spaces", () => {
   const spacedDir = join(realpathSync(tmpdir()), "mc spaced dir " + Date.now());
   mkdirSync(join(spacedDir, "scripts"), { recursive: true });
-  spawnSync("git", ["init", "--quiet"], { cwd: spacedDir });
+  spawnSync("git", ["init", "--quiet"], { cwd: spacedDir, env: fixtureGitEnv() });
   const copy = join(spacedDir, "scripts", "merge-controller.mjs");
   writeFileSync(copy, readFileSync(SCRIPT));
   writeFileSync(join(spacedDir, "scripts", "merge-eligibility.mjs"), readFileSync(new URL("../scripts/merge-eligibility.mjs", import.meta.url)));
@@ -792,7 +793,7 @@ test("source fault controls exercise server protection, final authorization, and
   const owner = scaffold();
   const root = join(owner.dir, "private-controller");
   mkdirSync(join(root, "scripts"), { recursive: true });
-  assert.equal(spawnSync("git", ["init", "--quiet"], { cwd: root }).status, 0);
+  assert.equal(spawnSync("git", ["init", "--quiet"], { cwd: root, env: fixtureGitEnv() }).status, 0);
   const copy = join(realpathSync(root), "scripts", "merge-controller.mjs");
   writeFileSync(join(root, "scripts", "merge-eligibility.mjs"), readFileSync(new URL("../scripts/merge-eligibility.mjs", import.meta.url)));
   const finalStart = source.indexOf("  const finalAuthorizationChanged = ");

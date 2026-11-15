@@ -9,6 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer } from "node:http";
 import { gateDirectory, gitTruth, installedToolVersions, matchNamedTestEvent, parseArgs, sourceFingerprint, summarizeCases } from "../scripts/acceptance/core.mjs";
 import { buildGateEvidenceCases, pushRevisionCase, registerTerminationHandlers, runChild, supportingTestCase, terminateProcessGroup, verificationGateEnvironment, writeNodeTestEventsArtifact } from "../scripts/acceptance.mjs";
+import { fixtureGitEnv } from "./fixtures/git-env.mjs";
 
 const temporary = [];
 after(() => temporary.forEach((path) => rmSync(path, { recursive: true, force: true })));
@@ -500,10 +501,10 @@ describe("acceptance runner boundary", () => {
   it("fingerprints tracked source bytes and retains dirty Git paths", () => {
     const directory = mkdtempSync(join(tmpdir(), "bifrost-acceptance-runner-"));
     temporary.push(directory);
-    execFileSync("git", ["init", "-q"], { cwd: directory });
+    execFileSync("git", ["init", "-q"], { cwd: directory, env: fixtureGitEnv() });
     writeFileSync(join(directory, "source.txt"), "before");
-    execFileSync("git", ["add", "source.txt"], { cwd: directory });
-    execFileSync("git", ["-c", "user.name=Acceptance Test", "-c", "user.email=acceptance@example.invalid", "commit", "-qm", "fixture"], { cwd: directory });
+    execFileSync("git", ["add", "source.txt"], { cwd: directory, env: fixtureGitEnv() });
+    execFileSync("git", ["-c", "user.name=Acceptance Test", "-c", "user.email=acceptance@example.invalid", "commit", "-qm", "fixture"], { cwd: directory, env: fixtureGitEnv() });
     const before = sourceFingerprint(directory);
     writeFileSync(join(directory, "source.txt"), "after");
     writeFileSync(join(directory, "fresh.txt"), "new");
@@ -639,7 +640,7 @@ describe("acceptance runner boundary", () => {
       'process.argv[1] = fileURLToPath(script);',
       'await import(script.href);',
     ].join("\n") + "\n");
-    const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+    const git = (...args) => execFileSync("git", args, { cwd: root, env: fixtureGitEnv(), encoding: "utf8" }).trim();
     git("init", "-q"); git("config", "user.email", "test@example.invalid"); git("config", "user.name", "Test");
     const emptyHooks = mkdtempSync(join(tmpdir(), "bifrost-empty-hooks-"));
     temporary.push(emptyHooks);

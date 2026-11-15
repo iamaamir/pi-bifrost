@@ -4,10 +4,11 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fixtureGitEnv } from "./fixtures/git-env.mjs";
 
 test("preserves resolved main ancestry when a squash merge lost it", () => {
   const root = mkdtempSync(join(tmpdir(), "bifrost-merge-ancestry-"));
-  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  const git = (...args) => execFileSync("git", args, { cwd: root, env: fixtureGitEnv(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   const write = (value) => writeFileSync(join(root, "shared.txt"), `${value}\n`);
   try {
     git("init", "-q", "-b", "v2");
@@ -22,14 +23,14 @@ test("preserves resolved main ancestry when a squash merge lost it", () => {
     git("switch", "-q", "v2");
     write("v2"); git("commit", "-qam", "v2 change");
     git("switch", "-qc", "resolution");
-    assert.equal(spawnSync("git", ["merge", "--no-commit", "main"], { cwd: root, stdio: "ignore" }).status, 1);
+    assert.equal(spawnSync("git", ["merge", "--no-commit", "main"], { cwd: root, env: fixtureGitEnv(), stdio: "ignore" }).status, 1);
     write("resolved"); git("add", "shared.txt"); git("commit", "-qm", "resolve merge");
     const resolvedMerge = git("rev-parse", "HEAD");
     git("switch", "-q", "v2");
     git("merge", "-q", "--squash", "resolution"); git("commit", "-qm", "squash resolution");
     const beforeTree = git("rev-parse", "HEAD^{tree}");
-    assert.equal(spawnSync("git", ["merge-base", "--is-ancestor", "main", "HEAD"], { cwd: root }).status, 1);
-    assert.notEqual(spawnSync("git", ["merge-tree", "--write-tree", "HEAD", "main"], { cwd: root, stdio: "ignore" }).status, 0);
+    assert.equal(spawnSync("git", ["merge-base", "--is-ancestor", "main", "HEAD"], { cwd: root, env: fixtureGitEnv() }).status, 1);
+    assert.notEqual(spawnSync("git", ["merge-tree", "--write-tree", "HEAD", "main"], { cwd: root, env: fixtureGitEnv(), stdio: "ignore" }).status, 0);
     git("merge", "-q", "--no-ff", "-m", "restore ancestry", resolvedMerge);
     assert.equal(git("rev-parse", "HEAD^{tree}"), beforeTree);
     git("merge-base", "--is-ancestor", "main", "HEAD");
