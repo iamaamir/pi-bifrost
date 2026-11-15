@@ -2595,11 +2595,14 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     // provider sign-in eligibility excludes at runtime would never be resolved
     // and the model could be dispatched unchecked.
     //
-    // The classifier resolves rules through `loadRules`, which lets a route file
-    // replace inline `config.rules`. Reading `config.rules` here would leave a
-    // model reachable only through the effective route file unchecked.
+    // Read the rules from the pipeline that will classify this turn, not from
+    // `config.rules` and not from `loadRules` directly. A route file can replace
+    // the inline rules without a reload: `loadRules` would then describe rules
+    // the cached pipeline is not using, and a direct model the pipeline still
+    // resolves could reach dispatch unchecked. The pipeline is the only source
+    // that cannot disagree with classification.
     const tierNames = new Set(Object.keys(config.models ?? {}));
-    for (const rule of loadRules(process.cwd(), config)) {
+    for (const rule of getPipeline(ctx).rules) {
       if (typeof rule?.model !== "string" || !rule.model.includes("/")) continue;
       // A rule naming a tier is an alias, not a direct model.
       if (tierNames.has(rule.model)) continue;
@@ -2652,7 +2655,14 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     // The turn is still going to select from the reloaded pools, so check those
     // before it does instead of leaving it with no exclusions at all.
     if ((state.configGeneration ?? 0) !== generation) {
-      return attempt < 2 ? prepareSignInEligibility(ctx, attempt + 1) : undefined;
+      if (attempt >= 2) {
+        // Three generations moved while resolving: the answer never described
+        // the pools the turn is about to select from. Continuing would dispatch
+        // an unchecked provider whenever no fresh cache entry exists, so the
+        // turn stops and asks for a retry instead.
+        throw new Error("Bifrost: the configuration changed while provider sign-in was being resolved, so this turn was not dispatched without a completed check. Retry the turn.");
+      }
+      return prepareSignInEligibility(ctx, attempt + 1);
     }
     // An unresolved check is not proof: only a resolution Pi reports as dead
     // excludes, because a transient failure must not route away from a
