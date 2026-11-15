@@ -69,6 +69,17 @@ describe("virtual fail-closed errors", () => {
     }
   });
 
+  it("does not call a sign-in exclusion a reliability block", () => {
+    // No request reached the provider, so nothing was written to the reliability
+    // store. The shared detail list must not imply otherwise when a reserve
+    // rejection and a dead credential meet in the same pool.
+    const message = noModelError("restricted", ["fixture/reserved", "dead/one"], "requested_tier_excluded", [
+      { key: "dead/one", reason: "sign_in_unavailable" },
+    ], { count: 1, reasonCodes: ["reserve_reached"] });
+    assert.match(message, /excluded dead\/one \(provider sign-in unavailable\)/u);
+    assert.doesNotMatch(message, /reliability blocked/u);
+  });
+
   it("attributes reserve fallback exclusions to the default tier when the request is empty", () => {
     const message = noModelError("quick", [], "requested_tier_excluded", [], {
       count: 1,

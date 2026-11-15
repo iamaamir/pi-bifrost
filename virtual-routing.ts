@@ -66,12 +66,14 @@ export function noModelError(
   const requestedUnavailableDetail = fallbackOnly && configuredPatterns.length === 0
     ? `; requested tier ${tier} had no resolved models`
     : "";
-  const reliabilityDetail = skipped?.length
-    ? `; reliability blocked ${skipped.map((entry) => `${entry.key} (${reasonLabel(entry.reason)})`).join(", ")}`
+  // Skips are not all reliability: a sign-in exclusion never reached the
+  // provider and wrote no reliability state, so the prefix stays neutral.
+  const exclusionDetail = skipped?.length
+    ? `; excluded ${skipped.map((entry) => `${entry.key} (${reasonLabel(entry.reason)})`).join(", ")}`
     : "";
   const problem = reason === "requested_tier_excluded" || reserveFiltered
     ? (reserveFiltered
-      ? `reserve policy excluded ${reserveCount} configured candidate(s)${reserveAttribution}${reasonCodes.length ? ` (reasons: ${reasonCodes.join(", ")})` : ""}${requestedUnavailableDetail}${reliabilityDetail}`
+      ? `reserve policy excluded ${reserveCount} configured candidate(s)${reserveAttribution}${reasonCodes.length ? ` (reasons: ${reasonCodes.join(", ")})` : ""}${requestedUnavailableDetail}${exclusionDetail}`
       : "configured candidates excluded by reserve policy")
     : poolProblem(tier, pool, skipped);
   const availability = reason === "requested_tier_unavailable" && fallbackOnly
