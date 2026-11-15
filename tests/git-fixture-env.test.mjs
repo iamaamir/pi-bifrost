@@ -46,7 +46,7 @@ test("withFixtureEnv scrubs redirects for the duration and restores them", async
   }
 });
 
-test("git children stay on the fixture repo under inherited redirects (issue #231 regression)", () => {
+test("git children stay on the fixture repo under inherited redirects (issue #231 regression)", async () => {
   const root = mkdtempSync(join(tmpdir(), "bifrost-fixture-env-"));
   const scratch = mkdtempSync(join(tmpdir(), "bifrost-fixture-scratch-"));
   try {
@@ -56,8 +56,9 @@ test("git children stay on the fixture repo under inherited redirects (issue #23
     process.env.GIT_DIR = join(scratch, ".git");
     try {
       // No env option on purpose: the scrubbed process.env is what protects
-      // this child, exactly as it protects in-process library helpers.
-      withFixtureEnv(() => {
+      // this child, exactly as it protects in-process library helpers. Await
+      // the helper so its restore runs before the scratch repo is deleted.
+      await withFixtureEnv(() => {
         execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@example.invalid", "commit", "--allow-empty", "-qm", "fixture"], { cwd: root });
       });
       const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, env: fixtureGitEnv(), encoding: "utf8" }).trim();
