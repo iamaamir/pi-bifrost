@@ -369,6 +369,9 @@ export interface ClassificationPipeline {
   readonly classify: (text: string, signal?: AbortSignal, options?: { readonly offline?: boolean }) => Promise<ClassificationResult>;
   /** Cheap local check used to preserve explicit rule ownership before recovery routing. */
   readonly matchRule: (text: string) => string | undefined;
+  /** Rules this pipeline classifies with, so other pre-dispatch steps cannot
+   * read a different (fresher or staler) rule file than classification. */
+  readonly rules: readonly RouteRule[];
 }
 
 function normalizeJudgment(output: ClassifierOutput, backend: ClassifierBackend): ClassificationJudgment {
@@ -634,5 +637,5 @@ export function createPipeline<MClassifier extends { readonly id: string } = { r
     }
   }
 
-  return { classify, matchRule: (text) => classifyCompiled(text, regexRules) };
+  return { classify, matchRule: (text) => classifyCompiled(text, regexRules), rules: rawRegexRules };
 }

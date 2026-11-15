@@ -48,7 +48,9 @@ function fixture(options: FixtureOptions = {}) {
   const dead = new Set(options.deadProviders ?? ["dead"]);
   const authCalls: string[] = [];
   const refreshHooks: Array<() => void> = [];
-  let authGate: { provider: string; promise: Promise<void>; release: () => void } | undefined;
+  // Gates are keyed per provider so consecutive retries can each be held open
+  // before the previous wait is released.
+  const authGates = new Map<string, { promise: Promise<void>; release: () => void }>();
   let commandHandler: ((args: string, ctx: ExtensionContext) => Promise<unknown>) | undefined;
   const config = {
     schemaVersion: 2,
@@ -90,7 +92,8 @@ function fixture(options: FixtureOptions = {}) {
       ...(options.withoutAuthResolver ? {} : {
         getProviderAuth: async (provider: string) => {
           authCalls.push(provider);
-          if (authGate?.provider === provider) await authGate.promise;
+          const gate = authGates.get(provider);
+          if (gate) await gate.promise;
           if (dead.has(provider)) throw new Error("token refresh failed");
           return { auth: { apiKey: "resolved" } };
         },
@@ -139,9 +142,14 @@ function fixture(options: FixtureOptions = {}) {
     holdAuth(provider: string) {
       let release: () => void = () => {};
       const promise = new Promise<void>((resolve) => { release = resolve; });
-      authGate = { provider, promise, release };
+      const gate = { promise, release };
+      authGates.set(provider, gate);
       return {
-        release: () => { authGate = undefined; release(); },
+        // A later hold may already have replaced this gate; only remove our own.
+        release: () => {
+          if (authGates.get(provider) === gate) authGates.delete(provider);
+          release();
+        },
       };
     },
     /** Apply the next registry refresh to this fixture, as a real refresh would. */
@@ -466,6 +474,63 @@ describe("pre-dispatch sign-in eligibility through the Auto route", { concurrenc
       assert.equal(h.authCalls.filter((provider) => provider === "dead").length, 2,
         "the reload must force a fresh resolution inside the same turn");
       assert.ok(!h.dispatched.includes("dead/one"), "the reloaded pool's dead provider must not dispatch");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("stops the turn when the configuration changes on every sign-in retry", async () => {
+    // The retry budget is bounded, but running out of attempts must not hand the
+    // turn an empty answer: with no fresh cache entry it would select from pools
+    // no check ever resolved. The turn ends instead of dispatching unchecked.
+    const h = fixture({ eligibility: "exclude", deadProviders: [], pool: ["dead/one"] });
+    try {
+      const first = h.holdAuth("dead");
+      const pending = h.route();
+      while (!h.authCalls.includes("dead")) await new Promise((resolve) => setImmediate(resolve));
+
+      await h.reload(["dead/one"]);
+      const second = h.holdAuth("dead");
+      first.release();
+      while (h.authCalls.filter((provider) => provider === "dead").length < 2) await new Promise((resolve) => setImmediate(resolve));
+
+      await h.reload(["dead/one"]);
+      const third = h.holdAuth("dead");
+      second.release();
+      while (h.authCalls.filter((provider) => provider === "dead").length < 3) await new Promise((resolve) => setImmediate(resolve));
+
+      await h.reload(["dead/one"]);
+      third.release();
+
+      await assert.rejects(pending, /configuration changed while provider sign-in was being resolved/);
+      assert.deepEqual(h.dispatched, [], "an unresolved configuration must not dispatch any provider");
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  it("checks the rules the cached classifier still uses after a route file appears", async () => {
+    // A route file can replace the inline rules without a reload. The classifier
+    // keeps the rules it loaded, so a check that re-read the route file would
+    // resolve a provider the turn will not use and skip the one it will.
+    const h = fixture({
+      eligibility: "exclude",
+      deadProviders: [],
+      pool: ["live/two"],
+      rules: [{ pattern: "review", model: "dead/one" }],
+    });
+    try {
+      // Preview builds the session pipeline, so it keeps the inline rules it saw.
+      await h.preview();
+      h.markDead("dead");
+      writeFileSync(join(h.cwd, ".pi", "bifrost-routes.json"), JSON.stringify([{ pattern: "review", model: "live/two" }]));
+
+      const routed = await h.route();
+      assert.ok(h.authCalls.includes("dead"),
+        "the cached classifier's rule provider must be resolved before dispatch");
+      assert.notEqual(`${routed.model.provider}/${routed.model.id}`, "dead/one",
+        "the excluded direct model must not be selected even though the new route file names another");
+      assert.ok(!h.dispatched.includes("dead/one"), "the excluded direct model must never be dispatched");
     } finally {
       h.cleanup();
     }
