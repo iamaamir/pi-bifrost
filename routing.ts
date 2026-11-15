@@ -636,7 +636,10 @@ function tierExclusionReason(
   pool: HealthyModelResolution,
   reserveExcludedPool: boolean,
 ): RoutedModelResolution["fallbackReason"] {
-  if (signInOnlySkipped(pool)) return "sign_in_unavailable";
+  // A reserve rejection is not in `skipped`, so a pool can look sign-in-only
+  // while a candidate was also held back for budget. That is mixed evidence and
+  // must keep the reserve wording instead of blaming credentials alone.
+  if (signInOnlySkipped(pool) && !reserveExcludedPool) return "sign_in_unavailable";
   if (unreliableSkipped(pool) > 0) return "requested_tier_unhealthy";
   if (scopeRejected(pool)) return "requested_tier_provider_excluded";
   if (reserveExcludedPool) return "requested_tier_excluded";
@@ -699,7 +702,7 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
     // A pool emptied only by sign-in has no reliability evidence behind it.
     // This path has no explicit policy, but the wording must stay the same as
     // the explicit-boundary path: reliability state holds nothing about it.
-    : signInOnlySkipped(primary)
+    : signInOnlySkipped(primary) && !requestedExcluded
       ? "sign_in_unavailable"
       : requestedUnreliable > 0
         ? "requested_tier_unhealthy"
@@ -718,7 +721,7 @@ export function resolveModelWithFallback<M extends RoutingModelBase>(
     // Only a route where every attempted pool was stopped by sign-in may claim
     // sign-in as the cause. A pool emptied by a circuit keeps the reliability
     // wording even when the other pool is empty for lack of credentials.
-    if (signInOnlySkipped(primary, fb)) return "sign_in_unavailable";
+    if (signInOnlySkipped(primary, fb) && !requestedExcluded && !reserveExcluded(fb)) return "sign_in_unavailable";
     if (unreliableSkipped(fb) > 0 || requestedUnreliable > 0) return "all_tiers_exhausted";
     if (scopeRejected(fb) || requestedScopeRejected) return "requested_tier_provider_excluded";
     if (reserveExcluded(primary) || reserveExcluded(fb)) return "requested_tier_excluded";
@@ -802,7 +805,7 @@ function resolveWithExplicitTierBoundary<M extends RoutingModelBase>(
   const anyScopeRejected = attemptedTiers.some(({ resolution }) => scopeRejected(resolution));
   // Every attempted tier was emptied only by sign-in, so the boundary failed
   // for lack of credentials rather than for an unavailable or unreliable tier.
-  const signInOnly = signInOnlySkipped(...attemptedTiers.map(({ resolution }) => resolution));
+  const signInOnly = signInOnlySkipped(...attemptedTiers.map(({ resolution }) => resolution)) && !anyReserveExcluded;
   const primaryExclusion = tierExclusionReason(primary, primaryReserveExcluded);
   const fallbackReason: RoutedModelResolution["fallbackReason"] = selectedAttempt
       ? selectedAttempt.tier === options.requestedTier

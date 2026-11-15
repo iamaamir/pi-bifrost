@@ -3145,10 +3145,6 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               state.lastRegistryRefreshAt = Date.now();
               state.forceRegistryRefresh = false;
               discardAllClassifierPipelines();
-              // The refresh can make a configured provider selectable for the
-              // first time, and the answer cached before it covered the pools
-              // as they were. Ask again before those pools can pick it.
-              turnSignInExclusions = await prepareSignInEligibility(ctx);
             } catch (error) {
               updateRegistryInventoryEvidence(state, ctx);
               if (signal?.aborted) {
@@ -3157,6 +3153,12 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               }
               debug("virtual", "registry.refresh.error", { category: "registry_refresh_failure" });
             }
+            // The refresh can make a configured provider selectable for the
+            // first time, and the answer cached before it covered the pools as
+            // they were. Ask again before those pools can pick it. This runs
+            // outside the refresh catch: a preparation failure must stop the
+            // turn, never become a dispatch with no completed check.
+            turnSignInExclusions = await prepareSignInEligibility(ctx);
           }
           if (!state.enabled || state.pinned) {
             terminalRouteCategory = "disabled_or_pinned";
@@ -3254,18 +3256,20 @@ export default function bifrostExtension(pi: ExtensionAPI) {
               state.lastRegistryRefreshAt = Date.now();
               state.forceRegistryRefresh = false;
               discardAllClassifierPipelines();
-              // An empty pool can become selectable only because of this
-              // refresh, so the pre-refresh sign-in answer cannot cover it.
-              turnSignInExclusions = await prepareSignInEligibility(ctx);
-              routeStart = performance.now();
-              attempt = resolveForTier(ctx, classification.tier, affinity, false, undefined, turnSignInExclusions);
-              routingDurationMs += +(performance.now() - routeStart).toFixed(3);
-              resolved = attempt.resolution;
             } catch (error) {
               updateRegistryInventoryEvidence(state, ctx);
               if (signal?.aborted) throw error;
               debug("virtual", "registry.refresh.error", { category: "registry_refresh_failure" });
             }
+            // An empty pool can become selectable only because of this
+            // refresh, so the pre-refresh sign-in answer cannot cover it. A
+            // failed preparation stops the turn instead of selecting from an
+            // unchecked pool.
+            turnSignInExclusions = await prepareSignInEligibility(ctx);
+            routeStart = performance.now();
+            attempt = resolveForTier(ctx, classification.tier, affinity, false, undefined, turnSignInExclusions);
+            routingDurationMs += +(performance.now() - routeStart).toFixed(3);
+            resolved = attempt.resolution;
           }
           if (state.config.debug?.enabled) {
             debugLifecycle("virtual", "route_decision", ctx.sessionManager, correlationTurn, {

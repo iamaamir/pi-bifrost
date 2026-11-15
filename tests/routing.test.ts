@@ -294,6 +294,36 @@ describe("routing", () => {
       assert.equal(result.fallbackReason, "requested_tier_excluded");
     });
 
+    it("keeps the reserve wording when sign-in emptied the rest of the pool", () => {
+      // A reserve rejection does not appear in `skipped`, so the pool reads as
+      // sign-in-only even though budget also held a candidate back. Calling that
+      // a credential problem sends the user to sign in for a routing choice.
+      const ctx = makeCtx([makeModel("fixture", "a"), makeModel("dead", "one", 1)]);
+      const reservePolicy = policy("policy");
+      const snapshot = publishEconomicObservation(emptyEconomicSnapshot(), reservePolicy, observation).snapshot;
+      const result = resolveConfiguredTier(ctx, "restricted", {
+        models: { restricted: ["fixture/a", "dead/one"] }, strategy: "first",
+      }, undefined, undefined, now, { policy: reservePolicy, snapshot }, undefined, undefined,
+      (model) => model.provider === "dead").resolution;
+      assert.equal(result.selected, undefined);
+      assert.equal(result.primary.economic?.[0]?.evaluation.disposition, "rejected");
+      assert.deepEqual(result.primary.skipped.map(({ key, reason }) => ({ key, reason })), [
+        { key: "dead/one", reason: "sign_in_unavailable" },
+      ]);
+      assert.equal(result.fallbackReason, "requested_tier_excluded");
+
+      // The explicit boundary reaches the same helper for a single tier.
+      const explicit = resolveConfiguredTier(ctx, "restricted", {
+        schemaVersion: 2,
+        models: { restricted: ["fixture/a", "dead/one"] },
+        tierPolicies: { restricted: { fallbackTiers: [] } },
+        strategy: "first",
+      }, undefined, undefined, now, { policy: reservePolicy, snapshot }, undefined, undefined,
+      (model) => model.provider === "dead").resolution;
+      assert.equal(explicit.selected, undefined);
+      assert.equal(explicit.fallbackReason, "requested_tier_excluded");
+    });
+
     it("reports reliability blockers when reserve rejection also removed a candidate", () => {
       const ctx = makeCtx([makeModel("fixture", "a"), makeModel("fixture", "b")]);
       const reservePolicy = policy("policy");
