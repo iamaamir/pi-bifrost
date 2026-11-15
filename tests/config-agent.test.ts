@@ -462,6 +462,35 @@ describe("provider sign-in state", () => {
     }
   });
 
+  it("stops starting sign-in resolutions after the tool call is cancelled", async () => {
+    // A cancelled tool call must not keep waiting on the remaining providers.
+    // The first resolution proves the credential path ran; the second must not
+    // start, and an unasked provider is unknown rather than dead.
+    const controller = new AbortController();
+    const resolved: string[] = [];
+    const harness = freshHarness({
+      signal: controller.signal,
+      providerAuthResult: (provider) => {
+        resolved.push(provider);
+        controller.abort();
+        return { auth: { apiKey: "resolved" } };
+      },
+    });
+    try {
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({
+        operation: "check",
+        candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong", "beta/code"] } },
+      }));
+      assert.deepEqual(resolved, ["alpha"], "no resolution may start after cancellation");
+      const beta = checked.providerAuth.find((entry) => entry.provider === "beta");
+      assert.equal(beta?.state, "unknown", "an unasked provider is not proof of a dead sign-in");
+      assert.match(beta?.reason ?? "", /cancelled before sign-in could be resolved/);
+      assert.equal(checked.writeEligible, true);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("warns when a stored sign-in resolves to nothing", async () => {
     // Pi's getAuth resolves an unusable credential to undefined instead of
     // throwing, so an empty resolution on a stored credential is a dead sign-in.

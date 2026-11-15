@@ -1,4 +1,4 @@
-import { classifyCompiled, compileRules, type CandidateDiscoveryExclusion, type RouteRule, type RoutingModelBase, type RoutedModelResolution, type RoutingStrategy, type SkippedCandidate, type TierResolutionOptions, type UnresolvedCandidatePattern } from "./routing.ts";
+import { classifyCompiled, compileRules, type CandidateDiscoveryExclusion, type CompiledRule, type RouteRule, type RoutingModelBase, type RoutedModelResolution, type RoutingStrategy, type SkippedCandidate, type TierResolutionOptions, type UnresolvedCandidatePattern } from "./routing.ts";
 import { debug, debugMeasure } from "./debug.ts";
 import { CLASSIFIER_BACKEND_IDS, type ClassificationJudgment, type ClassifierOutput, type ClassifierBackend } from "./classifier-backends.ts";
 import type { EconomicCandidateEvaluation } from "./routing.ts";
@@ -372,6 +372,9 @@ export interface ClassificationPipeline {
   /** Rules this pipeline classifies with, so other pre-dispatch steps cannot
    * read a different (fresher or staler) rule file than classification. */
   readonly rules: readonly RouteRule[];
+  /** The rules that survived compilation. A pre-dispatch step that reads raw
+   * rules would act on a pattern classification drops and can never match. */
+  readonly compiledRules: readonly CompiledRule[];
 }
 
 function normalizeJudgment(output: ClassifierOutput, backend: ClassifierBackend): ClassificationJudgment {
@@ -637,5 +640,5 @@ export function createPipeline<MClassifier extends { readonly id: string } = { r
     }
   }
 
-  return { classify, matchRule: (text) => classifyCompiled(text, regexRules), rules: rawRegexRules };
+  return { classify, matchRule: (text) => classifyCompiled(text, regexRules), rules: rawRegexRules, compiledRules: regexRules };
 }
