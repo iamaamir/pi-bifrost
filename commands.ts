@@ -1089,6 +1089,9 @@ async function handleInit(
       },
     });
     uiDone(ctx);
+    // The probe widget must never outlive the probe: every later exit path renders
+    // its feedback in the chat, and a stale progress panel reads as "still probing".
+    if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
     if (probeRun.cancelled || ctx.signal?.aborted) {
       log(ctx, "Init probing was cancelled; no configuration was changed.", "warning");
       return;
@@ -1579,7 +1582,6 @@ async function handleInit(
   // Clear the init widget so it doesn't persist in the TUI.
   if (ctx.hasUI) {
     ctx.ui.setWidget("bifrost-output", []);
-    ctx.ui.setWidget("bifrost-probe", []);
   }
 }
 
