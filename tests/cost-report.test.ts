@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { describe, it } from "node:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import bifrostExtension from "../index.ts";
-import { formatCostReport, getCostReportData } from "../cost-report.ts";
+import { getCostReportData } from "../cost-report.ts";
+import { formatCostText } from "../ui/cost-view.ts";
 
 const usage = (input: number, cost: number) => ({ input, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: input + 9, cost: { input: cost, output: 0, cacheRead: 0, cacheWrite: 0, total: cost } });
 
@@ -50,6 +51,7 @@ describe("session cost report", () => {
 
   it("separates response, compaction, and auxiliary records without content leakage", () => {
     const entries = [
+      { type: "message", message: { role: "user", content: "PROMPT-CANARY" } },
       { type: "message", message: { role: "assistant", provider: "p", model: "alias", responseModel: "openai/gpt-4", content: [{ type: "toolCall", name: "secret-tool", arguments: { canary: "TOOL-ARGS-CANARY" } }], usage: usage(10, 0.5) } },
       { type: "message", message: { role: "assistant", provider: "p", model: "openai/gpt-4", usage: usage(5, 0.25) } },
       { type: "compaction", usage: usage(7, 0.1), summary: "PROMPT-CANARY" },
@@ -57,37 +59,42 @@ describe("session cost report", () => {
       { type: "message", message: { role: "toolResult", usage: usage(1, 0.05), content: "TOOL-ARGS-CANARY" } },
       { type: "branch_summary", usage: usage(2, 0.02), content: "PROMPT-CANARY" },
     ] as any;
-    const report = formatCostReport(entries).join("\n");
-    assert.match(report, /assistant p\/openai\/gpt-4: recorded input 15/);
-    assert.match(report, /compaction \(model unspecified\): recorded input 7/);
-    assert.match(report, /whole session: recorded input 1024/);
-    assert.match(report, /compaction \(model unspecified\).*\$0\.100000 reported/);
-    assert.match(report, /auxiliary usage entry: recorded input 999/);
-    assert.match(report, /tool result: recorded input 1/);
-    assert.match(report, /branch summary \(model unspecified\): recorded input 2/);
+    const data = getCostReportData(entries, entries);
+    const report = formatCostText(data).join("\n");
+    assert.equal(data.allRetained.totals.input, 1024);
+    assert.match(report, /p\/openai\/gpt-4 · \$0\.750000/);
+    assert.match(report, /Input 15 · Output 4/);
+    assert.match(report, /Other: compaction \(model unspecified\) · \$0\.100000/);
+    assert.match(report, /Other: auxiliary usage entry/);
+    assert.match(report, /Other: tool result/);
+    assert.match(report, /Other: branch summary \(model unspecified\)/);
     assert.doesNotMatch(report, /CANARY|secret-tool|cache_warm/);
   });
 
   it("marks malformed usage and zero cost without implying free use", () => {
-    const report = formatCostReport([
+    const entries = [
+      { type: "message", message: { role: "user", content: "test" } },
       { type: "message", message: { role: "assistant", provider: "p", model: "m", usage: { input: 1, output: NaN, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } } },
       { type: "message", message: { role: "assistant", provider: "p", model: "n", usage: usage(0, 0) } },
       { type: "message", message: { role: "assistant", provider: "p", model: "missing" } },
       null,
-    ] as any).join("\n");
-    assert.match(report, /partial; malformed\/missing usage.*1 incomplete fields\/records/);
-    assert.match(report, /cost unavailable/);
-    assert.match(report, /assistant p\/n: recorded input 0, output 2, cache read 3, cache write 4; \$0\.000000 reported/);
-    assert.match(report, /assistant p\/missing: partial; malformed\/missing usage.*1 incomplete fields\/records/);
-    assert.match(report, /unreadable session entries: 1/);
-    assert.match(report, /Zero reported cost is not proof of free usage/);
+    ] as any;
+    const data = getCostReportData(entries, entries);
+    const report = formatCostText(data).join("\n");
+    assert.match(report, /p\/m · \$0\.000000[\s\S]*?Input 1 · Output 0 \(partial\)/);
+    assert.match(report, /p\/n · \$0\.000000/);
+    assert.match(report, /p\/missing · unavailable/);
+    assert.equal(data.activeBranch.malformed, 1);
+    assert.match(report, /Zero does not prove usage is free/);
 
-    const incompleteWholeSession = formatCostReport([
+    const incompleteEntries = [
       { type: "message", message: { role: "assistant", provider: "p", model: "m", usage: usage(1, 0.1) } }, null,
-    ] as any)[1];
-    assert.match(incompleteWholeSession, /^whole session: partial; malformed\/missing usage/);
-    assert.match(incompleteWholeSession, /cost unavailable/);
-    assert.match(incompleteWholeSession, /1 incomplete fields\/records/);
+    ] as any;
+    const incomplete = getCostReportData(incompleteEntries, incompleteEntries);
+    assert.equal(incomplete.allRetained.totals.usageValid, false);
+    assert.equal(incomplete.allRetained.totals.costValid, false);
+    assert.equal(incomplete.allRetained.totals.incomplete, 1);
+    assert.match(formatCostText(incomplete).join("\n"), /Current branch: \$0\.100000 \+ unknown/);
   });
 
   it("registers and runs the real /bifrost cost command repeatedly", async () => {

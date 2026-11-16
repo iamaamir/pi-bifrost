@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdtempSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync, readFileSync } from "node:fs";
+import { copyFileSync, cpSync, mkdtempSync, mkdirSync, readdirSync, rmSync, symlinkSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -283,6 +283,7 @@ describe("activation cancellation acceptance", { timeout: 120_000 }, () => {
     for (const file of readdirSync(ROOT)) {
       if (file.endsWith(".ts") || file === "schema.json") copyFileSync(join(ROOT, file), join(copyDir, file));
     }
+    cpSync(join(ROOT, "ui"), join(copyDir, "ui"), { recursive: true });
     writeFileSync(join(copyDir, "index.ts"), mutantSource);
     symlinkSync(join(ROOT, "node_modules"), join(copyDir, "node_modules"));
     const mutantExtension = (await import(pathToFileURL(join(copyDir, "index.ts")).href + `?fault=${Date.now()}`)).default;

@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -610,6 +610,7 @@ describe("cache lifecycle acceptance", { timeout: 600_000, concurrency: 1 }, () 
       for (const file of readdirSync(ROOT)) {
         if (file.endsWith(".ts") || file === "schema.json" || file === "package.json") copyFileSync(join(ROOT, file), join(copy, file));
       }
+      cpSync(join(ROOT, "ui"), join(copy, "ui"), { recursive: true });
       symlinkSync(join(ROOT, "node_modules"), join(copy, "node_modules"));
       writeFileSync(join(copy, "cache.ts"), mutated);
 
