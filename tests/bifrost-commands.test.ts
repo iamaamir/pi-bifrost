@@ -1970,6 +1970,43 @@ describe("command aliases", () => {
     }
   });
 
+  it("clears the probe widget when init exits after probing", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-widget-clear-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = join(tempDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      mkdirSync(agentDir);
+      // No probe cache: init must run a real probe so the bifrost-probe widget gets set.
+      const { ctx, calls } = makeCtx([makeModel("fixture", "chat")]);
+      (ctx as any).modelRegistry.streamSimple = (model: { provider: string; id: string; api: string }) => ({
+        result: async () => ({
+          role: "assistant", api: model.api, provider: model.provider, model: model.id,
+          content: [{ type: "text", text: "ok" }], usage: { totalTokens: 1 }, stopReason: "stop", timestamp: Date.now(),
+        }),
+      });
+      (ctx as any).ui.confirm = async () => {
+        // Inherited config appears while the dialog is open: init aborts after probing.
+        writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({ models: { quick: ["manual/keep"] } }));
+        return true;
+      };
+      await createCommandRouter(makeState() as never)("init", ctx as never);
+      const probeWidgetCalls = calls.filter((call) => call.kind === "widget" && String(call.value).startsWith("bifrost-probe:"));
+      assert.ok(probeWidgetCalls.length > 0, "probe widget was never set");
+      const last = probeWidgetCalls[probeWidgetCalls.length - 1]!;
+      assert.equal(last.lines?.length, 0, "probe widget was not cleared after probing");
+      assert.ok(calls.some((call) => String(call.value).includes("Inherited config changed")));
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("shows the selected init destination in the confirmation and respects cancellation", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-confirm-"));
     const previousCwd = process.cwd();
