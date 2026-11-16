@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { indexedColor, visibleWidth } from "@earendil-works/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { getCostReportData } from "../cost-report.ts";
 import { CostView, formatCostText } from "../ui/cost-view.ts";
 
@@ -15,9 +15,9 @@ it("shows branch totals and expands mixed-model requests without exposing conten
   const data = getCostReportData(branch, retained);
   let closed = false;
   const size = { columns: 80, rows: 30 };
-  const view = new CostView(data, () => size, { fg: (_color, value) => value, colors: { selectedBg: indexedColor(0) } as any, style: (value) => `\x1b[48;5;0m${value}\x1b[49m` }, () => { closed = true; }, () => {});
+  const view = new CostView(data, () => size, { fg: (_color, value) => value }, () => { closed = true; }, () => {});
   const framed = view.render(70);
-  assert(framed.every((line) => visibleWidth(line) === 70 && line.startsWith("\x1b[48;5;0m") && line.endsWith("\x1b[49m")));
+  assert(framed.every((line) => visibleWidth(line) === 70));
   assert.match(framed[0]!, /╭─+╮/);
   assert.match(framed.at(-1)!, /╰─+╯/);
   let screen = view.render(70).join("\n");

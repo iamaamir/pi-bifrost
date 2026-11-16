@@ -107,7 +107,7 @@ describe("session cost report", () => {
       setEditorText: () => {},
       custom: async (factory: (...args: any[]) => any, options: unknown) => {
         overlayOptions = options;
-        viewer = factory({ terminal: { columns: 120, rows: 30 }, requestRender() {} }, { fg: (_color: string, text: string) => text, colors: { selectedBg: {} }, style: (text: string) => text }, {}, () => {});
+        viewer = factory({ terminal: { columns: 120, rows: 30 }, requestRender() {} }, { fg: (_color: string, text: string) => text }, {}, () => {});
       },
     };
     const ctx = { cwd, mode: "rpc", hasUI: false, model: {}, modelRegistry: { getAvailable: () => [], find: () => undefined, getProviderAuthStatus: () => ({ configured: false }), refresh: async () => ({ refreshed: [], errors: [] }) }, sessionManager: { getEntries: () => recorded, getBranch: () => recorded }, ui } as unknown as ExtensionContext;

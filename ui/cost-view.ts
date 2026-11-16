@@ -5,7 +5,7 @@ import type { CostReportData, CostTotals } from "../cost-report.ts";
 import { wrapApprovalLines } from "../config-approval.ts";
 import { renderPanel } from "./panel.ts";
 
-type CostTheme = Pick<ExtensionContext["ui"]["theme"], "fg" | "style" | "colors">;
+type CostTheme = Pick<ExtensionContext["ui"]["theme"], "fg">;
 
 function cost(usage: CostTotals): string {
   if (!usage.count || usage.count === usage.unknownCost) return "unavailable";
@@ -87,7 +87,7 @@ export class CostView {
 
   render(width: number): string[] {
     const contentWidth = Math.max(0, width - 4);
-    return renderPanel(this.renderContent(contentWidth), width, this.theme, (text) => this.theme.style(text, { bg: this.theme.colors.selectedBg }));
+    return renderPanel(this.renderContent(contentWidth), width, this.theme);
   }
 
   private renderContent(width: number): string[] {

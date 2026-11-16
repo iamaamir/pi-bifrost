@@ -22,23 +22,6 @@ spec.loader.exec_module(ui)
 
 
 class ViewportScreen(ui.Screen):
-    def apply_sgr(self, codes):
-        indexed_bg = None
-        i = 0
-        while i < len(codes):
-            if codes[i] in (0, 49):
-                indexed_bg = None
-            elif codes[i] == 48 and i + 2 < len(codes) and codes[i + 1] == 5:
-                indexed_bg = (codes[i + 2],) * 3
-                i += 2
-            elif codes[i] == 48 and i + 4 < len(codes) and codes[i + 1] == 2:
-                indexed_bg = None
-                i += 4
-            i += 1
-        super().apply_sgr(codes)
-        if indexed_bg is not None:
-            self.bg = indexed_bg
-
     def put(self, ch):
         if ch in ("\n", "\r", "\b", "\t"):
             return super().put(ch)
@@ -93,11 +76,6 @@ def run():
         assert bottom is not None, f"{label}: bottom frame corners missing\n{parsed.lines()}"
         assert all(parsed.rows[row][left].ch == "│" and parsed.rows[row][right].ch == "│" for row in range(top + 1, bottom)), f"{label}: side borders are broken\n{parsed.lines()}"
         assert all(parsed.rows[top][col].ch == "─" and parsed.rows[bottom][col].ch == "─" for col in range(left + 1, right)), f"{label}: horizontal borders are broken\n{parsed.lines()}"
-
-        background = parsed.rows[top][left].bg
-        outside = parsed.rows[top][left - 1].bg if left else None
-        assert background != outside, f"{label}: overlay background is not opaque across its frame"
-        assert all(parsed.rows[row][col].bg == background for row in range(top, bottom + 1) for col in range(left, right + 1)), f"{label}: overlay background is not solid across its full width"
 
     def wait(predicate, label):
         deadline = time.monotonic() + 20
