@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isReportFor, shouldClearReports } from "../mutation/run.mjs";
+import { isReportFor, staleReportsFor } from "../mutation/run.mjs";
 import {
   ROOT,
   bindingExclusions,
@@ -928,11 +928,33 @@ test("an unsharded report satisfies a one-shard plan", () => {
   assert.doesNotMatch(markdown, /Missing shards/u);
 });
 
-test("an explicit --report does not clear a sibling shard", () => {
-  // Two local invocations run one shard each, each naming its own report. If the
-  // second cleared the target it would delete the first shard's results, and the
-  // merged score would cover only half the mutants.
-  assert.equal(shouldClearReports({}), true, "a normal run owns the whole report set");
-  assert.equal(shouldClearReports({ report: null }), true);
-  assert.equal(shouldClearReports({ report: "cache.ts.shard1.json" }), false, "an operator-owned file is left alone");
+test("clearing keeps sibling shards but drops this run's own stale output", () => {
+  // Two local invocations run one shard each. Deleting the whole target would
+  // lose the first shard; deleting nothing would let a failed rerun's previous
+  // file be read as a completed shard.
+  assert.deepEqual(staleReportsFor({}), { scope: "target" }, "a normal run owns the whole set");
+  assert.deepEqual(staleReportsFor({ report: null }), { scope: "target" });
+  assert.deepEqual(
+    staleReportsFor({ report: "cache.ts.shard1.json" }),
+    { scope: "own", name: "cache.ts.shard1.json" },
+    "only this run's own file goes",
+  );
+  // A path, not a bare name, must still scope to the basename the runner writes.
+  assert.deepEqual(staleReportsFor({ report: "reports/mutation/cache.ts.shard1.json" }), {
+    scope: "own",
+    name: "cache.ts.shard1.json",
+  });
+});
+
+test("the summary line prints the tolerance the gate used", () => {
+  // A saved override of 25 accepted 20 timeouts. Printing the default of 10 would
+  // make an accepted run look like it failed its own threshold.
+  const line = summaryLines({
+    modules: [{ module: "cache.ts", honestScore: 80, Killed: 80, Survived: 20, Timeout: 20 }],
+    aggregate: { total: 100, Timeout: 20, honestScore: 80 },
+    timeoutToleranceOverride: 25,
+    missingTargets: [],
+  })[0];
+  assert.match(line, /tolerance=25/u);
+  assert.doesNotMatch(line, /tolerance=10/u);
 });
