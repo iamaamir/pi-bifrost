@@ -324,6 +324,36 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
 
+  it("blocks when an inherited pool is handwritten because its receipt is invalid", async () => {
+    const env = fixture(port, ["healthy"]);
+    const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+    const receiptPath = join(env.home, ".pi", "agent", "bifrost-reconcile-ownership.json");
+    const original = Buffer.from(JSON.stringify({ models: { quick: ["fake/credits-exhausted"] } }) + "\n");
+    writeFileSync(globalPath, original);
+    // Missing tombstones makes the whole receipt invalid; its coverage claim must not count.
+    writeFileSync(receiptPath, JSON.stringify({ version: 1, sources: { "pi-models-v1-fake": { generated: { quick: ["fake/credits-exhausted"] } } } }));
+    try {
+      const result = await runInit({ ...env, args: "--write" });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.violations, "");
+      assert.match(result.stdout + result.stderr, /inherited.*quick.*no configuration.*changed/i);
+      assert.deepEqual(readFileSync(globalPath), original);
+      assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
+    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+  });
+
+  it("saves a project config when an inherited receipt is unreadable but the config has no pools", async () => {
+    const env = fixture(port, ["healthy"]);
+    writeFileSync(join(env.home, ".pi", "agent", "bifrost-reconcile-ownership.json"), Buffer.from([0xff, 0xfe]));
+    try {
+      const result = await runInit({ ...env, args: "--write" });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.violations, "");
+      assert.doesNotMatch(result.stdout + result.stderr, /could not safely read inherited config/i);
+      assert.ok(existsSync(join(env.work, ".pi", "bifrost.json")));
+    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+  });
+
   for (const selected of ["default", "default-global-only", "global"]) {
     it(`saves init to the ${selected} source without changing other layers`, async () => {
       requests = [];

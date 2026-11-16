@@ -57,6 +57,7 @@ import {
 } from "./reconciliation-command.ts";
 import {
   applyReconciliationTransaction,
+  assertOwnershipPayload,
   createReconciliationOwnershipReceipt,
   recoverReconciliationTransaction,
   ReconciliationStoreError,
@@ -520,6 +521,12 @@ function readInheritedConfigSnapshot(path: string): string | null {
   return text;
 }
 
+/** An unreadable receipt provides no ownership coverage; every pool stays protected as handwritten. */
+function readInheritedReceiptSnapshot(path: string): string | null {
+  try { return readInheritedConfigSnapshot(path); }
+  catch { return null; }
+}
+
 interface InheritedTierPool {
   readonly pool: readonly string[];
   /** Model keys this layer's ownership receipt generated; everything else is handwritten. */
@@ -554,11 +561,12 @@ function mergeTierKeys(byTier: Map<string, Set<string>>, tier: string, keys: unk
   byTier.set(tier, existing);
 }
 
-/** Receipt-generated model keys per tier; an unreadable receipt protects every pool as handwritten. */
+/** Receipt-generated model keys per tier; an unreadable or invalid receipt protects every pool as handwritten. */
 function receiptGeneratedKeys(text: string | null): ReadonlyMap<string, ReadonlySet<string>> {
   const byTier = new Map<string, Set<string>>();
   if (text === null) return byTier;
   try {
+    assertOwnershipPayload(Buffer.from(text, "utf8"));
     const receipt = JSON.parse(text) as { sources?: unknown };
     if (!isJsonObject(receipt.sources)) return byTier;
     for (const source of Object.values(receipt.sources)) {
@@ -575,23 +583,37 @@ function parseInheritedConfig(text: string): Record<string, unknown> {
   return parsed;
 }
 
-function readInheritedLayerPools(layer: ReconciliationConfigSource): { path: string; text: string | null; tiers: ReadonlyMap<string, InheritedTierPool> } {
+function readInheritedLayerPools(layer: ReconciliationConfigSource): {
+  path: string;
+  text: string | null;
+  receiptSnapshot: InheritedPoolSnapshot | null;
+  tiers: ReadonlyMap<string, InheritedTierPool>;
+} {
   const paths = reconciliationPaths(layer);
   const text = readInheritedConfigSnapshot(paths.configPath);
   const parsed = text === null ? {} : parseInheritedConfig(text);
-  const receiptKeys = receiptGeneratedKeys(readInheritedConfigSnapshot(paths.ownershipPath));
   const rawPools = isJsonObject(parsed.models) ? parsed.models : {};
+  // No pools to protect, so the receipt cannot change the decision and is not read or tracked.
+  const hasPools = Object.keys(rawPools).length > 0;
+  const receiptText = hasPools ? readInheritedReceiptSnapshot(paths.ownershipPath) : null;
+  const receiptKeys = receiptGeneratedKeys(receiptText);
   const tiers = new Map(Object.entries(rawPools).map(([tier, raw]) => [tier, {
     pool: normalizeModelPool(raw),
     receiptGenerated: receiptKeys.get(tier) ?? new Set<string>(),
   }]));
-  return { path: paths.configPath, text, tiers };
+  return {
+    path: paths.configPath,
+    text,
+    receiptSnapshot: hasPools ? { path: paths.ownershipPath, text: receiptText } : null,
+    tiers,
+  };
 }
 
 function readInheritedPools(layers: readonly ReconciliationConfigSource[]): InheritedPools {
   const layerPools = layers.map(readInheritedLayerPools);
   return {
-    snapshots: layerPools.map(({ path, text }) => ({ path, text })),
+    snapshots: layerPools.flatMap(({ path, text, receiptSnapshot }) =>
+      receiptSnapshot ? [{ path, text }, receiptSnapshot] : [{ path, text }]),
     tierNames: new Set(layerPools.flatMap(({ tiers }) => [...tiers.keys()])),
     effective: new Map(layerPools.flatMap(({ tiers }) => [...tiers])),
   };
