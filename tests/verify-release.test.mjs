@@ -211,6 +211,29 @@ test("a stale replay baseline fails the preflight before any gate and names the 
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("production preflight validates the replay baseline before host tooling and before any gate", async () => {
+  const root = repository();
+  try {
+    writeIndex(root, `${readFileSync(REPO_INDEX, "utf8")}\n// changed startup message\n`);
+    const sourceBefore = readFileSync(join(root, "index.ts"), "utf8");
+    // No checkPreflight override: this is the real preflight(). The fixture root
+    // has no node_modules, so reaching the installed-tool checks would fail with
+    // a different message; the baseline error proves the production wiring ran.
+    const result = await withFixtureEnv(() => runVerification({
+      root,
+      execute: async () => assert.fail("release gates must not run after a stale replay baseline"),
+    }));
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.gates.length, 1, "only the preflight is recorded when the baseline is stale");
+    assert.equal(result.gates[0].id, "preflight");
+    assert.equal(result.gates[0].exitCode, 1);
+    const log = readFileSync(join(root, result.gates[0].logPath), "utf8");
+    assert.match(log, /G03 replay fault-proof baseline is stale/u);
+    assert.doesNotMatch(log, /agent-tui is missing|Pinned Pi is missing/u);
+    assert.equal(readFileSync(join(root, "index.ts"), "utf8"), sourceBefore, "the baseline check must not rewrite the source");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test("the replay baseline check fails closed when index.ts cannot be read", () => {
   const root = repository();
   try {

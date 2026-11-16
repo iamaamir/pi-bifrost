@@ -6,7 +6,8 @@
 // and tests/integration/reliability-v2-auto.test.mjs to the production guards
 // in index.ts.
 //
-// GUARD INVENTORY (index.ts, candidate baseline SHA-256 declared below):
+// GUARD INVENTORY (index.ts; the pinned baseline hash lives in
+// ./replay-baseline.mjs, with the release preflight that enforces it):
 //   - isSideEffectFreeAllowanceFailure — proves a failed attempt had no
 //     output/tool results/queued work before allowance recovery.
 //   - autoBoundaryStillActive — confirms the original user boundary is still
@@ -64,12 +65,12 @@ import { join } from "node:path";
 import { processGroupExists } from "../../scripts/acceptance/core.mjs";
 import { closeTracking, cleanupFailure, detachOwnedHandles, spawnOwned } from "./child-auto-inline-harness.mjs";
 
-export const REPLAY_GUARD_BASELINE_SHA256 = "822123bab361524636307052a007e7e7ab686bf186195d4c41f93a95baea70bb";
-export const REPLAY_GUARD_FUNCTIONS = [
-  "isSideEffectFreeAllowanceFailure",
-  "allowanceRetryBoundaryStillSafe",
-  "autoBoundaryStillActive",
-];
+// Baseline metadata lives in ./replay-baseline.mjs because the release
+// preflight imports it and must not load this module's process orchestration.
+// Imported for local use (the proof requires the pinned hash) and re-exported
+// so every existing caller keeps its import path.
+import { REPLAY_GUARD_BASELINE_SHA256, REPLAY_GUARD_FUNCTIONS } from "./replay-baseline.mjs";
+export { REPLAY_GUARD_BASELINE_SHA256, REPLAY_GUARD_FUNCTIONS };
 
 // Each PROVEN pair has an executable fault reaching its exact named assertion.
 // A compound fault covers one semantic claim across redundant enforcement;
