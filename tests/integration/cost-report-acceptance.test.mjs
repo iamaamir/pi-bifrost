@@ -42,7 +42,7 @@ describe("session cost command with real Pi", () => {
       const afterGeneration = await readStats(server.port);
       assert.equal((afterGeneration.attempts.chat ?? 0) - (beforeCost.attempts.chat ?? 0), 1);
       const bifrostFilesBefore = snapshotBifrostFiles([fixture.work, fixture.home]);
-      const report = await rpc.prompt("/bifrost cost", { expectedStderr: "[bifrost]   No baseline is available to determine savings." });
+      const report = await rpc.prompt("/bifrost cost", { expectedStderr: "[bifrost]   Savings are unknown without a baseline." });
       const combined = `${report.stderr}\n${report.response?.data?.content ?? ""}`;
       assert.match(report.stderr, /Current branch: \$\d/);
       assert.match(report.stderr, /fake\/chat/);

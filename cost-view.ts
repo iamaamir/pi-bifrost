@@ -25,11 +25,11 @@ function modelRow(id: string, model: string, usage: CostTotals): ExpandableRow {
 
 function about(): ExpandableRow {
   return { id: "about", label: "About these numbers", children: [
-    { id: "about-scope", label: "Requests are derived from user-message boundaries; ambiguous activity may not map to a request." },
-    { id: "about-history", label: "Session history can include copied forks and alternate branches." },
-    { id: "about-estimate", label: "Pi-reported cost is an estimate, not a bill; zero does not prove free usage." },
-    { id: "about-routing", label: "Routing reasons are not recorded here; classifier and probe costs may be missing." },
-    { id: "about-savings", label: "No baseline is available to determine savings." },
+    { id: "about-scope", label: "Requests follow user messages. Some activity can fall outside them." },
+    { id: "about-history", label: "History can include copied forks and other branches." },
+    { id: "about-estimate", label: "Costs are estimates, not bills. Zero does not prove usage is free." },
+    { id: "about-routing", label: "Routing reasons are unavailable. Classifier and probe costs can be missing." },
+    { id: "about-savings", label: "Savings are unknown without a baseline." },
   ] };
 }
 
