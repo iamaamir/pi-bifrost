@@ -16,6 +16,7 @@ it("shows branch totals and expands mixed-model requests without exposing conten
   const size = { columns: 80, rows: 30 };
   const view = new CostView(data, () => size, { fg: (_color, value) => value }, () => { closed = true; }, () => {});
   let screen = view.render(70).join("\n");
+  assert.match(screen, /Session usage · Pi-recorded estimates/);
   assert.match(screen, /Current branch\s+\$0\.020000 known \+ unknown/);
   assert.match(screen, /All retained\s+\$0\.050000 known \+ unknown/);
   assert.doesNotMatch(screen, /p\/a|PROMPT-CANARY/);
@@ -31,7 +32,9 @@ it("shows branch totals and expands mixed-model requests without exposing conten
   assert.match(view.render(28).join("\n"), /\[Models\]/);
   view.handleInput("\x1b");
   assert.equal(closed, true);
-  assert.doesNotMatch(formatCostText(data).join("\n"), /PROMPT-CANARY/);
+  const text = formatCostText(data).join("\n");
+  assert.match(text, /Session usage · Pi-recorded estimates/);
+  assert.doesNotMatch(text, /PROMPT-CANARY/);
 });
 
 it("does not report an invented zero subtotal when every price is missing", () => {

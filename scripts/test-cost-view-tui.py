@@ -75,7 +75,7 @@ def run():
     try:
         wait(lambda text: "Pi" in text, "Pi startup")
         ui.send(master, "/cost-test\r")
-        initial = wait(lambda text: "Bifrost cost" in text, "cost overlay")
+        initial = wait(lambda text: "Session usage" in text, "cost overlay")
         assert "Current branch" in initial and "$0.001000" in initial, initial
         ui.send(master, "\r")
         expanded = wait(lambda text: "fake/healthy" in text, "Enter expands request model details")
@@ -84,7 +84,7 @@ def run():
         models = wait(lambda text: "[Models]" in text, "Tab switches to models")
         assert "healthy" in models, models
         ui.send(master, "\x1b")
-        wait(lambda text: "Bifrost cost" not in text, "Esc closes overlay")
+        wait(lambda text: "Session usage" not in text, "Esc closes overlay")
 
         width, height = 24, 10
         ui.set_winsize(master, height, width)

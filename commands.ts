@@ -2887,7 +2887,7 @@ export function createCommandRouter(
     exact("cost", async (_, ctx) => {
       const entries = ctx.sessionManager.getEntries();
       const data = getCostReportData(ctx.sessionManager.getBranch(), entries);
-      if (!await showCostView(ctx, data)) await uiResult(ctx, "Bifrost cost", formatCostText(data));
+      if (!await showCostView(ctx, data)) await uiResult(ctx, "Session usage", formatCostText(data));
     }),
     exact("on", (_, ctx) => {
       state.onManualControl?.(ctx.sessionManager, "on");

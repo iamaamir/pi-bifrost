@@ -51,7 +51,7 @@ function modelRows(data: CostReportData): ExpandableRow[] {
 }
 
 export function formatCostText(data: CostReportData): string[] {
-  const lines = ["Bifrost cost · Pi-recorded estimates", `Current branch: ${cost(data.activeBranch.totals)}${data.activeBranch.malformed ? " + unknown" : ""}`, `All retained: ${cost(data.allRetained.totals)}${data.allRetained.totals.incomplete && !data.allRetained.totals.unknownCost ? " · partial" : ""}`, "", "Requests (derived from user-message boundaries)"];
+  const lines = ["Session usage · Pi-recorded estimates", `Current branch: ${cost(data.activeBranch.totals)}${data.activeBranch.malformed ? " + unknown" : ""}`, `All retained: ${cost(data.allRetained.totals)}${data.allRetained.totals.incomplete && !data.allRetained.totals.unknownCost ? " · partial" : ""}`, "", "Requests (derived from user-message boundaries)"];
   const append = (rows: readonly ExpandableRow[], depth = 0) => {
     for (const row of rows) {
       lines.push(`${"  ".repeat(depth)}${row.label}${row.detail ? ` · ${row.detail}` : ""}`);
@@ -87,7 +87,7 @@ export class CostView {
     if (width < 20 || this.size().rows < 9) return [fit("Resize terminal · Esc closes")];
     const selected = this.view === "requests" ? this.requests : this.models;
     const partial = this.data.activeBranch.malformed ? " + unknown" : "";
-    const header = ["Bifrost cost · Pi-recorded estimates", `Current branch  ${cost(this.data.activeBranch.totals)}${partial}`, `All retained    ${cost(this.data.allRetained.totals)}${this.data.allRetained.totals.incomplete && !this.data.allRetained.totals.unknownCost ? " · partial" : ""}`, this.view === "requests" ? "[Requests]  Models" : " Requests  [Models]"].flatMap((line) => wrapApprovalLines(line, width));
+    const header = ["Session usage · Pi-recorded estimates", `Current branch  ${cost(this.data.activeBranch.totals)}${partial}`, `All retained    ${cost(this.data.allRetained.totals)}${this.data.allRetained.totals.incomplete && !this.data.allRetained.totals.unknownCost ? " · partial" : ""}`, this.view === "requests" ? "[Requests]  Models" : " Requests  [Models]"].flatMap((line) => wrapApprovalLines(line, width));
     const footer = wrapApprovalLines("↑↓ move · Enter expand · Tab view · Esc close", width);
     this.bodyHeight = Math.floor(this.size().rows * 0.8) - header.length - footer.length - 2;
     if (this.bodyHeight < 1) return [fit("Resize terminal · Esc closes")];
