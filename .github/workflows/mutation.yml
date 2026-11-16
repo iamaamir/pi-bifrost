@@ -51,11 +51,6 @@ on:
         required: false
         default: true
         type: boolean
-      upload_reports:
-        description: "Upload the raw Stryker JSON and survivor extract as artifacts"
-        required: false
-        default: true
-        type: boolean
 
 permissions:
   contents: read
@@ -75,6 +70,8 @@ jobs:
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.resolve.outputs.matrix }}
+      targets: ${{ steps.resolve.outputs.targets }}
+      shard_counts: ${{ steps.resolve.outputs.shard_counts }}
       concurrency: ${{ steps.resolve.outputs.concurrency }}
       leg_timeout: ${{ steps.resolve.outputs.leg_timeout }}
       timeout_tolerance: ${{ steps.resolve.outputs.timeout_tolerance }}
@@ -155,9 +152,9 @@ jobs:
           done
           if [ -f stryker.log ]; then cp stryker.log "mutation-out/$leg/stryker.log"; fi
       - name: Upload this leg's report
-        # Automatic runs (schedule, branch verification) always publish; a manual
-        # dispatch may opt out.
-        if: always() && (github.event_name != 'workflow_dispatch' || inputs.upload_reports)
+        # Always upload: this is the transport `summarise` downloads. Dropping it
+        # makes the measurement unreadable (every module becomes "missing").
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # The shard index is part of the name so the shards of one module are
@@ -194,13 +191,23 @@ jobs:
       - name: Render the summary
         env:
           TIMEOUT_TOLERANCE: ${{ inputs.timeout_tolerance }}
+          # The plan is the source of truth for what this run was asked to
+          # measure. Without it a single-module dispatch looks like four missing
+          # modules, and a lost shard looks like a complete module.
+          PLAN_TARGETS: ${{ needs.plan.outputs.targets }}
+          PLAN_SHARDS: ${{ needs.plan.outputs.shard_counts }}
         run: |
           mkdir -p mutation-out
+          node mutation/workflow.mjs plan-cli > mutation-out/plan-args.txt
+          selected="$(sed -n 1p mutation-out/plan-args.txt)"
+          shards="$(sed -n 2p mutation-out/plan-args.txt)"
           node mutation/report.mjs --dir mutation-reports \
             --out mutation-out/summary.md \
             --json mutation-out/summary.json \
             --survivors mutation-out/survivors.jsonl \
             --annotations mutation-out/annotations.txt \
+            --targets "$selected" \
+            --shards-per-target "$shards" \
             --timeout-tolerance "${TIMEOUT_TOLERANCE:-}"
           cat mutation-out/summary.md >> "$GITHUB_STEP_SUMMARY"
           node mutation/workflow.mjs summarise mutation-out/summary.json
@@ -214,9 +221,9 @@ jobs:
             cat mutation-out/annotations.txt
           fi
       - name: Upload the merged summary and survivor extract
-        # Automatic runs (schedule, branch verification) always publish; a manual
-        # dispatch may opt out.
-        if: always() && (github.event_name != 'workflow_dispatch' || inputs.upload_reports)
+        # Always upload: the merged summary and survivor extract are the primary
+        # published outputs of the measurement.
+        if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutation-summary-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}

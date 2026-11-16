@@ -354,6 +354,12 @@ export function unusableReasons(data) {
   if (Array.isArray(data?.missingTargets) && data.missingTargets.length > 0) {
     reasons.push(`missing module reports: ${data.missingTargets.join(", ")}`);
   }
+  // A module that reports at all can still be missing a shard. Without this the
+  // merged score covers a subset of the planned mutants while looking complete.
+  if (Array.isArray(data?.missingShards) && data.missingShards.length > 0) {
+    const detail = data.missingShards.map(({ module, shard }) => `${module} shard ${shard}`).join(", ");
+    reasons.push(`missing module shards: ${detail}; the score would cover only part of the planned mutants`);
+  }
   const timeouts = data?.aggregate?.Timeout ?? 0;
   // A dispatch may override the calibrated tolerance; blank keeps the default.
   const tolerance = data?.timeoutToleranceOverride ?? timeoutTolerance(data?.aggregate?.total ?? 0);

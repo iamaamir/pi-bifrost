@@ -29,32 +29,35 @@ the thresholds. `TIME_BUDGET` in [`mutation/config.mjs`](../mutation/config.mjs)
 holds the knobs, and the plan refuses to start when the arithmetic does not fit:
 
 ```
-cap 60m | reserve 12m | CI factor 1.8x | hard/leg 48m | target/leg 30m
+cap 60m | reserve 12m | CI factor 3.0x | hard/leg 48m | target/leg 30m
 
 cache.ts                1.0m  shards 1 ->  1.0m/leg
 classifier-semantics.ts 1.0m  shards 1 ->  1.0m/leg
 reliability.ts          1.0m  shards 1 ->  1.0m/leg
 reliability-v2.ts       4.8m  shards 1 ->  4.8m/leg
-routing.ts             22.4m  shards 1 -> 22.4m/leg   (TAP: production engine)
+routing.ts             22.5m  shards 1 -> 22.5m/leg   (TAP: production engine)
 
 projected wall clock: 34.5m of 60m cap
 ```
 
-Sharding is currently **unused**: at 14.9 minutes the whole matrix fits with room
-to spare, so every module is a single leg. The machinery stays because a future
-module may outgrow the budget, and the plan switches to shards automatically when
-it does.
+(Real `node mutation/workflow.mjs plan` output: `projected wall clock: 34.5m of the 60m cap (per-leg bound 48m)`; the module costs above are derived from `estimatedMinutes()` / `legEstimateMinutes()` in `mutation/config.mjs` and `mutation/targets.mjs` with the CI slowdown applied.)
+
+Sharding is currently **unused**: the plan projects 34.5 minutes wall clock, so
+every module is a single leg. The machinery stays because a future module may
+outgrow the budget, and the plan switches to shards automatically when it does.
 
 Three details that make it a real cap rather than a wish:
 
 - **Legs run in parallel**, so wall clock is the slowest leg plus fixed overhead,
-  not the sum. Nine legs across five modules.
+  not the sum. The current plan is **5 legs across 5 modules** (one leg per
+  module, no sharding).
 - **`ciSlowdownFactor` (3×)** accounts for GitHub's 4 cores versus the 10-core
   host the numbers were measured on. Measured on the first real dispatch, after
   subtracting per-job setup: `routing.ts` 17.4 min against 6.6 locally (2.7×) and
   `reliability-v2.ts` 6.9 against 1.8 (3.9×).
-- **Each leg gets its own job timeout** from the plan. A single global ceiling
-  either cuts a slow shard short or lets one stuck leg burn the window.
+- **Each leg gets its own job timeout** from the plan (currently 48 minutes, the
+  per-leg hard allowance). A single global ceiling either cuts a slow shard short
+  or lets one stuck leg burn the window.
 
 If a module cannot fit even at `maxShards`, the plan fails in seconds with a
 message naming the module and the arithmetic. It never silently drops mutants.
@@ -99,10 +102,10 @@ a no-op there, and a `node:fs` mock cannot be undone — so the test injected no
 fault at all and its "tolerated" assertions passed for the wrong reason. It now
 injects the fault by editing a private source copy, which works on both runtimes.
 
-The `tap` runner and the `RUNNER_OVERRIDES` / `BUN_INCOMPATIBLE_TESTS` mechanism
-remain, unused, because the next runner incompatibility will need them. A test
-asserts that any future override names a listed blocker, and that no blocker is
-listed without a target using it.
+`RUNNER_OVERRIDES` in `mutation/config.mjs` carries the reason a module deviates
+from the default runner; today it has exactly one entry: `routing.ts` uses `tap`
+because its verdict depends on the production regex engine. Four modules use
+Bun. A test asserts that any future override names a reason.
 
 Three properties hold for both runners, and all three were measured:
 
@@ -164,11 +167,13 @@ config file to tune:
 `mutation/config.mjs` is the only file to edit for a normal change:
 
 - `TARGETS` — which modules are measured, each one's `timeoutFactor` /
-  `timeoutMS`, and its measured `expectedMinutes` (which drives shard planning).
-- `TEST_RUNNER` — `tap` (default) or `command`. See the section above; this is
-  the setting that decides everything else.
-- `TEST_RUNNER` / `RUNNER_OVERRIDES` / `BUN_INCOMPATIBLE_TESTS` — the runner
-  choice, and the reason a module deviates from it.
+  `timeoutMS`, and its measured `secondsPerMutant` (with `MUTANT_ESTIMATE`, this
+  drives the cost/shard planning).
+- `TEST_RUNNER` — the default runner (`bun`). See the section above; this is the
+  setting that decides everything else.
+- `RUNNER_OVERRIDES` — per-target runner overrides with a stated reason (today:
+  `routing.ts` -> `tap`, because its verdict depends on the production regex
+  engine). Four modules use Bun.
 - `TAP_NODE_ARGS` — how `node:test` is invoked for the TAP runner.
 - `STRYKER_OPTIONS` — `checkers`, `thresholds`, reporters, `disableTypeChecks`.
 - `SHARDING` — overlap width, max shards, and the cost threshold that triggers it.
@@ -204,7 +209,7 @@ Stryker's score is `(Killed + Timeout) / (Killed + Timeout + Survived + NoCovera
 Counting a timeout as detected means a mutant that hangs the suite raises the
 score. The summary therefore reports both:
 
-- **Honest score** = `Killed / (Killed + Survived)`.
+- **Honest score** = `Killed / (Killed + Survived + NoCoverage)`.
 - **Stryker score** = Stryker's own definition, shown for comparison.
 
 The nightly job fails when a run is **unusable**, never when the score is low:
@@ -247,7 +252,10 @@ defaults reproduce the nightly run exactly:
 | `concurrency` | `4` | Stryker workers per leg, bounded 1–16 |
 | `timeout_tolerance` | blank | Max timed-out mutants before the run is unusable; blank uses `max(10, 2%)` |
 | `fail_on_unusable` | `true` | Fail the job on missing reports, excess timeouts, or shard conflicts |
-| `upload_reports` | `true` | Upload the raw JSON and `survivors.jsonl` |
+
+Leg reports and the merged summary/survivor extract are always uploaded as
+artifacts: the summariser downloads the per-leg reports, so artifact upload is
+the transport, not an optional retention knob.
 
 Inputs are validated in the `plan` job, so a typo fails in seconds instead of
 after an hour.
@@ -272,6 +280,12 @@ A first dispatch is worth doing anyway, because it calibrates
 `ciSlowdownFactor` against the real runner.
 
 ## Local runs
+
+Prerequisites: Node (24 in CI) and **Bun 1.4.0**. Four of five modules run under
+`bun test`, which is the default runner, so `bun` must be on `PATH`; the workflow
+installs it with `oven-sh/setup-bun`. `routing.ts` uses the TAP runner (Node) and
+does not need Bun, but there is no per-invocation flag to pick a runner — the
+choice lives in `RUNNER_OVERRIDES` in `mutation/config.mjs`.
 
 ```bash
 npm ci
@@ -326,10 +340,11 @@ enables it.
 | `reliability-v2.ts` | 2447 | 1m35s | 1 |
 | `routing.ts` | 989 | 1m16s | 1 |
 
-The runner change removed the reason to shard: the slowest module is 1m35s, so
-every module is one leg and the whole matrix projects to 14.9 minutes. Sharding
-stays configured for a module that outgrows the budget; the plan shards it
-automatically when one does.
+The runner change removed the reason to shard: the slowest leg is planned at
+22.5 minutes (`routing.ts` on TAP, CI factor applied), so every module is one leg
+and the whole matrix projects to 34.5 minutes wall clock (`node mutation/workflow.mjs plan`).
+Sharding stays configured for a module that outgrows the budget; the plan shards
+it automatically when one does.
 
 ## Measured results
 
@@ -350,7 +365,7 @@ honest. Three modules matched local mutant for mutant; `reliability-v2.ts` moved
 by 5 mutants and `routing.ts` by 5, which is the documented stochastic behaviour
 rather than a machine-dependent result.
 
-Honest score is `killed / (killed + survived + no-coverage)`. Note the column the
+Honest score is `Killed / (Killed + Survived + NoCoverage)`. Note the column the
 command runner could not produce: `NoCoverage` was always 0 there because coverage
 was never measured, so its score silently counted unreached mutants as if they did
 not exist. Those gaps are now visible, and they are large: 307 of 2,447 mutants in

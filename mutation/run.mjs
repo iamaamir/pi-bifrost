@@ -13,7 +13,7 @@
 // Reports land in reports/mutation/. Summarise with:
 //   node mutation/report.mjs --dir reports/mutation --out /tmp/mutation.md
 import { spawnSync } from "node:child_process";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { SHARDING, TARGETS, estimatedMinutes } from "./config.mjs";
 import { ROOT, bindingFor, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
@@ -87,6 +87,18 @@ function inventory() {
   }
 }
 
+/**
+ * Whether a file in the report directory is one of `target`'s own reports.
+ * Exact-name and exact-suffix only: `cache.ts` must never match
+ * `cache-classifier.ts.json`, because deleting another module's report would
+ * silently shrink that module's measured population.
+ */
+export function isReportFor(entry, target) {
+  if (entry === `${target}.json`) return true;
+  const escaped = target.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return new RegExp(`^${escaped}\\.shard\\d+\\.json$`, "u").test(entry);
+}
+
 function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.list) {
@@ -106,8 +118,39 @@ function main() {
     throw new Error("--shards applies to exactly one target");
   }
 
-  mkdirSync(join(ROOT, "reports", "mutation"), { recursive: true });
+  const reportsDir = join(ROOT, "reports", "mutation");
+  mkdirSync(reportsDir, { recursive: true });
   const failed = [];
+
+  // A previous run of the same target can leave `<target>.json` and/or
+  // `<target>.shardN.json` behind. The summariser merges every `*.json` in the
+  // directory, so stale files would be counted alongside the new measurement
+  // (e.g. an unsharded report reappearing after a sharded rerun). Clearing is
+  // per target, per measurement, so a multi-target run keeps each earlier
+  // target's fresh output while still discarding that target's own stale files.
+  const clearedTargets = new Set();
+  function clearPreviousReports(target) {
+    if (clearedTargets.has(target)) return;
+    clearedTargets.add(target);
+    let entries;
+    try {
+      entries = readdirSync(reportsDir);
+    } catch (error) {
+      console.error(`warning: could not read ${reportsDir} to clear previous reports for ${target}: ${error.message}`);
+      return;
+    }
+    for (const entry of entries) {
+      if (!isReportFor(entry, target)) continue;
+      try {
+        unlinkSync(join(reportsDir, entry));
+      } catch (error) {
+        // A stale report left in place is a silent-wrong-answer risk, but
+        // aborting here would discard every other target's measurement too.
+        console.error(`warning: could not remove stale report ${entry} for ${target}: ${error.message}`);
+      }
+    }
+  }
+
   // One run per shard when sharding, otherwise one per target. Each shard writes
   // its own report so the summariser can merge them back together.
   const runs = targets.flatMap((target) => {
@@ -125,6 +168,7 @@ function main() {
   });
 
   for (const run of runs) {
+    clearPreviousReports(run.target);
     console.log(`\n=== ${run.label} (${bindingFor(run.target).length} bound test files) ===`);
     const args = ["stryker", "run"];
     if (options.concurrency) args.push("--concurrency", options.concurrency);

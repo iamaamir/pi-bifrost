@@ -9,9 +9,11 @@
 //   - a missing matrix leg is a failure, not a pass.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isReportFor } from "../mutation/run.mjs";
 import {
   ROOT,
   bindingExclusions,
@@ -55,7 +57,7 @@ import {
   resolveTimeoutTolerance,
   summaryLines,
 } from "../mutation/workflow.mjs";
-import { annotationLines, readReports, renderSummary, summarise, survivorRows } from "../mutation/report.mjs";
+import { annotationLines, mergeShardReports, readReports, renderSummary, summarise, survivorRows } from "../mutation/report.mjs";
 
 const workflow = readFileSync(new URL("../.github/workflows/mutation.yml", import.meta.url), "utf8");
 const verificationWorkflow = readFileSync(new URL("../.github/workflows/verification.yml", import.meta.url), "utf8");
@@ -172,7 +174,7 @@ test("dispatch inputs are bounded, so a typo cannot start an unreasonable run", 
 
 test("the workflow exposes every knob as a manual dispatch input", () => {
   const dispatch = workflow.split("workflow_dispatch:")[1].split("permissions:")[0];
-  for (const input of ["target", "shards", "concurrency", "timeout_tolerance", "fail_on_unusable", "upload_reports"]) {
+  for (const input of ["target", "shards", "concurrency", "timeout_tolerance", "fail_on_unusable"]) {
     assert.match(dispatch, new RegExp(`^ {6}${input}:$`, "mu"), `${input} must be a dispatch input`);
   }
   // Defaults reproduce the nightly run exactly.
@@ -180,7 +182,9 @@ test("the workflow exposes every knob as a manual dispatch input", () => {
   assert.match(dispatch, /^ {6}concurrency:\n(?:.*\n)*?^ {8}default: "4"$/mu);
   assert.match(dispatch, /^ {6}timeout_tolerance:\n(?:.*\n)*?^ {8}default: ""$/mu);
   assert.match(dispatch, /^ {6}fail_on_unusable:\n(?:.*\n)*?^ {8}default: true$/mu);
-  assert.match(dispatch, /^ {6}upload_reports:\n(?:.*\n)*?^ {8}default: true$/mu);
+  // Artifact upload is transport, not a retention knob: the summariser downloads
+  // the per-leg reports, so a switch that skips the upload loses the measurement.
+  assert.doesNotMatch(dispatch, /^ {6}upload_reports:$/mu, "no knob may disable report transport");
 });
 
 test("adjacent shards overlap so no mutant straddles a boundary", () => {
@@ -539,7 +543,12 @@ test("verification keeps no mutation job, so the two cannot drift apart", () => 
 });
 
 test("the tooling resolves the repository root and finds the test directory", () => {
-  assert.ok(ROOT.includes("pi-bifrost"), "root must resolve inside the repository, worktree or not");
+  // Check the checkout's contents, not its directory name: a clone at
+  // `/home/user/repo` is a valid checkout, and asserting on the name would fail
+  // the suite there for no reason.
+  for (const entry of ["package.json", "mutation/config.mjs", "tests"]) {
+    assert.ok(existsSync(join(ROOT, entry)), `ROOT must contain ${entry}`);
+  }
   assert.ok(directConsumers().get("cache.ts").includes("tests/cache.test.ts"));
 });
 
@@ -765,4 +774,156 @@ test("the cwd preload is loaded before the runner hook", () => {
     assert.ok(guard.startsWith("/"), "the guard needs an absolute path inside the sandbox");
     assert.ok(args.indexOf(guard) < args.indexOf("{{hookFile}}"), "the guard must register first");
   }
+});
+
+test("a run that selects one module is not reported as four missing modules", () => {
+  // A dispatch may narrow the target set. The reporter must judge completeness
+  // against what was planned, or a successful single-module run fails the gate.
+  const reports = [{ module: "cache.ts", mutants: [{ status: "Killed" }], summary: summarise([{ status: "Killed" }]) }];
+  const narrowed = renderSummary({ reports, expectedTargets: ["cache.ts"] });
+  assert.doesNotMatch(narrowed, /Missing reports/u, "a selected module that reported is not missing");
+
+  const everything = renderSummary({ reports, expectedTargets: targetNames() });
+  assert.match(everything, /Missing reports/u, "an unselected module is still missing when the whole set is expected");
+});
+
+test("a module that is missing a planned shard is not treated as complete", () => {
+  // A two-shard module whose second artifact never arrived would otherwise merge
+  // silently and score over a subset of the planned mutants.
+  const reports = [
+    { module: "cache.ts", shardsSeen: [0], mutants: [{ status: "Killed" }], summary: summarise([{ status: "Killed" }]) },
+  ];
+  const markdown = renderSummary({ reports, expectedTargets: ["cache.ts"], shardsPerTarget: new Map([["cache.ts", 2]]) });
+  assert.match(markdown, /Missing shards/u, "the summary must name the missing shard");
+  assert.match(markdown, /shard 1/u);
+
+  // The same reports with the planned count satisfied must not raise the flag.
+  const complete = renderSummary({
+    reports: [{ ...reports[0], shardsSeen: [0, 1] }],
+    expectedTargets: ["cache.ts"],
+    shardsPerTarget: new Map([["cache.ts", 2]]),
+  });
+  assert.doesNotMatch(complete, /Missing shards/u);
+
+  const reasons = unusableReasons({
+    modules: [{ module: "cache.ts" }],
+    aggregate: { total: 1, Timeout: 0, RuntimeError: 0, CompileError: 0, shardConflicts: 0 },
+    missingTargets: [],
+    missingShards: [{ module: "cache.ts", shard: 1 }],
+  });
+  assert.match(reasons.join(" "), /missing module shards: cache\.ts shard 1/u);
+  assert.match(reasons.join(" "), /only part of the planned mutants/u);
+});
+
+test("a saved tolerance override is honoured when a summary is rechecked", () => {
+  // The override must be stored where the gate reads it, or re-checking a saved
+  // summary silently falls back to the default tolerance.
+  const withOverride = unusableReasons({
+    modules: [{ module: "cache.ts" }],
+    aggregate: { total: 100, Timeout: 20, RuntimeError: 0, CompileError: 0, shardConflicts: 0 },
+    missingTargets: [],
+    timeoutToleranceOverride: 25,
+  });
+  assert.deepEqual(withOverride, [], "20 timeouts inside an override of 25 is usable");
+
+  const withoutOverride = unusableReasons({
+    modules: [{ module: "cache.ts" }],
+    aggregate: { total: 100, Timeout: 20, RuntimeError: 0, CompileError: 0, shardConflicts: 0 },
+    missingTargets: [],
+  });
+  assert.match(withoutOverride.join(" "), /timed-out mutants exceed the tolerance/u, "the default tolerance rejects it");
+});
+
+test("the tolerance override reaches the gate through the written payload", () => {
+  // Guards the write location, not just the read. A summary re-checked later has
+  // no environment override, so a misplaced field silently changes the verdict.
+  const directory = mkdtempSync(join(tmpdir(), "mutation-tolerance-test-"));
+  try {
+    const report = {
+      schemaVersion: "1.0",
+      framework: { name: "StrykerJS", version: "10.0.0" },
+      thresholds: { high: 0, low: 0, break: null },
+      files: {
+        "/repo/cache.ts": {
+          mutants: Array.from({ length: 100 }, (_, index) => ({
+            id: String(index),
+            mutatorName: "ConditionalExpression",
+            replacement: "false",
+            // 20 timeouts, which the default tolerance of 10 rejects.
+            status: index < 20 ? "Timeout" : "Killed",
+            // A distinct location per mutant: identity is (mutator, location,
+            // replacement), so sharing one would make them look like a single
+            // mutant with contradictory statuses.
+            location: { start: { line: index + 1, column: 1 }, end: { line: index + 1, column: 5 } },
+          })),
+        },
+      },
+    };
+    writeFileSync(join(directory, "cache.json"), JSON.stringify(report));
+    const output = join(directory, "summary.json");
+    execFileSync(process.execPath, [
+      "mutation/report.mjs",
+      "--dir", directory,
+      "--json", output,
+      "--targets", "cache.ts",
+      "--timeout-tolerance", "25",
+    ]);
+    const payload = JSON.parse(readFileSync(output, "utf8"));
+    assert.equal(payload.timeoutToleranceOverride, 25, "the override must be at the top level");
+    assert.equal(payload.aggregate.timeoutToleranceOverride, undefined, "not nested under aggregate");
+    assert.deepEqual(unusableReasons(payload), [], "the recorded override must satisfy the gate");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("the projection follows the shard count that will actually run", () => {
+  // An explicit count smaller than the automatic suggestion makes a leg slower.
+  // Projecting from the suggestion would let an over-budget plan through.
+  const narrow = planMatrix({ requested: "routing.ts", shards: "1" });
+  const wide = planMatrix({ requested: "routing.ts", shards: "2" });
+  assert.equal(narrow.include.length, 1);
+  assert.equal(wide.include.length, 2);
+  assert.ok(
+    narrow.projectedMinutes > wide.projectedMinutes,
+    `one shard must project slower than two (got ${narrow.projectedMinutes} vs ${wide.projectedMinutes})`,
+  );
+});
+
+test("transport cannot be disabled, because the summary depends on it", () => {
+  // The leg upload is the only way a report reaches the summariser. A retention
+  // switch is fine; one that can skip the upload turns a good run into "all
+  // modules missing".
+  const uploads = [...workflow.matchAll(/name: (Upload this leg's report|Upload the merged summary and survivor extract)[\s\S]*?^ {8}if: (.*)$/gmu)];
+  assert.ok(uploads.length >= 2, "both upload steps must exist");
+  for (const [, step, condition] of uploads) {
+    assert.doesNotMatch(condition, /upload_reports/u, `${step} must not be gated by a transport switch`);
+    assert.match(condition, /always\(\)/u, `${step} must upload even when a leg failed`);
+  }
+});
+
+test("clearing stale reports never touches another module", () => {
+  // A previous run's file is merged into the next score, so it must go; the
+  // neighbour's file must stay, or its measured population silently shrinks.
+  assert.ok(isReportFor("cache.ts.json", "cache.ts"));
+  assert.ok(isReportFor("cache.ts.shard0.json", "cache.ts"));
+  assert.ok(isReportFor("cache.ts.shard12.json", "cache.ts"));
+  assert.ok(!isReportFor("cache-classifier.ts.json", "cache.ts"));
+  assert.ok(!isReportFor("cache.ts.bak.json", "cache.ts"));
+  assert.ok(!isReportFor("routing.ts.json", "cache.ts"));
+  assert.ok(!isReportFor("cache.ts.shardx.json", "cache.ts"));
+  // The regex metacharacter in the module name is literal, not a wildcard.
+  assert.ok(!isReportFor("cacheXts.json", "cache.ts"));
+});
+
+test("an unsharded report satisfies a one-shard plan", () => {
+  // `<target>.json` is the whole module, which is shard 0 of 1. Treating it as
+  // "no shard seen" made every single-shard target look like it lost its only
+  // artifact, so a perfectly good nightly run would fail its own gate.
+  const reports = [{ module: "cache.ts", mutants: [{ status: "Killed" }], summary: summarise([{ status: "Killed" }]) }];
+  const merged = mergeShardReports(reports);
+  assert.deepEqual(merged[0].shardsSeen, [0]);
+
+  const markdown = renderSummary({ reports: merged, expectedTargets: ["cache.ts"], shardsPerTarget: new Map([["cache.ts", 1]]) });
+  assert.doesNotMatch(markdown, /Missing shards/u);
 });
