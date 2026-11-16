@@ -29,14 +29,14 @@
  *   classifier-semantics.ts 157 mutants     3s  -> 0.019 s/mutant
  *   reliability.ts          352 mutants    14s  -> 0.040 s/mutant
  *   reliability-v2.ts      2447 mutants  1m35s  -> 0.039 s/mutant
- *   routing.ts              989 mutants  1m16s  -> 0.077 s/mutant
+ *   routing.ts             1000 mutants  7m29s  -> 0.449 s/mutant (TAP: production engine)
  */
 export const TARGETS = {
   "cache.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.013 },
   "classifier-semantics.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.019 },
   "reliability.ts": { timeoutFactor: 4, timeoutMS: 30_000, secondsPerMutant: 0.04 },
   "reliability-v2.ts": { timeoutFactor: 2, timeoutMS: 30_000, secondsPerMutant: 0.039 },
-  "routing.ts": { timeoutFactor: 4, timeoutMS: 30_000, secondsPerMutant: 0.077 },
+  "routing.ts": { timeoutFactor: 4, timeoutMS: 30_000, secondsPerMutant: 0.449 },
 };
 
 /**
@@ -102,7 +102,7 @@ export const MUTANT_ESTIMATE = {
   "classifier-semantics.ts": 157,
   "reliability.ts": 352,
   "reliability-v2.ts": 2447,
-  "routing.ts": 989,
+  "routing.ts": 1000,
 };
 
 /**
@@ -163,30 +163,27 @@ export const TEST_RUNNER = "bun";
 export const BUN_RUNNER_PLUGIN = "@hughescr/stryker-bun-runner";
 
 /**
- * Bound test files that Bun cannot run, with the reason. A target binding one of
- * these must use `tap`, because Bun's dry run aborts on a failing test.
- *
- * **Currently empty.** `tests/reliability-migration.test.ts` used to be listed
- * here: it asserted Node's `fsync`-on-lock-file failure by patching `node:fs`,
- * which Bun cannot do (`syncBuiltinESMExports()` is a no-op there, and a
- * `node:fs` mock cannot be undone). That test now injects the fault by editing a
- * private source copy instead, so it runs on both runtimes.
- *
- * The list and the override mechanism are kept because the next runner
- * incompatibility will need them, and a test asserts that every override names a
- * file from this list — an unexplained override fails rather than becoming
- * folklore.
- */
-export const BUN_INCOMPATIBLE_TESTS = {};
-
-/**
  * Per-target runner override. Absent means `TEST_RUNNER`.
  *
- * Empty today: every target can use the Bun runner. Set an entry only when a
- * bound test genuinely cannot run under Bun, and name the blocking file in
- * `BUN_INCOMPATIBLE_TESTS` with the reason.
+ * An entry carries the reason it exists, and a test requires one, so an override
+ * cannot become unexplained folklore. Two kinds of reason are legitimate:
+ *
+ * - a bound test that Bun cannot run at all, which aborts Bun's dry run;
+ * - a bound test whose *verdict* differs between engines, where only the
+ *   production engine gives the answer production would give.
+ *
+ * `tests/reliability-migration.test.ts` used to be the first kind: it injected a
+ * fault by patching `node:fs`, which Bun cannot do (`syncBuiltinESMExports()` is
+ * a no-op there, and a `node:fs` mock cannot be undone). It now injects the fault
+ * by editing a private source copy, so it runs on both runtimes.
  */
-export const RUNNER_OVERRIDES = {};
+export const RUNNER_OVERRIDES = {
+  "routing.ts": {
+    runner: "tap",
+    reason:
+      "its rule tests deliberately let a catastrophic regex run in-process when a mutant bypasses the backtracking probe, and V8 and JavaScriptCore backtrack at different speeds (measured 475ms vs 66ms for ^(a+)+$). A verdict on that code is only faithful under the production engine, so this module runs on Node.",
+  },
+};
 
 /**
  * Node arguments for the TAP runner. `{{hookFile}}` injects Stryker's coverage
