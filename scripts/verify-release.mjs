@@ -111,7 +111,7 @@ export function checkReplayBaseline(root) {
       + "Release preflight never rewrites the pin.",
     );
   }
-  return `G03 replay fault-proof baseline matches index.ts (sha256 ${hash.slice(0, 12)}, ${REPLAY_GUARD_FUNCTIONS.length} guards).`;
+  return `G03 replay fault-proof baseline matches index.ts (sha256 ${hash.slice(0, 12)}).`;
 }
 
 function preflight(root) {
