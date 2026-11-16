@@ -24,18 +24,18 @@
  * cost is per-mutant process startup, not CPU. That is why the budget is met by
  * **sharding across machines**, not by adding workers locally.
  *
- * Measured (see the runner comparison below for the full picture):
- *   cache.ts                229 mutants  Bun     4s  -> 0.018 s/mutant
- *   routing.ts              989 mutants  Bun  1m16s  -> 0.077 s/mutant
- *   reliability-v2.ts      2447 mutants  TAP        -> 1.26 s/mutant (227-mutant slice)
- * `classifier-semantics.ts` and `reliability.ts` are estimates; the first run
- * replaces them.
+ * Measured with the Bun runner on a 10-core host, full unsharded runs:
+ *   cache.ts                229 mutants     3s  -> 0.013 s/mutant
+ *   classifier-semantics.ts 157 mutants     3s  -> 0.019 s/mutant
+ *   reliability.ts          352 mutants    14s  -> 0.040 s/mutant
+ *   reliability-v2.ts      2447 mutants  1m35s  -> 0.039 s/mutant
+ *   routing.ts              989 mutants  1m16s  -> 0.077 s/mutant
  */
 export const TARGETS = {
-  "cache.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.018 },
-  "classifier-semantics.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.077 },
-  "reliability.ts": { timeoutFactor: 4, timeoutMS: 30_000, secondsPerMutant: 1.2 },
-  "reliability-v2.ts": { timeoutFactor: 2, timeoutMS: 30_000, secondsPerMutant: 1.26 },
+  "cache.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.013 },
+  "classifier-semantics.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.019 },
+  "reliability.ts": { timeoutFactor: 4, timeoutMS: 30_000, secondsPerMutant: 0.04 },
+  "reliability-v2.ts": { timeoutFactor: 2, timeoutMS: 30_000, secondsPerMutant: 0.039 },
   "routing.ts": { timeoutFactor: 4, timeoutMS: 30_000, secondsPerMutant: 0.077 },
 };
 
@@ -100,7 +100,7 @@ export function legMinutes() {
 export const MUTANT_ESTIMATE = {
   "cache.ts": 229,
   "classifier-semantics.ts": 157,
-  "reliability.ts": 900,
+  "reliability.ts": 352,
   "reliability-v2.ts": 2447,
   "routing.ts": 989,
 };
@@ -166,27 +166,27 @@ export const BUN_RUNNER_PLUGIN = "@hughescr/stryker-bun-runner";
  * Bound test files that Bun cannot run, with the reason. A target binding one of
  * these must use `tap`, because Bun's dry run aborts on a failing test.
  *
- * Keeping the list explicit means a new override can be checked rather than
- * trusted: a test asserts that every `RUNNER_OVERRIDES` entry actually touches
- * one of these files, so an unexplained override is a failure rather than
+ * **Currently empty.** `tests/reliability-migration.test.ts` used to be listed
+ * here: it asserted Node's `fsync`-on-lock-file failure by patching `node:fs`,
+ * which Bun cannot do (`syncBuiltinESMExports()` is a no-op there, and a
+ * `node:fs` mock cannot be undone). That test now injects the fault by editing a
+ * private source copy instead, so it runs on both runtimes.
+ *
+ * The list and the override mechanism are kept because the next runner
+ * incompatibility will need them, and a test asserts that every override names a
+ * file from this list — an unexplained override fails rather than becoming
  * folklore.
  */
-export const BUN_INCOMPATIBLE_TESTS = {
-  "tests/reliability-migration.test.ts":
-    "asserts Node's fsync-on-lock-file failure semantics, which Bun 1.4.0 does not reproduce",
-};
+export const BUN_INCOMPATIBLE_TESTS = {};
 
 /**
  * Per-target runner override. Absent means `TEST_RUNNER`.
  *
- * Only set where `TEST_RUNNER` cannot be used; the reason is recorded in
- * `BUN_INCOMPATIBLE_TESTS` and checked by a test.
+ * Empty today: every target can use the Bun runner. Set an entry only when a
+ * bound test genuinely cannot run under Bun, and name the blocking file in
+ * `BUN_INCOMPATIBLE_TESTS` with the reason.
  */
-export const RUNNER_OVERRIDES = {
-  // `tests/reliability-migration.test.ts` is bound to both reliability targets.
-  "reliability.ts": "tap",
-  "reliability-v2.ts": "tap",
-};
+export const RUNNER_OVERRIDES = {};
 
 /**
  * Node arguments for the TAP runner. `{{hookFile}}` injects Stryker's coverage

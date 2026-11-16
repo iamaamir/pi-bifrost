@@ -31,14 +31,19 @@ holds the knobs, and the plan refuses to start when the arithmetic does not fit:
 ```
 cap 60m | reserve 12m | CI factor 1.8x | hard/leg 48m | target/leg 30m
 
-cache.ts                3.2m  shards 1 ->  3.2m/leg
-classifier-semantics.ts 1.0m  shards 1 ->  1.0m/leg
-reliability.ts         32.4m  shards 2 -> 16.2m/leg
-reliability-v2.ts      92.5m  shards 4 -> 23.1m/leg
-routing.ts              9.8m  shards 1 ->  9.8m/leg
+cache.ts                1.00m  shards 1 -> 1.00m/leg
+classifier-semantics.ts 1.00m  shards 1 -> 1.00m/leg
+reliability.ts          1.00m  shards 1 -> 1.00m/leg
+reliability-v2.ts       2.86m  shards 1 -> 2.86m/leg
+routing.ts              2.28m  shards 1 -> 2.28m/leg
 
-projected wall clock: 35.1m of 60m cap
+projected wall clock: 14.9m of 60m cap
 ```
+
+Sharding is currently **unused**: at 14.9 minutes the whole matrix fits with room
+to spare, so every module is a single leg. The machinery stays because a future
+module may outgrow the budget, and the plan switches to shards automatically when
+it does.
 
 Three details that make it a real cap rather than a wish:
 
@@ -58,29 +63,30 @@ message naming the module and the arithmetic. It never silently drops mutants.
 Stryker's `testRunner` decides everything downstream. Three were measured on the
 same mutants, and both viable ones produce the same kills.
 
-| Runner | Coverage | `cache.ts` (229) | `routing.ts` (989) | Incremental |
-| --- | --- | --- | --- | --- |
-| `command` | `off` (unmeasured) | 4m38s | 19m20s | reuses blindly |
-| `tap` | per **file** | 27s | 5m31s | correct |
-| `bun` | per **test** | **3s** | **1m16s** | correct |
+| Runner | Coverage | `cache.ts` (229) | `routing.ts` (989) | `reliability-v2.ts` (2447) | Incremental |
+| --- | --- | --- | --- | --- | --- |
+| `command` | `off` (unmeasured) | 4m38s | 19m20s | ~92m (projected) | reuses blindly |
+| `tap` | per **file** | 27s | 5m31s | ~23m/shard × 4 | correct |
+| `bun` | per **test** | **3s** | **1m16s** | **1m35s** | correct |
 
 **Bun is the default.** `@hughescr/stryker-bun-runner` runs `bun test`, which
-executes this repository's `node:test` files unchanged — verified: 29 of 30 bound
-test files pass under Bun 1.4.0. Because coverage is attributed per individual
+executes this repository's `node:test` files unchanged — verified: all 30 bound test
+files pass under Bun 1.4.0. Because coverage is attributed per individual
 test, a mutant runs only the tests that reach it (~8 per mutant) instead of whole
 files, so a module bound to one heavy file no longer pays that file's runtime
 per mutant. That is the entire speed difference.
 
-**`tap` stays for two modules.** `tests/reliability-migration.test.ts` asserts
-Node's `fsync`-on-lock-file failure semantics, which Bun does not reproduce, so
-one test fails and Bun's dry run aborts. It is bound to both `reliability.ts` and
-`reliability-v2.ts`, so those use TAP. The exception is encoded in
-`RUNNER_OVERRIDES` with the blocking file named in `BUN_INCOMPATIBLE_TESTS`, and
-a test asserts every override actually touches a listed file — an unexplained
-override fails rather than becoming folklore.
+**Every module now uses Bun.** One bound test used to block it:
+`tests/reliability-migration.test.ts` asserted Node's `fsync`-on-lock-file
+failure by patching `node:fs`. Bun cannot do that — `syncBuiltinESMExports()` is
+a no-op there, and a `node:fs` mock cannot be undone — so the test injected no
+fault at all and its "tolerated" assertions passed for the wrong reason. It now
+injects the fault by editing a private source copy, which works on both runtimes.
 
-Excluding the file instead would be worse: it silently stops measuring the
-mutants that file kills. Speed is never bought by measuring less.
+The `tap` runner and the `RUNNER_OVERRIDES` / `BUN_INCOMPATIBLE_TESTS` mechanism
+remain, unused, because the next runner incompatibility will need them. A test
+asserts that any future override names a listed blocker, and that no blocker is
+listed without a target using it.
 
 Three properties hold for both runners, and all three were measured:
 
@@ -277,39 +283,40 @@ stored result blindly (228 of 229 after a test edit). With the TAP runner it is
 correct, but it is still not an authoritative measurement, so the nightly never
 enables it.
 
-| Module | Mutants | Measured (TAP, concurrency 6) | Auto shards |
+| Module | Mutants | Measured (Bun, concurrency 6) | Shards |
 | --- | --- | --- | --- |
-| `cache.ts` | 229 | 1m45s | 1 |
-| `classifier-semantics.ts` | 157 | 25s | 1 |
-| `routing.ts` | 989 | 5m31s | 1 |
-| `reliability.ts` | ~900 | not yet measured | 1 |
-| `reliability-v2.ts` | 2447 | see below | 1 |
+| `cache.ts` | 229 | 3s | 1 |
+| `classifier-semantics.ts` | 157 | 3s | 1 |
+| `reliability.ts` | 352 | 14s | 1 |
+| `reliability-v2.ts` | 2447 | 1m35s | 1 |
+| `routing.ts` | 989 | 1m16s | 1 |
 
-The TAP runner removed most of the reason to shard: `routing.ts` went from 19m20s
-to 5m31s and `reliability-v2.ts` is measured in the same section below. Sharding
-stays available for a module that still outgrows the job bound.
+The runner change removed the reason to shard: the slowest module is 1m35s, so
+every module is one leg and the whole matrix projects to 14.9 minutes. Sharding
+stays configured for a module that outgrows the budget; the plan shards it
+automatically when one does.
 
 ## Measured results
 
 Derived binding, TAP runner, 10-core macOS host, Node v24.14.0, Stryker 10.0.0:
 
-| Module | Mutants | Killed | Survived | NoCoverage | Timeout | Honest score |
-| --- | --- | --- | --- | --- | --- | --- |
-| `cache.ts` | 229 | 172 | 48 | 9 | 0 | 75.11% |
-| `classifier-semantics.ts` | 157 | 85 | 26 | 46 | 0 | 54.14% |
-| `routing.ts` | 989 | 680 | 207 | 95 | 7 | 69.46% |
-| `reliability-v2.ts` | 2447 | — | — | — | — | measured below |
+| Module | Mutants | Killed | Survived | NoCoverage | Timeout | Honest score | Wall clock |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `cache.ts` | 229 | 172 | 48 | 9 | 0 | 75.11% | 3s |
+| `classifier-semantics.ts` | 157 | 85 | 26 | 46 | 0 | 54.14% | 3s |
+| `reliability.ts` | 352 | 251 | 93 | 8 | 0 | 71.31% | 14s |
+| `reliability-v2.ts` | 2447 | 1431 | 708 | 307 | 1 | 58.52% | 1m35s |
+| `routing.ts` | 989 | 680 | 207 | 95 | 7 | 69.46% | 1m16s |
+| **All** | **4174** | **2619** | **1082** | **465** | **8** | **62.87%** | **1m35s per leg (parallel)** |
 
-Honest score is `killed / (killed + survived + no-coverage)`. Note the columns the
+Honest score is `killed / (killed + survived + no-coverage)`. Note the column the
 command runner could not produce: `NoCoverage` was always 0 there because coverage
-was never measured, so its score silently counted unreached mutants as if they
-did not exist. Routing's 95 uncovered mutants are real gaps — 9.6% of its mutant
-population sits on lines no bound test reaches.
+was never measured, so its score silently counted unreached mutants as if they did
+not exist. Those gaps are now visible, and they are large: 307 of 2,447 mutants in
+`reliability-v2.ts` (12.5%) sit on lines no bound test reaches.
 
 For comparison, the same mutant populations under the old hand-written binding
-scored 64.19% and 26.75% for the first two rows. `reliability.ts` is in the target
-set but was not measured on this host; the first nightly run establishes its
-baseline.
+scored 64.19% and 26.75% for the first two rows.
 
 ## Sandbox notes
 
@@ -335,17 +342,20 @@ Stryker copies the tree into `.stryker-tmp/`. Four things matter:
 
 ## Limitations
 
-- Coverage granularity depends on the runner: Bun attributes per **test**, TAP
-  per **test file**. Two modules are stuck on TAP because one bound test asserts
-  Node-only `fsync` semantics.
-- **Concurrency barely helps.** Measured throughput is 1.61 s/mutant at 6 workers
-  and 1.67 at 4 (ratio 0.97), because the cost is per-mutant process startup
-  rather than CPU. Sharding across machines is the only real lever, which is why
-  the budget is expressed in shards.
+- Coverage granularity depends on the runner: Bun attributes per **test**, the
+  TAP fallback per **test file**. All modules currently use Bun.
+- **Concurrency barely helps.** Under TAP, throughput measured 1.61 s/mutant at 6
+  workers and 1.67 at 4 (ratio 0.97), because the cost was per-mutant process
+  startup rather than CPU. Sharding across machines is the underlying lever,
+  which is why the budget is expressed in shards.
 - **Never run two mutation runs in the same working directory.** The TAP runner
   writes its handshake to `stryker-output-<pid>.json` relative to cwd, so
   concurrent runs (or deleting `.stryker-tmp` mid-run) collide. Measured: this
   produced 320 of 388 mutants as `RuntimeError`; the clean rerun gave 10.
+- **Upgrading Bun can change coverage attribution.** The Bun runner warns when
+  its inspector and coverage records disagree; two runs of the same module agreed
+  exactly (165/55/7 twice), but a major Bun upgrade should be re-checked against
+  the TAP runner before its numbers are trusted.
 - **Bound tests that call `process.chdir()`** need
   [`mutation/preload-restore-cwd.mjs`](../mutation/preload-restore-cwd.mjs).
   Without it a mutant that makes such a test throw before its cleanup leaves the
