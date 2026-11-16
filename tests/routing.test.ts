@@ -1567,16 +1567,16 @@ describe("routing", () => {
     it("falls back to the hosting runtime when the pinned probe binary is absent", () => {
       // The probe pins `node` so a mutant's verdict does not depend on whichever
       // runtime hosts the router. A host without `node` on PATH must still
-      // compile rules instead of silently dropping all of them.
+      // verify rules rather than dropping them.
+      //
+      // The pattern below is deliberately fresh: `compileRules` caches verdicts,
+      // and a pattern another test already verified would be skipped instead of
+      // probed, making this assertion vacuous. A probe failure is fail-closed, so
+      // without the fallback this rule would be dropped and the assertion fails.
       const previous = process.env.BIFROST_PROBE_NODE;
       process.env.BIFROST_PROBE_NODE = join(tmpdir(), "bifrost-no-such-node-binary");
       try {
-        const compiled = compileRules([
-          { pattern: "^(a+)+$", model: "quick" },
-          { pattern: "hello", model: "general" },
-        ]);
-        // The fallback still probes, so the catastrophic pattern is dropped and
-        // the safe rule survives.
+        const compiled = compileRules([{ pattern: "fallback-probe-pattern", model: "general" }]);
         assert.deepEqual(compiled.map((rule) => rule.model), ["general"]);
       } finally {
         if (previous === undefined) delete process.env.BIFROST_PROBE_NODE;
