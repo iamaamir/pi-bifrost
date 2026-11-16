@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isReportFor } from "../mutation/run.mjs";
+import { isReportFor, shouldClearReports } from "../mutation/run.mjs";
 import {
   ROOT,
   bindingExclusions,
@@ -926,4 +926,13 @@ test("an unsharded report satisfies a one-shard plan", () => {
 
   const markdown = renderSummary({ reports: merged, expectedTargets: ["cache.ts"], shardsPerTarget: new Map([["cache.ts", 1]]) });
   assert.doesNotMatch(markdown, /Missing shards/u);
+});
+
+test("an explicit --report does not clear a sibling shard", () => {
+  // Two local invocations run one shard each, each naming its own report. If the
+  // second cleared the target it would delete the first shard's results, and the
+  // merged score would cover only half the mutants.
+  assert.equal(shouldClearReports({}), true, "a normal run owns the whole report set");
+  assert.equal(shouldClearReports({ report: null }), true);
+  assert.equal(shouldClearReports({ report: "cache.ts.shard1.json" }), false, "an operator-owned file is left alone");
 });
