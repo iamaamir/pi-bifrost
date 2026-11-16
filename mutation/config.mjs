@@ -27,6 +27,7 @@
  * Measured with the Bun runner on a 10-core host, full unsharded runs:
  *   cache.ts                229 mutants     3s  -> 0.013 s/mutant
  *   classifier-semantics.ts 157 mutants     3s  -> 0.019 s/mutant
+ *   inline-override.ts       21 mutants   1.3s  -> 0.062 s/mutant
  *   reliability.ts          352 mutants    14s  -> 0.040 s/mutant
  *   reliability-v2.ts      2447 mutants  1m35s  -> 0.039 s/mutant
  *   routing.ts             1000 mutants  7m29s  -> 0.449 s/mutant (TAP: production engine)
@@ -34,6 +35,7 @@
 export const TARGETS = {
   "cache.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.013 },
   "classifier-semantics.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.019 },
+  "inline-override.ts": { timeoutFactor: 2, timeoutMS: 20_000, secondsPerMutant: 0.062 },
   "reliability.ts": { timeoutFactor: 4, timeoutMS: 30_000, secondsPerMutant: 0.04 },
   "reliability-v2.ts": { timeoutFactor: 2, timeoutMS: 30_000, secondsPerMutant: 0.039 },
   "routing.ts": { timeoutFactor: 4, timeoutMS: 30_000, secondsPerMutant: 0.449 },
@@ -103,6 +105,7 @@ export function legMinutes() {
 export const MUTANT_ESTIMATE = {
   "cache.ts": 229,
   "classifier-semantics.ts": 157,
+  "inline-override.ts": 21,
   "reliability.ts": 352,
   "reliability-v2.ts": 2447,
   "routing.ts": 1000,
