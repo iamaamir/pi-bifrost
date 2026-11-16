@@ -20,6 +20,51 @@ import { ROOT, bindingExclusions, targetNames } from "./targets.mjs";
 
 const COUNTED_STATUSES = ["Killed", "Timeout", "Survived", "NoCoverage", "RuntimeError", "CompileError"];
 
+function parseList(raw, flag) {
+  const values = raw.split(",").map((value) => value.trim());
+  if (values.length === 0 || values.some((value) => value === "")) {
+    throw new Error(`${flag} must not be empty`);
+  }
+  return values;
+}
+
+function parseTargets(raw) {
+  const selected = parseList(raw, "--targets");
+  const known = targetNames();
+  for (const target of selected) {
+    if (!known.includes(target)) {
+      throw new Error(`unknown module name "${target}"; known: ${known.join(", ")}`);
+    }
+  }
+  return [...new Set(selected)];
+}
+
+function parseShardsPerTarget(raw) {
+  const entries = parseList(raw, "--shards-per-target");
+  const known = targetNames();
+  const expected = new Map();
+  for (const entry of entries) {
+    const separator = entry.lastIndexOf("=");
+    if (separator <= 0 || separator === entry.length - 1) {
+      throw new Error(`--shards-per-target entries must be module=count, got "${entry}"`);
+    }
+    const module = entry.slice(0, separator);
+    const countText = entry.slice(separator + 1);
+    if (!known.includes(module)) {
+      throw new Error(`unknown module name "${module}" in --shards-per-target; known: ${known.join(", ")}`);
+    }
+    const count = Number(countText);
+    if (!Number.isInteger(count) || count < 1) {
+      throw new Error(`--shards-per-target count for "${module}" must be a positive integer`);
+    }
+    if (expected.has(module)) {
+      throw new Error(`--shards-per-target lists "${module}" more than once`);
+    }
+    expected.set(module, count);
+  }
+  return expected;
+}
+
 function parseArgs(argv) {
   const options = {
     dir: "mutation-reports",
@@ -28,6 +73,8 @@ function parseArgs(argv) {
     survivors: null,
     annotations: null,
     timeoutTolerance: null,
+    targets: null,
+    shardsPerTarget: null,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -41,6 +88,8 @@ function parseArgs(argv) {
     else if (arg === "--json") options.json = value();
     else if (arg === "--survivors") options.survivors = value();
     else if (arg === "--annotations") options.annotations = value();
+    else if (arg === "--targets") options.targets = parseTargets(value());
+    else if (arg === "--shards-per-target") options.shardsPerTarget = parseShardsPerTarget(value());
     else if (arg === "--timeout-tolerance") {
       // Blank means "use the calibrated default from config.mjs".
       const raw = value();
@@ -77,18 +126,29 @@ export function summarise(mutants) {
   };
 }
 
+function parseReportShard(name) {
+  const match = /^(.*?)(?:\.shard(\d+))?\.json$/u.exec(name);
+  if (!match) return { moduleName: null, shard: null };
+  return {
+    moduleName: match[1] || null,
+    shard: match[2] === undefined ? null : Number(match[2]),
+  };
+}
+
 /**
  * Split one Stryker JSON report into per-module results. A matrix leg writes a
  * report with exactly one file; a single combined run writes several. Both are
  * supported so a hand-run local report can be summarised the same way.
  */
 export function modulesOf(report, name) {
+  const { shard } = parseReportShard(name);
   return Object.entries(report.files ?? {})
     .map(([absolutePath, file]) => {
       const mutants = file.mutants ?? [];
       return {
         name,
         module: basename(absolutePath),
+        shard,
         file: absolutePath,
         mutants,
         summary: summarise(mutants),
@@ -129,8 +189,14 @@ export function mergeShardReports(reports) {
   const byModule = new Map();
   for (const report of reports) {
     const module = report.module;
-    if (!byModule.has(module)) byModule.set(module, { module, mutants: [], byIdentity: new Map(), conflicts: [] });
+    if (!byModule.has(module)) {
+      byModule.set(module, { module, mutants: [], byIdentity: new Map(), conflicts: [], shardsSeen: new Set() });
+    }
     const bucket = byModule.get(module);
+    // An unsharded run writes `<target>.json` and covers the whole module, which
+    // is shard 0 of 1. Recording it as "no shard seen" made every single-shard
+    // target look like it had lost its only artifact.
+    bucket.shardsSeen.add(Number.isInteger(report.shard) ? report.shard : 0);
     for (const mutant of report.mutants) {
       const identity = mutantIdentity(module, mutant);
       const existing = bucket.byIdentity.get(identity);
@@ -159,6 +225,7 @@ export function mergeShardReports(reports) {
     mutants: bucket.mutants,
     summary: summarise(bucket.mutants),
     conflicts: bucket.conflicts,
+    shardsSeen: [...bucket.shardsSeen].sort((a, b) => a - b),
     framework: reports.find((report) => report.module === bucket.module)?.framework ?? null,
     thresholds: reports.find((report) => report.module === bucket.module)?.thresholds ?? null,
     file: null,
@@ -293,7 +360,7 @@ function renderModuleTable(reports) {
   return { lines, aggregate };
 }
 
-function healthFlags(reports, aggregate, expectedTargets, toleranceOverride) {
+function healthFlags(reports, aggregate, expectedTargets, toleranceOverride, shardsPerTarget) {
   const flags = [];
   const tolerance = toleranceOverride ?? timeoutTolerance(aggregate.total);
   if (aggregate.Timeout > tolerance) {
@@ -322,6 +389,20 @@ function healthFlags(reports, aggregate, expectedTargets, toleranceOverride) {
   const missing = expectedTargets.filter((target) => !reports.some((report) => report.module === target));
   if (missing.length > 0) {
     flags.push(`**Missing reports** for: ${missing.map((target) => `\`${target}\``).join(", ")}. A missing matrix leg is not a pass.`);
+  }
+  // A module can report and still be short a shard. Without this flag the merged
+  // score covers a subset of the planned mutants while looking complete.
+  const shortShards = reports.flatMap((report) => {
+    const planned = shardsPerTarget?.get?.(report.module) ?? shardsPerTarget?.[report.module] ?? 0;
+    const seen = new Set(report.shardsSeen ?? []);
+    return Array.from({ length: planned }, (_, shard) => shard)
+      .filter((shard) => !seen.has(shard))
+      .map((shard) => `\`${report.module}\` shard ${shard}`);
+  });
+  if (shortShards.length > 0) {
+    flags.push(
+      `**Missing shards** for: ${shortShards.join(", ")}. The score would cover only part of the planned mutants.`,
+    );
   }
   const unexpected = reports.map((report) => report.module).filter((module) => !expectedTargets.includes(module));
   if (unexpected.length > 0) {
@@ -357,7 +438,14 @@ function renderTrend(current, previous) {
   return lines;
 }
 
-export function renderSummary({ reports, expectedTargets = targetNames(), previous = null, metadata = {}, tolerance = null }) {
+export function renderSummary({
+  reports,
+  expectedTargets = targetNames(),
+  shardsPerTarget = null,
+  previous = null,
+  metadata = {},
+  tolerance = null,
+}) {
   const { lines: tableLines, aggregate } = renderModuleTable(reports);
   const lines = [];
   lines.push("## Mutation measurement", "");
@@ -374,7 +462,7 @@ export function renderSummary({ reports, expectedTargets = targetNames(), previo
     "",
   );
 
-  const flags = healthFlags(reports, aggregate, expectedTargets, tolerance);
+  const flags = healthFlags(reports, aggregate, expectedTargets, tolerance, shardsPerTarget);
   if (flags.length > 0) {
     lines.push("### Health flags", "");
     for (const flag of flags) lines.push(`- ${flag}`);
@@ -435,10 +523,24 @@ export function renderSummary({ reports, expectedTargets = targetNames(), previo
   return lines.join("\n");
 }
 
+function missingShardsFor(reports, expectedTargets, shardsPerTarget) {
+  if (!shardsPerTarget) return [];
+  const missing = [];
+  for (const [module, count] of [...shardsPerTarget.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    if (!expectedTargets.includes(module)) continue;
+    const report = reports.find((entry) => entry.module === module);
+    const seen = new Set(report?.shardsSeen ?? []);
+    for (let shard = 0; shard < count; shard += 1) {
+      if (!seen.has(shard)) missing.push({ module, shard });
+    }
+  }
+  return missing;
+}
+
 function main() {
   const options = parseArgs(process.argv.slice(2));
   const reports = readReports(options.dir);
-  const expectedTargets = targetNames();
+  const expectedTargets = options.targets ?? targetNames();
   const survivors = survivorRows(reports);
 
   if (options.survivors) {
@@ -461,11 +563,12 @@ function main() {
     aggregate,
     expectedTargets,
     missingTargets: expectedTargets.filter((target) => !reports.some((report) => report.module === target)),
+    missingShards: missingShardsFor(reports, expectedTargets, options.shardsPerTarget),
     timeoutTolerance: options.timeoutTolerance ?? timeoutTolerance(aggregate.total),
   };
-  // A dispatch override is carried into the payload so the pass/fail step can
-  // apply it without re-parsing flags.
-  if (options.timeoutTolerance !== null) payload.aggregate.timeoutToleranceOverride = options.timeoutTolerance;
+  // unusableReasons (config.mjs) gates on the top-level timeoutToleranceOverride;
+  // timeoutTolerance is the resolved value carried for display regardless of source.
+  if (options.timeoutTolerance !== null) payload.timeoutToleranceOverride = options.timeoutTolerance;
 
   if (options.json) {
     mkdirSync(dirname(options.json), { recursive: true });
@@ -475,6 +578,7 @@ function main() {
   const markdown = renderSummary({
     reports,
     expectedTargets,
+    shardsPerTarget: options.shardsPerTarget,
     tolerance: options.timeoutTolerance ?? undefined,
   });
   if (options.out) {

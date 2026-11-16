@@ -6,7 +6,7 @@
 // shelling out.
 import { appendFileSync, readFileSync } from "node:fs";
 import { SHARDING, TARGETS, TIME_BUDGET, estimatedMinutes, legMinutes, timeoutTolerance, unusableReasons } from "./config.mjs";
-import { exceedsBudget, legEstimateMinutes, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
+import { exceedsBudget, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
 
 /** Resolve the dispatched target selection into a matrix list. */
 export function resolveTargets(requested, known = targetNames()) {
@@ -78,8 +78,14 @@ export function planMatrix({ requested, shards, concurrency } = {}) {
   }
 
   const include = [];
+  // Resolved counts drive both the matrix and the projection. Using the matrix's
+  // own counts matters because an explicit operator choice can be smaller than the
+  // automatic suggestion, which would make a leg slower than `legEstimateMinutes`
+  // predicts and let an over-budget plan slip through.
+  const resolvedCounts = new Map();
   for (const target of targets) {
     const count = resolveShardCount(shards, target);
+    resolvedCounts.set(target, count);
     for (const shard of shardsFor(target, count)) {
       include.push({
         target,
@@ -93,8 +99,11 @@ export function planMatrix({ requested, shards, concurrency } = {}) {
   }
 
   // Legs run in parallel, so the projected wall clock is the slowest leg plus the
-  // fixed overhead, not the sum of the legs.
-  const slowestLeg = Math.max(...targets.map((target) => legEstimateMinutes(target)));
+  // fixed overhead, not the sum of the legs. Each leg cost comes from the resolved
+  // shard count actually placed in the matrix.
+  const slowestLeg = Math.max(
+    ...targets.map((target) => estimatedMinutes(target) / resolvedCounts.get(target)),
+  );
   const projectedMinutes = slowestLeg + TIME_BUDGET.reserveMinutes;
   if (projectedMinutes > TIME_BUDGET.minutes) {
     throw new Error(
@@ -109,7 +118,7 @@ export function planMatrix({ requested, shards, concurrency } = {}) {
 export function summaryLines(data) {
   const honest = data?.aggregate?.honestScore;
   const lines = [
-    `\`modules=${data?.modules?.length ?? 0} mutants=${data?.aggregate?.total ?? 0} honest=${honest === null || honest === undefined ? "n/a" : honest.toFixed(2)} timeouts=${data?.aggregate?.Timeout ?? 0} tolerance=${timeoutTolerance(data?.aggregate?.total ?? 0)} missing=${data?.missingTargets?.length ?? 0}\``,
+    `\`modules=${data?.modules?.length ?? 0} mutants=${data?.aggregate?.total ?? 0} honest=${honest === null || honest === undefined ? "n/a" : honest.toFixed(2)} timeouts=${data?.aggregate?.Timeout ?? 0} tolerance=${timeoutTolerance(data?.aggregate?.total ?? 0)} missing=${(data?.missingTargets?.length ?? 0) + (data?.missingShards?.length ?? 0)}\``,
     "",
   ];
   for (const module of data?.modules ?? []) {
@@ -138,6 +147,12 @@ function run(command, argv) {
     if (process.env.GITHUB_OUTPUT) {
       appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify({ include: plan.include })}\n`);
       appendFileSync(process.env.GITHUB_OUTPUT, `targets=${JSON.stringify(plan.targets)}\n`);
+      // The reporter needs the planned shard set to tell a complete module from a
+      // module missing an artifact. Derive it from the matrix it is about to run
+      // rather than letting the summariser guess.
+      const shardCounts = {};
+      for (const leg of plan.include) shardCounts[leg.target] = Math.max(shardCounts[leg.target] ?? 0, leg.shardCount);
+      appendFileSync(process.env.GITHUB_OUTPUT, `shard_counts=${JSON.stringify(shardCounts)}\n`);
       appendFileSync(process.env.GITHUB_OUTPUT, `concurrency=${plan.concurrency}\n`);
       appendFileSync(process.env.GITHUB_OUTPUT, `leg_timeout=${legTimeout}\n`);
       appendFileSync(process.env.GITHUB_OUTPUT, `timeout_tolerance=${tolerance === null ? "" : tolerance}\n`);
@@ -156,6 +171,21 @@ function run(command, argv) {
     // a plain inventory print.
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `targets=${JSON.stringify(selected)}\n`);
     console.log(`selected ${selected.length} target(s): ${selected.join(", ")}`);
+    return;
+  }
+  if (command === "plan-cli") {
+    // Prints the plan's completeness expectations as report.mjs CLI arguments.
+    // Lives here rather than inline in the workflow: actionlint runs shellcheck
+    // over `run:` blocks, and multi-line JavaScript inside single quotes trips
+    // SC2016.
+    const targets = JSON.parse(process.env.PLAN_TARGETS ?? "[]");
+    const shardCounts = JSON.parse(process.env.PLAN_SHARDS ?? "{}");
+    // An empty set here means the plan job's outputs did not reach this step.
+    // Failing loudly beats handing the reporter an empty expectation, which would
+    // report every module missing and blame the measurement.
+    if (targets.length === 0) throw new Error("plan-cli needs PLAN_TARGETS from the plan job; got none");
+    console.log(targets.join(","));
+    console.log(Object.entries(shardCounts).map(([target, count]) => `${target}=${count}`).join(","));
     return;
   }
   if (command === "summarise") {
