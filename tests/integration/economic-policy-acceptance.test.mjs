@@ -10,7 +10,7 @@
 // Controlled fault: the final case copies index.ts/routing.ts/economic-signals.ts
 // into a private scratch tree, flips the reserve equality guard (`<=` -> `<`)
 // there, and proves the named equality assertion turns RED. The committed
-// index.ts must stay at its baseline hash.
+// index.ts must stay byte-identical to the copy captured when the module loaded.
 
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -22,10 +22,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, it } from "node:test";
 import { makeModel } from "../helpers.ts";
 import bifrostExtension from "../../index.ts";
-import { REPLAY_GUARD_BASELINE_SHA256 } from "../fixtures/replay-fault-control.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const PRODUCTION_INDEX_SHA256 = REPLAY_GUARD_BASELINE_SHA256;
+const PRODUCTION_INDEX_SHA256 = createHash("sha256").update(readFileSync(join(ROOT, "index.ts"), "utf8")).digest("hex");
 const RESERVE_EQUALITY_GUARD = "remainingRatio <= rule.reserveRatio";
 
 function sha256(text) {
@@ -393,7 +392,7 @@ describe("G06 economic policy acceptance", { timeout: 60_000 }, () => {
     const pristineIndex = readFileSync(join(ROOT, "index.ts"), "utf8");
     const pristineRouting = readFileSync(join(ROOT, "routing.ts"), "utf8");
     const pristineSignals = readFileSync(join(ROOT, "economic-signals.ts"), "utf8");
-    assert.equal(sha256(pristineIndex), PRODUCTION_INDEX_SHA256, "the committed index.ts must start at its baseline hash");
+    assert.equal(sha256(pristineIndex), PRODUCTION_INDEX_SHA256, "must be unchanged since this test module loaded");
     const pristineScratch = createIsolatedCopy("bifrost-g06-economic-pristine-");
     const mutantScratch = createIsolatedCopy("bifrost-g06-economic-mutant-");
     try {

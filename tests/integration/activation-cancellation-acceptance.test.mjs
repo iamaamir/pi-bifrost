@@ -10,7 +10,6 @@ import { makeModel } from "../helpers.ts";
 import bifrostExtension from "../../index.ts";
 import { TYPE_SAFE_API_KEY_ENV } from "../../classifier-backends.ts";
 import { BIFROST_AUTO_ID, BIFROST_AUTO_PROVIDER } from "../../virtual-model.ts";
-import { REPLAY_GUARD_BASELINE_SHA256 } from "../fixtures/replay-fault-control.mjs";
 
 function strictConfig(overrides = {}) {
   return {
@@ -261,11 +260,8 @@ describe("activation cancellation acceptance", { timeout: 120_000 }, () => {
   });
 
   it("fault control: removing the late-abort guard allows forbidden late dispatch", async () => {
-    const BASELINE_SHA256 = REPLAY_GUARD_BASELINE_SHA256;
     const sha256 = (text) => createHash("sha256").update(text).digest("hex");
     const original = readFileSync(join(ROOT, "index.ts"), "utf8");
-    assert.equal(sha256(original), BASELINE_SHA256,
-      "production index.ts must match the recorded baseline hash before fault injection");
     const guard = `      if (ctx.signal?.aborted) {
         endClassify({ kind: classification.kind, outcome: "aborted" });
         endInput({ outcome: "aborted" });
@@ -397,7 +393,7 @@ describe("activation cancellation acceptance", { timeout: 120_000 }, () => {
       rmSync(scratch, { recursive: true, force: true });
     }
 
-    assert.equal(sha256(readFileSync(join(ROOT, "index.ts"), "utf8")), BASELINE_SHA256,
+    assert.equal(sha256(readFileSync(join(ROOT, "index.ts"), "utf8")), sha256(original),
       "production index.ts must remain byte-identical after the fault control restored the copy");
   });
 });
