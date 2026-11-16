@@ -11,6 +11,34 @@ import { formatCostText } from "../ui/cost-view.ts";
 const usage = (input: number, cost: number) => ({ input, output: 2, cacheRead: 3, cacheWrite: 4, totalTokens: input + 9, cost: { input: cost, output: 0, cacheRead: 0, cacheWrite: 0, total: cost } });
 
 describe("session cost report", () => {
+  it("keeps distinct model identities separate without exposing unsafe identifiers", () => {
+    const entries = [
+      { type: "message", message: { role: "user" } },
+      ...[["p", "PRIVATE CANARY A"], ["p", "PRIVATE CANARY B"], ["p/x", "y"], ["p", "x/y"], ["p/x", "y"]].map(([provider, model]) => ({
+        type: "message", message: { role: "assistant", provider, model, usage: usage(1, 0.1) },
+      })),
+    ] as any;
+    const data = getCostReportData(entries, entries);
+    assert.equal(data.activeBranch.responses.length, 4);
+    assert.equal(new Set(data.activeBranch.responses.map(({ model }) => model)).size, 4);
+    assert.deepEqual(data.activeBranch.responses.map(({ usage }) => usage.count).sort(), [1, 1, 1, 2]);
+    assert.doesNotMatch(JSON.stringify(data), /PRIVATE CANARY/);
+    assert.doesNotMatch(formatCostText(data).join("\n"), /PRIVATE CANARY/);
+  });
+
+  it("marks invalid message shapes and missing entry types as incomplete", () => {
+    const entries = [
+      { type: "message", message: { role: "assistant", provider: "p", model: "m", usage: usage(1, 0.1) } },
+      { type: "message", message: null }, { type: "message", message: {} }, {}, [],
+      { type: "model_change" }, { type: "compaction" }, { type: "custom" },
+    ] as any;
+    const data = getCostReportData(entries, entries);
+    assert.equal(data.activeBranch.malformed, 4);
+    assert.equal(data.allRetained.totals.incomplete, 4);
+    const report = formatCostText(data).join("\n");
+    assert.match(report, /Current branch: \$0\.100000 \+ unknown/);
+    assert.match(report, /All retained: \$0\.100000 · partial/);
+  });
   it("groups active-branch responses by user boundary without merging mixed models", () => {
     const firstUser = { type: "message", message: { role: "user", content: "PRIVATE PROMPT CANARY" } };
     const entries = [
@@ -134,7 +162,11 @@ describe("session cost report", () => {
       await command("cost", ctx);
       await command("cost", ctx);
       assert.equal(output.filter((value) => value.includes("Current branch: $0.200000")).length, 2);
-      assert.equal(output.filter((value) => value.includes("Input 10 · Output 2")).length, 2);
+      assert.equal(output.filter((value) => value.includes("Models (current branch)")).length, 2);
+
+      recorded = [...recorded, { type: "message", message: null }] as any;
+      await command("cost", ctx);
+      assert.ok(output.some((value) => value.includes("Current branch: $0.200000 + unknown")));
 
       recorded = Array.from({ length: 16 }, (_, index) => ({ type: "message", message: { role: "assistant", provider: "fake", model: `model-${String(index).padStart(2, "0")}`, usage: usage(index, 0.1) } })) as any;
       const tuiCtx = Object.assign(ctx, { mode: "tui", hasUI: true });

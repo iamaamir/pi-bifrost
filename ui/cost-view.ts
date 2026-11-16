@@ -61,7 +61,11 @@ export function formatCostText(data: CostReportData): string[] {
       if (row.children) append(row.children, depth + 1);
     }
   };
-  append(requestRows(data));
+  append(requestRows(data).filter((row) => row.id !== "about"));
+  lines.push("", "Models (current branch)");
+  append(data.activeBranch.responses.map(({ model, usage }, n) => modelRow(`model-${n}`, model, usage)));
+  lines.push("");
+  append([about()]);
   return lines;
 }
 

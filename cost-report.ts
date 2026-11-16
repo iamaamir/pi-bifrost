@@ -80,9 +80,6 @@ function safeLabel(value: unknown): string {
   if (typeof value !== "string" || !value) return "unknown";
   return /^[A-Za-z0-9._:+@/-]{1,160}$/.test(value) ? value : "untrusted-id";
 }
-function modelFor(message: Record<string, any>): string {
-  return `${safeLabel(message.provider)}/${safeLabel(message.responseModel || message.model)}`;
-}
 function clone(item: Counts): Counts { return { ...item }; }
 function merge(target: Counts, item: Counts): void {
   target.input += item.input;
@@ -108,17 +105,39 @@ function account(entries: readonly SessionEntry[], assignGroups: boolean) {
   let active: { responses: Map<string, Counts>; totals: Counts } | undefined;
   let unassigned = empty();
   let malformed = 0;
+  const identities = new Map<string, string>();
+  const labelCounts = new Map<string, number>();
+  const modelFor = (message: Record<string, any>) => {
+    const provider = typeof message.provider === "string" ? message.provider : "";
+    const model = typeof message.responseModel === "string" && message.responseModel
+      ? message.responseModel : typeof message.model === "string" ? message.model : "";
+    const key = JSON.stringify([provider, model]);
+    const existing = identities.get(key);
+    if (existing) return existing;
+    const label = `${safeLabel(provider)}/${safeLabel(model)}`;
+    const count = (labelCounts.get(label) ?? 0) + 1;
+    labelCounts.set(label, count);
+    const unique = count === 1 ? label : `${label} (${count})`;
+    identities.set(key, unique);
+    return unique;
+  };
   const bucket = (map: Map<string, Counts>, key: string) => {
     const value = map.get(key) ?? empty();
     map.set(key, value);
     return value;
   };
   for (const raw of entries as readonly unknown[]) {
-    if (!raw || typeof raw !== "object") {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
       malformed++;
       continue;
     }
     const entry = raw as Record<string, any>;
+    if (typeof entry.type !== "string" || !entry.type ||
+        (entry.type === "message" && (!entry.message || typeof entry.message !== "object" ||
+          Array.isArray(entry.message) || typeof entry.message.role !== "string" || !entry.message.role))) {
+      malformed++;
+      continue;
+    }
     if (entry.type === "message" && entry.message?.role === "user" && assignGroups) {
       active = { responses: new Map(), totals: empty() };
       groups.push(active);

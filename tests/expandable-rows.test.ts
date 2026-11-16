@@ -87,6 +87,18 @@ describe("expandable rows", () => {
     assert(last.some((line) => line.includes("rt")));
   });
 
+  it("styles only viewport rows when navigating a large list", () => {
+    let styled = 0;
+    const rows = Array.from({ length: 2000 }, (_, i) => ({ id: `${i}`, label: `request ${i}` }));
+    const viewer = new ExpandableRows(rows, { fg: (_color, text) => { styled++; return text; } },
+      () => ({ columns: 30, rows: 6 }), () => {}, () => {});
+    assert.match(viewer.render(30)[0]!, /request 0/);
+    viewer.handleInput("\x1b[B");
+    const next = viewer.render(30);
+    assert.match(next[1]!, /› .*request 1/);
+    assert.equal(styled, 8);
+  });
+
   it("collapses with left and leaves escape for the overlay owner", () => {
     const h = harness([{ id: "group", label: "group", children: [{ id: "leaf", label: "leaf" }] }]);
     h.viewer.handleInput("\x1b[C");

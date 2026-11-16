@@ -22,6 +22,8 @@ export class ExpandableRows {
   private selected = 0;
   private selectedPart = 0;
   private wrappedLineCounts: number[] = [];
+  private wrappedLines: { rowIndex: number; part: number; prefix: string; text: string }[] = [];
+  private rowStarts: number[] = [];
   private offset = 0;
   private lastWidth = 0;
   private lastHeight = 0;
@@ -50,27 +52,28 @@ export class ExpandableRows {
     const { rows } = this.size();
     const height = Math.max(1, rows - 2);
     if (width !== this.lastWidth || height !== this.lastHeight) {
+      this.wrappedLines = [];
       this.lastWidth = width;
       this.lastHeight = height;
       this.offset = Math.min(this.offset, Math.max(0, this.visible.length - height));
     }
-    const lines = this.visible.flatMap(({ row, depth }, index) => {
+    if (!this.wrappedLines.length) this.wrappedLines = this.visible.flatMap(({ row, depth }, index) => {
+      this.rowStarts[index] = index ? this.rowStarts[index - 1]! + this.wrappedLineCounts[index - 1]! : 0;
       const marker = row.children?.length ? (this.expanded.has(row.id) ? "▾ " : "▸ ") : "  ";
       const prefix = `${"  ".repeat(depth)}${marker}`;
       const text = `${row.label}${row.detail ? `  ${row.detail}` : ""}`;
       const available = Math.max(1, width - visibleWidth(prefix) - 2);
       const wrapped = wrapCells(text, available);
       this.wrappedLineCounts[index] = wrapped.length;
-      if (index === this.selected) this.selectedPart = Math.min(this.selectedPart, wrapped.length - 1);
       return wrapped.map((part, line) => {
-        const selected = index === this.selected;
-        const left = line === 0 ? `${selected ? "› " : "  "}${prefix}` : "    ";
-        return { rowIndex: index, part: line, text: this.theme.fg(selected ? "accent" : "text", `${left}${part}`) };
+        return { rowIndex: index, part: line, prefix: line === 0 ? prefix : "  ", text: part };
       });
     });
+    const lines = this.wrappedLines;
+    this.selectedPart = Math.min(this.selectedPart, (this.wrappedLineCounts[this.selected] ?? 1) - 1);
     const maxOffset = Math.max(0, lines.length - height);
     this.offset = Math.min(this.offset, maxOffset);
-    const selectedLine = lines.findIndex((line) => line.rowIndex === this.selected && line.part === this.selectedPart);
+    const selectedLine = (this.rowStarts[this.selected] ?? 0) + this.selectedPart;
     if (selectedLine < this.offset) this.offset = selectedLine;
     else if (selectedLine >= this.offset + height) this.offset = selectedLine - height + 1;
     const selectedCount = this.wrappedLineCounts[this.selected] ?? 0;
@@ -80,7 +83,11 @@ export class ExpandableRows {
       if (start < this.offset) this.offset = start;
       else if (end > this.offset + height) this.offset = end - height;
     }
-    const visible = lines.slice(this.offset, this.offset + height).map((line) => line.text);
+    const visible = lines.slice(this.offset, this.offset + height).map((line) => {
+      const selected = line.rowIndex === this.selected;
+      const marker = line.part === 0 && selected ? "› " : "  ";
+      return this.theme.fg(selected ? "accent" : "text", `${marker}${line.prefix}${line.text}`);
+    });
     return [...visible, ...Array.from({ length: Math.max(0, height - visible.length) }, () => "")];
   }
 
@@ -152,6 +159,7 @@ export class ExpandableRows {
     };
     visit(this.rows, 0);
     this.visible = result;
+    this.wrappedLines = [];
     this.selected = Math.max(0, Math.min(this.selected, result.length - 1));
     this.wrappedLineCounts.length = result.length;
     this.selectedPart = Math.min(this.selectedPart, (this.wrappedLineCounts[this.selected] ?? 1) - 1);

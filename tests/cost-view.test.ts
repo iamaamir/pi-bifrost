@@ -48,3 +48,15 @@ it("does not report an invented zero subtotal when every price is missing", () =
   assert.match(text, /Current branch: unavailable/);
   assert.doesNotMatch(text, /\$0\.000000/);
 });
+
+it("shows aggregated current-branch model totals in plain text", () => {
+  const usage = (cost: number) => ({ input: 1, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: cost } });
+  const branch = [
+    { type: "message", message: { role: "user" } },
+    { type: "message", message: { role: "assistant", provider: "p", model: "m", usage: usage(0.1) } },
+    { type: "message", message: { role: "user" } },
+    { type: "message", message: { role: "assistant", provider: "p", model: "m", usage: usage(0.2) } },
+  ] as any;
+  const text = formatCostText(getCostReportData(branch, branch)).join("\n");
+  assert.match(text, /Models \(current branch\)[\s\S]*p\/m · \$0\.300000/);
+});
