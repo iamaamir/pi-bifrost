@@ -205,7 +205,7 @@ test("a stale replay baseline fails the preflight before any gate and names the 
     assert.equal(result.gates[0].exitCode, 1);
     const log = readFileSync(join(root, result.gates[0].logPath), "utf8");
     assert.match(log, /G03 replay fault-proof baseline is stale: index\.ts sha256=[0-9a-f]{64}/u);
-    assert.match(log, /tests\/fixtures\/replay-fault-control\.mjs/u);
+    assert.match(log, /tests\/fixtures\/replay-baseline\.mjs/u);
     assert.match(log, /REPLAY_GUARD_BASELINE_SHA256/u);
     assert.match(log, /Release preflight never rewrites the pin/u);
   } finally { rmSync(root, { recursive: true, force: true }); }

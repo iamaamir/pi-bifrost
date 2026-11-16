@@ -83,7 +83,7 @@ function boundedOutput(result) {
   return `${stdout.text()}${result.stderr ? `\n[stderr]\n${stderr.text()}` : ""}`;
 }
 
-const REPLAY_BASELINE_FIXTURE = "tests/fixtures/replay-fault-control.mjs";
+const REPLAY_BASELINE_MODULE = "tests/fixtures/replay-baseline.mjs";
 
 /**
  * Cheap candidate-integrity check for the G03 replay fault proofs. Those proofs
@@ -106,8 +106,8 @@ export function checkReplayBaseline(root) {
   const hash = createHash("sha256").update(source).digest("hex");
   if (hash !== REPLAY_GUARD_BASELINE_SHA256) {
     throw new Error(
-      `G03 replay fault-proof baseline is stale: index.ts sha256=${hash} does not match the pinned ${REPLAY_GUARD_BASELINE_SHA256} in ${REPLAY_BASELINE_FIXTURE}. `
-      + `Re-run the named replay fault proofs against this source, review the guard inventory (${REPLAY_GUARD_FUNCTIONS.join(", ")}), then update REPLAY_GUARD_BASELINE_SHA256 in that fixture. `
+      `G03 replay fault-proof baseline is stale: index.ts sha256=${hash} does not match the pinned ${REPLAY_GUARD_BASELINE_SHA256} in ${REPLAY_BASELINE_MODULE}. `
+      + `Re-run the named replay fault proofs against this source, review the guard inventory (${REPLAY_GUARD_FUNCTIONS.join(", ")}), then update REPLAY_GUARD_BASELINE_SHA256 in that module. `
       + "Release preflight never rewrites the pin.",
     );
   }
