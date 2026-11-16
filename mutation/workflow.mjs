@@ -118,7 +118,10 @@ export function planMatrix({ requested, shards, concurrency } = {}) {
 export function summaryLines(data) {
   const honest = data?.aggregate?.honestScore;
   const lines = [
-    `\`modules=${data?.modules?.length ?? 0} mutants=${data?.aggregate?.total ?? 0} honest=${honest === null || honest === undefined ? "n/a" : honest.toFixed(2)} timeouts=${data?.aggregate?.Timeout ?? 0} tolerance=${timeoutTolerance(data?.aggregate?.total ?? 0)} missing=${(data?.missingTargets?.length ?? 0) + (data?.missingShards?.length ?? 0)}\``,
+    // Report the tolerance the gate actually applied. Falling back to the default
+    // here would print a threshold the run was never judged against, making an
+    // accepted report look like it exceeded its own limit.
+    `\`modules=${data?.modules?.length ?? 0} mutants=${data?.aggregate?.total ?? 0} honest=${honest === null || honest === undefined ? "n/a" : honest.toFixed(2)} timeouts=${data?.aggregate?.Timeout ?? 0} tolerance=${data?.timeoutToleranceOverride ?? data?.timeoutTolerance ?? timeoutTolerance(data?.aggregate?.total ?? 0)} missing=${(data?.missingTargets?.length ?? 0) + (data?.missingShards?.length ?? 0)}\``,
     "",
   ];
   for (const module of data?.modules ?? []) {

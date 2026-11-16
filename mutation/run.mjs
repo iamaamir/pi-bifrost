@@ -88,13 +88,16 @@ function inventory() {
 }
 
 /**
- * Whether this invocation owns the target's whole report set and may clear it.
- * Clearing assumes we are writing every report the target has. An explicit
- * `--report` names one file the operator owns, so two invocations writing sibling
- * shards must not delete each other's results.
+ * Which reports this invocation may delete before measuring.
+ *
+ * A normal run writes the target's whole report set, so every stale report for
+ * that target goes. An explicit `--report` writes one file: sibling shards must
+ * survive, but this run's own output must not, or a run that fails before writing
+ * leaves its previous contents to be read as a completed shard.
  */
-export function shouldClearReports(options) {
-  return !options.report;
+export function staleReportsFor(options, run) {
+  if (!options.report) return { scope: "target" };
+  return { scope: "own", name: options.report.split(/[\\/]/u).pop() };
 }
 
 /**
@@ -139,9 +142,12 @@ function main() {
   // per target, per measurement, so a multi-target run keeps each earlier
   // target's fresh output while still discarding that target's own stale files.
   const clearedTargets = new Set();
-  function clearPreviousReports(target) {
-    if (clearedTargets.has(target)) return;
-    clearedTargets.add(target);
+  function clearPreviousReports(target, plan) {
+    // Keyed by plan, not just target: two own-scope runs of the same target in one
+    // invocation write different files and each must clear its own.
+    const key = plan.scope === "own" ? `${target}\u0000${plan.name}` : target;
+    if (clearedTargets.has(key)) return;
+    clearedTargets.add(key);
     let entries;
     try {
       entries = readdirSync(reportsDir);
@@ -150,7 +156,7 @@ function main() {
       return;
     }
     for (const entry of entries) {
-      if (!isReportFor(entry, target)) continue;
+      if (plan.scope === "own" ? entry !== plan.name : !isReportFor(entry, target)) continue;
       try {
         unlinkSync(join(reportsDir, entry));
       } catch (error) {
@@ -178,7 +184,7 @@ function main() {
   });
 
   for (const run of runs) {
-    if (shouldClearReports(options)) clearPreviousReports(run.target);
+    clearPreviousReports(run.target, staleReportsFor(options, run));
     console.log(`\n=== ${run.label} (${bindingFor(run.target).length} bound test files) ===`);
     const args = ["stryker", "run"];
     if (options.concurrency) args.push("--concurrency", options.concurrency);
