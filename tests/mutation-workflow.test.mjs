@@ -108,12 +108,24 @@ test("every target is a matrix leg, and each leg gets its own timeout budget", (
   assert.match(block, /timeout-minutes: \$\{\{ fromJSON\(needs\.plan\.outputs\.leg_timeout\) \}\}/u, "each leg is bounded from the plan");
 
   // Each leg measures exactly one shard through the runner, which owns target
-  // selection and the per-shard report name. Matrix values reach the shell as
-  // quoted arguments, not as interpolated script text.
-  assert.match(block, /node mutation\/run\.mjs "\$\{\{ matrix\.target \}\}"/u);
-  assert.match(block, /--mutate "\$\{\{ matrix\.mutate \}\}"/u, "the leg must narrow the scope to its shard");
-  assert.match(block, /--report "\$\{\{ matrix\.target \}\}\.shard\$\{\{ matrix\.shard \}\}\.json"/u);
-  assert.match(block, /--concurrency "\$\{\{ needs\.plan\.outputs\.concurrency \}\}"/u);
+  // selection and the per-shard report name. Matrix values reach the shell
+  // through the environment, never by interpolation: interpolating them into a
+  // `run:` block is the code-injection pattern zizmor rejects, and it makes a
+  // value indistinguishable from script text.
+  assert.match(block, /^ {10}TARGET: \$\{\{ matrix\.target \}\}$/mu);
+  assert.match(block, /^ {10}MUTATE: \$\{\{ matrix\.mutate \}\}$/mu, "the leg must narrow the scope to its shard");
+  assert.match(block, /^ {10}SHARD: \$\{\{ matrix\.shard \}\}$/mu);
+  assert.match(block, /^ {10}CONCURRENCY: \$\{\{ needs\.plan\.outputs\.concurrency \}\}$/mu);
+  assert.match(block, /node mutation\/run\.mjs "\$TARGET"/u);
+  assert.match(block, /--mutate "\$MUTATE"/u);
+  assert.match(block, /--report "\$TARGET\.shard\$SHARD\.json"/u);
+  assert.match(block, /--concurrency "\$CONCURRENCY"/u);
+  // And no `${{
+  assert.doesNotMatch(
+    block.split("\n").filter((line) => line.includes("run:") || line.trim().startsWith("node ") || line.trim().startsWith("--")).join("\n"),
+    /\$\{\{/u,
+    "a run: line must not interpolate workflow expressions",
+  );
 
   const inventory = targetInventory();
   assert.deepEqual(inventory.map((entry) => entry.target), targetNames());

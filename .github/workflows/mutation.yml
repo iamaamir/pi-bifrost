@@ -120,19 +120,29 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Measure ${{ matrix.label }}
+        # Matrix values reach the shell through the environment, never by
+        # interpolation, so a value can never become shell text.
+        env:
+          TARGET: ${{ matrix.target }}
+          MUTATE: ${{ matrix.mutate }}
+          SHARD: ${{ matrix.shard }}
+          CONCURRENCY: ${{ needs.plan.outputs.concurrency }}
         # The runner owns the Stryker invocation, so CI and a developer machine
         # run the same way. `--mutate` narrows the scope to this shard.
         run: |
-          node mutation/run.mjs "${{ matrix.target }}" \
-            --mutate "${{ matrix.mutate }}" \
-            --report "${{ matrix.target }}.shard${{ matrix.shard }}.json" \
-            --concurrency "${{ needs.plan.outputs.concurrency }}"
+          node mutation/run.mjs "$TARGET" \
+            --mutate "$MUTATE" \
+            --report "$TARGET.shard$SHARD.json" \
+            --concurrency "$CONCURRENCY"
       - name: Collect this leg's report
         if: always()
+        env:
+          TARGET: ${{ matrix.target }}
+          SHARD: ${{ matrix.shard }}
         run: |
           # The artifact name includes the shard so the summariser can merge the
           # shards of one module back together.
-          leg="${{ matrix.target }}-shard${{ matrix.shard }}"
+          leg="$TARGET-shard$SHARD"
           mkdir -p "mutation-out/$leg"
           for report in reports/mutation/*.json; do
             [ -f "$report" ] && cp "$report" "mutation-out/$leg/"
