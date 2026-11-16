@@ -14,7 +14,7 @@
 //   node mutation/report.mjs --dir reports/mutation --out /tmp/mutation.md
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, rmSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { SHARDING, TARGETS, estimatedMinutes } from "./config.mjs";
 import { ROOT, bindingFor, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
 
@@ -97,7 +97,7 @@ function inventory() {
  */
 export function staleReportsFor(options, run) {
   if (!options.report) return { scope: "target" };
-  return { scope: "own", name: options.report.split(/[\\/]/u).pop() };
+  return { scope: "own", name: basename(options.report) };
 }
 
 /**
@@ -171,7 +171,17 @@ function main() {
   // its own report so the summariser can merge them back together.
   const runs = targets.flatMap((target) => {
     if (options.mutate) {
-      return [{ target, mutate: options.mutate, reportName: options.report ?? `${target}.json`, label: options.mutate }];
+      // The report name is always a bare basename: it is joined onto
+      // reports/mutation/ below, so a path here would be re-prefixed. Accepting a
+      // path and stripping it keeps the clear-scope and the write in agreement.
+      return [
+        {
+          target,
+          mutate: options.mutate,
+          reportName: basename(options.report ?? `${target}.json`),
+          label: options.mutate,
+        },
+      ];
     }
     const shards = shardsFor(target, options.shards ?? 1);
     if (shards.length === 1) return [{ target, mutate: target, reportName: `${target}.json`, label: target }];
