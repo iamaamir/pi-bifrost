@@ -15,11 +15,6 @@ on:
   schedule:
     # 04:47 UTC daily. Scheduled runs execute from the default branch only.
     - cron: "47 4 * * *"
-  # TEMPORARY branch verification. `workflow_dispatch` refuses to run a workflow
-  # that does not exist on the default branch, so this trigger is the only way to
-  # exercise the pipeline from a feature branch. Removed before merge.
-  push:
-    branches: [feat/mutation-pipeline]
   # Every knob is also settable by hand. The defaults reproduce the nightly run
   # exactly, so a manual dispatch with no changes measures the same thing.
   workflow_dispatch:

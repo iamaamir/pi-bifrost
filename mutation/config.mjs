@@ -68,13 +68,16 @@ export const TIME_BUDGET = {
    * Slowdown to apply to measured cost when planning a GitHub-hosted run.
    *
    * The `secondsPerMutant` figures above were measured on a 10-core host.
-   * Standard GitHub-hosted runners have 4 cores, and each mutant spawns one
-   * `node --test` process per covering file, so the runner is closer to a 2x
-   * machine on this workload than a 2.5x one. Planning at 1.0 would produce a
-   * budget that is comfortably met locally and quietly overrun in CI, which is
-   * the failure this cap exists to prevent. Locally this is 1.
+   * Standard GitHub-hosted runners have 4 cores. Measured on the first real
+   * dispatch, subtracting per-job setup: `routing.ts` took 17.4 minutes against
+   * 6.6 locally (2.7x) and `reliability-v2.ts` 6.9 against 1.8 (3.9x). Planning
+   * at 1.0 would produce a budget comfortably met locally and quietly overrun in
+   * CI, which is the failure this cap exists to prevent.
+   *
+   * 3.0 covers the observed range with margin on the leg that sets the wall
+   * clock. Locally this is 1.
    */
-  ciSlowdownFactor: 1.8,
+  ciSlowdownFactor: 3,
   /**
    * What a single leg is planned to take, as opposed to what it is allowed to
    * take. Shards are sized to this, so a module lands well inside the cap rather
