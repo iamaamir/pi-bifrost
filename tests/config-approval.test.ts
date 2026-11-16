@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { approveConfig, ConfigApproval, wrapApprovalLines } from "../ui/config-approval.ts";
+import { approveConfig, ConfigApproval, wrapApprovalLines } from "../config-approval.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 function fixture() {

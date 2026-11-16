@@ -1,5 +1,4 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { renderPanel } from "./panel.ts";
 
 type ResultTheme = Pick<ExtensionContext["ui"]["theme"], "fg">;
 
@@ -74,17 +73,24 @@ class ResultViewer {
     this.maxOffset = Math.max(0, lines.length - MAX_VISIBLE_LINES);
     this.scrollOffset = Math.min(this.scrollOffset, this.maxOffset);
     const visible = lines.slice(this.scrollOffset, this.scrollOffset + MAX_VISIBLE_LINES);
+    const border = (text: string) => this.theme.fg("border", text);
+    const row = (text: string, color: "text" | "accent" | "dim" = "text") => {
+      const padded = text.slice(0, contentWidth).padEnd(contentWidth);
+      return `${border("│")} ${this.theme.fg(color, padded)} ${border("│")}`;
+    };
     const title = this.title.slice(0, contentWidth);
     const scroll = lines.length > MAX_VISIBLE_LINES
       ? `${this.scrollOffset + 1}-${this.scrollOffset + visible.length}/${lines.length} · ↑↓/jk scroll · esc close`
       : "esc close";
 
-    return renderPanel([
-      this.theme.fg("accent", title),
-      this.theme.fg("dim", scroll),
-      ...visible.map((line) => this.theme.fg("text", line)),
-      ...Array.from({ length: MAX_VISIBLE_LINES - visible.length }, () => ""),
-    ], width, this.theme);
+    return [
+      border(`╭${"─".repeat(contentWidth + 2)}╮`),
+      row(title, "accent"),
+      row(scroll, "dim"),
+      ...visible.map((line) => row(line)),
+      ...Array.from({ length: MAX_VISIBLE_LINES - visible.length }, () => row("")),
+      border(`╰${"─".repeat(contentWidth + 2)}╯`),
+    ];
   }
 
   invalidate(): void {}

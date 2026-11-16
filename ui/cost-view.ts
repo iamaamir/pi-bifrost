@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, sliceByColumn } from "@earendil-works/pi-tui";
 import { ExpandableRows, type ExpandableRow } from "./expandable-rows.ts";
 import type { CostReportData, CostTotals } from "../cost-report.ts";
-import { wrapApprovalLines } from "./config-approval.ts";
+import { wrapApprovalLines } from "../config-approval.ts";
 import { renderPanel } from "./panel.ts";
 
 type CostTheme = Pick<ExtensionContext["ui"]["theme"], "fg" | "style" | "colors">;

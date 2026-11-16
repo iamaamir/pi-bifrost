@@ -11,7 +11,7 @@
  * A rule only belongs here when the current tree passes it. `npm run check:arch`
  * is the enforcement point; `npm run check:arch:json` produces the raw graph.
  */
-const HOST_ADAPTERS = "^(?:(?:index|commands|probe)\\.ts|ui/(?:ux-status|result-viewer)\\.ts)$";
+const HOST_ADAPTERS = "^(index|commands|ux-status|result-viewer|probe)\\.ts$";
 const ADAPTER_OWNERS = "^(index|commands)\\.ts$";
 
 /** @type {import('dependency-cruiser').IConfiguration} */

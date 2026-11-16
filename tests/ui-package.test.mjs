@@ -14,7 +14,7 @@ it("ships the UI components and preserves their original package paths", () => {
     rmSync(cache, { recursive: true, force: true });
   }
   const paths = new Set(packed.files.map(({ path }) => path));
-  for (const name of ["cost-view", "expandable-rows", "result-viewer", "config-approval", "ux-status"]) {
+  for (const name of ["cost-view", "expandable-rows"]) {
     assert(paths.has(`ui/${name}.ts`), `package is missing ui/${name}.ts`);
     assert(import.meta.resolve(`pi-bifrost/${name}.ts`).endsWith(`/ui/${name}.ts`));
   }

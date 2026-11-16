@@ -23,12 +23,6 @@
     "./cost-view.ts": "./ui/cost-view.ts",
     "./expandable-rows": "./ui/expandable-rows.ts",
     "./expandable-rows.ts": "./ui/expandable-rows.ts",
-    "./result-viewer": "./ui/result-viewer.ts",
-    "./result-viewer.ts": "./ui/result-viewer.ts",
-    "./config-approval": "./ui/config-approval.ts",
-    "./config-approval.ts": "./ui/config-approval.ts",
-    "./ux-status": "./ui/ux-status.ts",
-    "./ux-status.ts": "./ui/ux-status.ts",
     "./*": "./*"
   },
   "license": "MIT",
