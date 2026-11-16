@@ -44,9 +44,11 @@ active cron today, and this branch does not claim one.
   into `node_modules` only (`--no-save --package-lock=false`, no credentials),
   with installed-version verification, an unchanged tracked tree, `npm run
   typecheck`, native SDK/process tests, and the installed-package consumer test.
-- `mutation-experiment`: the existing four-module Stryker configuration, manual
-  boolean opt-in, low concurrency (`2`), a hard 55 minute step bound and 60
-  minute job bound, and report plus file log uploaded even on failure.
+
+Mutation measurement is not a campaign attempt and not part of this workflow. It
+runs nightly in [`.github/workflows/mutation.yml`](../.github/workflows/mutation.yml)
+as a scheduled measurement with one matrix job per module; see
+[`mutation-testing.md`](mutation-testing.md).
 
 ## fast-check seeds
 
@@ -76,12 +78,12 @@ Please be truthful about what this varies:
 The campaign repeats those replay-control files as nightly regression evidence,
 not because configured seeds change them.
 
-## Mutation experiment
+## Mutation measurement
 
-Reuses `stryker.config.mjs` with `commandRunner.commandRunner`, coverage
-analysis off, `concurrency` 2, and the existing focused binding and disclosed
-survivor limits. It does not invent a mutation score threshold or claim that
-surviving mutants were caught. Report and file log are uploaded on failure.
+Separate workflow, separate trigger, separate report. See
+[`mutation-testing.md`](mutation-testing.md) for the target set, the derived
+binding, the two-score rule, and why the nightly fails on an unusable run rather
+than on a low score.
 
 ## Compatibility claims
 

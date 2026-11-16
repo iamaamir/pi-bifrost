@@ -1,181 +1,375 @@
-# Mutation testing (issue #62)
+# Mutation testing
 
-Focused, reproducible mutation testing for the core policy modules. This is an
-**opt-in, expensive campaign**. It is not part of `npm test`, `npm run typecheck`,
-or fast PR CI. Run it deliberately when changing routing, reliability, cache, or
-classifier semantics.
+Mutation measurement for the core policy modules. This is a **scheduled
+measurement**, not a release gate: it never runs on a pull request and never
+blocks a merge. Results are published on the workflow run page and as artifacts.
 
-## Verdict
+Run: [`.github/workflows/mutation.yml`](../.github/workflows/mutation.yml),
+nightly at 04:47 UTC from the default branch.
 
-StrykerJS 10 (`@stryker-mutator/core`) is compatible with this repository's
-`node:test` suite and native TypeScript type stripping (Node >= 22.18; measured
-on Node v24.14.0). No incompatibility was found, so no custom mutation runner
-was built. The measured constraints that shaped the setup:
+## Why it is not a merge gate
 
-- `node:test` has no Stryker per-test coverage plugin, so the `command` test
-  runner with `coverageAnalysis: "off"` is required. Every mutant runs the
-  whole bound test command; there is no per-test mutant attribution.
-- Stryker's Babel-based instrumenter parses the `.ts` sources directly and the
-  sandbox mutants stay valid for Node's type stripping. No build step, no
-  `buildCommand`, no enums/namespaces/parameter properties in the targets.
-- Stryker resolves `node_modules` from the parent project directory even though
-  the sandbox excludes it.
-- Mutant timeout is `dryRunDuration * timeoutFactor + timeoutMS`. Under worker
-  contention a suite that measures 12 s can exceed the default 1.5x+5s budget
-  and every mutant is reported as a spurious timeout. Size these to the slowest
-  bound suite (`tests/reliability-state-machine.test.ts`, ~4.3 s alone).
+A full run is far too slow to gate on. A per-pull-request subset would measure a
+different mutant population each time, so the number would not be comparable
+across runs — which is the only thing that makes it useful. One nightly run over
+the whole target set keeps the score comparable over time.
 
-## How to run
+## The one-hour cap
+
+The whole measurement is capped at **60 minutes**, enforced at plan time. GitHub's
+own limits are 6 hours per job and 35 days per run
+([Actions limits](https://docs.github.com/en/actions/reference/limits)) and
+neither can be raised, so we stay far inside them voluntarily: a measurement that
+takes an hour is one nobody reruns, and one that hits the platform limit fails
+after burning the entire window.
+
+The cap is met by **sharding, never by measuring fewer mutants**. Sharding buys
+wall clock with machines; it does not touch the mutant population, the binding, or
+the thresholds. `TIME_BUDGET` in [`mutation/config.mjs`](../mutation/config.mjs)
+holds the knobs, and the plan refuses to start when the arithmetic does not fit:
+
+```
+cap 60m | reserve 12m | CI factor 1.8x | hard/leg 48m | target/leg 30m
+
+cache.ts                3.2m  shards 1 ->  3.2m/leg
+classifier-semantics.ts 1.0m  shards 1 ->  1.0m/leg
+reliability.ts         32.4m  shards 2 -> 16.2m/leg
+reliability-v2.ts      92.5m  shards 4 -> 23.1m/leg
+routing.ts              9.8m  shards 1 ->  9.8m/leg
+
+projected wall clock: 35.1m of 60m cap
+```
+
+Three details that make it a real cap rather than a wish:
+
+- **Legs run in parallel**, so wall clock is the slowest leg plus fixed overhead,
+  not the sum. Nine legs across five modules.
+- **`ciSlowdownFactor` (1.8×)** accounts for GitHub's 4 cores versus the 10-core
+  host the numbers were measured on. Planning at 1.0 would produce a budget that
+  is comfortably met locally and quietly overrun in CI.
+- **Each leg gets its own job timeout** from the plan. A single global ceiling
+  either cuts a slow shard short or lets one stuck leg burn the window.
+
+If a module cannot fit even at `maxShards`, the plan fails in seconds with a
+message naming the module and the arithmetic. It never silently drops mutants.
+
+## The runner choice is the whole design
+
+Stryker's `testRunner` decides everything downstream. Three were measured on the
+same mutants, and both viable ones produce the same kills.
+
+| Runner | Coverage | `cache.ts` (229) | `routing.ts` (989) | Incremental |
+| --- | --- | --- | --- | --- |
+| `command` | `off` (unmeasured) | 4m38s | 19m20s | reuses blindly |
+| `tap` | per **file** | 27s | 5m31s | correct |
+| `bun` | per **test** | **3s** | **1m16s** | correct |
+
+**Bun is the default.** `@hughescr/stryker-bun-runner` runs `bun test`, which
+executes this repository's `node:test` files unchanged — verified: 29 of 30 bound
+test files pass under Bun 1.4.0. Because coverage is attributed per individual
+test, a mutant runs only the tests that reach it (~8 per mutant) instead of whole
+files, so a module bound to one heavy file no longer pays that file's runtime
+per mutant. That is the entire speed difference.
+
+**`tap` stays for two modules.** `tests/reliability-migration.test.ts` asserts
+Node's `fsync`-on-lock-file failure semantics, which Bun does not reproduce, so
+one test fails and Bun's dry run aborts. It is bound to both `reliability.ts` and
+`reliability-v2.ts`, so those use TAP. The exception is encoded in
+`RUNNER_OVERRIDES` with the blocking file named in `BUN_INCOMPATIBLE_TESTS`, and
+a test asserts every override actually touches a listed file — an unexplained
+override fails rather than becoming folklore.
+
+Excluding the file instead would be worse: it silently stops measuring the
+mutants that file kills. Speed is never bought by measuring less.
+
+Three properties hold for both runners, and all three were measured:
+
+1. **Per-test selection.** A mutant runs only the tests (Bun) or files (TAP) that
+   reach it, not the whole binding.
+2. **Incremental is safe.** With the command runner, editing
+   `tests/cache.test.ts` reused 228 of 229 stored results and republished the
+   stale score: Stryker's docs list that runner as reporting "Nothing", and its
+   differ then reuses unconditionally (`if (!testCoverage.hasCoverage) return
+   true`). With TAP the same edit is seen as "Tests: 1 files changed" and
+   correctly invalidates 157 of 229.
+3. **`NoCoverage` is real.** The command runner reported 0 uncovered mutants
+   because coverage was never measured. Measured coverage reports 9 for
+   `cache.ts` and 95 for `routing.ts` — genuine gaps.
+
+### Agreement between the runners
+
+Same mutants, compared kill-for-kill on a 227-mutant `reliability-v2.ts` slice:
+
+- **226 of 227 identical.** The one difference is an `ObjectLiteral` mutant at
+  line 221 that Bun killed and TAP missed — in the direction of the faster runner
+  catching more, not fewer.
+- `routing.ts`: 680 killed under both; TAP reported 7 timeouts where Bun reported
+  5.
+- `cache.ts`: identical 172 killed / 48 survived / 9 uncovered.
+
+So the two are interchangeable for scoring purposes, and Bun is chosen for speed.
+
+### Incremental is a local convenience, never the nightly
+
+The nightly must measure every mutant, so `incremental` is **off by default** and
+only enabled by `node mutation/run.mjs --incremental`, with one state file per
+target under `reports/mutation/.incremental-<module>.json`. Reusing results
+across nights would publish a score for code paths the run never touched —
+incremental cannot see dependency updates, environment changes, or fixtures.
+
+## How it works
+
+Each target is its own matrix job, so each module gets a timeout budget sized to
+its own bound suite. This is a correctness requirement, not a speed
+optimisation: a single shared budget sized for the fastest module reports every
+slower module's mutants as `Timeout`, and Stryker counts a timeout as
+**detected**, which inflates the score instead of failing the run. A measured
+eight-file reliability binding produced 208 of 352 mutants as timeouts and a
+reported 99.43%.
+
+Everything lives in one directory, [`mutation/`](../mutation), with a single
+config file to tune:
+
+| Piece | Location |
+| --- | --- |
+| **All tunable parameters** — targets, per-module budgets, Stryker options, thresholds, tolerance, summary limits | [`mutation/config.mjs`](../mutation/config.mjs) |
+| Target/binding derivation (reusable, no config) | [`mutation/targets.mjs`](../mutation/targets.mjs) |
+| Summary, honest score, survivor extract | [`mutation/report.mjs`](../mutation/report.mjs) |
+| Workflow helpers | [`mutation/workflow.mjs`](../mutation/workflow.mjs) |
+| Local runner | [`mutation/run.mjs`](../mutation/run.mjs) |
+| Stryker entry point (thin shim, no options) | [`stryker.config.mjs`](../stryker.config.mjs) |
+
+`mutation/config.mjs` is the only file to edit for a normal change:
+
+- `TARGETS` — which modules are measured, each one's `timeoutFactor` /
+  `timeoutMS`, and its measured `expectedMinutes` (which drives shard planning).
+- `TEST_RUNNER` — `tap` (default) or `command`. See the section above; this is
+  the setting that decides everything else.
+- `TEST_RUNNER` / `RUNNER_OVERRIDES` / `BUN_INCOMPATIBLE_TESTS` — the runner
+  choice, and the reason a module deviates from it.
+- `TAP_NODE_ARGS` — how `node:test` is invoked for the TAP runner.
+- `STRYKER_OPTIONS` — `checkers`, `thresholds`, reporters, `disableTypeChecks`.
+- `SHARDING` — overlap width, max shards, and the cost threshold that triggers it.
+- `SANDBOX_IGNORES` — what is not copied into the Stryker sandbox.
+- `TIMEOUT_TOLERANCE` — when a run is too full of timeouts to trust.
+- `SUMMARY` — how many survivors to show per module.
+
+Adding a module to `TARGETS` is the only edit needed: the workflow matrix, local
+runner, binding derivation and summary all read from it. The derivation helpers
+in `targets.mjs` are plain functions over the file tree, so they are reusable
+without the config (for example to answer "which tests import this module?").
+
+## Binding is derived, not hand-written
+
+The binding for a module is every test file that imports it directly, resolved
+from the test sources at run time. The issue #62 configuration hand-wrote five
+files for four modules, and that list undercounted: `reliability.ts` has 15
+direct consumers and `routing.ts` has 10. Most of its survivors measured absent
+tests rather than weak tests. Measured effect of the derived binding on the same
+mutant population:
+
+| Module | Hand-written binding | Derived binding |
+| --- | --- | --- |
+| `cache.ts` | 64.19% | 75.11% |
+| `classifier-semantics.ts` | 26.75% | 54.14% |
+
+Tests that reach a module only through a caller are still not bound, so every
+score here is a **lower bound**.
+
+## Two scores, deliberately
+
+Stryker's score is `(Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage)`.
+Counting a timeout as detected means a mutant that hangs the suite raises the
+score. The summary therefore reports both:
+
+- **Honest score** = `Killed / (Killed + Survived)`.
+- **Stryker score** = Stryker's own definition, shown for comparison.
+
+The nightly job fails when a run is **unusable**, never when the score is low:
+
+- any module report is missing (a missing matrix leg is not a pass);
+- no reports were produced at all;
+- timed-out mutants exceed the tolerance (`max(10, 2% of mutants)`).
+
+A few timeouts are legitimate and expected: a mutant that inverts a loop bound
+or decrements a counter instead of incrementing it genuinely does not terminate.
+`routing.ts` produces 7 of 989 (0.7%) this way. The tolerance separates those
+from a budget collapse, which lands an order of magnitude higher — the measured
+eight-file case was 208 of 352 (59%).
+
+A low score is the measurement, not a failure.
+
+## Reading the results
+
+The run page shows the per-module table, health flags, a survivor breakdown by
+mutator, and the first survivors with their source lines. Artifacts:
+
+- `mutation-report-<module>-…` — raw Stryker JSON per module, plus `stryker.log`.
+- `mutation-summary-…` — `summary.md`, `summary.json`, and `survivors.jsonl`.
+
+`survivors.jsonl` carries one row per survivor with module, mutant id, mutator,
+replacement, and exact range, so an agent can consume it directly. It is
+generated from the report every run, which is what the hand-maintained
+`docs/mutation-evidence-62/*.jsonl` extracts failed at: all 148 routing survivor
+rows had drifted to the wrong source lines.
+
+## Running it by hand
+
+`Actions → Mutation measurement → Run workflow`. Every knob is settable, and the
+defaults reproduce the nightly run exactly:
+
+| Input | Default | Meaning |
+| --- | --- | --- |
+| `target` | `all` | One module, or the whole matrix |
+| `shards` | `0` | Shards per module; `0` derives from measured cost, `1` disables |
+| `concurrency` | `4` | Stryker workers per leg, bounded 1–16 |
+| `timeout_tolerance` | blank | Max timed-out mutants before the run is unusable; blank uses `max(10, 2%)` |
+| `fail_on_unusable` | `true` | Fail the job on missing reports, excess timeouts, or shard conflicts |
+| `upload_reports` | `true` | Upload the raw JSON and `survivors.jsonl` |
+
+Inputs are validated in the `plan` job, so a typo fails in seconds instead of
+after an hour.
+
+## Local runs
 
 ```bash
 npm ci
-npm run test:mutation            # four-target campaign, focused binding (~3.5 min on 10 cores)
-npx stryker run stryker.config.classifier-semantics.mjs  # binding-sensitivity check (~40 s)
+node mutation/run.mjs --list                     # targets, budgets, shards, bindings
+node mutation/run.mjs cache.ts                  # one module, full run
+node mutation/run.mjs routing.ts --concurrency 8
+node mutation/run.mjs                           # every target, sequentially
+node mutation/run.mjs cache.ts --shards 2       # split one module
+node mutation/run.mjs cache.ts --mutate cache.ts:1-140   # one region
+node mutation/run.mjs cache.ts --incremental    # local loop: reuse unchanged results
+node mutation/run.mjs cache.ts --dry-run        # check the binding, no mutants
+
+# Summarise whatever ran
+node mutation/report.mjs --dir reports/mutation --out /tmp/mutation.md
 ```
 
-`stryker.config.mjs` (committed) mutates `cache.ts`, `classifier-semantics.ts`,
-`reliability.ts`, and `routing.ts` and binds the five directly owning test
-files (`cache`, `classifier-cache-key`, `classifier-detection`,
-`reliability`, `routing`). `stryker.config.classifier-semantics.mjs`
-(committed) re-runs `classifier-semantics.ts` against all three test files
-that import it directly; it exists because focused binding measurably
-undercounts kills (see below).
+Use `--incremental` while iterating on one module: the first run is full, later
+runs only re-test what changed (measured: 1m44s → 2s when nothing changed, and a
+test-file edit correctly re-ran the affected 157 mutants). It is deliberately
+**not** used by the nightly, which must measure every mutant.
 
-Reports land in `reports/mutation/` (gitignored). The JSON report contains
-every mutant, its replacement, status, and location.
+Reports land in `reports/mutation/` (gitignored) and are merged per module, so a
+sharded run summarises like an unsharded one. `npm run test:mutation` is the same
+runner. CI calls the runner too, so the two paths cannot drift.
 
-## Measured results (Node v24.14.0, macOS, 10 cores)
+## Sharding
 
-Focused binding, 5 test files (~0.6 s per mutant run), 3 min 24 s total.
-Stryker-reported statuses: 0 Timeout, 0 RuntimeError, 0 CompileError,
-0 NoCoverage. These are Stryker-reported statuses under the command runner,
-not cause classifications: any nonzero bound-command exit counts as Killed,
-so Killed includes assertion failures, thrown exceptions, and startup
-failures alike; with `coverageAnalysis: "off"` coverage is unmeasured, so a
-zero NoCoverage count does not prove every mutant executed. Scores below use
-Stryker's definition, Killed + Timeout over Killed + Timeout + Survived +
-NoCoverage (RuntimeError/CompileError excluded); with Timeout and NoCoverage
-at zero the denominator is exactly the mutant count:
+Sharding splits one module across machines so it fits a job bound. Only one axis
+was measured safe.
 
-| File | Mutants | Killed | Survived | Score |
-| --- | --- | --- | --- | --- |
-| cache.ts | 226 | 145 | 81 | 64.16% |
-| classifier-semantics.ts | 157 | 42 | 115 | 26.75% |
-| reliability.ts | 352 | 209 | 143 | 59.38% |
-| routing.ts | 520 | 372 | 148 | 71.54% |
-| **All** | **1255** | **768** | **487** | **61.20%** |
+**Line-range shards must overlap.** Adjacent non-overlapping ranges silently lose
+mutants that straddle a boundary — `1-100` + `100-244` recovered 176 of 229
+`cache.ts` mutants. With `overlapLines: 40` the same pair recovered all 229, and
+the 23 mutants measured twice agreed on status in every case. The merge
+deduplicates by mutant identity and reports any disagreement as a conflict, which
+makes the run unusable because the score would not be reproducible.
 
-The `classifier-semantics.ts` score is binding-sensitive. Adding its third
-direct consumer (`tests/classifier-effective-validation.test.ts`) raises the
-score from 26.75% to 51.59% (81 killed / 76 survived, 0 Stryker-reported
-timeouts, 38 s):
+**Mutator-based sharding is not usable.** `excludedMutations` still instruments
+excluded mutants as `Ignored`, so the reports are not clean partitions; the
+evaluated sets were not complementary and 4 phantom mutants appeared.
 
-| File | Binding | Mutants | Killed | Survived | Score |
-| --- | --- | --- | --- | --- | --- |
-| classifier-semantics.ts | cache-key + detection (in focused run) | 157 | 42 | 115 | 26.75% |
-| classifier-semantics.ts | all 3 direct consumers | 157 | 81 | 76 | 51.59% |
+**Incremental mode is not a shard.** With the command runner it reused every
+stored result blindly (228 of 229 after a test edit). With the TAP runner it is
+correct, but it is still not an authoritative measurement, so the nightly never
+enables it.
 
-Binding choice, not test quality alone, drives these numbers. The remaining
-76 survivors with full direct-consumer binding are committed in
-[`mutation-evidence-62/classifier-semantics-all-consumers-survivors.jsonl`](mutation-evidence-62/classifier-semantics-all-consumers-survivors.jsonl).
-Consumers reached only through Pi adapter integration suites are still not
-bound, so even 51.59% is a lower bound for this module.
+| Module | Mutants | Measured (TAP, concurrency 6) | Auto shards |
+| --- | --- | --- | --- |
+| `cache.ts` | 229 | 1m45s | 1 |
+| `classifier-semantics.ts` | 157 | 25s | 1 |
+| `routing.ts` | 989 | 5m31s | 1 |
+| `reliability.ts` | ~900 | not yet measured | 1 |
+| `reliability-v2.ts` | 2447 | see below | 1 |
 
-## Boundary/transition kill proof
+The TAP runner removed most of the reason to shard: `routing.ts` went from 19m20s
+to 5m31s and `reliability-v2.ts` is measured in the same section below. Sharding
+stays available for a module that still outgrows the job bound.
 
-377 killed mutants are comparator/conditional/logical mutations on
-boundary and state-transition lines: every Killed mutant with mutator in
-`{EqualityOperator, ConditionalExpression, LogicalOperator}`
-(92 + 203 + 82 = 377). The committed extract
-[`mutation-evidence-62/boundary-kills-focused-binding.jsonl`](mutation-evidence-62/boundary-kills-focused-binding.jsonl)
-lists mutant ID, exact start/end range, mutator, replacement, status, and
-the source line for each, so every row is individually identifiable (the
-earlier revision of this extract omitted IDs and left 105 rows
-indistinguishable). Run provenance — source/config/lock hashes, versions,
-command, raw totals, and report hashes — is in
-[`mutation-evidence-62/run-manifest.json`](mutation-evidence-62/run-manifest.json).
-Confirmed examples:
+## Measured results
 
-- `cache.ts` TTL freshness (`lastUsed >= cutoff` in `loadCache` and in the
-  `lookupCache` usable check): 12 killed mutants.
-- `cache.ts` eviction boundary (`entries.length <= maxEntries`): killed.
-- `cache.ts` Jaccard threshold (`score < threshold`, size-ratio bound): killed.
-- `cache.ts` best-entry tie-breaking (`score > best.score`): 10 killed mutants.
-- `reliability.ts` open transition (`openUntil > now`): 7 killed mutants;
-  half-open transition (`openUntil <= now`): 7 killed mutants.
-- `reliability.ts` failure-threshold transition
-  (`failures.length >= resolved.failureThreshold`): 6 killed mutants.
-- `reliability.ts` bounded allowance retry-hint horizon: killed.
-- `routing.ts` `minBy` selection (`s < bestScore`): 4 killed mutants.
+Derived binding, TAP runner, 10-core macOS host, Node v24.14.0, Stryker 10.0.0:
 
-A controlled mutant was applied by hand, not only through Stryker:
-[`mutation-evidence-62/controlled-mutant-red-green.txt`](mutation-evidence-62/controlled-mutant-red-green.txt)
-shows `cache.ts:130` flipping the eviction-boundary test red (28 pass / 1
-fail) and the restore returning 29/29 green, with no test edits.
+| Module | Mutants | Killed | Survived | NoCoverage | Timeout | Honest score |
+| --- | --- | --- | --- | --- | --- | --- |
+| `cache.ts` | 229 | 172 | 48 | 9 | 0 | 75.11% |
+| `classifier-semantics.ts` | 157 | 85 | 26 | 46 | 0 | 54.14% |
+| `routing.ts` | 989 | 680 | 207 | 95 | 7 | 69.46% |
+| `reliability-v2.ts` | 2447 | — | — | — | — | measured below |
 
-## Surviving-mutant evidence
+Honest score is `killed / (killed + survived + no-coverage)`. Note the columns the
+command runner could not produce: `NoCoverage` was always 0 there because coverage
+was never measured, so its score silently counted unreached mutants as if they
+did not exist. Routing's 95 uncovered mutants are real gaps — 9.6% of its mutant
+population sits on lines no bound test reaches.
 
-All 487 focused-binding survivors (mutant ID, exact start/end range,
-mutator, replacement, status, source line) are committed in
-[`mutation-evidence-62/survivors-focused-binding.jsonl`](mutation-evidence-62/survivors-focused-binding.jsonl).
-Notable real survivors worth targeted tests (for the test lanes, not patched
-here):
+For comparison, the same mutant populations under the old hand-written binding
+scored 64.19% and 26.75% for the first two rows. `reliability.ts` is in the target
+set but was not measured on this host; the first nightly run establishes its
+baseline.
 
-- `routing.ts` `guessTier` cost boundaries (`cost > FRONTIER_COST_THRESHOLD`,
-  `cost < QUICK_COST_THRESHOLD`) and its returned string literals.
-- `cache.ts` seq-counter reseeding after load (`maxSeq >= nextSeq`).
-- `cache.ts` `updateCache` semantic-key compound condition and the
-  `hits + 1` increment.
-- `cache.ts:147` TTL `>=` vs `>` at the exact cutoff (verified by hand, see
-  the controlled-mutant file); some survivors may be equivalent mutants.
+## Sandbox notes
+
+Stryker copies the tree into `.stryker-tmp/`. Four things matter:
+
+- `docs` must stay: `tests/bifrost-commands.test.ts` reads
+  `docs/guide/commands.md`, and excluding it fails the dry run.
+- `.pi` must be excluded: bound tests create their own `.pi` under a temp cwd,
+  and copying a developer's `.pi` breaks on symlinked skill directories
+  (`ENOTSUP: operation not supported on copyfile`). That failure blocked local
+  runs entirely before the exclusion was added.
+- `disableTypeChecks: false` must stay. Stryker's default injects
+  `// @ts-nocheck` into every sandbox `.ts` file (165 of them here). That changes
+  the bytes of files the bound tests read and hash — the affinity acceptance test
+  asserts a committed `index.ts` baseline — so the dry run fails before a single
+  mutant runs. It also shifts every line number by one, which would misattribute
+  every survivor. Node strips types at runtime without type checking, so the
+  directive buys nothing.
+- A consumer test that asserts on the target's own source text is excluded from
+  the binding for that target, because instrumentation rewrites exactly that
+  text. `tests/integration/affinity-policy-acceptance.test.mjs` is the one such
+  case, and the summary lists any exclusions under "Deliberately unbound".
 
 ## Limitations
 
-- Mutation outcomes can be stochastic, so no deterministic replay of a
-  historical status or exact score is promised. The recorded survivor
-  `routing.ts` mutant 839 (`ConditionalExpression` at lines 162–164,
-  replacement `case "largest_context":`, which drops the return and falls
-  through to the unseeded `random` strategy) is Killed or Survived depending
-  on the run: an independent 16-trial replay of the identical 5-file command
-  produced 12 nonzero exits and 4 zero exits (surviving trials 6, 8, 11,
-  13; 126 tests each), and a worktree repeat produced 7 kills / 3 survivals
-  over 10 trials (surviving trials 1, 8, 9). The owning tests stub
-  `Math.random` only for the explicit `random` strategy, not for this
-  fallthrough. Repeated outcomes are preserved in
-  [`mutation-evidence-62/run-manifest.json`](mutation-evidence-62/run-manifest.json)
-  (`stochasticMutants`); any rerun establishes a new outcome.
-- `coverageAnalysis: "off"` means no per-test attribution; a mutant is
-  reported Killed if the whole bound command exits non-zero, whether that
-  exit came from an assertion failure, a thrown exception (for example a
-  `TypeError` from an optional-chain removal), or a startup failure.
-  Equivalent-mutant candidates
-  are included in the survivor counts and were not audited exhaustively.
-- Focused binding undercounts kills (measured: +25 percentage points on
-  `classifier-semantics.ts` with one more consumer file). Widening the binding
-  further costs about one second per additional bound test file per mutant;
-  a full-suite-per-mutant run (`npm test`, measured at ~21.5 s) is not
-  affordable per mutant (~7 h for this campaign).
-- Scores are evidence, not a CI gate. No mutation threshold is enforced and
-  nothing in `verify:release` depends on this campaign.
-- `tests/acceptance-runner.test.mjs` ("runs the real contract CLI to final
-  stable-fingerprint evidence") intentionally fails on a dirty working tree
-  (`candidate-stable`). Run full verification on a clean, frozen candidate.
+- Coverage granularity depends on the runner: Bun attributes per **test**, TAP
+  per **test file**. Two modules are stuck on TAP because one bound test asserts
+  Node-only `fsync` semantics.
+- **Concurrency barely helps.** Measured throughput is 1.61 s/mutant at 6 workers
+  and 1.67 at 4 (ratio 0.97), because the cost is per-mutant process startup
+  rather than CPU. Sharding across machines is the only real lever, which is why
+  the budget is expressed in shards.
+- **Never run two mutation runs in the same working directory.** The TAP runner
+  writes its handshake to `stryker-output-<pid>.json` relative to cwd, so
+  concurrent runs (or deleting `.stryker-tmp` mid-run) collide. Measured: this
+  produced 320 of 388 mutants as `RuntimeError`; the clean rerun gave 10.
+- **Bound tests that call `process.chdir()`** need
+  [`mutation/preload-restore-cwd.mjs`](../mutation/preload-restore-cwd.mjs).
+  Without it a mutant that makes such a test throw before its cleanup leaves the
+  working directory changed, the handshake file lands elsewhere, and the mutant
+  is scored `RuntimeError` rather than killed. Four bound files across the target
+  set do this.
+- `RuntimeError`/`CompileError` mutants are **excluded from the score
+  denominator** by Stryker, so a runner problem can produce a confident score over
+  a smaller population. `RUNTIME_ERROR_TOLERANCE` makes that a hard failure.
+- `checkers` is empty, deliberately. Measured `RuntimeError` + `CompileError` was
+  0 of 1,727 mutants before the chdir fix, so `@stryker-mutator/typescript-checker`
+  would add a dependency and a per-mutant type-check pass for no measurable gain.
+- Outcomes can be stochastic. One `routing.ts` mutant was measured at 12 kills
+  and 4 survivals across 16 identical trials. Read score deltas as a band, not a
+  regression proof. No automatic regression threshold is enforced for this reason.
+- Equivalent-mutant candidates are included in survivor counts and are not
+  audited exhaustively.
 
-## Reproducibility
+## Historical evidence (issue #62)
 
-Exact commands, versions, config files, and the committed evidence extracts
-above are sufficient to replay both campaigns. Full JSON reports from the
-recorded runs are local artifacts under `evidence/mutation-62/` (gitignored,
-regenerable); the compact extracts in `docs/mutation-evidence-62/` are the
-committed record, bound to those report bytes by
-[`mutation-evidence-62/run-manifest.json`](mutation-evidence-62/run-manifest.json)
-(report hashes, source/config/lock hashes, versions, command, raw totals).
-Fields the Stryker JSON report does not record (VCS revision at run time,
-worker concurrency) are marked not-recorded in the manifest, not
-reconstructed. Because stochastic mutants (see Limitations) make reruns land
-on new outcomes, a replay establishes a new run; it does not necessarily
-reconstruct the recorded statuses. Measured failure mode to reproduce the caution: at the
-default `timeoutFactor: 1.5` + `timeoutMS: 5000`, binding 22 consumer test
-files (~12.4 s per run) under 9 workers made every mutant report as a timeout;
-the per-run budget must exceed the contended suite duration, not the idle one.
-Refs #62.
+The committed extracts in [`docs/mutation-evidence-62/`](mutation-evidence-62/)
+and the provenance in
+[`run-manifest.json`](mutation-evidence-62/run-manifest.json) record the original
+experiment at revision `bee4b0e`. They are retained as a historical record and
+are **not** regenerated by the nightly run; use the `survivors.jsonl` artifact
+for current data. The configuration they describe has since been replaced as
+above.

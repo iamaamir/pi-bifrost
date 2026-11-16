@@ -1,0 +1,213 @@
+name: Mutation measurement
+
+# Scheduled mutation testing. This is a measurement job, not a release gate: it
+# is never required for a merge and never runs on pull requests. A full
+# measurement is too slow to gate on, and a per-pull-request subset would measure
+# a different, incomparable population. One nightly run over the whole target set
+# keeps the score comparable over time.
+#
+# Each target is its own matrix job so a module gets a timeout budget sized to
+# its own bound suite. A single shared budget is a measured defect: sized for the
+# fastest module it reports every slower module's mutants as timeouts, and
+# Stryker counts a timeout as detected, which inflates the score instead of
+# failing the run.
+on:
+  schedule:
+    # 04:47 UTC daily. Scheduled runs execute from the default branch only.
+    - cron: "47 4 * * *"
+  # Every knob is also settable by hand. The defaults reproduce the nightly run
+  # exactly, so a manual dispatch with no changes measures the same thing.
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Module to measure, or 'all' for the full matrix"
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - cache.ts
+          - classifier-semantics.ts
+          - reliability.ts
+          - reliability-v2.ts
+          - routing.ts
+      shards:
+        description: "Shards per module (1 = no sharding, 0 = auto from measured cost)"
+        required: false
+        default: "0"
+        type: string
+      concurrency:
+        description: "Stryker worker processes (1-16)"
+        required: false
+        default: "4"
+        type: string
+      timeout_tolerance:
+        description: "Max timed-out mutants before the run is unusable (blank = max(10, 2%))"
+        required: false
+        default: ""
+        type: string
+      fail_on_unusable:
+        description: "Fail the job when the measurement is unusable (missing/timeouts/conflicts)"
+        required: false
+        default: true
+        type: boolean
+      upload_reports:
+        description: "Upload the raw Stryker JSON and survivor extract as artifacts"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Resolve the dispatch inputs into a matrix. Every knob is validated here, so a
+  # typo fails fast instead of silently measuring something else. The outputs
+  # carry the shard plan, so the matrix can express a module split across several
+  # legs without the workflow knowing how ranges are computed.
+  plan:
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+      concurrency: ${{ steps.resolve.outputs.concurrency }}
+      leg_timeout: ${{ steps.resolve.outputs.leg_timeout }}
+      timeout_tolerance: ${{ steps.resolve.outputs.timeout_tolerance }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Resolve the shard plan
+        id: resolve
+        # Inputs reach the script through the environment; nothing is
+        # interpolated into shell text.
+        env:
+          REQUESTED: ${{ inputs.target }}
+          SHARDS: ${{ inputs.shards }}
+          CONCURRENCY: ${{ inputs.concurrency }}
+          TIMEOUT_TOLERANCE: ${{ inputs.timeout_tolerance }}
+        run: node mutation/workflow.mjs plan
+
+  targets:
+    needs: [plan]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    # Per-leg bound from the plan, so one stuck shard cannot burn the whole
+    # window. GitHub's hard job limit is 6 hours and cannot be raised; the
+    # workflow's own cap is 60 minutes (TIME_BUDGET in mutation/config.mjs).
+    timeout-minutes: ${{ fromJSON(needs.plan.outputs.leg_timeout) }}
+    strategy:
+      fail-fast: false
+      # A matrix of shards, so one module can be split across several runners.
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Measure ${{ matrix.label }}
+        # The runner owns the Stryker invocation, so CI and a developer machine
+        # run the same way. `--mutate` narrows the scope to this shard.
+        run: |
+          node mutation/run.mjs "${{ matrix.target }}" \
+            --mutate "${{ matrix.mutate }}" \
+            --report "${{ matrix.target }}.shard${{ matrix.shard }}.json" \
+            --concurrency "${{ needs.plan.outputs.concurrency }}"
+      - name: Collect this leg's report
+        if: always()
+        run: |
+          # The artifact name includes the shard so the summariser can merge the
+          # shards of one module back together.
+          leg="${{ matrix.target }}-shard${{ matrix.shard }}"
+          mkdir -p "mutation-out/$leg"
+          for report in reports/mutation/*.json; do
+            [ -f "$report" ] && cp "$report" "mutation-out/$leg/"
+          done
+          if [ -f stryker.log ]; then cp stryker.log "mutation-out/$leg/stryker.log"; fi
+      - name: Upload this leg's report
+        if: always() && (inputs.upload_reports || github.event_name == 'schedule')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          # The shard index is part of the name so the shards of one module are
+          # distinct artifacts rather than overwriting each other.
+          name: mutation-report-${{ matrix.target }}-shard${{ matrix.shard }}-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: mutation-out/${{ matrix.target }}-shard${{ matrix.shard }}/
+          if-no-files-found: warn
+          retention-days: 30
+
+  summarise:
+    needs: [plan, targets]
+    # A failed leg must still produce a summary that names the failure.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Download every leg's report
+        # Tolerant: a missing artifact becomes a reported missing module rather
+        # than a silently dropped one.
+        continue-on-error: true
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          pattern: mutation-report-*
+          path: mutation-reports
+          merge-multiple: true
+      - name: Render the summary
+        env:
+          TIMEOUT_TOLERANCE: ${{ inputs.timeout_tolerance }}
+        run: |
+          mkdir -p mutation-out
+          node mutation/report.mjs --dir mutation-reports \
+            --out mutation-out/summary.md \
+            --json mutation-out/summary.json \
+            --survivors mutation-out/survivors.jsonl \
+            --annotations mutation-out/annotations.txt \
+            --timeout-tolerance "${TIMEOUT_TOLERANCE:-}"
+          cat mutation-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+          node mutation/workflow.mjs summarise mutation-out/summary.json
+      - name: Annotate surviving mutants
+        # GitHub renders each annotation against its source line, so a survivor
+        # is visible without downloading an artifact. The full list is still in
+        # survivors.jsonl; this is a readable subset.
+        if: always()
+        run: |
+          if [ -f mutation-out/annotations.txt ]; then
+            cat mutation-out/annotations.txt
+          fi
+      - name: Upload the merged summary and survivor extract
+        if: always() && (inputs.upload_reports || github.event_name == 'schedule')
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mutation-summary-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: mutation-out/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Fail on an unusable measurement
+        # Never fail on a low score: the score is the measurement, not a gate.
+        # Fail when the run cannot be trusted as a measurement. A manual dispatch
+        # may switch this off to inspect a partial run.
+        if: ${{ inputs.fail_on_unusable || github.event_name == 'schedule' }}
+        env:
+          TIMEOUT_TOLERANCE: ${{ inputs.timeout_tolerance }}
+        run: node mutation/workflow.mjs require-usable mutation-out/summary.json
