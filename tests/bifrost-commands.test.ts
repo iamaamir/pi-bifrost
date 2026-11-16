@@ -1936,6 +1936,40 @@ describe("command aliases", () => {
     }
   });
 
+  it("does not save when an inherited ownership receipt disappears during init confirmation", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-receipt-race-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = join(tempDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      mkdirSync(agentDir);
+      writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({ models: { quick: ["manual/keep"] } }));
+      writeFileSync(join(agentDir, "bifrost-reconcile-ownership.json"), JSON.stringify({
+        version: 1,
+        sources: { "pi-models-v1-manual": { generated: { quick: ["manual/keep"] }, tombstones: {} } },
+      }));
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      (ctx as any).ui.confirm = async () => {
+        rmSync(join(agentDir, "bifrost-reconcile-ownership.json"));
+        return true;
+      };
+      await createCommandRouter(makeState() as never)("init", ctx);
+      assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
+      assert.ok(calls.some((call) => String(call.value).includes("Inherited config changed")));
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("shows the selected init destination in the confirmation and respects cancellation", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-confirm-"));
     const previousCwd = process.cwd();
