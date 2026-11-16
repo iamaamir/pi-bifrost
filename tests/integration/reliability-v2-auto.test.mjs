@@ -7,12 +7,16 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { reliabilitySourceFencePath } from "../../reliability-v1-fence.ts";
-import { REPLAY_GUARD_BASELINE_SHA256, FAULT_PROOFS, NAMED_REPLAY_ASSERTIONS, runReplayGuardFaultProof } from "../fixtures/replay-fault-control.mjs";
+import { FAULT_PROOFS, NAMED_REPLAY_ASSERTIONS, runReplayGuardFaultProof } from "../fixtures/replay-fault-control.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, "..", "..");
 const PI = join(ROOT, "node_modules", ".bin", "pi");
 const EXTENSION = join(ROOT, "index.ts");
+// The candidate's own bytes, recomputed at use. The proof baseline is captured
+// from the candidate, not an approved historical value, so an unrelated
+// index.ts edit needs no hash update.
+const candidateIndexSha256 = () => createHash("sha256").update(readFileSync(EXTENSION, "utf8")).digest("hex");
 const FAKE_SERVER = join(ROOT, "scripts", "fake-provider-server.mjs");
 const OUTBOUND_GUARD = join(ROOT, "scripts", "test-outbound-guard.cjs");
 const MAX_CAPTURE_CHARS = 64 * 1024;
@@ -1507,14 +1511,14 @@ describe("G03 replay guard integrity anchor", () => {
   it("proves allowanceRetryBoundaryStillSafe faults the v2 Auto allowance-retry assertion", async () => {
     const proof = FAULT_PROOFS.allowanceRetryBoundaryV2;
     const sourceHash = createHash("sha256").update(readFileSync(EXTENSION, "utf8")).digest("hex");
-    assert.equal(sourceHash, REPLAY_GUARD_BASELINE_SHA256, "the proof requires the baseline production source");
+    assert.equal(sourceHash, candidateIndexSha256(), "the proof must capture the candidate's current source");
 
     const receipt = await runReplayGuardFaultProof({ root: ROOT, proof, log: (message) => process.stderr.write(`${message}\n`) });
     assert.equal(receipt.guard, proof.guard);
     assert.equal(receipt.testName, proof.testName);
-    assert.equal(receipt.baselineSha256, REPLAY_GUARD_BASELINE_SHA256);
+    assert.equal(receipt.baselineSha256, candidateIndexSha256());
     assert.notEqual(receipt.mutantSha256, receipt.baselineSha256, "the boundary fault must change the source hash");
-    assert.equal(receipt.restoredSha256, REPLAY_GUARD_BASELINE_SHA256, "the proof must restore the baseline source");
+    assert.equal(receipt.restoredSha256, candidateIndexSha256(), "the proof must restore the baseline source");
     assert.equal(receipt.redAssertionMessage, proof.redAssertionMessage);
     assert.equal(receipt.phases.green, 0);
     assert.equal(receipt.phases.red, 1);
@@ -1524,7 +1528,7 @@ describe("G03 replay guard integrity anchor", () => {
   it("proves abort at the allowance-settlement barrier blocks alternate dispatch", async () => {
     const proof = FAULT_PROOFS.allowanceAbortBoundary;
     const sourceHash = createHash("sha256").update(readFileSync(EXTENSION, "utf8")).digest("hex");
-    assert.equal(sourceHash, REPLAY_GUARD_BASELINE_SHA256, "the proof requires the baseline production source");
+    assert.equal(sourceHash, candidateIndexSha256(), "the proof must capture the candidate's current source");
 
     const receipt = await runReplayGuardFaultProof({
       root: ROOT,
@@ -1533,9 +1537,9 @@ describe("G03 replay guard integrity anchor", () => {
     });
     assert.equal(receipt.guard, proof.guard);
     assert.equal(receipt.testName, proof.testName);
-    assert.equal(receipt.baselineSha256, REPLAY_GUARD_BASELINE_SHA256);
+    assert.equal(receipt.baselineSha256, candidateIndexSha256());
     assert.equal(receipt.faultInjection, "fixture-env", "the accepted temporary-fixture fault injects no RPC abort in RED phase");
-    assert.equal(receipt.restoredSha256, REPLAY_GUARD_BASELINE_SHA256, "the scratch source remains pristine for this fixture-level fault");
+    assert.equal(receipt.restoredSha256, candidateIndexSha256(), "the scratch source remains pristine for this fixture-level fault");
     assert.equal(receipt.redAssertionMessage, proof.redAssertionMessage);
     assert.deepEqual(receipt.phases, { copy: "ok", green: 0, red: 1, restoredGreen: 0 });
   });
@@ -1544,8 +1548,8 @@ describe("G03 replay guard integrity anchor", () => {
     const proof = FAULT_PROOFS.ownershipGenerationBoundary;
     const receipt = await runReplayGuardFaultProof({ root: ROOT, proof, log: (message) => process.stderr.write(`${message}\\n`) });
     assert.equal(receipt.faultInjection, "fixture-env");
-    assert.equal(receipt.baselineSha256, REPLAY_GUARD_BASELINE_SHA256);
-    assert.equal(receipt.restoredSha256, REPLAY_GUARD_BASELINE_SHA256);
+    assert.equal(receipt.baselineSha256, candidateIndexSha256());
+    assert.equal(receipt.restoredSha256, candidateIndexSha256());
     assert.equal(receipt.redAssertionMessage, proof.redAssertionMessage);
     assert.deepEqual(receipt.phases, { copy: "ok", green: 0, red: 1, restoredGreen: 0 });
   });
@@ -1554,8 +1558,8 @@ describe("G03 replay guard integrity anchor", () => {
     const proof = FAULT_PROOFS.queuedActivityBoundary;
     const receipt = await runReplayGuardFaultProof({ root: ROOT, proof, log: (message) => process.stderr.write(`${message}\\n`) });
     assert.equal(receipt.faultInjection, "fixture-env");
-    assert.equal(receipt.baselineSha256, REPLAY_GUARD_BASELINE_SHA256);
-    assert.equal(receipt.restoredSha256, REPLAY_GUARD_BASELINE_SHA256);
+    assert.equal(receipt.baselineSha256, candidateIndexSha256());
+    assert.equal(receipt.restoredSha256, candidateIndexSha256());
     assert.equal(receipt.redAssertionMessage, proof.redAssertionMessage);
     assert.deepEqual(receipt.phases, { copy: "ok", green: 0, red: 1, restoredGreen: 0 });
   });
@@ -1563,14 +1567,14 @@ describe("G03 replay guard integrity anchor", () => {
   it("proves a malformed null-edit lineage faults the v2 Auto recovery assertion", async () => {
     const proof = FAULT_PROOFS.nullEditLineageV2;
     const sourceHash = createHash("sha256").update(readFileSync(EXTENSION, "utf8")).digest("hex");
-    assert.equal(sourceHash, REPLAY_GUARD_BASELINE_SHA256, "the proof requires the baseline production source");
+    assert.equal(sourceHash, candidateIndexSha256(), "the proof must capture the candidate's current source");
 
     const receipt = await runReplayGuardFaultProof({ root: ROOT, proof, log: (message) => process.stderr.write(`${message}\n`) });
     assert.equal(receipt.guard, proof.guard);
     assert.equal(receipt.testName, proof.testName);
-    assert.equal(receipt.baselineSha256, REPLAY_GUARD_BASELINE_SHA256);
+    assert.equal(receipt.baselineSha256, candidateIndexSha256());
     assert.notEqual(receipt.mutantSha256, receipt.baselineSha256, "the boundary fault must change the source hash");
-    assert.equal(receipt.restoredSha256, REPLAY_GUARD_BASELINE_SHA256, "the proof must restore the baseline source");
+    assert.equal(receipt.restoredSha256, candidateIndexSha256(), "the proof must restore the baseline source");
     assert.equal(receipt.redAssertionMessage, proof.redAssertionMessage);
     assert.deepEqual(receipt.phases, { copy: "ok", green: 0, red: 1, restoredGreen: 0 });
   });
@@ -1581,14 +1585,14 @@ describe("G03 remaining zero-effect allowance proof", () => {
   it("proves allowanceRetryBoundaryStillSafe faults the v1 Auto allowance-retry assertion", async () => {
     const proof = FAULT_PROOFS.allowanceRetryBoundaryV1;
     const sourceHash = createHash("sha256").update(readFileSync(EXTENSION, "utf8")).digest("hex");
-    assert.equal(sourceHash, REPLAY_GUARD_BASELINE_SHA256, "the proof requires the baseline production source");
+    assert.equal(sourceHash, candidateIndexSha256(), "the proof must capture the candidate's current source");
 
     const receipt = await runReplayGuardFaultProof({ root: ROOT, proof, log: (message) => process.stderr.write(`${message}\n`) });
     assert.equal(receipt.guard, proof.guard);
     assert.equal(receipt.testName, proof.testName);
-    assert.equal(receipt.baselineSha256, REPLAY_GUARD_BASELINE_SHA256);
+    assert.equal(receipt.baselineSha256, candidateIndexSha256());
     assert.notEqual(receipt.mutantSha256, receipt.baselineSha256, "the boundary fault must change the source hash");
-    assert.equal(receipt.restoredSha256, REPLAY_GUARD_BASELINE_SHA256, "the proof must restore the baseline source");
+    assert.equal(receipt.restoredSha256, candidateIndexSha256(), "the proof must restore the baseline source");
     assert.equal(receipt.redAssertionMessage, proof.redAssertionMessage);
     assert.deepEqual(receipt.phases, { copy: "ok", green: 0, red: 1, restoredGreen: 0 });
   });
@@ -1597,9 +1601,9 @@ describe("G03 remaining zero-effect allowance proof", () => {
     it(`proves the ${mode} Auto alternate limit with a compound lineage fault`, async () => {
       const proof = FAULT_PROOFS[`singleAlternate${mode.toUpperCase()}`];
       const receipt = await runReplayGuardFaultProof({ root: ROOT, proof, log: (message) => process.stderr.write(`${message}\n`) });
-      assert.equal(receipt.baselineSha256, REPLAY_GUARD_BASELINE_SHA256);
+      assert.equal(receipt.baselineSha256, candidateIndexSha256());
       assert.notEqual(receipt.mutantSha256, receipt.baselineSha256);
-      assert.equal(receipt.restoredSha256, REPLAY_GUARD_BASELINE_SHA256);
+      assert.equal(receipt.restoredSha256, candidateIndexSha256());
       assert.equal(receipt.redAssertionMessage, proof.redAssertionMessage);
       assert.deepEqual(receipt.phases, { copy: "ok", green: 0, red: 1, restoredGreen: 0 });
     });

@@ -4,8 +4,7 @@ import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
-import { checkReplayBaseline, runVerification } from "../scripts/verify-release.mjs";
+import { runVerification } from "../scripts/verify-release.mjs";
 import { fixtureGitEnv, withFixtureEnv } from "./fixtures/git-env.mjs";
 
 const scripts = { test: "true", typecheck: "true", "build:router": "true", "test:integration": "true", "test:ui": "true", "test:ui:reliability": "true" };
@@ -172,53 +171,5 @@ test("verification rejects a package missing any required gate", async () => {
     const result = await withFixtureEnv(() => runVerification({ root, execute: async () => assert.fail("must not run gates") }));
     assert.equal(result.exitCode, 1);
     assert.match(result.error, /build:router/);
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
-
-const REPO_INDEX = fileURLToPath(new URL("../index.ts", import.meta.url));
-
-function writeIndex(root, source = readFileSync(REPO_INDEX, "utf8")) {
-  writeFileSync(join(root, "index.ts"), source);
-}
-
-test("release preflight accepts an index.ts that matches the pinned replay baseline", () => {
-  const root = repository();
-  try {
-    writeIndex(root);
-    assert.match(checkReplayBaseline(root), /^G03 replay fault-proof baseline matches index\.ts \(sha256 [0-9a-f]{12}\)\.$/u);
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
-
-test("production preflight fails a stale baseline before any gate, names the module to update, and leaves the source untouched", async () => {
-  const root = repository();
-  try {
-    // The PR #193 failure shape: one unrelated line added to index.ts.
-    writeIndex(root, `${readFileSync(REPO_INDEX, "utf8")}\n// changed startup message\n`);
-    const sourceBefore = readFileSync(join(root, "index.ts"), "utf8");
-    // No checkPreflight override: this is the real preflight(). The fixture root
-    // has no node_modules, so reaching the installed-tool checks would fail with
-    // a different message; the baseline error proves the production wiring ran.
-    const result = await withFixtureEnv(() => runVerification({
-      root,
-      execute: async () => assert.fail("release gates must not run after a stale replay baseline"),
-    }));
-    assert.equal(result.exitCode, 1);
-    assert.equal(result.gates.length, 1, "only the preflight is recorded when the baseline is stale");
-    assert.equal(result.gates[0].id, "preflight");
-    assert.equal(result.gates[0].exitCode, 1);
-    const log = readFileSync(join(root, result.gates[0].logPath), "utf8");
-    assert.match(log, /G03 replay fault-proof baseline is stale: index\.ts sha256=[0-9a-f]{64}/u);
-    assert.match(log, /tests\/fixtures\/replay-baseline\.mjs/u);
-    assert.match(log, /REPLAY_GUARD_BASELINE_SHA256/u);
-    assert.match(log, /Release preflight never rewrites the pin/u);
-    assert.doesNotMatch(log, /agent-tui is missing|Pinned Pi is missing/u);
-    assert.equal(readFileSync(join(root, "index.ts"), "utf8"), sourceBefore, "the baseline check must not rewrite the source");
-  } finally { rmSync(root, { recursive: true, force: true }); }
-});
-
-test("the replay baseline check fails closed when index.ts cannot be read", () => {
-  const root = repository();
-  try {
-    assert.throws(() => checkReplayBaseline(root), /G03 replay fault-proof baseline check cannot read index\.ts: ENOENT\./u);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

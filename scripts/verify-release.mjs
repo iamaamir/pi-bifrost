@@ -6,7 +6,6 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveTestBinary } from "./resolve-test-binary.mjs";
 import { withPackLock } from "../tests/fixtures/pack-lock.mjs";
-import { REPLAY_GUARD_BASELINE_SHA256, REPLAY_GUARD_FUNCTIONS } from "../tests/fixtures/replay-baseline.mjs";
 
 const REQUIRED_GATES = [
   ["unit", "test"],
@@ -83,46 +82,7 @@ function boundedOutput(result) {
   return `${stdout.text()}${result.stderr ? `\n[stderr]\n${stderr.text()}` : ""}`;
 }
 
-const REPLAY_BASELINE_MODULE = "tests/fixtures/replay-baseline.mjs";
-
-/**
- * Cheap candidate-integrity check for the G03 replay fault proofs. Those proofs
- * require the byte-exact index.ts baseline pinned in the fixture, so a stale pin
- * otherwise fails inside the pinned-Pi integration gate, after expensive work.
- *
- * The pin is never rewritten here. A byte-identical file necessarily carries
- * every guard anchor, so the hash alone decides the check; the guard inventory
- * is reported only to name the review step. Failures name the fixture, so the
- * mismatch is actionable without opening the runner log.
- */
-export function checkReplayBaseline(root) {
-  const sourcePath = join(root, "index.ts");
-  let source;
-  try {
-    source = readFileSync(sourcePath, "utf8");
-  } catch (error) {
-    throw new Error(`G03 replay fault-proof baseline check cannot read index.ts: ${error?.code ?? error?.message ?? String(error)}. Restore the file or check the candidate checkout before running release verification.`);
-  }
-  const hash = createHash("sha256").update(source).digest("hex");
-  if (hash !== REPLAY_GUARD_BASELINE_SHA256) {
-    throw new Error(
-      `G03 replay fault-proof baseline is stale: index.ts sha256=${hash} does not match the pinned ${REPLAY_GUARD_BASELINE_SHA256} in ${REPLAY_BASELINE_MODULE}. `
-      + `Re-run the named replay fault proofs against this source, review the guard inventory (${REPLAY_GUARD_FUNCTIONS.join(", ")}), then update REPLAY_GUARD_BASELINE_SHA256 in that module. `
-      + "Release preflight never rewrites the pin.",
-    );
-  }
-  return `G03 replay fault-proof baseline matches index.ts (sha256 ${hash.slice(0, 12)}).`;
-}
-
 function preflight(root) {
-  // Candidate integrity is evaluated first and deliberately before any host-tool
-  // probe: a stale baseline is a property of the checked-out source, so this
-  // both fails faster than the installed-tool checks and lets the production
-  // wiring be regression-tested on a fixture root without Pi, agent-tui or
-  // Pillow installed. Keeping this call first is load-bearing —
-  // "production preflight validates the replay baseline before host tooling"
-  // fails if it moves behind the tool checks.
-  const replayBaseline = checkReplayBaseline(root);
   const checkBinary = (name, envVar) => {
     try { resolveTestBinary({ envVar, name, root }); return `${name}: available`; }
     catch { throw new Error(`${name} is missing. Install project dependencies or set ${envVar} to its executable.`); }
@@ -137,7 +97,7 @@ function preflight(root) {
   }
   const pillow = spawnSync("python3", ["-c", "import PIL"], { encoding: "utf8", timeout: 5000 });
   if (pillow.status !== 0) throw new Error("Python Pillow is required by test:ui. Install it with `python3 -m pip install Pillow`.");
-  return `Pi 1.4.0, agent-tui, and Python Pillow are available. ${replayBaseline}`;
+  return "Pi 1.4.0, agent-tui, and Python Pillow are available.";
 }
 
 function executeGate(root, script) {

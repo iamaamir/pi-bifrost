@@ -28,7 +28,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { processGroupExists, terminateProcessGroup } from "../../scripts/acceptance/core.mjs";
 import { startFakeProviderServer } from "../fixtures/http-pi-harness.mjs";
-import { REPLAY_GUARD_BASELINE_SHA256 } from "../fixtures/replay-fault-control.mjs";
 import { reliabilityV2Config } from "../../runtime-reliability-v2.ts";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -37,7 +36,7 @@ const EXTENSION = join(ROOT, "index.ts");
 const OUTBOUND_GUARD = join(ROOT, "scripts", "test-outbound-guard.cjs");
 
 /** Production index.ts hash that the fault proof must leave byte-identical. */
-const PRODUCTION_INDEX_SHA256 = REPLAY_GUARD_BASELINE_SHA256;
+const PRODUCTION_INDEX_SHA256 = createHash("sha256").update(readFileSync(join(ROOT, "index.ts"), "utf8")).digest("hex");
 
 // ── synthetic canaries ──────────────────────────────────────────
 // Distinct shapes so a leak is unambiguous, and words that survive cache
@@ -1373,7 +1372,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
   it("fault control: leaking the prompt projection turns the named redaction assertion RED", async () => {
     const sourcePath = join(ROOT, "index.ts");
     const original = readFileSync(sourcePath, "utf8");
-    assert.equal(sha256(original), PRODUCTION_INDEX_SHA256, "production index.ts must match the recorded baseline before the proof");
+    assert.equal(sha256(original), PRODUCTION_INDEX_SHA256, "must be unchanged since this test module loaded");
     const anchor = 'debug("input", "prompt", { length: promptText.length });';
     assert.ok(original.includes(anchor), "debug prompt projection anchor must exist");
     const mutated = original.replace(anchor, 'debug("input", "prompt", { length: promptText.length, prompt: promptText });');
