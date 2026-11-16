@@ -10,7 +10,11 @@ type CostTheme = Pick<ExtensionContext["ui"]["theme"], "fg">;
 function cost(usage: CostTotals): string {
   if (!usage.count || usage.count === usage.unknownCost) return "unavailable";
   const known = `$${usage.cost.toFixed(6)}`;
-  return usage.unknownCost ? `${known} known + unknown (${usage.unknownCost})` : known;
+  return usage.unknownCost ? `${known} known + unknown (${usage.unknownCost} unpriced)` : known;
+}
+
+function summary(usage: CostTotals, malformed = 0): string {
+  return `${cost(usage)}${malformed ? " + unknown" : ""}${usage.incomplete ? " · partial" : ""}`;
 }
 
 function details(id: string, usage: CostTotals): ExpandableRow[] {
@@ -54,7 +58,7 @@ function modelRows(data: CostReportData): ExpandableRow[] {
 }
 
 export function formatCostText(data: CostReportData): string[] {
-  const lines = ["Session usage · Pi-recorded estimates", `Current branch: ${cost(data.activeBranch.totals)}${data.activeBranch.malformed ? " + unknown" : ""}`, `All retained: ${cost(data.allRetained.totals)}${data.allRetained.totals.incomplete && !data.allRetained.totals.unknownCost ? " · partial" : ""}`, "", "Requests (derived from user-message boundaries)"];
+  const lines = ["Session usage · Pi-recorded estimates", `Current branch: ${summary(data.activeBranch.totals, data.activeBranch.malformed)}`, `All retained: ${summary(data.allRetained.totals)}`, "", "Requests (derived from user-message boundaries)"];
   const append = (rows: readonly ExpandableRow[], depth = 0) => {
     for (const row of rows) {
       lines.push(`${"  ".repeat(depth)}${row.label}${row.detail ? ` · ${row.detail}` : ""}`);
@@ -98,8 +102,7 @@ export class CostView {
     const fit = (text: string) => sliceByColumn(text, 0, Math.max(0, width), true);
     if (width < 20 || this.size().rows < 9) return [fit("Resize terminal · Esc closes")];
     const selected = this.view === "requests" ? this.requests : this.models;
-    const partial = this.data.activeBranch.malformed ? " + unknown" : "";
-    const header = ["Session usage · Pi-recorded estimates", `Current branch  ${cost(this.data.activeBranch.totals)}${partial}`, `All retained    ${cost(this.data.allRetained.totals)}${this.data.allRetained.totals.incomplete && !this.data.allRetained.totals.unknownCost ? " · partial" : ""}`, this.view === "requests" ? "[Requests]  Models" : " Requests  [Models]"].flatMap((line) => wrapApprovalLines(line, width));
+    const header = ["Session usage · Pi-recorded estimates", `Current branch  ${summary(this.data.activeBranch.totals, this.data.activeBranch.malformed)}`, `All retained    ${summary(this.data.allRetained.totals)}`, this.view === "requests" ? "[Requests]  Models" : " Requests  [Models]"].flatMap((line) => wrapApprovalLines(line, width));
     const footer = wrapApprovalLines("↑↓ move · Enter expand · Tab view · Esc close", width);
     this.bodyHeight = Math.floor(this.size().rows * 0.8) - header.length - footer.length - 4;
     if (this.bodyHeight < 1) return [fit("Resize terminal · Esc closes")];

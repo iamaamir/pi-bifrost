@@ -60,3 +60,21 @@ it("shows aggregated current-branch model totals in plain text", () => {
   const text = formatCostText(getCostReportData(branch, branch)).join("\n");
   assert.match(text, /Models \(current branch\)[\s\S]*p\/m · \$0\.300000/);
 });
+
+it("marks partial token data even when another record has unknown cost", () => {
+  const entries = [
+    { type: "message", message: { role: "assistant", provider: "p", model: "a", usage: { input: 1, output: 0, cacheRead: 0, cost: { total: 0.1 } } } },
+    { type: "message", message: { role: "assistant", provider: "p", model: "b", usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 } } },
+    { type: "message", message: null },
+  ] as any;
+  const data = getCostReportData(entries, entries);
+  const text = formatCostText(data).join("\n");
+  assert.match(text, /Current branch: .*partial/);
+  assert.match(text, /All retained: .*unknown \(1 unpriced\) · partial/);
+  const view = new CostView(data, () => ({ columns: 100, rows: 30 }), { fg: (_color, value) => value }, () => {}, () => {});
+  const screen = view.render(90).join("\n");
+  assert.match(screen, /Current branch .*partial/);
+  assert.match(screen, /All retained .*partial/);
+  const tokensOnly = formatCostText(getCostReportData(entries.slice(0, 1), entries.slice(0, 1))).join("\n");
+  assert.match(tokensOnly, /Current branch: \$0\.100000 · partial/);
+});
