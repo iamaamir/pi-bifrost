@@ -351,24 +351,29 @@ test("Bun is the default runner because it covers per test, not per file", () =>
   }
 });
 
-test("a target Bun cannot run falls back to TAP, and only for a stated reason", () => {
-  // tests/reliability-migration.test.ts asserts Node fsync-on-lock-file failure
-  // semantics that Bun does not reproduce, so its dry run aborts. Excluding the
-  // file would silently stop measuring the mutants it kills.
+test("the TAP fallback still works, and every override must name a real blocker", () => {
+  // The fallback has to keep working even while unused, or the mechanism rots.
+  for (const target of targetNames()) {
+    const tap = targetConfig(target, { runner: "tap" });
+    assert.equal(tap.testRunner, "tap");
+    assert.equal(tap.coverageAnalysis, "perTest", "TAP also gives perTest, at file granularity");
+    assert.deepEqual(tap.tap.testFiles, bindingFor(target));
+    assert.ok(tap.tap.nodeArgs.includes("--test-reporter=tap"), "node:test must emit TAP for Stryker");
+    assert.equal("appendPlugins" in tap, false, "the TAP runner is an official plugin, loaded by name");
+  }
+
+  // Every override must be justified by a listed blocker. An unexplained
+  // override is how a temporary workaround becomes permanent folklore.
   for (const [target, runner] of Object.entries(RUNNER_OVERRIDES)) {
     assert.ok(targetNames().includes(target), `${target} must be a real target`);
-    const config = targetConfig(target);
-    assert.equal(config.testRunner, runner);
-    assert.equal(config.coverageAnalysis, "perTest", "TAP also gives perTest, at file granularity");
-    assert.deepEqual(config.tap.testFiles, bindingFor(target));
-    assert.ok(config.tap.nodeArgs.includes("--test-reporter=tap"), "node:test must emit TAP for Stryker");
-    assert.equal("appendPlugins" in config, false, "the TAP runner is an official plugin, loaded by name");
-  }
-  // Every override is justified: an unexplained one is how a temporary
-  // workaround becomes permanent folklore.
-  for (const target of Object.keys(RUNNER_OVERRIDES)) {
+    assert.equal(runnerFor(target), runner);
     const blocked = bindingFor(target).some((file) => file in BUN_INCOMPATIBLE_TESTS);
-    assert.ok(blocked, `${target} must actually bind a Bun-incompatible file: ${Object.keys(BUN_INCOMPATIBLE_TESTS)}`);
+    assert.ok(blocked, `${target} must actually bind a Bun-incompatible file`);
+  }
+  // And no blocker may be listed without being used, so the list stays truthful.
+  for (const file of Object.keys(BUN_INCOMPATIBLE_TESTS)) {
+    const used = Object.keys(RUNNER_OVERRIDES).some((target) => bindingFor(target).includes(file));
+    assert.ok(used, `${file} is listed as Bun-incompatible but no overridden target binds it`);
   }
 });
 
@@ -549,7 +554,8 @@ test("all tunable Stryker parameters live in one config file", () => {
   assert.ok(["bun", "tap"].includes(TEST_RUNNER), "the runner choice lives in config");
   assert.ok(Array.isArray(TAP_NODE_ARGS) && TAP_NODE_ARGS.length > 0, "the TAP node args live in config");
   assert.ok(typeof BUN_RUNNER_PLUGIN === "string" && BUN_RUNNER_PLUGIN.length > 0, "the Bun plugin id lives in config");
-  assert.ok(Object.keys(RUNNER_OVERRIDES).length > 0, "the runner overrides live in config");
+  assert.equal(typeof RUNNER_OVERRIDES, "object", "the runner overrides live in config");
+  assert.equal(typeof BUN_INCOMPATIBLE_TESTS, "object", "the Bun blocker list lives in config");
   assert.equal(STRYKER_OPTIONS.thresholds.break, null, "the measurement must never fail a run on a low score");
   assert.ok(Array.isArray(SANDBOX_IGNORES));
   assert.ok(SUMMARY.survivorsPerModule > 0);
@@ -645,6 +651,12 @@ test("the root Stryker shim forwards the shard scope", () => {
 
 test("the plan projects inside the time budget and refuses when it cannot", () => {
   const plan = planMatrix({});
+  // Every module must appear exactly once per shard. A module silently dropped
+  // from the matrix is an unmeasured module reporting nothing, not a pass.
+  assert.deepEqual([...new Set(plan.include.map((leg) => leg.target))].sort(), [...targetNames()].sort());
+  for (const target of targetNames()) {
+    assert.equal(plan.include.filter((leg) => leg.target === target).length, suggestedShards(target));
+  }
   // Legs run in parallel, so wall clock is the slowest leg plus fixed overhead.
   assert.ok(
     plan.projectedMinutes <= TIME_BUDGET.minutes,
