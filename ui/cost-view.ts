@@ -3,7 +3,9 @@ import { matchesKey, sliceByColumn } from "@earendil-works/pi-tui";
 import { ExpandableRows, type ExpandableRow } from "./expandable-rows.ts";
 import type { CostReportData, CostTotals } from "../cost-report.ts";
 import { wrapApprovalLines } from "./config-approval.ts";
-import { renderPanel, type PanelTheme } from "./panel.ts";
+import { renderPanel } from "./panel.ts";
+
+type CostTheme = Pick<ExtensionContext["ui"]["theme"], "fg" | "style" | "colors">;
 
 function cost(usage: CostTotals): string {
   if (!usage.count || usage.count === usage.unknownCost) return "unavailable";
@@ -69,12 +71,12 @@ export class CostView {
   private readonly models: ExpandableRows;
   private readonly data: CostReportData;
   private readonly size: () => { columns: number; rows: number };
-  private readonly theme: PanelTheme;
+  private readonly theme: CostTheme;
   private readonly done: () => void;
   private readonly requestRender: () => void;
   private bodyHeight = 1;
 
-  constructor(data: CostReportData, size: () => { columns: number; rows: number }, theme: PanelTheme, done: () => void, requestRender: () => void) {
+  constructor(data: CostReportData, size: () => { columns: number; rows: number }, theme: CostTheme, done: () => void, requestRender: () => void) {
     this.data = data; this.size = size; this.theme = theme; this.done = done; this.requestRender = requestRender;
     const available = () => ({ ...this.size(), rows: this.bodyHeight + 2 });
     this.requests = new ExpandableRows(requestRows(data), theme, available, () => {}, requestRender);
@@ -85,7 +87,7 @@ export class CostView {
 
   render(width: number): string[] {
     const contentWidth = Math.max(0, width - 4);
-    return renderPanel(this.renderContent(contentWidth), width, this.theme);
+    return renderPanel(this.renderContent(contentWidth), width, this.theme, (text) => this.theme.style(text, { bg: this.theme.colors.selectedBg }));
   }
 
   private renderContent(width: number): string[] {
