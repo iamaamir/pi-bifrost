@@ -14,11 +14,6 @@ on:
         options:
           - default
           - expanded
-      mutation:
-        description: "Also run the opt-in four-module Stryker mutation experiment (slow)"
-        required: false
-        default: false
-        type: boolean
       campaign_repeats:
         description: "Campaign attempts per target (1-5)"
         required: false
@@ -479,38 +474,5 @@ jobs:
         with:
           name: pi-compatibility-${{ matrix.pi }}-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/pi-compatibility-versions.json
-          if-no-files-found: ignore
-          retention-days: 14
-
-  # Opt-in mutation experiment. Manual boolean input only: it never runs on
-  # PR/push/schedule, keeps low concurrency and hard job plus step bounds, and
-  # uploads the existing Stryker JSON report and file log even on failure. The
-  # existing four-module config keeps its disclosed focused binding and
-  # survivor limits; no mutation score threshold is enforced here.
-  mutation-experiment:
-    if: github.event_name == 'workflow_dispatch' && inputs.mutation == true
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # v7.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - name: Run the four-module Stryker experiment with bounded concurrency
-        timeout-minutes: 55
-        run: npx stryker run --concurrency 2 --maxConcurrentTestRunners 2 --fileLogLevel info
-      - name: Upload mutation report and log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: mutation-experiment-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: |
-            reports/mutation/
-            stryker.log
           if-no-files-found: ignore
           retention-days: 14
