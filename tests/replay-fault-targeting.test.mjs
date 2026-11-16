@@ -278,9 +278,42 @@ test("fails closed instead of adopting the next function's body", () => {
   assert.notEqual(bodyless, REAL_INDEX);
   assert.throws(
     () => injectGuardStatement(bodyless, "autoBoundaryStillActive", "return false;"),
-    /escapes into the following declaration/u,
+    /replay guard (has no body|anchor not found)/u,
     "a missing body must never borrow the following declaration's brace",
   );
+});
+
+test("fails closed on an overload pair for the same guard", () => {
+  const overloaded = REAL_INDEX.replace(
+    functionText(REAL_INDEX, AUTO_BOUNDARY_SIGNATURE),
+    "  function autoBoundaryStillActive(ctx: ExtensionContext, boundary: AutoUserBoundary): boolean;\n"
+      + "  function autoBoundaryStillActive(ctx: ExtensionContext, boundary: AutoUserBoundary): boolean { return false; }",
+  );
+  assert.notEqual(overloaded, REAL_INDEX);
+  assert.throws(
+    () => injectGuardStatement(overloaded, "autoBoundaryStillActive", "return false;"),
+    /ambiguous \(2 matches\)/u,
+    "two declarations named like the guard are ambiguous, even when one has a body",
+  );
+});
+
+test("targets the guard when a standalone block follows it", () => {
+  const block = "\n{\n  const localOnly = 1;\n  void localOnly;\n}\n";
+  const guardEnd = REAL_INDEX.indexOf("\n  function turnUserBoundary(");
+  const candidate = `${REAL_INDEX.slice(0, guardEnd)}${block}${REAL_INDEX.slice(guardEnd)}`;
+  assert.notEqual(candidate, REAL_INDEX);
+
+  const mutant = injectGuardStatement(candidate, "autoBoundaryStillActive", "return false;");
+  assertInsideGuard(mutant, AUTO_BOUNDARY_SIGNATURE, "return false;");
+  assert.ok(mutant.includes(block), "the standalone block must be byte-identical");
+  for (const signature of ADJACENT) {
+    assert.equal(functionText(mutant, signature), functionText(candidate, signature),
+      `${signature} must be byte-identical after the mutation`);
+  }
+  const brace = candidate.indexOf(AUTO_BOUNDARY_SIGNATURE) + AUTO_BOUNDARY_SIGNATURE.length - 1;
+  assert.equal(mutant,
+    `${candidate.slice(0, brace + 1)}\n    return false;${candidate.slice(brace + 1)}`,
+    "the fault must be inserted at the guard's own body brace, not the block that follows it");
 });
 
 test("runs the full proof on a guard whose body opens with a comment", async () => {
