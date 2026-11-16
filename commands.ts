@@ -520,6 +520,103 @@ function readInheritedConfigSnapshot(path: string): string | null {
   return text;
 }
 
+interface InheritedTierPool {
+  readonly pool: readonly string[];
+  /** Model keys this layer's ownership receipt generated; everything else is handwritten. */
+  readonly receiptGenerated: ReadonlySet<string>;
+}
+
+interface InheritedPoolSnapshot {
+  readonly path: string;
+  readonly text: string | null;
+}
+
+interface InheritedPools {
+  /** Per-layer config snapshots, kept for the confirmation-time change re-check. */
+  readonly snapshots: readonly InheritedPoolSnapshot[];
+  readonly tierNames: ReadonlySet<string>;
+  /** tier -> pool and receipt coverage; a later layer replaces an earlier one. */
+  readonly effective: ReadonlyMap<string, InheritedTierPool>;
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeModelPool(value: unknown): readonly string[] {
+  if (typeof value === "string") return [value];
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
+function mergeTierKeys(byTier: Map<string, Set<string>>, tier: string, keys: unknown): void {
+  const existing = byTier.get(tier) ?? new Set<string>();
+  for (const key of normalizeModelPool(keys)) existing.add(key);
+  byTier.set(tier, existing);
+}
+
+/** Receipt-generated model keys per tier; an unreadable receipt protects every pool as handwritten. */
+function receiptGeneratedKeys(text: string | null): ReadonlyMap<string, ReadonlySet<string>> {
+  const byTier = new Map<string, Set<string>>();
+  if (text === null) return byTier;
+  try {
+    const receipt = JSON.parse(text) as { sources?: unknown };
+    if (!isJsonObject(receipt.sources)) return byTier;
+    for (const source of Object.values(receipt.sources)) {
+      if (!isJsonObject(source) || !isJsonObject(source.generated)) continue;
+      for (const [tier, keys] of Object.entries(source.generated)) mergeTierKeys(byTier, tier, keys);
+    }
+  } catch { /* fail safe toward treating pools as handwritten */ }
+  return byTier;
+}
+
+function parseInheritedConfig(text: string): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(text);
+  if (!isJsonObject(parsed)) throw new Error("invalid inherited config");
+  return parsed;
+}
+
+function readInheritedLayerPools(layer: ReconciliationConfigSource): { path: string; text: string | null; tiers: ReadonlyMap<string, InheritedTierPool> } {
+  const paths = reconciliationPaths(layer);
+  const text = readInheritedConfigSnapshot(paths.configPath);
+  const parsed = text === null ? {} : parseInheritedConfig(text);
+  const receiptKeys = receiptGeneratedKeys(readInheritedConfigSnapshot(paths.ownershipPath));
+  const rawPools = isJsonObject(parsed.models) ? parsed.models : {};
+  const tiers = new Map(Object.entries(rawPools).map(([tier, raw]) => [tier, {
+    pool: normalizeModelPool(raw),
+    receiptGenerated: receiptKeys.get(tier) ?? new Set<string>(),
+  }]));
+  return { path: paths.configPath, text, tiers };
+}
+
+function readInheritedPools(layers: readonly ReconciliationConfigSource[]): InheritedPools {
+  const layerPools = layers.map(readInheritedLayerPools);
+  return {
+    snapshots: layerPools.map(({ path, text }) => ({ path, text })),
+    tierNames: new Set(layerPools.flatMap(({ tiers }) => [...tiers.keys()])),
+    effective: new Map(layerPools.flatMap(({ tiers }) => [...tiers])),
+  };
+}
+
+function sameMembership(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((key, index) => key === right[index]);
+}
+
+/** Init shadows a tier when it would replace a different pool that still holds handwritten models. */
+function isShadowedTier(proposed: readonly string[], inherited: InheritedTierPool): boolean {
+  const hasHandwrittenModel = inherited.pool.some((key) => !inherited.receiptGenerated.has(key));
+  return hasHandwrittenModel && !sameMembership(proposed, inherited.pool);
+}
+
+function findShadowedTiers(
+  proposed: Readonly<Record<string, readonly string[]>>,
+  ownedTiers: Readonly<Record<string, unknown>>,
+  inherited: ReadonlyMap<string, InheritedTierPool>,
+): string[] {
+  return Object.keys(proposed)
+    .filter((tier) => !Object.hasOwn(ownedTiers, tier) && inherited.has(tier))
+    .filter((tier) => isShadowedTier(proposed[tier], inherited.get(tier)!));
+}
+
 function selectInitSource(): ReconciliationSourceSnapshot {
   const project = readReconciliationSource("project");
   if (project.configBytes !== null || project.ownershipBytes !== null) return project;
@@ -1078,25 +1175,16 @@ async function handleInit(
   }
   const sourceModels = sourceConfig.models && typeof sourceConfig.models === "object" && !Array.isArray(sourceConfig.models)
     ? sourceConfig.models as Record<string, unknown> : {};
-  const inheritedSources: { path: string; text: string | null }[] = [];
-  const inheritedTiers = new Set<string>();
+  let inheritedSources: readonly InheritedPoolSnapshot[] = [];
+  let inheritedTiers: ReadonlySet<string> = new Set<string>();
   if (selectedSource === "project") {
     try {
-      for (const layer of ["user", "workspace"] as const) {
-        const path = reconciliationPaths(layer).configPath;
-        const text = readInheritedConfigSnapshot(path);
-        inheritedSources.push({ path, text });
-        if (text === null) continue;
-        const parsed: unknown = JSON.parse(text);
-        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid inherited config");
-        const pools = (parsed as Record<string, unknown>).models;
-        if (pools && typeof pools === "object" && !Array.isArray(pools)) {
-          for (const tier of Object.keys(pools)) inheritedTiers.add(tier);
-        }
-      }
-      const conflict = Object.keys(models).filter((tier) => inheritedTiers.has(tier) && !Object.hasOwn(sourceModels, tier));
-      if (conflict.length) {
-        log(ctx, `Init would shadow inherited model pools (${conflict.join(", ")}); no configuration was changed. Edit the existing source, use /bifrost init -g for global config, or review /bifrost config reconcile --source workspace.`, "warning");
+      const inherited = readInheritedPools(["user", "workspace"]);
+      inheritedSources = inherited.snapshots;
+      inheritedTiers = inherited.tierNames;
+      const shadowedTiers = findShadowedTiers(models, sourceModels, inherited.effective);
+      if (shadowedTiers.length > 0) {
+        log(ctx, `Init would shadow inherited model pools (${shadowedTiers.join(", ")}); no configuration was changed. Edit the existing source, use /bifrost init -g for global config, or review /bifrost config reconcile --source workspace.`, "warning");
         return;
       }
     } catch {
