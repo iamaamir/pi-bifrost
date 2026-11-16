@@ -88,6 +88,16 @@ function inventory() {
 }
 
 /**
+ * Whether this invocation owns the target's whole report set and may clear it.
+ * Clearing assumes we are writing every report the target has. An explicit
+ * `--report` names one file the operator owns, so two invocations writing sibling
+ * shards must not delete each other's results.
+ */
+export function shouldClearReports(options) {
+  return !options.report;
+}
+
+/**
  * Whether a file in the report directory is one of `target`'s own reports.
  * Exact-name and exact-suffix only: `cache.ts` must never match
  * `cache-classifier.ts.json`, because deleting another module's report would
@@ -168,7 +178,7 @@ function main() {
   });
 
   for (const run of runs) {
-    clearPreviousReports(run.target);
+    if (shouldClearReports(options)) clearPreviousReports(run.target);
     console.log(`\n=== ${run.label} (${bindingFor(run.target).length} bound test files) ===`);
     const args = ["stryker", "run"];
     if (options.concurrency) args.push("--concurrency", options.concurrency);
