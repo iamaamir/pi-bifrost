@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { execPath } from "node:process";
-import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -231,6 +231,7 @@ it("cancels real AgentSession activation behind a proven deny-all fence", async 
       for (const file of readdirSync(root)) {
         if (file.endsWith(".ts") || file === "bifrost.json" || file === "schema.json") copyFileSync(join(root, file), join(mutantDir, file));
       }
+      cpSync(join(root, "ui"), join(mutantDir, "ui"), { recursive: true });
       writeFileSync(join(mutantDir, "index.ts"), source);
       symlinkSync(join(root, "node_modules"), join(mutantDir, "node_modules"));
       return join(mutantDir, "index.ts");

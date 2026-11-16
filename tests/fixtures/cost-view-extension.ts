@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getCostReportData } from "../../cost-report.ts";
-import { showCostView } from "../../cost-view.ts";
+import { showCostView } from "../../ui/cost-view.ts";
 
 const entries = [
   { type: "message", message: { role: "user", content: [{ type: "text", text: "synthetic fixture" }] } },

@@ -21,7 +21,7 @@ import {
   type ConfigAgentPreviewResult,
 } from "../config-agent.ts";
 import { reportText } from "../config-agent-report.ts";
-import type { ConfigApproval } from "../config-approval.ts";
+import type { ConfigApproval } from "../ui/config-approval.ts";
 import { SUPPORTED_SCHEMA_VERSIONS, type BifrostConfig } from "../config.ts";
 import { loadConfigForReload } from "../config-load.ts";
 import { classifyCompiled, compileRules } from "../routing.ts";

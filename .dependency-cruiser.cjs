@@ -11,7 +11,7 @@
  * A rule only belongs here when the current tree passes it. `npm run check:arch`
  * is the enforcement point; `npm run check:arch:json` produces the raw graph.
  */
-const HOST_ADAPTERS = "^(index|commands|ux-status|result-viewer|probe)\\.ts$";
+const HOST_ADAPTERS = "^(?:(?:index|commands|probe)\\.ts|ui/(?:ux-status|result-viewer)\\.ts)$";
 const ADAPTER_OWNERS = "^(index|commands)\\.ts$";
 
 /** @type {import('dependency-cruiser').IConfiguration} */
@@ -53,7 +53,7 @@ module.exports = {
       comment:
         "The resolve-only API must not reach event wiring, commands, status UI, probe transport, or result rendering.",
       from: { path: "^router\\.ts$" },
-      to: { path: HOST_ADAPTERS },
+      to: { path: `(?:${HOST_ADAPTERS}|^ui/)` },
     },
     {
       name: "host-ui-imports-only-from-adapter-entry",
@@ -68,14 +68,14 @@ module.exports = {
       severity: "error",
       comment:
         "Shipped root modules run inside Pi and must not import dev-only tooling (tests, mutation, coverage, fuzzing, repository scripts).",
-      from: { path: "^[^/]+\\.ts$" },
+      from: { path: "^(?:[^/]+|ui/[^/]+)\\.ts$" },
       to: { dependencyTypes: ["npm-dev"], dependencyTypesNot: ["npm-peer"] },
     },
     {
       name: "production-no-repository-tooling",
       severity: "error",
       comment: "Shipped modules must not depend on repository scripts, tests, or fixtures.",
-      from: { path: "^[^/]+\\.ts$" },
+      from: { path: "^(?:[^/]+|ui/[^/]+)\\.ts$" },
       to: { path: "^(scripts|tests)/" },
     },
     {

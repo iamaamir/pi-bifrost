@@ -6,7 +6,7 @@ import {
   setBifrostModeStatus,
   shouldRefreshRegistry,
   type RegistryRefreshState,
-} from "../ux-status.ts";
+} from "../ui/ux-status.ts";
 
 function makeCtx() {
   const calls: Array<{ kind: string; key?: string; value?: unknown }> = [];

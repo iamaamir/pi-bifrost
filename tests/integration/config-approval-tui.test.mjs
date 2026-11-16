@@ -21,6 +21,7 @@ it("detects a faulty summary that hides classifier disablement in an isolated Pi
     for (const file of readdirSync(root).filter((name) => name.endsWith(".ts") || ["schema.json", "bifrost.json", "package.json"].includes(name))) {
       cpSync(join(root, file), join(copy, file));
     }
+    cpSync(join(root, "ui"), join(copy, "ui"), { recursive: true });
     symlinkSync(join(root, "node_modules"), join(copy, "node_modules"), "dir");
     mkdirSync(join(copy, "tests/fixtures"), { recursive: true });
     cpSync(join(root, "tests/fixtures/config-approval-extension.ts"), join(copy, "tests/fixtures/config-approval-extension.ts"));

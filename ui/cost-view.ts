@@ -1,8 +1,9 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, sliceByColumn } from "@earendil-works/pi-tui";
 import { ExpandableRows, type ExpandableRow } from "./expandable-rows.ts";
-import type { CostReportData, CostTotals } from "./cost-report.ts";
+import type { CostReportData, CostTotals } from "../cost-report.ts";
 import { wrapApprovalLines } from "./config-approval.ts";
+import { renderPanel, type PanelTheme } from "./panel.ts";
 
 function cost(usage: CostTotals): string {
   if (!usage.count || usage.count === usage.unknownCost) return "unavailable";
@@ -68,12 +69,12 @@ export class CostView {
   private readonly models: ExpandableRows;
   private readonly data: CostReportData;
   private readonly size: () => { columns: number; rows: number };
-  private readonly theme: Pick<ExtensionContext["ui"]["theme"], "fg">;
+  private readonly theme: PanelTheme;
   private readonly done: () => void;
   private readonly requestRender: () => void;
   private bodyHeight = 1;
 
-  constructor(data: CostReportData, size: () => { columns: number; rows: number }, theme: Pick<ExtensionContext["ui"]["theme"], "fg">, done: () => void, requestRender: () => void) {
+  constructor(data: CostReportData, size: () => { columns: number; rows: number }, theme: PanelTheme, done: () => void, requestRender: () => void) {
     this.data = data; this.size = size; this.theme = theme; this.done = done; this.requestRender = requestRender;
     const available = () => ({ ...this.size(), rows: this.bodyHeight + 2 });
     this.requests = new ExpandableRows(requestRows(data), theme, available, () => {}, requestRender);
@@ -83,13 +84,18 @@ export class CostView {
   invalidate(): void { this.requests.invalidate(); this.models.invalidate(); }
 
   render(width: number): string[] {
+    const contentWidth = Math.max(0, width - 4);
+    return renderPanel(this.renderContent(contentWidth), width, this.theme);
+  }
+
+  private renderContent(width: number): string[] {
     const fit = (text: string) => sliceByColumn(text, 0, Math.max(0, width), true);
     if (width < 20 || this.size().rows < 9) return [fit("Resize terminal · Esc closes")];
     const selected = this.view === "requests" ? this.requests : this.models;
     const partial = this.data.activeBranch.malformed ? " + unknown" : "";
     const header = ["Session usage · Pi-recorded estimates", `Current branch  ${cost(this.data.activeBranch.totals)}${partial}`, `All retained    ${cost(this.data.allRetained.totals)}${this.data.allRetained.totals.incomplete && !this.data.allRetained.totals.unknownCost ? " · partial" : ""}`, this.view === "requests" ? "[Requests]  Models" : " Requests  [Models]"].flatMap((line) => wrapApprovalLines(line, width));
     const footer = wrapApprovalLines("↑↓ move · Enter expand · Tab view · Esc close", width);
-    this.bodyHeight = Math.floor(this.size().rows * 0.8) - header.length - footer.length - 2;
+    this.bodyHeight = Math.floor(this.size().rows * 0.8) - header.length - footer.length - 4;
     if (this.bodyHeight < 1) return [fit("Resize terminal · Esc closes")];
     return [this.theme.fg("accent", header[0]!), ...header.slice(1), ...selected.render(width), ...footer];
   }

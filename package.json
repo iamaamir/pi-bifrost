@@ -4,6 +4,7 @@
   "description": "Route Pi turns through models you choose, with configured tiers and opt-in per-request dispatch.",
   "files": [
     "*.ts",
+    "ui/",
     "dist/router/",
     "bifrost.json",
     "schema.json",
@@ -18,6 +19,16 @@
       "types": "./dist/router/router.d.ts",
       "import": "./dist/router/router.js"
     },
+    "./cost-view": "./ui/cost-view.ts",
+    "./cost-view.ts": "./ui/cost-view.ts",
+    "./expandable-rows": "./ui/expandable-rows.ts",
+    "./expandable-rows.ts": "./ui/expandable-rows.ts",
+    "./result-viewer": "./ui/result-viewer.ts",
+    "./result-viewer.ts": "./ui/result-viewer.ts",
+    "./config-approval": "./ui/config-approval.ts",
+    "./config-approval.ts": "./ui/config-approval.ts",
+    "./ux-status": "./ui/ux-status.ts",
+    "./ux-status.ts": "./ui/ux-status.ts",
     "./*": "./*"
   },
   "license": "MIT",

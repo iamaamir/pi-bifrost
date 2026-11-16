@@ -99,7 +99,7 @@ import {
   setBifrostStatus,
   setBifrostWorkingMessage,
   shouldRefreshRegistry,
-} from "./ux-status.ts";
+} from "./ui/ux-status.ts";
 import { projectProviderRefreshEvidence, waitForRegistryRefresh } from "./registry-refresh.ts";
 import { buildBootstrapPools, canBootstrapModels, hasBlockingRuntimePreferences, hasExplicitExtensionRoutingFile, hasUserBootstrapFiles, serializeBootstrapConfig } from "./auto-setup.ts";
 import { buildInitOwnershipReceipt } from "./reconciliation-command.ts";

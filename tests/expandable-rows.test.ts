@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { ExpandableRows, type ExpandableRow } from "../expandable-rows.ts";
+import { ExpandableRows, type ExpandableRow } from "../ui/expandable-rows.ts";
 
 function harness(rows: ExpandableRow[], dimensions = { columns: 24, rows: 5 }) {
   const selected: string[] = [];

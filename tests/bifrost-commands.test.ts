@@ -12,7 +12,7 @@ import { providerReliabilityPath, reliabilityV2Path } from "../runtime-reliabili
 import { createProviderCooldownStore } from "../runtime-reliability-v2.ts";
 import { emptyReliabilityV2State } from "../reliability-v2.ts";
 import { buildInitOwnershipReceipt } from "../reconciliation-command.ts";
-import { REGISTRY_REFRESH_TTL_MS } from "../ux-status.ts";
+import { REGISTRY_REFRESH_TTL_MS } from "../ui/ux-status.ts";
 import { loadConfigForReload } from "../config-load.ts";
 import { resolveClassifierEnablement } from "../runtime-state.ts";
 

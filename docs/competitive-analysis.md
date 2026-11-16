@@ -54,7 +54,7 @@ Pi generates turn
 | Decision policy | `classification-pipeline.ts`, `routing.ts`, `inline-override.ts` | Determine requested tier and candidate model | High |
 | Reliability policy | `reliability.ts`, `reliability-store.ts`, `runtime-reliability.ts` | Circuit breaker, persisted state, settlement semantics | High |
 | Probe/cache | `probe.ts`, `cache.ts` | Verify models, cache classification | High to medium |
-| Pi adapter | `index.ts`, `commands.ts`, `ux-status.ts`, `result-viewer.ts` | Pi events, model switching, commands, UI | Low |
+| Pi adapter | `index.ts`, `commands.ts`, `ui/ux-status.ts`, `ui/result-viewer.ts` | Pi events, model switching, commands, UI | Low |
 
 This separation is Bifrost’s portability advantage. A second host needs a new adapter, not a new routing/reliability engine.
 

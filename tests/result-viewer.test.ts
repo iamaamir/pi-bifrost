@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { isEscapeKey, wrapResultLines } from "../result-viewer.ts";
+import { isEscapeKey, wrapResultLines } from "../ui/result-viewer.ts";
 
 describe("result viewer", () => {
   it("wraps long lines without dropping text", () => {

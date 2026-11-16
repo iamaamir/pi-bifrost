@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -128,6 +128,7 @@ function clonePluginSources(root, pluginDir) {
     // sources, so an isolated extension copy needs it as well.
     if (name.endsWith(".ts") || name === "schema.json") copyFileSync(join(root, name), join(pluginDir, name));
   }
+  cpSync(join(root, "ui"), join(pluginDir, "ui"), { recursive: true });
   symlinkSync(join(root, "node_modules"), join(pluginDir, "node_modules"), "dir");
 }
 

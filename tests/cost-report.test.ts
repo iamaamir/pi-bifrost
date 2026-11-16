@@ -107,7 +107,7 @@ describe("session cost report", () => {
       setEditorText: () => {},
       custom: async (factory: (...args: any[]) => any, options: unknown) => {
         overlayOptions = options;
-        viewer = factory({ terminal: { columns: 120, rows: 30 }, requestRender() {} }, { fg: (_color: string, text: string) => text }, {}, () => {});
+        viewer = factory({ terminal: { columns: 120, rows: 30 }, requestRender() {} }, { fg: (_color: string, text: string) => text, colors: { selectedBg: {} }, style: (text: string) => text }, {}, () => {});
       },
     };
     const ctx = { cwd, mode: "rpc", hasUI: false, model: {}, modelRegistry: { getAvailable: () => [], find: () => undefined, getProviderAuthStatus: () => ({ configured: false }), refresh: async () => ({ refreshed: [], errors: [] }) }, sessionManager: { getEntries: () => recorded, getBranch: () => recorded }, ui } as unknown as ExtensionContext;
@@ -137,6 +137,7 @@ describe("session cost report", () => {
       viewer.handleInput("\t");
       assert.match(viewer.render(120).join("\n"), /\[Models\]/);
       viewer.handleInput("\x1b[6~");
+      viewer.handleInput("\x1b[B");
       assert.match(viewer.render(120).join("\n"), /fake\/model-15/);
     } finally {
       console.error = originalError;

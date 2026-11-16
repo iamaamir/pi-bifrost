@@ -22,6 +22,23 @@ spec.loader.exec_module(ui)
 
 
 class ViewportScreen(ui.Screen):
+    def apply_sgr(self, codes):
+        indexed_bg = None
+        i = 0
+        while i < len(codes):
+            if codes[i] in (0, 49):
+                indexed_bg = None
+            elif codes[i] == 48 and i + 2 < len(codes) and codes[i + 1] == 5:
+                indexed_bg = (codes[i + 2],) * 3
+                i += 2
+            elif codes[i] == 48 and i + 4 < len(codes) and codes[i + 1] == 2:
+                indexed_bg = None
+                i += 4
+            i += 1
+        super().apply_sgr(codes)
+        if indexed_bg is not None:
+            self.bg = indexed_bg
+
     def put(self, ch):
         if ch in ("\n", "\r", "\b", "\t"):
             return super().put(ch)
@@ -61,6 +78,27 @@ def run():
         parsed.parse(log.read_text(errors="replace") if log.exists() else "")
         return "\n".join(parsed.lines())
 
+    def assert_overlay_frame(label):
+        parsed = ViewportScreen(width, height)
+        parsed.parse(log.read_text(errors="replace") if log.exists() else "")
+        title_row = next((row for row in range(height) if "Session usage" in "".join(cell.ch for cell in parsed.rows[row])), None)
+        assert title_row is not None, f"{label}: overlay title missing\n{parsed.lines()}"
+        title_cells = parsed.rows[title_row]
+        left = next((col for col, cell in enumerate(title_cells) if cell.ch == "│"), None)
+        right = next((col for col in range(width - 1, -1, -1) if title_cells[col].ch == "│"), None)
+        assert left is not None and right is not None and left < right, f"{label}: side borders missing\n{parsed.lines()}"
+        top = title_row - 1
+        bottom = next((row for row in range(title_row + 1, height) if parsed.rows[row][left].ch == "╰" and parsed.rows[row][right].ch == "╯"), None)
+        assert top >= 0 and parsed.rows[top][left].ch == "╭" and parsed.rows[top][right].ch == "╮", f"{label}: top frame corners missing\n{parsed.lines()}"
+        assert bottom is not None, f"{label}: bottom frame corners missing\n{parsed.lines()}"
+        assert all(parsed.rows[row][left].ch == "│" and parsed.rows[row][right].ch == "│" for row in range(top + 1, bottom)), f"{label}: side borders are broken\n{parsed.lines()}"
+        assert all(parsed.rows[top][col].ch == "─" and parsed.rows[bottom][col].ch == "─" for col in range(left + 1, right)), f"{label}: horizontal borders are broken\n{parsed.lines()}"
+
+        background = parsed.rows[top][left].bg
+        outside = parsed.rows[top][left - 1].bg if left else None
+        assert background != outside, f"{label}: overlay background is not opaque across its frame"
+        assert all(parsed.rows[row][col].bg == background for row in range(top, bottom + 1) for col in range(left, right + 1)), f"{label}: overlay background is not solid across its full width"
+
     def wait(predicate, label):
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
@@ -77,6 +115,7 @@ def run():
         ui.send(master, "/cost-test\r")
         initial = wait(lambda text: "Session usage" in text, "cost overlay")
         assert "Current branch" in initial and "$0.001000" in initial, initial
+        assert_overlay_frame("regular viewport")
         ui.send(master, "\r")
         expanded = wait(lambda text: "fake/healthy" in text, "Enter expands request model details")
         assert "Request 1*" in expanded and "fake/healthy" in expanded, expanded
@@ -85,6 +124,15 @@ def run():
         assert "healthy" in models, models
         ui.send(master, "\x1b")
         wait(lambda text: "Session usage" not in text, "Esc closes overlay")
+
+        width, height = 50, 14
+        ui.set_winsize(master, height, width)
+        os.kill(child.pid, signal.SIGWINCH)
+        ui.send(master, "/cost-test\r")
+        narrow = wait(lambda text: "Session usage" in text, "cost overlay at narrow usable viewport")
+        assert_overlay_frame("narrow usable viewport")
+        ui.send(master, "\x1b")
+        wait(lambda text: "Session usage" not in text, "Esc closes narrow usable overlay")
 
         width, height = 24, 10
         ui.set_winsize(master, height, width)

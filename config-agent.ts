@@ -42,7 +42,7 @@ import { checkProviderScope, compileRoutingScope } from "./routing-scope.ts";
 import { createRouter, type RouterModel, type RouterRegistrySnapshot, type RouterSnapshot } from "./router.ts";
 import { writeTextFile } from "./storage.ts";
 import { isGenerativeModel } from "./virtual-model.ts";
-import { approveConfig } from "./config-approval.ts";
+import { approveConfig } from "./ui/config-approval.ts";
 
 // ── Limits ─────────────────────────────────────────────────────
 

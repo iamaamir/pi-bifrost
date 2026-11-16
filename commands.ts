@@ -13,8 +13,8 @@ import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD
 import { buildRouteDecisionSummary, type ClassificationPipeline, type ClassificationResult, type ClassificationSource, type RouteDecisionSummary } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
 import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT, readRecentCompleteProbeReport } from "./probe.ts";
-import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
-import { showBifrostResult } from "./result-viewer.ts";
+import { setBifrostModeStatus, setBifrostStatus } from "./ui/ux-status.ts";
+import { showBifrostResult } from "./ui/result-viewer.ts";
 import {
   findCandidates,
   buildTierResolutionOptions,
@@ -62,11 +62,11 @@ import {
   ReconciliationStoreError,
 } from "./reconciliation-store.ts";
 import { projectProviderRefreshEvidence, waitForRegistryRefresh } from "./registry-refresh.ts";
-import { REGISTRY_REFRESH_TTL_MS } from "./ux-status.ts";
+import { REGISTRY_REFRESH_TTL_MS } from "./ui/ux-status.ts";
 import { isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
 import { hasExplicitExtensionRoutingFile, hasUserBootstrapFiles } from "./auto-setup.ts";
 import { getCostReportData } from "./cost-report.ts";
-import { formatCostText, showCostView } from "./cost-view.ts";
+import { formatCostText, showCostView } from "./ui/cost-view.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
