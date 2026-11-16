@@ -31,13 +31,13 @@ holds the knobs, and the plan refuses to start when the arithmetic does not fit:
 ```
 cap 60m | reserve 12m | CI factor 1.8x | hard/leg 48m | target/leg 30m
 
-cache.ts                1.00m  shards 1 ->  1.00m/leg
-classifier-semantics.ts 1.00m  shards 1 ->  1.00m/leg
-reliability.ts          1.00m  shards 1 ->  1.00m/leg
-reliability-v2.ts       2.86m  shards 1 ->  2.86m/leg
-routing.ts             13.47m  shards 1 -> 13.47m/leg   (TAP: production engine)
+cache.ts                1.0m  shards 1 ->  1.0m/leg
+classifier-semantics.ts 1.0m  shards 1 ->  1.0m/leg
+reliability.ts          1.0m  shards 1 ->  1.0m/leg
+reliability-v2.ts       4.8m  shards 1 ->  4.8m/leg
+routing.ts             22.4m  shards 1 -> 22.4m/leg   (TAP: production engine)
 
-projected wall clock: 25.5m of 60m cap
+projected wall clock: 34.5m of 60m cap
 ```
 
 Sharding is currently **unused**: at 14.9 minutes the whole matrix fits with room
@@ -49,9 +49,10 @@ Three details that make it a real cap rather than a wish:
 
 - **Legs run in parallel**, so wall clock is the slowest leg plus fixed overhead,
   not the sum. Nine legs across five modules.
-- **`ciSlowdownFactor` (1.8×)** accounts for GitHub's 4 cores versus the 10-core
-  host the numbers were measured on. Planning at 1.0 would produce a budget that
-  is comfortably met locally and quietly overrun in CI.
+- **`ciSlowdownFactor` (3×)** accounts for GitHub's 4 cores versus the 10-core
+  host the numbers were measured on. Measured on the first real dispatch, after
+  subtracting per-job setup: `routing.ts` 17.4 min against 6.6 locally (2.7×) and
+  `reliability-v2.ts` 6.9 against 1.8 (3.9×).
 - **Each leg gets its own job timeout** from the plan. A single global ceiling
   either cuts a slow shard short or lets one stuck leg burn the window.
 
@@ -251,6 +252,25 @@ defaults reproduce the nightly run exactly:
 Inputs are validated in the `plan` job, so a typo fails in seconds instead of
 after an hour.
 
+## Running it in CI before merging
+
+`workflow_dispatch` refuses to run a workflow that does not exist on the default
+branch (`HTTP 404: workflow mutation.yml not found on the default branch`). To
+exercise the pipeline from a feature branch, add a throwaway trigger:
+
+```yaml
+on:
+  push:
+    branches: [your-branch]
+```
+
+Push, watch the run, then remove the trigger. Branch-specific triggers do not
+belong in the merged workflow: it is a nightly measurement, not a per-push job,
+and `tests/mutation-workflow.test.mjs` asserts there is no `push:` trigger.
+
+A first dispatch is worth doing anyway, because it calibrates
+`ciSlowdownFactor` against the real runner.
+
 ## Local runs
 
 ```bash
@@ -323,6 +343,12 @@ Derived binding, TAP runner, 10-core macOS host, Node v24.14.0, Stryker 10.0.0:
 | `reliability-v2.ts` | bun | 2447 | 1432 | 707 | 307 | 1 | 58.54% | 1m46s |
 | `routing.ts` | tap | 1000 | 681 | 214 | 98 | 7 | 68.58% | 6m33s |
 | **All** | | **4185** | **2621** | **1088** | **468** | **8** | **62.75%** | **8m48s total** |
+
+Verified on GitHub-hosted 4-core runners from a feature branch: **19 minutes
+end to end**, all jobs green, and the same totals — 4,185 mutants and 62.75%
+honest. Three modules matched local mutant for mutant; `reliability-v2.ts` moved
+by 5 mutants and `routing.ts` by 5, which is the documented stochastic behaviour
+rather than a machine-dependent result.
 
 Honest score is `killed / (killed + survived + no-coverage)`. Note the column the
 command runner could not produce: `NoCoverage` was always 0 there because coverage

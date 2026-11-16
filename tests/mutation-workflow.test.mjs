@@ -87,9 +87,7 @@ test("the schedule is the only automatic trigger and pull requests never run it"
   assert.deepEqual(Object.keys(jobs), ["plan", "targets", "summarise"]);
   assert.match(workflow, /^on:\n {2}schedule:\n(?: {4}#.*\n)* {4}- cron: "\d+ \d+ \* \* \*"$/mu);
   assert.doesNotMatch(workflow, /^ {2}pull_request:/mu, "mutation must not run on pull requests");
-  // TEMPORARY: a push trigger is present on this branch only, to verify the
-  // pipeline before the workflow exists on the default branch.
-  // assert.doesNotMatch(workflow, /^ {2}push:/mu, "mutation must not run on push");
+  assert.doesNotMatch(workflow, /^ {2}push:/mu, "mutation must not run on push");
   assert.doesNotMatch(workflow, /secrets\./u, "the measurement must not need repository secrets");
 });
 
