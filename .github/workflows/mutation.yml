@@ -15,6 +15,11 @@ on:
   schedule:
     # 04:47 UTC daily. Scheduled runs execute from the default branch only.
     - cron: "47 4 * * *"
+  # TEMPORARY branch verification. `workflow_dispatch` refuses to run a workflow
+  # that does not exist on the default branch, so this trigger is the only way to
+  # exercise the pipeline from a feature branch. Removed before merge.
+  push:
+    branches: [feat/mutation-pipeline]
   # Every knob is also settable by hand. The defaults reproduce the nightly run
   # exactly, so a manual dispatch with no changes measures the same thing.
   workflow_dispatch:
@@ -117,6 +122,12 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      # The default mutation runner is `bun test`, so the binary must exist. It is
+      # a host tool, not an npm dependency: installing the npm package alone does
+      # not put `bun` on PATH.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
       - name: Install dependencies
         run: npm ci
       - name: Measure ${{ matrix.label }}
@@ -149,7 +160,9 @@ jobs:
           done
           if [ -f stryker.log ]; then cp stryker.log "mutation-out/$leg/stryker.log"; fi
       - name: Upload this leg's report
-        if: always() && (inputs.upload_reports || github.event_name == 'schedule')
+        # Automatic runs (schedule, branch verification) always publish; a manual
+        # dispatch may opt out.
+        if: always() && (github.event_name != 'workflow_dispatch' || inputs.upload_reports)
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # The shard index is part of the name so the shards of one module are
@@ -206,7 +219,9 @@ jobs:
             cat mutation-out/annotations.txt
           fi
       - name: Upload the merged summary and survivor extract
-        if: always() && (inputs.upload_reports || github.event_name == 'schedule')
+        # Automatic runs (schedule, branch verification) always publish; a manual
+        # dispatch may opt out.
+        if: always() && (github.event_name != 'workflow_dispatch' || inputs.upload_reports)
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mutation-summary-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
@@ -217,7 +232,7 @@ jobs:
         # Never fail on a low score: the score is the measurement, not a gate.
         # Fail when the run cannot be trusted as a measurement. A manual dispatch
         # may switch this off to inspect a partial run.
-        if: ${{ inputs.fail_on_unusable || github.event_name == 'schedule' }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.fail_on_unusable }}
         env:
           TIMEOUT_TOLERANCE: ${{ inputs.timeout_tolerance }}
         run: node mutation/workflow.mjs require-usable mutation-out/summary.json
