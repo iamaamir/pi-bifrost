@@ -31,13 +31,13 @@ holds the knobs, and the plan refuses to start when the arithmetic does not fit:
 ```
 cap 60m | reserve 12m | CI factor 1.8x | hard/leg 48m | target/leg 30m
 
-cache.ts                1.00m  shards 1 -> 1.00m/leg
-classifier-semantics.ts 1.00m  shards 1 -> 1.00m/leg
-reliability.ts          1.00m  shards 1 -> 1.00m/leg
-reliability-v2.ts       2.86m  shards 1 -> 2.86m/leg
-routing.ts              2.28m  shards 1 -> 2.28m/leg
+cache.ts                1.00m  shards 1 ->  1.00m/leg
+classifier-semantics.ts 1.00m  shards 1 ->  1.00m/leg
+reliability.ts          1.00m  shards 1 ->  1.00m/leg
+reliability-v2.ts       2.86m  shards 1 ->  2.86m/leg
+routing.ts             13.47m  shards 1 -> 13.47m/leg   (TAP: production engine)
 
-projected wall clock: 14.9m of 60m cap
+projected wall clock: 25.5m of 60m cap
 ```
 
 Sharding is currently **unused**: at 14.9 minutes the whole matrix fits with room
@@ -67,7 +67,7 @@ same mutants, and both viable ones produce the same kills.
 | --- | --- | --- | --- | --- | --- |
 | `command` | `off` (unmeasured) | 4m38s | 19m20s | ~92m (projected) | reuses blindly |
 | `tap` | per **file** | 27s | 5m31s | ~23m/shard × 4 | correct |
-| `bun` | per **test** | **3s** | **1m16s** | **1m35s** | correct |
+| `bun` | per **test** | **3s** | 1m16s (not used — see below) | **1m35s** | correct |
 
 **Bun is the default.** `@hughescr/stryker-bun-runner` runs `bun test`, which
 executes this repository's `node:test` files unchanged — verified: all 30 bound test
@@ -76,7 +76,22 @@ test, a mutant runs only the tests that reach it (~8 per mutant) instead of whol
 files, so a module bound to one heavy file no longer pays that file's runtime
 per mutant. That is the entire speed difference.
 
-**Every module now uses Bun.** One bound test used to block it:
+**`routing.ts` stays on TAP, for a different reason.** Its rule tests
+deliberately let a catastrophic regex run in-process when a mutant bypasses the
+backtracking probe, and the engines disagree: `^(a+)+$` against a 25-character
+canary took **475 ms under V8 and 66 ms under JavaScriptCore**. A measured A/B
+left 4 of 1,000 mutants with different verdicts, all in that region. Only the
+production engine answers the question production would ask, so this module runs
+on Node. Cost: 13.5 planned minutes instead of 2.3.
+
+The probe itself was also pinned: it spawned `process.execPath`, which is `bun`
+under Bun, so the probe ran a different regex engine than production. It now
+spawns `node` (overridable with `BIFROST_PROBE_NODE`, falling back to the hosting
+runtime when `node` is absent). That made the probe deterministic but did not
+remove the divergence above, because the mutated path runs the regex in the host
+process, not the probe.
+
+**Every other module uses Bun.** One bound test used to block it:
 `tests/reliability-migration.test.ts` asserted Node's `fsync`-on-lock-file
 failure by patching `node:fs`. Bun cannot do that — `syncBuiltinESMExports()` is
 a no-op there, and a `node:fs` mock cannot be undone — so the test injected no
@@ -300,14 +315,14 @@ automatically when one does.
 
 Derived binding, TAP runner, 10-core macOS host, Node v24.14.0, Stryker 10.0.0:
 
-| Module | Mutants | Killed | Survived | NoCoverage | Timeout | Honest score | Wall clock |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `cache.ts` | 229 | 172 | 48 | 9 | 0 | 75.11% | 3s |
-| `classifier-semantics.ts` | 157 | 85 | 26 | 46 | 0 | 54.14% | 3s |
-| `reliability.ts` | 352 | 251 | 93 | 8 | 0 | 71.31% | 14s |
-| `reliability-v2.ts` | 2447 | 1431 | 708 | 307 | 1 | 58.52% | 1m35s |
-| `routing.ts` | 989 | 680 | 207 | 95 | 7 | 69.46% | 1m16s |
-| **All** | **4174** | **2619** | **1082** | **465** | **8** | **62.87%** | **1m35s per leg (parallel)** |
+| Module | Runner | Mutants | Killed | Survived | NoCoverage | Timeout | Honest score | Wall clock |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `cache.ts` | bun | 229 | 172 | 48 | 9 | 0 | 75.11% | 4s |
+| `classifier-semantics.ts` | bun | 157 | 85 | 26 | 46 | 0 | 54.14% | 5s |
+| `reliability.ts` | bun | 352 | 251 | 93 | 8 | 0 | 71.31% | 15s |
+| `reliability-v2.ts` | bun | 2447 | 1432 | 707 | 307 | 1 | 58.54% | 1m46s |
+| `routing.ts` | tap | 1000 | 681 | 214 | 98 | 7 | 68.58% | 6m33s |
+| **All** | | **4185** | **2621** | **1088** | **468** | **8** | **62.75%** | **8m48s total** |
 
 Honest score is `killed / (killed + survived + no-coverage)`. Note the column the
 command runner could not produce: `NoCoverage` was always 0 there because coverage
@@ -343,7 +358,8 @@ Stryker copies the tree into `.stryker-tmp/`. Four things matter:
 ## Limitations
 
 - Coverage granularity depends on the runner: Bun attributes per **test**, the
-  TAP fallback per **test file**. All modules currently use Bun.
+  TAP fallback per **test file**. Four of five modules use Bun; `routing.ts` uses
+  TAP because its verdict depends on the regex engine.
 - **Concurrency barely helps.** Under TAP, throughput measured 1.61 s/mutant at 6
   workers and 1.67 at 4 (ratio 0.97), because the cost was per-mutant process
   startup rather than CPU. Sharding across machines is the underlying lever,

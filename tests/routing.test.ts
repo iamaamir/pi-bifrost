@@ -2,6 +2,8 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildRouteDecisionSummary,
   type ClassificationResult,
@@ -1560,6 +1562,26 @@ describe("routing", () => {
         { pattern: "hello", model: "general" },
       ]);
       assert.deepEqual(compiled.map((rule) => rule.model), ["general"]);
+    });
+
+    it("falls back to the hosting runtime when the pinned probe binary is absent", () => {
+      // The probe pins `node` so a mutant's verdict does not depend on whichever
+      // runtime hosts the router. A host without `node` on PATH must still
+      // compile rules instead of silently dropping all of them.
+      const previous = process.env.BIFROST_PROBE_NODE;
+      process.env.BIFROST_PROBE_NODE = join(tmpdir(), "bifrost-no-such-node-binary");
+      try {
+        const compiled = compileRules([
+          { pattern: "^(a+)+$", model: "quick" },
+          { pattern: "hello", model: "general" },
+        ]);
+        // The fallback still probes, so the catastrophic pattern is dropped and
+        // the safe rule survives.
+        assert.deepEqual(compiled.map((rule) => rule.model), ["general"]);
+      } finally {
+        if (previous === undefined) delete process.env.BIFROST_PROBE_NODE;
+        else process.env.BIFROST_PROBE_NODE = previous;
+      }
     });
 
     it("parity path drops the same catastrophic pattern", () => {

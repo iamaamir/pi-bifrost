@@ -882,6 +882,19 @@ export interface CompiledRule {
 // The structural scan remains the cheap first defense; canaries are heuristic.
 const BACKTRACKING_BUDGET_MS = 10;
 const BACKTRACKING_PROBE_TIMEOUT_MS = 500;
+/**
+ * The runtime the backtracking probe runs under.
+ *
+ * This must not be `process.execPath`: that made the probe's verdict depend on
+ * whichever runtime hosted the router. Measured under Bun, `process.execPath` is
+ * `bun`, so the probe executed a different regex engine and 4 of 989 mutants were
+ * judged differently from a Node-hosted run. Production runs on Node, so the
+ * probe pins Node and the verdict is the same everywhere.
+ *
+ * `BIFROST_PROBE_NODE` overrides the binary. A host without `node` on PATH falls
+ * back to the hosting runtime rather than losing regex rules entirely.
+ */
+const BACKTRACKING_PROBE_NODE_ENV = "BIFROST_PROBE_NODE";
 const BACKTRACKING_CANARIES = [
   "a".repeat(10) + "b", "a".repeat(14) + "b", "a".repeat(18) + "b",
   "a".repeat(20) + "b", "a".repeat(22) + "b", "a".repeat(24) + "b",
@@ -1045,14 +1058,22 @@ function verifyRulePatterns(patterns: readonly string[]): void {
   }
   while (pending.length > 0) {
     const batch = pending.slice(0, 32);
-    const result = spawnSync(process.execPath, ["-e", BACKTRACKING_PROBE], {
+    const probeArgs = ["-e", BACKTRACKING_PROBE];
+    const probeOptions = {
       input: JSON.stringify({ patterns: batch, canaries: BACKTRACKING_CANARIES, budget: BACKTRACKING_BUDGET_MS }),
-      encoding: "utf8",
+      encoding: "utf8" as const,
       timeout: BACKTRACKING_PROBE_TIMEOUT_MS + batch.length * 20,
-      killSignal: "SIGKILL",
+      killSignal: "SIGKILL" as const,
       maxBuffer: Math.max(1024, batch.length * 4),
       env: { ...process.env, NODE_OPTIONS: "" },
-    });
+    };
+    const probeNode = process.env[BACKTRACKING_PROBE_NODE_ENV] ?? "node";
+    let result = spawnSync(probeNode, probeArgs, probeOptions);
+    // A host without `node` on PATH falls back to the hosting runtime, so regex
+    // rules keep working. Only the engine-stability guarantee is lost.
+    if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT" && probeNode !== process.execPath) {
+      result = spawnSync(process.execPath, probeArgs, probeOptions);
+    }
     const lines = (result.stdout ?? "").split("\n").filter(Boolean);
     let completed = 0;
     for (const line of lines) {

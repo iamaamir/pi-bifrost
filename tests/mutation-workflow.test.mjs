@@ -29,7 +29,6 @@ import {
   targetNames,
 } from "../mutation/targets.mjs";
 import {
-  BUN_INCOMPATIBLE_TESTS,
   BUN_RUNNER_PLUGIN,
   RUNNER_OVERRIDES,
   RUNTIME_ERROR_TOLERANCE,
@@ -351,8 +350,8 @@ test("Bun is the default runner because it covers per test, not per file", () =>
   }
 });
 
-test("the TAP fallback still works, and every override must name a real blocker", () => {
-  // The fallback has to keep working even while unused, or the mechanism rots.
+test("the TAP fallback still works, and every override states why it exists", () => {
+  // The fallback has to keep working even where unused, or the mechanism rots.
   for (const target of targetNames()) {
     const tap = targetConfig(target, { runner: "tap" });
     assert.equal(tap.testRunner, "tap");
@@ -362,18 +361,17 @@ test("the TAP fallback still works, and every override must name a real blocker"
     assert.equal("appendPlugins" in tap, false, "the TAP runner is an official plugin, loaded by name");
   }
 
-  // Every override must be justified by a listed blocker. An unexplained
-  // override is how a temporary workaround becomes permanent folklore.
-  for (const [target, runner] of Object.entries(RUNNER_OVERRIDES)) {
+  // Every override must be a real target, name a real runner, and give a reason.
+  // An override without a stated reason is how a temporary workaround becomes
+  // permanent folklore.
+  for (const [target, override] of Object.entries(RUNNER_OVERRIDES)) {
     assert.ok(targetNames().includes(target), `${target} must be a real target`);
-    assert.equal(runnerFor(target), runner);
-    const blocked = bindingFor(target).some((file) => file in BUN_INCOMPATIBLE_TESTS);
-    assert.ok(blocked, `${target} must actually bind a Bun-incompatible file`);
-  }
-  // And no blocker may be listed without being used, so the list stays truthful.
-  for (const file of Object.keys(BUN_INCOMPATIBLE_TESTS)) {
-    const used = Object.keys(RUNNER_OVERRIDES).some((target) => bindingFor(target).includes(file));
-    assert.ok(used, `${file} is listed as Bun-incompatible but no overridden target binds it`);
+    assert.ok(["bun", "tap"].includes(override.runner), `${target} must name a known runner`);
+    assert.equal(typeof override.reason, "string", `${target} must state a reason`);
+    assert.ok(override.reason.length > 30, `${target}'s reason must actually explain something`);
+    assert.equal(runnerFor(target), override.runner);
+    // An override must differ from the default, or it is dead config.
+    assert.notEqual(override.runner, TEST_RUNNER, `${target} overrides the default to the default`);
   }
 });
 
@@ -555,7 +553,6 @@ test("all tunable Stryker parameters live in one config file", () => {
   assert.ok(Array.isArray(TAP_NODE_ARGS) && TAP_NODE_ARGS.length > 0, "the TAP node args live in config");
   assert.ok(typeof BUN_RUNNER_PLUGIN === "string" && BUN_RUNNER_PLUGIN.length > 0, "the Bun plugin id lives in config");
   assert.equal(typeof RUNNER_OVERRIDES, "object", "the runner overrides live in config");
-  assert.equal(typeof BUN_INCOMPATIBLE_TESTS, "object", "the Bun blocker list lives in config");
   assert.equal(STRYKER_OPTIONS.thresholds.break, null, "the measurement must never fail a run on a low score");
   assert.ok(Array.isArray(SANDBOX_IGNORES));
   assert.ok(SUMMARY.survivorsPerModule > 0);

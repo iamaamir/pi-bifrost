@@ -200,7 +200,7 @@ export function targetNames() {
  * `TEST_RUNNER`. Kept as a function so callers cannot disagree with config.
  */
 export function runnerFor(target) {
-  return RUNNER_OVERRIDES[target] ?? TEST_RUNNER;
+  return RUNNER_OVERRIDES[target]?.runner ?? TEST_RUNNER;
 }
 
 /**
