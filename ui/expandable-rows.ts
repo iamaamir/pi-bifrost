@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { matchesKey, sliceByColumn, visibleWidth } from "@earendil-works/pi-tui";
+import { matchesKey, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 export interface ExpandableRow {
   readonly id: string;
@@ -161,13 +161,5 @@ export class ExpandableRows {
 }
 
 function wrapCells(text: string, width: number): string[] {
-  const lines: string[] = [];
-  let offset = 0;
-  while (offset < visibleWidth(text)) {
-    const part = sliceByColumn(text, offset, width, true);
-    if (!part) break;
-    lines.push(part);
-    offset += visibleWidth(part);
-  }
-  return lines.length ? lines : [""];
+  return wrapTextWithAnsi(text, width);
 }

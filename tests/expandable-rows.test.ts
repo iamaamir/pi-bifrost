@@ -39,6 +39,14 @@ describe("expandable rows", () => {
     assert.deepEqual(h.selected, ["next"]);
   });
 
+  it("wraps prose between words when it fits", () => {
+    const h = harness([{ id: "about", label: "Some activity can fall outside them." }], { columns: 24, rows: 10 });
+    const lines = h.viewer.render(20).join("\n");
+    assert.match(lines, /Some activity\n/);
+    assert.match(lines, /can fall outside\n/);
+    assert.doesNotMatch(lines, /activ\n|outsid\n/);
+  });
+
   it("scrolls through every wrapped line of a selected row at the end", () => {
     const value = "third-row-value-that-wraps-across-many-lines";
     const h = harness([
