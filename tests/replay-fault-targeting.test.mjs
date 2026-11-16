@@ -9,6 +9,7 @@ import {
   FAULT_PROOF,
   FAULT_PROOFS,
   assertAssertionRed,
+  injectGuardStatement,
   runReplayGuardFaultProof,
   sha256,
 } from "./fixtures/replay-fault-control.mjs";
@@ -162,5 +163,137 @@ test("records top-level faults separately from fixture-env faults", async () => 
     assert.equal(receipt.mutantSha256, undefined, "a fixture-env fault has no mutant source");
     assert.equal(receipt.faultInjection, "fixture-env");
     assert.equal(receipt.baselineSha256, createHash("sha256").update(REAL_INDEX).digest("hex"));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+// --- body-brace targeting ---------------------------------------------------
+// The body brace must be derived from the guard's own signature. A `{\n` search
+// cannot distinguish a body from a comment tail, a type annotation, or the next
+// function, and the reported failure injected into `turnUserBoundary` while both
+// existing checks still passed.
+const AUTO_BOUNDARY_SIGNATURE =
+  "  function autoBoundaryStillActive(ctx: ExtensionContext, boundary: AutoUserBoundary): boolean {";
+const ADJACENT = [
+  "  function turnUserBoundary(",
+  "  function isSideEffectFreeAllowanceFailure(",
+  "  function recordAutoRouteProof(",
+];
+
+/** A function's text, from its signature up to the next sibling declaration. */
+function functionText(source, signature) {
+  const start = source.indexOf(signature);
+  assert.notEqual(start, -1, `missing signature: ${signature}`);
+  const end = source.indexOf("\n  function ", start);
+  return source.slice(start, end === -1 ? source.length : end);
+}
+
+function assertInsideGuard(mutant, signature, statement) {
+  const guardStart = mutant.indexOf(signature);
+  assert.notEqual(guardStart, -1, `missing signature: ${signature}`);
+  const fault = mutant.indexOf(`\n    ${statement}`, guardStart);
+  const nextSibling = mutant.indexOf("\n  function ", guardStart);
+  assert.notEqual(fault, -1, "the fault must be injected into the guard body");
+  assert.ok(fault > guardStart, "the fault must follow the guard signature, not precede it");
+  assert.ok(fault < nextSibling, "the fault must stay inside the intended function");
+}
+
+test("targets the intended function when its body opens with a comment", () => {
+  const candidate = REAL_INDEX.replace(AUTO_BOUNDARY_SIGNATURE, `${AUTO_BOUNDARY_SIGNATURE} /* comment */`);
+  assert.notEqual(candidate, REAL_INDEX, "the reproduction must change the candidate");
+
+  const mutant = injectGuardStatement(candidate, "autoBoundaryStillActive", "return false;");
+  assertInsideGuard(mutant, AUTO_BOUNDARY_SIGNATURE, "return false;");
+  for (const signature of ADJACENT) {
+    assert.equal(functionText(mutant, signature), functionText(candidate, signature),
+      `${signature} must be byte-identical after the mutation`);
+  }
+  const brace = candidate.indexOf(AUTO_BOUNDARY_SIGNATURE) + AUTO_BOUNDARY_SIGNATURE.length - 1;
+  assert.equal(mutant,
+    `${candidate.slice(0, brace + 1)}\n    return false;${candidate.slice(brace + 1)}`,
+    "the mutant must differ from the candidate by exactly one insertion at the guard's body brace");
+});
+
+test("skips an object type literal in the return type", () => {
+  const signature = "  function turnUserBoundary(ctx: ExtensionContext, event: TurnEndEvent): { entryId: string; message: object } | undefined {";
+  const mutant = injectGuardStatement(REAL_INDEX, "turnUserBoundary", "return undefined;");
+  assertInsideGuard(mutant, signature, "return undefined;");
+  assert.ok(mutant.includes(": { entryId: string; message: object } | undefined {"),
+    "the return-type annotation must be unchanged");
+  const brace = REAL_INDEX.indexOf(signature) + signature.length - 1;
+  assert.equal(mutant,
+    `${REAL_INDEX.slice(0, brace + 1)}\n    return undefined;${REAL_INDEX.slice(brace + 1)}`,
+    "the fault must be inserted at the body brace, not inside the annotation");
+});
+
+test("handles a multiline parameter list", () => {
+  const signature = "  function isSideEffectFreeAllowanceFailure(";
+  const mutant = injectGuardStatement(REAL_INDEX, "isSideEffectFreeAllowanceFailure", "return [assistantEntryId];");
+  assertInsideGuard(mutant, signature, "return [assistantEntryId];");
+  assert.ok(mutant.includes("    boundary: { entryId: string; message: object },"),
+    "parameter annotations must be unchanged");
+});
+
+test("accepts a body brace placed on its own line", () => {
+  const candidate = REAL_INDEX.replace(AUTO_BOUNDARY_SIGNATURE, `${AUTO_BOUNDARY_SIGNATURE.slice(0, -1)}\n  {`);
+  assert.notEqual(candidate, REAL_INDEX);
+  const mutant = injectGuardStatement(candidate, "autoBoundaryStillActive", "return false;");
+  assertInsideGuard(mutant, "  function autoBoundaryStillActive(", "return false;");
+  for (const signature of ADJACENT.slice(0, 2)) {
+    assert.equal(functionText(mutant, signature), functionText(candidate, signature),
+      `${signature} must be byte-identical after the mutation`);
+  }
+});
+
+test("fails closed when the guard declaration has no body", () => {
+  const declarationOnly = REAL_INDEX.replace(
+    functionText(REAL_INDEX, AUTO_BOUNDARY_SIGNATURE),
+    `${AUTO_BOUNDARY_SIGNATURE.slice(0, -1)};`,
+  );
+  assert.notEqual(declarationOnly, REAL_INDEX);
+  assert.throws(
+    () => injectGuardStatement(declarationOnly, "autoBoundaryStillActive", "return false;"),
+    /declaration only/u,
+    "a bodyless declaration must not adopt the next function's body",
+  );
+});
+
+test("fails closed on an overload whose return type is an object literal", () => {
+  const overload = REAL_INDEX.replace(
+    functionText(REAL_INDEX, AUTO_BOUNDARY_SIGNATURE),
+    "  function autoBoundaryStillActive(ctx: ExtensionContext, boundary: AutoUserBoundary): { ok: boolean };",
+  );
+  assert.notEqual(overload, REAL_INDEX);
+  assert.throws(
+    () => injectGuardStatement(overload, "autoBoundaryStillActive", "return false;"),
+    /declaration only/u,
+    "an object return type in a bodyless declaration must not be mistaken for the body",
+  );
+});
+
+test("fails closed instead of adopting the next function's body", () => {
+  const bodyless = REAL_INDEX.replace(
+    functionText(REAL_INDEX, AUTO_BOUNDARY_SIGNATURE),
+    "  function autoBoundaryStillActive(ctx: ExtensionContext, boundary: AutoUserBoundary): boolean",
+  );
+  assert.notEqual(bodyless, REAL_INDEX);
+  assert.throws(
+    () => injectGuardStatement(bodyless, "autoBoundaryStillActive", "return false;"),
+    /escapes into the following declaration/u,
+    "a missing body must never borrow the following declaration's brace",
+  );
+});
+
+test("runs the full proof on a guard whose body opens with a comment", async () => {
+  const candidate = REAL_INDEX.replace(AUTO_BOUNDARY_SIGNATURE, `${AUTO_BOUNDARY_SIGNATURE} /* comment */`);
+  const root = candidateRoot(candidate);
+  try {
+    const proof = FAULT_PROOFS.autoBoundaryToolSideEffect;
+    const runner = phaseRunner({ redMessage: proof.redAssertionMessage });
+    const receipt = await runReplayGuardFaultProof({ root, proof, runAssertion: runner.run });
+    assert.equal(runner.calls(), 3);
+    assert.equal(receipt.baselineSha256, sha256(candidate));
+    assert.notEqual(receipt.mutantSha256, receipt.baselineSha256, "the fault must change the guard");
+    assert.equal(receipt.restoredSha256, receipt.baselineSha256);
+    assert.equal(readFileSync(join(root, "index.ts"), "utf8"), candidate, "the committed source must be untouched");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

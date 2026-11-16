@@ -18,8 +18,11 @@
 // index.ts at start and uses those exact bytes for the pristine, mutated and
 // restored phases, so an unrelated `index.ts` edit needs no baseline update:
 // behavior is verified, not bytes. Failure modes are positional, not approval
-// based — a mutator whose anchor is missing or ambiguous fails before any phase
-// runs, and a mutation that changes nothing is rejected.
+// based — a mutator whose anchor is missing or ambiguous, whose body brace cannot
+// be resolved inside its own function, or whose mutation changes nothing fails
+// before any phase runs. Body braces are resolved from the guard's signature
+// (parameters, then return type, comments and literals skipped) rather than by
+// searching for the next `{\n`, which could reach a neighbouring function.
 //
 // CONTROLLED FAULT PROOF (performed in a disposable scratch copy, never in the
 // committed tree; reproduces /Users/mak/.paseo/delivery/g03-replay-fault/proof.log):
@@ -288,20 +291,128 @@ export const REPLAY_GUARD_MUTATORS = {
   autoBoundaryStillActive: (source) => injectGuardStatement(source, "autoBoundaryStillActive", "return false;"),
 };
 
-function injectGuardStatement(source, guard, statement) {
+/** Characters that can follow a type-literal's closing brace inside a
+ * signature. Seeing one means the brace we just closed annotated the return
+ * type, not the function body. `;` is included because a bodyless declaration may
+ * end in an object return type, and adopting that brace would inject into an
+ * annotation; a stray `;` after a real body therefore fails closed rather than
+ * mis-targeting. */
+const TYPE_CONTINUATION = new Set(["|", "&", "[", "]", "<", ">", ",", ")", "{", ";"]);
+
+/** Skip whitespace and comments; returns the next significant index. */
+function skipTrivia(source, index) {
+  let i = index;
+  while (i < source.length) {
+    const ch = source[i];
+    if (/\s/u.test(ch)) { i += 1; continue; }
+    if (ch === "/" && source[i + 1] === "/") {
+      const end = source.indexOf("\n", i);
+      i = end === -1 ? source.length : end + 1;
+      continue;
+    }
+    if (ch === "/" && source[i + 1] === "*") {
+      const end = source.indexOf("*/", i + 2);
+      if (end === -1) throw new Error("production source has an unterminated block comment");
+      i = end + 2;
+      continue;
+    }
+    return i;
+  }
+  return i;
+}
+
+/** Index just past the literal opening at `index`, so its contents are ignored. */
+function skipLiteral(source, index) {
+  const quote = source[index];
+  let i = index + 1;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === "\\") { i += 2; continue; }
+    if (ch === quote) return i + 1;
+    i += 1;
+  }
+  throw new Error("production source has an unterminated string literal");
+}
+
+/** Index of the delimiter matching `openIndex`, ignoring comments and literals. */
+function matchingDelimiter(source, openIndex, open, close) {
+  let depth = 0;
+  let i = openIndex;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === "/" && (source[i + 1] === "/" || source[i + 1] === "*")) {
+      const next = skipTrivia(source, i);
+      // A scan that cannot advance must refuse, never spin: a stalled proof is
+      // indistinguishable from a hung test and hides its own failure.
+      if (next === i) throw new Error("production source comment scan made no progress");
+      i = next;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") { i = skipLiteral(source, i); continue; }
+    if (ch === open) depth += 1;
+    else if (ch === close) {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+    i += 1;
+  }
+  return -1;
+}
+
+/**
+ * Index of `guard`'s body brace, resolved from its signature rather than by
+ * searching for the next `{\n`. A brace search cannot tell a body from a
+ * type annotation or a nested literal that follows the signature, so a body
+ * opening with a comment used to fall through to the *next* function and inject
+ * the fault there while every existing check still passed.
+ *
+ * The parameter list is matched first, then the return type is walked: a brace
+ * whose partner is followed by a type continuation is an annotation, and the
+ * first brace that is not becomes the body. Everything is comment and literal
+ * aware. The chosen brace must also precede the next sibling declaration, so a
+ * fault can never land in a neighbouring function; when any step is ambiguous
+ * or missing this fails closed instead of guessing.
+ */
+function guardBodyBrace(source, guard, anchorIndex) {
+  const openParen = anchorIndex + `  function ${guard}`.length;
+  const closeParen = matchingDelimiter(source, openParen, "(", ")");
+  if (closeParen === -1) throw new Error(`replay guard signature is not terminated: ${guard}`);
+  const nextSibling = source.indexOf("\n  function ", closeParen);
+  let index = skipTrivia(source, closeParen + 1);
+  for (;;) {
+    if (index >= source.length) throw new Error(`replay guard body brace not found: ${guard}`);
+    const ch = source[index];
+    if (ch === ";") throw new Error(`replay guard has no body to mutate (declaration only): ${guard}`);
+    if (ch === "}") throw new Error(`replay guard body brace not found before the enclosing block closed: ${guard}`);
+    if (ch === "{") {
+      const close = matchingDelimiter(source, index, "{", "}");
+      if (close === -1) throw new Error(`replay guard body is not terminated: ${guard}`);
+      const after = skipTrivia(source, close + 1);
+      if (TYPE_CONTINUATION.has(source[after])) { index = after; continue; }
+      if (nextSibling !== -1 && index > nextSibling) {
+        throw new Error(`replay guard body brace escapes into the following declaration: ${guard}`);
+      }
+      return index;
+    }
+    index = skipTrivia(source, index + 1);
+  }
+}
+
+/** Unit under test for the targeting contract: a mutant is the candidate with
+ * exactly one statement inserted at the intended guard's body opening. */
+export function injectGuardStatement(source, guard, statement) {
   const anchor = `  function ${guard}(`;
   const occurrences = source.split(anchor).length - 1;
   if (occurrences === 0) throw new Error(`replay guard anchor not found: ${guard}`);
   if (occurrences > 1) throw new Error(`replay guard anchor is ambiguous (${occurrences} matches): ${guard}`);
   const anchorIndex = source.indexOf(anchor);
-  const openBrace = source.indexOf("{\n", anchorIndex);
-  if (openBrace === -1) throw new Error(`replay guard body opening brace not found: ${guard}`);
+  const bodyBrace = guardBodyBrace(source, guard, anchorIndex);
   const injected = `\n    ${statement}`;
-  const mutant = `${source.slice(0, openBrace + 1)}${injected}${source.slice(openBrace + 1)}`;
-  // The fault must land in this one guard: the injected text opens the body of
-  // the same unique anchor, and appears exactly once more than in the original.
-  const mutantOpenBrace = mutant.indexOf("{\n", mutant.indexOf(anchor));
-  if (!mutant.startsWith(injected, mutantOpenBrace + 1)) {
+  const mutant = `${source.slice(0, bodyBrace + 1)}${injected}${source.slice(bodyBrace + 1)}`;
+  // Confinement by construction: the mutant is the candidate with one insertion
+  // at the verified body brace, so nothing outside that function can change.
+  if (mutant.slice(0, bodyBrace + 1) !== source.slice(0, bodyBrace + 1)
+    || mutant.slice(bodyBrace + 1 + injected.length) !== source.slice(bodyBrace + 1)) {
     throw new Error(`replay guard fault did not land in ${guard}`);
   }
   if (mutant.split(statement).length !== source.split(statement).length + 1) {
