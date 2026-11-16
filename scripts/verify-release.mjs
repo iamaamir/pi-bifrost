@@ -6,7 +6,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveTestBinary } from "./resolve-test-binary.mjs";
 import { withPackLock } from "../tests/fixtures/pack-lock.mjs";
-import { REPLAY_GUARD_BASELINE_SHA256, REPLAY_GUARD_FUNCTIONS } from "../tests/fixtures/replay-fault-control.mjs";
+import { REPLAY_GUARD_BASELINE_SHA256, REPLAY_GUARD_FUNCTIONS } from "../tests/fixtures/replay-baseline.mjs";
 
 const REQUIRED_GATES = [
   ["unit", "test"],
@@ -115,6 +115,14 @@ export function checkReplayBaseline(root) {
 }
 
 function preflight(root) {
+  // Candidate integrity is evaluated first and deliberately before any host-tool
+  // probe: a stale baseline is a property of the checked-out source, so this
+  // both fails faster than the installed-tool checks and lets the production
+  // wiring be regression-tested on a fixture root without Pi, agent-tui or
+  // Pillow installed. Keeping this call first is load-bearing —
+  // "production preflight validates the replay baseline before host tooling"
+  // fails if it moves behind the tool checks.
+  const replayBaseline = checkReplayBaseline(root);
   const checkBinary = (name, envVar) => {
     try { resolveTestBinary({ envVar, name, root }); return `${name}: available`; }
     catch { throw new Error(`${name} is missing. Install project dependencies or set ${envVar} to its executable.`); }
@@ -129,7 +137,6 @@ function preflight(root) {
   }
   const pillow = spawnSync("python3", ["-c", "import PIL"], { encoding: "utf8", timeout: 5000 });
   if (pillow.status !== 0) throw new Error("Python Pillow is required by test:ui. Install it with `python3 -m pip install Pillow`.");
-  const replayBaseline = checkReplayBaseline(root);
   return `Pi 1.4.0, agent-tui, and Python Pillow are available. ${replayBaseline}`;
 }
 

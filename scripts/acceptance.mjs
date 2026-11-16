@@ -486,6 +486,11 @@ export function buildGateEvidenceCases({ verification, root, artifactDir, termin
     return {
       id: "gate:" + gate.id,
       requirements: ["R16"],
+      // Retained identifier, deliberately not renamed: preflight now validates
+      // installed tools and replay-baseline integrity, so this name is narrower
+      // than the gate's behaviour. It is evidence metadata read by ci-report.mjs
+      // and present in recorded report fixtures, so renaming would rewrite
+      // historical evidence for cosmetic accuracy only.
       boundary: gate.id === "preflight" ? "installed-tool-preflight" : "release-verification-gate",
       status: gate.exitCode === 0 ? "passed" : "failed",
       required: true,
