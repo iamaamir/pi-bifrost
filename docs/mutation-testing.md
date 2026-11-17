@@ -65,12 +65,16 @@ lanes       = MATRIX.maxParallel (must equal the workflow's max-parallel)
 ```
 
 `projectWallClock()` in [`mutation/workflow.mjs`](../mutation/workflow.mjs) packs
-legs through those lanes **in matrix order**, because that is how GitHub
-dispatches a matrix: the next leg starts when a lane frees, in the order the
-matrix lists them. The previous formula was `max(leg) + reserve`, which assumed
-every leg started simultaneously. That is exact only while the leg count is at or
-below the lane count. Six modules sharded four ways is 24 legs, and the large
-modules' legs are listed last, so they start after the earlier waves drain:
+legs through those lanes in one possible dispatch order — the matrix order,
+starting the next leg when a lane frees. **GitHub does not guarantee matrix
+execution order** ([docs](https://docs.github.com/en/actions/using-jobs/using-a-matrix-for-your-jobs));
+it only guarantees that at most `max-parallel` jobs run at once. So this is a
+projection assumption, not a dispatch guarantee, and a different order can take
+longer than projected. The previous formula was `max(leg) + reserve`, which
+assumed every leg started simultaneously. That is exact only while the leg count
+is at or below the lane count. Six modules sharded four ways is 24 legs, and the
+large modules' legs are listed last, so under the modelled order they start after
+the earlier waves drain:
 
 ```
 node mutation/workflow.mjs plan            # SHARDS=4
@@ -330,6 +334,7 @@ low score.
 | A module reports **zero mutants** | — | It parsed and carries nothing; 0/0 is not a perfect score |
 | `Timeout` mutants | `max(10, 2%)` aggregate **and** per module | A budget collapse is indistinguishable from genuine timeouts |
 | `RuntimeError` + `CompileError` | `max(5, 2%)` aggregate **and** per module | Stryker **excludes** these from its denominator |
+| A report for a module **outside the selected set** | 0 | It is excluded from the score; its presence still means the artifact set is not the planned one |
 | A shard **outside** the plan | 0 | A stale or misrouted artifact was merged; missing-shard detection cannot see it |
 | Shard conflicts | 0 | Overlapping shards disagreed, so the run is not reproducible |
 
@@ -424,7 +429,7 @@ node mutation/run.mjs routing.ts --concurrency 8
 node mutation/run.mjs                           # every target, sequentially
 node mutation/run.mjs cache.ts --shards 2       # split one module
 node mutation/run.mjs cache.ts --mutate cache.ts:1-140   # one region
-node mutation/run.mjs cache.ts --report archive/cache.ts.json   # one named output file
+node mutation/run.mjs cache.ts --report reports/archive/cache.ts.json   # one named output file
 node mutation/run.mjs cache.ts --incremental    # local loop: reuse unchanged results
 node mutation/run.mjs cache.ts --dry-run        # check the binding, no mutants
 
@@ -432,10 +437,12 @@ node mutation/run.mjs cache.ts --dry-run        # check the binding, no mutants
 node mutation/report.mjs --dir reports/mutation --out /tmp/mutation.md
 ```
 
-`--report` writes exactly the path it is given (inside the checkout) and clears
-only that file, so two manual shard runs cannot delete each other's output. It
-requires exactly one target and cannot be combined with `--shards`; both fail
-immediately rather than silently ignoring the flag.
+`--report` writes exactly the path it is given **under `reports/`** and clears
+only that file, so two manual shard runs cannot delete each other's output. The
+reporting directory is gitignored, and the boundary matters because the runner
+removes its own previous output before measuring: a path elsewhere could delete a
+source or tracked file. It requires exactly one target and cannot be combined
+with `--shards`; both fail immediately rather than silently ignoring the flag.
 
 Use `--incremental` while iterating on one module: the first run is full, later
 runs only re-test what changed (measured: 1m44s → 2s when nothing changed, and a

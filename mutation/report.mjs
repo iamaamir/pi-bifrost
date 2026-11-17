@@ -393,7 +393,7 @@ function renderModuleTable(reports) {
   return { lines, aggregate };
 }
 
-function healthFlags(reports, aggregate, expectedTargets, toleranceOverride, shardsPerTarget) {
+function healthFlags(reports, aggregate, expectedTargets, toleranceOverride, shardsPerTarget, unexpectedTargets) {
   const flags = [];
   const tolerance = toleranceOverride ?? timeoutTolerance(aggregate.total);
   if (aggregate.Timeout > tolerance) {
@@ -423,7 +423,7 @@ function healthFlags(reports, aggregate, expectedTargets, toleranceOverride, sha
   // module can hide inside a large healthy population. Judge each module against
   // its own population as well, and name it.
   for (const report of reports) {
-    for (const reason of moduleUnusableReasons({ module: report.module, ...report.summary })) {
+    for (const reason of moduleUnusableReasons({ module: report.module, ...report.summary }, toleranceOverride)) {
       flags.push(`**${reason}.**`);
     }
   }
@@ -452,7 +452,7 @@ function healthFlags(reports, aggregate, expectedTargets, toleranceOverride, sha
       `**Unexpected shards** for: ${detail}. A shard the plan did not ask for is stale or misrouted, so the merged population is not the planned one.`,
     );
   }
-  const unexpected = reports.map((report) => report.module).filter((module) => !expectedTargets.includes(module));
+  const unexpected = unexpectedTargets ?? reports.map((report) => report.module).filter((module) => !expectedTargets.includes(module));
   if (unexpected.length > 0) {
     flags.push(`**Unexpected reports** for: ${unexpected.map((module) => `\`${module}\``).join(", ")}. Update \`mutation/config.mjs\`.`);
   }
@@ -479,6 +479,7 @@ export function renderSummary({
   shardsPerTarget = null,
   metadata = {},
   tolerance = null,
+  unexpectedTargets = null,
 }) {
   const { lines: tableLines, aggregate } = renderModuleTable(reports);
   const lines = [];
@@ -496,7 +497,7 @@ export function renderSummary({
     "",
   );
 
-  const flags = healthFlags(reports, aggregate, expectedTargets, tolerance, shardsPerTarget);
+  const flags = healthFlags(reports, aggregate, expectedTargets, tolerance, shardsPerTarget, unexpectedTargets);
   if (flags.length > 0) {
     lines.push("### Health flags", "");
     for (const flag of flags) lines.push(`- ${flag}`);
@@ -589,8 +590,15 @@ function missingShardsFor(reports, expectedTargets, shardsPerTarget) {
 
 function main() {
   const options = parseArgs(process.argv.slice(2));
-  const reports = readReports(options.dir);
   const expectedTargets = options.targets ?? targetNames();
+  // A report for a module this run did not plan must never reach the score. A
+  // stale artifact from an earlier wider run would otherwise be merged into the
+  // aggregate and into `modules`, publishing a number that covers mutants the
+  // run never measured. Only the selected set is scored; the foreign reports are
+  // carried separately so the gate can name them.
+  const readAll = readReports(options.dir);
+  const reports = readAll.filter((report) => expectedTargets.includes(report.module));
+  const unexpectedTargets = [...new Set(readAll.filter((report) => !expectedTargets.includes(report.module)).map((report) => report.module))].sort();
   const survivors = survivorRows(reports);
 
   if (options.survivors) {
@@ -612,6 +620,7 @@ function main() {
     modules: reports.map((report) => ({ module: report.module, ...report.summary })),
     aggregate,
     expectedTargets,
+    unexpectedTargets,
     missingTargets: expectedTargets.filter((target) => !reports.some((report) => report.module === target)),
     missingShards: missingShardsFor(reports, expectedTargets, options.shardsPerTarget),
     unexpectedShards: unexpectedShardsFor(reports, expectedTargets, options.shardsPerTarget),
@@ -631,6 +640,7 @@ function main() {
     expectedTargets,
     shardsPerTarget: options.shardsPerTarget,
     tolerance: options.timeoutTolerance ?? undefined,
+    unexpectedTargets,
   });
   if (options.out) {
     mkdirSync(dirname(options.out), { recursive: true });

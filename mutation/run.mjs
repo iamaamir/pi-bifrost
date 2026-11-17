@@ -13,7 +13,7 @@
 // Reports land in reports/mutation/. Summarise with:
 //   node mutation/report.mjs --dir reports/mutation --out /tmp/mutation.md
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, rmSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { SHARDING, TARGETS, estimatedMinutes } from "./config.mjs";
 import { ROOT, bindingFor, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
@@ -87,23 +87,46 @@ function inventory() {
   }
 }
 
+/** The only directory a measurement may write a report into (gitignored). */
+export const REPORTS_ROOT = join(ROOT, "reports");
+
 /**
- * Resolve an explicit `--report` path.
+ * Whether a path is inside the reporting directory.
  *
- * The path is honoured as given rather than reduced to a basename. Reducing it
- * silently wrote somewhere other than where the operator asked, and it made the
- * clear-scope disagree with the write: `--report archive/cache.ts.shard0.json`
- * cleared `reports/mutation/cache.ts.shard0.json`, which is a different file and
- * can be another shard's output. Ownership is now the exact resolved path.
- *
- * Confined to the repository so a stray `--report ../../somewhere` cannot delete
- * a file outside the checkout.
+ * A bare prefix test is not enough: `reports-archive/x.json` shares the string
+ * prefix but is a different directory, so the separator is part of the check.
+ * The root itself is not inside itself, which is what rejects `--report reports`.
  */
-export function resolveReportPath(reportPath) {
+export function isInsideReports(path, reportsRoot = REPORTS_ROOT) {
+  const prefix = reportsRoot.endsWith(sep) ? reportsRoot : `${reportsRoot}${sep}`;
+  return resolve(path).startsWith(prefix);
+}
+
+/**
+ * Resolve an explicit `--report` path, confined to the reporting directory.
+ *
+ * The flag used to accept any path inside the checkout, which is unsafe in two
+ * ways that share a root cause: this run *deletes its own previous output*
+ * before measuring, and Stryker then writes over that path. `--report
+ * package.json` would therefore delete a tracked file and replace it with a
+ * JSON report. `reports/` is gitignored, so confining output there means the
+ * command can only ever touch measurement artifacts.
+ *
+ * A directory is rejected rather than left to fail obscurely: the cleanup step
+ * cannot unlink a directory and Stryker cannot write to one.
+ */
+export function resolveReportPath(reportPath, reportsRoot = REPORTS_ROOT) {
+  if (typeof reportPath !== "string" || reportPath.trim() === "") {
+    throw new Error("--report needs a file path");
+  }
   const resolved = resolve(ROOT, reportPath);
-  const prefix = ROOT.endsWith(sep) ? ROOT : `${ROOT}${sep}`;
-  if (!resolved.startsWith(prefix)) {
-    throw new Error(`--report must stay inside the repository (${ROOT}), got ${reportPath}`);
+  if (!isInsideReports(resolved, reportsRoot)) {
+    throw new Error(
+      `--report must name a file under ${relative(ROOT, reportsRoot)}/ (got ${reportPath}); the runner removes its own previous output, so a path elsewhere could delete a source or tracked file`,
+    );
+  }
+  if (existsSync(resolved) && statSync(resolved).isDirectory()) {
+    throw new Error(`--report must name a file, not a directory (got ${reportPath})`);
   }
   return resolved;
 }
@@ -132,7 +155,14 @@ export function staleReportsFor(options, run) {
  */
 export function reportsToClear(options, run, reportsDir, entries) {
   const plan = staleReportsFor(options, run);
-  if (plan.scope === "own") return [plan.path];
+  if (plan.scope === "own") {
+    // Defence in depth: a caller can hand this function a path directly, so the
+    // ownership boundary is enforced here as well as at resolution time.
+    if (!isInsideReports(plan.path)) {
+      throw new Error(`refusing to clear a report outside ${relative(ROOT, REPORTS_ROOT)}/: ${plan.path}`);
+    }
+    return [plan.path];
+  }
   return entries.filter((entry) => isReportFor(entry, run.target)).map((entry) => join(reportsDir, entry));
 }
 

@@ -426,6 +426,15 @@ export function unusableReasons(data) {
     const detail = data.missingShards.map(({ module, shard }) => `${module} shard ${shard}`).join(", ");
     reasons.push(`missing module shards: ${detail}; the score would cover only part of the planned mutants`);
   }
+  // A report for a module this run did not plan is excluded from the score, so
+  // the published number is clean. Its presence still means the report set is
+  // not the one the plan described, which is a failed measurement rather than a
+  // silent merge.
+  if (Array.isArray(data?.unexpectedTargets) && data.unexpectedTargets.length > 0) {
+    reasons.push(
+      `unexpected module reports: ${data.unexpectedTargets.join(", ")}; they were excluded from the score, but a report outside the selected set means the artifact set is not the planned one`,
+    );
+  }
   // A shard the plan did not ask for means a stale or misrouted artifact was
   // merged: the population then differs from the one that was planned, and
   // missing-shard detection cannot see it.

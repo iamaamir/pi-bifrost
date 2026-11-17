@@ -63,11 +63,13 @@ export function resolveTimeoutTolerance(raw) {
 /**
  * Wall clock for leg costs dispatched through `slots` lanes, in matrix order.
  *
- * Order is preserved rather than sorted longest-first, because GitHub does not
- * reorder a matrix: it starts the next leg as a slot frees, in the order the
- * matrix lists them. A sharded plan puts the large modules' legs last, so they
- * begin after the earlier waves have drained — sorting would model a scheduler
- * that does not exist and would understate the result.
+ * Order is preserved rather than sorted longest-first, because the planner models
+ * dispatch in matrix order: the next leg starts as a slot frees. GitHub does
+ * **not** guarantee matrix execution order — it only guarantees at most
+ * `max-parallel` concurrent jobs — so this is one possible order, not the
+ * dispatch order. A sharded plan puts the large modules' legs last, so under this
+ * model they begin after the earlier waves drain; sorting would hide that wait
+ * and a different real order can take longer still.
  *
  * The model is a planning estimate, not a deadline. It assumes a leg starts the
  * instant a lane frees (GitHub scheduling and image pulls add unmodelled delay)
@@ -160,7 +162,7 @@ export function summaryLines(data) {
     // Report the tolerance the gate actually applied. Falling back to the default
     // here would print a threshold the run was never judged against, making an
     // accepted report look like it exceeded its own limit.
-    `\`modules=${data?.modules?.length ?? 0} mutants=${data?.aggregate?.total ?? 0} population=${pct(data?.aggregate?.populationScore)} conclusive=${pct(data?.aggregate?.conclusiveScore)} stryker=${pct(data?.aggregate?.strykerScore)} timeouts=${data?.aggregate?.Timeout ?? 0} errors=${(data?.aggregate?.RuntimeError ?? 0) + (data?.aggregate?.CompileError ?? 0)} tolerance=${data?.timeoutToleranceOverride ?? data?.timeoutTolerance ?? timeoutTolerance(data?.aggregate?.total ?? 0)} missing=${(data?.missingTargets?.length ?? 0) + (data?.missingShards?.length ?? 0)}\``,
+    `\`modules=${data?.modules?.length ?? 0} mutants=${data?.aggregate?.total ?? 0} population=${pct(data?.aggregate?.populationScore)} conclusive=${pct(data?.aggregate?.conclusiveScore)} stryker=${pct(data?.aggregate?.strykerScore)} timeouts=${data?.aggregate?.Timeout ?? 0} errors=${(data?.aggregate?.RuntimeError ?? 0) + (data?.aggregate?.CompileError ?? 0)} tolerance=${data?.timeoutToleranceOverride ?? data?.timeoutTolerance ?? timeoutTolerance(data?.aggregate?.total ?? 0)} missing=${(data?.missingTargets?.length ?? 0) + (data?.missingShards?.length ?? 0)} unexpected=${(data?.unexpectedTargets?.length ?? 0) + (data?.unexpectedShards?.length ?? 0)}\``,
     "",
   ];
   for (const module of data?.modules ?? []) {
