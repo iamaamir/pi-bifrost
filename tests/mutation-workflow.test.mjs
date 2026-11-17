@@ -1266,8 +1266,12 @@ test("the gate rejects a module-local failure through the shipped CLI", () => {
     }
   };
   try {
+    // The shipped CLI re-checks identity against the checkout, so these
+    // synthetic payloads must carry one or they are refused for the wrong reason.
+    const identity = Object.fromEntries(BASELINE_MODULES.map((m) => [m.module, measurementIdentity(m.module)]));
     const broken = { ...BASELINE_MODULES[0], Killed: 149, Survived: 0, NoCoverage: 0, RuntimeError: 80 };
     const rejected = gate({
+      measuredIdentity: identity,
       modules: [broken, ...BASELINE_MODULES.slice(1)],
       aggregate: { total: 4206, Killed: 4126, Timeout: 8, RuntimeError: 80, CompileError: 0, shardConflicts: 0 },
       missingTargets: [],
@@ -1278,6 +1282,7 @@ test("the gate rejects a module-local failure through the shipped CLI", () => {
     assert.match(rejected.stderr, /cache\.ts: 80 of 229/u);
 
     const accepted = gate({
+      measuredIdentity: identity,
       modules: BASELINE_MODULES,
       aggregate: { total: 4206, Killed: 2640, Timeout: 8, RuntimeError: 0, CompileError: 0, shardConflicts: 0 },
       missingTargets: [],
@@ -1286,6 +1291,39 @@ test("the gate rejects a module-local failure through the shipped CLI", () => {
     });
     assert.equal(accepted.status, 0);
     assert.match(accepted.stdout, /mutation measurement usable: 6 modules/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("the shipped CLI refuses a summary that is stale for this checkout", () => {
+  // A summary outlives the run that produced it: it is attached to the run,
+  // quoted in review, and re-gated by hand. Re-gating used to pass
+  // unconditionally, so a payload from an older tree reported a score for code
+  // that no longer exists.
+  const directory = mkdtempSync(join(tmpdir(), "mutation-stale-gate-"));
+  const gate = (payload) => {
+    const path = join(directory, "summary.json");
+    writeFileSync(path, JSON.stringify(payload));
+    try {
+      return { status: 0, stderr: "", stdout: execFileSync(process.execPath, ["mutation/workflow.mjs", "require-usable", path], { cwd: ROOT, encoding: "utf8", stdio: "pipe" }) };
+    } catch (error) {
+      return { status: error.status, stderr: String(error.stderr) };
+    }
+  };
+  try {
+    const base = { modules: BASELINE_MODULES, missingTargets: [], missingShards: [], unexpectedShards: [] };
+    const current = Object.fromEntries(BASELINE_MODULES.map((m) => [m.module, measurementIdentity(m.module)]));
+
+    assert.equal(gate({ ...base, measuredIdentity: current }).status, 0, "a current payload passes");
+
+    const stale = gate({ ...base, measuredIdentity: { ...current, "cache.ts": "0".repeat(64) } });
+    assert.equal(stale.status, 1, "a payload from another tree must not pass");
+    assert.match(stale.stderr, /cache\.ts: measured against different bytes/u);
+
+    const unstamped = gate(base);
+    assert.equal(unstamped.status, 1, "an unstamped payload is unverifiable, not usable");
+    assert.match(unstamped.stderr, /records no measurement identity/u);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -1721,6 +1759,9 @@ test("gate and summary agree on every measurement state", () => {
     ],
     ["a module with zero mutants", [reportFor({})], {}, ["zero-mutants"], []],
     ["a module whose mutants are all ignored", [reportFor({ Ignored: 5 })], {}, ["no-evaluated-mutants"], []],
+    ["a payload that records no identity", [reportFor({ Killed: 5 })], { identityFor: (m) => measurementIdentity(m) }, ["unstamped-payload"], []],
+    ["a payload measured against other bytes", [reportFor({ Killed: 5 })], { identityFor: () => "f".repeat(64), measuredIdentity: { [MODULE]: "0".repeat(64) } }, ["stale-payload"], []],
+    ["a payload that matches this checkout", [reportFor({ Killed: 5 })], { identityFor: (m) => measurementIdentity(m), measuredIdentity: { [MODULE]: measurementIdentity(MODULE) } }, [], []],
     ["ignored mutants beside evaluated ones", [reportFor({ Killed: 4, Ignored: 6 })], {}, [], []],
     [
       "an aggregate timeout burst with every module inside its own allowance",
@@ -1753,11 +1794,12 @@ test("gate and summary agree on every measurement state", () => {
 
   const seen = new Set();
   for (const [name, reports, options, blocking, advisory] of cases) {
-    const payload = buildPayload({ reports, expectedTargets: [MODULE], ...options });
-    const diagnostics = measurementDiagnostics(payload);
-    const reasons = unusableReasons(payload);
+    const { identityFor, ...payloadOptions } = options;
+    const payload = buildPayload({ reports, expectedTargets: [MODULE], ...payloadOptions });
+    const diagnostics = measurementDiagnostics(payload, identityFor ? { identityFor } : {});
+    const reasons = unusableReasons(payload, identityFor ? { identityFor } : {});
     // Rendered from the same payload the gate reads, which is the invariant.
-    const markdown = renderSummary({ reports, payload });
+    const markdown = renderSummary({ reports, payload, ...(identityFor ? { identityFor } : {}) });
 
     const codes = diagnostics.map((entry) => entry.code).sort();
     assert.deepEqual(codes, [...blocking, ...advisory].sort(), `${name}: diagnostics`);
@@ -1783,7 +1825,11 @@ test("gate and summary agree on every measurement state", () => {
   // Completeness: every diagnostic the policy can emit has a row above. Adding a
   // rule without a row fails here rather than in a later review.
   const emitted = new Set([
-    ...cases.flatMap(([, reports, options]) => measurementDiagnostics(buildPayload({ reports, expectedTargets: [MODULE], ...options })).map((entry) => entry.code)),
+    ...cases.flatMap(([, reports, options]) => {
+      const { identityFor, ...rest } = options;
+      return measurementDiagnostics(buildPayload({ reports, expectedTargets: [MODULE], ...rest }), identityFor ? { identityFor } : {})
+        .map((entry) => entry.code);
+    }),
   ]);
   const source = readFileSync(new URL("../mutation/config.mjs", import.meta.url), "utf8");
   const declared = new Set([...source.matchAll(/note\(\s*"([a-z-]+)",\s*(?:BLOCKING|ADVISORY)/g)].map((match) => match[1]));

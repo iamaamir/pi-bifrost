@@ -439,7 +439,7 @@ export function runtimeErrorTolerance(totalMutants) {
  * usable but the reader should know. Nothing here is a score threshold: a low
  * score is the measurement, never a failure.
  */
-export function measurementDiagnostics(data) {
+export function measurementDiagnostics(data, options = {}) {
   const diagnostics = [];
   const aggregate = data?.aggregate ?? {};
   const modules = Array.isArray(data?.modules) ? data.modules : [];
@@ -452,6 +452,31 @@ export function measurementDiagnostics(data) {
 
   if (modules.length === 0) {
     diagnostics.push(note("no-modules", BLOCKING, "no module reports were produced"));
+  }
+  // A payload outlives the run that produced it. Re-checking one later used to
+  // pass unconditionally, so a summary from an older tree reported a score for
+  // code that no longer exists. The identity is recorded at build time and
+  // checked here against the checkout, when the reader supplies one.
+  if (options.identityFor) {
+    const recorded = data?.measuredIdentity;
+    for (const entry of modules) {
+      let expected;
+      try {
+        expected = options.identityFor(entry.module);
+      } catch {
+        continue;
+      }
+      const claimed = recorded?.[entry.module];
+      if (typeof claimed !== "string") {
+        diagnostics.push(
+          note("unstamped-payload", BLOCKING, `${entry.module}: this payload records no measurement identity, so there is no evidence of which bytes produced its score`),
+        );
+      } else if (claimed !== expected) {
+        diagnostics.push(
+          note("stale-payload", BLOCKING, `${entry.module}: measured against different bytes (${claimed.slice(0, 12)} in the payload, ${expected.slice(0, 12)} here); rerun the measurement`),
+        );
+      }
+    }
   }
   if (Array.isArray(data?.missingTargets) && data.missingTargets.length > 0) {
     diagnostics.push(
@@ -578,8 +603,8 @@ export function measurementDiagnostics(data) {
  * A low score is the measurement, not a failure. Only unusable measurements
  * reach this list.
  */
-export function unusableReasons(data) {
-  return measurementDiagnostics(data)
+export function unusableReasons(data, options = {}) {
+  return measurementDiagnostics(data, options)
     .filter((diagnostic) => diagnostic.severity === BLOCKING)
     .map((diagnostic) => diagnostic.message);
 }

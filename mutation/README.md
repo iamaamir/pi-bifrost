@@ -388,6 +388,15 @@ two reports for one shard *within* an attempt are rejected as ambiguous rather
 than resolved by order. That keeps "re-run failed jobs" working: untouched legs
 stay on attempt 1 while retried legs move to attempt 2.
 
+**A summary carries its own identity, and re-gating checks it.** The reports
+path always verified the measurement identity, but a `summary.json` read back
+later was accepted unconditionally — so a payload built against an older tree
+reported a usable score for code that no longer exists, and its survivor rows
+carried no identity at all. The payload now records `measuredIdentity` per module
+and `require-usable` re-derives it from the checkout, refusing a stale or
+unstamped payload. The identity covers the bound tests too, so editing a test
+invalidates the result exactly as editing the module does.
+
 **An unreadable artifact blocks its slot; it never falls back.** A truncated
 upload used to be dropped, which made the previous attempt look current — the
 run was re-run because something failed, so its absence is not evidence of

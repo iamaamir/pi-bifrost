@@ -15,7 +15,7 @@ import {
   timeoutTolerance,
   unusableReasons,
 } from "./config.mjs";
-import { exceedsBudget, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
+import { exceedsBudget, measurementIdentity, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
 
 /** Resolve the dispatched target selection into a matrix list. */
 export function resolveTargets(requested, known = targetNames()) {
@@ -248,7 +248,11 @@ function run(command, argv) {
     // A dispatch may override the timeout tolerance; the default is calibrated in
     // config.mjs. Blank means "use the calibrated default".
     const override = resolveTimeoutTolerance(process.env.TIMEOUT_TOLERANCE);
-    const reasons = unusableReasons(override === null ? data : { ...data, timeoutToleranceOverride: override });
+    // The payload is checked against this checkout, so a summary built from an
+    // older tree cannot re-gate as usable just because it was valid when written.
+    const reasons = unusableReasons(override === null ? data : { ...data, timeoutToleranceOverride: override }, {
+      identityFor: measurementIdentity,
+    });
     if (reasons.length > 0) {
       for (const reason of reasons) console.error(`mutation measurement unusable: ${reason}`);
       process.exitCode = 1;
