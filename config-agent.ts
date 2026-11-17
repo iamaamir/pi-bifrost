@@ -570,19 +570,7 @@ export function catalogDigest(catalog: ConfigAgentCatalog): string {
   }))));
 }
 
-const MAX_AUTH_REASON_CHARS = 200;
 
-function boundedAuthReason(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  // Provider text is stripped of terminal escapes, flattened, and reduced to
-  // printable text so a hostile or noisy error cannot inject into the report.
-  const line = message
-    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
-    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g, "")
-    .replace(/[\u0000-\u001f\u007f]/g, " ")
-    .replace(/\s+/g, " ").trim() || "sign-in could not be resolved";
-  return line.length <= MAX_AUTH_REASON_CHARS ? line : `${line.slice(0, MAX_AUTH_REASON_CHARS - 3)}...`;
-}
 
 /**
  * Resolve each provider's stored sign-in through Pi's registry. Pi's
@@ -638,8 +626,8 @@ async function resolveProviderAuth(
         continue;
       }
       resolved.push({ provider, state: "ready", ...(source ? { source } : {}) });
-    } catch (error) {
-      resolved.push({ provider, state: "invalid", ...(source ? { source } : {}), reason: boundedAuthReason(error) });
+    } catch {
+      resolved.push({ provider, state: "invalid", ...(source ? { source } : {}), reason: "the stored sign-in cannot be used for this provider" });
     }
   }
   return resolved;

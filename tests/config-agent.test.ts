@@ -365,6 +365,21 @@ describe("agent-facing configuration inspection", () => {
 });
 
 describe("provider sign-in state", () => {
+  it("does not disclose authentication error text in configuration reports", async () => {
+    const secret = "synthetic-auth-error-canary";
+    const harness = freshHarness({
+      providerAuthResult: (provider) => provider === "alpha" ? new Error(secret) : { auth: {} },
+    });
+    try {
+      const inspected = await harness.run({ operation: "inspect" });
+      assert.doesNotMatch(JSON.stringify(inspected), new RegExp(secret));
+      const checked = await harness.run({ operation: "check", candidate: { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } } });
+      assert.doesNotMatch(JSON.stringify(checked), new RegExp(secret));
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("reports a stored sign-in that cannot be resolved and warns without blocking the write", async () => {
     const harness = freshHarness({
       providerAuthStatus: () => ({ configured: true, source: "stored" }),
@@ -376,15 +391,14 @@ describe("provider sign-in state", () => {
       const inspected = detailsOf<ConfigAgentInspectResult>(await harness.run({ operation: "inspect" }));
       const alpha = inspected.providerAuth.find((entry) => entry.provider === "alpha");
       assert.equal(alpha?.state, "invalid");
-      // Provider error text is flattened to one bounded line, with control
-      // characters stripped, so no payload or terminal escape follows it.
-      assert.equal(alpha?.reason, "OAuth refresh failed for alpha: invalid_grant provider stack trace");
+      // Provider error messages may contain credentials and must stay private.
+      assert.equal(alpha?.reason, "the stored sign-in cannot be used for this provider");
       assert.doesNotMatch(alpha?.reason ?? "", /[\u0000-\u001f\u007f]/);
       assert.equal(inspected.providerAuth.find((entry) => entry.provider === "beta")?.state, "ready");
 
       const inspectText = contentOf(await harness.run({ operation: "inspect" }));
       assert.match(inspectText, /provider sign-in:/);
-      assert.match(inspectText, /alpha: invalid -- OAuth refresh failed for alpha: invalid_grant provider stack trace/);
+      assert.match(inspectText, /alpha: invalid -- the stored sign-in cannot be used for this provider/);
       assert.doesNotMatch(inspectText, /resolved-value-not-reported/);
       assert.doesNotMatch(JSON.stringify(inspected), /resolved-value-not-reported/);
 
@@ -441,7 +455,7 @@ describe("provider sign-in state", () => {
       }));
       const warning = checked.issues.find((issue) => issue.code === "config.provider_auth_invalid" && issue.path === "models.dead");
       assert.match(warning?.message ?? "", /retired\/only would fail when selected/);
-      assert.match(warning?.message ?? "", /token refresh failed/);
+      assert.match(warning?.message ?? "", /stored sign-in cannot be used/);
     } finally {
       harness.cleanup();
     }
