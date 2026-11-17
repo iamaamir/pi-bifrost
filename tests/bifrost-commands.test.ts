@@ -857,6 +857,21 @@ describe("bifrost command ui", () => {
     }
   });
 
+  it("advertises every reconcile source the parser accepts", async () => {
+    const { ctx, calls } = makeCtx();
+    await createCommandRouter(makeState() as never)("config reconcile --source nowhere", ctx as never);
+    const usage = calls
+      .filter((call) => call.kind === "notify")
+      .map((call) => String(call.value))
+      .find((message) => message.includes("usage: /bifrost config reconcile"));
+    assert.ok(usage !== undefined, JSON.stringify(calls));
+    // ReconciliationConfigSource is "project" | "workspace" | "user"; the usage
+    // string once omitted workspace, so the conflict footer's advice looked invalid.
+    for (const source of ["project", "workspace", "user"]) {
+      assert.ok(usage.includes(source), `usage does not mention ${source}: ${usage}`);
+    }
+  });
+
   it("reconciles generated memberships from a recent probe cache and keeps manual config", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-refresh-"));
     const previousCwd = process.cwd();

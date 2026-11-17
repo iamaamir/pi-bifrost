@@ -1090,7 +1090,7 @@ async function handleReconciliationCommand(
   if (!parsed.ok) {
     log(
       ctx,
-      "usage: /bifrost config reconcile [--source project|user] [--tier <tier> --provider <provider>] [--refresh | --apply --proposal <digest> | --recover] [--json]",
+      "usage: /bifrost config reconcile [--source project|workspace|user] [--tier <tier> --provider <provider>] [--refresh | --apply --proposal <digest> | --recover] [--json]",
       "warning",
     );
     return;
