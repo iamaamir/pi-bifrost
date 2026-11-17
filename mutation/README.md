@@ -192,6 +192,9 @@ fails the run (not the merge) when:
 | `Timeout` mutants | `max(10, 2%)` aggregate **and** per module | Budget collapse is indistinguishable from real timeouts |
 | `RuntimeError` + `CompileError` | `max(5, 2%)` aggregate **and** per module | **Stryker excludes these from the denominator** |
 | A report for a module **outside the selected set** | 0 | It is excluded from the score, but its presence means the artifact set is not the planned one |
+| A report whose **measurement identity** differs | 0 | It measured different bytes (revision, binding or config); merging it would publish a composite |
+| **Two files claiming one shard** | 0 | `<module>.json` is shard 0, so it collides with `<module>.shard0.json`; one of them is stale |
+| An **unstamped** report | 0 | Its provenance is unknown, so nothing can establish what it measured |
 | A shard **outside** the plan | 0 | A stale or misrouted artifact was merged — missing-shard detection cannot see it |
 | Shard conflicts | 0 | Overlapping shards disagreed — not reproducible |
 
@@ -335,6 +338,32 @@ status every time.
 **Mutator-based sharding is not usable.** `excludedMutations` still instruments
 excluded mutants as `Ignored`, and the evaluated sets were not complementary (4
 phantom `CallExpression` mutants).
+
+**Every report carries the measurement it belongs to.** The runner stamps each
+report it writes with a content identity — the module's bytes, its bound test
+files and `mutation/config.mjs` — and the summariser accepts a report only if
+that identity matches the current checkout. The identity is per module, because
+a module's population is what one measurement of it covered; a single per-run
+value would either accept everything or reject everything. A report from a
+different revision, binding or config is rejected and named, never merged. It
+also means the artifact file name does not have to encode provenance, which is
+why the download pattern stays `mutation-report-*`: scoping it to the current
+`run_attempt` would hide the legs a partial re-run did not retry.
+
+**A dry run never clears reports.** `--dry-run` measures nothing and writes
+nothing, so deleting the previous measurement would destroy a real result to make
+room for a report that never exists. It is refused with `--report`, which would
+name that nonexistent file.
+
+**Report output is confined to `reports/`, on resolved paths.** The boundary is
+checked after resolving symlinks in every component that exists, so a path spelled
+inside `reports/` that a symlinked directory redirects elsewhere is refused
+rather than written or deleted through. Deleting uses the spelled path (removing
+a symlink removes the link, not its target), and a symlinked report *file* is
+refused because "remove our own output" would then mean two different things.
+Components that do not exist yet are allowed: creating them creates exactly what
+they name. Cleanup fails closed — if the boundary cannot be established it
+deletes nothing.
 
 **Stale reports are cleared per target.** The summariser merges every `*.json` in
 `reports/mutation/`, so a previous run's file would be counted. Clearing matches

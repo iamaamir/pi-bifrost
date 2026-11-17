@@ -13,10 +13,10 @@
 // Reports land in reports/mutation/. Summarise with:
 //   node mutation/report.mjs --dir reports/mutation --out /tmp/mutation.md
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync, unlinkSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { SHARDING, TARGETS, estimatedMinutes } from "./config.mjs";
-import { ROOT, bindingFor, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
+import { ROOT, bindingFor, measurementIdentity, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
 
 function parseArgs(argv) {
   const options = {
@@ -91,15 +91,78 @@ function inventory() {
 export const REPORTS_ROOT = join(ROOT, "reports");
 
 /**
- * Whether a path is inside the reporting directory.
+ * Canonical form of a path, resolving symlinks in every component that exists.
+ *
+ * `realpathSync` alone requires the whole path to exist, which a report path
+ * usually does not. Resolution therefore walks up to the nearest existing
+ * ancestor and appends the components that do not exist yet: those cannot
+ * redirect anything, because creating them creates exactly what they name.
+ */
+function canonical(path) {
+  const created = [];
+  let current = resolve(path);
+  for (;;) {
+    try {
+      return join(realpathSync(current), ...created);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw new Error(`cannot resolve ${current}: ${error.message}`);
+      const parent = dirname(current);
+      if (parent === current) throw new Error(`cannot resolve ${path}`);
+      created.unshift(basename(current));
+      current = parent;
+    }
+  }
+}
+
+/** Whether `candidate` is `root` or below it, both already canonical. */
+function within(candidate, root) {
+  const prefix = root.endsWith(sep) ? root : `${root}${sep}`;
+  return candidate === root || candidate.startsWith(prefix);
+}
+
+/**
+ * Resolve a path against the reporting directory, refusing any answer outside it.
+ *
+ * Lexical containment is not a boundary: a path can be spelled inside `reports/`
+ * while a component is a symlink elsewhere, and `unlinkSync`/`writeFileSync`
+ * follow that link and act on the outside target. So the boundary test is made on
+ * canonical paths, after every existing component has been resolved. That one
+ * check covers `..` traversal, a sibling directory that merely shares a string
+ * prefix, and a symlinked intermediate directory, dangling or not.
+ */
+export function canonicalInside(candidate, reportsRoot = REPORTS_ROOT) {
+  if (typeof candidate !== "string" || candidate.trim() === "") {
+    throw new Error("a report path needs a file path");
+  }
+  const lexicalRoot = resolve(reportsRoot);
+  const absolute = isAbsolute(candidate) ? resolve(candidate) : resolve(ROOT, candidate);
+  const fromRoot = relative(lexicalRoot, absolute);
+  if (fromRoot === "" || fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
+    throw new Error(`not under the reporting directory ${lexicalRoot}`);
+  }
+  const rootCanonical = canonical(lexicalRoot);
+  const resolved = canonical(absolute);
+  if (resolved === rootCanonical || !within(resolved, rootCanonical)) {
+    throw new Error(`resolves to ${resolved}, outside the reporting directory ${rootCanonical}`);
+  }
+  return resolved;
+}
+
+/**
+ * Whether a path is inside the reporting directory, as resolved on disk.
  *
  * A bare prefix test is not enough: `reports-archive/x.json` shares the string
- * prefix but is a different directory, so the separator is part of the check.
- * The root itself is not inside itself, which is what rejects `--report reports`.
+ * prefix but is a different directory, and a symlink inside the reporting
+ * directory that points outside is not inside it.
  */
 export function isInsideReports(path, reportsRoot = REPORTS_ROOT) {
-  const prefix = reportsRoot.endsWith(sep) ? reportsRoot : `${reportsRoot}${sep}`;
-  return resolve(path).startsWith(prefix);
+  if (typeof path !== "string") return false;
+  try {
+    canonicalInside(path, reportsRoot);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -108,27 +171,63 @@ export function isInsideReports(path, reportsRoot = REPORTS_ROOT) {
  * The flag used to accept any path inside the checkout, which is unsafe in two
  * ways that share a root cause: this run *deletes its own previous output*
  * before measuring, and Stryker then writes over that path. `--report
- * package.json` would therefore delete a tracked file and replace it with a
- * JSON report. `reports/` is gitignored, so confining output there means the
- * command can only ever touch measurement artifacts.
+ * package.json` therefore deleted a tracked file and replaced it with a JSON
+ * report. `reports/` is gitignored, so confining output there means the command
+ * can only ever touch measurement artifacts.
  *
- * A directory is rejected rather than left to fail obscurely: the cleanup step
- * cannot unlink a directory and Stryker cannot write to one.
+ * A directory is rejected rather than left to fail obscurely, and so is a
+ * symlink: "remove our own output" is unambiguous only for a regular file, since
+ * `unlinkSync` removes the link while a write follows it.
  */
 export function resolveReportPath(reportPath, reportsRoot = REPORTS_ROOT) {
   if (typeof reportPath !== "string" || reportPath.trim() === "") {
     throw new Error("--report needs a file path");
   }
-  const resolved = resolve(ROOT, reportPath);
-  if (!isInsideReports(resolved, reportsRoot)) {
+  let resolved;
+  try {
+    resolved = canonicalInside(reportPath, reportsRoot);
+  } catch (error) {
     throw new Error(
-      `--report must name a file under ${relative(ROOT, reportsRoot)}/ (got ${reportPath}); the runner removes its own previous output, so a path elsewhere could delete a source or tracked file`,
+      `--report must name a file under ${relative(ROOT, resolve(reportsRoot))}/ (got ${reportPath}); the runner removes its own previous output, so a path elsewhere could delete a source or tracked file (${error.message})`,
     );
   }
-  if (existsSync(resolved) && statSync(resolved).isDirectory()) {
-    throw new Error(`--report must name a file, not a directory (got ${reportPath})`);
+  const spelled = isAbsolute(reportPath) ? resolve(reportPath) : resolve(ROOT, reportPath);
+  let stat = null;
+  try {
+    stat = lstatSync(spelled);
+  } catch {
+    stat = null;
   }
+  if (stat?.isSymbolicLink()) throw new Error(`--report must name a regular file, not a symlink (got ${reportPath})`);
+  if (stat?.isDirectory()) throw new Error(`--report must name a file, not a directory (got ${reportPath})`);
   return resolved;
+}
+
+/**
+ * Stamp a Stryker report with the identity of the measurement it belongs to.
+ *
+ * Stryker's JSON carries no measurement identity, so the directory alone cannot
+ * be judged as one coherent measurement. The runner stamps each report it writes
+ * with the content identity of what the run measured -- the module's bytes, its
+ * bound tests, and the measurement configuration -- and the summariser accepts a
+ * report only if the identity matches the current checkout. A stale report from a
+ * different revision, a different binding, or a different config never enters the
+ * merged population.
+ */
+export function stampReport(run, reportPath, identity = measurementIdentity(run.target)) {
+  let report;
+  try {
+    report = JSON.parse(readFileSync(reportPath, "utf8"));
+  } catch (error) {
+    console.error(`warning: could not read ${reportPath} to stamp measurement provenance: ${error.message}`);
+    return false;
+  }
+  if (!report || typeof report !== "object" || report.files === undefined) return false;
+  report.bifrost = {
+    measurement: identity,
+  };
+  writeFileSync(reportPath, JSON.stringify(report));
+  return true;
 }
 
 /**
@@ -145,25 +244,54 @@ export function staleReportsFor(options, run) {
 }
 
 /**
+ * Refuse a directory that resolves outside the reporting boundary.
+ *
+ * Deletion uses the *spelled* path, never a canonicalized one: removing a symlink
+ * removes the link, whereas resolving first and unlinking the result would delete
+ * the target instead. What has to be contained is therefore the directory the
+ * entry lives in.
+ */
+function assertDirectoryInside(directory, reportsRoot) {
+  const resolved = canonical(directory);
+  const boundary = canonical(resolve(reportsRoot));
+  if (!within(resolved, boundary)) {
+    throw new Error(`refusing to clear reports: ${directory} resolves to ${resolved}, outside ${boundary}`);
+  }
+}
+
+/**
  * The files a measured run may remove before it starts, as absolute paths.
  *
- * Exported and pure so the ownership rule is testable without touching the
- * filesystem. An explicit `--report` owns exactly one path; a normal run owns
- * the target's whole report set inside the reporting directory. Nothing else in
- * that directory is ever a candidate, so a summary, a notes file, or another
- * module's report cannot be deleted by accident.
+ * Exported and pure-ish so the ownership rule is testable without touching the
+ * filesystem. An explicit `--report` owns exactly one path; a normal run owns the
+ * target's whole report set inside the reporting directory. Nothing else in that
+ * directory is ever a candidate, so a summary, a notes file, or another module's
+ * report cannot be deleted by accident, and a symlinked directory cannot redirect
+ * the delete outside the boundary.
+ *
+ * A dry run returns nothing: it measures nothing and writes nothing, so clearing
+ * would destroy a completed measurement to make room for a report that is never
+ * produced.
  */
-export function reportsToClear(options, run, reportsDir, entries) {
+export function reportsToClear(options, run, reportsDir, entries, reportsRoot = null) {
+  if (options.dryRun) return [];
   const plan = staleReportsFor(options, run);
   if (plan.scope === "own") {
     // Defence in depth: a caller can hand this function a path directly, so the
-    // ownership boundary is enforced here as well as at resolution time.
-    if (!isInsideReports(plan.path)) {
-      throw new Error(`refusing to clear a report outside ${relative(ROOT, REPORTS_ROOT)}/: ${plan.path}`);
-    }
+    // boundary is enforced here as well as at resolution time.
+    const boundary = reportsRoot ?? REPORTS_ROOT;
+    assertDirectoryInside(dirname(plan.path), boundary);
     return [plan.path];
   }
-  return entries.filter((entry) => isReportFor(entry, run.target)).map((entry) => join(reportsDir, entry));
+  const boundary = reportsRoot ?? reportsDir;
+  return entries
+    .filter((entry) => isReportFor(entry, run.target))
+    .map((entry) => {
+      // Fail closed: if the directory cannot be shown to be inside the boundary,
+      // deleting nothing is better than deleting the wrong file.
+      assertDirectoryInside(reportsDir, boundary);
+      return join(reportsDir, entry);
+    });
 }
 
 /**
@@ -204,9 +332,15 @@ function main() {
     if (targets.length !== 1) throw new Error("--report applies to exactly one target");
     if (options.shards !== null) throw new Error("--report cannot be combined with --shards; each shard writes its own file");
   }
+  if (options.dryRun && options.report !== null) {
+    throw new Error("--dry-run writes no report; --report would name a file that is never produced");
+  }
 
   const reportsDir = join(ROOT, "reports", "mutation");
-  mkdirSync(reportsDir, { recursive: true });
+  // A dry run writes no report, so it never creates the reporting directory.
+  if (!options.dryRun) mkdirSync(reportsDir, { recursive: true });
+  // Per-target identities are computed when each report is stamped: a run may
+  // span modules, and each report names the measurement it belongs to.
   const failed = [];
 
   // A previous run of the same target can leave `<target>.json` and/or
@@ -215,8 +349,13 @@ function main() {
   // (e.g. an unsharded report reappearing after a sharded rerun). Clearing is
   // per target, per measurement, so a multi-target run keeps each earlier
   // target's fresh output while still discarding that target's own stale files.
+  //
+  // A dry run measures nothing and writes nothing, so clearing would only
+  // destroy the previous measurement to make room for a report that never
+  // exists. It is skipped entirely.
   const clearedKeys = new Set();
   function clearPreviousReports(run) {
+    if (options.dryRun) return;
     const plan = staleReportsFor(options, run);
     // Keyed by plan, not just target: two own-scope runs of the same target in one
     // invocation write different files and each must clear its own.
@@ -261,6 +400,10 @@ function main() {
   // An explicit --report file is written where the operator asked; everything
   // else lands in the reporting directory under its derived name.
   for (const run of runs) {
+    if (options.dryRun) {
+      run.reportPath = null;
+      continue;
+    }
     run.reportPath = options.report === null ? join(reportsDir, run.reportName) : resolveReportPath(options.report);
     mkdirSync(dirname(run.reportPath), { recursive: true });
   }
@@ -268,9 +411,34 @@ function main() {
   for (const run of runs) {
     clearPreviousReports(run);
     console.log(`\n=== ${run.label} (${bindingFor(run.target).length} bound test files) ===`);
+    if (options.dryRun) {
+      // Validate the sandbox and the binding only. Stryker's `--dryRunOnly`
+      // never enters the mutation executor, so no report is written; point the
+      // reporter at a per-invocation file that is removed afterwards in case a
+      // future Stryker writes something anyway.
+      const tempReport = join(ROOT, ".stryker-tmp", `dry-run-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
+      mkdirSync(dirname(tempReport), { recursive: true });
+      const result = spawnSync("npx", ["stryker", "run", "--dryRunOnly"], {
+        cwd: ROOT,
+        stdio: "inherit",
+        env: {
+          ...process.env,
+          MUTATION_TARGET: run.target,
+          MUTATION_MUTATE: run.mutate,
+          MUTATION_REPORT_FILE: relative(ROOT, tempReport),
+          MUTATION_INCREMENTAL: "",
+        },
+      });
+      try {
+        unlinkSync(tempReport);
+      } catch {
+        // Never created, which is the documented behaviour of --dryRunOnly.
+      }
+      if (result.status !== 0) failed.push(run.label);
+      continue;
+    }
     const args = ["stryker", "run"];
     if (options.concurrency) args.push("--concurrency", options.concurrency);
-    if (options.dryRun) args.push("--dryRunOnly");
     const result = spawnSync("npx", args, {
       cwd: ROOT,
       stdio: "inherit",
@@ -284,9 +452,15 @@ function main() {
         MUTATION_INCREMENTAL: options.incremental ? "1" : "",
       },
     });
-    if (result.status !== 0) failed.push(run.label);
+    if (result.status !== 0) {
+      failed.push(run.label);
+      continue;
+    }
+    // Every report that reaches the summariser is stamped with the measurement
+    // it belongs to. An unstamped report is rejected there, so a run that
+    // cannot record its provenance is a failed measurement, not a stale one.
+    if (!stampReport(run, run.reportPath)) failed.push(run.label);
   }
-
   if (failed.length > 0) {
     console.error(`\nmutation run failed for: ${failed.join(", ")}`);
     process.exitCode = 1;

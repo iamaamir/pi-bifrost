@@ -7,6 +7,7 @@
 // test consumers and `routing.ts` has 10, but the old config bound five files for
 // four modules across all of them. Most of its survivors measured absent tests
 // rather than weak tests.
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -118,6 +119,39 @@ export function bindingFor(target) {
     throw new Error(`mutation target ${target} has no bindable test consumers; widen the suite or drop the target`);
   }
   return binding;
+}
+
+/**
+ * Fingerprint of one module's measurement inputs, content-addressed.
+ *
+ * A measurement's identity is exactly what it measured: the mutated module's
+ * bytes, the bytes of every bound test file, and the config file that decides
+ * how the measurement runs. Two measurements with the same fingerprint covered
+ * the same population; the summariser accepts a report only if its fingerprint
+ * is this one, so artifacts from a different revision, a different binding or a
+ * different config never contribute mutants to the score, and are reported as
+ * rejected artifacts rather than silently merged.
+ *
+ * The git head is deliberately not part of the key: unrelated commits move
+ * HEAD every day and would make every report look foreign. Content identity
+ * answers the question that matters -- did the bytes being measured change?
+ */
+export function measurementIdentity(target) {
+  const hash = createHash("sha256");
+  for (const file of [target, "mutation/config.mjs", ...bindingFor(target)]) {
+    try {
+      hash.update(file);
+      hash.update("\n");
+      hash.update(readFileSync(join(ROOT, file)));
+      hash.update("\n");
+    } catch {
+      // An unreadable input invalidates this measurement, not the repo: hash
+      // the path so the identity differs from every readable one.
+      hash.update(file);
+      hash.update("\nunreadable\n");
+    }
+  }
+  return hash.digest("hex");
 }
 
 /** Targets and the consumer tests that cannot be bound, for the summary. */

@@ -16,7 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { SUMMARY, moduleUnusableReasons, timeoutTolerance } from "./config.mjs";
-import { ROOT, bindingExclusions, targetNames } from "./targets.mjs";
+import { ROOT, bindingExclusions, measurementIdentity, targetNames } from "./targets.mjs";
 
 const COUNTED_STATUSES = ["Killed", "Timeout", "Survived", "NoCoverage", "RuntimeError", "CompileError"];
 
@@ -173,9 +173,20 @@ function parseReportShard(name) {
  * Split one Stryker JSON report into per-module results. A matrix leg writes a
  * report with exactly one file; a single combined run writes several. Both are
  * supported so a hand-run local report can be summarised the same way.
+ *
+ * The `name` is the file the report came from. Provenance (`bifrost`, stamped by
+ * the runner) is carried through so the selection step can judge whether the
+ * file is a measurement of this checkout. A Stryker report without it is still
+ * read, but it belongs to no measurement and is rejected by the selection step.
  */
 export function modulesOf(report, name) {
   const { shard } = parseReportShard(name);
+  const provenance =
+    report.bifrost && typeof report.bifrost === "object"
+      ? {
+          measurement: typeof report.bifrost.measurement === "string" ? report.bifrost.measurement : null,
+        }
+      : null;
   return Object.entries(report.files ?? {})
     .map(([absolutePath, file]) => {
       const mutants = file.mutants ?? [];
@@ -188,6 +199,7 @@ export function modulesOf(report, name) {
         summary: summarise(mutants),
         framework: report.framework ?? null,
         thresholds: report.thresholds ?? null,
+        provenance,
       };
     })
     .sort((a, b) => a.module.localeCompare(b.module));
@@ -262,16 +274,93 @@ export function mergeShardReports(reports) {
     shardsSeen: [...bucket.shardsSeen].sort((a, b) => a - b),
     framework: reports.find((report) => report.module === bucket.module)?.framework ?? null,
     thresholds: reports.find((report) => report.module === bucket.module)?.thresholds ?? null,
+    provenance: reports.find((report) => report.module === bucket.module)?.provenance ?? null,
     file: null,
   }));
 }
 
 /**
- * Read every `*.json` Stryker report in a directory, merging shards of the same
- * module together.
+ * Partition report files into the modules this invocation may trust and the
+ * files it may not.
+ *
+ * The identity is **per module**, because a module's population is exactly what
+ * one measurement of it covered: the module's bytes, its bound tests, and the
+ * measurement configuration. The runner stamps that identity into each report it
+ * writes, so the summariser can ask, for each module, "was this report produced
+ * from the bytes in this checkout?" A report that answers no measured something
+ * else -- a different revision, a different binding, a different config -- and
+ * must never contribute mutants to the score.
+ *
+ * A per-run identity cannot express this: modules have different populations, so
+ * one scalar would either accept everything or reject everything.
+ *
+ * Two files claiming the same shard of a module are also rejected. An unsharded
+ * `<module>.json` parses as shard 0, so it collides with `<module>.shard0.json`;
+ * merging them would publish a composite that no run produced.
  */
-export function readReports(directory) {
-  if (!existsSync(directory)) return [];
+export function selectMeasurement(perReport, { identityFor = measurementIdentity } = {}) {
+  const rejected = [];
+  const eligible = [];
+  const grouped = new Map();
+  for (const report of perReport) {
+    const list = grouped.get(report.module) ?? [];
+    list.push(report);
+    grouped.set(report.module, list);
+  }
+  for (const [module, reports] of [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const reject = (reason) => rejected.push(...reports.map((report) => ({ module, name: report.name, reason })));
+
+    const byShard = new Map();
+    let duplicate = null;
+    for (const report of reports) {
+      const shard = Number.isInteger(report.shard) ? report.shard : 0;
+      const first = byShard.get(shard);
+      if (first === undefined) byShard.set(shard, report.name);
+      else if (first !== report.name) duplicate ??= `${first} and ${report.name} both claim shard ${shard}`;
+    }
+    if (duplicate) {
+      reject(`${duplicate}; keep one measurement of ${module} and rerun the shard`);
+      continue;
+    }
+
+    const unstamped = reports.find((report) => !report.provenance?.measurement);
+    if (unstamped) {
+      reject(`${unstamped.name} has no measurement provenance; produce it with mutation/run.mjs`);
+      continue;
+    }
+
+    let expected;
+    try {
+      expected = identityFor(module);
+    } catch (error) {
+      reject(`${module} cannot be identified in this checkout (${error.message})`);
+      continue;
+    }
+
+    const foreign = reports.find((report) => report.provenance.measurement !== expected);
+    if (foreign) {
+      reject(
+        `${module} was measured against different bytes (${foreign.provenance.measurement.slice(0, 12)} in ${foreign.name}, ${expected.slice(0, 12)} here); rerun it against this checkout`,
+      );
+      continue;
+    }
+    eligible.push(...reports);
+  }
+  return { reports: mergeShardReports(eligible), rejected, rejectedNames: rejected.map((entry) => entry.name) };
+}
+
+/**
+ * Read every `*.json` Stryker report in a directory and select the modules this
+ * measurement can trust before merging anything.
+ *
+ * The nightly's download merges every leg into one directory, so the directory
+ * alone is not evidence of a coherent measurement. A report whose stamped
+ * identity does not match the current bytes is reported as rejected rather than
+ * silently merged, and reaches the gate as a failure condition.
+ */
+export function readReports(directory, { identityFor } = {}) {
+  const empty = { reports: [], rejected: [], rejectedNames: [] };
+  if (!existsSync(directory)) return empty;
   const perReport = readdirSync(directory)
     .filter((name) => name.endsWith(".json"))
     .sort()
@@ -292,7 +381,7 @@ export function readReports(directory) {
       if (!report || typeof report !== "object" || !report.files) return [];
       return modulesOf(report, name);
     });
-  return mergeShardReports(perReport);
+  return selectMeasurement(perReport, identityFor ? { identityFor } : {});
 }
 
 function formatPercent(value) {
@@ -597,8 +686,18 @@ function main() {
   // run never measured. Only the selected set is scored; the foreign reports are
   // carried separately so the gate can name them.
   const readAll = readReports(options.dir);
-  const reports = readAll.filter((report) => expectedTargets.includes(report.module));
-  const unexpectedTargets = [...new Set(readAll.filter((report) => !expectedTargets.includes(report.module)).map((report) => report.module))].sort();
+  const ineligible = readAll.rejected ?? [];
+  const reports = readAll.reports.filter((report) => expectedTargets.includes(report.module));
+  // A rejected report for a selected module is a failure condition with a
+  // reason; a report for a module outside the selection is reported as
+  // unexpected, whether or not its provenance checked out.
+  const rejected = ineligible
+    .filter((entry) => expectedTargets.includes(entry.module))
+    .map((entry) => ({ module: entry.module, name: entry.name, reason: entry.reason }));
+  const rejectedModules = [...new Set(rejected.map((entry) => entry.module))].sort();
+  const unexpectedTargets = [
+    ...new Set([...readAll.reports, ...ineligible].map((entry) => entry.module).filter((module) => !expectedTargets.includes(module))),
+  ].sort();
   const survivors = survivorRows(reports);
 
   if (options.survivors) {
@@ -624,6 +723,8 @@ function main() {
     missingTargets: expectedTargets.filter((target) => !reports.some((report) => report.module === target)),
     missingShards: missingShardsFor(reports, expectedTargets, options.shardsPerTarget),
     unexpectedShards: unexpectedShardsFor(reports, expectedTargets, options.shardsPerTarget),
+    rejectedReports: rejected,
+    rejectedModules,
     timeoutTolerance: options.timeoutTolerance ?? timeoutTolerance(aggregate.total),
   };
   // unusableReasons (config.mjs) gates on the top-level timeoutToleranceOverride;
