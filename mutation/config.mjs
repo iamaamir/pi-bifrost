@@ -463,7 +463,17 @@ export function measurementDiagnostics(data, options = {}) {
       let expected;
       try {
         expected = options.identityFor(entry.module);
-      } catch {
+      } catch (error) {
+        // Skipping made a summary for a module that no longer exists — or whose
+        // bound tests are now empty — pass the very check meant to catch it.
+        // Being unverifiable is not the same as being current.
+        diagnostics.push(
+          note(
+            "unverifiable-payload",
+            BLOCKING,
+            `${entry.module}: this payload cannot be checked against this checkout (${error.message}), so there is no evidence it is current`,
+          ),
+        );
         continue;
       }
       const claimed = recorded?.[entry.module];

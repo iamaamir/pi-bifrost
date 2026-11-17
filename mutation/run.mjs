@@ -320,17 +320,22 @@ export function reportsToClear(options, run, reportsDir, entries, reportsRoot = 
   if (plan.scope === "own") {
     // Defence in depth: a caller can hand this function a path directly, so the
     // boundary is enforced here as well as at resolution time.
-    const boundary = reportsRoot ?? REPORTS_ROOT;
-    assertDirectoryInside(dirname(plan.path), boundary);
+    assertDirectoryInside(dirname(plan.path), reportsRoot ?? REPORTS_ROOT);
     return [plan.path];
   }
-  const boundary = reportsRoot ?? reportsDir;
+  // The boundary is the reporting root, not `reportsDir`. Passing `reportsDir`
+  // compared the directory against its own canonical form, which is trivially
+  // true — so `reports/mutation -> /tmp/x` resolved the check to
+  // `within("/tmp/x", "/tmp/x")` and the delete went through. Only the *root* is
+  // the trust anchor; anything below it has to be shown to be inside.
+  const boundary = reportsRoot ?? REPORTS_ROOT;
+  assertDirectoryInside(reportsDir, boundary);
   return entries
     .filter((entry) => isReportFor(entry, run.target))
     .map((entry) => {
-      // Fail closed: if the directory cannot be shown to be inside the boundary,
+      // Fail closed: if the file cannot be shown to be inside the boundary,
       // deleting nothing is better than deleting the wrong file.
-      assertDirectoryInside(reportsDir, boundary);
+      assertDirectoryInside(dirname(join(reportsDir, entry)), boundary);
       return join(reportsDir, entry);
     });
 }
@@ -370,7 +375,10 @@ function main() {
     // partial run were allowed to write `<target>.json`, a one-shard plan would
     // accept it as complete and publish a score over part of the module.
     if (targets.length !== 1) throw new Error("--mutate applies to exactly one target");
-    if (options.mutate !== targets[0] && options.report === null) {
+    // A dry run writes no report, so it has no artifact whose name could claim to
+    // be the whole module; requiring --report made every scoped dry run
+    // impossible, because --report is refused for dry runs.
+    if (!options.dryRun && options.mutate !== targets[0] && options.report === null) {
       throw new Error(
         `--mutate ${options.mutate} measures only part of ${targets[0]}; name the artifact with --report so a partial result is not stored as the whole module`,
       );
