@@ -1411,6 +1411,9 @@ test("unexpected reports are rejected by the gate on their own", () => {
 test("a report path is confined to the reporting directory", () => {
   // The runner deletes its own previous output before measuring, so an
   // unrestricted path deleted a tracked file and then wrote a report over it.
+  // A fresh checkout has no `reports/` (it is gitignored). The runner creates
+  // it; so does this test, so the assertion can name the real path.
+  mkdirSync(join(ROOT, "reports"), { recursive: true });
   const reportsReal = realpathSync(join(ROOT, "reports"));
   const accepted = resolveReportPath("reports/mutation/cache.ts.json");
   assert.equal(accepted, join(reportsReal, "mutation", "cache.ts.json"));
@@ -1542,6 +1545,15 @@ test("a not-yet-created nested report path is allowed, and traversal out of it i
       "components that do not exist cannot redirect anything",
     );
     assert.throws(() => resolveReportPath(join(reports, "..", "outside.json"), reports), /must name a file under/u);
+
+    // A reporting directory that does not exist yet is the fresh-checkout case:
+    // resolution walks up to the nearest existing ancestor, so the path is
+    // allowed and names exactly what it says.
+    const freshRoot = join(root, "fresh", "reports");
+    assert.equal(
+      resolveReportPath(join(freshRoot, "mutation", "x.json"), freshRoot),
+      join(realpathSync(root), "fresh", "reports", "mutation", "x.json"),
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
