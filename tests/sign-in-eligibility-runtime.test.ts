@@ -170,6 +170,12 @@ function fixture(options: FixtureOptions = {}) {
         ...(options.previous === undefined ? {} : { previous: options.previous }),
       } as unknown as ModelRouteRequest, ctx);
     },
+    async routePhysical(): Promise<void> {
+      const input = handlers.get("input");
+      assert.ok(input);
+      const physical = { ...ctx, model: inventory[0] } as ExtensionContext;
+      await input({ text: "review the change", source: "interactive", streamingBehavior: "steer" }, physical);
+    },
     /** Run one `/bifrost <line>` command the way the command router would. */
     async command(line: string): Promise<unknown> {
       assert.ok(commandHandler, "the extension must register the bifrost command");
@@ -563,6 +569,19 @@ describe("pre-dispatch sign-in eligibility through the Auto route", { concurrenc
       assert.deepEqual(valid.authCalls, ["dead"], "the valid rule's provider is still resolved");
     } finally {
       valid.cleanup();
+    }
+  });
+
+  it("reuses a fresh Auto sign-in result for physical routing", async () => {
+    const h = fixture({ eligibility: "exclude" });
+    try {
+      await h.route();
+      const authCount = h.authCalls.length;
+      await h.routePhysical();
+      assert.equal(h.dispatched.at(-1), "live/two");
+      assert.equal(h.authCalls.length, authCount);
+    } finally {
+      h.cleanup();
     }
   });
 
