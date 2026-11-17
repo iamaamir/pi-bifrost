@@ -32,9 +32,7 @@ const MAX_PROBE_CACHE_BYTES = 10_000_000;
 const PROBE_TIMEOUT_MS = 10_000;
 /** Output bound per probe request; exported so consent text states the real cap. */
 export const PROBE_MAX_TOKENS = 5;
-/** Provider error text is untrusted and can be arbitrarily long: a live check
- * copies it into a report and an approval message, where a huge body would push
- * an otherwise fine candidate past the approval size limit. */
+/** Bound provider error text retained by the probe. */
 export const MAX_PROBE_ERROR_CHARS = 200;
 
 function boundProbeError(error: unknown): string {

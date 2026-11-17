@@ -671,7 +671,7 @@ describe("provider sign-in state", () => {
         ["alpha/strong:ok", "beta/code:error"],
       );
       const warning = probed.issues.find((issue) => issue.code === "config.probe_failed");
-      assert.match(warning?.message ?? "", /beta\/code failed: 401 unauthorized/);
+      assert.match(warning?.message ?? "", /beta\/code failed/);
       assert.equal(probed.status, "ok");
       assert.equal(probed.writeEligible, true);
       assert.match(contentOf(checked), /live probe \(one tiny prompt per model\):/);
@@ -777,6 +777,45 @@ describe("provider sign-in state", () => {
     }
   });
 
+  it("resolves inherited providers exposed by removing project models before probing", async () => {
+    const resolved: string[] = [];
+    const harness = freshHarness({
+      knownOnly: [makeModel("delta", "legacy")],
+      providerAuthStatus: (provider) => {
+        resolved.push(provider);
+        return { configured: provider !== "delta" };
+      },
+      probeModels: (models) => models.map((model) => ({ model, status: "ok" as const })),
+    });
+    try {
+      harness.writeFile("agent/bifrost.json", { schemaVersion: 2, default: "review", models: { review: ["delta/legacy"] } });
+      harness.writeFile(".pi/bifrost.json", { models: { review: ["alpha/strong"] } });
+      const checked = detailsOf<ConfigAgentCheckResult>(await harness.run({ operation: "check", patch: {}, remove: ["models"], probe: true }));
+      assert.equal(checked.status, "ok");
+      assert.ok(resolved.includes("delta"));
+      assert.ok(checked.probeSkipped?.some((entry) => entry.model === "delta/legacy"));
+      assert.equal(harness.probeCalls().flat().includes("delta/legacy"), false);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("does not disclose provider error text in the tool result or approval", async () => {
+    const secret = "private-provider-error-canary";
+    const harness = freshHarness({ probeModels: (models) => models.map((model) => ({ model, status: "error" as const, reason: secret })) });
+    try {
+      const candidate = { schemaVersion: 2, default: "review", models: { review: ["alpha/strong"] } };
+      const checked = await harness.run({ operation: "check", candidate, probe: true });
+      assert.doesNotMatch(JSON.stringify(checked), new RegExp(secret));
+      const handle = contentOf(checked).match(/proposalHandle: ([a-f0-9]{12})/)?.[1];
+      assert.ok(handle);
+      await harness.run({ operation: "apply", proposalHandle: handle });
+      assert.doesNotMatch(JSON.stringify(harness.confirmations()), new RegExp(secret));
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("states the same output cap the probe transport enforces", () => {
     // Policy states the number; the adapter enforces it. They are separate
     // modules by the architecture rule, so this is the seam that keeps the
@@ -824,8 +863,8 @@ describe("provider sign-in state", () => {
       const applied = detailsOf<ConfigAgentApplyResult>(await harness.run({ operation: "apply", proposalHandle: handle }));
       assert.equal(applied.applied, true);
       const [confirmation] = harness.confirmations();
-      assert.match(confirmation?.details ?? "", /Warning: Live probe of beta\/code failed: 401 unauthorized/);
-      assert.match(confirmation?.summary ?? "", /WARNING: Live probe of beta\/code failed: 401 unauthorized/);
+      assert.match(confirmation?.details ?? "", /Warning: Live probe of beta\/code failed/);
+      assert.match(confirmation?.summary ?? "", /WARNING: Live probe of beta\/code failed/);
       assert.equal(harness.probeCalls().length, 1, "apply must repeat the warning without sending another request");
     } finally {
       harness.cleanup();
@@ -848,7 +887,7 @@ describe("provider sign-in state", () => {
       const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
       assert.equal(applied.applied, true);
       const [confirmation] = harness.confirmations();
-      assert.match(confirmation?.details ?? "", /Warning: Live probe of beta\/code failed: 401 unauthorized/);
+      assert.match(confirmation?.details ?? "", /Warning: Live probe of beta\/code failed/);
       assert.equal(harness.probeCalls().length, 1, "a digest apply must not send another probe");
     } finally {
       harness.cleanup();
@@ -873,7 +912,7 @@ describe("provider sign-in state", () => {
       ));
       assert.equal(applied.applied, true);
       const [confirmation] = harness.confirmations();
-      assert.match(confirmation?.details ?? "", /Warning: Live probe of beta\/code failed: 401 unauthorized/);
+      assert.match(confirmation?.details ?? "", /Warning: Live probe of beta\/code failed/);
       assert.equal(harness.probeCalls().length, 1, "a digest apply must not send another probe");
     } finally {
       harness.cleanup();
@@ -897,7 +936,7 @@ describe("provider sign-in state", () => {
       const warning = probed.issues.find((issue) => issue.code === "config.probe_failed");
       assert.ok(warning, "a failed probe must warn");
       assert.ok(warning!.message.length < 400, `warning must stay bounded, got ${warning!.message.length} chars`);
-      assert.match(warning!.message, /^Live probe of beta\/code failed: <html>x+…/);
+      assert.match(warning!.message, /^Live probe of beta\/code failed/);
       const applied = detailsOf<ConfigAgentApplyResult>(await harness.run({
         operation: "apply",
         proposalHandle: contentOf(checked).match(/proposalHandle: ([a-f0-9]{12})/)?.[1],
@@ -1129,7 +1168,7 @@ describe("provider sign-in state", () => {
       });
       const text = contentOf(result);
       assert.match(text, /live probe \(one tiny prompt per model\): 1\/2 answered/);
-      assert.match(text, /beta\/code: error -- 401 unauthorized/);
+      assert.match(text, /beta\/code: error/);
       assert.doesNotMatch(text, /alpha\/strong: ok/);
     } finally {
       harness.cleanup();
@@ -1189,7 +1228,7 @@ describe("provider sign-in state", () => {
       assert.equal(checked.issues.filter((issue) => issue.code === "config.probe_failed").length, 0,
         "a cancelled run must not turn a partial outcome into a probe warning");
       assert.match(checked.notes.join("\n"), /Live probe was cancelled; the reported outcomes are partial and were not turned into warnings\./);
-      assert.match(contentOf(result), /alpha\/strong: error -- connection reset/);
+      assert.match(contentOf(result), /alpha\/strong: error/);
     } finally {
       harness.cleanup();
     }
@@ -1211,7 +1250,7 @@ describe("provider sign-in state", () => {
       assert.equal(checked.status, "ok");
       assert.equal(checked.liveProbe, undefined);
       assert.equal(checked.writeEligible, true);
-      assert.match(checked.notes.join(" "), /Live probe could not run \(provider transport refused\)/);
+      assert.match(checked.notes.join(" "), /Live probe could not run/);
       assert.equal(harness.readFile(".pi/bifrost.json"), undefined);
     } finally {
       harness.cleanup();
