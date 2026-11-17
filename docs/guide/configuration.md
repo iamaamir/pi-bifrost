@@ -123,7 +123,7 @@ A configured tier can name a provider whose stored credential has stopped workin
 - Selection continues inside the same tier. A configured `fallbackTiers` list is honored exactly as for any other ineligible candidate, and an empty list stays terminal.
 - The value is a closed set. An unknown value is a config error rather than a silent `off`.
 
-`inspect` reports sign-in state and `check` warns (`config.provider_auth_invalid`) without spending a credit, so the advisory path stays available before a configuration is written. See [ADR 0026](../adr/0026-pre-dispatch-sign-in-eligibility.md).
+`inspect` reports sign-in state and `check` warns (`config.provider_auth_invalid`) without spending a credit, so the advisory path stays available before a configuration is written. The configuration-agent preview does not apply sign-in exclusions; its selections can differ from Auto routing when exclusion is enabled. See [ADR 0026](../adr/0026-pre-dispatch-sign-in-eligibility.md).
 
 ### Economic observations and billing preference (schema version 2)
 

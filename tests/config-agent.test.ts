@@ -1621,6 +1621,25 @@ describe("preview is offline, deterministic, and non-mutating", () => {
     }
   });
 
+  it("marks preview selection as uncertain when Auto sign-in exclusions apply", async () => {
+    const harness = freshHarness({
+      providerAuthStatus: (provider) => ({ configured: provider !== "alpha" }),
+    });
+    try {
+      const candidate = {
+        schemaVersion: 2, default: "review", classifier: { enabled: false },
+        models: { review: ["alpha/strong", "beta/code"] }, signInEligibility: "exclude",
+      };
+      const preview = detailsOf<ConfigAgentPreviewResult>(await harness.run({ operation: "preview", candidate, prompts: ["review work"] }));
+      assert.equal(preview.cases[0]?.confidence, "sign_in_dependent");
+      assert.ok(preview.notes.some((note) => /sign-in exclusions are not applied/i.test(note)));
+      const off = detailsOf<ConfigAgentPreviewResult>(await harness.run({ operation: "preview", candidate: { ...candidate, signInEligibility: "off" }, prompts: ["review work"] }));
+      assert.equal(off.cases[0]?.confidence, "deterministic");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
   it("honors provider scope in version 2 and 3 previews", async () => {
     const harness = freshHarness();
     try {

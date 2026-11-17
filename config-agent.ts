@@ -303,7 +303,7 @@ export interface ConfigAgentPreviewCase {
   readonly prompt: string;
   readonly decidedBy: "inline_tier_prefix" | "regex_rule" | "default_tier" | "none";
   /** `deterministic` means no classifier call can change this outcome. */
-  readonly confidence: "deterministic" | "classifier_dependent";
+  readonly confidence: "deterministic" | "classifier_dependent" | "sign_in_dependent";
   readonly tier?: string;
   readonly selected?: string;
   readonly selectedTier?: string;
@@ -1582,10 +1582,11 @@ export async function previewConfigCandidate(input: ConfigAgentPreviewInput): Pr
     const ruleNamesModel = typeof decision.classification.tier === "string"
       && decision.classification.tier.includes("/")
       && !tierNames.has(decision.classification.tier);
-    const confidence: ConfigAgentPreviewCase["confidence"] =
+    let confidence: ConfigAgentPreviewCase["confidence"] =
       decidedBy === "inline_tier_prefix" || (decidedBy === "regex_rule" && ruleNamesModel)
         ? "deterministic"
         : decision.outcome !== "unclassified" && !classifiersCanChangeRoutes ? "deterministic" : "classifier_dependent";
+    if (afterConfig.signInEligibility === "exclude") confidence = "sign_in_dependent";
     cases.push({
       prompt,
       decidedBy,
@@ -1605,6 +1606,9 @@ export async function previewConfigCandidate(input: ConfigAgentPreviewInput): Pr
     "Tier assignments use the configured strategy with a fixed random source, so `random` picks the same candidate every time here.",
     "Preview assumes healthy models: saved circuit breaks and provider cooldowns are not loaded, so live routing may skip a paused model that resolves here.",
   ];
+  if (afterConfig.signInEligibility === "exclude") {
+    notes.push("Sign-in exclusions are not applied in this preview. Auto may select a different model or reject the route.");
+  }
   const emptyTiers = routing?.tiers.filter((tier) => tier.pool.length === 0).map((tier) => tier.tier) ?? [];
   if (emptyTiers.length > 0) {
     notes.push(`Empty tiers remain configured boundaries and were not filtered: ${emptyTiers.join(", ")}. Inspect requested tier, selected tier, and fallback reason below; no implicit fallback is added.`);
