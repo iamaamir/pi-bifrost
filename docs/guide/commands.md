@@ -59,6 +59,23 @@ Every init run ends on one line: `init: <outcome>. <what changed>. <one next ste
 
 Saving does not switch routing on. If `/bifrost off` is in effect, the saved line says routing is off and names `/bifrost on` as the next step.
 
+Every outcome init can report:
+
+| Outcome | When it appears |
+|---------|-----------------|
+| `saved` | The update was written and reloaded. The line says whether routing is on. |
+| `unchanged` | The pools already match what init would write, so nothing was written. |
+| `declined` | You answered no to the save confirmation. |
+| `cancelled` | The catalog refresh or the probe was cancelled, or the turn was aborted after the confirmation. |
+| `stopped before saving` | No TUI could ask the save question and `--write` was not passed. |
+| `paused` | The model inventory is incomplete or stale, so membership changes were not planned. `-f` refreshes it. |
+| `stale review` | The model inventory, the inherited config, or the save destination changed while the confirmation was open. |
+| `blocked` | Init refused to write: the config or the selected source could not be read or parsed, a pool would shadow an inherited pool, the proposal was invalid or too large, or a saved ownership record exists without its config. |
+| `blocked by a lock` | Another Bifrost writer holds the lock. |
+| `failed — no working models` | The probe found no usable model. |
+| `failed` | The write could not be confirmed on disk, or the written config was rejected on reload. |
+| `not started` | The arguments were not recognised; nothing was read or written. |
+
 A host without a TUI cannot answer the save question. Init still probes and shows the review there, then stops without saving unless you pass `--write`. `--write` skips the confirmation in every mode, not only headless.
 
 If a proposed project pool would replace a handwritten pool in your global or workspace config with different models, init stops without saving. Pools that init generated before (tracked by an ownership receipt) and empty pools do not block init. Edit the existing source or review a workspace update with `/bifrost config reconcile --source workspace`; use `-g` when you intend to update the global source.
