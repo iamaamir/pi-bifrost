@@ -805,8 +805,15 @@ def capture(
                 raise AssertionError("manual init opened a classifier picker after save")
             if "memberships" in init_screen:
                 raise AssertionError("manual init preview still uses internal membership vocabulary")
-            if "pools" not in init_screen or ": +" not in init_screen or "save to project (.pi/bifrost.json)" not in init_screen:
-                raise AssertionError("manual init did not preview tier pool changes")
+            expected_pool_changes = []
+            for tier in sorted(saved.get("models", {})):
+                added_here = len([key for key in saved["models"][tier] if key in ("fake/healthy", "fake/classifier")])
+                if added_here:
+                    expected_pool_changes.append(f"{tier}: +{added_here}/-0")
+            if not expected_pool_changes:
+                raise AssertionError("manual init fixture expected added pool changes")
+            if not all(change in init_screen for change in expected_pool_changes) or "save to project (.pi/bifrost.json)" not in init_screen:
+                raise AssertionError("manual init did not preview the expected tier pool changes")
             # #245: the run ends on the terminal footer, not a bare status line.
             # The card renders its title and message on separate lines, so match
             # the flattened text just like the preview assertions above.

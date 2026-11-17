@@ -2125,8 +2125,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         added.filter((change) => change.tier === tier).length +
         "/-" +
         removed.filter((change) => change.tier === tier).length,
-    )
-    .slice(0, 5);
+    );
 
   const poolSummary = tierSummary.length ? tierSummary.join(" · ") : "no changes";
   const previewLines = [
@@ -2161,7 +2160,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         theme.fg("muted", "  Pools       ") + theme.fg("accent", poolSummary),
 
         ...previewLines
-          .slice(4)
+          .slice(5)
           .map((line) =>
             line.trimStart().startsWith("!")
               ? theme.fg("warning", line)
