@@ -537,7 +537,7 @@ test("a report directory becomes a per-module summary with a survivor extract", 
     assert.equal(rows.length, 1);
     assert.deepEqual(Object.keys(rows[0]).sort(), [
       "coveredBy", "endColumn", "endLine", "module", "mutantId", "mutator", "replacement",
-      "startColumn", "startLine", "testsCompleted",
+      "source", "startColumn", "startLine", "testsCompleted",
     ].sort());
 
     const markdown = summary({ reports, expectedTargets: ["cache.ts"] });
@@ -2010,6 +2010,29 @@ test("a survivor row names the tests that ran against it", () => {
       "tests/cache.test.ts > reads > ignores a missing key",
     ]);
     assert.equal(row.coveredBy.length, row.testsCompleted, "ids resolve to real names, not placeholders");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a survivor carries the source line it points at", () => {
+  // Line numbers do not survive an edit above them, and nothing in a raw range
+  // says so. The text is findable regardless, so the coordinate becomes a hint.
+  const directory = mkdtempSync(join(tmpdir(), "mutation-source-anchor-"));
+  try {
+    const line = lineCount("cache.ts");
+    writeFileSync(join(directory, "cache.json"), JSON.stringify({
+      files: { "/repo/cache.ts": { mutants: [{
+        id: "1", mutatorName: "Regex", replacement: "/x/", status: "Survived",
+        location: { start: { line: 1, column: 1 }, end: { line: 1, column: 9 } },
+      }] } },
+    }));
+    stamp(directory, "cache.json");
+    const [row] = survivorRows(readReports(directory).reports);
+    assert.equal(typeof row.source, "string");
+    assert.ok(row.source.length > 0, `first line of cache.ts (${line} lines) is the anchor`);
+    const [annotation] = annotationLines([row]);
+    assert.ok(annotation.includes(row.source.trim()), "the annotation repeats the source");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
