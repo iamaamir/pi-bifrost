@@ -4729,6 +4729,17 @@ export function createCommandRouter(
           : []),
         "full errors: .pi/bifrost-probe.json",
       ];
+      // Expanded view (ctrl+o): every failure group with its complete model list.
+      const expandedDetails = [
+        `${errs.length} failed · ${timeouts.length} timed out${
+          skipped.length > 0 ? ` · ${skipped.length} skipped` : ""
+        }`,
+        ...sortedReasons.flatMap(([reason, r]) => [
+          `${REASON_LABELS[reason] ?? reason} ×${r.count}`,
+          ...r.models.map((m) => `· ${m}`),
+        ]),
+        "full errors: .pi/bifrost-probe.json",
+      ];
       if (ok.length === 0) {
         logImportant(
           ctx,
@@ -4736,6 +4747,7 @@ export function createCommandRouter(
           `0 of ${results.length} models are working`,
           "error",
           details,
+          expandedDetails,
         );
       } else if (notWorking > 0) {
         logImportant(
@@ -4744,6 +4756,7 @@ export function createCommandRouter(
           `${ok.length} of ${results.length} models are working`,
           "warning",
           details,
+          expandedDetails,
         );
       } else if (ok.length > 0) {
         logImportant(ctx, "Probe complete", `All ${ok.length} models are working.`, "success");

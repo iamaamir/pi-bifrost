@@ -8,8 +8,10 @@ type BifrostNotice = {
   title: string;
   message: string;
   level: NoticeLevel;
-  /** Optional indented detail lines rendered dimmer than the message. */
+  /** Collapsed detail lines. */
   details?: string[];
+  /** Full detail lines shown when the entry is expanded (ctrl+o). */
+  expandedDetails?: string[];
 };
 
 let entryApi: ExtensionAPI | undefined;
@@ -18,8 +20,14 @@ export function registerBifrostNotices(pi: ExtensionAPI) {
   if (typeof pi.registerEntryRenderer !== "function" || typeof pi.appendEntry !== "function") return;
   entryApi = pi;
 
-  pi.registerEntryRenderer("bifrost-notice", (entry, _options, theme) => {
+  pi.registerEntryRenderer("bifrost-notice", (entry, options, theme) => {
     const data = entry.data as BifrostNotice;
+    // shortcut: expanded/keyHint exist in pi-coding-agent >=1.5.2; the repo pins
+    // 1.4.0, so read them defensively. Upgrade when the dep is bumped.
+    const expanded = (options as { expanded?: boolean }).expanded === true;
+    const keyHint =
+      (options as { keyHint?: (keybinding: string, description: string) => string }).keyHint ??
+      ((_k: string, d: string) => d);
 
     const styles = {
       info: { icon: "○", color: "muted" },
@@ -50,11 +58,17 @@ export function registerBifrostNotices(pi: ExtensionAPI) {
         theme.fg(style.color, theme.bold(data.title)),
     ];
 
+    const expandable = data.expandedDetails !== undefined;
+    const bodyLines = expandable && expanded ? data.expandedDetails : data.details;
+
     if (data.message?.trim()) {
       lines.push(theme.fg("muted", data.message.trim()));
     }
-    for (const detail of data.details ?? []) {
+    for (const detail of bodyLines ?? []) {
       lines.push(theme.fg("dim", `  ${detail}`));
+    }
+    if (expandable && !expanded) {
+      lines.push(theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`));
     }
 
     box.addChild(new Text(lines.join("\n"), 0, 0));
@@ -69,6 +83,7 @@ export function log(
   message: string,
   level: NoticeLevel = "info",
   details?: string[],
+  expandedDetails?: string[],
 ): void {
   if (ctx.mode === "tui" && ctx.hasUI && entryApi) {
     try {
@@ -77,12 +92,15 @@ export function log(
         message,
         level,
         ...(details ? { details } : {}),
+        ...(expandedDetails ? { expandedDetails } : {}),
       } satisfies BifrostNotice);
       return;
     } catch {
       /* no session to attach the entry to; fall through to notify */
     }
   }
+  // Fallbacks stay compact: notify is a toast and headless already prints the
+  // full per-model table via uiOutput.
   const flat = details?.length ? `${message}\n${details.join("\n")}` : message;
   if (ctx.hasUI) {
     ctx.ui.notify(`${title}: ${flat}`, level === "success" ? "info" : level);
