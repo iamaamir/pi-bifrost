@@ -3129,6 +3129,18 @@ describe("resolveProviderAuth waits", () => {
     assert.match(result.at(-1)?.reason ?? "", /reached its 100ms budget before this provider was checked/);
   });
 
+  it("observes an auth rejection when the resolver aborts synchronously", async () => {
+    const controller = new AbortController();
+    const result = await resolveProviderAuth({
+      getProviderAuth: () => {
+        controller.abort();
+        return Promise.reject(new Error("fixture auth rejection"));
+      },
+    } as any, ["alpha"], { signal: controller.signal });
+    assert.equal(result[0]?.state, "unknown");
+    await new Promise((resolve) => setImmediate(resolve));
+  });
+
   it("stops asking after the caller cancels", async () => {
     const controller = new AbortController();
     controller.abort();

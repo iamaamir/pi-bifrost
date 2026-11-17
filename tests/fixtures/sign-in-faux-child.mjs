@@ -15,18 +15,21 @@ assert.ok(scratch, "BIFROST_FAUX_SCRATCH is required by the parent");
 const live = process.env.BIFROST_SIGN_IN_LIVE;
 const dead = process.env.BIFROST_SIGN_IN_DEAD;
 const order = JSON.parse(process.env.BIFROST_SIGN_IN_ORDER ?? "[]");
-const mode = process.env.BIFROST_SIGN_IN_MODE === "exclude" ? "exclude" : "off";
+const requestedMode = process.env.BIFROST_SIGN_IN_MODE;
+const mode = requestedMode === "exclude" || requestedMode === "exlcude" ? requestedMode : "off";
 // The terminal-boundary scenario: only a provider that cannot sign in, and an
 // explicit empty fallback list. The turn must fail closed rather than borrow
 // another tier or send the request the check exists to stop.
 const terminal = process.env.BIFROST_SIGN_IN_TERMINAL === "1";
 assert.ok(live && dead, "BIFROST_SIGN_IN_LIVE and BIFROST_SIGN_IN_DEAD are required by the parent");
 
-it(terminal
-  ? `fails closed when sign-in leaves the ${dead} tier empty at an explicit boundary`
-  : mode === "exclude"
-  ? `dispatches the ${live} provider and never calls the unauthenticated ${dead} provider`
-  : `fault control: without the opt-in the unauthenticated ${dead} provider is attempted`, async () => {
+let scenario;
+if (mode === "exlcude") scenario = "blocks dispatch for invalid sign-in eligibility";
+else if (terminal) scenario = `fails closed when sign-in leaves the ${dead} tier empty at an explicit boundary`;
+else if (mode === "exclude") scenario = `dispatches the ${live} provider and never calls the unauthenticated ${dead} provider`;
+else scenario = `fault control: without the opt-in the unauthenticated ${dead} provider is attempted`;
+
+it(scenario, async () => {
   assertCredentialsAbsent("sign-in-eligibility");
   const harness = await startFauxHarness({
     scratch,
@@ -54,6 +57,13 @@ it(terminal
     selectModel: "bifrost/auto",
   });
   try {
+    if (mode === "exlcude") {
+      await harness.session.prompt("synthetic invalid sign-in request");
+      assert.equal(harness.session.getLastAssistantText(), undefined);
+      assert.deepEqual(harness.invocations, []);
+      assertProviderCallCounts(harness.providers, { [live]: 0 });
+      return;
+    }
     if (terminal) {
       // An explicit `fallbackTiers: []` boundary is terminal: no request is sent
       // and no other tier is borrowed to hide the dead provider.

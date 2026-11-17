@@ -74,6 +74,22 @@ describe("pre-dispatch sign-in eligibility dispatch", () => {
     });
   }
 
+  it("blocks dispatch when the sign-in eligibility value is invalid", async () => {
+    writeFileSync(violations, "");
+    await runFauxFixtureChild({
+      child: CHILD,
+      env: {
+        ...env,
+        BIFROST_FAUX_SCRATCH: scratch,
+        BIFROST_SIGN_IN_LIVE: "fake",
+        BIFROST_SIGN_IN_DEAD: "unauth",
+        BIFROST_SIGN_IN_ORDER: JSON.stringify(["fake/chat"]),
+        BIFROST_SIGN_IN_MODE: "exlcude",
+      },
+    });
+    assertNoViolations(violations, "the invalid-config run made a blocked outbound attempt");
+  });
+
   it("fails closed when sign-in is the only reason a terminal tier is empty", async () => {
     // The tier names one provider and no fallback. Sign-in removes it, and the
     // turn must end without a request rather than borrow another tier or send
