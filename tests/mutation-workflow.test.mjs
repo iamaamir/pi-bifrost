@@ -984,6 +984,16 @@ test("the projection follows the shard count that will actually run", () => {
   );
 });
 
+test("downloaded artifacts are isolated so attempts cannot overwrite each other", () => {
+  // Flattening two artifacts that both contain `cache.ts.shard0.json` onto one
+  // filename leaves the survivor to extraction order. The attempt is part of the
+  // artifact name, and keeping the directories keeps that attribution readable.
+  assert.match(jobs.summarise, /merge-multiple: false/u);
+  assert.doesNotMatch(jobs.summarise, /merge-multiple: true/u);
+  assert.match(jobs.summarise, /pattern: mutation-report-\*/u);
+  assert.match(jobs.summarise, /path: mutation-reports/u);
+});
+
 test("the summary downloads every attempt, so a partial re-run still sees the legs that passed", () => {
   // Scoping the download to the current attempt would hide the legs that were
   // not re-run: "re-run failed jobs" increments the attempt while the successful
