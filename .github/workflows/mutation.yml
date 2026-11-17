@@ -19,19 +19,16 @@ on:
   # exactly, so a manual dispatch with no changes measures the same thing.
   workflow_dispatch:
     inputs:
+      # Deliberately a free-text input, not `type: choice`. A choice list is a
+      # second copy of TARGETS that nothing derives, so adding a module silently
+      # made it undispatched-able. The plan job validates the value against
+      # mutation/config.mjs before any matrix leg starts and lists the valid
+      # targets when it is wrong; `node mutation/run.mjs --list` prints them too.
       target:
-        description: "Module to measure, or 'all' for the full matrix"
+        description: "Module to measure (any key in mutation/config.mjs TARGETS), or 'all'"
         required: false
         default: all
-        type: choice
-        options:
-          - all
-          - cache.ts
-          - classifier-semantics.ts
-          - inline-override.ts
-          - reliability.ts
-          - reliability-v2.ts
-          - routing.ts
+        type: string
       shards:
         description: "Shards per module (1 = no sharding, 0 = auto from measured cost)"
         required: false
@@ -193,7 +190,11 @@ jobs:
         with:
           pattern: mutation-report-*
           path: mutation-reports
-          merge-multiple: true
+          # Each artifact keeps its own directory. Merging them would flatten two
+          # attempts of one shard onto the same filename, so which result survived
+          # would depend on extraction order. The artifact name carries the
+          # attempt, and the reporter selects the newest attempt per shard.
+          merge-multiple: false
       - name: Render the summary
         env:
           TIMEOUT_TOLERANCE: ${{ inputs.timeout_tolerance }}

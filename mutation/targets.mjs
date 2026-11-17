@@ -137,7 +137,16 @@ export function bindingFor(target) {
  * the question that matters -- did the bytes involved in the measurement change?
  */
 export function measurementIdentity(target) {
-  const files = ["mutation/config.mjs", ...localImportClosure([target, ...bindingFor(target)])];
+  const files = [
+    // The measurement configuration, the binding rules, the Stryker shim and the
+    // resolved dependency set: each decides what runs, so a change in any of them
+    // makes a stored result incomparable even when the module's bytes are equal.
+    "mutation/config.mjs",
+    "mutation/targets.mjs",
+    "stryker.config.mjs",
+    "package-lock.json",
+    ...localImportClosure([target, ...bindingFor(target)]),
+  ];
   const hash = createHash("sha256");
   for (const file of files) {
     hash.update(file);

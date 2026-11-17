@@ -121,6 +121,30 @@ function within(candidate, root) {
 }
 
 /**
+ * The reporting boundary, resolved, and refused unless it lies inside the checkout.
+ *
+ * Resolving the boundary alone is not enough: a symlinked `reports/` makes
+ * whatever it points at the boundary, so `reports -> /tmp/elsewhere` authorizes
+ * writes and deletions outside the repository. Git cannot commit the link
+ * (`reports/` is ignored), but anything with write access to the working tree
+ * can create one, so the default boundary is pinned to the repository.
+ *
+ * A caller that passes its own root is using that root as its trust anchor, which
+ * is what lets the tests exercise an isolated fixture.
+ */
+export function reportingRoot(reportsRoot = REPORTS_ROOT) {
+  const root = canonical(reportsRoot);
+  const repo = canonical(ROOT);
+  const isDefault = canonical(REPORTS_ROOT) === root;
+  if (isDefault && (root === repo || !within(root, repo))) {
+    throw new Error(
+      `refusing to use ${reportsRoot} as the reporting directory: it resolves to ${root}, outside the repository ${repo}`,
+    );
+  }
+  return root;
+}
+
+/**
  * Resolve a path against the reporting directory, refusing any answer outside it.
  *
  * Lexical containment is not a boundary: a path can be spelled inside `reports/`
@@ -140,7 +164,7 @@ export function canonicalInside(candidate, reportsRoot = REPORTS_ROOT) {
   if (fromRoot === "" || fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
     throw new Error(`not under the reporting directory ${lexicalRoot}`);
   }
-  const rootCanonical = canonical(lexicalRoot);
+  const rootCanonical = reportingRoot(reportsRoot);
   const resolved = canonical(absolute);
   if (resolved === rootCanonical || !within(resolved, rootCanonical)) {
     throw new Error(`resolves to ${resolved}, outside the reporting directory ${rootCanonical}`);
@@ -270,7 +294,7 @@ export function staleReportsFor(options, run) {
  */
 function assertDirectoryInside(directory, reportsRoot) {
   const resolved = canonical(directory);
-  const boundary = canonical(resolve(reportsRoot));
+  const boundary = reportingRoot(reportsRoot);
   if (!within(resolved, boundary)) {
     throw new Error(`refusing to clear reports: ${directory} resolves to ${resolved}, outside ${boundary}`);
   }
@@ -365,6 +389,9 @@ function main() {
   }
 
   const reportsDir = join(ROOT, "reports", "mutation");
+  // Validate the boundary before creating anything: creating directories through
+  // a redirecting `reports/` would already be outside the repository.
+  reportingRoot();
   // A dry run writes no report, so it never creates the reporting directory.
   if (!options.dryRun) mkdirSync(reportsDir, { recursive: true });
   // Per-target identities are computed when each report is stamped: a run may

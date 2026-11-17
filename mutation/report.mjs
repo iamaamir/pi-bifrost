@@ -179,7 +179,7 @@ function parseReportShard(name) {
  * file is a measurement of this checkout. A Stryker report without it is still
  * read, but it belongs to no measurement and is rejected by the selection step.
  */
-export function modulesOf(report, name) {
+export function modulesOf(report, name, attempt = 0) {
   const { shard } = parseReportShard(name);
   const provenance =
     report.bifrost && typeof report.bifrost === "object"
@@ -201,6 +201,7 @@ export function modulesOf(report, name) {
         framework: report.framework ?? null,
         thresholds: report.thresholds ?? null,
         provenance,
+        attempt,
       };
     })
     .sort((a, b) => a.module.localeCompare(b.module));
@@ -301,28 +302,43 @@ export function mergeShardReports(reports) {
  */
 export function selectMeasurement(perReport, { identityFor = measurementIdentity } = {}) {
   const rejected = [];
-  const eligible = [];
-  const grouped = new Map();
+  const ambiguous = new Map();
+
+  // One authoritative report per (module, shard). A re-run of failed jobs leaves
+  // the earlier attempt's artifact in place, so the same shard can arrive twice;
+  // the newest attempt is the authoritative one, and two files claiming a shard
+  // *within the same attempt* is ambiguity that must not be resolved by order.
+  const slots = new Map();
   for (const report of perReport) {
+    const shard = Number.isInteger(report.shard) ? report.shard : 0;
+    const key = `${report.module}\u0000${shard}`;
+    const list = slots.get(key) ?? [];
+    list.push(report);
+    slots.set(key, list);
+  }
+  const chosen = [];
+  for (const list of slots.values()) {
+    const newest = Math.max(...list.map((report) => report.attempt ?? 0));
+    const top = list.filter((report) => (report.attempt ?? 0) === newest);
+    if (top.length > 1) {
+      const module = list[0].module;
+      ambiguous.set(
+        module,
+        `${top.map((report) => report.name).join(" and ")} both claim ${module} shard ${list[0].shard ?? 0} in attempt ${newest}`,
+      );
+      continue;
+    }
+    chosen.push(top[0]);
+  }
+
+  const grouped = new Map();
+  for (const report of chosen) {
     const list = grouped.get(report.module) ?? [];
     list.push(report);
     grouped.set(report.module, list);
   }
   for (const [module, reports] of [...grouped.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     const reject = (reason) => rejected.push(...reports.map((report) => ({ module, name: report.name, reason })));
-
-    const byShard = new Map();
-    let duplicate = null;
-    for (const report of reports) {
-      const shard = Number.isInteger(report.shard) ? report.shard : 0;
-      const first = byShard.get(shard);
-      if (first === undefined) byShard.set(shard, report.name);
-      else if (first !== report.name) duplicate ??= `${first} and ${report.name} both claim shard ${shard}`;
-    }
-    if (duplicate) {
-      reject(`${duplicate}; keep one measurement of ${module} and rerun the shard`);
-      continue;
-    }
 
     const unstamped = reports.find((report) => !report.provenance?.measurement || !report.provenance?.scope);
     if (unstamped) {
@@ -356,43 +372,75 @@ export function selectMeasurement(perReport, { identityFor = measurementIdentity
       );
       continue;
     }
-    eligible.push(...reports);
   }
+
+  // An ambiguous shard never reaches the module loop, because the module has no
+  // authoritative report for it. It is still a rejection, not silence.
+  for (const [module, reason] of ambiguous) {
+    const reports = perReport.filter((report) => report.module === module);
+    rejected.push(...reports.map((report) => ({ module, name: report.name, reason })));
+  }
+
+  // A module rejected for any shard is rejected whole: merging the shards that
+  // did pass would publish a population the run never measured.
+  const rejectedModules = new Set(rejected.map((entry) => entry.module));
+  const eligible = [...grouped.entries()].filter(([module]) => !rejectedModules.has(module)).flatMap(([, reports]) => reports);
   return { reports: mergeShardReports(eligible), rejected, rejectedNames: rejected.map((entry) => entry.name) };
 }
 
 /**
- * Read every `*.json` Stryker report in a directory and select the modules this
- * measurement can trust before merging anything.
+ * Every report file under `directory`, with the attempt it came from.
  *
- * The nightly's download merges every leg into one directory, so the directory
- * alone is not evidence of a coherent measurement. A report whose stamped
- * identity does not match the current bytes is reported as rejected rather than
- * silently merged, and reaches the gate as a failure condition.
+ * The summarise job downloads artifacts without merging them, so each artifact
+ * lands in its own directory named `...-attempt-<n>`. Reading recursively keeps
+ * that attribution: two attempts of one shard are two files, not one that
+ * overwrote the other. A flat local run has no artifact directory, so its files
+ * are attempt 0 and the per-slot rule keeps them unambiguous.
  */
+function reportFiles(directory, depth = 2) {
+  const found = [];
+  const walk = (dir, remaining) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (remaining > 0) walk(path, remaining - 1);
+        continue;
+      }
+      if (!entry.name.endsWith(".json")) continue;
+      const match = /-attempt-(\d+)(?:[\\/]|$)/u.exec(path);
+      found.push({ name: entry.name, path, attempt: match ? Number(match[1]) : 0 });
+    }
+  };
+  walk(directory, depth);
+  return found.sort((a, b) => (a.path < b.path ? -1 : 1));
+}
+
+/** Read every Stryker report and select the modules this measurement can trust. */
 export function readReports(directory, { identityFor } = {}) {
   const empty = { reports: [], rejected: [], rejectedNames: [] };
   if (!existsSync(directory)) return empty;
-  const perReport = readdirSync(directory)
-    .filter((name) => name.endsWith(".json"))
-    .sort()
-    .flatMap((name) => {
-      const path = join(directory, name);
-      let report;
-      try {
-        report = JSON.parse(readFileSync(path, "utf8"));
-      } catch (error) {
-        // Silently dropping an unreadable report turns a corrupt artifact into a
-        // "missing module" with no cause. Say so, then let the missing-report
-        // check fail the run.
-        console.error(`warning: ignoring unreadable report ${path}: ${error.message}`);
-        return [];
-      }
-      // A file that is not a Stryker report (for example a merged summary) is
-      // skipped rather than counted as a module.
-      if (!report || typeof report !== "object" || !report.files) return [];
-      return modulesOf(report, name);
-    });
+  const perReport = reportFiles(directory).flatMap(({ name, path, attempt }) => {
+    let report;
+    try {
+      report = JSON.parse(readFileSync(path, "utf8"));
+    } catch (error) {
+      // Silently dropping an unreadable report turns a corrupt artifact into a
+      // "missing module" with no cause. Say so, then let the missing-report
+      // check fail the run.
+      console.error(`warning: ignoring unreadable report ${path}: ${error.message}`);
+      return [];
+    }
+    // A file that is not a Stryker report (for example a merged summary) is
+    // skipped rather than counted as a module.
+    if (!report || typeof report !== "object" || !report.files) return [];
+    return modulesOf(report, name, attempt);
+  });
   return selectMeasurement(perReport, identityFor ? { identityFor } : {});
 }
 

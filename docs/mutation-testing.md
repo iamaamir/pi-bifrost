@@ -338,6 +338,7 @@ low score.
 | A report whose **measurement identity** differs | 0 | It measured different bytes (revision, binding or config), so it must not be merged |
 | **Two files claiming one shard** | 0 | `<module>.json` is shard 0, so it collides with `<module>.shard0.json` |
 | An **unstamped** report | 0 | Provenance is unknown, so nothing establishes what it measured |
+| A module whose mutants are **all `Ignored`** | 0 | `total` is non-zero but nothing was evaluated |
 | A shard **outside** the plan | 0 | A stale or misrouted artifact was merged; missing-shard detection cannot see it |
 | Shard conflicts | 0 | Overlapping shards disagreed, so the run is not reproducible |
 
@@ -372,7 +373,8 @@ close that:
 - **A stamped content identity.** The runner writes
   `bifrost.measurement` into every report: a SHA-256 of the mutated module's
   bytes, the local modules it and its bound tests import, and
-  `mutation/config.mjs`. The identity is **per
+  `mutation/config.mjs`, the binding rules, the Stryker shim and
+  `package-lock.json`. The identity is **per
   module**, because that is the population one measurement covered. The
   summariser recomputes it and rejects a report that does not match — a different
   revision, a different binding, a different config — naming the file and both
@@ -391,6 +393,16 @@ whole module, so a partial `--mutate` run must name its artifact explicitly and 
 rejected if an unsharded report carries a line-range scope: a one-shard plan would
 otherwise publish a score over part of a module as though it were all of it.
 Sharded reports may carry ranges, because that is what a shard is.
+
+**Artifacts stay separate until selection.** The summarise job downloads with
+`merge-multiple: false`, so each artifact keeps a directory named after itself —
+which carries the attempt. The reporter takes the newest attempt per
+`(module, shard)` and rejects two reports for one shard within an attempt. That
+supports "re-run failed jobs" without letting extraction order decide a result.
+
+**The reporting root must resolve inside the checkout.** A symlinked `reports/`
+redirects writes and deletions, so the default boundary is validated before
+anything is created.
 
 **Report output is confined to `reports/` on resolved paths.** Lexical
 containment is not a boundary: a path spelled inside `reports/` whose parent is a
