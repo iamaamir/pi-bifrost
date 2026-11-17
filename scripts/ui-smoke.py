@@ -803,8 +803,10 @@ def capture(
                 raise AssertionError("manual init must ask exactly once to save the refreshed setup")
             if "choose classifier" in init_screen or "select classifier" in init_screen:
                 raise AssertionError("manual init opened a classifier picker after save")
-            if "pools +2 / -0 memberships" not in init_screen or "save to project (.pi/bifrost.json)" not in init_screen:
-                raise AssertionError("manual init did not preview the exact project membership changes")
+            if "memberships" in init_screen:
+                raise AssertionError("manual init preview still uses internal membership vocabulary")
+            if "pools" not in init_screen or ": +" not in init_screen or "save to project (.pi/bifrost.json)" not in init_screen:
+                raise AssertionError("manual init did not preview tier pool changes")
             # #245: the run ends on the terminal footer, not a bare status line.
             # The card renders its title and message on separate lines, so match
             # the flattened text just like the preview assertions above.

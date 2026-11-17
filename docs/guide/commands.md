@@ -37,7 +37,7 @@
 
 `validate` and `inspect` accept a leading `--json` flag. Both commands are read-only: they do not classify, refresh the registry, probe providers, or write reliability state. They report configured classifier policy and effective session state. `inspect` shows local registry/auth/circuit snapshots and the effective affinity mode: Auto defaults to within-tier retention, while physical routing defaults off. It reports the mode source and, when active, the proven Auto anchor's model and age without branch or prompt data. Its “Bifrost last registry refresh age” is the time since this extension last refreshed Pi's registry, not a freshness claim about provider data. JSON mode emits a version-1 `[bifrost-json] ` report line to stderr. The validation report names its source as `loaded-effective-config`; it does not read un-reloaded disk edits.
 
-On first use, when no meaningful configuration, route file, runtime routing preference, or explicit routing override blocks setup, Bifrost loads provisional pools from Pi's catalog before generation. It checks model access in the background and saves only successful generated pools with an ownership receipt. An empty `{}` configuration does not block setup. If every probe fails or a safe save cannot finish, Bifrost leaves configuration unchanged and warns. Probe requests can use provider credits or reach rate limits.
+On first use, when no meaningful configuration, route file, runtime routing preference, or explicit routing override blocks setup, Bifrost loads provisional pools from Pi's catalog before generation. It checks model access in the background and saves only successful generated pools with an ownership file. An empty `{}` configuration does not block setup. If every probe fails or a safe save cannot finish, Bifrost leaves configuration unchanged and warns. Probe requests can use provider credits or reach rate limits.
 
 Provider usage and billing pauses use Pi's configured provider ID. Bifrost does not identify shared billing accounts. Use `/bifrost reliability` to see active pauses. The reset command accepts only one exact provider ID that Bifrost knows. It stops during an active recovery trial.
 
@@ -70,7 +70,7 @@ Every outcome init can report:
 | `stopped before saving` | No TUI could ask the save question and `--write` was not passed. |
 | `paused` | The model inventory is incomplete or stale, so membership changes were not planned. `-f` refreshes it. |
 | `stale review` | The model inventory, the inherited config, or the save destination changed while the confirmation was open. |
-| `blocked` | Init refused to write: the config or the selected source could not be read or parsed, a pool would shadow an inherited pool, the proposal was invalid or too large, or a saved ownership record exists without its config. |
+| `blocked` | Init refused to write: the config or the selected source could not be read or parsed, a pool would shadow an inherited pool, the proposal was invalid or too large, or a saved ownership file exists without its config. |
 | `blocked by a lock` | Another Bifrost writer holds the lock. |
 | `failed — no working models` | The probe found no usable model. |
 | `failed` | The write could not be confirmed on disk, or the written config was rejected on reload. |
@@ -78,7 +78,7 @@ Every outcome init can report:
 
 A host without a TUI cannot answer the save question. Init still probes and shows the review there, then stops without saving unless you pass `--write`. `--write` skips the confirmation in every mode, not only headless.
 
-If a proposed project pool would replace a handwritten pool in your global or workspace config with different models, init stops without saving. Pools that init generated before (tracked by an ownership receipt) and empty pools do not block init. Edit the existing source or review a workspace update with `/bifrost config reconcile --source workspace`; use `-g` when you intend to update the global source.
+If a proposed project pool would replace a handwritten pool in your global or workspace config with different models, init stops without saving. Pools that init generated before (tracked by an ownership file) and empty pools do not block init. Edit the existing source or review a workspace update with `/bifrost config reconcile --source workspace`; use `-g` when you intend to update the global source.
 
 For safe migration, follow the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state).
 

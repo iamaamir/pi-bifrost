@@ -1619,7 +1619,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     logImportant(
       ctx,
       "Using verified models",
-      `${workingModels.length} probe-verified models (${probeAge}).`,
+      `${workingModels.length} working models (${probeAge}).`,
       "info",
     );
   }
@@ -2006,7 +2006,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
               ? "Nothing was saved; the existing configuration is invalid."
               : plan.reason === "prospective_config_invalid"
                 ? "Nothing was saved; the proposed configuration failed validation."
-                : `Nothing was saved; membership changes could not be prepared (${plan.reason ?? "unknown reason"}).`,
+                : `Nothing was saved; the pool changes could not be prepared (${plan.reason ?? "unknown reason"}).`,
             "Fix the configuration and retry.",
             "error",
           );
@@ -2049,7 +2049,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       reportInitOutcome(
         ctx,
         "blocked",
-        "Nothing was saved; a saved ownership record exists without its config.",
+        "Nothing was saved; a saved ownership file exists without its config.",
         "Review the target directory, then retry.",
         "error",
       );
@@ -2060,7 +2060,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       reportInitOutcome(
         ctx,
         "blocked",
-        "Nothing was saved; the ownership record for this init could not be created.",
+        "Nothing was saved; the ownership file for this init could not be created.",
         "Retry; if it fails again, inspect the target directory.",
         "error",
       );
@@ -2128,21 +2128,21 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     )
     .slice(0, 5);
 
+  const poolSummary = tierSummary.length ? tierSummary.join(" · ") : "no changes";
   const previewLines = [
     "◆ Bifrost · Setup preview",
     "",
     probeLoaded
       ? `  ✓ ${workingModels.length} working models (${probeAge})`
-      : `  ${available.length} catalog models (not probe-verified)`,
+      : `  ${available.length} catalog models (not tested)`,
     "",
-    `  Pools       +${added.length} / -${removed.length} memberships`,
-    ...(tierSummary.length ? [`  Tiers       ${tierSummary.join(" · ")}`] : []),
+    `  Pools       ${poolSummary}`,
     `  Classifier  ${effectiveClassifierSummary}`,
     `  Save to     ${initSourceLabel(source)}`,
     ...(settingsAdded ? ["  Defaults    Added where missing"] : []),
     ...(uncategorized.length ? [`  ! ${uncategorized.length} uncategorized models excluded`] : []),
     ...(unverifiedSavedCount
-      ? [` ⚠️ ${unverifiedSavedCount} unverified membership preserved`]
+      ? [` ⚠️ ${unverifiedSavedCount} unverified models kept`]
       : []),
   ];
 
@@ -2158,15 +2158,17 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           ? theme.fg("success", `  ✓ ${workingModels.length} working models (${probeAge})`)
           : theme.fg("warning", `  ${available.length} listed models (not verified)`),
         "",
-        theme.fg("muted", "  Pools       ") +
-          theme.fg("success", `+${added.length}`) +
-          theme.fg("dim", " / ") +
-          theme.fg("error", `-${removed.length}`) +
-          theme.fg("dim", " memberships"),
+        theme.fg("muted", "  Pools       ") + theme.fg("accent", poolSummary),
 
         ...previewLines
-          .slice(5)
-          .map((line) => (line.trimStart().startsWith("!") ? theme.fg("warning", line) : line)),
+          .slice(4)
+          .map((line) =>
+            line.trimStart().startsWith("!")
+              ? theme.fg("warning", line)
+              : line.trimStart().startsWith("⚠️")
+                ? theme.fg("warning", line)
+                : line,
+          ),
       ];
 
       return new Text(lines.join("\n"), 0, 0);

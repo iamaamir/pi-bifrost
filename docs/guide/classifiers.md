@@ -4,7 +4,7 @@
 
 A classifier is optional and enabled by default. `classifier.enabled` sets its durable default. `/bifrost classifier on|off` changes only the current Pi session. The command does not write a classifier toggle to runtime state. After restart, Bifrost uses the configured default. Regex rules and the configured default tier can route without an extra classification call. On a local-cache miss, an enabled classifier can receive the current prompt.
 
-`/bifrost init` detects a classifier backend. If the prompt backend needs a model, init selects a probe-verified available chat model when probe results are available. First-use setup can use a provisional chat model while its background probe runs. Run `/bifrost classifier` when you want to change the backend or model. Run `/bifrost classifier off` to disable the extra call for this session without editing a Bifrost JSON file. Set `classifier.enabled` to `false` for a durable rules/default-only policy.
+`/bifrost init` detects a classifier backend. If the prompt backend needs a model, init selects a working available chat model when probe results are available. First-use setup can use a provisional chat model while its background probe runs. Run `/bifrost classifier` when you want to change the backend or model. Run `/bifrost classifier off` to disable the extra call for this session without editing a Bifrost JSON file. Set `classifier.enabled` to `false` for a durable rules/default-only policy.
 
 Classifiers resolve **tiers**, not exact provider models. Model pools, reliability filtering, and strategies remain Bifrost policy.
 
