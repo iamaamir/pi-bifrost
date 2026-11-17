@@ -32,6 +32,70 @@ it("renders missing configured entries in text route traces", () => {
   assert.match(text, /fuzzy.*pattern_unavailable.*registry_snapshot/u);
 });
 
+describe("render trace preview", () => {
+  it("renders classifier attempt details with exact confidence", () => {
+    const lines = renderTracePreview({
+      version: 1,
+      kind: "route-decision",
+      outcome: "unresolved",
+      classification: { source: "fallback", tier: "general" },
+      classifierAttempt: {
+        backend: "typesafe",
+        outcome: "low_confidence",
+        fallbackKind: "prompt",
+        model: "jev-1.13.0",
+        fallbackModel: "fixture/classifier",
+        confidence: 0.73,
+      },
+      classifierDisclosure: { enabled: true, configuredClassifierMayReceivePrompt: true },
+    }).join("\n");
+
+    assert.match(lines, /classifier attempt: typesafe \(low_confidence, fallback=prompt\)/u);
+    assert.match(lines, /classifier attempt model: jev-1\.13\.0/u);
+    assert.match(lines, /classifier attempt confidence: 0\.73/u);
+  });
+
+  it("renders classifier attempt details with zero confidence", () => {
+    const lines = renderTracePreview({
+      version: 1,
+      kind: "route-decision",
+      outcome: "unresolved",
+      classification: { source: "fallback", tier: "general" },
+      classifierAttempt: {
+        backend: "pi-native",
+        outcome: "low_confidence",
+        fallbackKind: "default",
+        model: "typesafe/jev-latest",
+        confidence: 0,
+      },
+      classifierDisclosure: { enabled: true, configuredClassifierMayReceivePrompt: true },
+    }).join("\n");
+
+    assert.match(lines, /classifier attempt: pi-native \(low_confidence, fallback=default\)/u);
+    assert.match(lines, /classifier attempt model: typesafe\/jev-latest/u);
+    assert.ok(lines.includes("classifier attempt confidence: 0"));
+  });
+
+  it("omits absent optional classifier attempt fields", () => {
+    const lines = renderTracePreview({
+      version: 1,
+      kind: "route-decision",
+      outcome: "unresolved",
+      classification: { source: "fallback", tier: "general" },
+      classifierAttempt: {
+        backend: "typesafe",
+        outcome: "timeout",
+        fallbackKind: "regex",
+      },
+      classifierDisclosure: { enabled: true, configuredClassifierMayReceivePrompt: true },
+    }).join("\n");
+
+    assert.match(lines, /classifier attempt: typesafe \(timeout, fallback=regex\)/u);
+    assert.doesNotMatch(lines, /classifier attempt model:/u);
+    assert.doesNotMatch(lines, /classifier attempt confidence:/u);
+  });
+});
+
 function writeRecentProbeCache(path: string, results: unknown): void {
   writeFileSync(path, JSON.stringify(results));
   const recent = new Date(Date.now() - 60_000);
