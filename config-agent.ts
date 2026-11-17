@@ -584,7 +584,11 @@ async function withTimeout<T>(
   timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<T | typeof AUTH_WAIT_ENDED> {
-  if (signal?.aborted) return AUTH_WAIT_ENDED;
+  if (signal?.aborted) {
+    // The resolver has already started and may still reject after cancellation.
+    void Promise.resolve(promise).catch(() => {});
+    return AUTH_WAIT_ENDED;
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   const ended = new Promise<typeof AUTH_WAIT_ENDED>((resolve) => {

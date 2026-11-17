@@ -20,7 +20,7 @@ import { makeModel } from "./helpers.ts";
 type Hook = (event: any, ctx: ExtensionContext) => Promise<unknown>;
 
 interface FixtureOptions {
-  readonly eligibility?: "off" | "exclude";
+  readonly eligibility?: "off" | "exclude" | "exlcude";
   readonly models?: readonly Model<Api>[];
   readonly fallbackTiers?: readonly string[];
   readonly deadProviders?: readonly string[];
@@ -214,6 +214,18 @@ function fixture(options: FixtureOptions = {}) {
 }
 
 describe("pre-dispatch sign-in eligibility through the Auto route", { concurrency: false }, () => {
+  it("blocks Auto and physical routing when the sign-in eligibility value is invalid", async () => {
+    const h = fixture({ eligibility: "exlcude" });
+    try {
+      await assert.rejects(h.route(), /invalid routing policy config/);
+      await h.routePhysical();
+      assert.deepEqual(h.dispatched, []);
+      assert.deepEqual(h.authCalls, []);
+    } finally {
+      h.cleanup();
+    }
+  });
+
   it("excludes a provider whose sign-in cannot be resolved and dispatches the next model", async () => {
     const h = fixture({ eligibility: "exclude" });
     try {
