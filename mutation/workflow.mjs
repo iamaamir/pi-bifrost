@@ -5,7 +5,16 @@
 // quotes trips SC2016. Keeping the logic here also makes it testable without
 // shelling out.
 import { appendFileSync, readFileSync } from "node:fs";
-import { SHARDING, TARGETS, TIME_BUDGET, estimatedMinutes, legMinutes, timeoutTolerance, unusableReasons } from "./config.mjs";
+import {
+  MATRIX,
+  SHARDING,
+  TARGETS,
+  TIME_BUDGET,
+  estimatedMinutes,
+  legMinutes,
+  timeoutTolerance,
+  unusableReasons,
+} from "./config.mjs";
 import { exceedsBudget, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
 
 /** Resolve the dispatched target selection into a matrix list. */
@@ -49,6 +58,32 @@ export function resolveTimeoutTolerance(raw) {
     throw new Error(`timeout_tolerance must be a non-negative integer or blank, got "${value}"`);
   }
   return parsed;
+}
+
+/**
+ * Wall clock for leg costs dispatched through `slots` lanes, in matrix order.
+ *
+ * Order is preserved rather than sorted longest-first, because GitHub does not
+ * reorder a matrix: it starts the next leg as a slot frees, in the order the
+ * matrix lists them. A sharded plan puts the large modules' legs last, so they
+ * begin after the earlier waves have drained — sorting would model a scheduler
+ * that does not exist and would understate the result.
+ *
+ * The model is a planning estimate, not a deadline. It assumes a leg starts the
+ * instant a lane frees (GitHub scheduling and image pulls add unmodelled delay)
+ * and that a leg costs its module estimate divided by the shard count (shards
+ * overlap by `SHARDING.overlapLines`, so each covers slightly more than an even
+ * share). The only hard bound the platform gives us is the per-leg job timeout.
+ */
+export function projectWallClock(legCosts, slots = MATRIX.maxParallel) {
+  if (legCosts.length === 0) return 0;
+  const lanes = new Array(Math.max(1, Math.min(slots, legCosts.length))).fill(0);
+  for (const cost of legCosts) {
+    let lane = 0;
+    for (let index = 1; index < lanes.length; index += 1) if (lanes[index] < lanes[lane]) lane = index;
+    lanes[lane] += cost;
+  }
+  return Math.max(...lanes);
 }
 
 /**
@@ -98,36 +133,39 @@ export function planMatrix({ requested, shards, concurrency } = {}) {
     }
   }
 
-  // Legs run in parallel, so the projected wall clock is the slowest leg plus the
-  // fixed overhead, not the sum of the legs. Each leg cost comes from the resolved
-  // shard count actually placed in the matrix.
-  const slowestLeg = Math.max(
-    ...targets.map((target) => estimatedMinutes(target) / resolvedCounts.get(target)),
-  );
-  const projectedMinutes = slowestLeg + TIME_BUDGET.reserveMinutes;
+  // Legs are queued through `MATRIX.maxParallel` lanes, not all started at once.
+  // Packing the legs across those lanes is what makes the projection match a
+  // sharded matrix: six modules sharded four ways is 24 legs in three waves, and
+  // `max(leg)` alone would report a third of the real wall clock.
+  const legCosts = include.map((leg) => estimatedMinutes(leg.target) / leg.shardCount);
+  const slowestWave = projectWallClock(legCosts);
+  const projectedMinutes = slowestWave + TIME_BUDGET.reserveMinutes;
+  const waves = Math.ceil(include.length / MATRIX.maxParallel);
   if (projectedMinutes > TIME_BUDGET.minutes) {
     throw new Error(
-      `plan projects ${projectedMinutes.toFixed(0)}m, over the ${TIME_BUDGET.minutes}m budget (slowest leg ${slowestLeg.toFixed(1)}m + ${TIME_BUDGET.reserveMinutes}m overhead). Lower TIME_BUDGET.targetLegMinutes to shard further.`,
+      `plan projects ${projectedMinutes.toFixed(0)}m, over the ${TIME_BUDGET.minutes}m budget (${waves} wave(s) of ${include.length} leg(s), slowest wave ${slowestWave.toFixed(1)}m + ${TIME_BUDGET.reserveMinutes}m overhead). Lower TIME_BUDGET.targetLegMinutes to shard further.`,
     );
   }
 
-  return { targets, include, concurrency: workers, shards: shards ?? "0", projectedMinutes };
+  return { targets, include, concurrency: workers, shards: shards ?? "0", projectedMinutes, waves };
 }
 
 /** Summary lines appended to the workflow step page. */
+function pct(value) {
+  return value === null || value === undefined ? "n/a" : value.toFixed(2);
+}
+
 export function summaryLines(data) {
-  const honest = data?.aggregate?.honestScore;
   const lines = [
     // Report the tolerance the gate actually applied. Falling back to the default
     // here would print a threshold the run was never judged against, making an
     // accepted report look like it exceeded its own limit.
-    `\`modules=${data?.modules?.length ?? 0} mutants=${data?.aggregate?.total ?? 0} honest=${honest === null || honest === undefined ? "n/a" : honest.toFixed(2)} timeouts=${data?.aggregate?.Timeout ?? 0} tolerance=${data?.timeoutToleranceOverride ?? data?.timeoutTolerance ?? timeoutTolerance(data?.aggregate?.total ?? 0)} missing=${(data?.missingTargets?.length ?? 0) + (data?.missingShards?.length ?? 0)}\``,
+    `\`modules=${data?.modules?.length ?? 0} mutants=${data?.aggregate?.total ?? 0} population=${pct(data?.aggregate?.populationScore)} conclusive=${pct(data?.aggregate?.conclusiveScore)} stryker=${pct(data?.aggregate?.strykerScore)} timeouts=${data?.aggregate?.Timeout ?? 0} errors=${(data?.aggregate?.RuntimeError ?? 0) + (data?.aggregate?.CompileError ?? 0)} tolerance=${data?.timeoutToleranceOverride ?? data?.timeoutTolerance ?? timeoutTolerance(data?.aggregate?.total ?? 0)} missing=${(data?.missingTargets?.length ?? 0) + (data?.missingShards?.length ?? 0)}\``,
     "",
   ];
   for (const module of data?.modules ?? []) {
-    const score = module.honestScore === null || module.honestScore === undefined ? "n/a" : `${module.honestScore.toFixed(2)}%`;
     lines.push(
-      `- \`${module.module}\`: ${score} honest (${module.Killed} killed / ${module.Survived} survived / ${module.Timeout} timeout)`,
+      `- \`${module.module}\`: ${pct(module.populationScore)} population / ${pct(module.conclusiveScore)} conclusive (${module.Killed} killed / ${module.Survived} survived / ${module.Timeout} timeout / ${(module.RuntimeError ?? 0) + (module.CompileError ?? 0)} errors of ${module.total})`,
     );
   }
   return lines;
@@ -163,7 +201,10 @@ function run(command, argv) {
     console.log(`targets: ${plan.targets.join(", ")}`);
     console.log(`matrix legs: ${plan.include.length} (concurrency ${plan.concurrency})`);
     console.log(
-      `projected wall clock: ${plan.projectedMinutes.toFixed(1)}m of the ${TIME_BUDGET.minutes}m cap (per-leg bound ${legTimeout}m)`,
+      `projected wall clock: ${plan.projectedMinutes.toFixed(1)}m of the ${TIME_BUDGET.minutes}m planning budget, ${plan.waves} wave(s) of ${plan.include.length} leg(s) across ${MATRIX.maxParallel} lanes (per-leg hard bound ${legTimeout}m)`,
+    );
+    console.log(
+      "the projection is a planning objective, not a deadline: GitHub enforces no workflow-wide wall clock",
     );
     for (const leg of plan.include) console.log(`  ${leg.label}: mutate ${leg.mutate}`);
     return;

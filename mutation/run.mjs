@@ -6,15 +6,15 @@
 //   node mutation/run.mjs routing.ts              # one target
 //   node mutation/run.mjs routing.ts --concurrency 8
 //   node mutation/run.mjs cache.ts --shards 2     # split one module across shards
-//   node mutation/run.mjs cache.ts --mutate cache.ts:1-140 --report leg.json
+//   node mutation/run.mjs cache.ts --mutate cache.ts:1-140 --report reports/mutation/leg.json
 //   node mutation/run.mjs --list                  # inventory and bindings, no run
 //   node mutation/run.mjs cache.ts --dry-run      # verify the binding only
 //
 // Reports land in reports/mutation/. Summarise with:
 //   node mutation/report.mjs --dir reports/mutation --out /tmp/mutation.md
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, rmSync, unlinkSync } from "node:fs";
-import { basename, join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, rmSync, unlinkSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { SHARDING, TARGETS, estimatedMinutes } from "./config.mjs";
 import { ROOT, bindingFor, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
 
@@ -88,16 +88,52 @@ function inventory() {
 }
 
 /**
+ * Resolve an explicit `--report` path.
+ *
+ * The path is honoured as given rather than reduced to a basename. Reducing it
+ * silently wrote somewhere other than where the operator asked, and it made the
+ * clear-scope disagree with the write: `--report archive/cache.ts.shard0.json`
+ * cleared `reports/mutation/cache.ts.shard0.json`, which is a different file and
+ * can be another shard's output. Ownership is now the exact resolved path.
+ *
+ * Confined to the repository so a stray `--report ../../somewhere` cannot delete
+ * a file outside the checkout.
+ */
+export function resolveReportPath(reportPath) {
+  const resolved = resolve(ROOT, reportPath);
+  const prefix = ROOT.endsWith(sep) ? ROOT : `${ROOT}${sep}`;
+  if (!resolved.startsWith(prefix)) {
+    throw new Error(`--report must stay inside the repository (${ROOT}), got ${reportPath}`);
+  }
+  return resolved;
+}
+
+/**
  * Which reports this invocation may delete before measuring.
  *
  * A normal run writes the target's whole report set, so every stale report for
- * that target goes. An explicit `--report` writes one file: sibling shards must
- * survive, but this run's own output must not, or a run that fails before writing
- * leaves its previous contents to be read as a completed shard.
+ * that target goes. An explicit `--report` writes exactly one file: sibling
+ * shards must survive, but this run's own output must not, or a run that fails
+ * before writing leaves its previous contents to be read as a completed shard.
  */
 export function staleReportsFor(options, run) {
   if (!options.report) return { scope: "target" };
-  return { scope: "own", name: basename(options.report) };
+  return { scope: "own", path: run.reportPath };
+}
+
+/**
+ * The files a measured run may remove before it starts, as absolute paths.
+ *
+ * Exported and pure so the ownership rule is testable without touching the
+ * filesystem. An explicit `--report` owns exactly one path; a normal run owns
+ * the target's whole report set inside the reporting directory. Nothing else in
+ * that directory is ever a candidate, so a summary, a notes file, or another
+ * module's report cannot be deleted by accident.
+ */
+export function reportsToClear(options, run, reportsDir, entries) {
+  const plan = staleReportsFor(options, run);
+  if (plan.scope === "own") return [plan.path];
+  return entries.filter((entry) => isReportFor(entry, run.target)).map((entry) => join(reportsDir, entry));
 }
 
 /**
@@ -130,6 +166,14 @@ function main() {
     // report names ambiguous.
     throw new Error("--shards applies to exactly one target");
   }
+  if (options.report !== null) {
+    // One explicit output file has to mean one measurement. Previously the flag
+    // was silently ignored unless --mutate was also given, and ignored entirely
+    // when sharding, so an operator could believe they had captured a report
+    // that was never written to the path they named.
+    if (targets.length !== 1) throw new Error("--report applies to exactly one target");
+    if (options.shards !== null) throw new Error("--report cannot be combined with --shards; each shard writes its own file");
+  }
 
   const reportsDir = join(ROOT, "reports", "mutation");
   mkdirSync(reportsDir, { recursive: true });
@@ -141,28 +185,29 @@ function main() {
   // (e.g. an unsharded report reappearing after a sharded rerun). Clearing is
   // per target, per measurement, so a multi-target run keeps each earlier
   // target's fresh output while still discarding that target's own stale files.
-  const clearedTargets = new Set();
-  function clearPreviousReports(target, plan) {
+  const clearedKeys = new Set();
+  function clearPreviousReports(run) {
+    const plan = staleReportsFor(options, run);
     // Keyed by plan, not just target: two own-scope runs of the same target in one
     // invocation write different files and each must clear its own.
-    const key = plan.scope === "own" ? `${target}\u0000${plan.name}` : target;
-    if (clearedTargets.has(key)) return;
-    clearedTargets.add(key);
+    const key = plan.scope === "own" ? `own\u0000${plan.path}` : run.target;
+    if (clearedKeys.has(key)) return;
+    clearedKeys.add(key);
     let entries;
     try {
       entries = readdirSync(reportsDir);
     } catch (error) {
-      console.error(`warning: could not read ${reportsDir} to clear previous reports for ${target}: ${error.message}`);
+      console.error(`warning: could not read ${reportsDir} to clear previous reports for ${run.target}: ${error.message}`);
       return;
     }
-    for (const entry of entries) {
-      if (plan.scope === "own" ? entry !== plan.name : !isReportFor(entry, target)) continue;
+    for (const path of reportsToClear(options, run, reportsDir, entries)) {
+      if (!existsSync(path)) continue;
       try {
-        unlinkSync(join(reportsDir, entry));
+        unlinkSync(path);
       } catch (error) {
         // A stale report left in place is a silent-wrong-answer risk, but
         // aborting here would discard every other target's measurement too.
-        console.error(`warning: could not remove stale report ${entry} for ${target}: ${error.message}`);
+        console.error(`warning: could not remove stale report ${path}: ${error.message}`);
       }
     }
   }
@@ -171,17 +216,7 @@ function main() {
   // its own report so the summariser can merge them back together.
   const runs = targets.flatMap((target) => {
     if (options.mutate) {
-      // The report name is always a bare basename: it is joined onto
-      // reports/mutation/ below, so a path here would be re-prefixed. Accepting a
-      // path and stripping it keeps the clear-scope and the write in agreement.
-      return [
-        {
-          target,
-          mutate: options.mutate,
-          reportName: basename(options.report ?? `${target}.json`),
-          label: options.mutate,
-        },
-      ];
+      return [{ target, mutate: options.mutate, reportName: `${target}.json`, label: options.mutate }];
     }
     const shards = shardsFor(target, options.shards ?? 1);
     if (shards.length === 1) return [{ target, mutate: target, reportName: `${target}.json`, label: target }];
@@ -193,8 +228,15 @@ function main() {
     }));
   });
 
+  // An explicit --report file is written where the operator asked; everything
+  // else lands in the reporting directory under its derived name.
   for (const run of runs) {
-    clearPreviousReports(run.target, staleReportsFor(options, run));
+    run.reportPath = options.report === null ? join(reportsDir, run.reportName) : resolveReportPath(options.report);
+    mkdirSync(dirname(run.reportPath), { recursive: true });
+  }
+
+  for (const run of runs) {
+    clearPreviousReports(run);
     console.log(`\n=== ${run.label} (${bindingFor(run.target).length} bound test files) ===`);
     const args = ["stryker", "run"];
     if (options.concurrency) args.push("--concurrency", options.concurrency);
@@ -206,7 +248,7 @@ function main() {
         ...process.env,
         MUTATION_TARGET: run.target,
         MUTATION_MUTATE: run.mutate,
-        MUTATION_REPORT_FILE: `reports/mutation/${run.reportName}`,
+        MUTATION_REPORT_FILE: relative(ROOT, run.reportPath),
         // Opt-in local reuse. CI never sets this: the nightly must measure
         // every mutant rather than replay a stored score.
         MUTATION_INCREMENTAL: options.incremental ? "1" : "",
