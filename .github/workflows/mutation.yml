@@ -28,6 +28,7 @@ on:
           - all
           - cache.ts
           - classifier-semantics.ts
+          - inline-override.ts
           - reliability.ts
           - reliability-v2.ts
           - routing.ts
@@ -132,10 +133,15 @@ jobs:
           CONCURRENCY: ${{ needs.plan.outputs.concurrency }}
         # The runner owns the Stryker invocation, so CI and a developer machine
         # run the same way. `--mutate` narrows the scope to this shard.
+        #
+        # `--report` takes the full path, not a bare name: the flag writes exactly
+        # where it is pointed, so naming the reporting directory here is what makes
+        # it agree with the collection step below. A bare name would land in the
+        # repository root and the artifact would be empty.
         run: |
           node mutation/run.mjs "$TARGET" \
             --mutate "$MUTATE" \
-            --report "$TARGET.shard$SHARD.json" \
+            --report "reports/mutation/$TARGET.shard$SHARD.json" \
             --concurrency "$CONCURRENCY"
       - name: Collect this leg's report
         if: always()

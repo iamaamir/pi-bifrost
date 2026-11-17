@@ -15,7 +15,7 @@
 //   node mutation/report.mjs --dir mutation-reports --survivors survivors.jsonl
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { SUMMARY, timeoutTolerance } from "./config.mjs";
+import { SUMMARY, moduleUnusableReasons, timeoutTolerance } from "./config.mjs";
 import { ROOT, bindingExclusions, targetNames } from "./targets.mjs";
 
 const COUNTED_STATUSES = ["Killed", "Timeout", "Survived", "NoCoverage", "RuntimeError", "CompileError"];
@@ -102,7 +102,35 @@ function parseArgs(argv) {
   return options;
 }
 
-/** Status counts for one report's mutants, plus both score definitions. */
+/**
+ * Three scores, each over an explicit denominator. One number cannot answer all
+ * three questions honestly, and the previous pair (Stryker's and one called
+ * "honest") invited exactly the wrong reading: a run with one kill and nine
+ * timeouts reported 100% "honest" because timeouts sat in neither the numerator
+ * nor the denominator.
+ *
+ *   strykerScore     (Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage)
+ *                    Stryker's native score. Counts a timeout as detected.
+ *
+ *   conclusiveScore  Killed / (Killed + Survived + NoCoverage)
+ *                    Of the mutants that reached a conclusive verdict, the share
+ *                    the tests killed. Excludes `Timeout`, `RuntimeError` and
+ *                    `CompileError`, so it is a conditional rate, NOT a
+ *                    conservative one. Read it as "when we got an answer, how
+ *                    often was it the right one".
+ *
+ *   populationScore  Killed / (total - Ignored)
+ *                    Of every instrumented, evaluated mutant, the share the tests
+ *                    killed. Timeouts and errors stay in the denominator and
+ *                    never reach the numerator, so an unresolved mutant can never
+ *                    be mistaken for a verified kill. This is the conservative
+ *                    number and the one to read first.
+ *
+ * `Ignored` mutants are excluded from the population denominator because Stryker
+ * never evaluated them; counting them would penalise a run for mutants it was
+ * told not to measure. Every raw count is preserved, so any score can be
+ * recomputed from the payload.
+ */
 export function summarise(mutants) {
   const counts = Object.fromEntries(COUNTED_STATUSES.map((status) => [status, 0]));
   for (const mutant of mutants) {
@@ -111,18 +139,24 @@ export function summarise(mutants) {
   // Stryker's own definition: timeouts count as detected.
   const strykerDetected = counts.Killed + counts.Timeout;
   const strykerDenominator = strykerDetected + counts.Survived + counts.NoCoverage;
-  // Honest definition: a timeout is not evidence the tests caught anything, and
-  // an uncovered mutant is definitely not caught. Both belong in the denominator
-  // and neither in the numerator. (With the old command runner `NoCoverage` was
-  // always 0 because coverage was unmeasured; the TAP runner measures it, so
-  // excluding it here would flatter the score.)
-  const honestDetected = counts.Killed;
-  const honestDenominator = counts.Killed + counts.Survived + counts.NoCoverage;
+  // Conclusive outcomes only. A timeout is not evidence the tests caught
+  // anything, and an uncovered mutant is definitely not caught, so `NoCoverage`
+  // stays in this denominator. (With the old command runner `NoCoverage` was
+  // always 0 because coverage was unmeasured; the TAP runner measures it.)
+  const conclusiveDenominator = counts.Killed + counts.Survived + counts.NoCoverage;
+  // Whole evaluated population. Everything Stryker instrumented and evaluated is
+  // in the denominator; only a kill reaches the numerator.
+  const ignored = counts.Ignored ?? 0;
+  const populationDenominator = mutants.length - ignored;
   return {
     total: mutants.length,
     ...counts,
+    ignored,
+    evaluated: populationDenominator,
+    unresolved: counts.Timeout + counts.RuntimeError + counts.CompileError,
     strykerScore: strykerDenominator === 0 ? null : (100 * strykerDetected) / strykerDenominator,
-    honestScore: honestDenominator === 0 ? null : (100 * honestDetected) / honestDenominator,
+    conclusiveScore: conclusiveDenominator === 0 ? null : (100 * counts.Killed) / conclusiveDenominator,
+    populationScore: populationDenominator <= 0 ? null : (100 * counts.Killed) / populationDenominator,
   };
 }
 
@@ -246,7 +280,11 @@ export function readReports(directory) {
       let report;
       try {
         report = JSON.parse(readFileSync(path, "utf8"));
-      } catch {
+      } catch (error) {
+        // Silently dropping an unreadable report turns a corrupt artifact into a
+        // "missing module" with no cause. Say so, then let the missing-report
+        // check fail the run.
+        console.error(`warning: ignoring unreadable report ${path}: ${error.message}`);
         return [];
       }
       // A file that is not a Stryker report (for example a merged summary) is
@@ -259,11 +297,6 @@ export function readReports(directory) {
 
 function formatPercent(value) {
   return value === null ? "n/a" : `${value.toFixed(2)}%`;
-}
-
-function formatDelta(value) {
-  if (value === null) return "n/a";
-  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}`;
 }
 
 /** Survivor rows, one JSON object per line, for later agent consumption. */
@@ -339,8 +372,8 @@ function topSurvivorLines(report, limit) {
 
 function renderModuleTable(reports) {
   const lines = [
-    "| Module | Mutants | Killed | Survived | NoCoverage | Timeout | Errors | Honest score | Stryker score |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| Module | Mutants | Killed | Survived | NoCoverage | Timeout | Errors | Population | Conclusive | Stryker |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
   ];
   for (const report of reports) {
     const s = report.summary;
@@ -348,14 +381,14 @@ function renderModuleTable(reports) {
     const timeoutMark = s.Timeout > 0 ? `**${s.Timeout}**` : "0";
     const uncoveredMark = s.NoCoverage > 0 ? `**${s.NoCoverage}**` : "0";
     lines.push(
-      `| \`${report.module}\` | ${s.total} | ${s.Killed} | ${s.Survived} | ${uncoveredMark} | ${timeoutMark} | ${errors} | ${formatPercent(s.honestScore)} | ${formatPercent(s.strykerScore)} |`,
+      `| \`${report.module}\` | ${s.total} | ${s.Killed} | ${s.Survived} | ${uncoveredMark} | ${timeoutMark} | ${errors} | ${formatPercent(s.populationScore)} | ${formatPercent(s.conclusiveScore)} | ${formatPercent(s.strykerScore)} |`,
     );
   }
   const aggregate = summarise(reports.flatMap((report) => report.mutants));
   const shardConflicts = reports.reduce((total, report) => total + (report.conflicts?.length ?? 0), 0);
   aggregate.shardConflicts = shardConflicts;
   lines.push(
-    `| **Total** | **${aggregate.total}** | **${aggregate.Killed}** | **${aggregate.Survived}** | **${aggregate.NoCoverage}** | **${aggregate.Timeout}** | **${aggregate.RuntimeError + aggregate.CompileError}** | **${formatPercent(aggregate.honestScore)}** | **${formatPercent(aggregate.strykerScore)}** |`,
+    `| **Total** | **${aggregate.total}** | **${aggregate.Killed}** | **${aggregate.Survived}** | **${aggregate.NoCoverage}** | **${aggregate.Timeout}** | **${aggregate.RuntimeError + aggregate.CompileError}** | **${formatPercent(aggregate.populationScore)}** | **${formatPercent(aggregate.conclusiveScore)}** | **${formatPercent(aggregate.strykerScore)}** |`,
   );
   return { lines, aggregate };
 }
@@ -369,7 +402,7 @@ function healthFlags(reports, aggregate, expectedTargets, toleranceOverride, sha
     );
   } else if (aggregate.Timeout > 0) {
     flags.push(
-      `${aggregate.Timeout} mutant(s) timed out (tolerance ${tolerance}). A timeout counts as detected in the Stryker score, so the honest score is the one to read. A few are expected: a mutant that inverts a loop bound or decrements a counter instead of incrementing it genuinely does not terminate.`,
+      `${aggregate.Timeout} mutant(s) timed out (tolerance ${tolerance}). A timeout counts as detected in the Stryker score and is unresolved in the population score, so population is the one to read. A few are expected: a mutant that inverts a loop bound or decrements a counter instead of incrementing it genuinely does not terminate.`,
     );
   }
   const errors = aggregate.RuntimeError + aggregate.CompileError;
@@ -383,8 +416,16 @@ function healthFlags(reports, aggregate, expectedTargets, toleranceOverride, sha
     // line at all. That is a coverage gap (or dead code), not a weak assertion,
     // so it belongs on a different backlog from the survivors.
     flags.push(
-      `${aggregate.NoCoverage} mutant(s) have no coverage: no bound test reaches those lines. That is a coverage or dead-code gap rather than a weak assertion. They count against the honest score.`,
+      `${aggregate.NoCoverage} mutant(s) have no coverage: no bound test reaches those lines. That is a coverage or dead-code gap rather than a weak assertion. They count against both scores.`,
     );
+  }
+  // The aggregate tolerances are sized for the whole run, so one badly broken
+  // module can hide inside a large healthy population. Judge each module against
+  // its own population as well, and name it.
+  for (const report of reports) {
+    for (const reason of moduleUnusableReasons({ module: report.module, ...report.summary })) {
+      flags.push(`**${reason}.**`);
+    }
   }
   const missing = expectedTargets.filter((target) => !reports.some((report) => report.module === target));
   if (missing.length > 0) {
@@ -402,6 +443,13 @@ function healthFlags(reports, aggregate, expectedTargets, toleranceOverride, sha
   if (shortShards.length > 0) {
     flags.push(
       `**Missing shards** for: ${shortShards.join(", ")}. The score would cover only part of the planned mutants.`,
+    );
+  }
+  const extraShards = unexpectedShardsFor(reports, expectedTargets, shardsPerTarget);
+  if (extraShards.length > 0) {
+    const detail = extraShards.map((entry) => `\`${entry.module}\` shard ${entry.shard} (plan has ${entry.planned})`).join(", ");
+    flags.push(
+      `**Unexpected shards** for: ${detail}. A shard the plan did not ask for is stale or misrouted, so the merged population is not the planned one.`,
     );
   }
   const unexpected = reports.map((report) => report.module).filter((module) => !expectedTargets.includes(module));
@@ -425,24 +473,10 @@ function healthFlags(reports, aggregate, expectedTargets, toleranceOverride, sha
   return flags;
 }
 
-function renderTrend(current, previous) {
-  if (!previous) return [];
-  const lines = ["| Module | Honest score | Previous | Delta |", "| --- | --- | --- | --- |"];
-  for (const entry of current) {
-    const prior = previous.modules?.find((item) => item.module === entry.module);
-    if (!prior || prior.honestScore === null || entry.honestScore === null) continue;
-    const delta = entry.honestScore - prior.honestScore;
-    lines.push(`| \`${entry.module}\` | ${formatPercent(entry.honestScore)} | ${formatPercent(prior.honestScore)} | ${formatDelta(delta)} |`);
-  }
-  lines.push("", "Scores move by a few points between identical revisions: at least one mutant was measured at 12 kills and 4 survivals across 16 identical trials. Read the delta as a band, not a regression proof.");
-  return lines;
-}
-
 export function renderSummary({
   reports,
   expectedTargets = targetNames(),
   shardsPerTarget = null,
-  previous = null,
   metadata = {},
   tolerance = null,
 }) {
@@ -458,7 +492,7 @@ export function renderSummary({
   lines.push(...tableLines, "");
 
   lines.push(
-    "**Honest score = killed / (killed + survived + no-coverage).** Stryker's score also counts `Timeout` as detected, which is why both columns are shown. Neither number is enforced as a merge gate; this is a scheduled measurement, not a release gate.",
+    "**Population = killed / every evaluated mutant**, so a timeout or an errored mutant lowers it and can never look like a kill. **Conclusive = killed / (killed + survived + no-coverage)**, the rate among mutants that got a verdict: it excludes timeouts and errors, so it is conditional, not conservative. **Stryker** is Stryker's own score, which counts a `Timeout` as detected. Read population first. None of the three is enforced as a merge gate; this is a scheduled measurement, not a release gate.",
     "",
   );
 
@@ -468,12 +502,6 @@ export function renderSummary({
     for (const flag of flags) lines.push(`- ${flag}`);
     lines.push("");
   }
-
-  const trend = renderTrend(
-    reports.map((report) => ({ module: report.module, honestScore: report.summary.honestScore })),
-    previous,
-  );
-  if (trend.length > 0) lines.push("### Trend", "", ...trend, "");
 
   lines.push("### Where the survivors are", "");
   for (const report of reports) {
@@ -523,6 +551,28 @@ export function renderSummary({
   return lines.join("\n");
 }
 
+/**
+ * Shards that reported but were not part of the plan.
+ *
+ * A previous run with more shards leaves artifacts behind, and the summariser
+ * merges every report it finds. Missing-shard detection cannot see this: the plan
+ * asked for 2, the directory holds 0, 1 and a stale 2, and nothing looks absent.
+ * The stale shard's mutants are then merged into a population the plan never
+ * described. Treating it as a misrouted or stale artifact is the only safe read.
+ */
+function unexpectedShardsFor(reports, expectedTargets, shardsPerTarget) {
+  if (!shardsPerTarget) return [];
+  const extra = [];
+  for (const [module, count] of [...shardsPerTarget.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    if (!expectedTargets.includes(module)) continue;
+    const report = reports.find((entry) => entry.module === module);
+    for (const shard of report?.shardsSeen ?? []) {
+      if (shard >= count) extra.push({ module, shard, planned: count });
+    }
+  }
+  return extra;
+}
+
 function missingShardsFor(reports, expectedTargets, shardsPerTarget) {
   if (!shardsPerTarget) return [];
   const missing = [];
@@ -564,6 +614,7 @@ function main() {
     expectedTargets,
     missingTargets: expectedTargets.filter((target) => !reports.some((report) => report.module === target)),
     missingShards: missingShardsFor(reports, expectedTargets, options.shardsPerTarget),
+    unexpectedShards: unexpectedShardsFor(reports, expectedTargets, options.shardsPerTarget),
     timeoutTolerance: options.timeoutTolerance ?? timeoutTolerance(aggregate.total),
   };
   // unusableReasons (config.mjs) gates on the top-level timeoutToleranceOverride;

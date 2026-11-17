@@ -90,6 +90,20 @@ export const TIME_BUDGET = {
 };
 
 /**
+ * Runner-side concurrency limits for the matrix.
+ *
+ * `maxParallel` is how many matrix legs GitHub will run at once. It must match
+ * `strategy.max-parallel` in `.github/workflows/mutation.yml` — a test asserts
+ * the two agree — because the planner models waves with it. Without it the
+ * projection assumed every leg started simultaneously, which is only true while
+ * the leg count is at or below this number. Sharding six modules four ways is 24
+ * legs: three waves, not one.
+ */
+export const MATRIX = {
+  maxParallel: 8,
+};
+
+/**
  * The per-leg hard allowance: the cap minus the fixed overhead. A leg that
  * exceeds this would put the pipeline over budget.
  */
@@ -323,6 +337,55 @@ export function timeoutTolerance(totalMutants) {
 }
 
 /**
+ * Per-module adjudication.
+ *
+ * The aggregate tolerances below are calibrated against the whole run, which is
+ * the right granularity for "is this measurement trustworthy overall" and the
+ * wrong granularity for "is any one module broken". A module with 80 errored
+ * mutants out of 229 is 35% unusable, but inside a 4,200-mutant run it sits
+ * under the aggregate error allowance of 85 and the gate accepts the run. The
+ * merged score then looks confident while one module measured almost nothing.
+ *
+ * So each module is judged against the same calibrated rule applied to its own
+ * population, and the aggregate is judged as before. Both checks run: a module
+ * can be locally healthy and the run still unhealthy, and a module can be
+ * locally broken while the run's aggregate stays inside its allowance.
+ *
+ * `total` is the module's instrumented mutant count. `Ignored` mutants are not
+ * evidence either way, so they do not make a module unhealthy.
+ */
+export function moduleUnusableReasons(module, toleranceOverride = null) {
+  const reasons = [];
+  const name = module?.module ?? "(unnamed module)";
+  const total = Number(module?.total ?? 0);
+  if (total === 0) {
+    // A report exists but carries no mutants: instrumentation ran and produced
+    // nothing, which is a failed measurement, not a perfect score.
+    reasons.push(`${name}: reported zero mutants, so nothing in it was measured`);
+    return reasons;
+  }
+  const timeouts = Number(module?.Timeout ?? 0);
+  // A dispatch override is an absolute count of tolerated timeouts, so it bounds
+  // each module as well as the aggregate. Calibrating per module against the
+  // default here would make the override useless for the module that needed it:
+  // the aggregate would pass and the module check would still fail.
+  const timeoutsAllowed = toleranceOverride ?? timeoutTolerance(total);
+  if (timeouts > timeoutsAllowed) {
+    reasons.push(
+      `${name}: ${timeouts} of ${total} mutants timed out, above this module's tolerance of ${timeoutsAllowed}; its per-mutant budget is too small for its bound suite, so its Stryker score is inflated by timeouts`,
+    );
+  }
+  const errors = Number(module?.RuntimeError ?? 0) + Number(module?.CompileError ?? 0);
+  const errorsAllowed = runtimeErrorTolerance(total);
+  if (errors > errorsAllowed) {
+    reasons.push(
+      `${name}: ${errors} of ${total} mutants errored and are excluded from its score, above this module's tolerance of ${errorsAllowed}; the module reports a score over a population it never measured`,
+    );
+  }
+  return reasons;
+}
+
+/**
  * How many `RuntimeError` mutants make a run unusable.
  *
  * Stryker **excludes** `RuntimeError` and `CompileError` from the score
@@ -363,6 +426,17 @@ export function unusableReasons(data) {
     const detail = data.missingShards.map(({ module, shard }) => `${module} shard ${shard}`).join(", ");
     reasons.push(`missing module shards: ${detail}; the score would cover only part of the planned mutants`);
   }
+  // A shard the plan did not ask for means a stale or misrouted artifact was
+  // merged: the population then differs from the one that was planned, and
+  // missing-shard detection cannot see it.
+  if (Array.isArray(data?.unexpectedShards) && data.unexpectedShards.length > 0) {
+    const detail = data.unexpectedShards
+      .map(({ module, shard, planned }) => `${module} shard ${shard} (plan has ${planned})`)
+      .join(", ");
+    reasons.push(
+      `unexpected module shards: ${detail}; a shard outside the plan is stale or misrouted, so the merged population is not the planned one`,
+    );
+  }
   const timeouts = data?.aggregate?.Timeout ?? 0;
   // A dispatch may override the calibrated tolerance; blank keeps the default.
   const tolerance = data?.timeoutToleranceOverride ?? timeoutTolerance(data?.aggregate?.total ?? 0);
@@ -386,6 +460,12 @@ export function unusableReasons(data) {
     reasons.push(
       `${errors} mutant(s) errored and are excluded from the score, above the tolerance of ${errorTolerance}; the reported score is computed over a smaller population than the run claims, so it is not usable`,
     );
+  }
+  // Aggregate checks can pass while one module is badly broken; see
+  // moduleUnusableReasons above. Module-level reasons are reported separately so
+  // the failure names the module and its own counts.
+  for (const module of Array.isArray(data?.modules) ? data.modules : []) {
+    reasons.push(...moduleUnusableReasons(module, data?.timeoutToleranceOverride ?? null));
   }
   return reasons;
 }

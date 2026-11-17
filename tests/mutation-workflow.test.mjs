@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isReportFor, staleReportsFor } from "../mutation/run.mjs";
+import { isReportFor, reportsToClear, resolveReportPath, staleReportsFor } from "../mutation/run.mjs";
 import {
   ROOT,
   bindingExclusions,
@@ -32,6 +32,7 @@ import {
 } from "../mutation/targets.mjs";
 import {
   BUN_RUNNER_PLUGIN,
+  MATRIX,
   RUNNER_OVERRIDES,
   RUNTIME_ERROR_TOLERANCE,
   SANDBOX_IGNORES,
@@ -51,6 +52,7 @@ import {
 } from "../mutation/config.mjs";
 import {
   planMatrix,
+  projectWallClock,
   resolveConcurrency,
   resolveShardCount,
   resolveTargets,
@@ -120,7 +122,8 @@ test("every target is a matrix leg, and each leg gets its own timeout budget", (
   assert.match(block, /^ {10}CONCURRENCY: \$\{\{ needs\.plan\.outputs\.concurrency \}\}$/mu);
   assert.match(block, /node mutation\/run\.mjs "\$TARGET"/u);
   assert.match(block, /--mutate "\$MUTATE"/u);
-  assert.match(block, /--report "\$TARGET\.shard\$SHARD\.json"/u);
+  // The full path, not a bare name: it must land where the artifact step reads.
+  assert.match(block, /--report "reports\/mutation\/\$TARGET\.shard\$SHARD\.json"/u);
   assert.match(block, /--concurrency "\$CONCURRENCY"/u);
   // And no `${{
   assert.doesNotMatch(
@@ -154,6 +157,15 @@ test("the plan job builds a shard matrix and validates every dispatch input", ()
   assert.equal(resolveTargets(undefined).length, targetNames().length, "an absent selection means all");
   assert.deepEqual(resolveTargets("cache.ts"), ["cache.ts"]);
   assert.throws(() => resolveTargets("nope.ts"), /unknown mutation target/u);
+});
+
+test("the dispatch target list matches the measured targets", () => {
+  // The input is `type: choice`, so a module missing from this list cannot be
+  // dispatched on its own at all — a new target would be unreachable by hand.
+  const section = workflow.slice(workflow.indexOf("workflow_dispatch:"), workflow.indexOf("permissions:"));
+  const block = section.slice(section.indexOf("target:"), section.indexOf("shards:"));
+  const listed = [...block.matchAll(/^ {10}- (.+)$/gmu)].map((match) => match[1].trim());
+  assert.deepEqual(listed, ["all", ...targetNames()]);
 });
 
 test("dispatch inputs are bounded, so a typo cannot start an unreasonable run", () => {
@@ -225,22 +237,42 @@ test("the measurement fails only when it is unusable, never on a low score", () 
   assert.match(block, /run: node mutation\/workflow.mjs require-usable mutation-out\/summary\.json/u);
 
   // A low score is the measurement, not a failure.
-  assert.deepEqual(unusableReasons({ modules: [{ module: "cache.ts", honestScore: 1 }], aggregate: { total: 10, Timeout: 0 }, missingTargets: [] }), []);
+  assert.deepEqual(
+    unusableReasons({
+      modules: [{ module: "cache.ts", total: 10, Killed: 1, Survived: 9 }],
+      aggregate: { total: 10, Timeout: 0 },
+      missingTargets: [],
+    }),
+    [],
+  );
 
   // A few timeouts are legitimate: the mutant genuinely does not terminate.
   assert.deepEqual(
-    unusableReasons({ modules: [{ module: "routing.ts" }], aggregate: { total: 989, Timeout: 7 }, missingTargets: [] }),
+    unusableReasons({
+      modules: [{ module: "routing.ts", total: 989, Timeout: 7 }],
+      aggregate: { total: 989, Timeout: 7 },
+      missingTargets: [],
+    }),
     [],
     "7 of 989 timeouts (real infinite loops) must not fail the run",
   );
 
   // A budget collapse produces timeouts an order of magnitude above the tolerance.
-  const collapse = unusableReasons({ modules: [{ module: "reliability.ts" }], aggregate: { total: 352, Timeout: 208 }, missingTargets: [] });
-  assert.equal(collapse.length, 1);
-  assert.match(collapse[0], /exceed the tolerance/u);
+  // Both the aggregate and the module are over, so both say so.
+  const collapse = unusableReasons({
+    modules: [{ module: "reliability.ts", total: 352, Timeout: 208 }],
+    aggregate: { total: 352, Timeout: 208 },
+    missingTargets: [],
+  });
+  assert.ok(collapse.some((reason) => /exceed the tolerance/u.test(reason)), "the aggregate reason survives");
+  assert.ok(collapse.some((reason) => /reliability\.ts: 208 of 352/u.test(reason)), "a module reason names it");
 
   // A missing matrix leg is not a pass.
-  const missing = unusableReasons({ modules: [{ module: "cache.ts" }], aggregate: { total: 10, Timeout: 0 }, missingTargets: ["routing.ts"] });
+  const missing = unusableReasons({
+    modules: [{ module: "cache.ts", total: 10, Killed: 10 }],
+    aggregate: { total: 10, Timeout: 0 },
+    missingTargets: ["routing.ts"],
+  });
   assert.match(missing[0], /missing module reports: routing\.ts/u);
   const empty = unusableReasons({ modules: [], aggregate: { total: 0, Timeout: 0 }, missingTargets: [] });
   assert.match(empty[0], /no module reports/u);
@@ -290,7 +322,7 @@ test("the bound command names the target's derived test files", () => {
   }
 });
 
-test("no-coverage mutants count against the honest score", () => {
+test("no-coverage mutants count against both scores", () => {
   // With the TAP runner coverage is measured, so NoCoverage is real: no bound
   // test reaches that line. Excluding it from the denominator (as the old
   // command-runner definition effectively did, since NoCoverage was always 0)
@@ -302,11 +334,13 @@ test("no-coverage mutants count against the honest score", () => {
   ]);
   // 2 killed of (2 killed + 2 survived + 2 uncovered) = 33.3%. Excluding the
   // uncovered mutants would have reported 50%.
-  assert.equal(Number(summary.honestScore.toFixed(2)), 33.33);
+  assert.equal(Number(summary.conclusiveScore.toFixed(2)), 33.33);
+  assert.equal(Number(summary.populationScore.toFixed(2)), 33.33);
   assert.equal(summary.NoCoverage, 2);
 
   const allUncovered = summarise([{ status: "NoCoverage" }]);
-  assert.equal(allUncovered.honestScore, 0, "a mutant nothing reaches is not a pass");
+  assert.equal(allUncovered.conclusiveScore, 0, "a mutant nothing reaches is not a pass");
+  assert.equal(allUncovered.populationScore, 0);
   assert.equal(allUncovered.strykerScore, 0);
 });
 
@@ -461,7 +495,7 @@ test("a test that asserts on the target's own source text is excluded, not bound
   assert.ok(bindingFor("cache.ts").includes("tests/cache.test.ts"), "a plain importing test must stay bound");
 });
 
-test("survivor counts, honest score and Stryker score are derived, not assumed", () => {
+test("survivor counts and all three scores are derived from explicit denominators", () => {
   const mutants = [
     { status: "Killed" }, { status: "Killed" },
     { status: "Survived" }, { status: "Survived" },
@@ -473,10 +507,14 @@ test("survivor counts, honest score and Stryker score are derived, not assumed",
   assert.equal(summary.Timeout, 1);
   // Stryker counts the timeout as detected: (2+1)/(2+1+2).
   assert.equal(Number(summary.strykerScore.toFixed(2)), 60);
-  // Honest score excludes it: 2/(2+2).
-  assert.equal(summary.honestScore, 50);
-  // The two scores differ, which is the whole reason both are reported.
-  assert.notEqual(summary.honestScore, summary.strykerScore);
+  // Conclusive excludes the timeout from both sides: 2/(2+2).
+  assert.equal(summary.conclusiveScore, 50);
+  // Population keeps the timeout as an unresolved non-kill: 2/(2+2+1).
+  assert.equal(Number(summary.populationScore.toFixed(2)), 40);
+  // Three different numbers from one run is the point: each answers a different
+  // question and only one of them is conservative.
+  assert.equal(new Set([summary.strykerScore, summary.conclusiveScore, summary.populationScore]).size, 3);
+  assert.equal(summary.unresolved, 1);
 });
 
 test("a report directory becomes a per-module summary with a survivor extract", () => {
@@ -511,9 +549,11 @@ test("a report directory becomes a per-module summary with a survivor extract", 
     ].sort());
 
     const markdown = renderSummary({ reports, expectedTargets: ["cache.ts"] });
-    // Module | Mutants | Killed | Survived | NoCoverage | Timeout | Errors | ...
+    // Module | Mutants | Killed | Survived | NoCoverage | Timeout | Errors | Population | Conclusive | Stryker
     assert.match(markdown, /\| `cache\.ts` \| 2 \| 1 \| 1 \| 0 \| 0 \| 0 \|/u);
-    assert.match(markdown, /Honest score/u);
+    // The headline columns are the two explicit denominators plus Stryker's.
+    assert.match(markdown, /\| Population \| Conclusive \| Stryker \|/u);
+    assert.doesNotMatch(markdown, /Honest score/u, "the ambiguous label is gone");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -528,12 +568,15 @@ test("a missing module report is flagged rather than rendering as a pass", () =>
 
 test("summary lines name the score and the timeout count", () => {
   const lines = summaryLines({
-    modules: [{ module: "cache.ts", honestScore: 75.5, Killed: 3, Survived: 1, Timeout: 0 }],
-    aggregate: { total: 4, honestScore: 75.5, Timeout: 0 },
+    modules: [
+      { module: "cache.ts", total: 4, Killed: 3, Survived: 1, Timeout: 0, RuntimeError: 0, CompileError: 0, populationScore: 75, conclusiveScore: 75 },
+    ],
+    aggregate: { total: 4, populationScore: 75, conclusiveScore: 75, strykerScore: 75, Timeout: 0 },
     missingTargets: [],
   });
-  assert.match(lines.join("\n"), /honest=75\.50/u);
-  assert.match(lines.join("\n"), /`cache\.ts`: 75\.50% honest/u);
+  assert.match(lines.join("\n"), /population=75\.00/u);
+  assert.match(lines.join("\n"), /conclusive=75\.00/u);
+  assert.match(lines.join("\n"), /`cache\.ts`: 75\.00 population \/ 75\.00 conclusive/u);
 });
 
 test("verification keeps no mutation job, so the two cannot drift apart", () => {
@@ -626,6 +669,20 @@ test("an overlapping shard merge reproduces the unsharded mutant set", () => {
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("mutants that differ only by source span are never deduplicated", () => {
+  // Three ConditionalExpression -> "true" mutants share a start position and
+  // differ only by where they end. An identity key that used the start position
+  // alone would collapse them to one, silently shrinking the population.
+  const base = { mutatorName: "ConditionalExpression", replacement: "true", status: "Survived" };
+  const span = (endColumn) => ({ ...base, location: { start: { line: 217, column: 10 }, end: { line: 217, column: endColumn } } });
+  const merged = mergeShardReports([
+    { module: "reliability-v2.ts", shard: 0, mutants: [span(35), span(58)] },
+    { module: "reliability-v2.ts", shard: 1, mutants: [span(58), { ...base, location: { start: { line: 217, column: 39 }, end: { line: 217, column: 58 } } }] },
+  ]);
+  assert.equal(merged[0].mutants.length, 3, "distinct spans stay distinct, and the overlap is merged once");
+  assert.equal(merged[0].conflicts.length, 0);
 });
 
 test("a shard disagreement is surfaced, not silently resolved", () => {
@@ -724,23 +781,23 @@ test("a run dominated by errors is unusable, because Stryker hides them from the
   // integration failure yields a confident score over a smaller population.
   // Measured at 320 of 388 mutants before the chdir fix.
   const healthy = unusableReasons({
-    modules: [{ module: "cache.ts" }],
+    modules: [{ module: "cache.ts", total: 1000, Killed: 1000 }],
     aggregate: { total: 1000, Timeout: 0, RuntimeError: 0, CompileError: 0, shardConflicts: 0 },
     missingTargets: [],
   });
   assert.deepEqual(healthy, [], "a clean run is usable");
 
   const broken = unusableReasons({
-    modules: [{ module: "cache.ts" }],
+    modules: [{ module: "cache.ts", total: 388, RuntimeError: 320 }],
     aggregate: { total: 388, Timeout: 0, RuntimeError: 320, CompileError: 0, shardConflicts: 0 },
     missingTargets: [],
   });
-  assert.equal(broken.length, 1);
-  assert.match(broken[0], /errored and are excluded from the score/u);
-  assert.match(broken[0], /smaller population/u);
+  assert.ok(broken.some((reason) => /errored and are excluded from the score/u.test(reason)));
+  assert.ok(broken.some((reason) => /smaller population/u.test(reason)));
+  assert.ok(broken.some((reason) => /cache\.ts: 320 of 388/u.test(reason)), "the module is named");
 
   const tolerable = unusableReasons({
-    modules: [{ module: "cache.ts" }],
+    modules: [{ module: "cache.ts", total: 2447, RuntimeError: 3, CompileError: 1 }],
     aggregate: { total: 2447, Timeout: 0, RuntimeError: 3, CompileError: 1, shardConflicts: 0 },
     missingTargets: [],
   });
@@ -806,7 +863,7 @@ test("a module that is missing a planned shard is not treated as complete", () =
   assert.doesNotMatch(complete, /Missing shards/u);
 
   const reasons = unusableReasons({
-    modules: [{ module: "cache.ts" }],
+    modules: [{ module: "cache.ts", total: 1, Killed: 1 }],
     aggregate: { total: 1, Timeout: 0, RuntimeError: 0, CompileError: 0, shardConflicts: 0 },
     missingTargets: [],
     missingShards: [{ module: "cache.ts", shard: 1 }],
@@ -815,11 +872,38 @@ test("a module that is missing a planned shard is not treated as complete", () =
   assert.match(reasons.join(" "), /only part of the planned mutants/u);
 });
 
+test("a shard outside the plan is rejected instead of merged", () => {
+  // A previous run with three shards leaves a stale shard 2. Missing-shard
+  // detection sees nothing absent, so without this the stale population is
+  // merged into a plan that only described two shards.
+  const reports = [
+    { module: "cache.ts", shardsSeen: [0, 1, 2], mutants: [{ status: "Killed" }], summary: summarise([{ status: "Killed" }]) },
+  ];
+  const markdown = renderSummary({ reports, expectedTargets: ["cache.ts"], shardsPerTarget: new Map([["cache.ts", 2]]) });
+  assert.match(markdown, /Unexpected shards/u);
+  assert.match(markdown, /shard 2 \(plan has 2\)/u);
+  assert.doesNotMatch(markdown, /Missing shards/u, "nothing is missing; something is extra");
+
+  const reasons = unusableReasons({
+    modules: [{ module: "cache.ts", total: 1, Killed: 1 }],
+    aggregate: { total: 1, Timeout: 0, RuntimeError: 0, CompileError: 0, shardConflicts: 0 },
+    missingTargets: [],
+    missingShards: [],
+    unexpectedShards: [{ module: "cache.ts", shard: 2, planned: 2 }],
+  });
+  assert.match(reasons.join(" "), /unexpected module shards: cache\.ts shard 2 \(plan has 2\)/u);
+  assert.match(reasons.join(" "), /stale or misrouted/u);
+
+  // The exact planned set stays usable.
+  const exact = renderSummary({ reports, expectedTargets: ["cache.ts"], shardsPerTarget: new Map([["cache.ts", 3]]) });
+  assert.doesNotMatch(exact, /Unexpected shards/u);
+});
+
 test("a saved tolerance override is honoured when a summary is rechecked", () => {
   // The override must be stored where the gate reads it, or re-checking a saved
   // summary silently falls back to the default tolerance.
   const withOverride = unusableReasons({
-    modules: [{ module: "cache.ts" }],
+    modules: [{ module: "cache.ts", total: 100, Timeout: 20 }],
     aggregate: { total: 100, Timeout: 20, RuntimeError: 0, CompileError: 0, shardConflicts: 0 },
     missingTargets: [],
     timeoutToleranceOverride: 25,
@@ -827,7 +911,7 @@ test("a saved tolerance override is honoured when a summary is rechecked", () =>
   assert.deepEqual(withOverride, [], "20 timeouts inside an override of 25 is usable");
 
   const withoutOverride = unusableReasons({
-    modules: [{ module: "cache.ts" }],
+    modules: [{ module: "cache.ts", total: 100, Timeout: 20 }],
     aggregate: { total: 100, Timeout: 20, RuntimeError: 0, CompileError: 0, shardConflicts: 0 },
     missingTargets: [],
   });
@@ -932,29 +1016,278 @@ test("clearing keeps sibling shards but drops this run's own stale output", () =
   // Two local invocations run one shard each. Deleting the whole target would
   // lose the first shard; deleting nothing would let a failed rerun's previous
   // file be read as a completed shard.
+  const run = { target: "cache.ts", reportPath: join(ROOT, "reports", "mutation", "cache.ts.shard1.json") };
   assert.deepEqual(staleReportsFor({}), { scope: "target" }, "a normal run owns the whole set");
   assert.deepEqual(staleReportsFor({ report: null }), { scope: "target" });
-  assert.deepEqual(
-    staleReportsFor({ report: "cache.ts.shard1.json" }),
-    { scope: "own", name: "cache.ts.shard1.json" },
-    "only this run's own file goes",
-  );
-  // A path, not a bare name, must still scope to the basename the runner writes.
-  assert.deepEqual(staleReportsFor({ report: "reports/mutation/cache.ts.shard1.json" }), {
+
+  // An explicit path owns that exact file and nothing else. Reducing it to a
+  // basename deleted a same-named file in reports/mutation/, which is a
+  // different file and may be another shard's output.
+  const explicit = { report: "reports/mutation/cache.ts.shard1.json" };
+  assert.deepEqual(staleReportsFor(explicit, run), {
     scope: "own",
-    name: "cache.ts.shard1.json",
+    path: join(ROOT, "reports", "mutation", "cache.ts.shard1.json"),
   });
+
+  // The decisive case from the review: an archive path must not touch the
+  // top-level report of the same name.
+  const archived = { report: "archive/cache.ts.shard0.json" };
+  const tmp = mkdtempSync(join(tmpdir(), "mutation-own-"));
+  try {
+    const resolved = resolveReportPath(archived.report);
+    assert.ok(resolved.startsWith(ROOT), "--report resolves inside the checkout");
+    assert.deepEqual(staleReportsFor(archived, { target: "cache.ts", reportPath: resolved }), {
+      scope: "own",
+      path: resolved,
+    });
+    assert.ok(
+      !resolved.endsWith(join("reports", "mutation", "cache.ts.shard0.json")),
+      "an archive path must never resolve to the top-level report it would have deleted",
+    );
+
+    // The planner is what the runner actually deletes from. Only the owned file
+    // appears, and a sibling shard is never a candidate.
+    const entries = ["cache.ts.shard0.json", "cache.ts.shard1.json", "notes.txt", "routing.ts.json"];
+    assert.deepEqual(
+      reportsToClear(archived, { target: "cache.ts", reportPath: resolved }, tmp, entries),
+      [resolved],
+    );
+    assert.deepEqual(
+      reportsToClear({}, run, tmp, entries).sort(),
+      [join(tmp, "cache.ts.shard0.json"), join(tmp, "cache.ts.shard1.json")].sort(),
+      "a normal run owns both of that target's shards and nothing else",
+    );
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+
+  // A path outside the checkout is refused rather than allowed to delete.
+  assert.throws(() => resolveReportPath("../../etc/somewhere.json"), /must stay inside the repository/u);
 });
 
 test("the summary line prints the tolerance the gate used", () => {
   // A saved override of 25 accepted 20 timeouts. Printing the default of 10 would
   // make an accepted run look like it failed its own threshold.
   const line = summaryLines({
-    modules: [{ module: "cache.ts", honestScore: 80, Killed: 80, Survived: 20, Timeout: 20 }],
-    aggregate: { total: 100, Timeout: 20, honestScore: 80 },
+    modules: [
+      { module: "cache.ts", total: 100, Killed: 80, Survived: 20, Timeout: 20, RuntimeError: 0, CompileError: 0, populationScore: 80, conclusiveScore: 80 },
+    ],
+    aggregate: { total: 100, Timeout: 20, populationScore: 80, conclusiveScore: 80, strykerScore: 100 },
     timeoutToleranceOverride: 25,
     missingTargets: [],
   })[0];
   assert.match(line, /tolerance=25/u);
   assert.doesNotMatch(line, /tolerance=10/u);
+});
+
+// --- The aggregate tolerances must not hide a single broken module ---
+
+const BASELINE_MODULES = [
+  { module: "cache.ts", total: 229, Killed: 172, Survived: 48, NoCoverage: 9, Timeout: 0, RuntimeError: 0, CompileError: 0 },
+  { module: "classifier-semantics.ts", total: 157, Killed: 85, Survived: 26, NoCoverage: 46, Timeout: 0, RuntimeError: 0, CompileError: 0 },
+  { module: "inline-override.ts", total: 21, Killed: 19, Survived: 2, NoCoverage: 0, Timeout: 0, RuntimeError: 0, CompileError: 0 },
+  { module: "reliability.ts", total: 352, Killed: 251, Survived: 93, NoCoverage: 8, Timeout: 0, RuntimeError: 0, CompileError: 0 },
+  { module: "reliability-v2.ts", total: 2447, Killed: 1432, Survived: 707, NoCoverage: 307, Timeout: 1, RuntimeError: 0, CompileError: 0 },
+  { module: "routing.ts", total: 1000, Killed: 681, Survived: 214, NoCoverage: 98, Timeout: 7, RuntimeError: 0, CompileError: 0 },
+];
+
+test("a healthy measurement passes every module check", () => {
+  // The real baseline, so the module check cannot be tuned to a synthetic case.
+  const aggregate = { total: 4206, Timeout: 8, RuntimeError: 0, CompileError: 0, shardConflicts: 0 };
+  assert.deepEqual(unusableReasons({ modules: BASELINE_MODULES, aggregate, missingTargets: [] }), []);
+});
+
+test("a module-local error burst the aggregate tolerance would hide still fails the gate", () => {
+  // 80 errors in a 229-mutant module is 35% of that module. Inside a 4,206-mutant
+  // run it sits under the aggregate allowance of 85, so the aggregate check alone
+  // accepted it and the merged score looked confident while one module had
+  // measured almost nothing.
+  const total = 4206;
+  assert.ok(80 <= runtimeErrorTolerance(total), "the aggregate tolerance really does accept 80");
+
+  const broken = { ...BASELINE_MODULES[0], Killed: 149, Survived: 0, NoCoverage: 0, RuntimeError: 80 };
+  const payload = {
+    modules: [broken, ...BASELINE_MODULES.slice(1)],
+    aggregate: { total, Killed: total - 80, Timeout: 8, RuntimeError: 80, CompileError: 0, shardConflicts: 0 },
+    missingTargets: [],
+  };
+  const reasons = unusableReasons(payload);
+  assert.equal(reasons.length, 1, "only the module is unhealthy; the aggregate is inside its allowance");
+  assert.match(reasons[0], /cache\.ts: 80 of 229/u, "the reason names the module and both counts");
+  assert.match(reasons[0], /excluded from its score/u);
+});
+
+test("a module-local timeout burst is caught inside a large healthy run", () => {
+  const total = 4206;
+  assert.ok(60 <= timeoutTolerance(total), "the aggregate tolerance really does accept 60");
+
+  const collapsed = { ...BASELINE_MODULES[3], Killed: 292, Survived: 0, NoCoverage: 0, Timeout: 60 };
+  const modules = BASELINE_MODULES.map((module, index) => (index === 3 ? collapsed : module));
+  const payload = {
+    modules,
+    aggregate: { total, Timeout: 67, RuntimeError: 0, CompileError: 0, shardConflicts: 0 },
+    missingTargets: [],
+  };
+  const reasons = unusableReasons(payload);
+  assert.equal(reasons.length, 1);
+  assert.match(reasons[0], /reliability\.ts: 60 of 352/u);
+  assert.match(reasons[0], /budget is too small/u);
+});
+
+test("a module that reports zero mutants is not a perfect score", () => {
+  // A report can parse and still carry nothing. Scoring it as 0/0 would either be
+  // null or, worse, look like a flawless module.
+  const reasons = unusableReasons({
+    modules: [{ module: "cache.ts", total: 0 }],
+    aggregate: { total: 0, Timeout: 0, RuntimeError: 0, CompileError: 0, shardConflicts: 0 },
+    missingTargets: [],
+  });
+  assert.match(reasons.join(" "), /cache\.ts: reported zero mutants/u);
+});
+
+test("a dispatch timeout override bounds each module as well as the aggregate", () => {
+  // Otherwise the override cannot rescue the run that needed it: the aggregate
+  // passes against 25 while the module check still fails against the default 10.
+  const payload = {
+    modules: [{ module: "cache.ts", total: 100, Killed: 80, Survived: 0, Timeout: 20 }],
+    aggregate: { total: 100, Timeout: 20, RuntimeError: 0, CompileError: 0, shardConflicts: 0 },
+    missingTargets: [],
+  };
+  assert.ok(unusableReasons(payload).length > 0, "the default tolerance rejects 20 timeouts in 100 mutants");
+  assert.deepEqual(unusableReasons({ ...payload, timeoutToleranceOverride: 25 }), []);
+});
+
+// --- The score contract: unresolved outcomes are never verified kills ---
+
+test("one kill and nine timeouts never reads as a verified kill", () => {
+  const summary = summarise([
+    { status: "Killed" },
+    ...Array.from({ length: 9 }, () => ({ status: "Timeout" })),
+  ]);
+  assert.equal(summary.total, 10);
+  assert.equal(summary.Killed, 1);
+  assert.equal(summary.unresolved, 9);
+  assert.equal(summary.strykerScore, 100, "Stryker counts a timeout as detected");
+  assert.equal(summary.conclusiveScore, 100, "the conditional rate is real but conditional");
+  // The conservative rate over the whole population is the only one of the three
+  // that cannot be read as "the tests caught it".
+  assert.equal(Number(summary.populationScore.toFixed(2)), 10);
+});
+
+test("ignored mutants leave the population denominator instead of counting as kills", () => {
+  const summary = summarise([{ status: "Killed" }, { status: "Survived" }, { status: "Ignored" }, { status: "Ignored" }]);
+  assert.equal(summary.total, 4, "the raw count is preserved");
+  assert.equal(summary.ignored, 2);
+  assert.equal(summary.evaluated, 2);
+  assert.equal(summary.populationScore, 50, "Stryker never evaluated the ignored ones");
+  assert.equal(summary.conclusiveScore, 50);
+});
+
+test("an errored mutant lowers the population score rather than disappearing", () => {
+  const summary = summarise([{ status: "Killed" }, { status: "RuntimeError" }, { status: "CompileError" }]);
+  assert.equal(summary.evaluated, 3);
+  assert.equal(Number(summary.populationScore.toFixed(2)), 33.33);
+  // Stryker drops both errors from its denominator, so it reports 100% here.
+  assert.equal(summary.strykerScore, 100);
+});
+
+// --- The time budget is a projection, and it models the matrix it will run ---
+
+test("the projection models matrix waves instead of assuming every leg starts at once", () => {
+  const plan = planMatrix({ requested: "all", shards: "4", concurrency: "4" });
+  assert.equal(plan.include.length, 24, "six modules sharded four ways");
+  assert.ok(plan.include.length > MATRIX.maxParallel, "this plan needs more legs than lanes");
+  assert.equal(plan.waves, 3);
+
+  const slowestLeg = Math.max(...plan.include.map((leg) => estimatedMinutes(leg.target) / leg.shardCount));
+  assert.ok(
+    plan.projectedMinutes > slowestLeg + TIME_BUDGET.reserveMinutes,
+    "queued legs cost more than the slowest single leg, which is exactly what max(leg) got wrong",
+  );
+});
+
+test("the wave model preserves matrix order, because GitHub does not reorder a matrix", () => {
+  assert.equal(projectWallClock([]), 0);
+  // Eight lanes, eight one-minute legs: one wave.
+  assert.equal(projectWallClock([1, 1, 1, 1, 1, 1, 1, 1]), 1);
+  // 24 one-minute legs through 8 lanes: three waves.
+  assert.equal(projectWallClock(Array.from({ length: 24 }, () => 1)), 3);
+  // A long leg listed last starts only after a lane frees, so it costs its own
+  // duration plus that wait. Sorting longest-first would report 10.
+  assert.equal(projectWallClock([1, 1, 1, 1, 1, 1, 1, 1, 10]), 11);
+});
+
+test("the planner's lane count matches the workflow's max-parallel", () => {
+  // A drift here silently makes the projection optimistic again.
+  assert.match(jobs.targets, new RegExp(`max-parallel: ${MATRIX.maxParallel}\\b`, "u"));
+});
+
+test("the workflow names the report path that its collection step reads", () => {
+  // `--report` writes exactly where it is pointed. A bare filename would land in
+  // the repository root while the artifact step globs reports/mutation/*.json, and
+  // every uploaded artifact would be empty — a run that publishes "no modules".
+  assert.match(jobs.targets, /--report "reports\/mutation\/\$TARGET\.shard\$SHARD\.json"/u);
+  assert.match(jobs.targets, /for report in reports\/mutation\/\*\.json; do/u);
+});
+
+test("the gate rejects a module-local failure through the shipped CLI", () => {
+  // Unit tests cover the decision; this covers the seam that actually runs in CI,
+  // where the summary is read back from disk and the module counts come from the
+  // written payload.
+  const directory = mkdtempSync(join(tmpdir(), "mutation-gate-"));
+  const gate = (payload) => {
+    const path = join(directory, "summary.json");
+    writeFileSync(path, JSON.stringify(payload));
+    try {
+      return { status: 0, stderr: "", stdout: execFileSync(process.execPath, ["mutation/workflow.mjs", "require-usable", path], { cwd: ROOT, encoding: "utf8", stdio: "pipe" }) };
+    } catch (error) {
+      return { status: error.status, stderr: String(error.stderr) };
+    }
+  };
+  try {
+    const broken = { ...BASELINE_MODULES[0], Killed: 149, Survived: 0, NoCoverage: 0, RuntimeError: 80 };
+    const rejected = gate({
+      modules: [broken, ...BASELINE_MODULES.slice(1)],
+      aggregate: { total: 4206, Killed: 4126, Timeout: 8, RuntimeError: 80, CompileError: 0, shardConflicts: 0 },
+      missingTargets: [],
+      missingShards: [],
+      unexpectedShards: [],
+    });
+    assert.equal(rejected.status, 1, "the run must fail its own gate");
+    assert.match(rejected.stderr, /cache\.ts: 80 of 229/u);
+
+    const accepted = gate({
+      modules: BASELINE_MODULES,
+      aggregate: { total: 4206, Killed: 2640, Timeout: 8, RuntimeError: 0, CompileError: 0, shardConflicts: 0 },
+      missingTargets: [],
+      missingShards: [],
+      unexpectedShards: [],
+    });
+    assert.equal(accepted.status, 0);
+    assert.match(accepted.stdout, /mutation measurement usable: 6 modules/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an explicit --report is refused when it cannot name exactly one measurement", () => {
+  // The flag used to be silently ignored without --mutate, and ignored entirely
+  // when sharding, so an operator could believe a report was captured at a path
+  // that was never written. These fail before any Stryker work starts.
+  const attempt = (args) => {
+    try {
+      execFileSync(process.execPath, ["mutation/run.mjs", ...args], { cwd: ROOT, encoding: "utf8", stdio: "pipe" });
+      return { status: 0, stderr: "" };
+    } catch (error) {
+      return { status: error.status, stderr: String(error.stderr) };
+    }
+  };
+
+  const manyTargets = attempt(["cache.ts", "routing.ts", "--report", "one.json"]);
+  assert.notEqual(manyTargets.status, 0);
+  assert.match(manyTargets.stderr, /--report applies to exactly one target/u);
+
+  const sharded = attempt(["cache.ts", "--shards", "2", "--report", "one.json"]);
+  assert.notEqual(sharded.status, 0);
+  assert.match(sharded.stderr, /--report cannot be combined with --shards/u);
 });

@@ -14,50 +14,94 @@ different mutant population each time, so the number would not be comparable
 across runs — which is the only thing that makes it useful. One nightly run over
 the whole target set keeps the score comparable over time.
 
-## The one-hour cap
+## The one-hour planning budget
 
-The whole measurement is capped at **60 minutes**, enforced at plan time. GitHub's
-own limits are 6 hours per job and 35 days per run
+The measurement targets a **60-minute** wall clock. That number is a **planning
+objective, not a hard deadline.** GitHub Actions offers no workflow-wide
+wall-clock limit, so nothing can enforce one; a plan can only refuse to start an
+infeasible matrix and bound each job individually. Both of those are done, and
+both are stated below rather than implied.
+
+GitHub's own limits are 6 hours per job and 35 days per run
 ([Actions limits](https://docs.github.com/en/actions/reference/limits)) and
-neither can be raised, so we stay far inside them voluntarily: a measurement that
+neither can be raised. Staying far inside them is voluntary: a measurement that
 takes an hour is one nobody reruns, and one that hits the platform limit fails
 after burning the entire window.
 
-The cap is met by **sharding, never by measuring fewer mutants**. Sharding buys
+The budget is met by **sharding, never by measuring fewer mutants**. Sharding buys
 wall clock with machines; it does not touch the mutant population, the binding, or
-the thresholds. `TIME_BUDGET` in [`mutation/config.mjs`](../mutation/config.mjs)
-holds the knobs, and the plan refuses to start when the arithmetic does not fit:
+the thresholds. `TIME_BUDGET` and `MATRIX` in
+[`mutation/config.mjs`](../mutation/config.mjs) hold the knobs:
 
 ```
-cap 60m | reserve 12m | CI factor 3.0x | hard/leg 48m | target/leg 30m
+cap 60m | reserve 12m | CI factor 3.0x | hard/leg 48m | target/leg 30m | lanes 8
 
 cache.ts                1.0m  shards 1 ->  1.0m/leg
 classifier-semantics.ts 1.0m  shards 1 ->  1.0m/leg
+inline-override.ts      1.0m  shards 1 ->  1.0m/leg
 reliability.ts          1.0m  shards 1 ->  1.0m/leg
 reliability-v2.ts       4.8m  shards 1 ->  4.8m/leg
-routing.ts             22.5m  shards 1 -> 22.5m/leg   (TAP: production engine)
-
-projected wall clock: 34.5m of 60m cap
+routing.ts             22.4m  shards 1 -> 22.4m/leg   (TAP: production engine)
 ```
 
-(Real `node mutation/workflow.mjs plan` output: `projected wall clock: 34.5m of the 60m cap (per-leg bound 48m)`; the module costs above are derived from `estimatedMinutes()` / `legEstimateMinutes()` in `mutation/config.mjs` and `mutation/targets.mjs` with the CI slowdown applied.)
+Real `node mutation/workflow.mjs plan` output:
 
-Sharding is currently **unused**: the plan projects 34.5 minutes wall clock, so
-every module is a single leg. The machinery stays because a future module may
-outgrow the budget, and the plan switches to shards automatically when it does.
+```
+targets: cache.ts, classifier-semantics.ts, inline-override.ts, reliability.ts, reliability-v2.ts, routing.ts
+matrix legs: 6 (concurrency 4)
+projected wall clock: 34.5m of the 60m planning budget, 1 wave(s) of 6 leg(s) across 8 lanes (per-leg hard bound 48m)
+the projection is a planning objective, not a deadline: GitHub enforces no workflow-wide wall clock
+```
 
-Three details that make it a real cap rather than a wish:
+Sharding is currently **unused**: six legs fit in one wave, so the plan projects
+34.5 minutes. The machinery stays because a future module may outgrow the budget,
+and the plan switches to shards automatically when it does.
 
-- **Legs run in parallel**, so wall clock is the slowest leg plus fixed overhead,
-  not the sum. The current plan is **5 legs across 5 modules** (one leg per
-  module, no sharding).
-- **`ciSlowdownFactor` (3×)** accounts for GitHub's 4 cores versus the 10-core
-  host the numbers were measured on. Measured on the first real dispatch, after
-  subtracting per-job setup: `routing.ts` 17.4 min against 6.6 locally (2.7×) and
-  `reliability-v2.ts` 6.9 against 1.8 (3.9×).
-- **Each leg gets its own job timeout** from the plan (currently 48 minutes, the
-  per-leg hard allowance). A single global ceiling either cuts a slow shard short
-  or lets one stuck leg burn the window.
+### How the projection is computed
+
+```
+wall clock ~= reserveMinutes + longest lane
+lanes       = MATRIX.maxParallel (must equal the workflow's max-parallel)
+```
+
+`projectWallClock()` in [`mutation/workflow.mjs`](../mutation/workflow.mjs) packs
+legs through those lanes **in matrix order**, because that is how GitHub
+dispatches a matrix: the next leg starts when a lane frees, in the order the
+matrix lists them. The previous formula was `max(leg) + reserve`, which assumed
+every leg started simultaneously. That is exact only while the leg count is at or
+below the lane count. Six modules sharded four ways is 24 legs, and the large
+modules' legs are listed last, so they start after the earlier waves drain:
+
+```
+node mutation/workflow.mjs plan            # SHARDS=4
+matrix legs: 24 (concurrency 4)
+projected wall clock: 18.1m of the 60m planning budget, 3 wave(s) of 24 leg(s) across 8 lanes
+```
+
+`max(leg)` would have said 17.6m — the difference is the wait before the long legs
+are dispatched. A test asserts `MATRIX.maxParallel` matches `strategy.max-parallel`
+in the workflow, so the two cannot drift.
+
+### Why it is still only an estimate
+
+- GitHub scheduling, image pulls and `npm ci` add delay the planner cannot see.
+- Shards overlap by `SHARDING.overlapLines`, so each leg covers slightly more than
+  an even share of its module; the projection divides evenly and understates it.
+- A leg that overruns its estimate has no workflow-wide deadline to stop it.
+
+### What is actually enforced
+
+- **The plan refuses an infeasible matrix before any job starts.** A module that
+  cannot fit even at `SHARDING.maxShards` fails in seconds with a named module,
+  rather than running long and failing later. The cap is never met by measuring
+  fewer mutants.
+- **Each leg gets its own job timeout** from the plan (48 minutes, the per-leg hard
+  allowance). A single global ceiling would either cut a slow shard short or let
+  one stuck leg burn the window.
+- **The summarise job has its own 15-minute timeout**, and never runs longer than
+  the merge and render it does.
+- **The usability gate** fails a run whose measurement is incomplete, whatever the
+  clock says; see [the usability gate](#the-usability-gate).
 
 If a module cannot fit even at `maxShards`, the plan fails in seconds with a
 message naming the module and the arithmetic. It never silently drops mutants.
@@ -123,16 +167,50 @@ Three properties hold for both runners, and all three were measured:
 
 ### Agreement between the runners
 
-Same mutants, compared kill-for-kill on a 227-mutant `reliability-v2.ts` slice:
+Measured on current HEAD, each engine run twice from a clean `.stryker-tmp`.
 
-- **226 of 227 identical.** The one difference is an `ObjectLiteral` mutant at
-  line 221 that Bun killed and TAP missed — in the direction of the faster runner
-  catching more, not fewer.
-- `routing.ts`: 680 killed under both; TAP reported 7 timeouts where Bun reported
-  5.
-- `cache.ts`: identical 172 killed / 48 survived / 9 uncovered.
+`cache.ts`, 229 mutants, full population:
 
-So the two are interchangeable for scoring purposes, and Bun is chosen for speed.
+| Run | Killed | Survived | NoCoverage | Errors |
+|---|---|---|---|---|
+| bun, run 1 | 172 | 48 | 9 | 0 |
+| bun, run 2 | 172 | 48 | 9 | 0 |
+| tap, run 1 | 172 | 48 | 9 | 0 |
+| tap, run 3 | 172 | 48 | 9 | 0 |
+
+All 229 mutants agree between engines, and Bun is deterministic across repeats.
+
+`inline-override.ts`, 21 mutants: **21 of 21 identical** on both engines, both
+repeats. Bun is chosen for speed.
+
+`reliability-v2.ts`, a 291-mutant slice (`495-575`):
+
+| Comparison | Identical | Differ |
+|---|---|---|
+| Bun run 1 vs Bun run 2 | 287 / 291 | 4 |
+| Bun run 1 vs TAP run 1 | 287 / 291 | 4 |
+
+**Three of the four cross-engine differences are also differences between two
+identical Bun runs.** That slice reads `now` and expiry values, so those mutants
+are genuinely non-deterministic; a verdict comparison there cannot attribute a
+difference to the engine at all. The A/B method is only informative on mutants
+that are stable within one engine, and this measurement is the reason the
+earlier "226 of 227 identical, one `ObjectLiteral` at line 221 that Bun killed
+and TAP missed" claim has been removed: on current HEAD that mutant is killed by
+**both** engines, and the specific figure is not reproducible.
+
+`routing.ts` is the case where the engine demonstrably decides the verdict, and it
+is the only override: `^(a+)+$` against a 25-character canary takes **475 ms under
+V8 and 66 ms under JavaScriptCore**, and the rule tests deliberately let that
+regex run in the host process when a mutant bypasses the backtracking probe. Only
+the production engine answers the question production would ask.
+
+**Remaining limitation.** Equivalence is established by measurement, not by proof.
+Bun is trusted for a module because its verdicts match the production engine on
+that module within the module's own noise floor. A module whose tests depend on an
+engine-specific behaviour that no sampled mutant exercises would not be caught by
+this. The mitigation is the override mechanism plus this measurement: if a module
+starts depending on engine semantics, it moves to TAP and records the reason.
 
 ### Incremental is a local convenience, never the nightly
 
@@ -159,7 +237,7 @@ config file to tune:
 | --- | --- |
 | **All tunable parameters** — targets, per-module budgets, Stryker options, thresholds, tolerance, summary limits | [`mutation/config.mjs`](../mutation/config.mjs) |
 | Target/binding derivation (reusable, no config) | [`mutation/targets.mjs`](../mutation/targets.mjs) |
-| Summary, honest score, survivor extract | [`mutation/report.mjs`](../mutation/report.mjs) |
+| Summary, scores, survivor extract | [`mutation/report.mjs`](../mutation/report.mjs) |
 | Workflow helpers | [`mutation/workflow.mjs`](../mutation/workflow.mjs) |
 | Local runner | [`mutation/run.mjs`](../mutation/run.mjs) |
 | Stryker entry point (thin shim, no options) | [`stryker.config.mjs`](../stryker.config.mjs) |
@@ -203,28 +281,79 @@ mutant population:
 Tests that reach a module only through a caller are still not bound, so every
 score here is a **lower bound**.
 
-## Two scores, deliberately
+## Three scores, each with an explicit denominator
 
-Stryker's score is `(Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage)`.
-Counting a timeout as detected means a mutant that hangs the suite raises the
-score. The summary therefore reports both:
+One number cannot answer three different questions. The summary therefore reports
+three, with the formula for each stated in the output rather than implied:
 
-- **Honest score** = `Killed / (Killed + Survived + NoCoverage)`.
-- **Stryker score** = Stryker's own definition, shown for comparison.
+| Score | Formula | Question it answers |
+|---|---|---|
+| **Population** | `Killed / (total - Ignored)` | Of every mutant the tool evaluated, how many did the tests kill? |
+| **Conclusive** | `Killed / (Killed + Survived + NoCoverage)` | Of the mutants that reached a conclusion, how many did the tests catch? |
+| **Stryker** | `(Killed + Timeout) / (Killed + Timeout + Survived + NoCoverage)` | Stryker's own native score |
 
-The nightly job fails when a run is **unusable**, never when the score is low:
+**Read population first.** It is the only one of the three that cannot be read as
+"the tests caught it". A timeout, a runtime error and a compile error all stay in
+its denominator and never reach its numerator, so an unresolved mutant can never
+be mistaken for a verified kill.
 
-- any module report is missing (a missing matrix leg is not a pass);
-- no reports were produced at all;
-- timed-out mutants exceed the tolerance (`max(10, 2% of mutants)`).
+The earlier pair was Stryker's score and one called the **honest score**,
+`Killed / (Killed + Survived + NoCoverage)`. That name was wrong: a run with one
+kill and nine timeouts reported 100%, because timeouts sat in neither the
+numerator nor the denominator. It is mathematically valid as a rate over
+conclusive outcomes and misleading as a rate over the population. It is now
+called **conclusive** and is presented alongside population instead of instead of
+it.
 
-A few timeouts are legitimate and expected: a mutant that inverts a loop bound
-or decrements a counter instead of incrementing it genuinely does not terminate.
-`routing.ts` produces 7 of 989 (0.7%) this way. The tolerance separates those
-from a budget collapse, which lands an order of magnitude higher — the measured
+`NoCoverage` stays in the conclusive and population denominators: a mutant no
+bound test reaches is a mutant no test asserts. `Ignored` mutants are excluded
+from the population denominator, because Stryker never evaluated them and counting
+them would penalise a run for mutants it was told to skip. Every raw count —
+`Killed`, `Survived`, `NoCoverage`, `Timeout`, `RuntimeError`, `CompileError`,
+`Ignored`, `total`, `evaluated`, `unresolved` — is preserved in `summary.json`, so
+any score can be recomputed from the payload.
+
+None of the three is enforced as a merge gate. A low score is the measurement, not
+a failure.
+
+## The usability gate
+
+A score computed over a silently smaller population is worse than no score, so
+the run's own workflow fails when the measurement is unusable. It never fails on a
+low score.
+
+| Condition | Allowance | Why |
+|---|---|---|
+| No module reports | — | Nothing was measured |
+| A module report is missing | — | A matrix leg did not run |
+| A planned **shard** is missing | — | The module reports, but only part of it measured |
+| A module reports **zero mutants** | — | It parsed and carries nothing; 0/0 is not a perfect score |
+| `Timeout` mutants | `max(10, 2%)` aggregate **and** per module | A budget collapse is indistinguishable from genuine timeouts |
+| `RuntimeError` + `CompileError` | `max(5, 2%)` aggregate **and** per module | Stryker **excludes** these from its denominator |
+| A shard **outside** the plan | 0 | A stale or misrouted artifact was merged; missing-shard detection cannot see it |
+| Shard conflicts | 0 | Overlapping shards disagreed, so the run is not reproducible |
+
+**Both the aggregate and each module are judged**, against the same calibrated
+rule applied to each population. Aggregate-only checks could hide a broken module
+inside a healthy run: 80 errored mutants out of 229 is 35% of that module, but it
+sits under the aggregate error allowance of 85 for a 4,200-mutant run, so the gate
+accepted the run and published a confident score while one module had measured
+almost nothing. The failure now names the module and prints its observed and
+allowed counts.
+
+A dispatch may raise the timeout allowance with `timeout_tolerance`. It is an
+absolute count and it bounds **each module as well as the aggregate**; otherwise
+the override would pass the aggregate check and still fail the module that needed
+it.
+
+A few timeouts are legitimate and expected: a mutant that inverts a loop bound or
+decrements a counter instead of incrementing it genuinely does not terminate.
+`routing.ts` produces 7 of 989 (0.7%) this way. The tolerance separates those from
+a budget collapse, which lands an order of magnitude higher — the measured
 eight-file case was 208 of 352 (59%).
 
-A low score is the measurement, not a failure.
+A run that fails this gate **still publishes its summary**, report and survivors.
+Failing the measurement is not the same as discarding the evidence.
 
 ## Reading the results
 
@@ -281,7 +410,7 @@ A first dispatch is worth doing anyway, because it calibrates
 
 ## Local runs
 
-Prerequisites: Node (24 in CI) and **Bun 1.4.0**. Four of five modules run under
+Prerequisites: Node (24 in CI) and **Bun 1.4.0**. Five of six modules run under
 `bun test`, which is the default runner, so `bun` must be on `PATH`; the workflow
 installs it with `oven-sh/setup-bun`. `routing.ts` uses the TAP runner (Node) and
 does not need Bun, but there is no per-invocation flag to pick a runner — the
@@ -295,12 +424,18 @@ node mutation/run.mjs routing.ts --concurrency 8
 node mutation/run.mjs                           # every target, sequentially
 node mutation/run.mjs cache.ts --shards 2       # split one module
 node mutation/run.mjs cache.ts --mutate cache.ts:1-140   # one region
+node mutation/run.mjs cache.ts --report archive/cache.ts.json   # one named output file
 node mutation/run.mjs cache.ts --incremental    # local loop: reuse unchanged results
 node mutation/run.mjs cache.ts --dry-run        # check the binding, no mutants
 
 # Summarise whatever ran
 node mutation/report.mjs --dir reports/mutation --out /tmp/mutation.md
 ```
+
+`--report` writes exactly the path it is given (inside the checkout) and clears
+only that file, so two manual shard runs cannot delete each other's output. It
+requires exactly one target and cannot be combined with `--shards`; both fail
+immediately rather than silently ignoring the flag.
 
 Use `--incremental` while iterating on one module: the first run is full, later
 runs only re-test what changed (measured: 1m44s → 2s when nothing changed, and a
@@ -350,26 +485,33 @@ it automatically when one does.
 
 Derived binding, TAP runner, 10-core macOS host, Node v24.14.0, Stryker 10.0.0:
 
-| Module | Runner | Mutants | Killed | Survived | NoCoverage | Timeout | Honest score | Wall clock |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `cache.ts` | bun | 229 | 172 | 48 | 9 | 0 | 75.11% | 4s |
-| `classifier-semantics.ts` | bun | 157 | 85 | 26 | 46 | 0 | 54.14% | 5s |
-| `reliability.ts` | bun | 352 | 251 | 93 | 8 | 0 | 71.31% | 15s |
-| `reliability-v2.ts` | bun | 2447 | 1432 | 707 | 307 | 1 | 58.54% | 1m46s |
-| `routing.ts` | tap | 1000 | 681 | 214 | 98 | 7 | 68.58% | 6m33s |
-| **All** | | **4185** | **2621** | **1088** | **468** | **8** | **62.75%** | **8m48s total** |
+| Module | Runner | Mutants | Killed | Survived | NoCoverage | Timeout | Population | Conclusive | Wall clock |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `cache.ts` | bun | 229 | 172 | 48 | 9 | 0 | 75.11% | 75.11% | 4s |
+| `classifier-semantics.ts` | bun | 157 | 85 | 26 | 46 | 0 | 54.14% | 54.14% | 5s |
+| `inline-override.ts` | bun | 21 | 19 | 2 | 0 | 0 | 90.48% | 90.48% | 1s |
+| `reliability.ts` | bun | 352 | 251 | 93 | 8 | 0 | 71.31% | 71.31% | 15s |
+| `reliability-v2.ts` | bun | 2447 | 1432 | 707 | 307 | 1 | 58.52% | 58.54% | 1m46s |
+| `routing.ts` | tap | 1000 | 681 | 214 | 98 | 7 | 68.10% | 68.58% | 6m33s |
+| **All** | | **4206** | **2640** | **1090** | **468** | **8** | **62.77%** | **62.89%** | **8m48s total** |
 
-Verified on GitHub-hosted 4-core runners from a feature branch: **19 minutes
-end to end**, all jobs green, and the same totals — 4,185 mutants and 62.75%
-honest. Three modules matched local mutant for mutant; `reliability-v2.ts` moved
-by 5 mutants and `routing.ts` by 5, which is the documented stochastic behaviour
-rather than a machine-dependent result.
+Verified on GitHub-hosted 4-core runners from a feature branch — before
+`inline-override.ts` was added — at **19 minutes end to end**, all jobs green, and
+the same totals for the then-current five modules: 4,185 mutants and 62.75%
+population. Three modules matched local mutant for mutant; `reliability-v2.ts`
+moved by 5 mutants and `routing.ts` by 5, which is the documented stochastic
+behaviour rather than a machine-dependent result.
 
-Honest score is `Killed / (Killed + Survived + NoCoverage)`. Note the column the
-command runner could not produce: `NoCoverage` was always 0 there because coverage
-was never measured, so its score silently counted unreached mutants as if they did
-not exist. Those gaps are now visible, and they are large: 307 of 2,447 mutants in
-`reliability-v2.ts` (12.5%) sit on lines no bound test reaches.
+The two score columns differ only where there are timeouts, which is why only
+`routing.ts` moves (68.10% population against 68.58% conclusive): population keeps
+its 7 timeouts in the denominator as unresolved, conclusive drops them from both
+sides. Read population first.
+
+Note the column the old command runner could not produce: `NoCoverage` was always
+0 there because coverage was never measured, so the score silently counted
+unreached mutants as if they did not exist. Those gaps are now visible, and they
+are large: 307 of 2,447 mutants in `reliability-v2.ts` (12.5%) sit on lines no
+bound test reaches.
 
 For comparison, the same mutant populations under the old hand-written binding
 scored 64.19% and 26.75% for the first two rows.
@@ -399,7 +541,7 @@ Stryker copies the tree into `.stryker-tmp/`. Four things matter:
 ## Limitations
 
 - Coverage granularity depends on the runner: Bun attributes per **test**, the
-  TAP fallback per **test file**. Four of five modules use Bun; `routing.ts` uses
+  TAP fallback per **test file**. Five of six modules use Bun; `routing.ts` uses
   TAP because its verdict depends on the regex engine.
 - **Concurrency barely helps.** Under TAP, throughput measured 1.61 s/mutant at 6
   workers and 1.67 at 4 (ratio 0.97), because the cost was per-mutant process
