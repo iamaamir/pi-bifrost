@@ -3686,6 +3686,30 @@ describe("command aliases", () => {
     }
   });
 
+  it("makes a new init exit report an outcome or fail this test", () => {
+    // The footer contract is "every exit", so guard the source, not a denylist of
+    // strings a previous exit used: a newly added bare `return;` is the regression.
+    const source = readFileSync(new URL("../commands.ts", import.meta.url), "utf8");
+    const start = source.indexOf("async function handleInit(");
+    assert.notEqual(start, -1, "handleInit must exist in commands.ts");
+    const end = source.indexOf("\nfunction increasedMetric(", start);
+    assert.notEqual(end, -1, "handleInit boundary not found");
+    const body = source.slice(start, end).split("\n");
+    // `if (cond) return;` is the dominant exit form in this function, so match
+    // any line that ends in a bare return rather than only `return;` alone.
+    const exits = body
+      .map((line, index) => ({ index, text: line.trim() }))
+      .filter(({ text }) => text.endsWith("return;"));
+    assert.ok(exits.length >= 20, `expected many init exits, found ${exits.length}`);
+    for (const { index } of exits) {
+      const preceding = body.slice(Math.max(0, index - 12), index).join("\n");
+      assert.ok(
+        preceding.includes("reportInitOutcome("),
+        `init exit at handleInit+${index} returns without reporting an outcome`,
+      );
+    }
+  });
+
   it("does not claim routing is active after saving while it is off", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-footer-off-"));
     const previousCwd = process.cwd();
