@@ -1635,7 +1635,9 @@ export function buildClassifierTestReport(input: {
     : increasedMetric(after.tiers, before.tiers);
   const observedConfidence = judgment?.backend === backend && judgment.confidence !== undefined
     ? String(judgment.confidence)
-    : increasedMetric(after.confidenceBands, before.confidenceBands) ?? "n/a";
+    : result.classifierAttempt?.backend === backend && result.classifierAttempt.confidence !== undefined
+      ? String(result.classifierAttempt.confidence)
+      : increasedMetric(after.confidenceBands, before.confidenceBands) ?? "n/a";
   const rawPromptModel = classifier?.model;
   const configuredModel = Array.isArray(rawPromptModel) ? rawPromptModel.join(", ") : rawPromptModel;
   const model = judgment?.backend === backend
@@ -1940,6 +1942,11 @@ export function renderTracePreview(trace: BifrostTracePreview): string[] {
     lines.push(`classifier: ${trace.classification.classifier.backend}`);
     if (trace.classification.classifier.model !== undefined) lines.push(`classifier model: ${trace.classification.classifier.model}`);
     if (trace.classification.classifier.confidence !== undefined) lines.push(`classifier confidence: ${trace.classification.classifier.confidence}`);
+  }
+  if (trace.classifierAttempt) {
+    lines.push(`classifier attempt: ${trace.classifierAttempt.backend} (${trace.classifierAttempt.outcome}, fallback=${trace.classifierAttempt.fallbackKind})`);
+    if (trace.classifierAttempt.model !== undefined) lines.push(`classifier attempt model: ${trace.classifierAttempt.model}`);
+    if (trace.classifierAttempt.confidence !== undefined) lines.push(`classifier attempt confidence: ${trace.classifierAttempt.confidence}`);
   }
   const renderPool = (label: string, pool: RouteDecisionSummary["requested"] | RouteDecisionSummary["fallback"]) => {
     if (!pool) return;

@@ -452,6 +452,9 @@ function directClassifierAttempt(
   config?: BifrostConfig,
 ): DirectClassifierAttempt {
   const model = boundedClassifierModel(observation?.model);
+  const confidence = typeof observation?.confidence === "number" && Number.isFinite(observation.confidence)
+    ? observation.confidence
+    : undefined;
   const circuitKey = model ? `classifier/${backend}/${model}` : undefined;
   const circuit = circuitKey && reliabilityStore && config?.reliability?.enabled !== false
     ? getCircuitState(reliabilityStore.getState(), circuitKey, Date.now(), config?.reliability)
@@ -468,6 +471,7 @@ function directClassifierAttempt(
         backend,
         outcome: observation.outcome,
         ...(model ? { model } : {}),
+        ...(confidence !== undefined ? { confidence } : {}),
         ...(circuitOpenUntil !== undefined ? { circuitOpenUntil } : {}),
       },
     } : {}),

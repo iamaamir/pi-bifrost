@@ -450,6 +450,14 @@ describe("bifrost command ui", () => {
         tier: "frontier",
         source: "classifier",
         judgment: { tier: "frontier", backend: "prompt", model: "fixture/classifier" },
+        classifierAttempt: {
+          backend: "typesafe",
+          outcome: "low_confidence",
+          fallbackKind: "prompt",
+          fallbackModel: "fixture/classifier",
+          model: "jev-1.13.0",
+          confidence: 0.73,
+        },
       },
       before,
       after,
@@ -459,13 +467,88 @@ describe("bifrost command ui", () => {
     assert(lines.includes("backend: typesafe"));
     assert(lines.includes("model: jev-1.13.0"));
     assert(lines.includes("backend result: quick"));
-    assert(lines.includes("confidence: <0.8"));
+    assert(lines.includes("confidence: 0.73"));
     assert(lines.includes("accepted: no"));
     assert(lines.includes("final result: frontier"));
     assert(lines.includes("final source: classifier"));
     assert(lines.includes("final backend: prompt"));
     assert(lines.includes("final model: fixture/classifier"));
+    assert(lines.includes("classifier fallback: prompt"));
     assert(lines.includes("outcome: low_confidence"));
+  });
+
+  it("falls back to confidence bands when a rejected attempt has no exact confidence", () => {
+    const before = {
+      version: 1, model: "jev-1.13.0", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
+    } as const;
+    const after = {
+      ...before,
+      total: 1,
+      outcomes: { low_confidence: 1 },
+      tiers: { quick: 1 },
+      confidenceBands: { "<0.8": 1 },
+      totalAttempts: 1,
+    } as const;
+
+    const lines = buildClassifierTestReport({
+      classifier: { backend: "typesafe", typesafe: { model: "jev-1.13.0" }, minConfidence: 0.8 },
+      result: {
+        kind: "classified",
+        tier: "frontier",
+        source: "classifier",
+        judgment: { tier: "frontier", backend: "prompt", model: "fixture/classifier" },
+        classifierAttempt: {
+          backend: "typesafe",
+          outcome: "low_confidence",
+          fallbackKind: "prompt",
+          fallbackModel: "fixture/classifier",
+          model: "jev-1.13.0",
+        },
+      },
+      before,
+      after,
+      credential: "environment",
+    });
+
+    assert(lines.includes("confidence: <0.8"));
+  });
+
+  it("shows zero confidence for a rejected direct classifier attempt", () => {
+    const before = {
+      version: 1, model: "jev-1.13.0", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
+    } as const;
+    const after = {
+      ...before,
+      total: 1,
+      outcomes: { low_confidence: 1 },
+      tiers: { quick: 1 },
+      confidenceBands: { "<0.8": 1 },
+      totalAttempts: 1,
+    } as const;
+
+    const lines = buildClassifierTestReport({
+      classifier: { backend: "typesafe", typesafe: { model: "jev-1.13.0" }, minConfidence: 0.8 },
+      result: {
+        kind: "fallback",
+        tier: "frontier",
+        classifierAttempt: {
+          backend: "typesafe",
+          outcome: "low_confidence",
+          fallbackKind: "default",
+          model: "jev-1.13.0",
+          confidence: 0,
+        },
+      },
+      before,
+      after,
+      credential: "environment",
+    });
+
+    assert(lines.includes("backend result: quick"));
+    assert(lines.includes("confidence: 0"));
+    assert(lines.includes("accepted: no"));
+    assert(lines.includes("final result: frontier"));
+    assert(lines.includes("final source: fallback"));
   });
 
   it("uses detected classifier defaults after init without opening the picker", async () => {
