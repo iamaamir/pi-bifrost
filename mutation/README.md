@@ -370,6 +370,15 @@ nothing, so deleting the previous measurement would destroy a real result to mak
 room for a report that never exists. It is refused with `--report`, which would
 name that nonexistent file.
 
+**A shard's scope must be the scope the plan assigned it.** Sharding is line
+ranges, so the only evidence of what a shard actually mutated is the range in its
+provenance. A leg that mutated ten lines of a 163-line shard still calls itself
+shard 0; without this check it merges as shard 0 and the skipped mutants are
+invisible, because `total` counts what was measured, not what was planned. The
+reporter derives the plan from the module (`shardsFor`) and the requested shard
+count, and rejects any shard whose range differs — truncated, extended, swapped,
+or out of range. Filenames never establish completeness.
+
 **Artifacts are not merged on download.** Each leg uploads its own artifact, and
 the summarise job downloads them with `merge-multiple: false` so every artifact
 keeps its own directory. Flattening would put two attempts of one shard on the

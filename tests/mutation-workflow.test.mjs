@@ -14,23 +14,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isInsideReports, isReportFor, reportingRoot, reportsToClear, resolveReportPath, staleReportsFor, strykerArgs } from "../mutation/run.mjs";
-import {
-  ROOT,
-  bindingExclusions,
-  bindingFor,
-  commandFor,
-  directConsumers,
-  exceedsBudget,
-  legEstimateMinutes,
-  lineCount,
-  measurementIdentity,
-  runnerFor,
-  shardsFor,
-  suggestedShards,
-  targetConfig,
-  targetInventory,
-  targetNames,
-} from "../mutation/targets.mjs";
+import { ROOT, bindingExclusions, bindingFor, commandFor, directConsumers, exceedsBudget, identityDigest, identityInputs, legEstimateMinutes, lineCount, measurementIdentity, runnerFor, shardsFor, suggestedShards, targetConfig, targetInventory, targetNames } from "../mutation/targets.mjs";
 import {
   BUN_RUNNER_PLUGIN,
   MATRIX,
@@ -664,8 +648,8 @@ test("an overlapping shard merge reproduces the unsharded mutant set", () => {
       mutant("3", 90, "Killed"),
     ])));
 
-    stamp(directory, "cache.ts.shard0.json");
-    stamp(directory, "cache.ts.shard1.json");
+    stamp(directory, "cache.ts.shard0.json", 2);
+    stamp(directory, "cache.ts.shard1.json", 2);
     const { reports } = readReports(directory);
     assert.equal(reports.length, 1, "two shards of one module become one report");
     assert.equal(reports[0].module, "cache.ts");
@@ -706,8 +690,8 @@ test("a shard disagreement is surfaced, not silently resolved", () => {
     writeFileSync(join(directory, "cache.ts.shard0.json"), JSON.stringify(report("Killed")));
     writeFileSync(join(directory, "cache.ts.shard1.json"), JSON.stringify(report("Survived")));
 
-    stamp(directory, "cache.ts.shard0.json");
-    stamp(directory, "cache.ts.shard1.json");
+    stamp(directory, "cache.ts.shard0.json", 2);
+    stamp(directory, "cache.ts.shard1.json", 2);
     const { reports } = readReports(directory);
     assert.equal(reports[0].mutants.length, 1);
     assert.equal(reports[0].conflicts.length, 1, "the disagreement must be recorded");
@@ -1331,11 +1315,14 @@ test("an explicit --report is refused when it cannot name exactly one measuremen
 // --- A report for a module this run did not plan must not reach the score ---
 
 /** Stamp a fixture report the way the runner does, for the module it describes. */
-function stamp(directory, name) {
+function stamp(directory, name, shardCount = 1) {
+  // The scope must be the range the plan assigns this shard index, so the helper
+  // derives it from the same function the reporter validates against.
   const path = join(directory, name);
   const report = JSON.parse(readFileSync(path, "utf8"));
   const module = Object.keys(report.files)[0].split("/").pop();
-  report.bifrost = { measurement: measurementIdentity(module), scope: module };
+  const index = Number(/\.shard(\d+)\.json$/u.exec(name)?.[1] ?? 0);
+  report.bifrost = { measurement: measurementIdentity(module), scope: shardsFor(module, shardCount)[index].mutate };
   writeFileSync(path, JSON.stringify(report));
 }
 
@@ -1827,20 +1814,97 @@ test("a partial --mutate scope cannot stand in for the whole module", () => {
   }
 });
 
+function identityOrFallback(module) {
+  try {
+    return measurementIdentity(module);
+  } catch {
+    return "0".repeat(64);
+  }
+}
+
+function shardFixture(scopes, module = "cache.ts") {
+  const directory = mkdtempSync(join(tmpdir(), "mutation-shard-plan-"));
+  scopes.forEach((scope, index) => {
+    const name = index === scopes.length - 1 && scopes.length === 1 ? `${module}.json` : `${module}.shard${index}.json`;
+    writeFileSync(join(directory, name), JSON.stringify({
+      files: { [`/repo/${module}`]: { mutants: [{
+        id: `${index}`, mutatorName: "EqualityOperator", replacement: "!==", status: "Killed",
+        location: { start: { line: 10, column: 1 }, end: { line: 10, column: 9 } },
+      }] } },
+      // A module outside TARGETS has no identity; the plan check must reject it
+      // before provenance is ever consulted.
+      bifrost: { measurement: identityOrFallback(module), scope },
+    }));
+  });
+  return directory;
+}
+
+test("a shard that measures less than the plan assigned is rejected", () => {
+  // The leg mutated ten lines but still calls itself shard 0. Nothing else in the
+  // report says what was skipped, so the declared range is the only evidence, and
+  // accepting it would publish a population that never ran.
+  const planned = shardsFor("cache.ts", 2);
+  const directory = shardFixture(["cache.ts:1-10", planned[1].mutate]);
+  try {
+    const { reports, rejected } = readReports(directory, { shardCounts: new Map([["cache.ts", 2]]) });
+    assert.equal(reports.length, 0);
+    assert.equal(rejected.length, 1);
+    assert.ok(rejected[0].reason.includes(planned[0].mutate), rejected[0].reason);
+    assert.match(rejected[0].reason, /truncated shard is not the planned population/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("shards swapped between indexes are rejected", () => {
+  const planned = shardsFor("cache.ts", 2);
+  const directory = shardFixture([planned[1].mutate, planned[0].mutate]);
+  try {
+    const { reports, rejected } = readReports(directory, { shardCounts: new Map([["cache.ts", 2]]) });
+    assert.equal(reports.length, 0, "a swapped pair measures each range, but not as the plan asked");
+    assert.equal(rejected.length, 2, "both files are named");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a shard that extends past the plan is rejected", () => {
+  const planned = shardsFor("cache.ts", 2);
+  const directory = shardFixture([`cache.ts:1-${lineCount("cache.ts") + 50}`, planned[1].mutate]);
+  try {
+    const { reports } = readReports(directory, { shardCounts: new Map([["cache.ts", 2]]) });
+    assert.equal(reports.length, 0);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a report for a module the plan cannot describe is rejected", () => {
+  const directory = shardFixture(["widget.ts"], "widget.ts");
+  try {
+    const { reports, rejected } = readReports(directory);
+    assert.equal(reports.length, 0);
+    assert.match(rejected[0].reason, /cannot be planned in this checkout/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("a sharded report may carry a line-range scope", () => {
   // Sharding is line ranges by design; only an *unsharded* name has to mean the
-  // whole module.
+  // whole module. The range still has to be the one the plan assigned.
   const directory = mkdtempSync(join(tmpdir(), "mutation-shard-scope-"));
   try {
-    const report = (range, line) => ({
+    const planned = shardsFor("cache.ts", 2);
+    const report = (index, line) => ({
       files: { "/repo/cache.ts": { mutants: [{
-        id: range, mutatorName: "EqualityOperator", replacement: "!==", status: "Killed",
+        id: String(index), mutatorName: "EqualityOperator", replacement: "!==", status: "Killed",
         location: { start: { line, column: 1 }, end: { line, column: 9 } },
       }] } },
-      bifrost: { measurement: measurementIdentity("cache.ts"), scope: `cache.ts:${range}` },
+      bifrost: { measurement: measurementIdentity("cache.ts"), scope: planned[index].mutate },
     });
-    writeFileSync(join(directory, "cache.ts.shard0.json"), JSON.stringify(report("1-140", 10)));
-    writeFileSync(join(directory, "cache.ts.shard1.json"), JSON.stringify(report("120-244", 90)));
+    writeFileSync(join(directory, "cache.ts.shard0.json"), JSON.stringify(report(0, 10)));
+    writeFileSync(join(directory, "cache.ts.shard1.json"), JSON.stringify(report(1, 90)));
 
     const { reports, rejected } = readReports(directory);
     assert.deepEqual(rejected, []);
@@ -1851,18 +1915,20 @@ test("a sharded report may carry a line-range scope", () => {
 });
 
 test("the identity covers the local modules the target imports", () => {
-  // `cache.ts` imports `storage.ts`. If a helper changed and the identity did
-  // not, an old report would be accepted against new code.
-  const helper = join(ROOT, "storage.ts");
-  const original = readFileSync(helper);
-  const before = measurementIdentity("cache.ts");
-  try {
-    writeFileSync(helper, `${original.toString("utf8")}\n// mutation identity probe\n`);
-    assert.notEqual(measurementIdentity("cache.ts"), before, "a changed helper must change the identity");
-  } finally {
-    writeFileSync(helper, original);
-  }
-  assert.equal(measurementIdentity("cache.ts"), before, "and restoring it must restore the identity");
+  // `cache.ts` imports `storage.ts`. The derivation says the helper is an input,
+  // and the digest says different bytes give a different identity, so an old
+  // report cannot survive a helper change. Both halves are asserted here; the
+  // earlier version rewrote `storage.ts` on disk to show it, which made the suite
+  // mutate tracked source.
+  assert.ok(identityInputs("cache.ts").includes("storage.ts"), "a transitive helper is an input");
+
+  const files = identityInputs("cache.ts");
+  const digestWith = (content) =>
+    identityDigest(files, (file) =>
+      file === "storage.ts" ? Buffer.from(content) : readFileSync(join(ROOT, file)),
+    );
+  assert.notEqual(digestWith("export const a = 1;\n"), digestWith("export const a = 2;\n"));
+  assert.equal(digestWith("same"), digestWith("same"), "the digest is reproducible");
 });
 
 test("both Stryker branches share one argument builder", () => {
@@ -1917,27 +1983,22 @@ test("a symlinked reporting root is refused", () => {
 test("the identity covers the measurement's execution inputs", () => {
   // The population depends on more than the mutated bytes: how Stryker is
   // configured, how bindings are derived, and which dependency versions resolve.
-  const before = measurementIdentity("cache.ts");
-  for (const file of ["stryker.config.mjs", "mutation/targets.mjs", "package-lock.json"]) {
-    const original = readFileSync(join(ROOT, file));
-    try {
-      writeFileSync(join(ROOT, file), `${original.toString("utf8")}\n// identity probe\n`);
-      assert.notEqual(measurementIdentity("cache.ts"), before, `${file} must affect the identity`);
-    } finally {
-      writeFileSync(join(ROOT, file), original);
-    }
+  const inputs = identityInputs("cache.ts");
+  for (const file of ["stryker.config.mjs", "mutation/targets.mjs", "package-lock.json", "mutation/config.mjs"]) {
+    assert.ok(inputs.includes(file), `${file} must be an identity input`);
   }
-  assert.equal(measurementIdentity("cache.ts"), before, "restoring the inputs restores the identity");
+  // An unreadable input must not collide with a readable one.
+  assert.notEqual(identityDigest(["a.ts"], () => "unreadable"), identityDigest(["a.ts"], () => ""));
 });
 
 // --- Multi-attempt artifacts: one authoritative report per shard ---
 
-const artifactReport = (shard, line, status = "Killed", scope = `cache.ts:${line}-${line}`) => ({
+const artifactReport = (shard, line, status = "Killed", count = 1) => ({
   files: { "/repo/cache.ts": { mutants: [{
     id: `${shard}-${line}`, mutatorName: "EqualityOperator", replacement: "!==", status,
     location: { start: { line, column: 1 }, end: { line, column: 9 } },
   }] } },
-  bifrost: { measurement: measurementIdentity("cache.ts"), scope },
+  bifrost: { measurement: measurementIdentity("cache.ts"), scope: shardsFor("cache.ts", count)[shard].mutate },
 });
 
 function artifactFixture(attempts) {
@@ -1954,8 +2015,8 @@ test("a partial re-run reconstructs one measurement from several attempts", () =
   // Only shard 1 failed, so "re-run failed jobs" produces attempt 2 for it while
   // shard 0 stays on attempt 1. Both belong to the same measurement.
   const directory = artifactFixture([
-    { artifact: "mutation-report-cache.ts-shard0-sha-run-1-attempt-1", name: "cache.ts.shard0.json", report: artifactReport(0, 10) },
-    { artifact: "mutation-report-cache.ts-shard1-sha-run-1-attempt-2", name: "cache.ts.shard1.json", report: artifactReport(1, 90) },
+    { artifact: "mutation-report-cache.ts-shard0-sha-run-1-attempt-1", name: "cache.ts.shard0.json", report: artifactReport(0, 10, "Killed", 2) },
+    { artifact: "mutation-report-cache.ts-shard1-sha-run-1-attempt-2", name: "cache.ts.shard1.json", report: artifactReport(1, 90, "Killed", 2) },
   ]);
   try {
     const { reports, rejected } = readReports(directory);

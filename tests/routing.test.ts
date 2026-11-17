@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -1581,6 +1582,33 @@ describe("routing", () => {
       } finally {
         if (previous === undefined) delete process.env.BIFROST_PROBE_NODE;
         else process.env.BIFROST_PROBE_NODE = previous;
+      }
+    });
+
+    it("does not let PATH choose the probe binary on a Node host", () => {
+      // The probe is a security control: its verdict decides whether a rule can
+      // run. Resolving `node` through PATH let anyone who controls the
+      // environment substitute a binary that answers "safe" for every pattern.
+      // Under Node the hosting binary is the production engine and is used
+      // directly; under Bun there is no Node binary to reuse, so the lookup
+      // stays and this test does not apply.
+      if ((process.versions as Record<string, string | undefined>).bun) return;
+      const dir = mkdtempSync(join(tmpdir(), "bifrost-probe-path-"));
+      const marker = join(dir, "executed");
+      writeFileSync(join(dir, "node"), `#!/bin/sh\ntouch '${marker}'\ncat >/dev/null\necho 0\n`, { mode: 0o755 });
+      const previousPath = process.env.PATH;
+      const previousOverride = process.env.BIFROST_PROBE_NODE;
+      delete process.env.BIFROST_PROBE_NODE;
+      process.env.PATH = `${dir}:${previousPath ?? ""}`;
+      try {
+        const compiled = compileRules([{ pattern: "path-substitution-probe-pattern", model: "general" }]);
+        assert.deepEqual(compiled.map((rule) => rule.model), ["general"]);
+        assert.equal(existsSync(marker), false, "the probe executed a binary resolved through PATH");
+      } finally {
+        process.env.PATH = previousPath;
+        if (previousOverride === undefined) delete process.env.BIFROST_PROBE_NODE;
+        else process.env.BIFROST_PROBE_NODE = previousOverride;
+        rmSync(dir, { recursive: true, force: true });
       }
     });
 

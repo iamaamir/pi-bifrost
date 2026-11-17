@@ -136,8 +136,8 @@ export function bindingFor(target) {
  * every day and would make every report look foreign. Content identity answers
  * the question that matters -- did the bytes involved in the measurement change?
  */
-export function measurementIdentity(target) {
-  const files = [
+export function identityInputs(target) {
+  return [
     // The measurement configuration, the binding rules, the Stryker shim and the
     // resolved dependency set: each decides what runs, so a change in any of them
     // makes a stored result incomparable even when the module's bytes are equal.
@@ -147,20 +147,41 @@ export function measurementIdentity(target) {
     "package-lock.json",
     ...localImportClosure([target, ...bindingFor(target)]),
   ];
+}
+
+/**
+ * SHA-256 over `name`, bytes and newline for every input, in order.
+ *
+ * Split from the input derivation so both halves can be tested on their own: the
+ * derivation says *which* files matter, and the digest says that different bytes
+ * produce a different identity. Composed, they prove that changing a transitive
+ * dependency invalidates a stored result without either test writing to the
+ * repository.
+ */
+export function identityDigest(files, read) {
   const hash = createHash("sha256");
   for (const file of files) {
     hash.update(file);
     hash.update("\n");
-    try {
-      hash.update(readFileSync(join(ROOT, file)));
-    } catch {
-      // An unreadable input invalidates this measurement, not the repo: hash a
-      // marker so the identity differs from every readable one.
-      hash.update("unreadable");
-    }
+    hash.update(read(file));
     hash.update("\n");
   }
   return hash.digest("hex");
+}
+
+function readRepoFile(file) {
+  try {
+    return readFileSync(join(ROOT, file));
+  } catch {
+    // An unreadable input invalidates this measurement, not the repo: hash a
+    // marker so the identity differs from every readable one.
+    return "unreadable";
+  }
+}
+
+/** The identity of one measurement: its inputs, digested. */
+export function measurementIdentity(target) {
+  return identityDigest(identityInputs(target), readRepoFile);
 }
 
 /**

@@ -16,7 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { BLOCKING, SUMMARY, measurementDiagnostics, timeoutTolerance } from "./config.mjs";
-import { ROOT, bindingExclusions, measurementIdentity, targetNames } from "./targets.mjs";
+import { ROOT, bindingExclusions, measurementIdentity, shardsFor, targetNames } from "./targets.mjs";
 
 const COUNTED_STATUSES = ["Killed", "Timeout", "Survived", "NoCoverage", "RuntimeError", "CompileError"];
 
@@ -300,7 +300,7 @@ export function mergeShardReports(reports) {
  * `<module>.json` parses as shard 0, so it collides with `<module>.shard0.json`;
  * merging them would publish a composite that no run produced.
  */
-export function selectMeasurement(perReport, { identityFor = measurementIdentity } = {}) {
+export function selectMeasurement(perReport, { identityFor = measurementIdentity, shardCounts = null } = {}) {
   const rejected = [];
   const ambiguous = new Map();
 
@@ -354,6 +354,38 @@ export function selectMeasurement(perReport, { identityFor = measurementIdentity
       reject(
         `${partial.name} covers only ${partial.provenance.scope}, not all of ${module}; a partial scope cannot stand in for the whole module`,
       );
+      continue;
+    }
+
+    // A shard is only the measurement it claims to be if its declared range is
+    // the range the plan assigned to that shard index. Otherwise a shard that
+    // mutated ten lines still merges as shard 0 of a plan that assigned a hundred
+    // and fifty, and the missing mutants are invisible: `total` looks complete
+    // because nothing recorded what was skipped.
+    const declaredCount =
+      shardCounts?.get(module) ??
+      Math.max(...reports.map((report) => (Number.isInteger(report.shard) ? report.shard : 0))) + 1;
+    let plan;
+    try {
+      plan = shardsFor(module, declaredCount);
+    } catch (error) {
+      reject(`${module} cannot be planned in this checkout (${error.message})`);
+      continue;
+    }
+
+    const mismatched = reports.flatMap((report) => {
+      const index = Number.isInteger(report.shard) ? report.shard : 0;
+      const planned = plan[index];
+      if (planned && report.provenance.scope === planned.mutate) return [];
+      return [{
+        name: report.name,
+        reason: planned
+          ? `${report.name} covers ${report.provenance.scope}, but the plan assigns shard ${index} of ${module} the range ${planned.mutate}; a truncated shard is not the planned population`
+          : `${report.name} declares shard ${index}, but ${module} is planned as ${plan.length} shard(s)`,
+      }];
+    });
+    if (mismatched.length > 0) {
+      rejected.push(...mismatched.map(({ name, reason }) => ({ module, name, reason })));
       continue;
     }
 
@@ -422,7 +454,7 @@ function reportFiles(directory, depth = 2) {
 }
 
 /** Read every Stryker report and select the modules this measurement can trust. */
-export function readReports(directory, { identityFor } = {}) {
+export function readReports(directory, { identityFor, shardCounts } = {}) {
   const empty = { reports: [], rejected: [], rejectedNames: [] };
   if (!existsSync(directory)) return empty;
   const perReport = reportFiles(directory).flatMap(({ name, path, attempt }) => {
@@ -441,7 +473,10 @@ export function readReports(directory, { identityFor } = {}) {
     if (!report || typeof report !== "object" || !report.files) return [];
     return modulesOf(report, name, attempt);
   });
-  return selectMeasurement(perReport, identityFor ? { identityFor } : {});
+  return selectMeasurement(perReport, {
+    ...(identityFor ? { identityFor } : {}),
+    ...(shardCounts ? { shardCounts } : {}),
+  });
 }
 
 function formatPercent(value) {
@@ -705,7 +740,7 @@ function main() {
   // aggregate and into `modules`, publishing a number that covers mutants the
   // run never measured. Only the selected set is scored; the foreign reports are
   // carried separately so the gate can name them.
-  const readAll = readReports(options.dir);
+  const readAll = readReports(options.dir, { shardCounts: options.shardsPerTarget });
   const ineligible = readAll.rejected ?? [];
   const reports = readAll.reports.filter((report) => expectedTargets.includes(report.module));
   // A rejected report for a selected module is a failure condition with a
