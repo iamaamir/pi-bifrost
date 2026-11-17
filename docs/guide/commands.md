@@ -68,9 +68,9 @@ Every outcome init can report:
 | `declined` | You answered no to the save confirmation. |
 | `cancelled` | The catalog refresh or the probe was cancelled, or the turn was aborted after the confirmation. |
 | `stopped before saving` | No TUI could ask the save question and `--write` was not passed. |
-| `paused` | The model inventory is incomplete or stale, so membership changes were not planned. `-f` refreshes it. |
+| `paused` | The model inventory is incomplete or stale, so pool changes were not planned. `-f` refreshes it. |
 | `stale review` | The model inventory, the inherited config, or the save destination changed while the confirmation was open. |
-| `blocked` | Init refused to write: the config or the selected source could not be read or parsed, a pool would shadow an inherited pool, the proposal was invalid or too large, or a saved ownership file exists without its config. |
+| `blocked` | Init refused to write: the config or the selected source could not be read or parsed, a pool would replace a handwritten pool in your global or workspace config, the proposal was invalid or too large, or a saved ownership file exists without its config. |
 | `blocked by a lock` | Another Bifrost writer holds the lock. |
 | `failed — no working models` | The probe found no usable model. |
 | `failed` | The write could not be confirmed on disk, or the written config was rejected on reload. |
