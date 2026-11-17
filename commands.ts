@@ -815,7 +815,7 @@ async function handleReconciliationCommand(args: string, ctx: ExtensionContext, 
   const commandArgs = args.replace(/^config\s+reconcile(?:\s+|$)/iu, "");
   const parsed = parseReconciliationCommandArgs(commandArgs);
   if (!parsed.ok) {
-    log(ctx, "usage: /bifrost config reconcile [--source project|user] [--tier <tier> --provider <provider>] [--refresh | --apply --proposal <digest> | --recover] [--json]", "warning");
+    log(ctx, "usage: /bifrost config reconcile [--source project|workspace|user] [--tier <tier> --provider <provider>] [--refresh | --apply --proposal <digest> | --recover] [--json]", "warning");
     return;
   }
   const request = parsed.request;
