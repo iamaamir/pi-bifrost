@@ -191,6 +191,7 @@ fails the run (not the merge) when:
 | A module reports **zero mutants** | — | It parsed and carries nothing; 0/0 is not a perfect score |
 | `Timeout` mutants | `max(10, 2%)` aggregate **and** per module | Budget collapse is indistinguishable from real timeouts |
 | `RuntimeError` + `CompileError` | `max(5, 2%)` aggregate **and** per module | **Stryker excludes these from the denominator** |
+| A report for a module **outside the selected set** | 0 | It is excluded from the score, but its presence means the artifact set is not the planned one |
 | A shard **outside** the plan | 0 | A stale or misrouted artifact was merged — missing-shard detection cannot see it |
 | Shard conflicts | 0 | Overlapping shards disagreed — not reproducible |
 
@@ -230,11 +231,15 @@ node mutation/workflow.mjs plan
 # projected wall clock: 34.5m of the 60m planning budget, 1 wave(s) of 6 leg(s) across 8 lanes (per-leg hard bound 48m)
 ```
 
-`projectWallClock()` packs legs through those lanes **in matrix order**, because
-that is how GitHub dispatches a matrix: the next leg starts when a lane frees, in
-the order the matrix lists them. The old formula was `max(leg) + reserve`, which
-assumed every leg started at once — exact only while the leg count is at or below
-the lane count. Sharding six modules four ways is 24 legs:
+`projectWallClock()` packs legs through those lanes in one possible dispatch
+order — the order the matrix lists them, starting the next leg when a lane frees.
+**GitHub does not guarantee matrix execution order**, only that at most
+`max-parallel` jobs run at once, so this is a projection assumption rather than a
+dispatch guarantee: a different order can produce a longer wall clock than the
+projection, which is why the number is a planning objective. The old formula was
+`max(leg) + reserve`, which assumed every leg started at once — exact only while
+the leg count is at or below the lane count. Sharding six modules four ways is 24
+legs:
 
 ```
 SHARDS=4 node mutation/workflow.mjs plan
@@ -254,7 +259,7 @@ Still an estimate, because: GitHub scheduling and image pulls add delay the
 planner cannot see; shards overlap, so each covers slightly more than an even
 share; and a leg that overruns has no workflow-wide deadline to stop it.
 
-**What is actually enforced:**
+### What is actually enforced
 
 - the plan refuses an infeasible matrix before any job starts, naming the module —
   and it never meets the cap by measuring fewer mutants;
@@ -335,8 +340,8 @@ phantom `CallExpression` mutants).
 `reports/mutation/`, so a previous run's file would be counted. Clearing matches
 exact names only — `cache.ts` must never delete `cache-classifier.ts.json`. An
 explicit `--report` owns exactly the resolved path it names — an
-`archive/x.json` target never deletes `reports/mutation/x.json`, which may be a
-different shard's output — so two manual per-shard runs do not delete each other.
+`reports/archive/x.json` target never deletes `reports/mutation/x.json`, which
+may be a different shard's output — so two manual per-shard runs do not delete each other.
 
 **`--shards` applies to one target.** A shard is a slice of one module; applying
 it across several would make report names ambiguous.
@@ -377,8 +382,10 @@ node mutation/report.mjs --dir reports/mutation --out /tmp/mutation.md
 `bun test`, so `bun` must be on `PATH`. `routing.ts` uses TAP and does not need
 it. There is no per-invocation runner flag; the choice is `RUNNER_OVERRIDES`.
 
-`--report` names one output file, is written exactly where you point it (inside
-the repository), and clears only that file. It requires exactly one target and
+`--report` names one output file, is written exactly where you point it **under
+`reports/`**, and clears only that file. The boundary is enforced: `reports/` is
+gitignored, and the runner deletes its own previous output before measuring, so
+a path elsewhere could delete a source or tracked file. It requires exactly one target and
 cannot be combined with `--shards`; both cases fail immediately rather than
 silently ignoring the flag. Normal runs clear the target's whole report set first,
 because a stale file would be merged into the score.

@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isReportFor, reportsToClear, resolveReportPath, staleReportsFor } from "../mutation/run.mjs";
+import { isInsideReports, isReportFor, reportsToClear, resolveReportPath, staleReportsFor } from "../mutation/run.mjs";
 import {
   ROOT,
   bindingExclusions,
@@ -1029,9 +1029,9 @@ test("clearing keeps sibling shards but drops this run's own stale output", () =
     path: join(ROOT, "reports", "mutation", "cache.ts.shard1.json"),
   });
 
-  // The decisive case from the review: an archive path must not touch the
+  // The decisive case from the review: a nested path must not touch the
   // top-level report of the same name.
-  const archived = { report: "archive/cache.ts.shard0.json" };
+  const archived = { report: "reports/archive/cache.ts.shard0.json" };
   const tmp = mkdtempSync(join(tmpdir(), "mutation-own-"));
   try {
     const resolved = resolveReportPath(archived.report);
@@ -1061,8 +1061,10 @@ test("clearing keeps sibling shards but drops this run's own stale output", () =
     rmSync(tmp, { recursive: true, force: true });
   }
 
-  // A path outside the checkout is refused rather than allowed to delete.
-  assert.throws(() => resolveReportPath("../../etc/somewhere.json"), /must stay inside the repository/u);
+  // A path outside the reporting directory is refused rather than allowed to
+  // delete: this run unlinks its own previous output before measuring.
+  assert.throws(() => resolveReportPath("../../etc/somewhere.json"), /must name a file under reports\//u);
+  assert.throws(() => resolveReportPath("package.json"), /must name a file under reports\//u);
 });
 
 test("the summary line prints the tolerance the gate used", () => {
@@ -1290,4 +1292,161 @@ test("an explicit --report is refused when it cannot name exactly one measuremen
   const sharded = attempt(["cache.ts", "--shards", "2", "--report", "one.json"]);
   assert.notEqual(sharded.status, 0);
   assert.match(sharded.stderr, /--report cannot be combined with --shards/u);
+});
+
+// --- A report for a module this run did not plan must not reach the score ---
+
+const strykerReport = (module, statuses) => ({
+  schemaVersion: "1.0",
+  framework: { name: "StrykerJS", version: "10.0.0" },
+  thresholds: { high: 0, low: 0, break: null },
+  files: {
+    [`/repo/${module}`]: {
+      mutants: statuses.map((status, index) => ({
+        id: String(index),
+        mutatorName: "ConditionalExpression",
+        replacement: "true",
+        status,
+        location: { start: { line: index + 1, column: 0 }, end: { line: index + 1, column: 1 } },
+      })),
+    },
+  },
+});
+
+const invoke = (argv) => {
+  try {
+    const stdout = execFileSync(process.execPath, argv, { cwd: ROOT, encoding: "utf8", stdio: "pipe" });
+    return { status: 0, stdout, stderr: "" };
+  } catch (error) {
+    return { status: error.status, stdout: String(error.stdout ?? ""), stderr: String(error.stderr ?? "") };
+  }
+};
+
+test("a report outside the selected target set cannot influence the score or pass the gate", () => {
+  // A stale `routing.ts.json` left by an earlier wider run used to be merged into
+  // `modules` and `aggregate`, so a cache-only dispatch published a score that
+  // covered mutants it never measured.
+  const directory = mkdtempSync(join(tmpdir(), "mutation-unselected-"));
+  try {
+    writeFileSync(join(directory, "cache.ts.json"), JSON.stringify(strykerReport("cache.ts", Array(10).fill("Killed"))));
+    writeFileSync(join(directory, "routing.ts.json"), JSON.stringify(strykerReport("routing.ts", Array(10).fill("Survived"))));
+    const out = join(directory, "summary.json");
+
+    const selected = invoke(["mutation/report.mjs", "--dir", directory, "--targets", "cache.ts", "--json", out, "--out", join(directory, "summary.md")]);
+    assert.equal(selected.status, 0, selected.stderr);
+    const payload = JSON.parse(readFileSync(out, "utf8"));
+    assert.deepEqual(payload.modules.map((module) => module.module), ["cache.ts"], "only the selected module is scored");
+    assert.equal(payload.aggregate.total, 10, "the foreign report is not in the population");
+    assert.equal(payload.aggregate.Killed, 10);
+    assert.deepEqual(payload.unexpectedTargets, ["routing.ts"]);
+    assert.deepEqual(payload.missingTargets, []);
+
+    const markdown = readFileSync(join(directory, "summary.md"), "utf8");
+    assert.doesNotMatch(markdown, /\| `routing\.ts` \|/u, "the foreign module is not in the table");
+    assert.match(markdown, /Unexpected reports/u);
+
+    // Its presence is still a failed measurement: the artifact set is not the
+    // planned one, even though the published score is clean.
+    const rejected = invoke(["mutation/workflow.mjs", "require-usable", out]);
+    assert.equal(rejected.status, 1);
+    assert.match(rejected.stderr, /unexpected module reports: routing\.ts/u);
+    assert.match(rejected.stderr, /excluded from the score/u);
+
+    // Control: selecting both scores both and passes.
+    const both = invoke(["mutation/report.mjs", "--dir", directory, "--targets", "cache.ts,routing.ts", "--json", out, "--out", join(directory, "both.md")]);
+    assert.equal(both.status, 0, both.stderr);
+    const bothPayload = JSON.parse(readFileSync(out, "utf8"));
+    assert.equal(bothPayload.aggregate.total, 20);
+    assert.deepEqual(bothPayload.unexpectedTargets, []);
+    assert.equal(invoke(["mutation/workflow.mjs", "require-usable", out]).status, 0);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("unexpected reports are rejected by the gate on their own", () => {
+  const reasons = unusableReasons({
+    modules: [{ module: "cache.ts", total: 10, Killed: 10 }],
+    aggregate: { total: 10, Timeout: 0, RuntimeError: 0, CompileError: 0, shardConflicts: 0 },
+    missingTargets: [],
+    unexpectedTargets: ["routing.ts"],
+  });
+  assert.equal(reasons.length, 1);
+  assert.match(reasons[0], /unexpected module reports: routing\.ts/u);
+});
+
+// --- A report path may only touch the reporting directory ---
+
+test("a report path is confined to the reporting directory", () => {
+  // The runner deletes its own previous output before measuring, so an
+  // unrestricted path deleted a tracked file and then wrote a report over it.
+  const accepted = resolveReportPath("reports/mutation/cache.ts.json");
+  assert.equal(accepted, join(ROOT, "reports", "mutation", "cache.ts.json"));
+  assert.ok(isInsideReports(resolveReportPath("reports/archive/deep/nested/x.json")));
+
+  for (const malicious of ["package.json", "src/Mutation.ts", "mutation/README.md", "../../outside.json", "/tmp/outside.json"]) {
+    assert.throws(() => resolveReportPath(malicious), /must name a file under reports\//u, `${malicious} must be refused`);
+  }
+  // The prefix must include the separator: a sibling directory that merely
+  // shares the string prefix is not the reporting directory.
+  assert.throws(() => resolveReportPath("reports-archive/x.json"), /must name a file under reports\//u);
+  // The directory itself is not a file target.
+  assert.throws(() => resolveReportPath("reports"), /must name a file under reports\//u);
+  assert.throws(() => resolveReportPath("reports/"), /must name a file under reports\//u);
+  assert.throws(() => resolveReportPath(""), /needs a file path/u);
+
+  // A directory that exists is refused rather than left to fail in unlink/write.
+  const root = mkdtempSync(join(tmpdir(), "mutation-reports-root-"));
+  try {
+    const reportsRoot = join(root, "reports");
+    writeFileSync(join(root, "placeholder"), "");
+    execFileSync("mkdir", ["-p", join(reportsRoot, "existing")]);
+    assert.throws(() => resolveReportPath(join(reportsRoot, "existing"), reportsRoot), /must name a file, not a directory/u);
+    assert.equal(resolveReportPath(join(reportsRoot, "existing", "ok.json"), reportsRoot), join(reportsRoot, "existing", "ok.json"));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+
+  // And the cleaner refuses an out-of-bounds owned path handed to it directly.
+  assert.throws(
+    () => reportsToClear({ report: "x.json" }, { target: "cache.ts", reportPath: join(ROOT, "package.json") }, join(ROOT, "reports"), []),
+    /refusing to clear a report outside reports\//u,
+  );
+});
+
+// --- The published warnings and the gate must apply the same allowance ---
+
+test("the summary applies the same timeout allowance as the gate", () => {
+  const mutants = [...Array(80).fill("Killed"), ...Array(20).fill("Timeout")].map((status) => ({ status }));
+  const report = { module: "cache.ts", mutants, summary: summarise(mutants), conflicts: [], shardsSeen: [0] };
+  const reports = [report];
+
+  // With the override, the gate accepts these 20 timeouts. The published summary
+  // must not then contradict it by judging the module against the default of 10.
+  const withOverride = renderSummary({
+    reports,
+    expectedTargets: ["cache.ts"],
+    shardsPerTarget: new Map([["cache.ts", 1]]),
+    tolerance: 25,
+  });
+  assert.doesNotMatch(withOverride, /above this module's tolerance/u);
+  assert.doesNotMatch(withOverride, /above the tolerance of 10/u);
+  assert.match(withOverride, /tolerance 25/u);
+
+  const payload = {
+    modules: [{ module: "cache.ts", ...report.summary }],
+    aggregate: { ...summarise(mutants), shardConflicts: 0 },
+    missingTargets: [],
+    timeoutToleranceOverride: 25,
+  };
+  assert.deepEqual(unusableReasons(payload), [], "the gate accepts the same run");
+
+  // Control: without the override both reject against the calibrated default.
+  const withoutOverride = renderSummary({
+    reports,
+    expectedTargets: ["cache.ts"],
+    shardsPerTarget: new Map([["cache.ts", 1]]),
+  });
+  assert.match(withoutOverride, /above this module's tolerance of 10/u);
+  assert.ok(unusableReasons({ ...payload, timeoutToleranceOverride: undefined }).length > 0);
 });
