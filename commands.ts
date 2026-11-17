@@ -1928,7 +1928,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         reportInitOutcome(
           ctx,
           "blocked",
-          `Nothing was saved; inherited model pools would be shadowed (${shadowedTiers.join(", ")}).`,
+          `Nothing was saved; pools inherited from your global or workspace config already set ${shadowedTiers.join(", ")} with different models.`,
           "Edit the existing source, use /bifrost init -g for the global config, or review /bifrost config reconcile --source workspace.",
           "warning",
         );
