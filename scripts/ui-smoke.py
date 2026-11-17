@@ -805,6 +805,11 @@ def capture(
                 raise AssertionError("manual init opened a classifier picker after save")
             if "pools +2 / -0 memberships" not in init_screen or "save to project (.pi/bifrost.json)" not in init_screen:
                 raise AssertionError("manual init did not preview the exact project membership changes")
+            # #245: the run ends on the terminal footer, not a bare status line.
+            # The card renders its title and message on separate lines, so match
+            # the flattened text just like the preview assertions above.
+            if "init saved." not in init_screen or "send a prompt to try it" not in init_screen:
+                raise AssertionError("manual init did not end on the terminal footer")
 
         time.sleep(2.0)
         assert_no_network_violations(home)

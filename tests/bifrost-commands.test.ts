@@ -1948,7 +1948,12 @@ describe("command aliases", () => {
       };
       await createCommandRouter(makeState() as never)("init", ctx);
       assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
-      assert.ok(calls.some((call) => String(call.value).includes("Inherited config changed")));
+      assert.ok(
+        calls.some((call) =>
+          String(call.value).includes("init: stale review. Nothing was saved; your inherited config changed"),
+        ),
+        JSON.stringify(calls),
+      );
     } finally {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -1982,7 +1987,12 @@ describe("command aliases", () => {
       };
       await createCommandRouter(makeState() as never)("init", ctx);
       assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
-      assert.ok(calls.some((call) => String(call.value).includes("Inherited config changed")));
+      assert.ok(
+        calls.some((call) =>
+          String(call.value).includes("init: stale review. Nothing was saved; your inherited config changed"),
+        ),
+        JSON.stringify(calls),
+      );
     } finally {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -2023,7 +2033,12 @@ describe("command aliases", () => {
         last.lines === undefined || last.lines.length === 0,
         "probe widget was not cleared after probing",
       );
-      assert.ok(calls.some((call) => String(call.value).includes("Inherited config changed")));
+      assert.ok(
+        calls.some((call) =>
+          String(call.value).includes("init: stale review. Nothing was saved; your inherited config changed"),
+        ),
+        JSON.stringify(calls),
+      );
     } finally {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -2059,6 +2074,52 @@ describe("command aliases", () => {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ends every init exit on the terminal footer standard", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-footer-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      const router = createCommandRouter(makeState() as never);
+      await router("init --bogus", ctx as never);
+      (ctx as any).ui.confirm = async () => false;
+      await router("init", ctx as never);
+      (ctx as any).ui.confirm = async () => true;
+      await router("init --write", ctx as never);
+      const notices = calls
+        .filter((call) => call.kind === "notify")
+        .map((call) => String(call.value));
+      // #245: `init: <outcome>. <what changed>. <one next step>`, TUI and headless.
+      assert.equal(
+        notices.find((notice) => notice.includes("init: not started.")),
+        "warning:init: not started. Nothing was read or written. Usage: /bifrost init [-f] [--write] [-g].",
+      );
+      assert.equal(
+        notices.find((notice) => notice.includes("init: declined.")),
+        "info:init: declined. Nothing was saved. Probe results are cached for an hour; run /bifrost init again to review and save.",
+      );
+      assert.ok(
+        // notify() has no "success" type, so a saved footer arrives as info there.
+        notices.some((notice) => notice.includes("init: saved. Saved ") && notice.endsWith("Send a prompt to try it.")),
+        JSON.stringify(notices),
+      );
+      // No exit may keep its old ad-hoc title: the footer is the only terminus.
+      assert.ok(
+        !notices.some((notice) =>
+          /No usable models found|Setup cancelled|Init blocked|No updates needed|Save unavailable|Bifrost initialized/.test(notice),
+        ),
+        JSON.stringify(notices),
+      );
+    } finally {
+      process.chdir(previousCwd);
       rmSync(tempDir, { recursive: true, force: true });
     }
   });

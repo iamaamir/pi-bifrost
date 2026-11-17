@@ -233,7 +233,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
           assert.equal(result.violations, "");
           assert.deepEqual(readFileSync(target), original);
           assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), !conflict);
-          if (conflict) assert.match(result.stdout + result.stderr, /inherited.*quick.*no configuration.*changed/i);
+          if (conflict) assert.match(result.stdout + result.stderr, /init: blocked\. Nothing was saved; inherited model pools would be shadowed \(quick\)/i);
         } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
       });
     }
@@ -249,7 +249,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
         const result = await runInit({ ...env, args: "--write" });
         assert.equal(result.code, 0, result.stderr);
         assert.equal(result.violations, "");
-        assert.match(result.stdout + result.stderr, /inherited.*quick.*no configuration.*changed/i);
+        assert.match(result.stdout + result.stderr, /init: blocked\. Nothing was saved; inherited model pools would be shadowed \(quick\)/i);
         assert.deepEqual(readFileSync(lowerPath), original);
         assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
         assert.equal(existsSync(join(env.work, ".pi", "bifrost-reconcile-ownership.json")), false);
@@ -336,7 +336,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       const result = await runInit({ ...env, args: "--write" });
       assert.equal(result.code, 0, result.stderr);
       assert.equal(result.violations, "");
-      assert.match(result.stdout + result.stderr, /inherited.*quick.*no configuration.*changed/i);
+      assert.match(result.stdout + result.stderr, /init: blocked\. Nothing was saved; inherited model pools would be shadowed \(quick\)/i);
       assert.deepEqual(readFileSync(globalPath), original);
       assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
