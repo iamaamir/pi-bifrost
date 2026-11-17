@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isInsideReports, isReportFor, reportsToClear, resolveReportPath, staleReportsFor } from "../mutation/run.mjs";
@@ -23,6 +23,7 @@ import {
   exceedsBudget,
   legEstimateMinutes,
   lineCount,
+  measurementIdentity,
   runnerFor,
   shardsFor,
   suggestedShards,
@@ -59,7 +60,7 @@ import {
   resolveTimeoutTolerance,
   summaryLines,
 } from "../mutation/workflow.mjs";
-import { annotationLines, mergeShardReports, readReports, renderSummary, summarise, survivorRows } from "../mutation/report.mjs";
+import { annotationLines, mergeShardReports, readReports, renderSummary, selectMeasurement, summarise, survivorRows } from "../mutation/report.mjs";
 
 const workflow = readFileSync(new URL("../.github/workflows/mutation.yml", import.meta.url), "utf8");
 const verificationWorkflow = readFileSync(new URL("../.github/workflows/verification.yml", import.meta.url), "utf8");
@@ -537,7 +538,8 @@ test("a report directory becomes a per-module summary with a survivor extract", 
     // A non-Stryker json file must be ignored rather than counted.
     writeFileSync(join(directory, "summary.json"), JSON.stringify({ generatedAt: "x", modules: [] }));
 
-    const reports = readReports(directory);
+    stamp(directory, "cache.json");
+    const { reports } = readReports(directory);
     assert.equal(reports.length, 1);
     assert.equal(reports[0].module, "cache.ts");
     assert.equal(reports[0].summary.total, 2);
@@ -659,7 +661,9 @@ test("an overlapping shard merge reproduces the unsharded mutant set", () => {
       mutant("3", 90, "Killed"),
     ])));
 
-    const reports = readReports(directory);
+    stamp(directory, "cache.ts.shard0.json");
+    stamp(directory, "cache.ts.shard1.json");
+    const { reports } = readReports(directory);
     assert.equal(reports.length, 1, "two shards of one module become one report");
     assert.equal(reports[0].module, "cache.ts");
     assert.equal(reports[0].mutants.length, 3, "the overlap must be deduplicated, not double-counted");
@@ -699,7 +703,9 @@ test("a shard disagreement is surfaced, not silently resolved", () => {
     writeFileSync(join(directory, "cache.ts.shard0.json"), JSON.stringify(report("Killed")));
     writeFileSync(join(directory, "cache.ts.shard1.json"), JSON.stringify(report("Survived")));
 
-    const reports = readReports(directory);
+    stamp(directory, "cache.ts.shard0.json");
+    stamp(directory, "cache.ts.shard1.json");
+    const { reports } = readReports(directory);
     assert.equal(reports[0].mutants.length, 1);
     assert.equal(reports[0].conflicts.length, 1, "the disagreement must be recorded");
     assert.deepEqual(reports[0].conflicts[0].statuses, ["Killed", "Survived"]);
@@ -927,6 +933,7 @@ test("the tolerance override reaches the gate through the written payload", () =
       schemaVersion: "1.0",
       framework: { name: "StrykerJS", version: "10.0.0" },
       thresholds: { high: 0, low: 0, break: null },
+      bifrost: { measurement: measurementIdentity("cache.ts") },
       files: {
         "/repo/cache.ts": {
           mutants: Array.from({ length: 100 }, (_, index) => ({
@@ -972,6 +979,20 @@ test("the projection follows the shard count that will actually run", () => {
     narrow.projectedMinutes > wide.projectedMinutes,
     `one shard must project slower than two (got ${narrow.projectedMinutes} vs ${wide.projectedMinutes})`,
   );
+});
+
+test("the summary downloads every attempt, so a partial re-run still sees the legs that passed", () => {
+  // Scoping the download to the current attempt would hide the legs that were
+  // not re-run: "re-run failed jobs" increments the attempt while the successful
+  // legs' artifacts stay on the earlier one, so the summary would see only the
+  // retried legs and report every other module missing. What rejects a
+  // measurement of different bytes is the stamped identity, not the file name.
+  const block = jobs.summarise;
+  assert.match(block, /pattern: mutation-report-\*/u);
+  assert.doesNotMatch(block, /pattern:[^\n]*run_attempt/u);
+  // The upload name still distinguishes attempts, so one cannot overwrite another
+  // within a single run.
+  assert.match(jobs.targets, /name: mutation-report-[^\n]*attempt-\$\{\{ github\.run_attempt \}\}/u);
 });
 
 test("transport cannot be disabled, because the summary depends on it", () => {
@@ -1296,10 +1317,20 @@ test("an explicit --report is refused when it cannot name exactly one measuremen
 
 // --- A report for a module this run did not plan must not reach the score ---
 
+/** Stamp a fixture report the way the runner does, for the module it describes. */
+function stamp(directory, name) {
+  const path = join(directory, name);
+  const report = JSON.parse(readFileSync(path, "utf8"));
+  const module = Object.keys(report.files)[0].split("/").pop();
+  report.bifrost = { measurement: measurementIdentity(module) };
+  writeFileSync(path, JSON.stringify(report));
+}
+
 const strykerReport = (module, statuses) => ({
   schemaVersion: "1.0",
   framework: { name: "StrykerJS", version: "10.0.0" },
   thresholds: { high: 0, low: 0, break: null },
+  bifrost: { measurement: measurementIdentity(module) },
   files: {
     [`/repo/${module}`]: {
       mutants: statuses.map((status, index) => ({
@@ -1380,8 +1411,9 @@ test("unexpected reports are rejected by the gate on their own", () => {
 test("a report path is confined to the reporting directory", () => {
   // The runner deletes its own previous output before measuring, so an
   // unrestricted path deleted a tracked file and then wrote a report over it.
+  const reportsReal = realpathSync(join(ROOT, "reports"));
   const accepted = resolveReportPath("reports/mutation/cache.ts.json");
-  assert.equal(accepted, join(ROOT, "reports", "mutation", "cache.ts.json"));
+  assert.equal(accepted, join(reportsReal, "mutation", "cache.ts.json"));
   assert.ok(isInsideReports(resolveReportPath("reports/archive/deep/nested/x.json")));
 
   for (const malicious of ["package.json", "src/Mutation.ts", "mutation/README.md", "../../outside.json", "/tmp/outside.json"]) {
@@ -1402,7 +1434,10 @@ test("a report path is confined to the reporting directory", () => {
     writeFileSync(join(root, "placeholder"), "");
     execFileSync("mkdir", ["-p", join(reportsRoot, "existing")]);
     assert.throws(() => resolveReportPath(join(reportsRoot, "existing"), reportsRoot), /must name a file, not a directory/u);
-    assert.equal(resolveReportPath(join(reportsRoot, "existing", "ok.json"), reportsRoot), join(reportsRoot, "existing", "ok.json"));
+    assert.equal(
+      resolveReportPath(join(reportsRoot, "existing", "ok.json"), reportsRoot),
+      join(realpathSync(reportsRoot), "existing", "ok.json"),
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1410,7 +1445,7 @@ test("a report path is confined to the reporting directory", () => {
   // And the cleaner refuses an out-of-bounds owned path handed to it directly.
   assert.throws(
     () => reportsToClear({ report: "x.json" }, { target: "cache.ts", reportPath: join(ROOT, "package.json") }, join(ROOT, "reports"), []),
-    /refusing to clear a report outside reports\//u,
+    /refusing to clear reports/u,
   );
 });
 
@@ -1449,4 +1484,188 @@ test("the summary applies the same timeout allowance as the gate", () => {
   });
   assert.match(withoutOverride, /above this module's tolerance of 10/u);
   assert.ok(unusableReasons({ ...payload, timeoutToleranceOverride: undefined }).length > 0);
+});
+
+// --- Adversarial report paths: the boundary is the resolved filesystem ---
+
+test("a symlinked directory cannot redirect a report outside the reporting directory", () => {
+  const root = mkdtempSync(join(tmpdir(), "mutation-symlink-"));
+  try {
+    const reports = join(root, "reports");
+    const outside = join(root, "outside");
+    mkdirSync(reports, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    const victim = join(outside, "victim.json");
+    writeFileSync(victim, "do not touch");
+    symlinkSync(outside, join(reports, "escape"));
+
+    const target = join(reports, "escape", "victim.json");
+    assert.throws(() => resolveReportPath(target, reports), /must name a file under/u);
+    assert.equal(isInsideReports(target, reports), false);
+    assert.equal(readFileSync(victim, "utf8"), "do not touch", "the outside file must not be written");
+
+    // Cleanup applies the same boundary and fails closed rather than deleting it.
+    assert.throws(
+      () => reportsToClear({ report: target }, { target: "cache.ts", reportPath: target }, reports, [], reports),
+      /refusing to clear reports/u,
+    );
+    assert.equal(readFileSync(victim, "utf8"), "do not touch", "the outside file must not be deleted");
+
+    // A symlink to a file outside is caught by containment, which is the
+    // stronger refusal: the write would land outside the boundary.
+    symlinkSync(victim, join(reports, "linked-outside.json"));
+    assert.throws(() => resolveReportPath(join(reports, "linked-outside.json"), reports), /must name a file under/u);
+
+    // A symlink that stays inside is refused by the regular-file rule:
+    // `unlinkSync` removes the link while `writeFileSync` follows it, so
+    // "remove our own output" would not mean one thing.
+    writeFileSync(join(reports, "real.json"), "{}");
+    symlinkSync(join(reports, "real.json"), join(reports, "linked-inside.json"));
+    assert.throws(() => resolveReportPath(join(reports, "linked-inside.json"), reports), /must name a regular file, not a symlink/u);
+
+    // A dangling symlink is the same case as long as it points inside.
+    symlinkSync(join(reports, "missing.json"), join(reports, "dangling.json"));
+    assert.throws(() => resolveReportPath(join(reports, "dangling.json"), reports), /must name a regular file, not a symlink/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a not-yet-created nested report path is allowed, and traversal out of it is not", () => {
+  const root = mkdtempSync(join(tmpdir(), "mutation-nested-"));
+  try {
+    const reports = join(root, "reports");
+    mkdirSync(reports, { recursive: true });
+    assert.equal(
+      resolveReportPath(join(reports, "a", "b", "c.json"), reports),
+      join(realpathSync(reports), "a", "b", "c.json"),
+      "components that do not exist cannot redirect anything",
+    );
+    assert.throws(() => resolveReportPath(join(reports, "..", "outside.json"), reports), /must name a file under/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// --- Mixed or stale populations ---
+
+test("an unsharded report cannot be merged with a shard of the same module", () => {
+  // `<module>.json` parses as shard 0, so it collides with `<module>.shard0.json`.
+  // Both present means two measurements of one shard; merging them would publish
+  // a composite no run produced.
+  const directory = mkdtempSync(join(tmpdir(), "mutation-duplicate-shard-"));
+  try {
+    const report = (status) => ({ files: { "/repo/cache.ts": { mutants: [{
+      id: status, mutatorName: "EqualityOperator", replacement: "!==", status,
+      location: { start: { line: 10, column: 1 }, end: { line: 10, column: 9 } },
+    }] } } });
+    writeFileSync(join(directory, "cache.ts.json"), JSON.stringify(report("Killed")));
+    writeFileSync(join(directory, "cache.ts.shard0.json"), JSON.stringify(report("Survived")));
+    stamp(directory, "cache.ts.json");
+    stamp(directory, "cache.ts.shard0.json");
+
+    const { reports, rejected } = readReports(directory);
+    assert.equal(reports.length, 0, "no module may be merged from two files claiming one shard");
+    assert.match(rejected[0].reason, /cache\.ts\.json and cache\.ts\.shard0\.json both claim shard 0/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a report measured against different bytes is rejected, not merged", () => {
+  const directory = mkdtempSync(join(tmpdir(), "mutation-stale-report-"));
+  try {
+    const report = {
+      files: { "/repo/cache.ts": { mutants: [{
+        id: "1", mutatorName: "EqualityOperator", replacement: "!==", status: "Killed",
+        location: { start: { line: 10, column: 1 }, end: { line: 10, column: 9 } },
+      }] } },
+      bifrost: { measurement: "0".repeat(64) },
+    };
+    writeFileSync(join(directory, "cache.ts.json"), JSON.stringify(report));
+
+    const { reports, rejected } = readReports(directory);
+    assert.equal(reports.length, 0, "a stale measurement must not contribute mutants");
+    assert.match(rejected[0].reason, /measured against different bytes/u);
+
+    const reasons = unusableReasons({
+      modules: [],
+      aggregate: { total: 0, Timeout: 0, RuntimeError: 0, CompileError: 0, shardConflicts: 0 },
+      missingTargets: ["cache.ts"],
+      missingShards: [],
+      rejectedModules: ["cache.ts"],
+      rejectedReports: rejected,
+    });
+    assert.match(reasons.join(" "), /rejected reports for cache\.ts/u);
+    assert.match(reasons.join(" "), /measured against different bytes/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an unstamped report is rejected rather than trusted", () => {
+  const directory = mkdtempSync(join(tmpdir(), "mutation-unstamped-"));
+  try {
+    writeFileSync(join(directory, "cache.ts.json"), JSON.stringify({
+      files: { "/repo/cache.ts": { mutants: [{ id: "1", mutatorName: "EqualityOperator", replacement: "!==", status: "Killed", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 2 } } }] } },
+    }));
+    const { reports, rejected } = readReports(directory);
+    assert.equal(reports.length, 0);
+    assert.match(rejected[0].reason, /has no measurement provenance/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+// --- A dry run must never destroy a completed measurement ---
+
+test("a dry run clears nothing, while a real run still clears its own target", () => {
+  const reportsDir = join(ROOT, "reports", "mutation");
+  const run = { target: "cache.ts", reportPath: join(reportsDir, "cache.ts.json") };
+  const entries = ["cache.ts.json", "cache.ts.shard0.json", "routing.ts.json"];
+
+  assert.deepEqual(reportsToClear({ dryRun: true }, run, reportsDir, entries), [], "a dry run writes no report, so it clears none");
+
+  const real = reportsToClear({}, run, reportsDir, entries);
+  assert.deepEqual(real.sort(), [join(reportsDir, "cache.ts.json"), join(reportsDir, "cache.ts.shard0.json")].sort());
+});
+
+const hasBun = (() => {
+  try {
+    execFileSync("bun", ["--version"], { stdio: "pipe" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+test("a real dry run preserves a completed report on disk", { skip: !hasBun && "bun is required to dry-run the default runner" }, () => {
+  const directory = join(ROOT, "reports", "mutation");
+  const file = join(directory, "inline-override.ts.json");
+  const existed = existsSync(file);
+  const previous = existed ? readFileSync(file) : null;
+  const sentinel = JSON.stringify({ files: {}, sentinel: "a completed previous measurement" });
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(file, sentinel);
+  try {
+    execFileSync(process.execPath, ["mutation/run.mjs", "inline-override.ts", "--dry-run"], { cwd: ROOT, encoding: "utf8", stdio: "pipe" });
+    assert.equal(readFileSync(file, "utf8"), sentinel, "a dry run must not clear a completed report");
+  } finally {
+    if (previous === null) rmSync(file, { force: true });
+    else writeFileSync(file, previous);
+  }
+});
+
+test("--dry-run refuses to name a report it will never produce", () => {
+  const attempt = (args) => {
+    try {
+      execFileSync(process.execPath, ["mutation/run.mjs", ...args], { cwd: ROOT, encoding: "utf8", stdio: "pipe" });
+      return { status: 0, stderr: "" };
+    } catch (error) {
+      return { status: error.status, stderr: String(error.stderr) };
+    }
+  };
+  const result = attempt(["cache.ts", "--dry-run", "--report", "reports/mutation/x.json"]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--dry-run writes no report/u);
 });

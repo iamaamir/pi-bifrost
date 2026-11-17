@@ -426,6 +426,17 @@ export function unusableReasons(data) {
     const detail = data.missingShards.map(({ module, shard }) => `${module} shard ${shard}`).join(", ");
     reasons.push(`missing module shards: ${detail}; the score would cover only part of the planned mutants`);
   }
+  // A report whose stamped measurement identity does not match this checkout
+  // measured different bytes. It is excluded from the score, and the module it
+  // belonged to is then incomplete -- which is a failed measurement, not a stale
+  // number that happens to look plausible.
+  if (Array.isArray(data?.rejectedModules) && data.rejectedModules.length > 0) {
+    const detail = (Array.isArray(data?.rejectedReports) ? data.rejectedReports : [])
+      .slice(0, 5)
+      .map((entry) => `${entry.module} (${entry.name}): ${entry.reason}`)
+      .join("; ");
+    reasons.push(`rejected reports for ${data.rejectedModules.join(", ")}: ${detail}`);
+  }
   // A report for a module this run did not plan is excluded from the score, so
   // the published number is clean. Its presence still means the report set is
   // not the one the plan described, which is a failed measurement rather than a

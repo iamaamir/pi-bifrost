@@ -335,6 +335,9 @@ low score.
 | `Timeout` mutants | `max(10, 2%)` aggregate **and** per module | A budget collapse is indistinguishable from genuine timeouts |
 | `RuntimeError` + `CompileError` | `max(5, 2%)` aggregate **and** per module | Stryker **excludes** these from its denominator |
 | A report for a module **outside the selected set** | 0 | It is excluded from the score; its presence still means the artifact set is not the planned one |
+| A report whose **measurement identity** differs | 0 | It measured different bytes (revision, binding or config), so it must not be merged |
+| **Two files claiming one shard** | 0 | `<module>.json` is shard 0, so it collides with `<module>.shard0.json` |
+| An **unstamped** report | 0 | Provenance is unknown, so nothing establishes what it measured |
 | A shard **outside** the plan | 0 | A stale or misrouted artifact was merged; missing-shard detection cannot see it |
 | Shard conflicts | 0 | Overlapping shards disagreed, so the run is not reproducible |
 
@@ -359,6 +362,42 @@ eight-file case was 208 of 352 (59%).
 
 A run that fails this gate **still publishes its summary**, report and survivors.
 Failing the measurement is not the same as discarding the evidence.
+
+## Report provenance and ownership
+
+A Stryker report carries no revision or measurement identity, so a directory of
+reports is not by itself evidence of one coherent measurement. Two mechanisms
+close that:
+
+- **A stamped content identity.** The runner writes
+  `bifrost.measurement` into every report: a SHA-256 of the mutated module's
+  bytes, its bound test files and `mutation/config.mjs`. The identity is **per
+  module**, because that is the population one measurement covered. The
+  summariser recomputes it and rejects a report that does not match — a different
+  revision, a different binding, a different config — naming the file and both
+  identities. A per-run scalar could not express this: modules have different
+  populations, so one value would accept everything or reject everything.
+  Because provenance travels inside the artifact, the download pattern does not
+  need to encode it, and staying `mutation-report-*` keeps a partial re-run
+  working: scoping it to `run_attempt` would hide the legs that were not retried.
+- **One file per shard.** An unsharded `<module>.json` parses as shard 0, so it
+  collides with `<module>.shard0.json`. Two files claiming one shard are two
+  measurements of it, and merging them would publish a composite that no run
+  produced. The module is rejected with both file names.
+
+**Report output is confined to `reports/` on resolved paths.** Lexical
+containment is not a boundary: a path spelled inside `reports/` whose parent is a
+symlink elsewhere is followed by `writeFileSync` and `unlinkSync`. Each component
+that exists is resolved before the boundary test, so such a path is refused.
+Deletion uses the spelled path, since removing a symlink removes the link rather
+than its target, and a symlinked report *file* is refused outright so "remove our
+own output" is unambiguous. Components that do not exist yet are allowed: creating
+them creates exactly what they name. Cleanup fails closed.
+
+**A dry run measures nothing, writes nothing, and clears nothing.** Deleting the
+previous measurement would destroy a real result to make room for a report that is
+never produced. `--dry-run` is also refused together with `--report`, which would
+name that nonexistent file.
 
 ## Reading the results
 
