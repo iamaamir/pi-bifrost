@@ -537,7 +537,7 @@ test("a report directory becomes a per-module summary with a survivor extract", 
     assert.equal(rows.length, 1);
     assert.deepEqual(Object.keys(rows[0]).sort(), [
       "coveredBy", "endColumn", "endLine", "module", "mutantId", "mutator", "replacement",
-      "source", "startColumn", "startLine", "testsCompleted",
+      "source", "startColumn", "startLine", "static", "testsCompleted",
     ].sort());
 
     const markdown = summary({ reports, expectedTargets: ["cache.ts"] });
@@ -2033,6 +2033,55 @@ test("a survivor carries the source line it points at", () => {
     assert.ok(row.source.length > 0, `first line of cache.ts (${line} lines) is the anchor`);
     const [annotation] = annotationLines([row]);
     assert.ok(annotation.includes(row.source.trim()), "the annotation repeats the source");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a static survivor is marked so its empty coverage is not an anomaly", () => {
+  // A static mutant is judged by comparing source text, so no test can ever cover
+  // it: testsCompleted is the whole suite and coveredBy is empty. A reader who
+  // sees "189 tests ran, none covered it" concludes the opposite of what happened.
+  const directory = mkdtempSync(join(tmpdir(), "mutation-static-"));
+  try {
+    writeFileSync(join(directory, "cache.json"), JSON.stringify({
+      files: { "/repo/cache.ts": { mutants: [{
+        id: "0", mutatorName: "ArithmeticOperator", replacement: "24 / 30", status: "Survived",
+        static: true, testsCompleted: 189, coveredBy: [],
+        location: { start: { line: 23, column: 30 }, end: { line: 23, column: 36 } },
+      }] } },
+      testFiles: { "tests/cache.test.ts": { tests: [{ id: "0", name: "tests/cache.test.ts > cache > adds" }] } },
+    }));
+    stamp(directory, "cache.json");
+    const { reports } = readReports(directory);
+    const [row] = survivorRows(reports);
+    assert.equal(row.static, true, "the row says why coverage is empty");
+
+    const text = renderSummary({ reports, payload: buildPayload({ reports, expectedTargets: ["cache.ts"] }) });
+    assert.match(text, /### Static survivors/u);
+    assert.match(text, /no test can cover them/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("uncovered mutants are named, not just counted", () => {
+  // The score says "9 have no coverage"; a reader cannot act on the count without
+  // re-running Stryker to find out which nine.
+  const directory = mkdtempSync(join(tmpdir(), "mutation-uncovered-"));
+  try {
+    writeFileSync(join(directory, "cache.json"), JSON.stringify({
+      files: { "/repo/cache.ts": { mutants: [{
+        id: "77", mutatorName: "ArithmeticOperator", replacement: "maxSeq - 1", status: "NoCoverage",
+        location: { start: { line: 110, column: 28 }, end: { line: 110, column: 37 } },
+      }] } },
+    }));
+    stamp(directory, "cache.json");
+    const { reports } = readReports(directory);
+    const text = renderSummary({ reports, payload: buildPayload({ reports, expectedTargets: ["cache.ts"] }) });
+    assert.match(text, /### Uncovered mutants/u);
+    assert.ok(text.includes("cache.ts:110"), "the line is named");
+    assert.ok(text.includes("maxSeq - 1"), "and what it replaces");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

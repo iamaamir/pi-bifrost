@@ -568,6 +568,11 @@ export function survivorRows(reports) {
         // discriminate. `null` when the report carried no coverage at all.
         testsCompleted: Number.isInteger(mutant.testsCompleted) ? mutant.testsCompleted : null,
         coveredBy: coveringTests(report, mutant),
+        // A static mutant is evaluated by comparing source text, so no test can
+        // ever cover it: `testsCompleted` is the whole suite and `coveredBy` is
+        // empty. Without saying so the row reads as an anomaly — "189 tests ran,
+        // none covered it" — which is the opposite of what happened.
+        static: mutant.static === true,
       })),
   );
 }
@@ -774,6 +779,33 @@ export function renderSummary({ reports, payload, identityFor = measurementIdent
       }
     }
     lines.push("</details>", "");
+  }
+
+  const uncovered = reports.flatMap((report) =>
+    report.mutants
+      .filter((mutant) => mutant.status === "NoCoverage")
+      .map((mutant) => `- \`${report.module}:${mutant.location?.start?.line ?? "?"}\` ${mutant.mutatorName} → ${String(mutant.replacement).slice(0, 80)}`),
+  );
+  if (uncovered.length > 0) {
+    // The score reports a count ("9 have no coverage") without saying which, so a
+    // reader cannot act on it without re-running Stryker.
+    lines.push("### Uncovered mutants", "", "No bound test reaches these lines:", "", ...uncovered.slice(0, 20), "");
+  }
+
+  const staticSurvivors = reports.flatMap((report) =>
+    report.mutants
+      .filter((mutant) => mutant.status === "Survived" && mutant.static === true)
+      .map((mutant) => `${report.module}:${mutant.location?.start?.line ?? "?"}`),
+  ).slice(0, 10);
+  if (staticSurvivors.length > 0) {
+    lines.push(
+      "### Static survivors",
+      "",
+      "These encode a change to the source *text* rather than to runtime behaviour, so Stryker compares them statically and no test can cover them. Their `coveredBy` is empty and `testsCompleted` is the whole suite; that is expected, not missing coverage.",
+      "",
+      ...staticSurvivors.map((entry) => `- \`${entry}\``),
+      "",
+    );
   }
 
   lines.push("### Bound tests", "");
