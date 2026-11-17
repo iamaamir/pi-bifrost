@@ -396,7 +396,7 @@ describe("strict runtime boundaries through registered Pi hooks", () => {
         tierPolicies: { restricted: { fallbackTiers: ["restricted"] } },
       }));
       await harness.command("reload", harness.ctx);
-      assert.ok(harness.notices.some((message) => message.includes("config reload rejected")));
+      assert.ok(harness.notices.some((message) => message.includes("Config reload rejected")));
       assert.deepEqual(await sendInput(harness), { action: "continue" });
       assert.deepEqual(harness.selected, ["fixture/allowed"]);
     } finally {

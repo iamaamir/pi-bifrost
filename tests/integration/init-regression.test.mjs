@@ -179,7 +179,7 @@ async function assertInheritedSettingsMatrixCase(port, args, targetKind) {
     if (targetKind === "owned") {
       assert.deepEqual(saved.models, { quick: ["fake/healthy"] });
       assert.equal(saved.targetPrivateSetting, "KEEP_TARGET_CANARY");
-      assert.match(result.stdout + result.stderr, /memberships: \+0 \/ -0/, `expected the owned-membership case to exercise settings-only reconciliation: ${JSON.stringify(result)}`);
+      assert.match(result.stdout + result.stderr, /Pools\s+\+0 \/ -0/, `expected the owned-membership case to exercise settings-only reconciliation: ${JSON.stringify(result)}`);
     }
 
     const before = loadConfigForReload(env.work, ROOT).config;
@@ -372,7 +372,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
         assert.equal(result.code, 0, result.stderr);
         assert.equal(result.violations, "");
         const target = selected === "global" ? "user" : "project";
-        assert.match(result.stdout + result.stderr, new RegExp(`save target: ${target}`));
+        assert.match(result.stdout + result.stderr, new RegExp(`Save to\\s+${target}`));
         assert.ok(JSON.parse(readFileSync(paths[target], "utf8")).models);
         for (const layer of ["workspace", "user"]) {
           if (layer === "workspace" && selected === "default-global-only") {
@@ -568,7 +568,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.deepEqual(saved.classifier.typesafe, { timeoutMs: 1234, maxAttempts: 2, debug: true, metrics: { enabled: false } });
       assert.deepEqual(saved.classifier.piNative, { timeoutMs: 2345, maxAttempts: 2, metrics: { enabled: false } });
       assert.deepEqual(saved.retained, { owner: "user" });
-      assert.match(result.stdout + result.stderr, /handwritten entries are preserved/u);
+      assert.match(result.stdout + result.stderr, /unverified membership preserved/u);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
 
