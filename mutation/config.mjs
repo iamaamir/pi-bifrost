@@ -336,53 +336,62 @@ export function timeoutTolerance(totalMutants) {
   return Math.max(TIMEOUT_TOLERANCE.minimum, Math.ceil(totalMutants * TIMEOUT_TOLERANCE.share));
 }
 
+/** Severity of a measurement diagnostic. Only `blocking` fails the gate. */
+export const BLOCKING = "blocking";
+export const ADVISORY = "advisory";
+
+function note(code, severity, message, remedy = null) {
+  return remedy === null ? { code, severity, message } : { code, severity, message, remedy };
+}
+
 /**
  * Per-module adjudication.
  *
- * The aggregate tolerances below are calibrated against the whole run, which is
- * the right granularity for "is this measurement trustworthy overall" and the
- * wrong granularity for "is any one module broken". A module with 80 errored
- * mutants out of 229 is 35% unusable, but inside a 4,200-mutant run it sits
- * under the aggregate error allowance of 85 and the gate accepts the run. The
- * merged score then looks confident while one module measured almost nothing.
+ * The aggregate tolerances are calibrated against the whole run, which is the
+ * right granularity for "is this measurement trustworthy overall" and the wrong
+ * granularity for "is any one module broken". A module with 80 errored mutants
+ * out of 229 is 35% unusable, but inside a 4,200-mutant run it sits under the
+ * aggregate error allowance of 85 and the gate would accept the run while one
+ * module measured almost nothing.
  *
  * So each module is judged against the same calibrated rule applied to its own
- * population, and the aggregate is judged as before. Both checks run: a module
- * can be locally healthy and the run still unhealthy, and a module can be
- * locally broken while the run's aggregate stays inside its allowance.
- *
- * `total` is the module's instrumented mutant count. `Ignored` mutants are not
- * evidence either way, so they do not make a module unhealthy.
+ * population, and the aggregate is judged as before. A dispatch override is an
+ * absolute count of tolerated timeouts, so it bounds each module as well as the
+ * aggregate -- otherwise it would clear the aggregate check and still fail the
+ * module it was meant to rescue.
  */
-export function moduleUnusableReasons(module, toleranceOverride = null) {
-  const reasons = [];
+export function moduleDiagnostics(module, timeoutOverride = null) {
+  const diagnostics = [];
   const name = module?.module ?? "(unnamed module)";
   const total = Number(module?.total ?? 0);
   if (total === 0) {
     // A report exists but carries no mutants: instrumentation ran and produced
     // nothing, which is a failed measurement, not a perfect score.
-    reasons.push(`${name}: reported zero mutants, so nothing in it was measured`);
-    return reasons;
+    return [note("zero-mutants", BLOCKING, `${name}: reported zero mutants, so nothing in it was measured`)];
   }
   const timeouts = Number(module?.Timeout ?? 0);
-  // A dispatch override is an absolute count of tolerated timeouts, so it bounds
-  // each module as well as the aggregate. Calibrating per module against the
-  // default here would make the override useless for the module that needed it:
-  // the aggregate would pass and the module check would still fail.
-  const timeoutsAllowed = toleranceOverride ?? timeoutTolerance(total);
+  const timeoutsAllowed = timeoutOverride ?? timeoutTolerance(total);
   if (timeouts > timeoutsAllowed) {
-    reasons.push(
-      `${name}: ${timeouts} of ${total} mutants timed out, above this module's tolerance of ${timeoutsAllowed}; its per-mutant budget is too small for its bound suite, so its Stryker score is inflated by timeouts`,
+    diagnostics.push(
+      note(
+        "module-timeout-burst",
+        BLOCKING,
+        `${name}: ${timeouts} of ${total} mutants timed out, above this module's tolerance of ${timeoutsAllowed}; its per-mutant budget is too small for its bound suite, so its Stryker score is inflated by timeouts`,
+      ),
     );
   }
   const errors = Number(module?.RuntimeError ?? 0) + Number(module?.CompileError ?? 0);
   const errorsAllowed = runtimeErrorTolerance(total);
   if (errors > errorsAllowed) {
-    reasons.push(
-      `${name}: ${errors} of ${total} mutants errored and are excluded from its score, above this module's tolerance of ${errorsAllowed}; the module reports a score over a population it never measured`,
+    diagnostics.push(
+      note(
+        "module-error-burst",
+        BLOCKING,
+        `${name}: ${errors} of ${total} mutants errored and are excluded from its score, above this module's tolerance of ${errorsAllowed}; the module reports a score over a population it never measured`,
+      ),
     );
   }
-  return reasons;
+  return diagnostics;
 }
 
 /**
@@ -393,13 +402,11 @@ export function moduleUnusableReasons(module, toleranceOverride = null) {
  * and dangerous for a runner integration problem: measured here, a bound test
  * calling `process.chdir()` made the TAP runner lose its handshake file and
  * report 320 of 388 mutants as `RuntimeError`. The tool then happily printed a
- * score computed over the surviving 68 — a smaller population than the one it
+ * score computed over the surviving 68 -- a smaller population than the one it
  * claimed to measure, with nothing in the output saying so.
  *
  * A zero tolerance would fail on the occasional genuine equivalence-style crash,
- * so this allows a small share and treats anything above it as a broken run. The
- * `chdir` cause is fixed by `preload-restore-cwd.mjs`; this gate is what catches
- * the next one.
+ * so this allows a small share and treats anything above it as a broken run.
  */
 export const RUNTIME_ERROR_TOLERANCE = {
   share: 0.02,
@@ -411,81 +418,161 @@ export function runtimeErrorTolerance(totalMutants) {
   return Math.max(RUNTIME_ERROR_TOLERANCE.minimum, Math.ceil(totalMutants * RUNTIME_ERROR_TOLERANCE.share));
 }
 
-/** The pass/fail rules for a completed run, evaluated by ./workflow.mjs. */
-export function unusableReasons(data) {
-  const reasons = [];
-  if (!Array.isArray(data?.modules) || data.modules.length === 0) {
-    reasons.push("no module reports were produced");
+/**
+ * Every judgement this measurement makes about itself, in one place.
+ *
+ * The gate and the published summary are two renderings of one policy: the gate
+ * prints the blocking messages, the summary prints blocking and advisory ones
+ * with their remedies. They used to be separate implementations of the same
+ * rules, which is why a dispatch override could pass the gate while the summary
+ * still reported the module as failing against the default. With one function
+ * they cannot disagree.
+ *
+ * `blocking` means the measurement is unusable; `advisory` means the number is
+ * usable but the reader should know. Nothing here is a score threshold: a low
+ * score is the measurement, never a failure.
+ */
+export function measurementDiagnostics(data) {
+  const diagnostics = [];
+  const aggregate = data?.aggregate ?? {};
+  const modules = Array.isArray(data?.modules) ? data.modules : [];
+  const total = Number(aggregate.total ?? 0);
+  const override = data?.timeoutToleranceOverride ?? null;
+  const timeoutsAllowed = override ?? timeoutTolerance(total);
+  const errorsAllowed = runtimeErrorTolerance(total);
+  const timeouts = Number(aggregate.Timeout ?? 0);
+  const errors = Number(aggregate.RuntimeError ?? 0) + Number(aggregate.CompileError ?? 0);
+
+  if (modules.length === 0) {
+    diagnostics.push(note("no-modules", BLOCKING, "no module reports were produced"));
   }
   if (Array.isArray(data?.missingTargets) && data.missingTargets.length > 0) {
-    reasons.push(`missing module reports: ${data.missingTargets.join(", ")}`);
+    diagnostics.push(
+      note("missing-module", BLOCKING, `missing module reports: ${data.missingTargets.join(", ")}`, "A missing matrix leg is not a pass."),
+    );
   }
   // A module that reports at all can still be missing a shard. Without this the
   // merged score covers a subset of the planned mutants while looking complete.
   if (Array.isArray(data?.missingShards) && data.missingShards.length > 0) {
     const detail = data.missingShards.map(({ module, shard }) => `${module} shard ${shard}`).join(", ");
-    reasons.push(`missing module shards: ${detail}; the score would cover only part of the planned mutants`);
+    diagnostics.push(
+      note("missing-shard", BLOCKING, `missing module shards: ${detail}; the score would cover only part of the planned mutants`),
+    );
   }
-  // A report whose stamped measurement identity does not match this checkout
-  // measured different bytes. It is excluded from the score, and the module it
-  // belonged to is then incomplete -- which is a failed measurement, not a stale
-  // number that happens to look plausible.
+  // A report whose stamped identity does not match this checkout measured
+  // different bytes. It is excluded from the score, and the module it belonged to
+  // is then incomplete -- a failed measurement, not a stale number that happens
+  // to look plausible.
   if (Array.isArray(data?.rejectedModules) && data.rejectedModules.length > 0) {
     const detail = (Array.isArray(data?.rejectedReports) ? data.rejectedReports : [])
       .slice(0, 5)
       .map((entry) => `${entry.module} (${entry.name}): ${entry.reason}`)
       .join("; ");
-    reasons.push(`rejected reports for ${data.rejectedModules.join(", ")}: ${detail}`);
+    diagnostics.push(note("rejected-report", BLOCKING, `rejected reports for ${data.rejectedModules.join(", ")}: ${detail}`));
   }
   // A report for a module this run did not plan is excluded from the score, so
-  // the published number is clean. Its presence still means the report set is
-  // not the one the plan described, which is a failed measurement rather than a
-  // silent merge.
+  // the published number is clean. Its presence still means the report set is not
+  // the one the plan described.
   if (Array.isArray(data?.unexpectedTargets) && data.unexpectedTargets.length > 0) {
-    reasons.push(
-      `unexpected module reports: ${data.unexpectedTargets.join(", ")}; they were excluded from the score, but a report outside the selected set means the artifact set is not the planned one`,
+    diagnostics.push(
+      note(
+        "unexpected-module",
+        BLOCKING,
+        `unexpected module reports: ${data.unexpectedTargets.join(", ")}; they were excluded from the score, but a report outside the selected set means the artifact set is not the planned one`,
+        "Update `mutation/config.mjs` if the target set changed.",
+      ),
     );
   }
   // A shard the plan did not ask for means a stale or misrouted artifact was
-  // merged: the population then differs from the one that was planned, and
-  // missing-shard detection cannot see it.
+  // merged: the population then differs from the planned one, and missing-shard
+  // detection cannot see it.
   if (Array.isArray(data?.unexpectedShards) && data.unexpectedShards.length > 0) {
-    const detail = data.unexpectedShards
-      .map(({ module, shard, planned }) => `${module} shard ${shard} (plan has ${planned})`)
-      .join(", ");
-    reasons.push(
-      `unexpected module shards: ${detail}; a shard outside the plan is stale or misrouted, so the merged population is not the planned one`,
+    const detail = data.unexpectedShards.map(({ module, shard, planned }) => `${module} shard ${shard} (plan has ${planned})`).join(", ");
+    diagnostics.push(
+      note(
+        "unexpected-shard",
+        BLOCKING,
+        `unexpected module shards: ${detail}; a shard outside the plan is stale or misrouted, so the merged population is not the planned one`,
+      ),
     );
   }
-  const timeouts = data?.aggregate?.Timeout ?? 0;
-  // A dispatch may override the calibrated tolerance; blank keeps the default.
-  const tolerance = data?.timeoutToleranceOverride ?? timeoutTolerance(data?.aggregate?.total ?? 0);
-  if (timeouts > tolerance) {
-    reasons.push(
-      `${timeouts} timed-out mutants exceed the tolerance of ${tolerance}; the per-mutant budget is too small for the bound suite, so the Stryker score is not trustworthy`,
+
+  if (timeouts > timeoutsAllowed) {
+    diagnostics.push(
+      note(
+        "timeout-burst",
+        BLOCKING,
+        `${timeouts} timed-out mutants exceed the tolerance of ${timeoutsAllowed}; the per-mutant budget is too small for the bound suite, so the Stryker score is not trustworthy`,
+        "Stryker counts a timeout as detected, so the Stryker score is inflated. Raise the module's `timeoutFactor`/`timeoutMS` in `mutation/config.mjs` before trusting this run.",
+      ),
+    );
+  } else if (timeouts > 0) {
+    diagnostics.push(
+      note(
+        "timeouts-observed",
+        ADVISORY,
+        `${timeouts} mutant(s) timed out (tolerance ${timeoutsAllowed}). A timeout counts as detected in the Stryker score and is unresolved in the population score, so population is the one to read. A few are expected: a mutant that inverts a loop bound or decrements a counter instead of incrementing it genuinely does not terminate.`,
+      ),
     );
   }
-  const conflicts = data?.aggregate?.shardConflicts ?? 0;
+
+  const conflicts = Number(aggregate.shardConflicts ?? 0);
   if (conflicts > 0) {
-    reasons.push(
-      `${conflicts} mutant(s) got different results in overlapping shards; the sharded run is not reproducible, so rerun that module without sharding`,
+    const sample = Array.isArray(data?.shardConflictSample) && data.shardConflictSample.length > 0 ? `: ${data.shardConflictSample.join(", ")}` : "";
+    diagnostics.push(
+      note(
+        "shard-conflict",
+        BLOCKING,
+        `${conflicts} shard conflict(s)${sample}; overlapping shards disagreed on the same mutant, so the sharded run is not reproducible`,
+        "Rerun that module without sharding.",
+      ),
     );
   }
-  // Stryker drops errored mutants from the score denominator, so a run with many
-  // of them reports a confident-looking score over a population it never
-  // measured. That is the one failure mode most likely to be believed.
-  const errors = (data?.aggregate?.RuntimeError ?? 0) + (data?.aggregate?.CompileError ?? 0);
-  const errorTolerance = runtimeErrorTolerance(data?.aggregate?.total ?? 0);
-  if (errors > errorTolerance) {
-    reasons.push(
-      `${errors} mutant(s) errored and are excluded from the score, above the tolerance of ${errorTolerance}; the reported score is computed over a smaller population than the run claims, so it is not usable`,
+
+  if (errors > errorsAllowed) {
+    diagnostics.push(
+      note(
+        "error-burst",
+        BLOCKING,
+        `${errors} mutant(s) errored and are excluded from the score, above the tolerance of ${errorsAllowed}; the reported score is computed over a smaller population than the run claims, so it is not usable`,
+        "With no type checker configured these are excluded from the denominator; `@stryker-mutator/typescript-checker` would classify them as compile errors instead.",
+      ),
+    );
+  } else if (errors > 0) {
+    diagnostics.push(
+      note(
+        "errors-observed",
+        ADVISORY,
+        `${errors} mutant(s) errored at runtime or compile time (tolerance ${errorsAllowed}). With no type checker configured these are excluded from the denominator; \`@stryker-mutator/typescript-checker\` would classify them as compile errors instead.`,
+      ),
     );
   }
-  // Aggregate checks can pass while one module is badly broken; see
-  // moduleUnusableReasons above. Module-level reasons are reported separately so
-  // the failure names the module and its own counts.
-  for (const module of Array.isArray(data?.modules) ? data.modules : []) {
-    reasons.push(...moduleUnusableReasons(module, data?.timeoutToleranceOverride ?? null));
+
+  if (Number(aggregate.NoCoverage ?? 0) > 0) {
+    // Measured coverage means these are real: no bound test reaches the mutated
+    // line at all. That is a coverage gap (or dead code), not a weak assertion,
+    // so it belongs on a different backlog from the survivors.
+    diagnostics.push(
+      note(
+        "no-coverage",
+        ADVISORY,
+        `${aggregate.NoCoverage} mutant(s) have no coverage: no bound test reaches those lines. That is a coverage or dead-code gap rather than a weak assertion. They count against both scores.`,
+      ),
+    );
   }
-  return reasons;
+
+  for (const module of modules) diagnostics.push(...moduleDiagnostics(module, override));
+  return diagnostics;
+}
+
+/**
+ * The gate: the blocking diagnostics, as plain messages.
+ *
+ * A low score is the measurement, not a failure. Only unusable measurements
+ * reach this list.
+ */
+export function unusableReasons(data) {
+  return measurementDiagnostics(data)
+    .filter((diagnostic) => diagnostic.severity === BLOCKING)
+    .map((diagnostic) => diagnostic.message);
 }

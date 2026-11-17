@@ -15,7 +15,7 @@
 //   node mutation/report.mjs --dir mutation-reports --survivors survivors.jsonl
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { SUMMARY, moduleUnusableReasons, timeoutTolerance } from "./config.mjs";
+import { BLOCKING, SUMMARY, measurementDiagnostics, timeoutTolerance } from "./config.mjs";
 import { ROOT, bindingExclusions, measurementIdentity, targetNames } from "./targets.mjs";
 
 const COUNTED_STATUSES = ["Killed", "Timeout", "Survived", "NoCoverage", "RuntimeError", "CompileError"];
@@ -459,7 +459,7 @@ function topSurvivorLines(report, limit) {
     .slice(0, limit);
 }
 
-function renderModuleTable(reports) {
+function renderModuleTable(reports, aggregate) {
   const lines = [
     "| Module | Mutants | Killed | Survived | NoCoverage | Timeout | Errors | Population | Conclusive | Stryker |",
     "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
@@ -473,109 +473,62 @@ function renderModuleTable(reports) {
       `| \`${report.module}\` | ${s.total} | ${s.Killed} | ${s.Survived} | ${uncoveredMark} | ${timeoutMark} | ${errors} | ${formatPercent(s.populationScore)} | ${formatPercent(s.conclusiveScore)} | ${formatPercent(s.strykerScore)} |`,
     );
   }
-  const aggregate = summarise(reports.flatMap((report) => report.mutants));
-  const shardConflicts = reports.reduce((total, report) => total + (report.conflicts?.length ?? 0), 0);
-  aggregate.shardConflicts = shardConflicts;
   lines.push(
     `| **Total** | **${aggregate.total}** | **${aggregate.Killed}** | **${aggregate.Survived}** | **${aggregate.NoCoverage}** | **${aggregate.Timeout}** | **${aggregate.RuntimeError + aggregate.CompileError}** | **${formatPercent(aggregate.populationScore)}** | **${formatPercent(aggregate.conclusiveScore)}** | **${formatPercent(aggregate.strykerScore)}** |`,
   );
   return { lines, aggregate };
 }
 
-function healthFlags(reports, aggregate, expectedTargets, toleranceOverride, shardsPerTarget, unexpectedTargets) {
-  const flags = [];
-  const tolerance = toleranceOverride ?? timeoutTolerance(aggregate.total);
-  if (aggregate.Timeout > tolerance) {
-    flags.push(
-      `**${aggregate.Timeout} mutant(s) timed out, above the tolerance of ${tolerance}.** Stryker counts a timeout as detected, so the Stryker score is inflated. Raise the module's \`timeoutFactor\`/\`timeoutMS\` in \`mutation/config.mjs\` before trusting this run.`,
-    );
-  } else if (aggregate.Timeout > 0) {
-    flags.push(
-      `${aggregate.Timeout} mutant(s) timed out (tolerance ${tolerance}). A timeout counts as detected in the Stryker score and is unresolved in the population score, so population is the one to read. A few are expected: a mutant that inverts a loop bound or decrements a counter instead of incrementing it genuinely does not terminate.`,
-    );
-  }
-  const errors = aggregate.RuntimeError + aggregate.CompileError;
-  if (errors > 0) {
-    flags.push(
-      `**${errors} mutant(s) errored at runtime or compile time.** With no type checker configured these are excluded from the denominator; \`@stryker-mutator/typescript-checker\` would classify them as compile errors instead.`,
-    );
-  }
-  if (aggregate.NoCoverage > 0) {
-    // Measured coverage means these are real: no bound test reaches the mutated
-    // line at all. That is a coverage gap (or dead code), not a weak assertion,
-    // so it belongs on a different backlog from the survivors.
-    flags.push(
-      `${aggregate.NoCoverage} mutant(s) have no coverage: no bound test reaches those lines. That is a coverage or dead-code gap rather than a weak assertion. They count against both scores.`,
-    );
-  }
-  // The aggregate tolerances are sized for the whole run, so one badly broken
-  // module can hide inside a large healthy population. Judge each module against
-  // its own population as well, and name it.
-  for (const report of reports) {
-    for (const reason of moduleUnusableReasons({ module: report.module, ...report.summary }, toleranceOverride)) {
-      flags.push(`**${reason}.**`);
-    }
-  }
-  const missing = expectedTargets.filter((target) => !reports.some((report) => report.module === target));
-  if (missing.length > 0) {
-    flags.push(`**Missing reports** for: ${missing.map((target) => `\`${target}\``).join(", ")}. A missing matrix leg is not a pass.`);
-  }
-  // A module can report and still be short a shard. Without this flag the merged
-  // score covers a subset of the planned mutants while looking complete.
-  const shortShards = reports.flatMap((report) => {
-    const planned = shardsPerTarget?.get?.(report.module) ?? shardsPerTarget?.[report.module] ?? 0;
-    const seen = new Set(report.shardsSeen ?? []);
-    return Array.from({ length: planned }, (_, shard) => shard)
-      .filter((shard) => !seen.has(shard))
-      .map((shard) => `\`${report.module}\` shard ${shard}`);
-  });
-  if (shortShards.length > 0) {
-    flags.push(
-      `**Missing shards** for: ${shortShards.join(", ")}. The score would cover only part of the planned mutants.`,
-    );
-  }
-  const extraShards = unexpectedShardsFor(reports, expectedTargets, shardsPerTarget);
-  if (extraShards.length > 0) {
-    const detail = extraShards.map((entry) => `\`${entry.module}\` shard ${entry.shard} (plan has ${entry.planned})`).join(", ");
-    flags.push(
-      `**Unexpected shards** for: ${detail}. A shard the plan did not ask for is stale or misrouted, so the merged population is not the planned one.`,
-    );
-  }
-  const unexpected = unexpectedTargets ?? reports.map((report) => report.module).filter((module) => !expectedTargets.includes(module));
-  if (unexpected.length > 0) {
-    flags.push(`**Unexpected reports** for: ${unexpected.map((module) => `\`${module}\``).join(", ")}. Update \`mutation/config.mjs\`.`);
-  }
-  // Overlapping shards measure some mutants twice. They agreed in every measured
-  // case, so a disagreement means the run is not reproducible.
-  const conflicts = reports.flatMap((report) =>
-    (report.conflicts ?? []).map((conflict) => ({ module: report.module, ...conflict })),
-  );
-  if (conflicts.length > 0) {
-    const sample = conflicts
-      .slice(0, 5)
-      .map((conflict) => `\`${conflict.module}:${conflict.line ?? "?"}\` (${conflict.statuses.join(" vs ")})`)
-      .join(", ");
-    flags.push(
-      `**${conflicts.length} shard conflict(s):** overlapping shards disagreed on the same mutant: ${sample}. Rerun with a single shard; the score is not reproducible.`,
-    );
-  }
-  return flags;
-}
-
-export function renderSummary({
+/**
+ * Everything the measurement knows about itself, in the shape the gate reads.
+ *
+ * The payload is built once and used three times: the JSON artifact, the gate
+ * (`unusableReasons`) and the summary's health section. The summary used to
+ * re-derive the same rules in `healthFlags`, which is how a dispatch override
+ * could pass the gate while the summary still reported the module as failing.
+ */
+export function buildPayload({
   reports,
   expectedTargets = targetNames(),
   shardsPerTarget = null,
-  metadata = {},
-  tolerance = null,
+  rejectedReports = [],
   unexpectedTargets = null,
+  timeoutToleranceOverride = null,
+  metadata = {},
 }) {
-  const { lines: tableLines, aggregate } = renderModuleTable(reports);
+  const aggregate = summarise(reports.flatMap((report) => report.mutants));
+  const conflicts = reports.flatMap((report) => (report.conflicts ?? []).map((conflict) => ({ module: report.module, ...conflict })));
+  aggregate.shardConflicts = conflicts.length;
+  const payload = {
+    ...metadata,
+    modules: reports.map((report) => ({ module: report.module, ...report.summary })),
+    aggregate,
+    expectedTargets,
+    unexpectedTargets:
+      unexpectedTargets ?? reports.map((report) => report.module).filter((module) => !expectedTargets.includes(module)),
+    missingTargets: expectedTargets.filter((target) => !reports.some((report) => report.module === target)),
+    missingShards: missingShardsFor(reports, expectedTargets, shardsPerTarget),
+    unexpectedShards: unexpectedShardsFor(reports, expectedTargets, shardsPerTarget),
+    rejectedReports,
+    rejectedModules: [...new Set(rejectedReports.map((entry) => entry.module))].sort(),
+    timeoutTolerance: timeoutToleranceOverride ?? timeoutTolerance(aggregate.total),
+  };
+  if (conflicts.length > 0) {
+    payload.shardConflictSample = conflicts
+      .slice(0, 5)
+      .map((conflict) => `\`${conflict.module}:${conflict.line ?? "?"}\` (${conflict.statuses.join(" vs ")})`);
+  }
+  if (timeoutToleranceOverride !== null) payload.timeoutToleranceOverride = timeoutToleranceOverride;
+  return payload;
+}
+
+export function renderSummary({ reports, payload }) {
+  const { lines: tableLines } = renderModuleTable(reports, payload.aggregate);
   const lines = [];
   lines.push("## Mutation measurement", "");
-  if (metadata.sha) {
+  if (payload.sha) {
     lines.push(
-      `Revision \`${metadata.sha.slice(0, 12)}\` · ${metadata.branch ?? "unknown branch"} · Node ${metadata.node ?? "?"} · Stryker ${reports.find((report) => report.framework)?.framework?.version ?? "?"} · ${aggregate.total} mutants`,
+      `Revision \`${payload.sha.slice(0, 12)}\` · ${payload.branch ?? "unknown branch"} · Node ${payload.node ?? "?"} · Stryker ${reports.find((report) => report.framework)?.framework?.version ?? "?"} · ${payload.aggregate.total} mutants`,
       "",
     );
   }
@@ -586,10 +539,17 @@ export function renderSummary({
     "",
   );
 
-  const flags = healthFlags(reports, aggregate, expectedTargets, tolerance, shardsPerTarget, unexpectedTargets);
-  if (flags.length > 0) {
+  // One policy, two renderings: the gate prints these same messages, so the
+  // summary cannot claim something the gate did not enforce.
+  const diagnostics = measurementDiagnostics(payload);
+  if (diagnostics.length > 0) {
     lines.push("### Health flags", "");
-    for (const flag of flags) lines.push(`- ${flag}`);
+    for (const diagnostic of diagnostics) {
+      // The verdict is marked; the remedy that follows it is guidance, not part
+      // of the finding, so it stays outside the emphasis.
+      const remedy = diagnostic.remedy ? ` ${diagnostic.remedy}` : "";
+      lines.push(diagnostic.severity === BLOCKING ? `- **${diagnostic.message}**${remedy}` : `- ${diagnostic.message}`);
+    }
     lines.push("");
   }
 
@@ -712,37 +672,24 @@ function main() {
     writeFileSync(options.annotations, annotationLines(survivors).join("\n") + "\n");
   }
 
-  const aggregate = summarise(reports.flatMap((report) => report.mutants));
-  aggregate.shardConflicts = reports.reduce((total, report) => total + (report.conflicts?.length ?? 0), 0);
-  const payload = {
-    generatedAt: new Date().toISOString(),
-    modules: reports.map((report) => ({ module: report.module, ...report.summary })),
-    aggregate,
+  // The payload is the single description of this measurement: the JSON
+  // artifact, the gate and the summary's health section all read it.
+  const payload = buildPayload({
+    reports,
     expectedTargets,
-    unexpectedTargets,
-    missingTargets: expectedTargets.filter((target) => !reports.some((report) => report.module === target)),
-    missingShards: missingShardsFor(reports, expectedTargets, options.shardsPerTarget),
-    unexpectedShards: unexpectedShardsFor(reports, expectedTargets, options.shardsPerTarget),
+    shardsPerTarget: options.shardsPerTarget,
     rejectedReports: rejected,
-    rejectedModules,
-    timeoutTolerance: options.timeoutTolerance ?? timeoutTolerance(aggregate.total),
-  };
-  // unusableReasons (config.mjs) gates on the top-level timeoutToleranceOverride;
-  // timeoutTolerance is the resolved value carried for display regardless of source.
-  if (options.timeoutTolerance !== null) payload.timeoutToleranceOverride = options.timeoutTolerance;
+    unexpectedTargets,
+    timeoutToleranceOverride: options.timeoutTolerance,
+    metadata: { generatedAt: new Date().toISOString() },
+  });
 
   if (options.json) {
     mkdirSync(dirname(options.json), { recursive: true });
     writeFileSync(options.json, JSON.stringify(payload, null, 2));
   }
 
-  const markdown = renderSummary({
-    reports,
-    expectedTargets,
-    shardsPerTarget: options.shardsPerTarget,
-    tolerance: options.timeoutTolerance ?? undefined,
-    unexpectedTargets,
-  });
+  const markdown = renderSummary({ reports, payload });
   if (options.out) {
     mkdirSync(dirname(options.out), { recursive: true });
     writeFileSync(options.out, markdown);
