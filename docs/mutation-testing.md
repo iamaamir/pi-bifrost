@@ -394,6 +394,13 @@ rejected if an unsharded report carries a line-range scope: a one-shard plan wou
 otherwise publish a score over part of a module as though it were all of it.
 Sharded reports may carry ranges, because that is what a shard is.
 
+**A payload records what it measured, and is checked again when read.** The
+reporter writes `measuredIdentity` per module; `require-usable` re-derives the
+identity from the checkout and rejects a payload that no longer matches, or one
+that records none. Without this a summary from an earlier commit re-gated as
+usable forever. The identity includes the bound test files, so a test edit
+invalidates a stored result the same way a module edit does.
+
 **A corrupt artifact claims its slot.** Unreadable reports are not dropped: a
 truncated upload in a newer attempt must not let the previous attempt publish as
 current, so the module is rejected with the file and attempt named. A corrupt

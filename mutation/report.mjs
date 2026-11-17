@@ -656,6 +656,7 @@ export function buildPayload({
   rejectedReports = [],
   unexpectedTargets = null,
   timeoutToleranceOverride = null,
+  measuredIdentity = null,
   metadata = {},
 }) {
   const aggregate = summarise(reports.flatMap((report) => report.mutants));
@@ -678,6 +679,12 @@ export function buildPayload({
     // this. It belongs in the payload builder, not the CLI, because the payload
     // is what every reader consumes.
     measuredIn: [...new Set(reports.flatMap((report) => report.projectRoots ?? []))].sort(),
+    // What this payload measured, so it can be re-checked later. A summary is an
+    // artifact people re-read: without this, a payload built against an older
+    // tree re-gates as usable forever, and nothing in it says the bytes moved.
+    measuredIdentity:
+      measuredIdentity ??
+      Object.fromEntries(reports.map((report) => [report.module, report.provenance?.measurement ?? null])),
     timeoutTolerance: timeoutToleranceOverride ?? timeoutTolerance(aggregate.total),
   };
   if (conflicts.length > 0) {
@@ -689,7 +696,7 @@ export function buildPayload({
   return payload;
 }
 
-export function renderSummary({ reports, payload }) {
+export function renderSummary({ reports, payload, identityFor = measurementIdentity }) {
   const { lines: tableLines } = renderModuleTable(reports, payload.aggregate);
   const lines = [];
   lines.push("## Mutation measurement", "");
@@ -708,7 +715,11 @@ export function renderSummary({ reports, payload }) {
 
   // One policy, two renderings: the gate prints these same messages, so the
   // summary cannot claim something the gate did not enforce.
-  const diagnostics = measurementDiagnostics(payload);
+  // The page and the gate must reach the same verdict, so the page performs the
+  // same identity check the gate does. A summary that prints "usable" while the
+  // CLI re-gating the same file refuses it is the divergence the single policy
+  // function exists to prevent.
+  const diagnostics = measurementDiagnostics(payload, { identityFor });
   if (diagnostics.length > 0) {
     lines.push("### Health flags", "");
     for (const diagnostic of diagnostics) {
