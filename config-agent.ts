@@ -794,17 +794,6 @@ function probeModelKeys(
   return [...keys].sort();
 }
 
-/** Provider error text copied into a warning: bounded, so a verbose error body
- * cannot push the approval message past its size cap and refuse a fine candidate. */
-const MAX_PROBE_REASON_CHARS = 200;
-
-function boundedProbeReason(reason: string): string {
-  // Provider error bodies arrive with newlines and padding; collapsing the
-  // whitespace keeps one warning on one line before the length cap applies.
-  const normalized = reason.replace(/\s+/g, " ").trim();
-  return normalized.length <= MAX_PROBE_REASON_CHARS ? normalized : `${normalized.slice(0, MAX_PROBE_REASON_CHARS - 1)}…`;
-}
-
 /** Warning for a model the live check reached and could not answer. */
 function probeIssues(
   probed: readonly ConfigAgentProbeResult[],
@@ -814,7 +803,7 @@ function probeIssues(
     .map((entry) => ({
       severity: "warning" as const,
       code: "config.probe_failed",
-      message: `Live probe of ${entry.model} ${entry.status === "timeout" ? "timed out" : "failed"}${entry.reason ? `: ${boundedProbeReason(entry.reason)}` : ""}. This is one observed result for this run, not proof the model always fails; the candidate is still writable.`,
+      message: `Live probe of ${entry.model} ${entry.status === "timeout" ? "timed out" : "failed"}. This is one observed result for this run, not proof the model always fails; the candidate is still writable.`,
     }));
 }
 
@@ -977,13 +966,13 @@ async function applyLiveProbe(
   let probed: readonly ConfigAgentProbeResult[];
   try {
     probed = await deps.probeModels(models, ctx, signal);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+  } catch {
     return {
       ...result,
-      notes: [...result.notes, `Live probe could not run (${message}); nothing was written.`],
+      notes: [...result.notes, "Live probe could not run; nothing was written."],
     };
   }
+  probed = probed.map(({ model, status }) => ({ model, status }));
   if (probed.length === 0) {
     return { ...result, notes: [...result.notes, "Live probe returned no result; nothing was written."] };
   }
@@ -2331,6 +2320,14 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
       }
       addRuleProviders((request.candidate as { rules?: unknown } | undefined)?.rules);
       addRuleProviders((request.patch as { rules?: unknown } | undefined)?.rules);
+      if (operation === "check") {
+        const prospective = checkConfigCandidate({ request, catalog, cwd, extensionDir: deps.extensionDir });
+        if (prospective.effectiveAfter) {
+          const config = prospective.effectiveAfter as unknown as BifrostConfig;
+          for (const provider of configProviders(config, catalog)) resolvedProviders.add(provider);
+          addRuleProviders(loadRules(cwd, config));
+        }
+      }
       const providerAuth = await resolveProviderAuth(ctx.modelRegistry, [...resolvedProviders], { signal });
       const classifierRuntime = deps.classifierRuntime
         ? (config: BifrostConfig) => deps.classifierRuntime!(config, ctx)
