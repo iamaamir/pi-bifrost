@@ -124,34 +124,70 @@ export function bindingFor(target) {
 /**
  * Fingerprint of one module's measurement inputs, content-addressed.
  *
- * A measurement's identity is exactly what it measured: the mutated module's
- * bytes, the bytes of every bound test file, and the config file that decides
- * how the measurement runs. Two measurements with the same fingerprint covered
- * the same population; the summariser accepts a report only if its fingerprint
- * is this one, so artifacts from a different revision, a different binding or a
- * different config never contribute mutants to the score, and are reported as
- * rejected artifacts rather than silently merged.
+ * A measurement's identity is everything whose bytes decide what the bound
+ * tests do with this module: the module, the local modules it imports, the
+ * bound test files and the local modules they import, plus the configuration
+ * that decides how the measurement runs. Two measurements with the same
+ * fingerprint covered the same code; the summariser accepts a report only if
+ * its fingerprint matches the current checkout, so artifacts from a different
+ * revision, binding or config never contribute mutants to the score.
  *
- * The git head is deliberately not part of the key: unrelated commits move
- * HEAD every day and would make every report look foreign. Content identity
- * answers the question that matters -- did the bytes being measured change?
+ * The git head is deliberately not part of the key: unrelated commits move HEAD
+ * every day and would make every report look foreign. Content identity answers
+ * the question that matters -- did the bytes involved in the measurement change?
  */
 export function measurementIdentity(target) {
+  const files = ["mutation/config.mjs", ...localImportClosure([target, ...bindingFor(target)])];
   const hash = createHash("sha256");
-  for (const file of [target, "mutation/config.mjs", ...bindingFor(target)]) {
+  for (const file of files) {
+    hash.update(file);
+    hash.update("\n");
     try {
-      hash.update(file);
-      hash.update("\n");
       hash.update(readFileSync(join(ROOT, file)));
-      hash.update("\n");
     } catch {
-      // An unreadable input invalidates this measurement, not the repo: hash
-      // the path so the identity differs from every readable one.
-      hash.update(file);
-      hash.update("\nunreadable\n");
+      // An unreadable input invalidates this measurement, not the repo: hash a
+      // marker so the identity differs from every readable one.
+      hash.update("unreadable");
     }
+    hash.update("\n");
   }
   return hash.digest("hex");
+}
+
+/**
+ * The target plus every local module it (transitively) imports.
+ *
+ * A measurement's identity has to cover every file whose bytes can change what
+ * the bound tests do. Hashing only the mutated module missed its helpers:
+ * `cache.ts` imports `storage.ts`, so changing `storage.ts` left the identity
+ * unchanged and an old report was still accepted against the new code.
+ *
+ * Only relative specifiers are followed; a package never resolves into this
+ * checkout. The walk is bounded so a pathological graph cannot stall a run, and
+ * the visited set makes cycles safe.
+ */
+function localImportClosure(starts, limit = 200) {
+  const seen = new Set();
+  const queue = [...starts];
+  while (queue.length > 0 && seen.size < limit) {
+    const file = queue.shift();
+    if (seen.has(file)) continue;
+    seen.add(file);
+    let source;
+    try {
+      source = readFileSync(join(ROOT, file), "utf8");
+    } catch {
+      continue;
+    }
+    for (const match of source.matchAll(IMPORT_PATTERN)) {
+      const specifier = match[1];
+      if (!specifier.startsWith(".")) continue;
+      const resolved = relative(ROOT, join(dirname(join(ROOT, file)), specifier));
+      if (resolved.startsWith("..") || seen.has(resolved)) continue;
+      queue.push(resolved);
+    }
+  }
+  return [...seen].sort();
 }
 
 /** Targets and the consumer tests that cannot be bound, for the summary. */

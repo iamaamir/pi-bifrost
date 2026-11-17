@@ -88,6 +88,13 @@ Sharding is automatic: `suggestedShards()` splits a module into as many legs as
 needed to land each under `targetLegMinutes` (30), capped at `SHARDING.maxShards`
 (4). Each shard is its own parallel job.
 
+### 4. Add it to the dispatch list
+
+`.github/workflows/mutation.yml` lists targets under `workflow_dispatch.inputs.target`
+as `type: choice`. A module missing from that list cannot be dispatched on its own
+at all, so add it there too. A test asserts the list matches `TARGETS`, so
+forgetting this fails the suite rather than surfacing months later.
+
 Finally, run the suite:
 
 ```bash
@@ -340,8 +347,9 @@ excluded mutants as `Ignored`, and the evaluated sets were not complementary (4
 phantom `CallExpression` mutants).
 
 **Every report carries the measurement it belongs to.** The runner stamps each
-report it writes with a content identity — the module's bytes, its bound test
-files and `mutation/config.mjs` — and the summariser accepts a report only if
+report it writes with a content identity — the module's bytes, the local modules
+it and its bound tests import, and `mutation/config.mjs` — and the summariser
+accepts a report only if
 that identity matches the current checkout. The identity is per module, because
 a module's population is what one measurement of it covered; a single per-run
 value would either accept everything or reject everything. A report from a
@@ -349,6 +357,12 @@ different revision, binding or config is rejected and named, never merged. It
 also means the artifact file name does not have to encode provenance, which is
 why the download pattern stays `mutation-report-*`: scoping it to the current
 `run_attempt` would hide the legs a partial re-run did not retry.
+
+**A report records the scope it measured.** An unsharded `<module>.json` stands
+for the whole module, so a run that mutated only a line range must name its
+artifact with `--report`; the summariser rejects an unsharded report whose scope
+is a range, because a one-shard plan would otherwise score part of a module as
+all of it. Sharded reports may carry ranges — that is what a shard is.
 
 **A dry run never clears reports.** `--dry-run` measures nothing and writes
 nothing, so deleting the previous measurement would destroy a real result to make
@@ -445,10 +459,13 @@ the selected targets and the per-target shard counts. The summariser judges
 completeness against **that plan**, not against every configured target — so a
 single-module dispatch is not four missing modules, and a lost shard is named.
 
-`workflow_dispatch` cannot run a workflow that is not on the default branch
-(`HTTP 404`). To exercise changes from a feature branch, add a temporary
-`push:` trigger, watch the run, then remove it — the test suite asserts there is
-no `push:` trigger in the merged workflow.
+`workflow_dispatch` cannot run a workflow that **is not yet on the default
+branch** (`HTTP 404`). That only affects a brand-new workflow coming into
+existence: for `mutation.yml`, which already exists on the default branch, use
+`gh workflow run mutation.yml --ref <branch>` and pick the branch in the UI. The
+`push:` trigger workaround is for the first landing of a new workflow file — add
+it temporarily, watch the run, then remove it. The test suite asserts there is no
+`push:` trigger in the merged workflow.
 
 ## Extending this module
 

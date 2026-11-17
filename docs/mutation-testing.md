@@ -371,7 +371,8 @@ close that:
 
 - **A stamped content identity.** The runner writes
   `bifrost.measurement` into every report: a SHA-256 of the mutated module's
-  bytes, its bound test files and `mutation/config.mjs`. The identity is **per
+  bytes, the local modules it and its bound tests import, and
+  `mutation/config.mjs`. The identity is **per
   module**, because that is the population one measurement covered. The
   summariser recomputes it and rejects a report that does not match — a different
   revision, a different binding, a different config — naming the file and both
@@ -384,6 +385,12 @@ close that:
   collides with `<module>.shard0.json`. Two files claiming one shard are two
   measurements of it, and merging them would publish a composite that no run
   produced. The module is rejected with both file names.
+
+**A report records what it measured.** An unsharded `<module>.json` stands for the
+whole module, so a partial `--mutate` run must name its artifact explicitly and is
+rejected if an unsharded report carries a line-range scope: a one-shard plan would
+otherwise publish a score over part of a module as though it were all of it.
+Sharded reports may carry ranges, because that is what a shard is.
 
 **Report output is confined to `reports/` on resolved paths.** Lexical
 containment is not a boundary: a path spelled inside `reports/` whose parent is a

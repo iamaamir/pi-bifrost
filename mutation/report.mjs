@@ -185,6 +185,7 @@ export function modulesOf(report, name) {
     report.bifrost && typeof report.bifrost === "object"
       ? {
           measurement: typeof report.bifrost.measurement === "string" ? report.bifrost.measurement : null,
+          scope: typeof report.bifrost.scope === "string" ? report.bifrost.scope : null,
         }
       : null;
   return Object.entries(report.files ?? {})
@@ -323,9 +324,20 @@ export function selectMeasurement(perReport, { identityFor = measurementIdentity
       continue;
     }
 
-    const unstamped = reports.find((report) => !report.provenance?.measurement);
+    const unstamped = reports.find((report) => !report.provenance?.measurement || !report.provenance?.scope);
     if (unstamped) {
       reject(`${unstamped.name} has no measurement provenance; produce it with mutation/run.mjs`);
+      continue;
+    }
+
+    // An unsharded report stands for the whole module. If it was produced from a
+    // line range it is a partial measurement, and a one-shard plan would accept
+    // it as complete while most of the module was never mutated.
+    const partial = reports.find((report) => report.shard === null && report.provenance.scope !== module);
+    if (partial) {
+      reject(
+        `${partial.name} covers only ${partial.provenance.scope}, not all of ${module}; a partial scope cannot stand in for the whole module`,
+      );
       continue;
     }
 
