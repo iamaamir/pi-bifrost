@@ -19,12 +19,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out the candidate revision
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Install Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 24
           cache: npm
@@ -41,12 +41,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out the candidate revision
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - name: Install Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: 24
           cache: npm
@@ -59,7 +59,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Check out the candidate revision
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
@@ -89,7 +89,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Check out the candidate revision
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
@@ -111,14 +111,15 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          first_pr_commit="$(git rev-list --first-parent --reverse "$BASE_SHA..$HEAD_SHA" | sed -n '1p')"
+          first_pr_commit="$(git rev-list --first-parent --reverse \
+            "$BASE_SHA..$HEAD_SHA" | sed -n '1p')"
           if [ -z "$first_pr_commit" ]; then
             echo "Could not determine the first pull request commit" >&2
             exit 1
           fi
           echo "BASE_REF=$first_pr_commit" >> "$GITHUB_ENV"
       - name: Scan commits for secrets
-        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e
         if: github.event_name != 'push'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -149,7 +150,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out the candidate revision with history for a baseline scan
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
@@ -171,7 +172,9 @@ jobs:
           --metrics=off --disable-version-check
       - name: Scan the full tree outside pull requests
         if: github.event_name != 'pull_request'
-        run: semgrep scan --config semgrep/ --error --metrics=off --disable-version-check
+        run: >-
+          semgrep scan --config semgrep/ --error --metrics=off
+          --disable-version-check
 
   # The upstream reusable workflow diffs dependency findings between the target
   # branch and the pull request, so only newly introduced vulnerabilities fail.
@@ -181,4 +184,5 @@ jobs:
       actions: read
       contents: read
       security-events: write
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
+    uses: >-
+      google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@b1d267aea5211fa648d9d442fa64b90dbdcbdd36
