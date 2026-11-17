@@ -3398,7 +3398,7 @@ async function handleReliabilityCommand(
       logImportant(
         ctx,
         "Cooldown state unavailable",
-        "Provider cooldown state is invalid or unavailable; inspect .pi/bifrost-reliability-v2.json.",
+        "Provider cooldown state is invalid or unavailable; inspect .pi/bifrost-provider-reliability.json.",
         "error",
       );
     }
@@ -4567,28 +4567,32 @@ export function createCommandRouter(
     exact("on", (_, ctx) => {
       state.onManualControl?.(ctx.sessionManager, "on");
       state.enabled = true;
-      state.saveModeState();
+      const persisted = state.saveModeState() !== false;
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       logImportant(
         ctx,
         "Bifrost enabled",
-        "Routing is enabled; this choice survives a restart.",
-        "success",
+        persisted
+          ? "Routing is enabled; this choice survives a restart."
+          : "Routing is enabled for this session; the mode state could not be saved.",
+        persisted ? "success" : "warning",
       );
     }),
     exact("off", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
       state.onManualControl?.(ctx.sessionManager, "off");
       state.enabled = false;
-      state.saveModeState();
+      const persisted = state.saveModeState() !== false;
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       logImportant(
         ctx,
         "Bifrost disabled",
-        "Routing is disabled; this choice survives a restart.",
-        "success",
+        persisted
+          ? "Routing is disabled; this choice survives a restart."
+          : "Routing is disabled for this session; the mode state could not be saved.",
+        persisted ? "success" : "warning",
       );
     }),
     exact("pin", async (_, ctx) => {
