@@ -1829,11 +1829,12 @@ export type BifrostPreviewSuccess = {
   readonly attemptedTiers?: Array<{ readonly tier: string; readonly strategy: string; readonly candidates: string[] }>;
 };
 
-/** No routing decision was made, so no routing field is reported. */
+/** No routing decision was made, so no accepted routing decision is reported. Diagnostic classifier-attempt detail may still be present for unclassified outcomes. */
 export type BifrostPreviewFailure = {
   readonly ok: false;
   readonly prompt: string;
   readonly error: "usage" | "unclassified" | "config_invalid";
+  readonly classifierAttempt?: ClassifierAttemptSummary;
 };
 
 /** Marker prefix for machine-readable command output, so a caller can find the line without guessing. */
@@ -1873,8 +1874,12 @@ export function parsePreviewArgs(args: string, sub: string): { prompt: string; j
 }
 
 /** Build the failure half of the report. Pure: no classification, no display, no side effects. */
-export function buildPreviewFailure(prompt: string, error: BifrostPreviewFailure["error"]): BifrostPreviewFailure {
-  return { ok: false, prompt, error };
+export function buildPreviewFailure(
+  prompt: string,
+  error: BifrostPreviewFailure["error"],
+  classifierAttempt?: ClassifierAttemptSummary,
+): BifrostPreviewFailure {
+  return { ok: false, prompt, error, ...(classifierAttempt ? { classifierAttempt } : {}) };
 }
 
 export function buildPreviewReport(input: {
@@ -2040,6 +2045,23 @@ export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
   ];
 }
 
+function renderPreviewFailureReport(report: BifrostPreviewFailure): string[] {
+  const attempt = report.classifierAttempt;
+  return [
+    "--- preview ---",
+    `prompt:    ${report.prompt}`,
+    "source:    unclassified",
+    ...(attempt ? [
+      `classifier attempt: ${attempt.backend} (${attempt.outcome}, fallback=${attempt.fallbackKind})`,
+      ...(attempt.model !== undefined ? [`classifier attempt model: ${attempt.model}`] : []),
+      ...(attempt.confidence !== undefined ? [`classifier attempt confidence: ${attempt.confidence}`] : []),
+    ] : []),
+    `result:    ${report.error}`,
+    "selected:  none",
+    "---------------",
+  ];
+}
+
 /** Write the one machine-readable line for a preview, successful or not. */
 function emitPreviewReport(report: BifrostPreviewReport): void {
   console.error(`${BIFROST_JSON_PREFIX}${serializePreviewReport(report)}`);
@@ -2114,7 +2136,12 @@ async function handlePreview(
       else await uiResult(ctx, "Bifrost route trace", renderTracePreview(report));
       return;
     }
-    if (json) emitPreviewReport(buildPreviewFailure(prompt, "unclassified"));
+    const failure = buildPreviewFailure(prompt, "unclassified", classification.classifierAttempt);
+    if (json) {
+      emitPreviewReport(failure);
+    } else if (classification.classifierAttempt) {
+      await uiResult(ctx, "Bifrost preview", renderPreviewFailureReport(failure));
+    }
     log(ctx, "no tier matched", "warning");
     return;
   }

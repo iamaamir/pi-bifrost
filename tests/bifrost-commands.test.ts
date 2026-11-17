@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, buildTracePreview, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, renderTracePreview, resolveTierDisplay, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
 import { makeModel, makePiClassifierModel, makeRegistry } from "./helpers.ts";
-import { createPipeline } from "../classification-pipeline.ts";
+import { buildRouteDecisionSummary, createPipeline } from "../classification-pipeline.ts";
 import { DEFAULT_THRESHOLD, lookupCache, touchCacheEntry, updateCache, type CacheEntry } from "../cache.ts";
 import { reliabilityPath } from "../reliability.ts";
 import { providerReliabilityPath, reliabilityV2Path } from "../runtime-reliability-v2.ts";
@@ -2028,11 +2028,49 @@ describe("preview failure report", () => {
     });
   });
 
+  it("carries rejected classifier-attempt detail on unclassified failures without fabricating acceptance", () => {
+    const attempt = {
+      backend: "pi-native" as const,
+      outcome: "low_confidence" as const,
+      fallbackKind: "none" as const,
+      model: "fixture/prompt",
+      confidence: 0.73,
+    };
+    assert.deepEqual(buildPreviewFailure("hello", "unclassified", attempt), {
+      ok: false,
+      prompt: "hello",
+      error: "unclassified",
+      classifierAttempt: attempt,
+    });
+  });
+
   it("serializes to one parseable line", () => {
     const line = serializePreviewReport(buildPreviewFailure("hello", "unclassified"));
 
     assert.equal(line.split("\n").length, 1);
     assert.deepEqual(JSON.parse(line), { ok: false, prompt: "hello", error: "unclassified" });
+  });
+
+  it("serializes unclassified rejected-attempt confidence without implying acceptance", () => {
+    const line = serializePreviewReport(buildPreviewFailure("hello", "unclassified", {
+      backend: "pi-native",
+      outcome: "low_confidence",
+      fallbackKind: "none",
+      model: "fixture/prompt",
+      confidence: 0.73,
+    }));
+    assert.deepEqual(JSON.parse(line), {
+      ok: false,
+      prompt: "hello",
+      error: "unclassified",
+      classifierAttempt: {
+        backend: "pi-native",
+        outcome: "low_confidence",
+        fallbackKind: "none",
+        model: "fixture/prompt",
+        confidence: 0.73,
+      },
+    });
   });
 });
 
@@ -2088,6 +2126,87 @@ describe("preview json marker", () => {
 
     assert.deepEqual(report, { ok: false, prompt: "hello", error: "unclassified" });
     assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("no tier matched")));
+  });
+
+  it("surfaces rejected direct-classifier confidence in unclassified /bifrost preview --json, text, and trace", async () => {
+    const attempt = {
+      backend: "pi-native" as const,
+      outcome: "low_confidence" as const,
+      fallbackKind: "none" as const,
+      model: "fixture/prompt",
+      confidence: 0.73,
+    };
+    const classification = { kind: "unclassified" as const, classifierAttempt: attempt };
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    state.getPipeline = () => ({ classify: async () => classification }) as never;
+
+    const [jsonReport] = await captureJsonReports(async () => {
+      await createCommandRouter(state as never)("preview --json hello", ctx as never);
+    });
+
+    assert.deepEqual(jsonReport, {
+      ok: false,
+      prompt: "hello",
+      error: "unclassified",
+      classifierAttempt: attempt,
+    });
+    assert.equal("backend" in (jsonReport as Record<string, unknown>), false);
+    assert.equal("confidence" in (jsonReport as Record<string, unknown>), false);
+    assert.equal("tier" in (jsonReport as Record<string, unknown>), false);
+    assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("no tier matched")));
+
+    const { ctx: textCtx } = makeCtx();
+    const text = (await captureCommandText(async () => {
+      await createCommandRouter(state as never)("preview hello", printModeCtx({ ...(textCtx as any), hasUI: false }) as never);
+    })).join("\n");
+    assert.match(text, /--- preview ---/u);
+    assert.match(text, /source:    unclassified/u);
+    assert.match(text, /classifier attempt: pi-native \(low_confidence, fallback=none\)/u);
+    assert.match(text, /classifier attempt confidence: 0\.73/u);
+    assert.match(text, /result:    unclassified/u);
+    assert.doesNotMatch(text, /^backend:/mu);
+    assert.doesNotMatch(text, /^confidence:/mu);
+    assert.match(text, /no tier matched/u);
+
+    const [traceJson] = await captureJsonReports(async () => {
+      await createCommandRouter(state as never)("preview --trace --json hello", ctx as never);
+    }) as Array<Record<string, any>>;
+    assert.equal(traceJson.outcome, "unclassified");
+    assert.deepEqual(traceJson.classification, { source: "unclassified" });
+    assert.deepEqual(traceJson.classifierAttempt, attempt);
+    assert.equal((traceJson.classification as { classifier?: unknown }).classifier, undefined);
+    const traceText = renderTracePreview(buildTracePreview(buildRouteDecisionSummary(classification), true)).join("\n");
+    assert.match(traceText, /outcome: unclassified/u);
+    assert.match(traceText, /classifier attempt confidence: 0\.73/u);
+  });
+
+  it("preserves zero and missing rejected confidence on unclassified preview JSON and trace", async () => {
+    for (const attempt of [
+      { backend: "pi-native" as const, outcome: "low_confidence" as const, fallbackKind: "none" as const, model: "fixture/prompt", confidence: 0 },
+      { backend: "typesafe" as const, outcome: "timeout" as const, fallbackKind: "none" as const },
+    ]) {
+      const classification = { kind: "unclassified" as const, classifierAttempt: attempt };
+      const { ctx } = makeCtx();
+      const state = makeState();
+      state.getPipeline = () => ({ classify: async () => classification }) as never;
+      const dispatch = createCommandRouter(state as never);
+
+      const [jsonReport] = await captureJsonReports(async () => {
+        await dispatch("preview --json hello", ctx as never);
+      }) as Array<Record<string, any>>;
+      assert.equal(jsonReport.ok, false);
+      assert.equal(jsonReport.error, "unclassified");
+      assert.equal(jsonReport.classifierAttempt?.backend, attempt.backend);
+      if ("confidence" in attempt) assert.equal(jsonReport.classifierAttempt?.confidence, 0);
+      else assert.equal("confidence" in (jsonReport.classifierAttempt ?? {}), false);
+
+      const [traceJson] = await captureJsonReports(async () => {
+        await dispatch("preview --trace --json hello", ctx as never);
+      }) as Array<Record<string, any>>;
+      if ("confidence" in attempt) assert.equal(traceJson.classifierAttempt?.confidence, 0);
+      else assert.equal("confidence" in (traceJson.classifierAttempt ?? {}), false);
+    }
   });
 
   it("marks a successful report as ok", async () => {
