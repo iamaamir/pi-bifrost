@@ -4329,7 +4329,12 @@ export function createCommandRouter(
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
-      logImportant(ctx, "Bifrost enabled", "Routing is enabled for this session.", "success");
+      logImportant(
+        ctx,
+        "Bifrost enabled",
+        "Routing is enabled; this choice survives a restart.",
+        "success",
+      );
     }),
     exact("off", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
@@ -4338,7 +4343,12 @@ export function createCommandRouter(
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
-      logImportant(ctx, "Bifrost disabled", "Routing is disabled for this session.", "success");
+      logImportant(
+        ctx,
+        "Bifrost disabled",
+        "Routing is disabled; this choice survives a restart.",
+        "success",
+      );
     }),
     exact("pin", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
@@ -4394,16 +4404,23 @@ export function createCommandRouter(
 
       let okCount = 0;
       let errCount = 0;
-      const probeRun = await runProbe(ctx, {
-        ...probeOptionsFromConfig(state.config.probe),
-        signal: ctx.signal,
-        onProgress: (done, total, last) => {
-          if (last.status === "ok") okCount++;
-          else if (last.status === "error" || last.status === "timeout") errCount++;
-          setProbeProgress(ctx, { done, total, okCount, errCount });
-        },
-      });
-      uiDone(ctx);
+      let probeRun: Awaited<ReturnType<typeof runProbe>>;
+      try {
+        probeRun = await runProbe(ctx, {
+          ...probeOptionsFromConfig(state.config.probe),
+          signal: ctx.signal,
+          onProgress: (done, total, last) => {
+            if (last.status === "ok") okCount++;
+            else if (last.status === "error" || last.status === "timeout") errCount++;
+            setProbeProgress(ctx, { done, total, okCount, errCount });
+          },
+        });
+      } finally {
+        // Clear on every exit: a cancelled or thrown probe must not leave a
+        // frozen progress bar that still reads as "probing".
+        uiDone(ctx);
+        if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
+      }
       if (probeRun.cancelled || ctx.signal?.aborted) {
         logImportant(ctx, "Probe cancelled", "Partial results were not saved.", "info");
         return;

@@ -2018,6 +2018,7 @@ describe("command aliases", () => {
       const probeWidgetCalls = calls.filter((call) => call.kind === "widget" && String(call.value).startsWith("bifrost-probe:"));
       assert.ok(probeWidgetCalls.length > 0, "probe widget was never set");
       const last = probeWidgetCalls[probeWidgetCalls.length - 1]!;
+      assert.notEqual(last.value, "bifrost-probe:func", "probe widget was not cleared after probing");
       assert.ok(
         last.lines === undefined || last.lines.length === 0,
         "probe widget was not cleared after probing",
@@ -2588,6 +2589,49 @@ describe("route dispatch", () => {
     assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).startsWith("info:Probing 1 model(s)")));
     const lines = calls.filter((c) => c.kind === "widget").flatMap((c) => c.lines ?? []);
     assert.ok(lines.includes("--- probe results (1 models) ---"));
+  });
+
+  it("clears the probe widget when /bifrost probe is cancelled", async () => {
+    const { ctx, calls } = makeCtx([makeModel("fixture", "one"), makeModel("fixture", "two")]);
+    const state = makeState();
+    state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} } as never;
+    const controller = new AbortController();
+    (ctx as any).signal = controller.signal;
+    // The first model finishes and aborts the turn. The probe then returns
+    // cancelled, which takes the early return: the progress widget must not
+    // survive it as a frozen "still probing" bar.
+    (ctx as any).modelRegistry.streamSimple = () => ({
+      result: async () => {
+        controller.abort();
+        return {
+          role: "assistant", api: "openai-completions", provider: "fixture", model: "one",
+          content: [{ type: "text", text: "ok" }], usage: { totalTokens: 1 }, stopReason: "stop", timestamp: Date.now(),
+        };
+      },
+    });
+    await inTempDir(async () => {
+      await createCommandRouter(state as never)("probe", ctx as never);
+    });
+    const probeWidgetCalls = calls.filter((call) => call.kind === "widget" && String(call.value).startsWith("bifrost-probe:"));
+    assert.ok(probeWidgetCalls.some((call) => call.value === "bifrost-probe:func"), "progress widget was never set");
+    assert.equal(
+      probeWidgetCalls[probeWidgetCalls.length - 1]?.value,
+      "bifrost-probe:0",
+      "cancelled probe left a stale progress widget",
+    );
+    assert.ok(calls.some((call) => String(call.value).includes("Probe cancelled")), "cancellation was not reported");
+  });
+
+  it("tells the user an on/off choice survives a restart", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    await createCommandRouter(state as never)("on", ctx as never);
+    await createCommandRouter(state as never)("off", ctx as never);
+    const notices = calls.filter((call) => call.kind === "notify").map((call) => String(call.value));
+    // saveModeState persists the flag, and docs/guide/commands.md records that
+    // on/off survives a restart: the notice must not call the choice temporary.
+    assert.ok(notices.includes("info:Bifrost enabled: Routing is enabled; this choice survives a restart."), JSON.stringify(notices));
+    assert.ok(notices.includes("info:Bifrost disabled: Routing is disabled; this choice survives a restart."), JSON.stringify(notices));
   });
 
   it("groups probe failures by reason in the summary card", async () => {

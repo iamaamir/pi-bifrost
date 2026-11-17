@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { parseColor } from "@earendil-works/pi-tui";
-import { registerBifrostNotices } from "../ui/notice.ts";
+import { log, registerBifrostNotices } from "../ui/notice.ts";
 
 function makeRenderer() {
   let renderer: ((entry: never, options: never, theme: never) => unknown) | undefined;
@@ -55,6 +55,18 @@ test("notice card stays compact when collapsed and hints the expand key", () => 
   assert.ok(text.includes("ctrl+o to expand"), text);
 });
 
+test("notice card renders full details when the host cannot expand", () => {
+  const render = makeRenderer()(entry as never, {} as never, theme as never) as {
+    render(width: number): string[];
+  };
+  const text = render.render(80).join("\n");
+  // No keyHint means pi < 1.5.2: there is no expand key, so the full list must
+  // be visible and no dead hint may be shown.
+  assert.ok(text.includes("openai/chat-latest"), text);
+  assert.ok(text.includes("openai/gpt-4o-mini"), text);
+  assert.ok(!text.includes("to expand"), text);
+});
+
 test("notice card lists every failing model when expanded", () => {
   const render = makeRenderer()(entry as never, { expanded: true, keyHint: (_k: string, d: string) => `ctrl+o ${d}` } as never, theme as never) as {
     render(width: number): string[];
@@ -63,4 +75,28 @@ test("notice card lists every failing model when expanded", () => {
   assert.ok(text.includes("openai/chat-latest"), text);
   assert.ok(text.includes("openai/gpt-4o-mini"), text);
   assert.ok(!text.includes("to expand"), text);
+});
+
+test("headless notices stay on stderr for every level", () => {
+  const original = { log: console.log, info: console.info, warn: console.warn, error: console.error };
+  const seen: Array<[string, string]> = [];
+  const record = (stream: string) => (...values: unknown[]) => {
+    seen.push([stream, values.map(String).join(" ")]);
+  };
+  console.log = record("log");
+  console.info = record("info");
+  console.warn = record("warn");
+  console.error = record("error");
+  try {
+    for (const level of ["info", "success", "warning", "error"] as const) {
+      log({ hasUI: false, mode: "print" } as never, "Title", "Message", level);
+    }
+  } finally {
+    console.log = original.log;
+    console.info = original.info;
+    console.warn = original.warn;
+    console.error = original.error;
+  }
+  assert.deepEqual(seen.map(([stream]) => stream), ["error", "error", "warn", "error"]);
+  assert.ok(seen.every(([, line]) => line === "[bifrost] Title: Message"), JSON.stringify(seen));
 });

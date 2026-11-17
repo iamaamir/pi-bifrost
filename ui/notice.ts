@@ -24,7 +24,11 @@ export function registerBifrostNotices(pi: ExtensionAPI) {
     const data = entry.data as BifrostNotice;
     // shortcut: expanded/keyHint exist in pi-coding-agent >=1.5.2; the repo pins
     // 1.4.0, so read them defensively. Upgrade when the dep is bumped.
-    const expanded = (options as { expanded?: boolean }).expanded === true;
+    // Without host support the hint would name no key and `expandedDetails`
+    // would be unreachable, so render the full detail inline instead.
+    const hostSupportsExpand =
+      typeof (options as { keyHint?: unknown }).keyHint === "function";
+    const expanded = hostSupportsExpand && (options as { expanded?: boolean }).expanded === true;
     const keyHint =
       (options as { keyHint?: (keybinding: string, description: string) => string }).keyHint ??
       ((_k: string, d: string) => d);
@@ -58,8 +62,11 @@ export function registerBifrostNotices(pi: ExtensionAPI) {
         theme.fg(style.color, theme.bold(data.title)),
     ];
 
-    const expandable = data.expandedDetails !== undefined;
-    const bodyLines = expandable && expanded ? data.expandedDetails : data.details;
+    const expandable = data.expandedDetails !== undefined && hostSupportsExpand;
+    const bodyLines =
+      data.expandedDetails !== undefined && (expanded || !hostSupportsExpand)
+        ? data.expandedDetails
+        : data.details;
 
     if (data.message?.trim()) {
       lines.push(theme.fg("muted", data.message.trim()));
@@ -107,8 +114,10 @@ export function log(
     return;
   }
 
+  // Headless notices go to stderr like every other Bifrost diagnostic: stdout
+  // may carry the caller's own machine-readable output.
   const output = `[bifrost] ${title}: ${flat}`;
-  ({ info: console.info, success: console.log, warning: console.warn, error: console.error })[
+  ({ info: console.error, success: console.error, warning: console.warn, error: console.error })[
     level
   ](output);
 }
