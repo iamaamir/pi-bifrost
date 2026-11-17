@@ -45,6 +45,7 @@ import {
   TIME_BUDGET,
   TARGETS,
   TIMEOUT_TOLERANCE,
+  measurementDiagnostics,
   estimatedMinutes,
   legMinutes,
   runtimeErrorTolerance,
@@ -60,7 +61,7 @@ import {
   resolveTimeoutTolerance,
   summaryLines,
 } from "../mutation/workflow.mjs";
-import { annotationLines, mergeShardReports, readReports, renderSummary, selectMeasurement, summarise, survivorRows } from "../mutation/report.mjs";
+import { annotationLines, buildPayload, mergeShardReports, readReports, renderSummary, selectMeasurement, summarise, survivorRows } from "../mutation/report.mjs";
 
 const workflow = readFileSync(new URL("../.github/workflows/mutation.yml", import.meta.url), "utf8");
 const verificationWorkflow = readFileSync(new URL("../.github/workflows/verification.yml", import.meta.url), "utf8");
@@ -550,7 +551,7 @@ test("a report directory becomes a per-module summary with a survivor extract", 
       "endColumn", "endLine", "module", "mutantId", "mutator", "replacement", "startColumn", "startLine",
     ].sort());
 
-    const markdown = renderSummary({ reports, expectedTargets: ["cache.ts"] });
+    const markdown = summary({ reports, expectedTargets: ["cache.ts"] });
     // Module | Mutants | Killed | Survived | NoCoverage | Timeout | Errors | Population | Conclusive | Stryker
     assert.match(markdown, /\| `cache\.ts` \| 2 \| 1 \| 1 \| 0 \| 0 \| 0 \|/u);
     // The headline columns are the two explicit denominators plus Stryker's.
@@ -562,10 +563,8 @@ test("a report directory becomes a per-module summary with a survivor extract", 
 });
 
 test("a missing module report is flagged rather than rendering as a pass", () => {
-  const markdown = renderSummary({ reports: [], expectedTargets: ["cache.ts", "routing.ts"] });
-  assert.match(markdown, /Missing reports/u);
-  assert.match(markdown, /`cache\.ts`/u);
-  assert.match(markdown, /`routing\.ts`/u);
+  const markdown = summary({ reports: [], expectedTargets: ["cache.ts", "routing.ts"] });
+  assert.match(markdown, /missing module reports: cache\.ts, routing\.ts/u, "the summary names both missing modules");
 });
 
 test("summary lines name the score and the timeout count", () => {
@@ -711,7 +710,7 @@ test("a shard disagreement is surfaced, not silently resolved", () => {
     assert.deepEqual(reports[0].conflicts[0].statuses, ["Killed", "Survived"]);
 
     // A conflict makes the run unusable: the score is not reproducible.
-    const markdown = renderSummary({ reports, expectedTargets: ["cache.ts"] });
+    const markdown = summary({ reports, expectedTargets: ["cache.ts"] });
     assert.match(markdown, /shard conflict/u);
     const reasons = unusableReasons({
       modules: [{ module: "cache.ts" }],
@@ -843,11 +842,11 @@ test("a run that selects one module is not reported as four missing modules", ()
   // A dispatch may narrow the target set. The reporter must judge completeness
   // against what was planned, or a successful single-module run fails the gate.
   const reports = [{ module: "cache.ts", mutants: [{ status: "Killed" }], summary: summarise([{ status: "Killed" }]) }];
-  const narrowed = renderSummary({ reports, expectedTargets: ["cache.ts"] });
-  assert.doesNotMatch(narrowed, /Missing reports/u, "a selected module that reported is not missing");
+  const narrowed = summary({ reports, expectedTargets: ["cache.ts"] });
+  assert.doesNotMatch(narrowed, /missing module reports/u, "a selected module that reported is not missing");
 
-  const everything = renderSummary({ reports, expectedTargets: targetNames() });
-  assert.match(everything, /Missing reports/u, "an unselected module is still missing when the whole set is expected");
+  const everything = summary({ reports, expectedTargets: targetNames() });
+  assert.match(everything, /missing module reports/u, "an unselected module is still missing when the whole set is expected");
 });
 
 test("a module that is missing a planned shard is not treated as complete", () => {
@@ -856,17 +855,17 @@ test("a module that is missing a planned shard is not treated as complete", () =
   const reports = [
     { module: "cache.ts", shardsSeen: [0], mutants: [{ status: "Killed" }], summary: summarise([{ status: "Killed" }]) },
   ];
-  const markdown = renderSummary({ reports, expectedTargets: ["cache.ts"], shardsPerTarget: new Map([["cache.ts", 2]]) });
-  assert.match(markdown, /Missing shards/u, "the summary must name the missing shard");
+  const markdown = summary({ reports, expectedTargets: ["cache.ts"], shardsPerTarget: new Map([["cache.ts", 2]]) });
+  assert.match(markdown, /missing module shards/u, "the summary must name the missing shard");
   assert.match(markdown, /shard 1/u);
 
   // The same reports with the planned count satisfied must not raise the flag.
-  const complete = renderSummary({
+  const complete = summary({
     reports: [{ ...reports[0], shardsSeen: [0, 1] }],
     expectedTargets: ["cache.ts"],
     shardsPerTarget: new Map([["cache.ts", 2]]),
   });
-  assert.doesNotMatch(complete, /Missing shards/u);
+  assert.doesNotMatch(complete, /missing module shards/u);
 
   const reasons = unusableReasons({
     modules: [{ module: "cache.ts", total: 1, Killed: 1 }],
@@ -885,10 +884,10 @@ test("a shard outside the plan is rejected instead of merged", () => {
   const reports = [
     { module: "cache.ts", shardsSeen: [0, 1, 2], mutants: [{ status: "Killed" }], summary: summarise([{ status: "Killed" }]) },
   ];
-  const markdown = renderSummary({ reports, expectedTargets: ["cache.ts"], shardsPerTarget: new Map([["cache.ts", 2]]) });
-  assert.match(markdown, /Unexpected shards/u);
+  const markdown = summary({ reports, expectedTargets: ["cache.ts"], shardsPerTarget: new Map([["cache.ts", 2]]) });
+  assert.match(markdown, /unexpected module shards/u);
   assert.match(markdown, /shard 2 \(plan has 2\)/u);
-  assert.doesNotMatch(markdown, /Missing shards/u, "nothing is missing; something is extra");
+  assert.doesNotMatch(markdown, /missing module shards/u, "nothing is missing; something is extra");
 
   const reasons = unusableReasons({
     modules: [{ module: "cache.ts", total: 1, Killed: 1 }],
@@ -901,8 +900,8 @@ test("a shard outside the plan is rejected instead of merged", () => {
   assert.match(reasons.join(" "), /stale or misrouted/u);
 
   // The exact planned set stays usable.
-  const exact = renderSummary({ reports, expectedTargets: ["cache.ts"], shardsPerTarget: new Map([["cache.ts", 3]]) });
-  assert.doesNotMatch(exact, /Unexpected shards/u);
+  const exact = summary({ reports, expectedTargets: ["cache.ts"], shardsPerTarget: new Map([["cache.ts", 3]]) });
+  assert.doesNotMatch(exact, /unexpected module shards/u);
 });
 
 test("a saved tolerance override is honoured when a summary is rechecked", () => {
@@ -1029,8 +1028,8 @@ test("an unsharded report satisfies a one-shard plan", () => {
   const merged = mergeShardReports(reports);
   assert.deepEqual(merged[0].shardsSeen, [0]);
 
-  const markdown = renderSummary({ reports: merged, expectedTargets: ["cache.ts"], shardsPerTarget: new Map([["cache.ts", 1]]) });
-  assert.doesNotMatch(markdown, /Missing shards/u);
+  const markdown = summary({ reports: merged, expectedTargets: ["cache.ts"], shardsPerTarget: new Map([["cache.ts", 1]]) });
+  assert.doesNotMatch(markdown, /missing module shards/u);
 });
 
 test("clearing keeps sibling shards but drops this run's own stale output", () => {
@@ -1326,6 +1325,13 @@ function stamp(directory, name) {
   writeFileSync(path, JSON.stringify(report));
 }
 
+
+// The summary is a rendering of the same payload the gate reads, so a test that
+// asks "what would the page say?" is asking the same question as the gate.
+function summary({ reports, tolerance = null, ...options }) {
+  return renderSummary({ reports, payload: buildPayload({ reports, timeoutToleranceOverride: tolerance, ...options }) });
+}
+
 const strykerReport = (module, statuses) => ({
   schemaVersion: "1.0",
   framework: { name: "StrykerJS", version: "10.0.0" },
@@ -1374,7 +1380,7 @@ test("a report outside the selected target set cannot influence the score or pas
 
     const markdown = readFileSync(join(directory, "summary.md"), "utf8");
     assert.doesNotMatch(markdown, /\| `routing\.ts` \|/u, "the foreign module is not in the table");
-    assert.match(markdown, /Unexpected reports/u);
+    assert.match(markdown, /unexpected module reports/u);
 
     // Its presence is still a failed measurement: the artifact set is not the
     // planned one, even though the published score is clean.
@@ -1461,7 +1467,7 @@ test("the summary applies the same timeout allowance as the gate", () => {
 
   // With the override, the gate accepts these 20 timeouts. The published summary
   // must not then contradict it by judging the module against the default of 10.
-  const withOverride = renderSummary({
+  const withOverride = summary({
     reports,
     expectedTargets: ["cache.ts"],
     shardsPerTarget: new Map([["cache.ts", 1]]),
@@ -1480,7 +1486,7 @@ test("the summary applies the same timeout allowance as the gate", () => {
   assert.deepEqual(unusableReasons(payload), [], "the gate accepts the same run");
 
   // Control: without the override both reject against the calibrated default.
-  const withoutOverride = renderSummary({
+  const withoutOverride = summary({
     reports,
     expectedTargets: ["cache.ts"],
     shardsPerTarget: new Map([["cache.ts", 1]]),
@@ -1680,4 +1686,102 @@ test("--dry-run refuses to name a report it will never produce", () => {
   const result = attempt(["cache.ts", "--dry-run", "--report", "reports/mutation/x.json"]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /--dry-run writes no report/u);
+});
+
+// --- One policy: the gate and the summary are two renderings of one verdict ---
+
+test("gate and summary agree on every measurement state", () => {
+  // The input space here is finite, so it is enumerated rather than discovered
+  // one review finding at a time. Each row states the diagnostics it must
+  // produce; the loop then asserts that the gate prints exactly the blocking
+  // ones and the summary page prints all of them. A rule added without a row
+  // fails the completeness check at the bottom.
+  const MODULE = "cache.ts";
+  const reportFor = (counts, { module = MODULE, conflicts = [], shardsSeen = [0] } = {}) => {
+    const mutants = Object.entries(counts).flatMap(([status, n]) => Array.from({ length: n }, () => ({ status })));
+    return { module, mutants, summary: summarise(mutants), conflicts, shardsSeen };
+  };
+  const healthy = (module, total = 100) => reportFor({ Killed: total }, { module });
+
+  const cases = [
+    ["a clean measurement", [reportFor({ Killed: 10 })], {}, [], []],
+    ["no module reports", [], {}, ["no-modules", "missing-module"], []],
+    ["a missing module", [healthy(MODULE)], { expectedTargets: [MODULE, "routing.ts"] }, ["missing-module"], []],
+    ["a missing shard", [reportFor({ Killed: 10 })], { shardsPerTarget: new Map([[MODULE, 2]]) }, ["missing-shard"], []],
+    ["an unexpected module", [healthy(MODULE), healthy("routing.ts")], { expectedTargets: [MODULE] }, ["unexpected-module"], []],
+    ["an unexpected shard", [reportFor({ Killed: 10 }, { shardsSeen: [0, 1] })], { shardsPerTarget: new Map([[MODULE, 1]]) }, ["unexpected-shard"], []],
+    [
+      "a rejected report",
+      [],
+      { rejectedReports: [{ module: MODULE, name: "cache.ts.json", reason: "measured against different bytes" }] },
+      ["no-modules", "missing-module", "rejected-report"],
+      [],
+    ],
+    ["a module with zero mutants", [reportFor({})], {}, ["zero-mutants"], []],
+    [
+      "an aggregate timeout burst with every module inside its own allowance",
+      Array.from({ length: 6 }, (_, index) => reportFor({ Killed: 92, Timeout: 8 }, { module: `m${index}.ts` })),
+      { expectedTargets: ["m0.ts", "m1.ts", "m2.ts", "m3.ts", "m4.ts", "m5.ts"] },
+      ["timeout-burst"],
+      [],
+    ],
+    ["a module-local timeout burst inside a healthy run", [reportFor({ Killed: 85, Timeout: 15 }), healthy("routing.ts", 4100)], { expectedTargets: [MODULE, "routing.ts"] }, ["module-timeout-burst"], ["timeouts-observed"]],
+    [
+      "an aggregate error burst with every module inside its own allowance",
+      Array.from({ length: 6 }, (_, index) => reportFor({ Killed: 95, RuntimeError: 5 }, { module: `m${index}.ts` })),
+      { expectedTargets: ["m0.ts", "m1.ts", "m2.ts", "m3.ts", "m4.ts", "m5.ts"] },
+      ["error-burst"],
+      [],
+    ],
+    ["a module-local error burst inside a healthy run", [reportFor({ Killed: 85, RuntimeError: 15 }), healthy("routing.ts", 4100)], { expectedTargets: [MODULE, "routing.ts"] }, ["module-error-burst"], ["errors-observed"]],
+    ["a shard conflict", [reportFor({ Killed: 10 }, { conflicts: [{ identity: "x", statuses: ["Killed", "Survived"], line: 3 }] })], {}, ["shard-conflict"], []],
+    ["timeouts inside the allowance", [reportFor({ Killed: 100, Timeout: 1 })], {}, [], ["timeouts-observed"]],
+    ["errors inside the allowance", [reportFor({ Killed: 100, RuntimeError: 2 })], {}, [], ["errors-observed"]],
+    ["uncovered mutants", [reportFor({ Killed: 8, NoCoverage: 2 })], {}, [], ["no-coverage"]],
+    [
+      "an override that raises the timeout allowance",
+      [reportFor({ Killed: 80, Timeout: 20 })],
+      { timeoutToleranceOverride: 25 },
+      [],
+      ["timeouts-observed"],
+    ],
+  ];
+
+  const seen = new Set();
+  for (const [name, reports, options, blocking, advisory] of cases) {
+    const payload = buildPayload({ reports, expectedTargets: [MODULE], ...options });
+    const diagnostics = measurementDiagnostics(payload);
+    const reasons = unusableReasons(payload);
+    // Rendered from the same payload the gate reads, which is the invariant.
+    const markdown = renderSummary({ reports, payload });
+
+    const codes = diagnostics.map((entry) => entry.code).sort();
+    assert.deepEqual(codes, [...blocking, ...advisory].sort(), `${name}: diagnostics`);
+    for (const code of codes) seen.add(code);
+
+    // The gate is exactly the blocking messages, in the same words.
+    assert.deepEqual(
+      reasons,
+      diagnostics.filter((entry) => entry.severity === "blocking").map((entry) => entry.message),
+      `${name}: the gate prints exactly the blocking messages`,
+    );
+
+    // Every diagnostic reaches the page, so the summary cannot contradict it.
+    for (const entry of diagnostics) {
+      assert.ok(markdown.includes(entry.message), `${name}: the summary must print "${entry.code}"`);
+    }
+    // And blocking ones are marked as such on the page.
+    for (const message of reasons) {
+      assert.ok(markdown.includes(`**${message}`), `${name}: blocking diagnostics are marked in the summary`);
+    }
+  }
+
+  // Completeness: every diagnostic the policy can emit has a row above. Adding a
+  // rule without a row fails here rather than in a later review.
+  const emitted = new Set([
+    ...cases.flatMap(([, reports, options]) => measurementDiagnostics(buildPayload({ reports, expectedTargets: [MODULE], ...options })).map((entry) => entry.code)),
+  ]);
+  const source = readFileSync(new URL("../mutation/config.mjs", import.meta.url), "utf8");
+  const declared = new Set([...source.matchAll(/note\(\s*"([a-z-]+)",\s*(?:BLOCKING|ADVISORY)/g)].map((match) => match[1]));
+  assert.deepEqual([...declared].sort(), [...emitted].sort(), "every declared diagnostic has a truth-table row");
 });
