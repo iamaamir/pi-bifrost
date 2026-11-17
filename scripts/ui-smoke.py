@@ -797,12 +797,13 @@ def capture(
                 "criteria": {"general": "keep this criterion"},
             }:
                 raise AssertionError("manual init changed explicit classifier settings")
-            init_screen = " ".join((log_path.read_text(errors="ignore") if log_path.exists() else "").split()).lower()
+            # The preview card colors the pool delta, so strip SGR/OSC before matching copy.
+            init_screen = " ".join(re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\\\)", "", log_path.read_text(errors="ignore") if log_path.exists() else "").split()).lower()
             if init_screen.count("save bifrost setup?") != 1:
                 raise AssertionError("manual init must ask exactly once to save the refreshed setup")
             if "choose classifier" in init_screen or "select classifier" in init_screen:
                 raise AssertionError("manual init opened a classifier picker after save")
-            if "save memberships: +2 / -0" not in init_screen or "to project (.pi/bifrost.json)" not in init_screen:
+            if "pools +2 / -0 memberships" not in init_screen or "save to project (.pi/bifrost.json)" not in init_screen:
                 raise AssertionError("manual init did not preview the exact project membership changes")
 
         time.sleep(2.0)
@@ -1050,9 +1051,9 @@ def main() -> int:
                     raise AssertionError("large-pool Auto routing did not restore the Auto status in the footer")
             if name == "reload-invalid-economics":
                 reload_text = " ".join((OUT / "reload-invalid-economics.txt").read_text(errors="ignore").split())
-                prefix = "Bifrost config reload rejected:"
+                title = "Config reload rejected"
                 body = "workspace config economics contains an invalid source-local policy."
-                if reload_text.count(prefix) != 1 or reload_text.count(body) != 1:
+                if reload_text.count(title) != 1 or reload_text.count(body) != 1:
                     raise AssertionError("invalid economics reload should report the rejection once in the current UI")
                 if "hello after rejected reload" not in reload_text or "healthy" not in reload_text:
                     raise AssertionError("last-good routing config did not remain active after the rejected reload")

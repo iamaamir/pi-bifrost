@@ -250,7 +250,7 @@ describe("reliability migration acceptance against pinned Pi", { timeout: 300_00
       writeFileSync(paths(work).sidecar, corrupt);
 
       const result = await runPi({ home, work, model: "fake-a/healthy", messages: ["/bifrost reliability migrate"] });
-      assert.match(`${result.stdout}\n${result.stderr}`, /existing reliability v2 sidecar is invalid or unsafe; repair it explicitly/u);
+      assert.match(`${result.stdout}\n${result.stderr}`, /existing v2 sidecar is invalid or unsafe; repair it explicitly/u);
       assert.deepEqual(readFileSync(paths(work).source), sourceBytes, "the v1 source is untouched");
       assert.deepEqual(readFileSync(paths(work).sidecar), corrupt, "the corrupt sidecar is untouched");
       assert.equal(existsSync(paths(work).backup), false, "no backup is created before the corrupt sidecar is rejected");
