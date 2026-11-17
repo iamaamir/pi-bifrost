@@ -1324,7 +1324,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
     const sourcePath = join(ROOT, "index.ts");
     const original = readFileSync(sourcePath, "utf8");
     const originalHash = sha256(original);
-    const anchor = `debug("input", "route_decision", {\n              decision: buildRouteDecisionSummary(classification, attempt),\n            });`;
+    const anchor = `debug("input", "route_decision", {\n          decision: buildRouteDecisionSummary(classification, attempt),\n        });`;
     assert.ok(original.includes(anchor), "input route-decision projection anchor must exist");
     const mutants = [
       {

@@ -262,19 +262,13 @@ describe("activation cancellation acceptance", { timeout: 120_000 }, () => {
   it("fault control: removing the late-abort guard allows forbidden late dispatch", async () => {
     const sha256 = (text) => createHash("sha256").update(text).digest("hex");
     const original = readFileSync(join(ROOT, "index.ts"), "utf8");
-    const guard = `          if (ctx.signal?.aborted) {
-            endClassify({ kind: classification.kind, outcome: "aborted" });
-            endInput({ outcome: "aborted" });
-            return routeBoundary
-              ? strictInputHandled(
-                  ctx,
-                  state,
-                  originalText,
-                  editorTextAtInput,
-                  "Bifrost routing was cancelled; the turn was not sent. Resubmit after repair.",
-                )
-              : defaultAction;
-          }`;
+    const guard = `      if (ctx.signal?.aborted) {
+        endClassify({ kind: classification.kind, outcome: "aborted" });
+        endInput({ outcome: "aborted" });
+        return routeBoundary
+          ? strictInputHandled(ctx, state, originalText, editorTextAtInput, "Bifrost routing was cancelled; the turn was not sent. Resubmit after repair.")
+          : defaultAction;
+      }`;
     assert.ok(original.includes(guard), "late-abort guard must exist in production source");
     const mutantSource = original.replace(guard, "      console.error('MUTANT_GUARD_REMOVED_REACHED');");
     assert.notEqual(mutantSource, original, "fault injection must change the production source");
