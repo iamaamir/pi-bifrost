@@ -367,7 +367,6 @@ function sha256(text: string): string {
   return createHash("sha256").update(text, "utf-8").digest("hex");
 }
 
-/** Stable JSON encoding: object keys sorted at every level, so digests survive key order. */
 /**
  * Compare two request fields for identity without canonicalizing unvalidated
  * input. `canonicalJson` recurses, so an over-depth candidate can exhaust the
@@ -378,6 +377,7 @@ function sameRequestField(left: unknown, right: unknown): boolean {
   return canonicalJson(left) === canonicalJson(right);
 }
 
+/** Stable JSON encoding: object keys sorted at every level, so digests survive key order. */
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
