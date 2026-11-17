@@ -10,7 +10,7 @@ import { loadConfigForReload, loadConfigWithSourceOverride, readBoundedConfigTex
 import { applyConfigMigration, ConfigMigrationError, parseConfigMigrationArgs, planConfigMigration, readConfigMigrationSource } from "./config-migration.ts";
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
-import { buildRouteDecisionSummary, type ClassificationPipeline, type ClassificationResult, type ClassificationSource, type RouteDecisionSummary } from "./classification-pipeline.ts";
+import { buildRouteDecisionSummary, type ClassificationPipeline, type ClassificationResult, type ClassificationSource, type ClassifierAttemptSummary, type RouteDecisionSummary } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
 import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT, readRecentCompleteProbeReport } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
@@ -1814,6 +1814,7 @@ export type BifrostPreviewSuccess = {
   readonly backend?: string;
   readonly model?: string;
   readonly confidence?: number;
+  readonly classifierAttempt?: ClassifierAttemptSummary;
   readonly tier: string;
   readonly strategy: string;
   readonly selectedTier?: string;
@@ -1883,6 +1884,8 @@ export function buildPreviewReport(input: {
 }): BifrostPreviewSuccess {
   const { prompt, classification, display } = input;
   const judgment = classification.kind === "classified" ? classification.judgment : undefined;
+  const attempt = classification.classifierAttempt;
+
   return {
     ok: true,
     prompt,
@@ -1890,6 +1893,7 @@ export function buildPreviewReport(input: {
     ...(judgment ? { backend: judgment.backend } : {}),
     ...(judgment?.model !== undefined ? { model: judgment.model } : {}),
     ...(judgment?.confidence !== undefined ? { confidence: judgment.confidence } : {}),
+    ...(attempt ? { classifierAttempt: attempt } : {}),
     tier: classification.tier,
     strategy: display.strategy,
     // An unresolved selection arrives as an absent value, so omitting the key is
@@ -1990,6 +1994,14 @@ export function renderTracePreview(trace: BifrostTracePreview): string[] {
 }
 
 export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
+  const attempt = report.classifierAttempt;
+  const showAttempt = attempt !== undefined && (
+    attempt.fallbackKind !== "none"
+    || attempt.outcome !== "success"
+    || report.backend !== attempt.backend
+    || (attempt.confidence !== undefined && report.confidence === undefined)
+  );
+
   return [
     "--- preview ---",
     `prompt:    ${report.prompt}`,
@@ -2000,6 +2012,11 @@ export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
       `backend:   ${report.backend}`,
       `model:     ${report.model ?? "none"}`,
       `confidence:${report.confidence === undefined ? " n/a" : ` ${report.confidence}`}`,
+    ] : []),
+    ...(showAttempt && attempt ? [
+      `classifier attempt: ${attempt.backend} (${attempt.outcome}, fallback=${attempt.fallbackKind})`,
+      ...(attempt.model !== undefined ? [`classifier attempt model: ${attempt.model}`] : []),
+      ...(attempt.confidence !== undefined ? [`classifier attempt confidence: ${attempt.confidence}`] : []),
     ] : []),
     `tier:      ${report.tier}`,
     `strategy:  ${report.strategy}`,
@@ -2013,9 +2030,9 @@ export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
       : []),
     ...(report.fallbackBoundary === "explicit" ? [
       "fallback boundary: explicit",
-      ...(report.attemptedTiers ?? []).flatMap((attempt, index) => [
-        `attempt ${index + 1} (${attempt.tier}, ${attempt.strategy}):`,
-        ...attempt.candidates.map((candidate) => `  ${candidate}`),
+      ...(report.attemptedTiers ?? []).flatMap((attemptedTier, index) => [
+        `attempt ${index + 1} (${attemptedTier.tier}, ${attemptedTier.strategy}):`,
+        ...attemptedTier.candidates.map((candidate) => `  ${candidate}`),
       ]),
     ] : []),
     `selected:  ${report.selected ?? PREVIEW_NONE}`,
