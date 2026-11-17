@@ -2634,6 +2634,58 @@ describe("route dispatch", () => {
     assert.ok(notices.includes("info:Bifrost disabled: Routing is disabled; this choice survives a restart."), JSON.stringify(notices));
   });
 
+  it("does not promise persistence when the mode state could not be saved", async () => {
+    const { ctx, calls } = makeCtx();
+    const state = makeState(() => false);
+    await createCommandRouter(state as never)("on", ctx as never);
+    await createCommandRouter(state as never)("off", ctx as never);
+    const notices = calls.filter((call) => call.kind === "notify").map((call) => String(call.value));
+    // saveModeState's boolean is the only evidence the choice survives a restart.
+    assert.ok(
+      notices.includes(
+        "warning:Bifrost enabled: Routing is enabled for this session; the mode state could not be saved.",
+      ),
+      JSON.stringify(notices),
+    );
+    assert.ok(
+      notices.includes(
+        "warning:Bifrost disabled: Routing is disabled for this session; the mode state could not be saved.",
+      ),
+      JSON.stringify(notices),
+    );
+  });
+
+  it("clears the probe widget when the init probe rejects", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-probe-reject-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      const { ctx, calls } = makeCtx([makeModel("fixture", "chat")]);
+      const probeWidgets: string[] = [];
+      (ctx as any).ui.setWidget = (key: string, value: unknown) => {
+        if (key !== "bifrost-probe") return;
+        const shape = typeof value === "function" ? "component" : JSON.stringify(value);
+        probeWidgets.push(shape);
+        calls.push({ kind: "widget", value: `bifrost-probe:${shape}` });
+        if (typeof value === "function") throw new Error("progress render failed");
+      };
+      // A progress render that throws rejects runProbe before the widget clear.
+      await assert.rejects(
+        createCommandRouter(makeState() as never)("init", ctx as never),
+        /progress render failed/,
+      );
+      assert.equal(
+        probeWidgets[probeWidgets.length - 1],
+        "[]",
+        "a rejected init probe left the progress widget on screen",
+      );
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("groups probe failures by reason in the summary card", async () => {
     const { ctx, calls } = makeCtx([makeModel("fixture", "chat"), makeModel("fixture", "bad")]);
     const state = makeState();

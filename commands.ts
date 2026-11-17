@@ -1496,21 +1496,26 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     let errCount = 0;
 
     uiBusy(ctx, `Probing ${availableCount} models...`);
-    const probeRun = await runProbe(ctx, {
-      ...probeOptionsFromConfig(initConfig.probe),
-      signal: ctx.signal,
+    let probeRun: Awaited<ReturnType<typeof runProbe>>;
+    try {
+      probeRun = await runProbe(ctx, {
+        ...probeOptionsFromConfig(initConfig.probe),
+        signal: ctx.signal,
 
-      onProgress: (done, total, last) => {
-        if (last.status === "ok") okCount++;
-        else if (last.status === "error" || last.status === "timeout") errCount++;
+        onProgress: (done, total, last) => {
+          if (last.status === "ok") okCount++;
+          else if (last.status === "error" || last.status === "timeout") errCount++;
 
-        setProbeProgress(ctx, { done, total, okCount, errCount });
-      },
-    });
-    uiDone(ctx);
-    // The probe widget must never outlive the probe: every later exit path renders
-    // its feedback in the chat, and a stale progress panel reads as "still probing".
-    if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
+          setProbeProgress(ctx, { done, total, okCount, errCount });
+        },
+      });
+    } finally {
+      // The probe widget must never outlive the probe: every later exit path
+      // renders its feedback in the chat, and a stale progress panel reads as
+      // "still probing". A rejected probe skips the code below, so clear here.
+      uiDone(ctx);
+      if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
+    }
     if (probeRun.cancelled || ctx.signal?.aborted) {
       logImportant(ctx, "Init probing cancelled", "No configuration was changed.", "info");
       return;
@@ -3146,7 +3151,7 @@ async function handleReliabilityCommand(
       logImportant(
         ctx,
         "Cooldown state unavailable",
-        "Provider cooldown state is invalid or unavailable; inspect .pi/bifrost-reliability-v2.json.",
+        "Provider cooldown state is invalid or unavailable; inspect .pi/bifrost-provider-reliability.json.",
         "error",
       );
     }
@@ -4326,28 +4331,32 @@ export function createCommandRouter(
     exact("on", (_, ctx) => {
       state.onManualControl?.(ctx.sessionManager, "on");
       state.enabled = true;
-      state.saveModeState();
+      const persisted = state.saveModeState() !== false;
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       logImportant(
         ctx,
         "Bifrost enabled",
-        "Routing is enabled; this choice survives a restart.",
-        "success",
+        persisted
+          ? "Routing is enabled; this choice survives a restart."
+          : "Routing is enabled for this session; the mode state could not be saved.",
+        persisted ? "success" : "warning",
       );
     }),
     exact("off", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
       state.onManualControl?.(ctx.sessionManager, "off");
       state.enabled = false;
-      state.saveModeState();
+      const persisted = state.saveModeState() !== false;
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
       logImportant(
         ctx,
         "Bifrost disabled",
-        "Routing is disabled; this choice survives a restart.",
-        "success",
+        persisted
+          ? "Routing is disabled; this choice survives a restart."
+          : "Routing is disabled for this session; the mode state could not be saved.",
+        persisted ? "success" : "warning",
       );
     }),
     exact("pin", async (_, ctx) => {
