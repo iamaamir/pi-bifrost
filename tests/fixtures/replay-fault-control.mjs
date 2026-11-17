@@ -265,9 +265,9 @@ for (const mode of ["v1", "v2"]) {
 // it does not prove each redundant guard individually fault-sensitive.
 function permitRepeatedEmptyRecovery(source, v2) {
   const edits = [
-    ['if (`${String(message.provider)}/${String(message.model)}` !== failedModelKey\n          || message.stopReason', 'if (message.stopReason'],
-    ['if (previousAttempt?.entryId === boundary.entryId && previousAttempt.userMessage.deref() === boundary.message) {', 'if (false) {'],
-    ...(v2 ? [['retryEligible: activeRouteOrigin === "automatic" || activeRouteOrigin === "explicit_tier",', 'retryEligible: true,']] : []),
+    ['if (\n          `${String(message.provider)}/${String(message.model)}` !== failedModelKey ||\n          message.stopReason', 'if (\n          message.stopReason'],
+    ['if (\n      previousAttempt?.entryId === boundary.entryId &&\n      previousAttempt.userMessage.deref() === boundary.message\n    ) {', 'if (false) {'],
+    ...(v2 ? [['retryEligible:\n                activeRouteOrigin === "automatic" || activeRouteOrigin === "explicit_tier",', 'retryEligible: true,']] : []),
   ];
   for (const [before, after] of edits) {
     if (source.split(before).length !== 2) throw new Error(`compound recovery fault requires one exact anchor: ${before}`);
@@ -280,7 +280,7 @@ function permitRepeatedEmptyRecovery(source, v2) {
  * (the assertion depends on the guard permitting the safe path). */
 export const REPLAY_GUARD_MUTATORS = {
   consumedSteeringBoundary: (source) => {
-    const guard = "    if (!activity || activity.multipleUsers || activity.firstUser !== boundary.message) return undefined;\n";
+    const guard = "    if (!activity || activity.multipleUsers || activity.firstUser !== boundary.message)\n      return undefined;\n";
     if (source.split(guard).length !== 2) throw new Error("consumed steering fault requires one exact guard");
     return source.replace(guard, "");
   },

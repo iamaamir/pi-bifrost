@@ -184,7 +184,7 @@ describe("legacy physical routing regression", { timeout: 240_000, concurrency: 
           .map((record) => record.message);
         const output = `${messages.join("\n")}\n${rpc.stderr}`;
 
-        assert.match(output, /config reload rejected: workspace config must contain an object/);
+        assert.match(output, /Config reload rejected: workspace config must contain an object/);
         assert.match(output, /strict route for tier "restricted" has no healthy model/);
         assert.match(output, /the turn was not sent/);
         assert.equal((after.attempts.fast ?? 0) - (before.attempts.fast ?? 0), 0,
