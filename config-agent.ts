@@ -1614,7 +1614,7 @@ export async function previewConfigCandidate(input: ConfigAgentPreviewInput): Pr
     notes.push(`Empty tiers remain configured boundaries and were not filtered: ${emptyTiers.join(", ")}. Inspect requested tier, selected tier, and fallback reason below; no implicit fallback is added.`);
   }
   if (classifiersCanChangeRoutes) {
-    notes.push("Projected classifier runtime is enabled, so prompt classification after apply and reload can pick a different tier than these cases show. Cases marked classifier_dependent show only the offline no-classifier path.");
+    notes.push("Projected classifier runtime is enabled, so prompt classification after apply and reload can pick a different tier than these cases show. This preview shows only the offline no-classifier path.");
   }
   if (catalog.available.length === 0) {
     notes.push("The model catalog reported no available models, so every tier resolves empty.");
