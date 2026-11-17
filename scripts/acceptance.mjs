@@ -62,7 +62,7 @@ const SUPPORTING_TESTS = [
   {"id": "support:g07:11", "requirement": "R08", "file": "tests/reliability-v2-state-machine.test.ts", "name": "rejects the settledOutcomeDedupLedgerDropped control", "boundary": "independent single-scope/no-observation transition model and in-process durable store restart"},
   {"id": "support:g07:12", "requirement": "R08", "file": "tests/reliability-v2-state-machine.test.ts", "name": "rejects the revisionSkipsTwo control", "boundary": "independent single-scope/no-observation transition model and in-process durable store restart"},
   {"id": "support:g07:13", "requirement": "R08", "file": "tests/reliability-v2-state-machine.test.ts", "name": "rejects the unexpectedAdmissionReason control", "boundary": "independent single-scope/no-observation transition model and in-process durable store restart"},
-  {"id": "support:g03:guard-1", "requirement": "R06", "file": "tests/integration/auto-virtual.test.mjs", "name": "anchors the baseline source hash and proves isSideEffectFreeAllowanceFailure faults the output-effect no-replay assertion", "boundary": "real Pi guard fault proof; first permissive unsafe-replay bypass, remaining restrictive safe-path sensitivity"},
+  {"id": "support:g03:guard-1", "requirement": "R06", "file": "tests/integration/auto-virtual.test.mjs", "name": "records the candidate source hash and proves isSideEffectFreeAllowanceFailure faults the output-effect no-replay assertion", "boundary": "real Pi guard fault proof; first permissive unsafe-replay bypass, remaining restrictive safe-path sensitivity"},
   {"id": "support:g03:guard-2", "requirement": "R06", "file": "tests/integration/auto-virtual.test.mjs", "name": "proves autoBoundaryStillActive faults the synthetic tool side-effect no-replay assertion", "boundary": "real Pi guard fault proof; first permissive unsafe-replay bypass, remaining restrictive safe-path sensitivity"},
   {"id": "support:g03:guard-3", "requirement": "R06", "file": "tests/integration/reliability-v2-auto.test.mjs", "name": "proves allowanceRetryBoundaryStillSafe faults the v2 Auto allowance-retry assertion", "boundary": "real Pi guard fault proof; first permissive unsafe-replay bypass, remaining restrictive safe-path sensitivity"},
   {"id": "support:g01:01", "requirement": "R16", "file": "tests/integration/native-faux-lifecycle.test.mjs", "name": "routes real AgentSession turns by direct rules, tier override precedence, and default", "boundary": "shared bounded native faux harness; owned detached group receipts; deny-all probe; credential canaries absent"},
@@ -486,6 +486,10 @@ export function buildGateEvidenceCases({ verification, root, artifactDir, termin
     return {
       id: "gate:" + gate.id,
       requirements: ["R16"],
+      // Retained evidence identifier: read by ci-report.mjs and present in
+      // recorded report fixtures, so it is not renamed for cosmetic accuracy.
+      // The preflight gate may carry additional checks over time without
+      // changing this id.
       boundary: gate.id === "preflight" ? "installed-tool-preflight" : "release-verification-gate",
       status: gate.exitCode === 0 ? "passed" : "failed",
       required: true,

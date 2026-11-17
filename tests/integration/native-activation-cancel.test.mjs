@@ -8,14 +8,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { it } from "node:test";
 import { processGroupExists, terminateProcessGroup } from "../../scripts/acceptance/core.mjs";
-import { REPLAY_GUARD_BASELINE_SHA256 } from "../fixtures/replay-fault-control.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const child = join(root, "tests", "fixtures", "native-activation-cancel-child.mjs");
 const guard = join(root, "scripts", "test-outbound-guard.cjs");
 const credentials = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY", "TYPESAFE_API_KEY", "HF_TOKEN", "HUGGINGFACE_HUB_TOKEN", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"];
 const DEADLINE_MS = 120_000;
-const PRODUCTION_SHA256 = REPLAY_GUARD_BASELINE_SHA256;
+const PRODUCTION_SHA256 = createHash("sha256").update(readFileSync(join(root, "index.ts"), "utf8")).digest("hex");
 const LATE_ABORT_GUARD = `      if (ctx.signal?.aborted) {
         endClassify({ kind: classification.kind, outcome: "aborted" });
         endInput({ outcome: "aborted" });
@@ -220,7 +219,7 @@ it("cancels real AgentSession activation behind a proven deny-all fence", async 
     // source is never modified. Each fault removes the exact handling for one
     // real host outcome and must fail the named child assertion.
     const original = readFileSync(join(root, "index.ts"), "utf8");
-    assert.equal(sha256(original), PRODUCTION_SHA256, "production index.ts must match the reviewed baseline hash");
+    assert.equal(sha256(original), PRODUCTION_SHA256, "must be unchanged since this test module loaded");
     assert.ok(original.includes(LATE_ABORT_GUARD), "the late-abort guard must exist in production source");
 
     let mutantCounter = 0;

@@ -22,10 +22,9 @@ import { makeModel } from "../helpers.ts";
 import bifrostExtension from "../../index.ts";
 import { resolveConfiguredTier } from "../../routing.ts";
 import { buildRouteDecisionSummary } from "../../classification-pipeline.ts";
-import { REPLAY_GUARD_BASELINE_SHA256 } from "../fixtures/replay-fault-control.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const PRODUCTION_INDEX_SHA256 = REPLAY_GUARD_BASELINE_SHA256;
+const PRODUCTION_INDEX_SHA256 = createHash("sha256").update(readFileSync(join(ROOT, "index.ts"), "utf8")).digest("hex");
 const SELECTION_CANDIDATES_GUARD = "const selectionCandidates = targetPool.selectionCandidates ?? targetPool.healthyCandidates;";
 const SELECTION_CANDIDATES_MUTANT = "const selectionCandidates = targetPool.candidates ?? targetPool.selectionCandidates ?? targetPool.healthyCandidates;";
 
@@ -356,7 +355,7 @@ describe("G06 affinity policy acceptance", { timeout: 60_000 }, () => {
   it("fails the named hard-exclusion assertion under a hard-filter-bypass fault in an isolated copy", async () => {
     const pristineIndex = readFileSync(join(ROOT, "index.ts"), "utf8");
     const pristineRouting = readFileSync(join(ROOT, "routing.ts"), "utf8");
-    assert.equal(sha256(pristineIndex), PRODUCTION_INDEX_SHA256, "the committed index.ts must start at its baseline hash");
+    assert.equal(sha256(pristineIndex), PRODUCTION_INDEX_SHA256, "must be unchanged since this test module loaded");
     const pristineScratch = createIsolatedCopy("bifrost-g06-affinity-pristine-");
     const mutantScratch = createIsolatedCopy("bifrost-g06-affinity-mutant-");
     try {

@@ -45,11 +45,10 @@ import { createTypeSafeClassifier } from "../../typesafe-classifier.ts";
 import { createPiNativeClassifier } from "../../classifier-pi-native.ts";
 import { createAndPromptSession, promptSessionIfActive } from "../../session-fallback.ts";
 import bifrostExtension from "../../index.ts";
-import { REPLAY_GUARD_BASELINE_SHA256 } from "../fixtures/replay-fault-control.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 /** Production index.ts baseline recorded for G05 fault-control restoration. */
-const INDEX_BASELINE_SHA256 = REPLAY_GUARD_BASELINE_SHA256;
+const INDEX_BASELINE_SHA256 = createHash("sha256").update(readFileSync(join(ROOT, "index.ts"), "utf8")).digest("hex");
 
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));

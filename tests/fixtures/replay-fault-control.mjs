@@ -6,13 +6,23 @@
 // and tests/integration/reliability-v2-auto.test.mjs to the production guards
 // in index.ts.
 //
-// GUARD INVENTORY (index.ts, candidate baseline SHA-256 declared below):
-//   - isSideEffectFreeAllowanceFailure (exact line 1875) — proves a failed
-//     attempt had no output/tool results/queued work before allowance recovery.
-//   - autoBoundaryStillActive (exact line 1818) — confirms the original user
-//     boundary is still the active turn.
-//   - allowanceRetryBoundaryStillSafe (exact line 2636) — re-checks the boundary
-//     immediately before dispatching the prepared allowance retry.
+// GUARD INVENTORY (index.ts):
+//   - isSideEffectFreeAllowanceFailure — proves a failed attempt had no
+//     output/tool results/queued work before allowance recovery.
+//   - autoBoundaryStillActive — confirms the original user boundary is still
+//     the active turn.
+//   - allowanceRetryBoundaryStillSafe — re-checks the boundary immediately
+//     before dispatching the prepared allowance retry.
+//
+// There is no committed source hash. The proof captures the candidate's current
+// index.ts at start and uses those exact bytes for the pristine, mutated and
+// restored phases, so an unrelated `index.ts` edit needs no baseline update:
+// behavior is verified, not bytes. Failure modes are positional, not approval
+// based — a mutator whose anchor is missing or ambiguous, whose body brace cannot
+// be resolved inside its own function, or whose mutation changes nothing fails
+// before any phase runs. Body braces are resolved from the guard's signature
+// (parameters, then return type, comments and literals skipped) rather than by
+// searching for the next `{\n`, which could reach a neighbouring function.
 //
 // CONTROLLED FAULT PROOF (performed in a disposable scratch copy, never in the
 // committed tree; reproduces /Users/mak/.paseo/delivery/g03-replay-fault/proof.log):
@@ -56,23 +66,17 @@ import { createHash } from "node:crypto";
 import { cpSync, copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import ts from "typescript";
 import { processGroupExists } from "../../scripts/acceptance/core.mjs";
 import { closeTracking, cleanupFailure, detachOwnedHandles, spawnOwned } from "./child-auto-inline-harness.mjs";
 
-export const REPLAY_GUARD_BASELINE_SHA256 = "822123bab361524636307052a007e7e7ab686bf186195d4c41f93a95baea70bb";
+// Guards every replay proof must keep targeting. Mutators locate them by anchor;
+// the integration anchor asserts each one still exists in production source.
 export const REPLAY_GUARD_FUNCTIONS = [
   "isSideEffectFreeAllowanceFailure",
   "allowanceRetryBoundaryStillSafe",
   "autoBoundaryStillActive",
 ];
-
-// Guard line anchors are exact against the baseline commit; keep them in sync
-// with index.ts when the guards move.
-export const REPLAY_GUARD_LINES = {
-  autoBoundaryStillActive: 1830,
-  isSideEffectFreeAllowanceFailure: 1887,
-  allowanceRetryBoundaryStillSafe: 2660,
-};
 
 // Each PROVEN pair has an executable fault reaching its exact named assertion.
 // A compound fault covers one semantic claim across redundant enforcement;
@@ -288,13 +292,57 @@ export const REPLAY_GUARD_MUTATORS = {
   autoBoundaryStillActive: (source) => injectGuardStatement(source, "autoBoundaryStillActive", "return false;"),
 };
 
-function injectGuardStatement(source, guard, statement) {
-  const anchor = `  function ${guard}(`;
-  const anchorIndex = source.indexOf(anchor);
-  if (anchorIndex === -1) throw new Error(`replay guard anchor not found: ${guard}`);
-  const openBrace = source.indexOf("{\n", anchorIndex);
-  if (openBrace === -1) throw new Error(`replay guard body opening brace not found: ${guard}`);
-  return `${source.slice(0, openBrace + 1)}\n    ${statement}${source.slice(openBrace + 1)}`;
+/**
+ * Index of the brace that opens `guard`'s body, resolved from the TypeScript AST.
+ *
+ * A text scan cannot answer "which brace opens this declaration's body". The
+ * signature may carry a return-type literal, the body may open with a comment,
+ * and a standalone block or the next function can follow it immediately; each
+ * heuristic that closed one of those gaps opened another, and a brace search that
+ * lands one function late still looks like a single clean insertion. The parser
+ * answers the question directly, ships as a devDependency, and is already used by
+ * scripts/crap-report.mjs. Zero or duplicate declarations, a declaration without
+ * a block body, and any shape the parser cannot represent fail closed.
+ */
+function guardBodyBraceIndex(source, guard) {
+  const sourceFile = ts.createSourceFile("index.ts", source, ts.ScriptTarget.Latest, false);
+  const declarations = [];
+  const visit = (node) => {
+    if (ts.isFunctionDeclaration(node) && node.name?.text === guard) declarations.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  if (declarations.length === 0) throw new Error(`replay guard anchor not found: ${guard}`);
+  if (declarations.length > 1) {
+    throw new Error(`replay guard anchor is ambiguous (${declarations.length} matches): ${guard}`);
+  }
+  const [declaration] = declarations;
+  if (!declaration.body || !ts.isBlock(declaration.body)) {
+    throw new Error(`replay guard has no body to mutate (declaration only): ${guard}`);
+  }
+  const bodyBrace = declaration.body.getStart(sourceFile);
+  if (source[bodyBrace] !== "{") throw new Error(`replay guard body brace not found: ${guard}`);
+  return bodyBrace;
+}
+
+/** Unit under test for the targeting contract: a mutant is the candidate with
+ * exactly one statement inserted at the intended guard's body opening. */
+export function injectGuardStatement(source, guard, statement) {
+  const bodyBrace = guardBodyBraceIndex(source, guard);
+  const injected = `\n    ${statement}`;
+  const mutant = `${source.slice(0, bodyBrace + 1)}${injected}${source.slice(bodyBrace + 1)}`;
+  // Confinement by construction: the mutant is the candidate with exactly one
+  // insertion at the guard's own body opening, so every byte outside that
+  // declaration — return-type annotations, standalone blocks, neighbouring
+  // functions — is unchanged.
+  if (mutant.slice(0, bodyBrace + 1) !== source.slice(0, bodyBrace + 1)
+    || mutant.slice(bodyBrace + 1 + injected.length) !== source.slice(bodyBrace + 1)) {
+    throw new Error(`replay guard fault did not land in ${guard}`);
+  }
+  if (mutant.split(statement).length !== source.split(statement).length + 1) {
+    throw new Error(`replay guard fault statement is not uniquely introduced in ${guard}`);
+  }
+  return mutant;
 }
 
 export function sha256(text) {
@@ -540,14 +588,31 @@ export async function runReplayGuardFaultProof({
 }) {
   const committedPath = join(root, "index.ts");
   const original = readFileSync(committedPath, "utf8");
-  const originalHash = sha256(original);
-  if (originalHash !== REPLAY_GUARD_BASELINE_SHA256) {
-    throw new Error(`G03 replay fault proof requires baseline source; index.ts sha256=${originalHash}`);
-  }
-  const mutate = REPLAY_GUARD_MUTATORS[proof.guard];
+  // Dynamically captured baseline: the candidate's own bytes, recorded for
+  // provenance and restoration. It is never compared with a committed hash, so
+  // an unrelated edit cannot fail the proof; only behavior and mutation
+  // applicability can.
+  const baselineSha256 = sha256(original);
+  const mutate = proof.mutate ?? REPLAY_GUARD_MUTATORS[proof.guard];
   if (!mutate && !proof.fixtureFaultEnv) throw new Error(`G03 replay fault proof has no mutator for guard ${proof.guard}`);
 
+  // Validate the declared fault against the captured source before a scratch
+  // tree or any nested run exists: a missing or ambiguous target, or a fault
+  // that changes nothing, fails as its own diagnostic with no side effects.
+  let mutant = null;
+  let mutantSha256 = null;
+  if (mutate) {
+    mutant = mutate(original);
+    mutantSha256 = sha256(mutant);
+    if (mutantSha256 === baselineSha256) {
+      throw new Error(`G03 replay fault proof mutation produced no source change for ${proof.guard}`);
+    }
+  }
+
   const scratch = createReplayScratchTree(root);
+  // Hold the captured bytes, not a re-read that a concurrent writer could have
+  // changed between capture and copy.
+  writeFileSync(join(scratch, "index.ts"), original);
   log(`G03 replay fault proof scratch: ${scratch} (created at proof start)`);
   const receipts = [];
   const ownedGroupsAtCreation = new Set();
@@ -576,14 +641,12 @@ export async function runReplayGuardFaultProof({
     receipts.push(green);
     assertAssertionGreen(green, "pristine copy");
 
-    // 3. MUTATE the scratch implementation or inject the declared fixture-only fault.
-    let mutantHash;
-    if (mutate) {
-      const mutant = mutate(original);
-      mutantHash = sha256(mutant);
-      if (mutantHash === originalHash) throw new Error("G03 replay fault proof mutation produced no source change");
+    // 3. MUTATE the scratch implementation or activate the declared fixture-only
+    // fault. The mutant was validated against the captured source before the
+    // scratch existed, so writing it cannot introduce an unvalidated change.
+    if (mutant) {
       writeFileSync(join(scratch, "index.ts"), mutant);
-      log(`G03 replay fault proof ${proof.guard} mutant sha256=${mutantHash}`);
+      log(`G03 replay fault proof ${proof.guard} mutant sha256=${mutantSha256}`);
     } else {
       log(`G03 replay fault proof ${proof.guard} fixture fault env: ${JSON.stringify(proof.fixtureFaultEnv)}`);
     }
@@ -594,29 +657,34 @@ export async function runReplayGuardFaultProof({
     assertAssertionRed(red, redAssertionMessage);
     log(`G03 replay fault proof RED: ${redAssertionMessage}`);
 
-    // 5. RESTORE and verify.
-    if (mutate) writeFileSync(join(scratch, "index.ts"), original);
+    // 5. RESTORE and verify against the captured baseline bytes.
+    if (mutant) writeFileSync(join(scratch, "index.ts"), original);
     const restoredHash = sha256(readFileSync(join(scratch, "index.ts"), "utf8"));
-    if (restoredHash !== originalHash) throw new Error(`G03 replay fault proof restore hash mismatch: ${restoredHash}`);
+    if (restoredHash !== baselineSha256) {
+      throw new Error(`G03 replay fault proof restore hash mismatch: ${restoredHash} != ${baselineSha256}`);
+    }
     const restoredGreen = await runPhase();
     receipts.push(restoredGreen);
     assertAssertionGreen(restoredGreen, "restored copy");
 
+    // Source integrity is separate from source approval: the committed file
+    // must still hold the exact bytes this proof captured and tested.
     const committedHashAfter = sha256(readFileSync(committedPath, "utf8"));
-    if (committedHashAfter !== originalHash) {
-      throw new Error(`G03 replay fault proof modified the committed index.ts: ${committedHashAfter}`);
+    if (committedHashAfter !== baselineSha256) {
+      throw new Error(`G03 replay fault proof modified the committed index.ts during the run: ${committedHashAfter} != ${baselineSha256}`);
     }
 
     return {
       guard: proof.guard,
       testFile,
       testName,
-      baselineSha256: originalHash,
-      ...(mutantHash ? { mutantSha256: mutantHash } : { faultInjection: "fixture-env" }),
+      baselineSha256,
+      ...(mutantSha256 ? { mutantSha256 } : { faultInjection: "fixture-env" }),
       restoredSha256: restoredHash,
       redAssertionMessage,
       scratch,
-      scratchRetained: false,
+      // A kept scratch is retained by the caller; the receipt must say so.
+      scratchRetained: keepScratch,
       ownedGroups: [...ownedGroupsAtCreation],
       phases: {
         copy: "ok",
