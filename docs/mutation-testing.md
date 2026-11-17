@@ -394,6 +394,11 @@ rejected if an unsharded report carries a line-range scope: a one-shard plan wou
 otherwise publish a score over part of a module as though it were all of it.
 Sharded reports may carry ranges, because that is what a shard is.
 
+**A corrupt artifact claims its slot.** Unreadable reports are not dropped: a
+truncated upload in a newer attempt must not let the previous attempt publish as
+current, so the module is rejected with the file and attempt named. A corrupt
+older attempt is superseded by a readable newer one.
+
 **A shard's declared range must equal the plan's range for its index.** The
 plan is derived from the module and the requested shard count, never from the
 files present, so a truncated, extended, swapped or out-of-range shard is

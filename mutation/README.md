@@ -388,6 +388,13 @@ two reports for one shard *within* an attempt are rejected as ambiguous rather
 than resolved by order. That keeps "re-run failed jobs" working: untouched legs
 stay on attempt 1 while retried legs move to attempt 2.
 
+**An unreadable artifact blocks its slot; it never falls back.** A truncated
+upload used to be dropped, which made the previous attempt look current — the
+run was re-run because something failed, so its absence is not evidence of
+success. A corrupt report now occupies its `(module, shard)` slot: if it is the
+newest attempt for that slot the module is rejected, and if a readable newer
+attempt exists the corrupt older one is superseded.
+
 **The reporting root cannot leave the repository.** The default `reports/` must
 resolve inside the checkout; a symlinked root pointing elsewhere is refused
 before anything is created, written or deleted. A caller that passes its own root

@@ -238,13 +238,14 @@ export function mergeShardReports(reports) {
   for (const report of reports) {
     const module = report.module;
     if (!byModule.has(module)) {
-      byModule.set(module, { module, mutants: [], byIdentity: new Map(), conflicts: [], shardsSeen: new Set() });
+      byModule.set(module, { module, mutants: [], byIdentity: new Map(), conflicts: [], shardsSeen: new Set(), attempt: 0 });
     }
     const bucket = byModule.get(module);
     // An unsharded run writes `<target>.json` and covers the whole module, which
     // is shard 0 of 1. Recording it as "no shard seen" made every single-shard
     // target look like it had lost its only artifact.
     bucket.shardsSeen.add(Number.isInteger(report.shard) ? report.shard : 0);
+    bucket.attempt = Math.max(bucket.attempt, report.attempt ?? 0);
     for (const mutant of report.mutants) {
       const identity = mutantIdentity(module, mutant);
       const existing = bucket.byIdentity.get(identity);
@@ -273,6 +274,9 @@ export function mergeShardReports(reports) {
     mutants: bucket.mutants,
     summary: summarise(bucket.mutants),
     conflicts: bucket.conflicts,
+    // The newest attempt that contributed, so a merged result stays attributable
+    // to the execution that produced it.
+    attempt: bucket.attempt,
     shardsSeen: [...bucket.shardsSeen].sort((a, b) => a - b),
     framework: reports.find((report) => report.module === bucket.module)?.framework ?? null,
     thresholds: reports.find((report) => report.module === bucket.module)?.thresholds ?? null,
@@ -300,7 +304,7 @@ export function mergeShardReports(reports) {
  * `<module>.json` parses as shard 0, so it collides with `<module>.shard0.json`;
  * merging them would publish a composite that no run produced.
  */
-export function selectMeasurement(perReport, { identityFor = measurementIdentity, shardCounts = null } = {}) {
+export function selectMeasurement(perReport, { identityFor = measurementIdentity, shardCounts = null, unreadable = [] } = {}) {
   const rejected = [];
   const ambiguous = new Map();
 
@@ -308,27 +312,46 @@ export function selectMeasurement(perReport, { identityFor = measurementIdentity
   // the earlier attempt's artifact in place, so the same shard can arrive twice;
   // the newest attempt is the authoritative one, and two files claiming a shard
   // *within the same attempt* is ambiguity that must not be resolved by order.
+  // One slot per (module, shard), holding both readable reports and any that
+  // failed to parse. An unreadable report still *claims* its slot: treating it
+  // as absent would let an older attempt publish on behalf of a newer one.
   const slots = new Map();
+  const slotFor = (module, shard) => {
+    const key = `${module}\u0000${shard}`;
+    if (!slots.has(key)) slots.set(key, { module, shard, readable: [], unreadable: [] });
+    return slots.get(key);
+  };
   for (const report of perReport) {
-    const shard = Number.isInteger(report.shard) ? report.shard : 0;
-    const key = `${report.module}\u0000${shard}`;
-    const list = slots.get(key) ?? [];
-    list.push(report);
-    slots.set(key, list);
+    slotFor(report.module, Number.isInteger(report.shard) ? report.shard : 0).readable.push(report);
   }
+  for (const broken of unreadable) {
+    if (!broken.module) continue;
+    const shard = Number.isInteger(broken.shard) ? broken.shard : 0;
+    slotFor(broken.module, shard).unreadable.push(broken);
+  }
+
   const chosen = [];
-  for (const list of slots.values()) {
-    const newest = Math.max(...list.map((report) => report.attempt ?? 0));
-    const top = list.filter((report) => (report.attempt ?? 0) === newest);
-    if (top.length > 1) {
-      const module = list[0].module;
+  for (const slot of slots.values()) {
+    const newest = Math.max(
+      ...[...slot.readable.map((report) => report.attempt ?? 0), ...slot.unreadable.map((broken) => broken.attempt)],
+    );
+    const brokenTop = slot.unreadable.filter((broken) => broken.attempt === newest);
+    if (brokenTop.length > 0) {
       ambiguous.set(
-        module,
-        `${top.map((report) => report.name).join(" and ")} both claim ${module} shard ${list[0].shard ?? 0} in attempt ${newest}`,
+        slot.module,
+        `${brokenTop.map((broken) => broken.name).join(" and ")} (attempt ${newest}) could not be read: ${brokenTop[0].reason}; an unreadable newer attempt is not a reason to fall back to an older result`,
       );
       continue;
     }
-    chosen.push(top[0]);
+    const top = slot.readable.filter((report) => (report.attempt ?? 0) === newest);
+    if (top.length > 1) {
+      ambiguous.set(
+        slot.module,
+        `${top.map((report) => report.name).join(" and ")} both claim ${slot.module} shard ${slot.shard} in attempt ${newest}`,
+      );
+      continue;
+    }
+    if (top.length === 1) chosen.push(top[0]);
   }
 
   const grouped = new Map();
@@ -410,7 +433,9 @@ export function selectMeasurement(perReport, { identityFor = measurementIdentity
   // authoritative report for it. It is still a rejection, not silence.
   for (const [module, reason] of ambiguous) {
     const reports = perReport.filter((report) => report.module === module);
-    rejected.push(...reports.map((report) => ({ module, name: report.name, reason })));
+    const broken = unreadable.filter((entry) => entry.module === module);
+    const named = reports.length > 0 ? reports : broken;
+    rejected.push(...named.map((entry) => ({ module, name: entry.name, reason })));
   }
 
   // A module rejected for any shard is rejected whole: merging the shards that
@@ -457,15 +482,16 @@ function reportFiles(directory, depth = 2) {
 export function readReports(directory, { identityFor, shardCounts } = {}) {
   const empty = { reports: [], rejected: [], rejectedNames: [] };
   if (!existsSync(directory)) return empty;
+  const unreadable = [];
   const perReport = reportFiles(directory).flatMap(({ name, path, attempt }) => {
     let report;
     try {
       report = JSON.parse(readFileSync(path, "utf8"));
     } catch (error) {
-      // Silently dropping an unreadable report turns a corrupt artifact into a
-      // "missing module" with no cause. Say so, then let the missing-report
-      // check fail the run.
-      console.error(`warning: ignoring unreadable report ${path}: ${error.message}`);
+      // A corrupt artifact must not vanish. Dropping it made a truncated newer
+      // attempt indistinguishable from a shard that was never uploaded, so the
+      // previous attempt's result was published as if it were current.
+      unreadable.push({ name, path, attempt, reason: error.message, module: parseReportShard(name).moduleName });
       return [];
     }
     // A file that is not a Stryker report (for example a merged summary) is
@@ -476,6 +502,7 @@ export function readReports(directory, { identityFor, shardCounts } = {}) {
   return selectMeasurement(perReport, {
     ...(identityFor ? { identityFor } : {}),
     ...(shardCounts ? { shardCounts } : {}),
+    unreadable,
   });
 }
 

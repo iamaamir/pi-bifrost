@@ -1991,6 +1991,93 @@ test("the identity covers the measurement's execution inputs", () => {
   assert.notEqual(identityDigest(["a.ts"], () => "unreadable"), identityDigest(["a.ts"], () => ""));
 });
 
+// --- A corrupt artifact must not resurrect an older attempt ---
+
+const REAL_ARTIFACT = "mutation-report-inline-override.ts-shard0-69d885d57c1fc1a65797aaf86c5b7b3af0f47433-run-44123987165-attempt";
+
+function attemptFixture(entries) {
+  // entries: [{ attempt, body }] written under artifact directory names copied
+  // from a real run, so the parser is pinned to GitHub's actual layout.
+  const directory = mkdtempSync(join(tmpdir(), "mutation-corrupt-attempt-"));
+  for (const { attempt, body } of entries) {
+    const artifact = `${REAL_ARTIFACT}-${attempt}`;
+    mkdirSync(join(directory, artifact), { recursive: true });
+    writeFileSync(join(directory, artifact, "inline-override.ts.shard0.json"), body);
+  }
+  return directory;
+}
+
+const goodInlineReport = () => JSON.stringify({
+  files: { "/repo/inline-override.ts": { mutants: [{
+    id: "1", mutatorName: "EqualityOperator", replacement: "!==", status: "Killed",
+    location: { start: { line: 10, column: 1 }, end: { line: 10, column: 9 } },
+  }] } },
+  bifrost: { measurement: measurementIdentity("inline-override.ts"), scope: "inline-override.ts" },
+});
+
+test("a corrupted newer attempt does not publish the older one", () => {
+  // A truncated upload is indistinguishable from "no artifact" once it is
+  // dropped, and the earlier attempt then looks current. The run that produced
+  // the newer attempt was a re-run precisely because something was wrong, so its
+  // absence is not evidence of success.
+  const directory = attemptFixture([
+    { attempt: 1, body: goodInlineReport() },
+    { attempt: 2, body: goodInlineReport().slice(0, 120) },
+  ]);
+  try {
+    const { reports, rejected } = readReports(directory);
+    assert.equal(reports.length, 0, "no fallback to attempt 1");
+    assert.equal(rejected.length, 1);
+    assert.match(rejected[0].reason, /attempt 2\) could not be read/u);
+    assert.match(rejected[0].reason, /not a reason to fall back/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a corrupted older attempt is superseded by a readable newer one", () => {
+  const directory = attemptFixture([
+    { attempt: 1, body: "{ not json" },
+    { attempt: 2, body: goodInlineReport() },
+  ]);
+  try {
+    const { reports, rejected } = readReports(directory);
+    assert.deepEqual(rejected, []);
+    assert.equal(reports.length, 1);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an unreadable artifact is named even when nothing else exists", () => {
+  // Without this it becomes "missing module", which sends the reader looking for
+  // a leg that ran fine and uploaded something unreadable.
+  const directory = attemptFixture([{ attempt: 1, body: "{" }]);
+  try {
+    const { reports, rejected } = readReports(directory);
+    assert.equal(reports.length, 0);
+    assert.equal(rejected.length, 1);
+    assert.equal(rejected[0].module, "inline-override.ts");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("the attempt is read from a real artifact directory name", () => {
+  const directory = attemptFixture([
+    { attempt: 1, body: goodInlineReport() },
+    { attempt: 2, body: goodInlineReport() },
+  ]);
+  try {
+    const { reports } = readReports(directory);
+    // Two attempts of one shard: the later one is authoritative, not ambiguous.
+    assert.equal(reports.length, 1);
+    assert.equal(reports[0].attempt, 2);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 // --- Multi-attempt artifacts: one authoritative report per shard ---
 
 const artifactReport = (shard, line, status = "Killed", count = 1) => ({
