@@ -188,7 +188,7 @@ function probeDebug(runId: string, event: string, meta: Record<string, unknown>)
 
 const SAFE_PARAMETER_NAMES = new Set(["temperature", "max_tokens", "max_output_tokens", "max_completion_tokens", "reasoning", "service_tier"]);
 
-function failureDetails(result: ProbeResult): { reason: string; httpStatus?: number; parameter?: string } | undefined {
+export function failureDetails(result: ProbeResult): { reason: string; httpStatus?: number; parameter?: string } | undefined {
   if (result.status === "ok") return undefined;
   if (result.error === "model is no longer eligible") return { reason: "not_eligible" };
   if (result.error?.startsWith("unsupported api:")) return { reason: "unsupported_api" };

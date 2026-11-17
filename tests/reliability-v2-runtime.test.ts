@@ -729,7 +729,7 @@ describe("reliability v2 registered Auto runtime", () => {
       try {
         writeFileSync(join(configDir, "bifrost.json"), JSON.stringify({ ...config, affinity: { mode: "off", unsupportedSetting: "PRIVATE_CONFIG_SENTINEL" } }));
         await commandHandler!("reload", ctx);
-        assert.ok(physicalLog.some((line) => line.includes("config reload rejected")));
+        assert.ok(physicalLog.some((line) => line.includes("Config reload rejected")));
         assert.equal(physicalLog.some((line) => line.includes("PRIVATE_CONFIG_SENTINEL")), false);
         assert.deepEqual(await handlers.get("input")?.({ text: "physical must remain blocked", source: "interactive" } as never, physical), { action: "handled" });
       } finally { console.error = originalPhysicalConsoleError; }

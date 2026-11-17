@@ -138,6 +138,9 @@ import { isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
 import { hasExplicitExtensionRoutingFile, hasUserBootstrapFiles } from "./auto-setup.ts";
 import { getCostReportData } from "./cost-report.ts";
 import { formatCostText, showCostView } from "./ui/cost-view.ts";
+import { Text } from "@earendil-works/pi-tui";
+import { log as logImportant } from "./ui/notice.ts";
+import { setProbeProgress } from "./ui/probe-progress.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
@@ -256,9 +259,10 @@ function installConfigIfTierPoliciesValid(
       category: "validation_failed",
       issueCount: errors.length,
     });
-    log(
+    logImportant(
       ctx,
-      `Bifrost config reload rejected: ${errors.map((issue) => issue.message).join(" ")}`,
+      "Config reload rejected",
+      errors.map((issue) => issue.message).join(" "),
       "error",
     );
     return false;
@@ -296,18 +300,20 @@ function installReloadedConfig(
       category: "source_invalid",
       issueCount: loaded.diagnostics.length,
     });
-    log(
+    logImportant(
       ctx,
-      `Bifrost config reload rejected: ${loaded.diagnostics.map(({ message }) => message).join(" ")}`,
+      "Config reload rejected",
+      loaded.diagnostics.map(({ message }) => message).join(" "),
       "error",
     );
     return false;
   }
   const installed = installConfigIfTierPoliciesValid(state, loaded.config, ctx, true);
   if (installed && loaded.warnings.length > 0) {
-    log(
+    logImportant(
       ctx,
-      `Bifrost config loaded with warnings: ${loaded.warnings.map(({ message }) => message).join(" ")}`,
+      "Configuration loaded with warnings",
+      loaded.warnings.map(({ message }) => message).join(" "),
       "warning",
     );
   }
@@ -659,6 +665,21 @@ export function buildInitProposal(
 }
 
 // ── Command handlers ────────────────────────────────────────
+
+/** Human-readable names for probe failure reasons (see failureDetails in probe.ts). */
+const REASON_LABELS: Record<string, string> = {
+  provider_error: "provider errors",
+  http_error: "HTTP errors",
+  rate_limited: "rate limited",
+  allowance_exhausted: "allowance exhausted",
+  authentication_or_access: "authentication failed",
+  unsupported_parameter: "unsupported parameters",
+  unsupported_api: "unsupported API",
+  empty_response: "empty responses",
+  not_eligible: "not eligible",
+  timeout: "timed out",
+  unknown: "unknown errors",
+};
 
 const isForced = (args: string): boolean => args?.split(/\s+/).includes("-f");
 
@@ -1408,7 +1429,7 @@ async function handleReconciliationCommand(
         `Contact ${request.provider} to refresh its model catalog before previewing. This will not apply config changes.`,
       ))
     ) {
-      log(ctx, "catalog refresh cancelled; no config proposal was made");
+      logImportant(ctx, "Catalog refresh cancelled", "No config proposal was made.", "info");
       return;
     }
     uiBusy(ctx, `Refreshing ${request.provider} model catalog...`);
@@ -1717,7 +1738,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       );
       if (outcome === "aborted") {
         state.forceRegistryRefresh = true;
-        log(ctx, "Model catalog refresh was cancelled; no configuration was changed.", "warning");
+        logImportant(ctx, "Catalog refresh cancelled", "No configuration was changed.", "info");
         return;
       }
       state.forceRegistryRefresh = false;
@@ -1734,9 +1755,10 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       }
     } catch {
       state.forceRegistryRefresh = true;
-      log(
+      logImportant(
         ctx,
-        "Pi's model catalog could not be refreshed; using the available catalog snapshot.",
+        "Catalog refresh unavailable",
+        "Using the available catalog snapshot.",
         "warning",
       );
     } finally {
@@ -1834,7 +1856,12 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   try {
     source = readReconciliationSource(selectedSource);
   } catch {
-    log(ctx, "Init could not safely snapshot the current config; no files were changed.", "error");
+    logImportant(
+      ctx,
+      "Init blocked",
+      "Could not safely snapshot the current config. No files were changed.",
+      "error",
+    );
     return;
   }
   let sourceConfig: Record<string, unknown> = {};
@@ -1845,7 +1872,12 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         throw new Error("invalid config root");
       sourceConfig = parsed as Record<string, unknown>;
     } catch {
-      log(ctx, "Init could not safely read the selected config; no files were changed.", "error");
+      logImportant(
+        ctx,
+        "Init blocked",
+        "Could not safely read the selected config. No files were changed.",
+        "error",
+      );
       return;
     }
   }
@@ -1864,17 +1896,19 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       inheritedTiers = inherited.tierNames;
       const shadowedTiers = findShadowedTiers(models, sourceModels, inherited.effective);
       if (shadowedTiers.length > 0) {
-        log(
+        logImportant(
           ctx,
-          `Init would shadow inherited model pools (${shadowedTiers.join(", ")}); no configuration was changed. Edit the existing source, use /bifrost init -g for global config, or review /bifrost config reconcile --source workspace.`,
+          "Init blocked",
+          `Inherited model pools would be shadowed (${shadowedTiers.join(", ")}). No configuration was changed. Edit the existing source, use /bifrost init -g for global config, or review /bifrost config reconcile --source workspace.`,
           "warning",
         );
         return;
       }
     } catch {
-      log(
+      logImportant(
         ctx,
-        "Init could not safely read inherited config; no configuration was changed.",
+        "Init blocked",
+        "Could not safely read inherited config. No configuration was changed.",
         "error",
       );
       return;
@@ -1931,9 +1965,10 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       ? `${probeChoices[0].provider}/${probeChoices[0].model}`
       : undefined;
     if (!classifierModel) {
-      log(
+      logImportant(
         ctx,
-        "No working models found for classifier. Init will omit classifier.model; regex fallback remains available.",
+        "Classifier model unavailable",
+        "Init will omit classifier.model; regex fallback remains available.",
         "warning",
       );
     }
@@ -2073,9 +2108,10 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
             nextConfigBytes.byteLength > MAX_CONFIG_SOURCE_BYTES ||
             !prospectiveConfigInstallable(source.source, nextConfigBytes, state)
           ) {
-            log(
+            logImportant(
               ctx,
-              "Init's proposed config is invalid or exceeds the safe write limit; no files were changed.",
+              "Init blocked",
+              "The proposed config is invalid or exceeds the safe write limit. No files were changed.",
               "error",
             );
             return;
@@ -2094,9 +2130,11 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           changes = [];
         } else {
           if (source.ownershipBytes !== null) {
-            log(
+            logImportant(
               ctx,
-              "The refreshed catalog has no safe membership or settings changes; no files were changed.",
+              "No updates needed",
+              "No new memberships or settings to apply.",
+              "info",
             );
             return;
           }
@@ -2117,17 +2155,32 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           changes = [];
         }
       } else {
-        log(
-          ctx,
-          plan.status === "advisory"
-            ? "Pi's model inventory is incomplete or stale, so Init cannot safely change memberships. Refresh the catalog and retry; no files were changed."
-            : plan.reason === "no_changes"
-              ? "The refreshed catalog has no safe membership changes; no files were changed."
-              : "Init could not safely prepare a membership update (" +
-                (plan.reason ?? "unknown source state") +
-                "); no files were changed.",
-          plan.reason === "no_changes" ? undefined : "warning",
-        );
+        if (plan.status === "advisory") {
+          logImportant(
+            ctx,
+            "Model updates deferred",
+            "Model inventory is incomplete or stale. Refresh the catalog and retry.",
+            "warning",
+          );
+        } else if (plan.reason === "no_changes") {
+          logImportant(
+            ctx,
+            "No updates needed",
+            "No new memberships or settings to apply.",
+            "info",
+          );
+        } else {
+          logImportant(
+            ctx,
+            "Update blocked",
+            plan.reason === "source_invalid"
+              ? "The existing configuration is invalid. No files were changed."
+              : plan.reason === "prospective_config_invalid"
+                ? "The proposed configuration failed validation. No files were changed."
+                : `Could not safely prepare membership changes (${plan.reason ?? "unknown reason"}). No files were changed.`,
+            "error",
+          );
+        }
         return;
       }
     } else {
@@ -2149,9 +2202,10 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         nextConfigBytes.byteLength > MAX_CONFIG_SOURCE_BYTES ||
         !prospectiveConfigInstallable(source.source, nextConfigBytes, state)
       ) {
-        log(
+        logImportant(
           ctx,
-          "Init's proposed config is invalid or exceeds the safe write limit; no files were changed.",
+          "Init blocked",
+          "The proposed config is invalid or exceeds the safe write limit. No files were changed.",
           "error",
         );
         return;
@@ -2161,18 +2215,20 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     }
   } else {
     if (source.ownershipBytes !== null) {
-      log(
+      logImportant(
         ctx,
-        "Init found an ownership receipt without its config and cannot safely replace it.",
+        "Setup blocked",
+        "An ownership receipt exists without its config. No files were changed.",
         "error",
       );
       return;
     }
     const ownership = buildInitOwnershipReceipt(models);
     if (!ownership) {
-      log(
+      logImportant(
         ctx,
-        "Init could not create a safe exact-membership ownership receipt; no files were changed.",
+        "Init blocked",
+        "Could not create a safe ownership receipt. No files were changed.",
         "error",
       );
       return;
@@ -2189,9 +2245,10 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       ownershipBytes.byteLength > 5_000_000 ||
       !prospectiveConfigInstallable(source.source, configBytes, state)
     ) {
-      log(
+      logImportant(
         ctx,
-        "Init's proposed config is invalid or exceeds the safe write limit; no files were changed.",
+        "Init blocked",
+        "The proposed config is invalid or exceeds the safe write limit. No files were changed.",
         "error",
       );
       return;
@@ -2247,31 +2304,31 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   ].filter(Boolean));
 
   if (uncategorized.length > 0) {
-    log(
+    logImportant(
       ctx,
-      `${uncategorized.length} model(s) uncategorized — edit ${source.configPath} to assign them.`,
+      "Uncategorized models",
+      `${uncategorized.length} model(s) are not in any tier. Edit ${source.configPath} to assign them.`,
+      "warning",
     );
   }
 
   const writeWithoutPrompt = args.trim().split(/\s+/).includes("--write");
   if (!ctx.hasUI && !writeWithoutPrompt) {
-    log(ctx, "run in TUI or use --write to persist", "warning");
+    logImportant(ctx, "Save unavailable", "Run in TUI or use --write to persist.", "warning");
     return;
   }
 
   const ok =
     writeWithoutPrompt ||
-    (await ctx.ui.confirm(
-      "Save Bifrost setup?",
-      `Save ${deltaSummary} to ${initSourceLabel(source)}?`,
-    ));
+    (await ctx.ui.confirm("Save Bifrost setup?", `Apply the changes shown above?`));
   if (!ok) {
-    log(ctx, "config not written");
+    if (ctx.mode === "tui" && ctx.hasUI) ctx.ui.setWidget("bifrost-output", []);
+    logImportant(ctx, "Setup cancelled", "No configuration changes were saved.", "info");
     return;
   }
 
   if (ctx.signal?.aborted) {
-    log(ctx, "Init was cancelled before the reviewed update could be saved.", "warning");
+    logImportant(ctx, "Init cancelled", "The reviewed update was not saved.", "info");
     return;
   }
   const currentKeys = ctx.modelRegistry
@@ -2307,9 +2364,10 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     currentKeys.length !== plannedKeys.length ||
     currentKeys.some((key, index) => key !== plannedKeys[index])
   ) {
-    log(
+    logImportant(
       ctx,
-      "Pi's model inventory changed while Init was awaiting confirmation; no files were changed. Retry to review the new memberships.",
+      "Init review expired",
+      "Pi's model inventory changed while awaiting confirmation. No files were changed; retry to review new memberships.",
       "warning",
     );
     return;
@@ -2318,9 +2376,10 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   try {
     currentSource = readReconciliationSource(selectedSource);
   } catch {
-    log(
+    logImportant(
       ctx,
-      "The config destination changed while Init was awaiting confirmation; no files were changed.",
+      "Init review unavailable",
+      "The config destination could not be checked. No files were changed.",
       "warning",
     );
     return;
@@ -2328,22 +2387,29 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   try {
     for (const { path, text } of inheritedSources) {
       if (readInheritedConfigSnapshot(path) !== text) {
-        log(
+        logImportant(
           ctx,
-          "Inherited config changed while Init was awaiting confirmation; no files were changed. Retry to review the new configuration.",
+          "Init review expired",
+          "Inherited config changed while awaiting confirmation. No files were changed; retry to review the new configuration.",
           "warning",
         );
         return;
       }
     }
   } catch {
-    log(ctx, "Inherited config could not be checked; no files were changed.", "warning");
+    logImportant(
+      ctx,
+      "Init review unavailable",
+      "Inherited config could not be checked. No files were changed.",
+      "warning",
+    );
     return;
   }
   if (currentSource.source !== source.source || currentSource.configPath !== source.configPath) {
-    log(
+    logImportant(
       ctx,
-      "The config destination changed while Init was awaiting confirmation; no files were changed.",
+      "Init review expired",
+      "The config destination changed while awaiting confirmation. No files were changed.",
       "warning",
     );
     return;
@@ -2400,20 +2466,35 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       state.effectiveClassifierBackend(state.config).backend,
     ),
   });
-  log(ctx, `updated ${initSourceLabel(source)} and reloaded config`);
-  log(
-    ctx,
-    `Bifrost active with ${Object.keys(state.config.models ?? {}).length} tier(s). Try a prompt.`,
-  );
-  const classifier = state.effectiveClassifierBackend(state.config, ctx);
-  log(
-    ctx,
-    `Classifier: ${classifier.backend} (${classifier.auto ? "detected default" : "configured"}). Use /bifrost classifier to change it.`,
-  );
+
+  const tierCount = Object.keys(state.config.models ?? {}).length;
+
+  const summary = [
+    `${tierCount} tiers`,
+    ...(probeLoaded ? [`${workingModels.length} verified models`] : []),
+    initSourceLabel(source),
+  ].join(" · ");
+
+  if (ctx.mode === "tui" && ctx.hasUI) {
+    // Remove any remaining probing widget.
+    ctx.ui.setWidget("bifrost-probe", undefined);
+
+    // Replace setup preview with completion state.
+    ctx.ui.setWidget("bifrost-output", (_tui, theme) => {
+      const lines = [
+        theme.fg("success", "✓") + theme.bold(" Bifrost initialized"),
+        theme.fg("dim", `  ${summary}`),
+      ];
+
+      return new Text(lines.join("\n"), 0, 0);
+    });
+  } else {
+    logImportant(ctx, "Bifrost initialized", summary, "success");
+  }
 
   // Clear the init widget so it doesn't persist in the TUI.
   if (ctx.hasUI) {
-    ctx.ui.setWidget("bifrost-output", []);
+    //ctx.ui.setWidget("bifrost-output", []);
   }
 }
 
@@ -2496,21 +2577,27 @@ async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState):
   const classifier = state.config.classifier;
   const enablement = classifierEnablementFor(state, ctx);
   if (enablement.runtimeStateIssue) {
-    log(
+    logImportant(
       ctx,
-      "Classifier is paused because runtime state is invalid. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.",
+      "Classifier test blocked",
+      "Runtime state is invalid. Repair .pi/bifrost-state.json, then run /bifrost reload.",
       "error",
     );
     return;
   }
   if (!enablement.enabled) {
-    log(ctx, "Classifier is disabled; run /bifrost classifier on first", "warning");
+    logImportant(
+      ctx,
+      "Classifier test unavailable",
+      "Classifier is disabled; run /bifrost classifier on first.",
+      "warning",
+    );
     return;
   }
   const effective = state.effectiveClassifierBackend(state.config, ctx);
   const errors = classifierConfigErrors(state.config, effective.backend, true);
   if (errors.length > 0) {
-    log(ctx, `Classifier test blocked by configuration errors: ${errors.join(" ")}`, "error");
+    logImportant(ctx, "Classifier test blocked", errors.join(" "), "error");
     return;
   }
   const before = state.classifierMetricsStore.snapshot();
@@ -2564,7 +2651,12 @@ async function handleBenchmark(
   const categories = Object.keys(state.config.models ?? {});
 
   if (categories.length === 0) {
-    log(ctx, "no categories configured; run /bifrost init first", "warning");
+    logImportant(
+      ctx,
+      "Benchmark unavailable",
+      "No categories configured; run /bifrost init first.",
+      "warning",
+    );
     return;
   }
 
@@ -3005,15 +3097,21 @@ async function handlePreview(
       if (json) console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(report)}`);
       else await uiResult(ctx, "Bifrost route trace", renderTracePreview(report));
     } else if (json) emitPreviewReport(buildPreviewFailure(prompt, "config_invalid"));
-    log(
+    logImportant(
       ctx,
-      "Preview is unavailable because a configuration source is invalid. Run /bifrost validate and repair the reported source.",
+      "Preview unavailable",
+      "A configuration source is invalid. Run /bifrost validate and repair the reported source.",
       "error",
     );
     return;
   }
   if (trace && classifierEnabled && !offline) {
-    log(ctx, "Preview may send the prompt to the configured classifier", "warning");
+    logImportant(
+      ctx,
+      "Classifier privacy",
+      "Preview may send the prompt to the configured classifier.",
+      "warning",
+    );
   }
   setBifrostStatus(ctx, "previewing prompt...", "accent");
   uiBusy(ctx, "Classifying preview prompt...");
@@ -3278,7 +3376,12 @@ async function handleReliabilityCommand(
         createProviderCooldownStore(process.cwd(), state.config.reliability);
       const paused = store.list();
       if (paused.length === 0) {
-        log(ctx, "No provider cooldowns or recovery trials are active.");
+        logImportant(
+          ctx,
+          "No cooldowns active",
+          "No provider cooldowns or recovery trials are active.",
+          "info",
+        );
         return;
       }
       log(
@@ -3292,9 +3395,10 @@ async function handleReliabilityCommand(
         ].join("\n"),
       );
     } catch {
-      log(
+      logImportant(
         ctx,
-        "Provider cooldown state is invalid or unavailable; inspect the project .pi provider reliability sidecar.",
+        "Cooldown state unavailable",
+        "Provider cooldown state is invalid or unavailable; inspect .pi/bifrost-reliability-v2.json.",
         "error",
       );
     }
@@ -3323,7 +3427,12 @@ async function handleReliabilityCommand(
     try {
       providerScopeModelKey("usage", providerId);
     } catch {
-      log(ctx, "Provider ID is outside the supported reliability namespace.", "warning");
+      logImportant(
+        ctx,
+        "Provider reset blocked",
+        "Provider ID is outside the supported reliability namespace.",
+        "warning",
+      );
       return;
     }
     let store: ProviderCooldownStore;
@@ -3335,26 +3444,30 @@ async function handleReliabilityCommand(
         !knownProviders.has(providerId) &&
         !store.list().some((item) => item.providerId === providerId)
       ) {
-        log(
+        logImportant(
           ctx,
-          `Provider ${providerId} is not configured or present in cooldown state; nothing was reset.`,
+          "Provider reset skipped",
+          `${providerId} is not configured or present in cooldown state. Nothing was reset.`,
           "warning",
         );
         return;
       }
       const result = await store.reset(providerId);
-      log(
+      logImportant(
         ctx,
+        result === "reset" ? "Provider cooldown reset" : "Provider reset skipped",
         result === "trial_active"
-          ? `Provider ${providerId} has an active recovery trial; cooldown reset was stopped.`
+          ? `${providerId} has an active recovery trial; cooldown reset was stopped.`
           : result === "reset"
-            ? `Provider ${providerId} cooldown was reset.`
-            : `Provider ${providerId} has no active cooldown.`,
+            ? `${providerId} cooldown was reset.`
+            : `${providerId} has no active cooldown.`,
+        result === "reset" ? "success" : "info",
       );
     } catch {
-      log(
+      logImportant(
         ctx,
-        `Provider ${providerId} cooldown could not be reset; provider state was left unchanged.`,
+        "Provider reset failed",
+        `${providerId} cooldown could not be reset; provider state was left unchanged.`,
         "error",
       );
     }
@@ -3377,8 +3490,9 @@ async function handleReliabilityCommand(
     !state.reliabilityV2ConfigValid ||
     (stateVersion === 2 && !schemaVersionAtLeast(state.config.schemaVersion, 2))
   ) {
-    log(
+    logImportant(
       ctx,
+      "Reliability migration blocked",
       "Repair the reliability settings and validate the config before preparing the v2 sidecar.",
       "error",
     );
@@ -3388,9 +3502,10 @@ async function handleReliabilityCommand(
   try {
     store = createReliabilityV2Store(process.cwd(), state.config.reliability);
   } catch {
-    log(
+    logImportant(
       ctx,
-      "Reliability migration could not prepare a safe sidecar location; no files were changed.",
+      "Reliability migration blocked",
+      "Could not prepare a safe sidecar location. No files were changed.",
       "error",
     );
     return;
@@ -3398,13 +3513,19 @@ async function handleReliabilityCommand(
   try {
     store.readSnapshot();
     if (stateVersion === 2) state.reliabilityV2Store = store;
-    log(ctx, "Reliability v2 sidecar already exists and was left unchanged.");
+    logImportant(
+      ctx,
+      "Reliability migration skipped",
+      "Reliability v2 sidecar already exists and was left unchanged.",
+      "info",
+    );
     return;
   } catch (error) {
     if (!(error instanceof ReliabilityV2StoreError) || error.code !== "uninitialized_state") {
-      log(
+      logImportant(
         ctx,
-        "An existing reliability v2 sidecar is invalid or unsafe; repair it explicitly before migration.",
+        "Reliability migration blocked",
+        "An existing v2 sidecar is invalid or unsafe; repair it explicitly before migration.",
         "error",
       );
       return;
@@ -3424,25 +3545,30 @@ async function handleReliabilityCommand(
       requireSourceAbsent: fresh,
     });
     state.reliabilityV2Store = store;
-    log(
+    logImportant(
       ctx,
       result.status === "seeded"
-        ? "Reliability v2 sidecar initialized. Auto routing can now use receipt-owned circuit trials; model selection was not changed."
+        ? "Reliability v2 sidecar initialized"
+        : "Reliability migration skipped",
+      result.status === "seeded"
+        ? "Auto routing can now use receipt-owned circuit trials; model selection was not changed."
         : "Reliability v2 sidecar already exists and was left unchanged.",
+      result.status === "seeded" ? "success" : "info",
     );
   } catch (error) {
     const code = error instanceof ReliabilityV2StoreError ? error.code : "migration_failed";
-    log(
+    logImportant(
       ctx,
+      "Reliability migration failed",
       code === "source_lock_contended"
-        ? "Reliability migration stopped safely because its v1 source lock is busy. Stop other Pi sessions that may write the source and ensure this session has no active or queued generation. If the lock remains, inspect the exact default `.pi/bifrost-reliability.json.migration.lock` or custom `reliability.path` plus `.migration.lock`; remove only a proven stale lock, never based on age or PID alone. V1 state and backup were left untouched; no v2 state was committed."
+        ? "The v1 source lock is busy. Existing state and backup were left untouched; no v2 state was committed."
         : code === "source_missing"
           ? "No v1 reliability file exists; pass --fresh only if you intend to initialize an empty v2 sidecar."
           : code === "source_exists"
             ? "--fresh is allowed only when no v1 reliability file exists; existing v1 state was left unchanged."
             : code === "source_changed"
-              ? "Reliability migration stopped because the v1 source changed during migration. No v2 state was committed; review the source and retry."
-              : `Reliability migration stopped safely (${code}); existing files were preserved.`,
+              ? "The v1 source changed during migration. No v2 state was committed; review the source and retry."
+              : `Migration stopped safely (${code}); existing files were preserved.`,
       "error",
     );
   }
@@ -4013,9 +4139,10 @@ function persistBootstrapConfig(
   try {
     source = selectInitSource();
   } catch {
-    log(
+    logImportant(
       ctx,
-      "Cannot safely save Bifrost's in-memory model setup because a config source is invalid.",
+      "Classifier update blocked",
+      "A config source is invalid. No files were changed.",
       "error",
     );
     return false;
@@ -4072,17 +4199,19 @@ function persistBootstrapConfig(
         throw new Error("invalid config object");
       current = parsed as Record<string, unknown>;
     } catch {
-      log(
+      logImportant(
         ctx,
-        "Cannot safely update the classifier because the selected config is invalid JSON.",
+        "Classifier update blocked",
+        "The selected config is invalid JSON. No files were changed.",
         "error",
       );
       return false;
     }
   } else if (source.ownershipBytes !== null) {
-    log(
+    logImportant(
       ctx,
-      "Cannot save Bifrost's starter setup because an ownership receipt exists without its config.",
+      "Classifier update blocked",
+      "An ownership receipt exists without its config. No files were changed.",
       "error",
     );
     return false;
@@ -4113,9 +4242,10 @@ function persistBootstrapConfig(
     } else {
       const receipt = buildInitOwnershipReceipt(generatedModels);
       if (!receipt) {
-        log(
+        logImportant(
           ctx,
-          "Cannot safely save Bifrost's generated model pools and default; no files were changed.",
+          "Starter setup blocked",
+          "Could not safely save generated model pools and default. No files were changed.",
           "error",
         );
         return false;
@@ -4145,9 +4275,10 @@ function persistBootstrapConfig(
     ownershipBytes.byteLength > MAX_RECONCILIATION_OWNERSHIP_BYTES ||
     !prospectiveConfigInstallable(source.source, configBytes, state)
   ) {
-    log(
+    logImportant(
       ctx,
-      "The requested classifier config is invalid or exceeds a safe write limit; no files were changed.",
+      "Classifier update blocked",
+      "The requested config is invalid or exceeds the safe write limit. No files were changed.",
       "error",
     );
     return false;
@@ -4173,22 +4304,33 @@ function persistBootstrapConfig(
       nextOwnershipBytes: ownershipBytes,
     });
   } catch {
-    log(
+    logImportant(
       ctx,
-      "Could not safely save the classifier and starter model setup; existing files were preserved.",
+      "Classifier update failed",
+      "Could not safely save the classifier and starter model setup. Existing files were preserved.",
       "error",
     );
     return false;
   }
   state.bootstrapModelsInMemory = false;
   if (stillFresh)
-    log(ctx, "Saving Bifrost's detected starter model pools with your classifier choice.");
+    logImportant(
+      ctx,
+      "Starter models saved",
+      "Detected model pools were saved with your classifier choice.",
+      "success",
+    );
   return true;
 }
 
 async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState): Promise<void> {
   if (!ctx.hasUI) {
-    log(ctx, "Choose classifier backend in Pi UI: prompt, typesafe, or pi-native", "warning");
+    logImportant(
+      ctx,
+      "Classifier selection unavailable",
+      "Choose classifier backend in Pi UI: prompt, typesafe, or pi-native.",
+      "warning",
+    );
     return;
   }
   let bootstrapSourceAtStart: ReconciliationSourceSnapshot | undefined;
@@ -4197,7 +4339,12 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
     try {
       bootstrapSourceAtStart = selectInitSource();
     } catch {
-      log(ctx, "Cannot safely change the classifier because a config source is invalid.", "error");
+      logImportant(
+        ctx,
+        "Classifier update blocked",
+        "A config source is invalid. No files were changed.",
+        "error",
+      );
       return;
     }
   }
@@ -4223,15 +4370,21 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
     !promptClassifierModelAvailable(ctx, state.config.classifier?.model);
   if (needsPromptModel) {
     if (ctx.modelRegistry.getAvailable().length === 0) {
-      log(
+      logImportant(
         ctx,
-        "No Pi models available for prompt classifier; regex fallback remains active.",
+        "Classifier model unavailable",
+        "No Pi models are available; regex fallback remains active.",
         "warning",
       );
     } else {
       selectedPromptModel = (await requestPromptClassifierModel(ctx)) ?? undefined;
       if (!selectedPromptModel) {
-        log(ctx, "Prompt classifier model selection cancelled", "warning");
+        logImportant(
+          ctx,
+          "Model selection cancelled",
+          "Prompt classifier configuration was not changed.",
+          "info",
+        );
         return;
       }
     }
@@ -4244,16 +4397,18 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
         (model) => `${model.provider}/${model.id}`,
       );
     } catch {
-      log(
+      logImportant(
         ctx,
-        "Pi classifier catalog unavailable; choose catalog default and check credentials before use.",
+        "Classifier catalog unavailable",
+        "Could not load the typesafe classifier catalog. Check credentials, then retry.",
         "warning",
       );
     }
     if (catalogModels.length === 0) {
-      log(
+      logImportant(
         ctx,
-        `No TypeSafe classifier available now; run /login or set ${TYPE_SAFE_API_KEY_ENV} before use.`,
+        "TypeSafe classifier unavailable",
+        `Run /login or set ${TYPE_SAFE_API_KEY_ENV} before use.`,
         "warning",
       );
     }
@@ -4271,7 +4426,7 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
       ? (JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>)
       : {};
   } catch {
-    log(ctx, "Cannot update classifier: .pi/bifrost.json is invalid JSON", "error");
+    logImportant(ctx, "Classifier update blocked", ".pi/bifrost.json is invalid JSON.", "error");
     return;
   }
   const classifier =
@@ -4302,14 +4457,20 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
         state.effectiveClassifierBackend(state.config).backend,
       ),
     });
-    log(ctx, `classifier backend set to ${backend}; config reloaded`);
+    logImportant(
+      ctx,
+      "Classifier backend updated",
+      `${backend}; configuration reloaded.`,
+      "success",
+    );
     if (
       backend === CLASSIFIER_BACKEND_IDS.typesafe &&
       resolveTypeSafeApiKey().source === "missing"
     ) {
-      log(
+      logImportant(
         ctx,
-        `TypeSafe credential missing; use ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`,
+        "TypeSafe credential missing",
+        `Use ~/.pi/agent/auth.json or set ${TYPE_SAFE_API_KEY_ENV}.`,
         "warning",
       );
     }
@@ -4327,11 +4488,12 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
       state.effectiveClassifierBackend(state.config).backend,
     ),
   });
-  log(ctx, `classifier backend set to ${backend}; config reloaded`);
+  logImportant(ctx, "Classifier backend updated", `${backend}; configuration reloaded.`, "success");
   if (backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
-    log(
+    logImportant(
       ctx,
-      `TypeSafe credential missing; use ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`,
+      "TypeSafe credential missing",
+      `Use ~/.pi/agent/auth.json or set ${TYPE_SAFE_API_KEY_ENV}.`,
       "warning",
     );
   }
@@ -4344,7 +4506,11 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
  * reload path. Shared by `/bifrost reload` and by an approved agent apply, so
  * both activate a saved configuration exactly the same way.
  */
-export function reloadBifrostConfig(state: BifrostState, ctx: ExtensionContext): boolean {
+export function reloadBifrostConfig(
+  state: BifrostState,
+  ctx: ExtensionContext,
+  announceSuccess = false,
+): boolean {
   const done = debugMeasure("command", "reload");
   const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
   if (!installReloadedConfig(state, loadedConfig, ctx)) {
@@ -4376,6 +4542,9 @@ export function reloadBifrostConfig(state: BifrostState, ctx: ExtensionContext):
   });
   syncBifrostModeStatus(ctx, state);
   clearBifrostWidgets(ctx);
+  if (announceSuccess && loadedConfig.warnings.length === 0) {
+    logImportant(ctx, "Bifrost config reloaded", "Configuration is active.", "success");
+  }
   done();
   debug("command", "reloaded", {
     enabled: state.enabled,
@@ -4401,7 +4570,7 @@ export function createCommandRouter(
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
-      log(ctx, "Bifrost enabled");
+      logImportant(ctx, "Bifrost enabled", "Routing is enabled for this session.", "success");
     }),
     exact("off", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
@@ -4410,7 +4579,7 @@ export function createCommandRouter(
       state.saveModeState();
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
-      log(ctx, "Bifrost disabled");
+      logImportant(ctx, "Bifrost disabled", "Routing is disabled for this session.", "success");
     }),
     exact("pin", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
@@ -4418,18 +4587,17 @@ export function createCommandRouter(
       state.pinned = true;
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
-      log(ctx, "Bifrost pinned");
+      logImportant(ctx, "Bifrost pinned", "Automatic model switching is disabled.", "success");
     }),
     exact("unpin", (_, ctx) => {
       state.onManualControl?.(ctx.sessionManager, "unpin");
       state.pinned = false;
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
-      log(ctx, "Bifrost unpinned");
+      logImportant(ctx, "Bifrost unpinned", "Automatic model switching is enabled.", "success");
     }),
     exact("reload", (_, ctx) => {
-      if (!reloadBifrostConfig(state, ctx)) return;
-      log(ctx, "Bifrost config reloaded");
+      reloadBifrostConfig(state, ctx, true);
     }),
 
     spaced("validate", (args, ctx) => handleDiagnosticsCommand("validate", args, ctx, state)),
@@ -4458,20 +4626,27 @@ export function createCommandRouter(
     exact("probe", async (_, ctx) => {
       const available = ctx.modelRegistry.getAvailable();
       if (available.length === 0) {
-        log(ctx, "No models available in registry.", "warning");
+        logImportant(ctx, "No models available", "The model registry is empty.", "warning");
         return;
       }
       clearBifrostWidgets(ctx);
       uiBusy(ctx, `Probing ${available.length} models...`);
       log(ctx, `Probing ${available.length} model(s) with "${PROBE_PROMPT_TEXT}"...`);
 
+      let okCount = 0;
+      let errCount = 0;
       const probeRun = await runProbe(ctx, {
         ...probeOptionsFromConfig(state.config.probe),
         signal: ctx.signal,
+        onProgress: (done, total, last) => {
+          if (last.status === "ok") okCount++;
+          else if (last.status === "error" || last.status === "timeout") errCount++;
+          setProbeProgress(ctx, { done, total, okCount, errCount });
+        },
       });
       uiDone(ctx);
       if (probeRun.cancelled || ctx.signal?.aborted) {
-        log(ctx, "Probe was cancelled; partial results were not saved.", "warning");
+        logImportant(ctx, "Probe cancelled", "Partial results were not saved.", "info");
         return;
       }
       const { results, path } = probeRun;
@@ -4521,14 +4696,57 @@ export function createCommandRouter(
       lines.push("", `full results → ${path}`);
       uiOutput(ctx, lines);
 
-      if (ok.length < results.length) {
-        log(
+      const notWorking = results.length - ok.length;
+      // Group failures by the existing reason classifier: the card should explain
+      // *why* models failed, not list 400 near-duplicate errors. Raw per-model
+      // errors stay in .pi/bifrost-probe.json.
+      const failureReasons = new Map<string, { count: number; models: string[] }>();
+      for (const r of [...errs, ...timeouts]) {
+        const reason = failureDetails(r)?.reason ?? "unknown";
+        const entry = failureReasons.get(reason) ?? { count: 0, models: [] };
+        entry.count++;
+        entry.models.push(`${r.provider}/${r.model}`);
+        failureReasons.set(reason, entry);
+      }
+      const sortedReasons = [...failureReasons.entries()].sort((a, b) => b[1].count - a[1].count);
+      const topReasons = sortedReasons.slice(0, 5);
+      const countWidth = String(Math.max(0, ...sortedReasons.map(([, r]) => r.count))).length;
+      const labelWidth = Math.max(
+        ...topReasons.map(([reason]) => (REASON_LABELS[reason] ?? reason).length),
+      );
+      const details = [
+        `${errs.length} failed · ${timeouts.length} timed out${
+          skipped.length > 0 ? ` · ${skipped.length} skipped` : ""
+        }`,
+        ...topReasons.map(([reason, r]) => {
+          // Small groups: name every model (the names are the answer). Large
+          // groups: the count is the answer; per-model names stay in the file.
+          const names = r.count <= 3 ? ` — ${r.models.join(", ")}` : "";
+          return `${(REASON_LABELS[reason] ?? reason).padEnd(labelWidth)} ×${String(r.count).padStart(countWidth)}${names}`;
+        }),
+        ...(sortedReasons.length > topReasons.length
+          ? [`${sortedReasons.length - topReasons.length} more failure reasons`]
+          : []),
+        "full errors: .pi/bifrost-probe.json",
+      ];
+      if (ok.length === 0) {
+        logImportant(
           ctx,
-          `${ok.length}/${results.length} models responded. Check ${path} for details.`,
+          "No usable models",
+          `0 of ${results.length} models are working`,
+          "error",
+          details,
+        );
+      } else if (notWorking > 0) {
+        logImportant(
+          ctx,
+          "Probe finished with failures",
+          `${ok.length} of ${results.length} models are working`,
           "warning",
+          details,
         );
       } else if (ok.length > 0) {
-        log(ctx, `All ${ok.length} models responded successfully.`);
+        logImportant(ctx, "Probe complete", `All ${ok.length} models are working.`, "success");
       }
 
       // Clear the probe widget so results don't persist in the TUI.
@@ -4558,7 +4776,12 @@ export function createCommandRouter(
       saveCache(path, []);
       state.cacheEntries = [];
       state.invalidatePipeline();
-      log(ctx, "cache cleared");
+      logImportant(
+        ctx,
+        "Cache cleared",
+        "All cached classification entries were removed.",
+        "success",
+      );
     }),
 
     // Classifier
@@ -4566,9 +4789,10 @@ export function createCommandRouter(
     exact("classifier", (_, ctx) => handleClassifierChoose(ctx, state)),
     exact("classifier on", (_, ctx) => {
       if (state.classifierRuntimeStateIssue) {
-        log(
+        logImportant(
           ctx,
-          "Classifier remains disabled because runtime state is invalid. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.",
+          "Classifier enable blocked",
+          "Runtime state is invalid. Repair .pi/bifrost-state.json, then run /bifrost reload.",
           "error",
         );
         return;
@@ -4576,9 +4800,10 @@ export function createCommandRouter(
       const effective = state.effectiveClassifierBackend(state.config, ctx);
       const errors = classifierConfigErrors(state.config, effective.backend, true);
       if (errors.length > 0) {
-        log(
+        logImportant(
           ctx,
-          `Classifier remains disabled because its configuration is invalid: ${errors.join(" ")}`,
+          "Classifier enable blocked",
+          `Configuration is invalid: ${errors.join(" ")}`,
           "error",
         );
         return;
@@ -4586,37 +4811,48 @@ export function createCommandRouter(
       state.setClassifierSessionOverride(ctx.sessionManager, true);
       syncBifrostModeStatus(ctx, state);
       debug("command", "classifier_toggle", { enabled: true, persistence: "session" });
-      log(
+      logImportant(
         ctx,
-        `Classifier enabled for this Pi session. Backend ${effective.backend} can receive current prompts; configuration was not changed.`,
+        "Classifier enabled",
+        `Backend ${effective.backend} can receive current prompts; configuration was not changed.`,
+        "success",
       );
     }),
     exact("classifier off", (_, ctx) => {
       state.setClassifierSessionOverride(ctx.sessionManager, false);
       syncBifrostModeStatus(ctx, state);
       debug("command", "classifier_toggle", { enabled: false, persistence: "session" });
-      log(ctx, "Classifier disabled for this Pi session; configuration was not changed.");
+      logImportant(
+        ctx,
+        "Classifier disabled",
+        "Disabled for this Pi session; configuration was not changed.",
+        "info",
+      );
     }),
     exact("classifier inherit", (_, ctx) => {
       state.setClassifierSessionOverride(ctx.sessionManager, undefined);
       const enablement = classifierEnablementFor(state, ctx);
       syncBifrostModeStatus(ctx, state);
       if (enablement.source === "legacy-conflict" && enablement.legacyConflict) {
-        log(
+        logImportant(
           ctx,
-          `Classifier session override cleared; ${classifierConflictNote(enablement.legacyConflict, enablement.source)}.`,
+          "Classifier override cleared",
+          classifierConflictNote(enablement.legacyConflict, enablement.source) + ".",
           "warning",
         );
       } else if (enablement.runtimeStateIssue) {
-        log(
+        logImportant(
           ctx,
-          `Classifier remains disabled because runtime state is invalid. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.`,
+          "Classifier remains disabled",
+          "Runtime state is invalid. Repair .pi/bifrost-state.json, then run /bifrost reload.",
           "error",
         );
       } else {
-        log(
+        logImportant(
           ctx,
+          "Classifier override cleared",
           `Classifier now follows configuration for this session (${enablement.enabled ? "enabled" : "disabled"}).`,
+          "info",
         );
       }
     }),
@@ -4712,9 +4948,11 @@ export function createCommandRouter(
     if (!trimmed) {
       debug("command", "dashboard");
       if (!ctx.hasUI) {
-        log(
+        logImportant(
           ctx,
-          `Bifrost: enabled=${state.enabled} pinned=${state.pinned} current=${modelKey(ctx.model)}`,
+          "Bifrost status",
+          `enabled=${state.enabled} pinned=${state.pinned} current=${modelKey(ctx.model)}`,
+          "info",
         );
         return;
       }
@@ -4748,7 +4986,7 @@ export function createCommandRouter(
 
     debug("command", "picker", { command: sub });
     if (!ctx.hasUI) {
-      log(ctx, `Unknown /bifrost subcommand: ${trimmed}`, "warning");
+      logImportant(ctx, "Unknown command", `/bifrost ${trimmed}`, "warning");
       return;
     }
 
@@ -4757,7 +4995,12 @@ export function createCommandRouter(
 
     if (selected.argumentHint) {
       ctx.ui.setEditorText(`/bifrost ${selected.value} `);
-      log(ctx, `Prefilled /bifrost ${selected.value}`);
+      logImportant(
+        ctx,
+        "Command drafted",
+        `/bifrost ${selected.value} — add its arguments in the editor.`,
+        "info",
+      );
       return;
     }
 

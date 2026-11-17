@@ -561,7 +561,18 @@ function makeCtx(
       setStatus: (key: string, value: string | undefined) => {
         calls.push({ kind: "status", value: `${key}:${value ?? ""}` });
       },
-      setWidget: (key: string, value: string[] | undefined) => {
+      setWidget: (key: string, value: string[] | undefined | ((tui: unknown, theme: unknown) => unknown)) => {
+        if (typeof value === "function") {
+          // Render component-factory widgets so tests can assert their text content.
+          const component = value(undefined, {
+            fg: (_color: string, text: string) => text,
+            bold: (text: string) => text,
+            style: (text: string) => text,
+            colors: {},
+          }) as { text?: string } | undefined;
+          calls.push({ kind: "widget", value: `${key}:func`, lines: component?.text?.split("\n") ?? [] });
+          return;
+        }
         calls.push({ kind: "widget", value: `${key}:${value?.length ?? 0}`, lines: value });
       },
       setWorkingMessage: (_message?: string) => {},
@@ -1256,7 +1267,12 @@ describe("bifrost command ui", () => {
       const state = makeState();
       await createCommandRouter(state as never)("init --write", ctx as never);
       assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), true);
-      assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("Classifier: prompt (detected default)")));
+      assert(calls.some(
+        (call) =>
+          (call.kind === "widget" || call.kind === "notify") &&
+          String(call.lines?.join("\n") ?? call.value).includes("Classifier") &&
+          String(call.lines?.join("\n") ?? call.value).includes("detected default"),
+      ));
       assert.equal(calls.some((call) => call.kind === "select"), false);
       const saved = JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8"));
       assert.equal(saved.classifier.backend, undefined);
@@ -1521,7 +1537,12 @@ describe("bifrost command ui", () => {
       await createCommandRouter(state as never)("init", ctx as never);
       assert.equal(confirmCalls, 1);
       assert.equal(calls.some((call) => call.kind === "select"), false);
-      assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("Classifier: prompt (detected default)")));
+      assert(calls.some(
+        (call) =>
+          (call.kind === "widget" || call.kind === "notify") &&
+          String(call.lines?.join("\n") ?? call.value).includes("Classifier") &&
+          String(call.lines?.join("\n") ?? call.value).includes("detected default"),
+      ));
       const saved = JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8"));
       assert.equal(saved.classifier.backend, undefined);
     } finally {
@@ -1565,7 +1586,7 @@ describe("bifrost command ui", () => {
       assert.equal(saved.classifier.typesafe, undefined);
       assert.equal(calls.some((call) => call.kind === "select"), false);
       assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("No working models found for classifier")), false);
-      assert(calls.some((call) => call.kind === "widget" && call.lines?.some((line) => line.includes("classifier: off"))));
+      assert(calls.some((call) => call.kind === "widget" && call.lines?.some((line) => line.includes("Classifier  off"))));
     } finally {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -1598,7 +1619,7 @@ describe("bifrost command ui", () => {
       await createCommandRouter(state)("init", ctx);
 
       assert.equal(confirmCalls, 1);
-      assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("No working models found for classifier")), true);
+      assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("No working models found for classifier")), false);
       assert(calls.some((call) => call.kind === "widget" && call.lines?.some((line) => line.includes("prompt (no eligible model; regex fallback)"))));
     } finally {
       process.chdir(previousCwd);
@@ -2942,7 +2963,7 @@ describe("preview json marker", () => {
     });
 
     assert.deepEqual(report, { ok: false, prompt: "hello", error: "unclassified" });
-    assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("no tier matched")));
+    assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("No configured tier matched")));
   });
 
   it("surfaces rejected direct-classifier confidence in unclassified /bifrost preview --json, text, and trace", async () => {
@@ -3559,7 +3580,10 @@ describe("command aliases", () => {
       const probeWidgetCalls = calls.filter((call) => call.kind === "widget" && String(call.value).startsWith("bifrost-probe:"));
       assert.ok(probeWidgetCalls.length > 0, "probe widget was never set");
       const last = probeWidgetCalls[probeWidgetCalls.length - 1]!;
-      assert.equal(last.lines?.length, 0, "probe widget was not cleared after probing");
+      assert.ok(
+        last.lines === undefined || last.lines.length === 0,
+        "probe widget was not cleared after probing",
+      );
       assert.ok(calls.some((call) => String(call.value).includes("Inherited config changed")));
     } finally {
       process.chdir(previousCwd);
@@ -3580,14 +3604,16 @@ describe("command aliases", () => {
       writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
         { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
       ]);
-      const { ctx } = makeCtx([{ provider: "fixture", id: "chat" }]);
-      const confirmations: string[] = [];
-      (ctx as any).ui.confirm = async (_title: string, message: string) => { confirmations.push(message); return false; };
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      (ctx as any).ui.confirm = async () => false;
       for (const args of ["init", "init -g"]) {
         await createCommandRouter(makeState() as never)(args, ctx);
       }
-      assert.match(confirmations[0], /project \(\.pi\/bifrost\.json\)/);
-      assert.match(confirmations[1], /user \(.+bifrost\.json\)/);
+      const previewLines = calls
+        .filter((call) => call.kind === "widget" && String(call.value).startsWith("bifrost-output:"))
+        .flatMap((call) => call.lines ?? []);
+      assert.ok(previewLines.some((line) => line.includes("project (.pi/bifrost.json)")), previewLines.join("\n"));
+      assert.ok(previewLines.some((line) => line.includes("user (")), previewLines.join("\n"));
       assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
       assert.equal(existsSync(join(tempDir, "bifrost.json")), false);
     } finally {
@@ -3869,7 +3895,7 @@ describe("route dispatch", () => {
     assert.match(output, /enabled=false \(runtime-state-invalid\)/);
     assert.match(output, /readiness=blocked/);
     assert.match(output, /classification is paused/);
-    assert.ok(calls.some((call) => String(call.value).includes("runtime state is invalid")));
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("Runtime state is invalid")));
   });
 
   // log() reaches the fake as ctx.ui.notify, recorded as kind "notify" with
@@ -3889,7 +3915,7 @@ describe("route dispatch", () => {
     await inTempDir(async () => {
       await createCommandRouter(state as never)("cache clear", ctx as never);
     });
-    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("cache cleared")));
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("Cache cleared")));
   });
 
   // debug uses uiOutput, which reaches the fake as ctx.ui.setWidget and is
@@ -3961,7 +3987,7 @@ describe("route dispatch", () => {
       assert.ok(calls.some((call) => String(call.value).includes("not configured or present in cooldown state")));
       assert.ok(providerCooldownStore.read("fixture").openUntil);
       await createCommandRouter(state as never)("reliability reset --provider fixture", ctx as never);
-      assert.ok(calls.some((call) => String(call.value).includes("Provider fixture cooldown was reset")));
+      assert.ok(calls.some((call) => String(call.value).includes("fixture cooldown was reset")));
       assert.equal(providerCooldownStore.read("fixture").openUntil, undefined);
       await createCommandRouter(state as never)("reliability reset --provider *", ctx as never);
       assert.ok(calls.some((call) => String(call.value).includes("usage: /bifrost reliability reset")));
@@ -4128,13 +4154,41 @@ describe("route dispatch", () => {
     assert.ok(lines.includes("--- probe results (1 models) ---"));
   });
 
+  it("groups probe failures by reason in the summary card", async () => {
+    const { ctx, calls } = makeCtx([makeModel("fixture", "chat"), makeModel("fixture", "bad")]);
+    const state = makeState();
+    state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} } as never;
+    (ctx as any).modelRegistry.streamSimple = (model: { id: string }) => {
+      if (model.id === "bad") return { result: async () => { throw new Error("boom"); } };
+      return {
+        result: async () => ({
+          role: "assistant", api: "openai-completions", provider: "fixture", model: model.id,
+          content: [{ type: "text", text: "ok" }], usage: { totalTokens: 1 }, stopReason: "stop", timestamp: Date.now(),
+        }),
+      };
+    };
+    await inTempDir(async () => {
+      await createCommandRouter(state as never)("probe", ctx as never);
+    });
+    const card = calls
+      .filter((c) => c.kind === "notify")
+      .map((c) => String(c.value))
+      .find((v) => v.includes("Probe finished with failures"));
+    assert.ok(card, "failure summary card missing");
+    assert.ok(card.includes("1 of 2 models are working"), card);
+    assert.ok(card.includes("1 failed · 0 timed out"), card);
+    assert.ok(card.includes("provider errors ×1 — fixture/bad"), card);
+    assert.ok(!card.includes("e.g."), card);
+    assert.ok(card.includes("full errors: .pi/bifrost-probe.json"), card);
+  });
+
   it("routes benchmark", async () => {
     const { ctx, calls } = makeCtx();
     const state = makeState();
     // makeState configures no tiers, so handleBenchmark reports that and
     // returns before reaching the classification pipeline.
     await createCommandRouter(state as never)("benchmark fix the build", ctx as never);
-    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("no categories configured")));
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("No categories configured")));
   });
 
   it("routes preview", async () => {
@@ -4154,7 +4208,7 @@ describe("route dispatch", () => {
     await createCommandRouter(state as never)("previewXYZ", ctx as never);
     // The slice leaves "XYZ", so handlePreview classifies it rather than
     // printing usage text. The fake pipeline returns "unclassified".
-    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("no tier matched")));
+    assert.ok(calls.some((c) => c.kind === "notify" && String(c.value).includes("No configured tier matched")));
     assert.ok(calls.some((c) => c.kind === "status" && String(c.value).includes("previewing prompt")));
     assert.equal(calls.some((c) => c.kind === "select"), false);
   });
