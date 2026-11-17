@@ -53,7 +53,7 @@ module.exports = {
       comment:
         "The resolve-only API must not reach event wiring, commands, status UI, probe transport, or result rendering.",
       from: { path: "^router\\.ts$" },
-      to: { path: HOST_ADAPTERS },
+      to: { path: `(?:${HOST_ADAPTERS}|^ui/)` },
     },
     {
       name: "host-ui-imports-only-from-adapter-entry",
@@ -68,14 +68,14 @@ module.exports = {
       severity: "error",
       comment:
         "Shipped root modules run inside Pi and must not import dev-only tooling (tests, mutation, coverage, fuzzing, repository scripts).",
-      from: { path: "^[^/]+\\.ts$" },
+      from: { path: "^(?:[^/]+|ui/[^/]+)\\.ts$" },
       to: { dependencyTypes: ["npm-dev"], dependencyTypesNot: ["npm-peer"] },
     },
     {
       name: "production-no-repository-tooling",
       severity: "error",
       comment: "Shipped modules must not depend on repository scripts, tests, or fixtures.",
-      from: { path: "^[^/]+\\.ts$" },
+      from: { path: "^(?:[^/]+|ui/[^/]+)\\.ts$" },
       to: { path: "^(scripts|tests)/" },
     },
     {

@@ -22,7 +22,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1350,6 +1350,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
             copyFileSync(join(ROOT, entry), join(scratch, entry));
           }
         }
+        cpSync(join(ROOT, "ui"), join(scratch, "ui"), { recursive: true });
         symlinkSync(join(ROOT, "node_modules"), join(scratch, "node_modules"));
         writeFileSync(join(scratch, "index.ts"), mutated);
         const run = await debugDecisionScenario(join(scratch, "index.ts"));
@@ -1388,6 +1389,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
           copyFileSync(join(ROOT, entry), join(scratch, entry));
         }
       }
+      cpSync(join(ROOT, "ui"), join(scratch, "ui"), { recursive: true });
       symlinkSync(join(ROOT, "node_modules"), join(scratch, "node_modules"));
       writeFileSync(join(scratch, "index.ts"), mutated);
 
@@ -1436,6 +1438,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
           copyFileSync(join(ROOT, entry), join(scratch, entry));
         }
       }
+      cpSync(join(ROOT, "ui"), join(scratch, "ui"), { recursive: true });
       symlinkSync(join(ROOT, "node_modules"), join(scratch, "node_modules"));
       writeFileSync(join(scratch, "reliability-v2-store.ts"), mutated);
       try { ({ released } = await v2ReliabilityScenario(join(scratch, "index.ts"))); }
@@ -1471,6 +1474,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
           copyFileSync(join(ROOT, entry), join(scratch, entry));
         }
       }
+      cpSync(join(ROOT, "ui"), join(scratch, "ui"), { recursive: true });
       symlinkSync(join(ROOT, "node_modules"), join(scratch, "node_modules"));
       writeFileSync(join(scratch, "classifier-pi-native.ts"), mutated);
 
@@ -1512,6 +1516,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
             copyFileSync(join(ROOT, entry), join(scratch, entry));
           }
         }
+        cpSync(join(ROOT, "ui"), join(scratch, "ui"), { recursive: true });
         symlinkSync(join(ROOT, "node_modules"), join(scratch, "node_modules"));
 
         const extension = join(scratch, "index.ts");
@@ -1587,6 +1592,7 @@ describe("command and artifact privacy acceptance", { timeout: 600_000, concurre
             copyFileSync(join(ROOT, entry), join(scratch, entry));
           }
         }
+        cpSync(join(ROOT, "ui"), join(scratch, "ui"), { recursive: true });
         symlinkSync(join(ROOT, "node_modules"), join(scratch, "node_modules"));
 
         const extension = join(scratch, "index.ts");

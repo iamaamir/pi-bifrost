@@ -95,7 +95,7 @@ def run():
             for _ in range(100):
                 text = wait(lambda s: page(s)[0] > 0, f"{label} page")
                 current, total = page(text)
-                seen.append(text)
+                seen.append("\n".join(text.splitlines()[:height - 1]) if label == "exact" else text)
                 unchanged()
                 if current == total:
                     assert "a Apply" in text, text
@@ -136,9 +136,9 @@ def run():
             time.sleep(0.2)
             unchanged()
             seen = traverse("exact")
-            exact = seen
+            exact = "\n".join(line[:width - 1] for line in seen.splitlines())
             assert "description" in exact, seen
-            value = "".join(re.findall(r"x{2,}|HIDDEN_LAST_CHANGE", exact))
+            value = "".join(re.findall(r"x{2,}|HIDDEN_LAST_CHANGE", exact.partition("description")[2]))
             assert value == "x" * 6_000 + "HIDDEN_LAST_CHANGE", f"captured exact value has {value.count('x')} x chars and suffix={value.endswith('HIDDEN_LAST_CHANGE')}"
             ui.send(master, "\x1b")
             wait(lambda _: result.exists(), "cancel result")
@@ -165,8 +165,8 @@ def run():
             ui.send(master, "d")
             wait(lambda s: "Full exact change 1/" in s, "exact view after resize")
             seen = traverse("exact")
-            exact = seen
-            value = "".join(re.findall(r"x{2,}|HIDDEN_LAST_CHANGE", exact))
+            exact = "\n".join(line[:width - 1] for line in seen.splitlines())
+            value = "".join(re.findall(r"x{2,}|HIDDEN_LAST_CHANGE", exact.partition("description")[2]))
             assert value == "x" * 6_000 + "HIDDEN_LAST_CHANGE", "full changed value must be inspectable"
             ui.send(master, "a")
             wait(lambda _: result.exists(), "apply result")

@@ -142,6 +142,7 @@ describe("packed experimental router consumer", () => {
       const { packageRoot, routerFiles } = installedRouterFiles(consumer);
       const archivePaths = packed.files.map((file) => file.path);
       const rootSources = readdirSync(process.cwd()).filter((path) => path.endsWith(".ts"));
+      const uiSources = readdirSync(join(process.cwd(), "ui")).filter((path) => path.endsWith(".ts")).map((path) => `ui/${path}`);
       assert.deepEqual(packageJsonOf(packageRoot).exports["./router"], {
         types: "./dist/router/router.d.ts",
         import: "./dist/router/router.js",
@@ -161,14 +162,15 @@ describe("packed experimental router consumer", () => {
         "skills/configure-bifrost/SKILL.md",
         "skills/configure-bifrost/references/configuration-reference.md",
       ];
-      for (const required of [...rootSources, ...routerFiles, "bifrost.json", "schema.json", "package.json", "README.md", "CHANGELOG.md", "LICENSE", "docs/router-api.md", ...agentSkill]) {
+      for (const required of [...rootSources, ...uiSources, ...routerFiles, "bifrost.json", "schema.json", "package.json", "README.md", "CHANGELOG.md", "LICENSE", "docs/router-api.md", ...agentSkill]) {
         assert.ok(archivePaths.includes(required), `release archive missing ${required}`);
       }
       assert.ok(archivePaths.every((path) => path.endsWith(".ts") && !path.includes("/")
         || ["bifrost.json", "schema.json", "README.md", "CHANGELOG.md", "LICENSE", "package.json", "docs/router-api.md"].includes(path)
         || routerFiles.includes(path)
+        || uiSources.includes(path)
         || path.startsWith("examples/")
-        || agentSkill.includes(path)), "release contains files outside source, router API, examples, and agent skill allowlists");
+        || agentSkill.includes(path)), "release contains files outside source, UI, router API, examples, and agent skill allowlists");
       assert.ok(archivePaths.includes("dist/router/router.js"), "the package must contain built JS");
       assert.ok(archivePaths.includes("dist/router/router.d.ts"), "the package must contain API declarations");
       assertNoPackageReferences(packageRoot, routerFiles);

@@ -35,6 +35,8 @@ pi install npm:pi-bifrost
 
 Restart Pi if the extension is not loaded in the current session.
 
+To inspect usage Pi recorded for the current session, run `/bifrost cost`. In the interactive view, **Tab** switches between Requests and Models for the current branch; **Up/Down** moves through groups, **Enter** expands or collapses them, and **Esc** closes the view. The current-branch request groups are derived from session entries, while all-retained totals are shown separately and can include copied fork history or alternate branches. Assistant responses are grouped by reported model; auxiliary usage, such as compaction, is shown when Pi records it. Unknown costs stay unknown and are not included in any known-cost subtotal. The report cannot show historical routing reasons. It does not display prompt or tool content. Costs are Pi-reported estimates, not billing records; zero reported cost does not confirm free usage. Classifier or probe overhead may be outside the session or unknown, so the report makes no savings claim. When an interactive TUI is unavailable, it prints a plain-text report.
+
 ## Understand four terms
 
 - **Tier:** named capability group such as `quick`, `general`, or `frontier`.

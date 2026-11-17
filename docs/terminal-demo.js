@@ -140,6 +140,7 @@ if (terminal) {
     ["reliability reset", "Clear one provider pause", "debug", "Use --provider with an exact provider ID. Active recovery trials block reset."],
     ["reliability migrate", "Prepare reliability v2 state", "debug", "Prepares receipt-owned reliability v2 state without changing the selected model."],
     ["cache stats", "Show classification cache", "cache", "Shows local tier-decision cache statistics."],
+    ["cost", "Show session usage and cost estimate", "debug", "Shows Pi-recorded usage; estimates are not billing records."],
     ["cache clear", "Clear classification cache", "cache", "Empties stored tier decisions, not provider responses."],
     ["classifier", "Choose classifier backend", "classifier", "Choose a tier classifier; Pi-native requires host support."],
     ["classifier on", "Enable classifier", "classifier", "Configured classifier enabled."],
