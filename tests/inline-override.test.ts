@@ -67,4 +67,16 @@ describe("inline tier override", () => {
     assert.equal(r.forcedTier, undefined);
     assert.equal(r.promptText, "frontier debug");
   });
+
+  it("does not match a tier word that appears after leading non-alpha characters", () => {
+    const r = parseInlineOverride("123 frontier debug", models);
+    assert.equal(r.forcedTier, undefined);
+    assert.equal(r.promptText, "123 frontier debug");
+  });
+
+  it("strips all whitespace after a matched tier word", () => {
+    const r = parseInlineOverride("frontier  debug this", models);
+    assert.equal(r.forcedTier, "frontier");
+    assert.equal(r.promptText, "debug this");
+  });
 });
