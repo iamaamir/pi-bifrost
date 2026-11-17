@@ -568,10 +568,12 @@ export function survivorRows(reports) {
         // discriminate. `null` when the report carried no coverage at all.
         testsCompleted: Number.isInteger(mutant.testsCompleted) ? mutant.testsCompleted : null,
         coveredBy: coveringTests(report, mutant),
-        // A static mutant is evaluated by comparing source text, so no test can
-        // ever cover it: `testsCompleted` is the whole suite and `coveredBy` is
-        // empty. Without saying so the row reads as an anomaly — "189 tests ran,
-        // none covered it" — which is the opposite of what happened.
+        // Static means the mutated code runs while a file is *loaded*, before any
+        // test starts, so Stryker cannot attribute it to one test: it reloads the
+        // environment and runs the whole suite. `coveredBy` is empty and
+        // `testsCompleted` is the suite size. These are still killable — a test
+        // that asserts the loaded value does it — but the per-test attribution is
+        // unavailable, so the number is not evidence of a gap.
         static: mutant.static === true,
       })),
   );
@@ -801,7 +803,7 @@ export function renderSummary({ reports, payload, identityFor = measurementIdent
     lines.push(
       "### Static survivors",
       "",
-      "These encode a change to the source *text* rather than to runtime behaviour, so Stryker compares them statically and no test can cover them. Their `coveredBy` is empty and `testsCompleted` is the whole suite; that is expected, not missing coverage.",
+      "These mutants run while a file is **loaded**, before any test begins, so Stryker cannot attribute them to a single test: it reloads the environment and runs the whole suite. Their `coveredBy` is therefore empty and `testsCompleted` is the suite size. That is the coverage *attribution* being unavailable, not the behaviour being unasserted — a test that asserts the loaded value kills them, and changing one changes runtime behaviour.",
       "",
       ...staticSurvivors.map((entry) => `- \`${entry}\``),
       "",

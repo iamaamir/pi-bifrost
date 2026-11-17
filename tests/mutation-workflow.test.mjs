@@ -1067,12 +1067,14 @@ test("clearing keeps sibling shards but drops this run's own stale output", () =
     // The planner is what the runner actually deletes from. Only the owned file
     // appears, and a sibling shard is never a candidate.
     const entries = ["cache.ts.shard0.json", "cache.ts.shard1.json", "notes.txt", "routing.ts.json"];
+    // `tmp` is the trust anchor here: the fixture directory plays the role that
+    // `reports/` plays in production, and the boundary is always the root.
     assert.deepEqual(
       reportsToClear(archived, { target: "cache.ts", reportPath: resolved }, tmp, entries),
       [resolved],
     );
     assert.deepEqual(
-      reportsToClear({}, run, tmp, entries).sort(),
+      reportsToClear({}, run, tmp, entries, tmp).sort(),
       [join(tmp, "cache.ts.shard0.json"), join(tmp, "cache.ts.shard1.json")].sort(),
       "a normal run owns both of that target's shards and nothing else",
     );
@@ -1760,6 +1762,7 @@ test("gate and summary agree on every measurement state", () => {
     ["a module with zero mutants", [reportFor({})], {}, ["zero-mutants"], []],
     ["a module whose mutants are all ignored", [reportFor({ Ignored: 5 })], {}, ["no-evaluated-mutants"], []],
     ["a payload that records no identity", [reportFor({ Killed: 5 })], { identityFor: (m) => measurementIdentity(m) }, ["unstamped-payload"], []],
+    ["a payload that cannot be checked here", [reportFor({ Killed: 5 })], { identityFor: () => { throw new Error("unknown mutation target cache.ts"); }, measuredIdentity: { [MODULE]: "0".repeat(64) } }, ["unverifiable-payload"], []],
     ["a payload measured against other bytes", [reportFor({ Killed: 5 })], { identityFor: () => "f".repeat(64), measuredIdentity: { [MODULE]: "0".repeat(64) } }, ["stale-payload"], []],
     ["a payload that matches this checkout", [reportFor({ Killed: 5 })], { identityFor: (m) => measurementIdentity(m), measuredIdentity: { [MODULE]: measurementIdentity(MODULE) } }, [], []],
     ["ignored mutants beside evaluated ones", [reportFor({ Killed: 4, Ignored: 6 })], {}, [], []],
@@ -2039,9 +2042,10 @@ test("a survivor carries the source line it points at", () => {
 });
 
 test("a static survivor is marked so its empty coverage is not an anomaly", () => {
-  // A static mutant is judged by comparing source text, so no test can ever cover
-  // it: testsCompleted is the whole suite and coveredBy is empty. A reader who
-  // sees "189 tests ran, none covered it" concludes the opposite of what happened.
+  // A static mutant runs while a file loads, so Stryker cannot attribute it to one
+  // test: it reloads the environment and runs the whole suite. A reader who sees
+  // "189 tests ran, none covered it" concludes the opposite of what happened —
+  // and the first wording claimed they were unkillable, which is false.
   const directory = mkdtempSync(join(tmpdir(), "mutation-static-"));
   try {
     writeFileSync(join(directory, "cache.json"), JSON.stringify({
@@ -2059,7 +2063,7 @@ test("a static survivor is marked so its empty coverage is not an anomaly", () =
 
     const text = renderSummary({ reports, payload: buildPayload({ reports, expectedTargets: ["cache.ts"] }) });
     assert.match(text, /### Static survivors/u);
-    assert.match(text, /no test can cover them/u);
+    assert.match(text, /runs the whole suite/u, "the wording must not claim these are unkillable");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -2154,6 +2158,57 @@ test("a partial --mutate scope must name its artifact", () => {
 });
 
 // --- The reporting boundary itself is not user-controlled ---
+
+test("a symlinked reports/mutation cannot redirect the cleanup", () => {
+  // The root check was not enough: `reports/` was fine, and `reports/mutation`
+  // pointed elsewhere. `reportsToClear` then compared that directory against its
+  // own canonical form, which is trivially true, and deleted a file outside the
+  // checkout. This is the exact shape the review found.
+  const outside = mkdtempSync(join(tmpdir(), "mutation-nested-escape-"));
+  const reports = join(ROOT, "reports");
+  const nested = join(reports, "mutation");
+  const aside = `${nested}.test-aside-${process.pid}`;
+  const hadNested = existsSync(nested);
+  try {
+    writeFileSync(join(outside, "cache.ts.shard0.json"), "do not delete");
+    if (hadNested) renameSync(nested, aside);
+    mkdirSync(reports, { recursive: true });
+    symlinkSync(outside, nested);
+
+    assert.throws(
+      () => reportsToClear({}, { target: "cache.ts", reportPath: null }, nested, ["cache.ts.shard0.json"]),
+      /outside .*reports/u,
+      "the boundary is the reporting root, not the directory under it",
+    );
+    assert.equal(readFileSync(join(outside, "cache.ts.shard0.json"), "utf8"), "do not delete");
+  } finally {
+    rmSync(nested, { force: true });
+    if (hadNested) renameSync(aside, nested);
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("a scoped dry run can start without naming a report", () => {
+  // A dry run saves nothing, so it has no artifact that could be mistaken for the
+  // whole module. Requiring --report made it impossible: --report is refused for
+  // dry runs, so `--mutate <range> --dry-run` could not run at all.
+  const run = (args) => {
+    try {
+      return { status: 0, out: execFileSync(process.execPath, ["mutation/run.mjs", ...args], { cwd: ROOT, encoding: "utf8", stdio: "pipe" }) };
+    } catch (error) {
+      return { status: error.status, err: String(error.stderr) };
+    }
+  };
+  const dry = run(["cache.ts", "--mutate", "cache.ts:1-50", "--dry-run"]);
+  assert.equal(dry.status, 0, dry.err);
+  assert.match(dry.out, /dry-run has been completed successfully/u, "it starts and finishes");
+
+  // A real scoped run still has to name its artifact: that is what stops a
+  // partial measurement being stored as the whole module.
+  const real = run(["cache.ts", "--mutate", "cache.ts:1-50", "--concurrency", "1"]);
+  assert.notEqual(real.status, 0);
+  assert.match(real.err, /name the artifact with --report/u);
+});
 
 test("a symlinked reporting root is refused", () => {
   // `reports/` is gitignored, so it is not part of any commit -- but anything with
