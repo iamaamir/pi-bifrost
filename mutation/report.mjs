@@ -555,6 +555,10 @@ export function survivorRows(reports) {
         mutantId: mutant.id,
         mutator: mutant.mutatorName,
         replacement: mutant.replacement,
+        // The line's own text is what makes the coordinate recoverable: if the
+        // file moved under the artifact, the range is wrong but this is still
+        // findable. A blob sha would only help a reader who remembered to check.
+        source: sourceLine(report, mutant),
         startLine: mutant.location?.start?.line ?? null,
         startColumn: mutant.location?.start?.column ?? null,
         endLine: mutant.location?.end?.line ?? null,
@@ -589,7 +593,13 @@ export function annotationLines(survivors, limit = 20) {
   return selected.map((row) => {
     const line = row.startLine ?? 1;
     // Commas and newlines would break the workflow-command syntax.
-    const detail = `Survived ${row.mutator}: ${String(row.replacement).replaceAll("\n", " ").slice(0, 120)}`;
+    const mutation = `Survived ${row.mutator}: ${String(row.replacement).replaceAll("\n", " ").slice(0, 100)}`;
+    // The coordinate is a hint, not the anchor: annotations are read long after
+    // the run, and a shifted file makes `line=` point at the wrong code with no
+    // sign of drift. The source text is what survives that.
+    const detail = row.source
+      ? `${mutation} — at: ${String(row.source).replaceAll("\n", " ").trim().slice(0, 120)}`
+      : mutation;
     return `::warning file=${row.module},line=${line},col=${row.startColumn ?? 1},title=Mutation survived::${detail}`;
   });
 }
