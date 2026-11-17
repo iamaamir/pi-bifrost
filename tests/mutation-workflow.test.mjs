@@ -10,10 +10,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isInsideReports, isReportFor, reportsToClear, resolveReportPath, staleReportsFor, strykerArgs } from "../mutation/run.mjs";
+import { isInsideReports, isReportFor, reportingRoot, reportsToClear, resolveReportPath, staleReportsFor, strykerArgs } from "../mutation/run.mjs";
 import {
   ROOT,
   bindingExclusions,
@@ -161,13 +161,17 @@ test("the plan job builds a shard matrix and validates every dispatch input", ()
   assert.throws(() => resolveTargets("nope.ts"), /unknown mutation target/u);
 });
 
-test("the dispatch target list matches the measured targets", () => {
-  // The input is `type: choice`, so a module missing from this list cannot be
-  // dispatched on its own at all — a new target would be unreachable by hand.
+test("the dispatch target is validated against TARGETS instead of duplicated", () => {
+  // A `type: choice` list is a second copy of TARGETS that nothing keeps in
+  // sync, which is how a new target became undispatched-able. The input is free
+  // text and the plan job rejects anything it cannot resolve, naming the valid
+  // targets.
   const section = workflow.slice(workflow.indexOf("workflow_dispatch:"), workflow.indexOf("permissions:"));
   const block = section.slice(section.indexOf("target:"), section.indexOf("shards:"));
-  const listed = [...block.matchAll(/^ {10}- (.+)$/gmu)].map((match) => match[1].trim());
-  assert.deepEqual(listed, ["all", ...targetNames()]);
+  assert.doesNotMatch(block, /type: choice/u, "no static list to drift");
+  assert.doesNotMatch(block, /^ {10}- /mu);
+  assert.match(block, /type: string/u);
+  assert.throws(() => resolveTargets("not-a-target.ts"), /unknown mutation target\(s\): not-a-target\.ts; known: cache\.ts/u);
 });
 
 test("dispatch inputs are bounded, so a typo cannot start an unreasonable run", () => {
@@ -1584,7 +1588,7 @@ test("an unsharded report cannot be merged with a shard of the same module", () 
 
     const { reports, rejected } = readReports(directory);
     assert.equal(reports.length, 0, "no module may be merged from two files claiming one shard");
-    assert.match(rejected[0].reason, /cache\.ts\.json and cache\.ts\.shard0\.json both claim shard 0/u);
+    assert.match(rejected[0].reason, /cache\.ts\.json and cache\.ts\.shard0\.json both claim cache\.ts shard 0 in attempt 0/u);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -1718,6 +1722,8 @@ test("gate and summary agree on every measurement state", () => {
       [],
     ],
     ["a module with zero mutants", [reportFor({})], {}, ["zero-mutants"], []],
+    ["a module whose mutants are all ignored", [reportFor({ Ignored: 5 })], {}, ["no-evaluated-mutants"], []],
+    ["ignored mutants beside evaluated ones", [reportFor({ Killed: 4, Ignored: 6 })], {}, [], []],
     [
       "an aggregate timeout burst with every module inside its own allowance",
       Array.from({ length: 6 }, (_, index) => reportFor({ Killed: 92, Timeout: 8 }, { module: `m${index}.ts` })),
@@ -1869,4 +1875,132 @@ test("a partial --mutate scope must name its artifact", () => {
   const result = attempt(["cache.ts", "--mutate", "cache.ts:1-50"]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /measures only part of cache\.ts; name the artifact with --report/u);
+});
+
+// --- The reporting boundary itself is not user-controlled ---
+
+test("a symlinked reporting root is refused", () => {
+  // `reports/` is gitignored, so it is not part of any commit -- but anything with
+  // write access to the tree can create the link. Without this check, "the
+  // reporting directory" means wherever the link points, and both writes and
+  // cleanup follow it out of the repository.
+  const reportsPath = join(ROOT, "reports");
+  const aside = `${reportsPath}.test-aside-${process.pid}`;
+  const hadReports = existsSync(reportsPath);
+  if (hadReports) renameSync(reportsPath, aside);
+  const outside = mkdtempSync(join(tmpdir(), "mutation-root-escape-"));
+  try {
+    writeFileSync(join(outside, "victim.json"), "do not touch");
+    symlinkSync(outside, reportsPath);
+
+    assert.throws(() => reportingRoot(), /outside the repository/u);
+    assert.throws(() => resolveReportPath("reports/mutation/x.json"), /must name a file under reports\//u);
+    assert.equal(isInsideReports("reports/mutation/x.json"), false);
+    assert.equal(readFileSync(join(outside, "victim.json"), "utf8"), "do not touch");
+  } finally {
+    rmSync(reportsPath, { force: true });
+    if (hadReports) renameSync(aside, reportsPath);
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("the identity covers the measurement's execution inputs", () => {
+  // The population depends on more than the mutated bytes: how Stryker is
+  // configured, how bindings are derived, and which dependency versions resolve.
+  const before = measurementIdentity("cache.ts");
+  for (const file of ["stryker.config.mjs", "mutation/targets.mjs", "package-lock.json"]) {
+    const original = readFileSync(join(ROOT, file));
+    try {
+      writeFileSync(join(ROOT, file), `${original.toString("utf8")}\n// identity probe\n`);
+      assert.notEqual(measurementIdentity("cache.ts"), before, `${file} must affect the identity`);
+    } finally {
+      writeFileSync(join(ROOT, file), original);
+    }
+  }
+  assert.equal(measurementIdentity("cache.ts"), before, "restoring the inputs restores the identity");
+});
+
+// --- Multi-attempt artifacts: one authoritative report per shard ---
+
+const artifactReport = (shard, line, status = "Killed", scope = `cache.ts:${line}-${line}`) => ({
+  files: { "/repo/cache.ts": { mutants: [{
+    id: `${shard}-${line}`, mutatorName: "EqualityOperator", replacement: "!==", status,
+    location: { start: { line, column: 1 }, end: { line, column: 9 } },
+  }] } },
+  bifrost: { measurement: measurementIdentity("cache.ts"), scope },
+});
+
+function artifactFixture(attempts) {
+  // attempts: [{ artifact, name, report }]
+  const directory = mkdtempSync(join(tmpdir(), "mutation-attempts-"));
+  for (const { artifact, name, report } of attempts) {
+    mkdirSync(join(directory, artifact), { recursive: true });
+    writeFileSync(join(directory, artifact, name), JSON.stringify(report));
+  }
+  return directory;
+}
+
+test("a partial re-run reconstructs one measurement from several attempts", () => {
+  // Only shard 1 failed, so "re-run failed jobs" produces attempt 2 for it while
+  // shard 0 stays on attempt 1. Both belong to the same measurement.
+  const directory = artifactFixture([
+    { artifact: "mutation-report-cache.ts-shard0-sha-run-1-attempt-1", name: "cache.ts.shard0.json", report: artifactReport(0, 10) },
+    { artifact: "mutation-report-cache.ts-shard1-sha-run-1-attempt-2", name: "cache.ts.shard1.json", report: artifactReport(1, 90) },
+  ]);
+  try {
+    const { reports, rejected } = readReports(directory);
+    assert.deepEqual(rejected, []);
+    assert.equal(reports.length, 1);
+    assert.equal(reports[0].mutants.length, 2, "both attempts contribute their own shard");
+    assert.deepEqual(reports[0].shardsSeen, [0, 1]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("the newest attempt of one shard wins, deterministically", () => {
+  const directory = artifactFixture([
+    { artifact: "mutation-report-cache.ts-shard0-sha-run-1-attempt-1", name: "cache.ts.shard0.json", report: artifactReport(0, 10, "Survived") },
+    { artifact: "mutation-report-cache.ts-shard0-sha-run-1-attempt-2", name: "cache.ts.shard0.json", report: artifactReport(0, 10, "Killed") },
+  ]);
+  try {
+    const { reports } = readReports(directory);
+    assert.equal(reports[0].mutants.length, 1);
+    assert.equal(reports[0].mutants[0].status, "Killed", "the later attempt is authoritative");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("two reports for one shard in the same attempt are rejected", () => {
+  // Choosing between them would depend on extraction order, which is not a
+  // policy. Ambiguity is refused instead.
+  const directory = artifactFixture([
+    { artifact: "mutation-report-cache.ts-shard0-sha-run-1-attempt-2", name: "cache.ts.shard0.json", report: artifactReport(0, 10) },
+    { artifact: "mutation-report-other-shard0-sha-run-1-attempt-2", name: "cache.ts.shard0.json", report: artifactReport(0, 10) },
+  ]);
+  try {
+    const { reports, rejected } = readReports(directory);
+    assert.equal(reports.length, 0);
+    assert.equal(rejected.length, 2);
+    assert.match(rejected[0].reason, /both claim cache\.ts shard 0 in attempt 2/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a newer attempt measured against different bytes is still rejected", () => {
+  const stale = artifactReport(0, 10);
+  stale.bifrost.measurement = "0".repeat(64);
+  const directory = artifactFixture([
+    { artifact: "mutation-report-cache.ts-shard0-sha-run-1-attempt-1", name: "cache.ts.shard0.json", report: artifactReport(0, 10) },
+    { artifact: "mutation-report-cache.ts-shard0-sha-run-1-attempt-2", name: "cache.ts.shard0.json", report: stale },
+  ]);
+  try {
+    const { reports, rejected } = readReports(directory);
+    assert.equal(reports.length, 0, "recency does not override provenance");
+    assert.match(rejected[0].reason, /measured against different bytes/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

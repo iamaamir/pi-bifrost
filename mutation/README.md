@@ -348,8 +348,9 @@ phantom `CallExpression` mutants).
 
 **Every report carries the measurement it belongs to.** The runner stamps each
 report it writes with a content identity — the module's bytes, the local modules
-it and its bound tests import, and `mutation/config.mjs` — and the summariser
-accepts a report only if
+it and its bound tests import, `mutation/config.mjs`, the binding rules
+(`mutation/targets.mjs`), the Stryker shim and the resolved dependency set
+(`package-lock.json`) — and the summariser accepts a report only if
 that identity matches the current checkout. The identity is per module, because
 a module's population is what one measurement of it covered; a single per-run
 value would either accept everything or reject everything. A report from a
@@ -368,6 +369,20 @@ all of it. Sharded reports may carry ranges — that is what a shard is.
 nothing, so deleting the previous measurement would destroy a real result to make
 room for a report that never exists. It is refused with `--report`, which would
 name that nonexistent file.
+
+**Artifacts are not merged on download.** Each leg uploads its own artifact, and
+the summarise job downloads them with `merge-multiple: false` so every artifact
+keeps its own directory. Flattening would put two attempts of one shard on the
+same filename and leave the survivor to extraction order. The reporter reads the
+attempt from the artifact path and takes the newest attempt per `(module, shard)`;
+two reports for one shard *within* an attempt are rejected as ambiguous rather
+than resolved by order. That keeps "re-run failed jobs" working: untouched legs
+stay on attempt 1 while retried legs move to attempt 2.
+
+**The reporting root cannot leave the repository.** The default `reports/` must
+resolve inside the checkout; a symlinked root pointing elsewhere is refused
+before anything is created, written or deleted. A caller that passes its own root
+is using that root as its trust anchor.
 
 **Report output is confined to `reports/`, on resolved paths.** The boundary is
 checked after resolving symlinks in every component that exists, so a path spelled

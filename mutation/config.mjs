@@ -369,6 +369,13 @@ export function moduleDiagnostics(module, timeoutOverride = null) {
     // nothing, which is a failed measurement, not a perfect score.
     return [note("zero-mutants", BLOCKING, `${name}: reported zero mutants, so nothing in it was measured`)];
   }
+  // A report can carry mutants and still evaluate none of them: every one
+  // `Ignored` means Stryker skipped the whole module, so the population the run
+  // claims is empty. A non-zero `total` must not hide that.
+  const evaluated = Number(module?.evaluated ?? total);
+  if (evaluated === 0) {
+    return [note("no-evaluated-mutants", BLOCKING, `${name}: every one of its ${total} mutants is Ignored, so nothing in it was evaluated`)];
+  }
   const timeouts = Number(module?.Timeout ?? 0);
   const timeoutsAllowed = timeoutOverride ?? timeoutTolerance(total);
   if (timeouts > timeoutsAllowed) {
