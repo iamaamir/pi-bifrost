@@ -5,7 +5,7 @@
 | Command | Behavior |
 |---------|----------|
 | `/bifrost` | Open dashboard and quick actions |
-| `/bifrost init` | Refresh Pi's model catalog, reuse probe results from the last hour or probe before proposing pools, then ask once before saving; pass `-f` to force fresh probes, or `--write` to save without the confirm in scripts |
+| `/bifrost init` | Refresh Pi's model catalog, reuse probe results from the last hour or probe before proposing pools, then ask once before saving; pass `-f` to force fresh probes, or `--write` to save without the confirm |
 | `/bifrost probe` | Send a tiny request to each registry model and report availability; usage may apply |
 | `/bifrost preview <prompt>` | Show the route without generating; leading `--offline` uses only local cache, rules and the default tier; `--json` keeps the existing report, and `--trace` adds a content-free summary. Without `--offline`, an enabled classifier may receive the prompt. A tier name in the prompt is not applied |
 | `/bifrost on` | Enable routing policy |
@@ -47,16 +47,19 @@ Init remains available to refresh the catalog or reconcile model lists. It reuse
 
 Init displays its save target. It saves to project `.pi/bifrost.json` by default, or to user `~/.pi/agent/bifrost.json` when you pass `-g`.
 
-Every init run ends on one line: `init: <outcome>. <what changed>. <one next step>`. For example:
+Every init run ends on one line: `init: <outcome>. <what changed>. <one next step>`. In a TUI that line is an `init` notice card and it is the last thing the run renders. Headless prints it on stderr with the `[bifrost]` prefix every Bifrost diagnostic carries. For example:
 
 ```text
-init: saved. Saved .pi/bifrost.json and reloaded. Bifrost is active with 3 tiers. Send a prompt to try it.
-init: declined. Nothing was saved. Probe results are cached for an hour; run /bifrost init again to review and save.
-init: stopped before saving. Nothing was saved; probe results are cached for an hour. Run /bifrost init in the TUI, or pass --write to save without the confirm.
-init: failed — no working models. Nothing was saved. Check API keys, credits, and network, then retry.
+[bifrost] init: saved. Saved .pi/bifrost.json and reloaded. Bifrost is active with 3 tiers. Send a prompt to try it.
+[bifrost] init: saved. Saved .pi/bifrost.json and reloaded. Bifrost is configured with 3 tiers, but routing is off. Run /bifrost on to route prompts.
+[bifrost] init: declined. Nothing was saved; recent probe results are reused for an hour unless you pass -f or the catalog changes. Run /bifrost init again to review and save.
+[bifrost] init: stopped before saving. Nothing was saved; recent probe results are reused for an hour unless you pass -f or the catalog changes. Run /bifrost init in the TUI, or pass --write to save without the confirm.
+[bifrost] init: failed — no working models. Nothing was saved. Check API keys, credits, and network, then retry.
 ```
 
-A host without a TUI cannot answer the save question. Init still probes and shows the review there, then stops without saving unless you pass `--write`.
+Saving does not switch routing on. If `/bifrost off` is in effect, the saved line says routing is off and names `/bifrost on` as the next step.
+
+A host without a TUI cannot answer the save question. Init still probes and shows the review there, then stops without saving unless you pass `--write`. `--write` skips the confirmation in every mode, not only headless.
 
 If a proposed project pool would replace a handwritten pool in your global or workspace config with different models, init stops without saving. Pools that init generated before (tracked by an ownership receipt) and empty pools do not block init. Edit the existing source or review a workspace update with `/bifrost config reconcile --source workspace`; use `-g` when you intend to update the global source.
 

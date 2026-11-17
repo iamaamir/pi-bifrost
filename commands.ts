@@ -157,7 +157,7 @@ import { hasExplicitExtensionRoutingFile, hasUserBootstrapFiles } from "./auto-s
 import { getCostReportData } from "./cost-report.ts";
 import { formatCostText, showCostView } from "./ui/cost-view.ts";
 import { Text } from "@earendil-works/pi-tui";
-import { log as logImportant } from "./ui/notice.ts";
+import { log as logImportant, type NoticeLevel } from "./ui/notice.ts";
 import { setProbeProgress } from "./ui/probe-progress.ts";
 
 // ── Mutable state shared across commands ────────────────────
@@ -363,16 +363,16 @@ export function uiDone(ctx: ExtensionContext) {
 }
 
 /**
- * Every `/bifrost init` exit ends on one line: what happened, what changed, and
- * at most one next step. The notice card is the terminal state; headless keeps
- * the same shape on stderr.
+ * Reports one `/bifrost init` outcome: what happened, what changed, and at
+ * most one next step. It appends that line as the `init` notice card, which is
+ * the terminal state of the run; headless prints the same shape on stderr.
  */
-function initFooter(
+function reportInitOutcome(
   ctx: ExtensionContext,
   outcome: string,
   changed: string,
   next: string | undefined,
-  level: "info" | "success" | "warning" | "error",
+  level: NoticeLevel,
 ): void {
   logImportant(ctx, "init", `${outcome}. ${next ? `${changed} ${next}` : changed}`, level);
 }
@@ -1391,7 +1391,7 @@ async function handleConfigCommand(
 async function handleInit(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
   const tokens = args.trim().split(/\s+/).slice(1);
   if (tokens.some((token) => !["-f", "--write", "-g"].includes(token))) {
-    initFooter(
+    reportInitOutcome(
       ctx,
       "not started",
       "Nothing was read or written.",
@@ -1453,7 +1453,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       );
       if (outcome === "aborted") {
         state.forceRegistryRefresh = true;
-        initFooter(
+        reportInitOutcome(
           ctx,
           "cancelled",
           "Nothing was saved.",
@@ -1544,7 +1544,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
     }
     if (probeRun.cancelled || ctx.signal?.aborted) {
-      initFooter(
+      reportInitOutcome(
         ctx,
         "cancelled",
         "Nothing was saved.",
@@ -1586,7 +1586,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     log(ctx, `Probe complete: ok=${ok} error=${errors} timeout=${timeouts} skipped=${skipped}.`);
   }
   if (probeLoaded && workingModels.length === 0) {
-    initFooter(
+    reportInitOutcome(
       ctx,
       "failed — no working models",
       "Nothing was saved.",
@@ -1646,7 +1646,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   }
 
   if (probeLoaded && Object.values(models).every((pool) => pool.length === 0)) {
-    initFooter(
+    reportInitOutcome(
       ctx,
       "failed — no working models",
       "Nothing was saved.",
@@ -1670,7 +1670,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   try {
     source = readReconciliationSource(selectedSource);
   } catch {
-    initFooter(
+    reportInitOutcome(
       ctx,
       "blocked",
       "Nothing was saved; the current config could not be read safely.",
@@ -1687,7 +1687,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         throw new Error("invalid config root");
       sourceConfig = parsed as Record<string, unknown>;
     } catch {
-      initFooter(
+      reportInitOutcome(
         ctx,
         "blocked",
         "Nothing was saved; the selected config could not be parsed.",
@@ -1712,7 +1712,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       inheritedTiers = inherited.tierNames;
       const shadowedTiers = findShadowedTiers(models, sourceModels, inherited.effective);
       if (shadowedTiers.length > 0) {
-        initFooter(
+        reportInitOutcome(
           ctx,
           "blocked",
           `Nothing was saved; inherited model pools would be shadowed (${shadowedTiers.join(", ")}).`,
@@ -1722,7 +1722,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         return;
       }
     } catch {
-      initFooter(
+      reportInitOutcome(
         ctx,
         "blocked",
         "Nothing was saved; your inherited config could not be read safely.",
@@ -1933,7 +1933,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
             nextConfigBytes.byteLength > MAX_CONFIG_SOURCE_BYTES ||
             !prospectiveConfigInstallable(source.source, nextConfigBytes, state)
           ) {
-            initFooter(
+            reportInitOutcome(
               ctx,
               "blocked",
               "Nothing was saved; the proposed config is invalid or too large.",
@@ -1956,7 +1956,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           changes = [];
         } else {
           if (source.ownershipBytes !== null) {
-            initFooter(
+            reportInitOutcome(
               ctx,
               "unchanged",
               "Nothing changed; the pools already match what init would write.",
@@ -1983,7 +1983,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         }
       } else {
         if (plan.status === "advisory") {
-          initFooter(
+          reportInitOutcome(
             ctx,
             "paused",
             "Nothing was saved; the model inventory is incomplete or stale.",
@@ -1991,7 +1991,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
             "warning",
           );
         } else if (plan.reason === "no_changes") {
-          initFooter(
+          reportInitOutcome(
             ctx,
             "unchanged",
             "Nothing changed; the pools already match what init would write.",
@@ -1999,7 +1999,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
             "info",
           );
         } else {
-          initFooter(
+          reportInitOutcome(
             ctx,
             "blocked",
             plan.reason === "source_invalid"
@@ -2032,7 +2032,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         nextConfigBytes.byteLength > MAX_CONFIG_SOURCE_BYTES ||
         !prospectiveConfigInstallable(source.source, nextConfigBytes, state)
       ) {
-        initFooter(
+        reportInitOutcome(
           ctx,
           "blocked",
           "Nothing was saved; the proposed config is invalid or too large.",
@@ -2046,7 +2046,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     }
   } else {
     if (source.ownershipBytes !== null) {
-      initFooter(
+      reportInitOutcome(
         ctx,
         "blocked",
         "Nothing was saved; a saved ownership record exists without its config.",
@@ -2057,7 +2057,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     }
     const ownership = buildInitOwnershipReceipt(models);
     if (!ownership) {
-      initFooter(
+      reportInitOutcome(
         ctx,
         "blocked",
         "Nothing was saved; the ownership record for this init could not be created.",
@@ -2078,7 +2078,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       ownershipBytes.byteLength > 5_000_000 ||
       !prospectiveConfigInstallable(source.source, configBytes, state)
     ) {
-      initFooter(
+      reportInitOutcome(
         ctx,
         "blocked",
         "Nothing was saved; the proposed config is invalid or too large.",
@@ -2186,10 +2186,10 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
 
   const writeWithoutPrompt = args.trim().split(/\s+/).includes("--write");
   if (!ctx.hasUI && !writeWithoutPrompt) {
-    initFooter(
+    reportInitOutcome(
       ctx,
       "stopped before saving",
-      "Nothing was saved; probe results are cached for an hour.",
+      "Nothing was saved; recent probe results are reused for an hour unless you pass -f or the catalog changes.",
       "Run /bifrost init in the TUI, or pass --write to save without the confirm.",
       "warning",
     );
@@ -2199,20 +2199,22 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   const ok =
     writeWithoutPrompt ||
     (await ctx.ui.confirm("Save Bifrost setup?", `Apply the changes shown above?`));
+  // The review card is stale from here on: every remaining exit either saves or
+  // reports why not, and the footer card must be the terminal state.
+  clearBifrostWidgets(ctx);
   if (!ok) {
-    if (ctx.mode === "tui" && ctx.hasUI) ctx.ui.setWidget("bifrost-output", []);
-    initFooter(
+    reportInitOutcome(
       ctx,
       "declined",
-      "Nothing was saved.",
-      "Probe results are cached for an hour; run /bifrost init again to review and save.",
+      "Nothing was saved; recent probe results are reused for an hour unless you pass -f or the catalog changes.",
+      "Run /bifrost init again to review and save.",
       "info",
     );
     return;
   }
 
   if (ctx.signal?.aborted) {
-    initFooter(
+    reportInitOutcome(
       ctx,
       "cancelled",
       "The reviewed update was not saved.",
@@ -2254,7 +2256,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     currentKeys.length !== plannedKeys.length ||
     currentKeys.some((key, index) => key !== plannedKeys[index])
   ) {
-    initFooter(
+    reportInitOutcome(
       ctx,
       "stale review",
       "Nothing was saved; Pi's model inventory changed while awaiting confirmation.",
@@ -2267,7 +2269,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   try {
     currentSource = readReconciliationSource(selectedSource);
   } catch {
-    initFooter(
+    reportInitOutcome(
       ctx,
       "blocked",
       "Nothing was saved; the config destination could not be checked.",
@@ -2279,7 +2281,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   try {
     for (const { path, text } of inheritedSources) {
       if (readInheritedConfigSnapshot(path) !== text) {
-        initFooter(
+        reportInitOutcome(
           ctx,
           "stale review",
           "Nothing was saved; your inherited config changed while awaiting confirmation.",
@@ -2290,7 +2292,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       }
     }
   } catch {
-    initFooter(
+    reportInitOutcome(
       ctx,
       "blocked",
       "Nothing was saved; your inherited config could not be checked.",
@@ -2300,7 +2302,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     return;
   }
   if (currentSource.source !== source.source || currentSource.configPath !== source.configPath) {
-    initFooter(
+    reportInitOutcome(
       ctx,
       "stale review",
       "Nothing was saved; the config destination changed while awaiting confirmation.",
@@ -2327,15 +2329,15 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     }
   } catch (error) {
     const locked = error instanceof ReconciliationStoreError && error.code === "locked";
-    initFooter(
+    reportInitOutcome(
       ctx,
       locked ? "blocked by a lock" : "failed",
       locked
         ? "Nothing was saved; another Bifrost writer holds the lock."
-        : "Nothing was saved; the reviewed update could not be committed and existing files were preserved.",
+        : `The reviewed update to ${source.configPath} could not be confirmed.`,
       locked
         ? "Verify no other Bifrost writer is active and remove only exact stale lock files, then retry."
-        : "Retry; if it fails again, run /bifrost config reconcile --recover.",
+        : "Inspect the file and run /bifrost config reconcile --recover before retrying.",
       "error",
     );
     return;
@@ -2344,11 +2346,11 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   // Auto-reload so the extension picks up the new config immediately.
   const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
   if (!installReloadedConfig(state, loadedConfig, ctx)) {
-    initFooter(
+    reportInitOutcome(
       ctx,
       "failed",
       "The configuration was written but could not be reloaded.",
-      "Run /bifrost reload to activate it.",
+      "Fix the diagnostics above, then run /bifrost reload.",
       "error",
     );
     return;
@@ -2372,14 +2374,16 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   });
 
   const tierCount = Object.keys(state.config.models ?? {}).length;
-  // The footer is the terminal state: drop the review/progress widgets so the
-  // card is the last thing the user sees.
-  clearBifrostWidgets(ctx);
-  initFooter(
+  const tiers = `${tierCount} tier${tierCount === 1 ? "" : "s"}`;
+  reportInitOutcome(
     ctx,
     "saved",
-    `Saved ${source.configPath} and reloaded. Bifrost is active with ${tierCount} tier${tierCount === 1 ? "" : "s"}.`,
-    "Send a prompt to try it.",
+    // Saving does not switch routing on: /bifrost off persists across reloads,
+    // so report the state the user is actually in.
+    state.enabled
+      ? `Saved ${source.configPath} and reloaded. Bifrost is active with ${tiers}.`
+      : `Saved ${source.configPath} and reloaded. Bifrost is configured with ${tiers}, but routing is off.`,
+    state.enabled ? "Send a prompt to try it." : "Run /bifrost on to route prompts.",
     "success",
   );
 }
