@@ -214,14 +214,18 @@ test("targets the intended function when its body opens with a comment", () => {
 });
 
 test("skips an object type literal in the return type", () => {
-  const signature = "  function turnUserBoundary(ctx: ExtensionContext, event: TurnEndEvent): { entryId: string; message: object } | undefined {";
+  // Derive the signature from the real source so the anchor survives both
+  // single-line and rewrapped formatting of the same declaration.
+  const fnStart = REAL_INDEX.indexOf("  function turnUserBoundary(");
+  assert.notEqual(fnStart, -1, "missing turnUserBoundary declaration");
+  const bodyBrace = REAL_INDEX.indexOf("| undefined {", fnStart) + "| undefined {".length - 1;
+  const signature = REAL_INDEX.slice(fnStart, bodyBrace + 1);
   const mutant = injectGuardStatement(REAL_INDEX, "turnUserBoundary", "return undefined;");
   assertInsideGuard(mutant, signature, "return undefined;");
-  assert.ok(mutant.includes(": { entryId: string; message: object } | undefined {"),
+  assert.ok(mutant.startsWith(signature, fnStart),
     "the return-type annotation must be unchanged");
-  const brace = REAL_INDEX.indexOf(signature) + signature.length - 1;
   assert.equal(mutant,
-    `${REAL_INDEX.slice(0, brace + 1)}\n    return undefined;${REAL_INDEX.slice(brace + 1)}`,
+    `${REAL_INDEX.slice(0, bodyBrace + 1)}\n    return undefined;${REAL_INDEX.slice(bodyBrace + 1)}`,
     "the fault must be inserted at the body brace, not inside the annotation");
 });
 
