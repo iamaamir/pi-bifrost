@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isInsideReports, isReportFor, reportsToClear, resolveReportPath, staleReportsFor } from "../mutation/run.mjs";
+import { isInsideReports, isReportFor, reportsToClear, resolveReportPath, staleReportsFor, strykerArgs } from "../mutation/run.mjs";
 import {
   ROOT,
   bindingExclusions,
@@ -932,7 +932,7 @@ test("the tolerance override reaches the gate through the written payload", () =
       schemaVersion: "1.0",
       framework: { name: "StrykerJS", version: "10.0.0" },
       thresholds: { high: 0, low: 0, break: null },
-      bifrost: { measurement: measurementIdentity("cache.ts") },
+      bifrost: { measurement: measurementIdentity("cache.ts"), scope: "cache.ts" },
       files: {
         "/repo/cache.ts": {
           mutants: Array.from({ length: 100 }, (_, index) => ({
@@ -1321,7 +1321,7 @@ function stamp(directory, name) {
   const path = join(directory, name);
   const report = JSON.parse(readFileSync(path, "utf8"));
   const module = Object.keys(report.files)[0].split("/").pop();
-  report.bifrost = { measurement: measurementIdentity(module) };
+  report.bifrost = { measurement: measurementIdentity(module), scope: module };
   writeFileSync(path, JSON.stringify(report));
 }
 
@@ -1336,7 +1336,7 @@ const strykerReport = (module, statuses) => ({
   schemaVersion: "1.0",
   framework: { name: "StrykerJS", version: "10.0.0" },
   thresholds: { high: 0, low: 0, break: null },
-  bifrost: { measurement: measurementIdentity(module) },
+  bifrost: { measurement: measurementIdentity(module), scope: module },
   files: {
     [`/repo/${module}`]: {
       mutants: statuses.map((status, index) => ({
@@ -1598,7 +1598,7 @@ test("a report measured against different bytes is rejected, not merged", () => 
         id: "1", mutatorName: "EqualityOperator", replacement: "!==", status: "Killed",
         location: { start: { line: 10, column: 1 }, end: { line: 10, column: 9 } },
       }] } },
-      bifrost: { measurement: "0".repeat(64) },
+      bifrost: { measurement: "0".repeat(64), scope: "cache.ts" },
     };
     writeFileSync(join(directory, "cache.ts.json"), JSON.stringify(report));
 
@@ -1784,4 +1784,89 @@ test("gate and summary agree on every measurement state", () => {
   const source = readFileSync(new URL("../mutation/config.mjs", import.meta.url), "utf8");
   const declared = new Set([...source.matchAll(/note\(\s*"([a-z-]+)",\s*(?:BLOCKING|ADVISORY)/g)].map((match) => match[1]));
   assert.deepEqual([...declared].sort(), [...emitted].sort(), "every declared diagnostic has a truth-table row");
+});
+
+// --- The measured scope, and the identity that covers it ---
+
+test("a partial --mutate scope cannot stand in for the whole module", () => {
+  // `<module>.json` is shard 0 of 1, so a one-shard plan treats it as the whole
+  // module. If the run behind it only mutated a line range, that score omits
+  // most of the module while looking complete.
+  const directory = mkdtempSync(join(tmpdir(), "mutation-partial-"));
+  try {
+    const report = {
+      files: { "/repo/cache.ts": { mutants: [{
+        id: "1", mutatorName: "EqualityOperator", replacement: "!==", status: "Killed",
+        location: { start: { line: 10, column: 1 }, end: { line: 10, column: 9 } },
+      }] } },
+      bifrost: { measurement: measurementIdentity("cache.ts"), scope: "cache.ts:1-50" },
+    };
+    writeFileSync(join(directory, "cache.ts.json"), JSON.stringify(report));
+
+    const { reports, rejected } = readReports(directory);
+    assert.equal(reports.length, 0, "a partial measurement must not be scored as the whole module");
+    assert.match(rejected[0].reason, /covers only cache\.ts:1-50/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a sharded report may carry a line-range scope", () => {
+  // Sharding is line ranges by design; only an *unsharded* name has to mean the
+  // whole module.
+  const directory = mkdtempSync(join(tmpdir(), "mutation-shard-scope-"));
+  try {
+    const report = (range, line) => ({
+      files: { "/repo/cache.ts": { mutants: [{
+        id: range, mutatorName: "EqualityOperator", replacement: "!==", status: "Killed",
+        location: { start: { line, column: 1 }, end: { line, column: 9 } },
+      }] } },
+      bifrost: { measurement: measurementIdentity("cache.ts"), scope: `cache.ts:${range}` },
+    });
+    writeFileSync(join(directory, "cache.ts.shard0.json"), JSON.stringify(report("1-140", 10)));
+    writeFileSync(join(directory, "cache.ts.shard1.json"), JSON.stringify(report("120-244", 90)));
+
+    const { reports, rejected } = readReports(directory);
+    assert.deepEqual(rejected, []);
+    assert.equal(reports[0].mutants.length, 2);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("the identity covers the local modules the target imports", () => {
+  // `cache.ts` imports `storage.ts`. If a helper changed and the identity did
+  // not, an old report would be accepted against new code.
+  const helper = join(ROOT, "storage.ts");
+  const original = readFileSync(helper);
+  const before = measurementIdentity("cache.ts");
+  try {
+    writeFileSync(helper, `${original.toString("utf8")}\n// mutation identity probe\n`);
+    assert.notEqual(measurementIdentity("cache.ts"), before, "a changed helper must change the identity");
+  } finally {
+    writeFileSync(helper, original);
+  }
+  assert.equal(measurementIdentity("cache.ts"), before, "and restoring it must restore the identity");
+});
+
+test("both Stryker branches share one argument builder", () => {
+  // A dry run used to build its own argument list and silently drop the worker
+  // limit, so `--dry-run --concurrency 1` used Stryker's default worker count.
+  assert.deepEqual(strykerArgs({ concurrency: "1" }, { dryRun: true }), ["stryker", "run", "--dryRunOnly", "--concurrency", "1"]);
+  assert.deepEqual(strykerArgs({ concurrency: "4" }), ["stryker", "run", "--concurrency", "4"]);
+  assert.deepEqual(strykerArgs({}), ["stryker", "run"], "no concurrency means no flag");
+});
+
+test("a partial --mutate scope must name its artifact", () => {
+  const attempt = (args) => {
+    try {
+      execFileSync(process.execPath, ["mutation/run.mjs", ...args], { cwd: ROOT, encoding: "utf8", stdio: "pipe" });
+      return { status: 0, stderr: "" };
+    } catch (error) {
+      return { status: error.status, stderr: String(error.stderr) };
+    }
+  };
+  const result = attempt(["cache.ts", "--mutate", "cache.ts:1-50"]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /measures only part of cache\.ts; name the artifact with --report/u);
 });

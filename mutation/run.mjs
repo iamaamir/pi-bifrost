@@ -166,6 +166,20 @@ export function isInsideReports(path, reportsRoot = REPORTS_ROOT) {
 }
 
 /**
+ * The Stryker invocation for one run.
+ *
+ * Both branches build the same arguments; only `--dryRunOnly` differs. Keeping
+ * them in one function is why a dry run cannot quietly drop `--concurrency`,
+ * which it did when the branch was written out separately.
+ */
+export function strykerArgs(options, { dryRun = false } = {}) {
+  const args = ["stryker", "run"];
+  if (dryRun) args.push("--dryRunOnly");
+  if (options.concurrency) args.push("--concurrency", options.concurrency);
+  return args;
+}
+
+/**
  * Resolve an explicit `--report` path, confined to the reporting directory.
  *
  * The flag used to accept any path inside the checkout, which is unsafe in two
@@ -225,6 +239,9 @@ export function stampReport(run, reportPath, identity = measurementIdentity(run.
   if (!report || typeof report !== "object" || report.files === undefined) return false;
   report.bifrost = {
     measurement: identity,
+    // What was actually mutated. An unsharded report must cover the whole
+    // module; a line range is partial and the summariser checks it.
+    scope: run.mutate,
   };
   writeFileSync(reportPath, JSON.stringify(report));
   return true;
@@ -324,6 +341,17 @@ function main() {
     // report names ambiguous.
     throw new Error("--shards applies to exactly one target");
   }
+  if (options.mutate !== null) {
+    // A scope is one module's scope, and a range is not the whole module. If a
+    // partial run were allowed to write `<target>.json`, a one-shard plan would
+    // accept it as complete and publish a score over part of the module.
+    if (targets.length !== 1) throw new Error("--mutate applies to exactly one target");
+    if (options.mutate !== targets[0] && options.report === null) {
+      throw new Error(
+        `--mutate ${options.mutate} measures only part of ${targets[0]}; name the artifact with --report so a partial result is not stored as the whole module`,
+      );
+    }
+  }
   if (options.report !== null) {
     // One explicit output file has to mean one measurement. Previously the flag
     // was silently ignored unless --mutate was also given, and ignored entirely
@@ -418,7 +446,7 @@ function main() {
       // future Stryker writes something anyway.
       const tempReport = join(ROOT, ".stryker-tmp", `dry-run-${process.pid}-${Math.random().toString(36).slice(2)}.json`);
       mkdirSync(dirname(tempReport), { recursive: true });
-      const result = spawnSync("npx", ["stryker", "run", "--dryRunOnly"], {
+      const result = spawnSync("npx", strykerArgs(options, { dryRun: true }), {
         cwd: ROOT,
         stdio: "inherit",
         env: {
@@ -437,8 +465,11 @@ function main() {
       if (result.status !== 0) failed.push(run.label);
       continue;
     }
-    const args = ["stryker", "run"];
-    if (options.concurrency) args.push("--concurrency", options.concurrency);
+    const args = strykerArgs(options);
+    // Captured before Stryker starts, because Stryker measures its sandbox copy.
+    // Editing the module or a bound test during a long run would otherwise stamp
+    // the *new* bytes onto results measured from the old ones.
+    const identity = measurementIdentity(run.target);
     const result = spawnSync("npx", args, {
       cwd: ROOT,
       stdio: "inherit",
@@ -459,7 +490,19 @@ function main() {
     // Every report that reaches the summariser is stamped with the measurement
     // it belongs to. An unstamped report is rejected there, so a run that
     // cannot record its provenance is a failed measurement, not a stale one.
-    if (!stampReport(run, run.reportPath)) failed.push(run.label);
+    let stamped = false;
+    try {
+      if (measurementIdentity(run.target) !== identity) {
+        console.error(
+          `\nerror: ${run.target} inputs changed while it was being measured; discarding ${run.reportName} rather than stamping it with bytes it did not measure`,
+        );
+      } else {
+        stamped = stampReport(run, run.reportPath, identity);
+      }
+    } catch (error) {
+      console.error(`\nerror: could not confirm ${run.target} inputs after the run: ${error.message}`);
+    }
+    if (!stamped) failed.push(run.label);
   }
   if (failed.length > 0) {
     console.error(`\nmutation run failed for: ${failed.join(", ")}`);
