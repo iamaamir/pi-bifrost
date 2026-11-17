@@ -394,6 +394,13 @@ rejected if an unsharded report carries a line-range scope: a one-shard plan wou
 otherwise publish a score over part of a module as though it were all of it.
 Sharded reports may carry ranges, because that is what a shard is.
 
+**A shard's declared range must equal the plan's range for its index.** The
+plan is derived from the module and the requested shard count, never from the
+files present, so a truncated, extended, swapped or out-of-range shard is
+rejected rather than merged. Overlap between adjacent planned ranges is
+preserved and deduplicated by mutant identity; conflicting verdicts for one
+mutant block the measurement.
+
 **Artifacts stay separate until selection.** The summarise job downloads with
 `merge-multiple: false`, so each artifact keeps a directory named after itself —
 which carries the attempt. The reporter takes the newest attempt per

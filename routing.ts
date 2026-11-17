@@ -891,10 +891,25 @@ const BACKTRACKING_PROBE_TIMEOUT_MS = 500;
  * judged differently from a Node-hosted run. Production runs on Node, so the
  * probe pins Node and the verdict is the same everywhere.
  *
- * `BIFROST_PROBE_NODE` overrides the binary. A host without `node` on PATH falls
- * back to the hosting runtime rather than losing regex rules entirely.
+ * A Node host therefore probes with its own binary (`process.execPath`), which
+ * also means no PATH lookup: a substituted `node` earlier on PATH could answer
+ * "safe" for every pattern and silently disable this defense. A non-Node host
+ * (Bun, Deno) has no Node binary to reuse, so it looks up `node`; if that is
+ * absent the probe falls back to the hosting runtime rather than losing regex
+ * rules entirely. `BIFROST_PROBE_NODE` overrides the binary in either case.
  */
 const BACKTRACKING_PROBE_NODE_ENV = "BIFROST_PROBE_NODE";
+
+/** The binary the backtracking probe runs under. */
+function probeRuntime(): string {
+  const override = process.env[BACKTRACKING_PROBE_NODE_ENV];
+  if (override) return override;
+  const versions = process.versions as Record<string, string | undefined>;
+  // Under Node, the hosting binary is the production engine. Resolving `node`
+  // through PATH would let the environment choose the verifier.
+  if (!versions.bun && !versions.deno) return process.execPath;
+  return "node";
+}
 const BACKTRACKING_CANARIES = [
   "a".repeat(10) + "b", "a".repeat(14) + "b", "a".repeat(18) + "b",
   "a".repeat(20) + "b", "a".repeat(22) + "b", "a".repeat(24) + "b",
@@ -1067,7 +1082,7 @@ function verifyRulePatterns(patterns: readonly string[]): void {
       maxBuffer: Math.max(1024, batch.length * 4),
       env: { ...process.env, NODE_OPTIONS: "" },
     };
-    const probeNode = process.env[BACKTRACKING_PROBE_NODE_ENV] ?? "node";
+    const probeNode = probeRuntime();
     let result = spawnSync(probeNode, probeArgs, probeOptions);
     // A host without `node` on PATH falls back to the hosting runtime, so regex
     // rules keep working. Only the engine-stability guarantee is lost.
