@@ -3666,7 +3666,7 @@ describe("command aliases", () => {
       );
       assert.equal(
         notices.find((notice) => notice.includes("init: declined.")),
-        "info:init: declined. Nothing was saved. Probe results are cached for an hour; run /bifrost init again to review and save.",
+        "info:init: declined. Nothing was saved; recent probe results are reused for an hour unless you pass -f or the catalog changes. Run /bifrost init again to review and save.",
       );
       assert.ok(
         // notify() has no "success" type, so a saved footer arrives as info there.
@@ -3680,6 +3680,34 @@ describe("command aliases", () => {
         ),
         JSON.stringify(notices),
       );
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not claim routing is active after saving while it is off", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-footer-off-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      // /bifrost off persists enabled:false, and init reloads that state.
+      writeFileSync(join(tempDir, ".pi", "bifrost-state.json"), JSON.stringify({ enabled: false }));
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      const state = makeState();
+      await createCommandRouter(state as never)("init --write", ctx as never);
+      const notices = calls
+        .filter((call) => call.kind === "notify")
+        .map((call) => String(call.value));
+      assert.equal((state as { enabled?: boolean }).enabled, false, "init must not switch routing on");
+      const saved = notices.find((notice) => notice.includes("init: saved."));
+      assert.ok(saved?.includes("but routing is off"), JSON.stringify(notices));
+      assert.ok(saved?.endsWith("Run /bifrost on to route prompts."), JSON.stringify(notices));
+      assert.ok(!saved?.includes("Bifrost is active"), JSON.stringify(notices));
     } finally {
       process.chdir(previousCwd);
       rmSync(tempDir, { recursive: true, force: true });
