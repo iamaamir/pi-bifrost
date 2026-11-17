@@ -818,7 +818,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.deepEqual(saved.classifier.typesafe, { timeoutMs: 1234, maxAttempts: 2, debug: true, metrics: { enabled: false } });
       assert.deepEqual(saved.classifier.piNative, { timeoutMs: 2345, maxAttempts: 2, metrics: { enabled: false } });
       assert.deepEqual(saved.retained, { owner: "user" });
-      assert.match(result.stdout + result.stderr, /unverified membership preserved/u);
+      assert.match(result.stdout + result.stderr, /unverified models kept/u);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
 
