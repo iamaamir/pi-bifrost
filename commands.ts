@@ -4051,7 +4051,7 @@ function persistBootstrapConfig(
     logImportant(
       ctx,
       "Classifier update blocked",
-      "An ownership receipt exists without its config. No files were changed.",
+      "An ownership file exists without its config. No files were changed.",
       "error",
     );
     return false;
