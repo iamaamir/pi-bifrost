@@ -536,7 +536,8 @@ test("a report directory becomes a per-module summary with a survivor extract", 
     const rows = survivorRows(reports);
     assert.equal(rows.length, 1);
     assert.deepEqual(Object.keys(rows[0]).sort(), [
-      "endColumn", "endLine", "module", "mutantId", "mutator", "replacement", "startColumn", "startLine",
+      "coveredBy", "endColumn", "endLine", "module", "mutantId", "mutator", "replacement",
+      "startColumn", "startLine", "testsCompleted",
     ].sort());
 
     const markdown = summary({ reports, expectedTargets: ["cache.ts"] });
@@ -1929,6 +1930,87 @@ test("the identity covers the local modules the target imports", () => {
     );
   assert.notEqual(digestWith("export const a = 1;\n"), digestWith("export const a = 2;\n"));
   assert.equal(digestWith("same"), digestWith("same"), "the digest is reproducible");
+});
+
+test("a survivor row names the tests that ran against it", () => {
+  // The score cannot distinguish "nothing asserts this" from "a test runs but
+  // does not discriminate"; both look like a survivor. The covering test names
+  // are the only evidence that separates them, and the first plan written from a
+  // bundle without them proposed a test that the mutant already satisfied.
+  const directory = mkdtempSync(join(tmpdir(), "mutation-coverage-"));
+  try {
+    writeFileSync(join(directory, "cache.json"), JSON.stringify({
+      files: { "/repo/cache.ts": { mutants: [{
+        id: "5", mutatorName: "Regex", replacement: "/x/", status: "Survived",
+        testsCompleted: 2, coveredBy: ["0", "1"],
+        location: { start: { line: 28, column: 32 }, end: { line: 28, column: 49 } },
+      }] } },
+      testFiles: {
+        "tests/cache.test.ts": {
+          tests: [
+            { id: "0", name: "tests/cache.test.ts > reads > returns a value" },
+            { id: "1", name: "tests/cache.test.ts > reads > ignores a missing key" },
+          ],
+        },
+      },
+    }));
+    stamp(directory, "cache.json");
+
+    const { reports } = readReports(directory);
+    const [row] = survivorRows(reports);
+    assert.equal(row.testsCompleted, 2);
+    assert.deepEqual(row.coveredBy, [
+      "tests/cache.test.ts > reads > returns a value",
+      "tests/cache.test.ts > reads > ignores a missing key",
+    ]);
+    assert.equal(row.coveredBy.length, row.testsCompleted, "ids resolve to real names, not placeholders");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("coverage is absent, not invented, when the report carries none", () => {
+  const directory = mkdtempSync(join(tmpdir(), "mutation-no-coverage-"));
+  try {
+    writeFileSync(join(directory, "cache.json"), JSON.stringify({
+      files: { "/repo/cache.ts": { mutants: [{
+        id: "1", mutatorName: "Regex", replacement: "/x/", status: "Survived",
+        location: { start: { line: 1, column: 1 }, end: { line: 1, column: 9 } },
+      }] } },
+    }));
+    stamp(directory, "cache.json");
+    const [row] = survivorRows(readReports(directory).reports);
+    assert.equal(row.coveredBy, null, "no coverage must not read as 'zero tests covered it'");
+    assert.equal(row.testsCompleted, null);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("the summary names the bound tests and the checkout that was measured", () => {
+  // A test outside the bound set cannot kill a mutant however strong it is, and
+  // an artifact names a module without saying which tree produced it.
+  const directory = mkdtempSync(join(tmpdir(), "mutation-provenance-doc-"));
+  try {
+    writeFileSync(join(directory, "cache.json"), JSON.stringify({
+      projectRoot: "/home/runner/work/pi-bifrost/pi-bifrost",
+      files: { "/repo/cache.ts": { mutants: [{
+        id: "1", mutatorName: "Regex", replacement: "/x/", status: "Survived",
+        location: { start: { line: 1, column: 1 }, end: { line: 1, column: 9 } },
+      }] } },
+    }));
+    stamp(directory, "cache.json");
+    const { reports } = readReports(directory);
+    const payload = buildPayload({ reports, expectedTargets: ["cache.ts"] });
+    const text = renderSummary({ reports, payload });
+
+    assert.match(text, /### Bound tests/u);
+    assert.ok(text.includes("tests/cache.test.ts"), "the bound file is named");
+    assert.deepEqual(payload.measuredIn, ["/home/runner/work/pi-bifrost/pi-bifrost"]);
+    assert.match(text, /measurement usable|unusable|Bound tests/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("both Stryker branches share one argument builder", () => {

@@ -16,7 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { BLOCKING, SUMMARY, measurementDiagnostics, timeoutTolerance } from "./config.mjs";
-import { ROOT, bindingExclusions, measurementIdentity, shardsFor, targetNames } from "./targets.mjs";
+import { ROOT, bindingExclusions, bindingFor, measurementIdentity, shardsFor, targetNames } from "./targets.mjs";
 
 const COUNTED_STATUSES = ["Killed", "Timeout", "Survived", "NoCoverage", "RuntimeError", "CompileError"];
 
@@ -188,6 +188,15 @@ export function modulesOf(report, name, attempt = 0) {
           scope: typeof report.bifrost.scope === "string" ? report.bifrost.scope : null,
         }
       : null;
+  // Stryker records coverage as test *ids*; `testFiles` maps those ids to the
+  // full test name. Carrying the names is what lets a reader tell "this
+  // behaviour is unasserted" from "a test covers it but does not discriminate" —
+  // without them the only way to answer either question is to re-derive coverage
+  // by hand, which is where the first survivor plan went wrong.
+  const testNames = new Map();
+  for (const entry of Object.values(report.testFiles ?? {})) {
+    for (const test of entry?.tests ?? []) testNames.set(String(test.id), test.name);
+  }
   return Object.entries(report.files ?? {})
     .map(([absolutePath, file]) => {
       const mutants = file.mutants ?? [];
@@ -197,6 +206,11 @@ export function modulesOf(report, name, attempt = 0) {
         shard,
         file: absolutePath,
         mutants,
+        testNames,
+        // Which checkout produced this report. An artifact names its module but
+        // not the tree it came from, so without this a reader cannot tell which
+        // of several worktrees the line numbers refer to.
+        projectRoot: typeof report.projectRoot === "string" ? report.projectRoot : null,
         summary: summarise(mutants),
         framework: report.framework ?? null,
         thresholds: report.thresholds ?? null,
@@ -238,7 +252,7 @@ export function mergeShardReports(reports) {
   for (const report of reports) {
     const module = report.module;
     if (!byModule.has(module)) {
-      byModule.set(module, { module, mutants: [], byIdentity: new Map(), conflicts: [], shardsSeen: new Set(), attempt: 0 });
+      byModule.set(module, { module, mutants: [], byIdentity: new Map(), conflicts: [], shardsSeen: new Set(), attempt: 0, testNames: new Map(), projectRoots: new Set() });
     }
     const bucket = byModule.get(module);
     // An unsharded run writes `<target>.json` and covers the whole module, which
@@ -246,6 +260,10 @@ export function mergeShardReports(reports) {
     // target look like it had lost its only artifact.
     bucket.shardsSeen.add(Number.isInteger(report.shard) ? report.shard : 0);
     bucket.attempt = Math.max(bucket.attempt, report.attempt ?? 0);
+    // Coverage ids are per report; every shard of one module names the same
+    // tests, and a shard that carries none must not erase what another recorded.
+    for (const [id, name] of report.testNames ?? []) bucket.testNames.set(id, name);
+    if (report.projectRoot) bucket.projectRoots.add(report.projectRoot);
     for (const mutant of report.mutants) {
       const identity = mutantIdentity(module, mutant);
       const existing = bucket.byIdentity.get(identity);
@@ -277,6 +295,8 @@ export function mergeShardReports(reports) {
     // The newest attempt that contributed, so a merged result stays attributable
     // to the execution that produced it.
     attempt: bucket.attempt,
+    testNames: bucket.testNames,
+    projectRoots: [...bucket.projectRoots],
     shardsSeen: [...bucket.shardsSeen].sort((a, b) => a - b),
     framework: reports.find((report) => report.module === bucket.module)?.framework ?? null,
     thresholds: reports.find((report) => report.module === bucket.module)?.thresholds ?? null,
@@ -510,6 +530,21 @@ function formatPercent(value) {
   return value === null ? "n/a" : `${value.toFixed(2)}%`;
 }
 
+/**
+ * The tests that exercised a mutant, by name.
+ *
+ * A survivor is only actionable if you can see which tests *did* run against it:
+ * that is the difference between a missing test and a test that runs but asserts
+ * nothing that distinguishes the mutant. Stryker's `coveredBy` holds ids, and
+ * `testFiles` resolves them, so both travel together onto the survivor row.
+ */
+function coveringTests(report, mutant) {
+  const names = report.testNames;
+  if (!names || names.size === 0) return null;
+  const ids = Array.isArray(mutant.coveredBy) ? mutant.coveredBy : [];
+  return ids.map((id) => names.get(String(id)) ?? `test ${id}`);
+}
+
 /** Survivor rows, one JSON object per line, for later agent consumption. */
 export function survivorRows(reports) {
   return reports.flatMap((report) =>
@@ -524,6 +559,11 @@ export function survivorRows(reports) {
         startColumn: mutant.location?.start?.column ?? null,
         endLine: mutant.location?.end?.line ?? null,
         endColumn: mutant.location?.end?.column ?? null,
+        // How many tests ran against this mutant, and which ones, so a reader can
+        // tell an unasserted behaviour from an assertion that does not
+        // discriminate. `null` when the report carried no coverage at all.
+        testsCompleted: Number.isInteger(mutant.testsCompleted) ? mutant.testsCompleted : null,
+        coveredBy: coveringTests(report, mutant),
       })),
   );
 }
@@ -633,6 +673,11 @@ export function buildPayload({
     unexpectedShards: unexpectedShardsFor(reports, expectedTargets, shardsPerTarget),
     rejectedReports,
     rejectedModules: [...new Set(rejectedReports.map((entry) => entry.module))].sort(),
+    // Where the measured bytes came from. Two artifacts can name the same module
+    // and mean different checkouts, so the line numbers are only meaningful with
+    // this. It belongs in the payload builder, not the CLI, because the payload
+    // is what every reader consumes.
+    measuredIn: [...new Set(reports.flatMap((report) => report.projectRoots ?? []))].sort(),
     timeoutTolerance: timeoutToleranceOverride ?? timeoutTolerance(aggregate.total),
   };
   if (conflicts.length > 0) {
@@ -695,16 +740,46 @@ export function renderSummary({ reports, payload }) {
       if (source) lines.push(`  ${line}: ${source}`);
       lines.push(`  ${mutant.mutatorName} → ${String(mutant.replacement).slice(0, 100)}`);
       lines.push("```");
+      const covering = coveringTests(report, mutant);
+      if (covering && covering.length > 0) {
+        const names = covering.map((name) => name.split(" > ").pop());
+        lines.push(
+          "",
+          `These ${covering.length} test(s) ran against this mutant and passed. Either none of them asserts the behaviour that changed, or one of them runs without discriminating — the list is what distinguishes the two, and they need different fixes:`,
+          "",
+          ...names.map((name) => `- \`${name}\``),
+          "",
+        );
+      }
     }
     lines.push("</details>", "");
   }
+
+  lines.push("### Bound tests", "");
+  for (const report of reports) {
+    // A module outside TARGETS cannot have a derived binding; say so rather than
+    // failing the whole summary over a name the plan never asked for.
+    let bound = [];
+    try {
+      bound = bindingFor(report.module);
+    } catch {
+      lines.push(`- \`${report.module}\` ← not a configured target, so no binding is derivable`);
+      continue;
+    }
+    lines.push(`- \`${report.module}\` ← ${bound.map((file) => `\`${file}\``).join(", ") || "no bound test"}`);
+  }
+  lines.push(
+    "",
+    "A test that is not in this list did not run for these mutants, so it cannot kill them however strong its assertions are. Binding is derived from direct imports; add the test to one of these files, or bind it deliberately.",
+    "",
+  );
 
   lines.push("### How to read this", "");
   lines.push(
     "- A surviving mutant means the bound tests still pass with that change, so the behaviour it encodes is unasserted *somewhere in the bound set*.",
     "- Binding is derived from direct imports. Tests that reach a module only through a caller are not bound, so these scores are a lower bound.",
     "- The TAP runner gives per-test-file coverage, so each mutant runs only the files that reach it. Coverage is per file, not per test name.",
-    "- Full report and survivor extract are attached to this run. `survivors.jsonl` carries module, mutant id, mutator, replacement, and exact range.",
+    "- Full report and survivor extract are attached to this run. `survivors.jsonl` carries module, mutant id, mutator, replacement, exact range, and the tests that ran against it (`coveredBy`), so a survivor can be diagnosed without re-deriving coverage: a behaviour no test asserts and a test that asserts too little look identical in the score but need different fixes.",
   );
 
   const exclusions = bindingExclusions();
