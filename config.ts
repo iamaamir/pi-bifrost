@@ -234,6 +234,7 @@ export const ALL_STRATEGIES: readonly RoutingStrategy[] = [
   "cheapest_output",
   "largest_context",
   "random",
+  "best_value",
   "fastest",
 ];
 

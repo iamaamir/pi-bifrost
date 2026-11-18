@@ -36,7 +36,7 @@ The separate classification cache can store normalized prompt terms. Disabling c
 prompt → tier → configured model pool → reliability filter → strategy → Pi model
 ```
 
-A tier is selected from a tier prefix, rule, local classification cache, optional classifier, or configured default. An exact-model rule can bypass the tier. Strategies include `first`, `fastest`, `cheapest`, `cheapest_input`, `cheapest_output`, `largest_context`, and `random`. Init orders verified models by probe speed for `first` and `fastest` selection.
+A tier is selected from a tier prefix, rule, local classification cache, optional classifier, or configured default. An exact-model rule can bypass the tier. Strategies include `first`, `fastest`, `cheapest`, `cheapest_input`, `cheapest_output`, `largest_context`, `best_value`, and `random`. Init orders verified models by probe speed for `first` and `fastest` selection.
 
 Persistent circuits skip repeatedly failing models on future turns and later allow controlled recovery. By default, usage and billing rejections pause models with the same configured Pi provider ID in Auto and physical routing. Bifrost does not identify billing accounts or fetch live usage limits. Generic HTTP 429 pauses that provider briefly. It does not retry the current prompt.
 

@@ -85,8 +85,8 @@
     },
     "strategy": {
       "type": "string",
-      "enum": ["first", "cheapest", "cheapest_input", "cheapest_output", "largest_context", "random", "fastest"],
-      "description": "Model selection strategy. 'first'/'fastest' picks first candidate (list should be pre-sorted). 'cheapest' sorts by input+output cost. 'cheapest_input' by input cost. 'cheapest_output' by output cost. 'largest_context' by context window. 'random' picks randomly.",
+      "enum": ["first", "cheapest", "cheapest_input", "cheapest_output", "largest_context", "random", "best_value", "fastest"],
+      "description": "Model selection strategy. 'first'/'fastest' picks first candidate (list should be pre-sorted). 'cheapest' sorts by input+output cost. 'cheapest_input' by input cost. 'cheapest_output' by output cost. 'largest_context' by context window. 'random' picks randomly. 'best_value' prefers the lowest combined cost per context token.",
       "default": "first"
     },
     "categoryStrategies": {
@@ -98,7 +98,7 @@
       },
       "additionalProperties": {
         "type": "string",
-        "enum": ["first", "cheapest", "cheapest_input", "cheapest_output", "largest_context", "random", "fastest"]
+        "enum": ["first", "cheapest", "cheapest_input", "cheapest_output", "largest_context", "random", "best_value", "fastest"]
       }
     },
     "models": {
@@ -648,7 +648,7 @@
       "if": { "not": { "properties": { "schemaVersion": { "const": 3 } }, "required": ["schemaVersion"] } },
       "then": {
         "properties": {
-          "categoryStrategies": { "properties": { "description": { "enum": ["first", "cheapest", "cheapest_input", "cheapest_output", "largest_context", "random", "fastest"] } } },
+          "categoryStrategies": { "properties": { "description": { "enum": ["first", "cheapest", "cheapest_input", "cheapest_output", "largest_context", "random", "best_value", "fastest"] } } },
           "tierPolicies": { "additionalProperties": { "not": { "type": "string" } } },
           "routingScope": { "properties": { "tiers": { "additionalProperties": { "not": { "type": "string" } } } } },
           "economics": { "properties": {
