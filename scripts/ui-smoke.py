@@ -751,13 +751,12 @@ def capture(
             if "systemPrompt" in classifier or "criteria" in classifier:
                 raise AssertionError("fresh background config copied inherited classifier prompt content")
             receipt = json.loads(ownership_path.read_text())
-            generated = [
-                model
-                for source in receipt.get("sources", {}).values()
-                for models in source.get("generated", {}).values()
-                for model in models
-            ]
-            if sorted(generated) != sorted(memberships):
+            expected_receipt = {
+                "version": 2,
+                "scope": "project",
+                "tiers": {tier: {"state": "generated", "models": models} for tier, models in saved["models"].items()},
+            }
+            if receipt != expected_receipt:
                 raise AssertionError("fresh background ownership receipt does not match saved generated memberships")
             first_run = " ".join((log_path.read_text(errors="ignore") if log_path.exists() else "").split()).lower()
             if "save bifrost setup?" in first_run or "choose classifier" in first_run or "select classifier" in first_run:
@@ -780,11 +779,15 @@ def capture(
             if not ownership_path.is_file():
                 raise AssertionError("manual init did not save the generated-membership ownership receipt")
             receipt = json.loads(ownership_path.read_text())
+            if receipt.get("version") != 2 or receipt.get("scope") != "project":
+                raise AssertionError("manual init ownership scope/version is incorrect")
+            if receipt.get("tiers", {}).get("general") != {"state": "user"}:
+                raise AssertionError("manual init claimed a user-managed tier")
             generated = [
                 model
-                for source in receipt.get("sources", {}).values()
-                for models in source.get("generated", {}).values()
-                for model in models
+                for tier in receipt.get("tiers", {}).values()
+                if tier.get("state") == "generated"
+                for model in tier["models"]
             ]
             if "fake/usage-exhausted" in generated or not {"fake/healthy", "fake/classifier"}.issubset(generated):
                 raise AssertionError("manual init ownership receipt does not match successful probe results")

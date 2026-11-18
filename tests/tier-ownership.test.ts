@@ -29,6 +29,32 @@ describe("ordered whole-tier ownership", () => {
     assert.deepEqual(restored, ownership);
   });
 
+  it("never trusts missing, legacy, corrupt, or wrong-scope ownership", () => {
+    const configBytes = Buffer.from(JSON.stringify({ models: { quick: generated } }));
+    const legacy = { version: 1, sources: { catalog: { generated: { quick: generated }, tombstones: {} } } };
+    for (const [name, stored, blocked] of [
+      ["missing", null, false],
+      ["legacy", JSON.stringify(legacy), false],
+      ["corrupt", "{broken", true],
+      ["scope", JSON.stringify({ ...ownership, scope: "user" }), true],
+      ["pattern", JSON.stringify({ ...ownership, tiers: { quick: { state: "generated", models: ["p/*"] } } }), true],
+    ] as const) {
+      const result = buildInitMembershipPlan({
+        source: "project", configPath: "/fixture/config", ownershipPath: "/fixture/ownership", journalPath: "/fixture/journal",
+        configBytes, ownershipBytes: stored === null ? null : Buffer.from(stored),
+      }, [{ provider: "p", status: "complete", modelsByTier: { quick: ["p/new"] } }], () => true);
+      assert.deepEqual(result.changes, [], name);
+      if (blocked) {
+        assert.equal(result.reason, "source_invalid", name);
+        assert.equal(result.transaction, undefined, name);
+      } else {
+        assert.deepEqual(result.transaction?.nextConfigBytes, configBytes, name);
+        assert.deepEqual(JSON.parse(Buffer.from(result.transaction!.nextOwnershipBytes).toString()).tiers.quick,
+          { state: "user" }, name);
+      }
+    }
+  });
+
   for (const [name, models, receipt] of [
     ["empty", { quick: [] }, undefined],
     ["deleted", {}, ownership],
