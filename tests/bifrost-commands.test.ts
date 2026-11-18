@@ -1998,6 +1998,33 @@ describe("preview report", () => {
     assert(renderPreviewReport(report).includes("confidence: 0"));
   });
 
+  it("renders five distinct confidences each as its own exact value", () => {
+    const confidences = [0, 0.42, 0.73, 0.999, 1];
+    const attemptLines = confidences.map((confidence) => {
+      const report = buildPreviewReport({
+        prompt: `prompt ${confidence}`,
+        classification: {
+          kind: "fallback",
+          tier: "general",
+          classifierAttempt: {
+            backend: "typesafe",
+            outcome: "low_confidence",
+            fallbackKind: "default",
+            model: "jev-1.13.0",
+            confidence,
+          },
+        },
+        display,
+      });
+
+      assert.equal(report.classifierAttempt?.confidence, confidence);
+      return renderPreviewReport(report).filter((line) => line.startsWith("classifier attempt confidence:"));
+    });
+
+    // Exactly one line per report, carrying that report's own value and no other.
+    assert.deepEqual(attemptLines, confidences.map((confidence) => [`classifier attempt confidence: ${confidence}`]));
+  });
+
   it("serializes to one parseable line with no prose envelope", () => {
     const report = buildPreviewReport({
       prompt: "direct hit",
