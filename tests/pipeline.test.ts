@@ -424,6 +424,27 @@ describe("classification-pipeline", () => {
       assert.equal(buildRouteDecisionSummary(result).classifierAttempt?.confidence, 0);
     });
 
+    it("drops non-finite direct confidence instead of fabricating numeric evidence", async () => {
+      for (const confidence of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+        const pipeline = createPipeline(deps({
+          classifyDirect: async () => ({
+            kind: "direct-classifier-attempt",
+            observation: {
+              backend: "typesafe" as const,
+              outcome: "low_confidence" as const,
+              model: "jev-1.13.0",
+              confidence,
+            },
+          }),
+          defaultTier: "economical",
+        }));
+        const result = await pipeline.classify("anything");
+        assert.equal(result.kind, "fallback");
+        assert.equal("confidence" in (result.classifierAttempt ?? {}), false, `confidence ${confidence} leaked`);
+        assert.equal("confidence" in (buildRouteDecisionSummary(result).classifierAttempt ?? {}), false);
+      }
+    });
+
     it("retains prompt backend and model metadata", async () => {
       const p = createPipeline(deps({
         classifierModels: [makeClassifierModel("fixture", "prompt-model")],
