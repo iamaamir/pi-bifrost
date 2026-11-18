@@ -42,6 +42,7 @@ import {
 import { createPipeline, type ClassificationResult } from "../classification-pipeline.ts";
 import { CLASSIFIER_BACKEND_IDS, type ClassifierBackend } from "../classifier-backends.ts";
 import type { BifrostConfig, ClassifierConfig } from "../config.ts";
+import { buildPreviewReport, renderPreviewReport, serializePreviewReport } from "../commands.ts";
 import type { RouteRule } from "../routing.ts";
 import { makeClassifierModel } from "./helpers.ts";
 
@@ -946,5 +947,68 @@ describe("controlled fault sensitivity", () => {
     assert.equal(tiers.failed, true);
     assert.ok(tiers.counterexamplePath !== null && typeof tiers.counterexamplePath === "string");
     assert.equal(tiers.counterexample[0].length, 2);
+  });
+});
+
+// ── Preview report echo ───────────────────────────────────────
+
+describe("preview report confidence echo", () => {
+  const display = {
+    strategy: "first-available",
+    selected: "fake/chat",
+    requestedCandidateLines: ["fake/chat"],
+    fallbackCandidateLines: [] as string[],
+  };
+
+  it("echoes a generated rejected confidence unchanged into JSON and text", () => {
+    fc.assert(
+      fc.property(fc.double({ min: 0, max: 1, noNaN: true }), (confidence) => {
+        const report = buildPreviewReport({
+          prompt: "generated prompt",
+          classification: {
+            kind: "fallback",
+            tier: "general",
+            classifierAttempt: {
+              backend: CLASSIFIER_BACKEND_IDS.piNative,
+              outcome: "low_confidence",
+              fallbackKind: "default",
+              confidence,
+            },
+          },
+          display,
+        });
+
+        assert.equal(report.classifierAttempt?.confidence, confidence);
+        // The JSON path is what downstream consumers read, so round-trip it
+        // rather than trusting the in-memory object.
+        const serialized = JSON.parse(serializePreviewReport(report));
+        assert.equal(serialized.classifierAttempt.confidence, confidence);
+        const lines = renderPreviewReport(report).filter((line) => line.startsWith("classifier attempt confidence:"));
+        assert.deepEqual(lines, [`classifier attempt confidence: ${confidence}`]);
+      }),
+      { numRuns: 250 },
+    );
+  });
+
+  it("echoes a generated accepted confidence unchanged into JSON and text", () => {
+    fc.assert(
+      fc.property(fc.double({ min: 0, max: 1, noNaN: true }), (confidence) => {
+        const report = buildPreviewReport({
+          prompt: "generated prompt",
+          classification: {
+            kind: "classified",
+            tier: "general",
+            source: "classifier",
+            judgment: { tier: "general", backend: CLASSIFIER_BACKEND_IDS.piNative, confidence },
+          },
+          display,
+        });
+
+        assert.equal(report.confidence, confidence);
+        const lines = renderPreviewReport(report).filter((line) => line.startsWith("confidence:"));
+        assert.deepEqual(lines, [`confidence: ${confidence}`]);
+      }),
+      { numRuns: 250 },
+    );
   });
 });

@@ -157,19 +157,22 @@ function makeExtensionHarness(config, options = {}) {
     thinkingLevel: "low",
   };
   let input;
+  let command;
   const pi = {
     registerVirtualModel: () => {},
-    registerCommand: () => {},
+    registerCommand: (_name, options) => { command = options?.handler; },
     on: (event, handler) => { if (event === "input") input = handler; return () => {}; },
     setModel: async (model) => { selected.push(`${model.provider}/${model.id}`); return true; },
   };
   bifrostExtension(pi);
   if (!input) throw new Error("extension did not register the input hook");
+  if (!command) throw new Error("extension did not register the bifrost command");
   return {
     ctx,
     selected,
     notices,
     input: (text = "do the task") => input({ text, source: "interactive", streamingBehavior: "steer" }, ctx),
+    command: (args) => command(args, ctx),
     cleanup: () => {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -556,7 +559,7 @@ describe("classifier transport acceptance", { timeout: 120_000 }, () => {
       }),
       {
         available: [makeModel("fixture", "fast"), makeModel("fixture", "capable")],
-        classifierModels: [{ type: "classifier", provider: "fixture", id: "prompt" }],
+        classifierModels: [{ type: "classifier", provider: "fixture", id: "prompt", api: "fixture-classify" }],
         classify: async () => {
           nativeCalls += 1;
           return promptAnswer("general", 0.5);
@@ -567,6 +570,83 @@ describe("classifier transport acceptance", { timeout: 120_000 }, () => {
       await harness.input();
       assert.equal(nativeCalls, 1, "the low-confidence native judgment is attempted once");
       assert.deepEqual(harness.selected, ["fixture/fast"], "a low-confidence judgment falls back to the local default tier");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("propagates rejected direct confidence through directClassifierAttempt into preview command output", async () => {
+    let nativeCalls = 0;
+    const harness = makeExtensionHarness(
+      promptConfig({
+        classifier: {
+          enabled: true,
+          backend: "pi-native",
+          piNative: { model: "fixture/prompt", timeoutMs: 500, maxAttempts: 1 },
+          minConfidence: 0.8,
+          fallback: "regex",
+        },
+      }),
+      {
+        available: [makeModel("fixture", "fast"), makeModel("fixture", "capable")],
+        classifierModels: [{ type: "classifier", provider: "fixture", id: "prompt", api: "fixture-classify" }],
+        classify: async () => {
+          nativeCalls += 1;
+          return promptAnswer("frontier", 0.73);
+        },
+      },
+    );
+
+    const captureCommandOutput = async (args) => {
+      const originalError = console.error;
+      const lines = [];
+      console.error = (...parts) => { lines.push(parts.map((part) => String(part)).join(" ")); };
+      try {
+        await harness.command(args);
+      } finally {
+        console.error = originalError;
+      }
+      return lines;
+    };
+
+    try {
+      const jsonLines = await captureCommandOutput("preview --json route this prompt");
+      const jsonMarked = jsonLines.filter((line) => line.startsWith("[bifrost-json] "));
+      assert.equal(jsonMarked.length, 1, `expected one preview JSON marker line, got:\n${jsonLines.join("\n")}`);
+      const report = JSON.parse(jsonMarked[0].slice("[bifrost-json] ".length));
+      assert.equal(report.ok, true);
+      assert.equal(report.prompt, "route this prompt");
+      assert.equal(nativeCalls, 1, "preview classification must invoke the direct classifier once");
+      assert.equal("backend" in report, false, "rejected direct classifier must not populate accepted judgment backend");
+      assert.equal("model" in report, false, "rejected direct classifier must not populate accepted judgment model");
+      assert.equal("confidence" in report, false, "rejected direct classifier must not populate accepted judgment confidence");
+      assert.equal(report.classifierAttempt?.backend, "pi-native");
+      assert.equal(report.classifierAttempt?.outcome, "low_confidence");
+      assert.equal(report.classifierAttempt?.confidence, 0.73, "directClassifierAttempt must preserve exact rejected confidence");
+      assert.equal(report.classifierAttempt?.fallbackKind, "default");
+      assert.equal(report.source, "fallback");
+      assert.equal(report.tier, "quick");
+      assert.equal(report.selectedTier, "quick");
+      assert.equal(report.selected, "fixture/fast");
+      assert.doesNotMatch(JSON.stringify(report), /sk-|api[_-]?key|authorization|Bearer|raw provider|promptAnswer/i);
+
+      const traceLines = await captureCommandOutput("preview --trace --json route this prompt");
+      const traceMarked = traceLines.filter((line) => line.startsWith("[bifrost-json] "));
+      assert.equal(traceMarked.length, 1, `expected one trace JSON marker line, got:\n${traceLines.join("\n")}`);
+      const trace = JSON.parse(traceMarked[0].slice("[bifrost-json] ".length));
+      assert.equal(nativeCalls, 2, "trace preview must classify through the same production path");
+      assert.equal(trace.kind, "route-decision");
+      assert.equal(trace.outcome, "selected");
+      assert.equal(trace.classification.source, "fallback");
+      assert.equal(trace.classification.tier, "quick");
+      assert.equal(trace.classification.classifier, undefined, "trace must not present rejected attempt as accepted classifier judgment");
+      assert.equal(trace.classifierAttempt?.backend, "pi-native");
+      assert.equal(trace.classifierAttempt?.outcome, "low_confidence");
+      assert.equal(trace.classifierAttempt?.confidence, 0.73);
+      assert.equal(trace.classifierAttempt?.fallbackKind, "default");
+      assert.equal(trace.selectedTier, "quick");
+      assert.equal(trace.selected, "fixture/fast");
+      assert.doesNotMatch(JSON.stringify(trace), /sk-|api[_-]?key|authorization|Bearer|raw provider|promptAnswer/i);
     } finally {
       harness.cleanup();
     }

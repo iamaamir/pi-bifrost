@@ -51,6 +51,7 @@ it("routes real AgentSession through Pi-native classifier to a different physica
 
   const precedenceScenario = scenario === "backend-precedence" || scenario === "backend-precedence-mutant";
   const precedenceMutantScenario = scenario === "backend-precedence-mutant";
+  const previewScenario = scenario === "preview-command";
   let classifyMode = scenario === "deadline-late" ? "late" : "success";
   let classifyCalls = 0;
   let classifySignal;
@@ -80,11 +81,18 @@ it("routes real AgentSession through Pi-native classifier to a different physica
           }
           if (classifyMode === "late") await new Promise((resolve) => setTimeout(resolve, 600));
           const choice = classifyMode === "late" ? "frontier" : fault === "wrong-tier" && classifyCalls === 1 ? "quick" : "general";
+          // The preview turn is below the configured 0.8 gate on purpose: a
+          // rejected `general/0.73` must still report the value it returned.
+          const previewTurn = previewScenario && context.state?.prompt === "route this prompt";
+          const confidence = previewTurn ? 0.73 : 0.85;
+          const probabilities = previewTurn
+            ? { quick: 0.07, general: 0.73, frontier: 0.2 }
+            : classifyMode === "late" ? { quick: 0.05, general: 0.1, frontier: 0.85 } : { quick: 0.05, general: 0.85, frontier: 0.1 };
           return {
             api: "fixture-classify",
             provider: "fixture-class",
             model: "fixture-jev",
-            answers: { tier: { type: "choice", choice, confidence: 0.85, probabilities: classifyMode === "late" ? { quick: 0.05, general: 0.1, frontier: 0.85 } : { quick: 0.05, general: 0.85, frontier: 0.1 } } },
+            answers: { tier: { type: "choice", choice, confidence, probabilities } },
             stopReason: "stop",
             timestamp: Date.now(),
           };
@@ -137,7 +145,7 @@ it("routes real AgentSession through Pi-native classifier to a different physica
       totalTimeoutMs: classifyMode === "late" ? 150 : undefined,
       ...(precedenceScenario ? { model: "faux/prompt-decoy" } : {}),
       fallback: precedenceScenario ? "prompt" : "regex",
-      minConfidence: 0,
+      minConfidence: previewScenario ? 0.8 : 0,
     },
     cache: { enabled: false },
     rules: [],
@@ -236,7 +244,9 @@ it("routes real AgentSession through Pi-native classifier to a different physica
       assert.equal(promptDecoyCalls, 0, "successful native judgment must not call prompt-decoy model");
     }
 
-    if (!precedenceScenario) {
+    // The error turn opens the pi-native circuit, which would turn the preview
+    // into `circuit_open` instead of the rejected judgment under test.
+    if (!precedenceScenario && !previewScenario) {
       classifyMode = "error";
       try {
         console.error = (...args) => { errors.push(args.join(" ")); originalError(...args); };
@@ -268,6 +278,70 @@ it("routes real AgentSession through Pi-native classifier to a different physica
       assert.equal(faux.state.callCount, 3);
       assert.equal(faux.getPendingResponseCount(), 0);
     }
+  }
+
+  if (previewScenario) {
+    // The command path, not the turn path: Pi dispatches the registered
+    // extension command through `prompt()`, and Bifrost's print-mode output is
+    // what a headless user actually sees.
+    const modelBeforePreview = `${session.model.provider}/${session.model.id}`;
+    const invocationsBeforePreview = [...invocations];
+    const callsBeforePreview = faux.state.callCount;
+    const originalError = console.error;
+    // Each invocation is captured on its own: a shared buffer would let the
+    // `--json` run satisfy the text assertions for a plain run that printed
+    // nothing, so the test would not observe the boundary it claims.
+    const capturePreview = async (command) => {
+      const lines = [];
+      console.error = (...args) => { lines.push(args.join(" ")); };
+      try {
+        await session.prompt(command);
+      } finally {
+        console.error = originalError;
+      }
+      return lines;
+    };
+    const jsonOutput = await capturePreview("/bifrost preview --json route this prompt");
+    assert.equal(classifyCalls, 2, `the JSON preview must invoke the native classifier exactly once:\n${jsonOutput.join("\n")}`);
+    const textOutput = await capturePreview("/bifrost preview route this prompt");
+    assert.equal(classifyCalls, 3, `each preview must invoke the native classifier exactly once:\n${textOutput.join("\n")}`);
+
+    const jsonLines = jsonOutput.filter((line) => line.startsWith("[bifrost-json] "));
+    assert.equal(jsonLines.length, 1, `expected one preview JSON marker line, got:\n${jsonOutput.join("\n")}`);
+    assert.equal(
+      jsonOutput.some((line) => line.includes("--- preview ---")),
+      false,
+      `the JSON preview must not also print its text report:\n${jsonOutput.join("\n")}`,
+    );
+    const report = JSON.parse(jsonLines[0].slice("[bifrost-json] ".length));
+    assert.equal(report.ok, true);
+    assert.equal(report.prompt, "route this prompt");
+    assert.equal(report.source, "fallback", "a rejected direct judgment must not become the accepted source");
+    assert.equal(report.tier, "quick");
+    assert.equal(report.selectedTier, "quick");
+    assert.equal("backend" in report, false, "rejected judgment must not populate accepted backend");
+    assert.equal("model" in report, false, "rejected judgment must not populate accepted model");
+    assert.equal("confidence" in report, false, "rejected judgment must not populate accepted confidence");
+    assert.equal(report.classifierAttempt?.backend, "pi-native");
+    assert.equal(report.classifierAttempt?.outcome, "low_confidence");
+    assert.equal(report.classifierAttempt?.fallbackKind, "default");
+    assert.equal(report.classifierAttempt?.confidence, 0.73, "the exact rejected confidence must survive the real command path");
+    assert.match(String(report.classifierAttempt?.model), /(^|\/)fixture-jev$/, "the attempt must name the classifier model that answered");
+
+    assert.equal(
+      textOutput.some((line) => line.startsWith("[bifrost-json] ")),
+      false,
+      `the text preview must not emit a JSON marker:\n${textOutput.join("\n")}`,
+    );
+    const textLines = textOutput.filter((line) => line.startsWith("[bifrost] ")).map((line) => line.slice("[bifrost] ".length));
+    assert.ok(textLines.includes("--- preview ---"), `preview text view missing:\n${textOutput.join("\n")}`);
+    assert.ok(textLines.includes("classifier attempt: pi-native (low_confidence, fallback=default)"), `attempt line missing:\n${textOutput.join("\n")}`);
+    assert.ok(textLines.includes("classifier attempt confidence: 0.73"), `exact confidence line missing:\n${textOutput.join("\n")}`);
+    assert.equal(textLines.some((line) => line.startsWith("confidence:")), false, "the text view must not present rejected confidence as accepted");
+
+    assert.equal(faux.state.callCount, callsBeforePreview, "preview must not dispatch a generation");
+    assert.deepEqual(invocations, invocationsBeforePreview, "preview must not stream through a physical model");
+    assert.equal(`${session.model.provider}/${session.model.id}`, modelBeforePreview, "preview must leave Pi's active model unchanged");
   }
 
   assert.equal(existsSync(violationPath) ? readFileSync(violationPath, "utf8") : "", "", "AgentSession made blocked outbound attempt");
