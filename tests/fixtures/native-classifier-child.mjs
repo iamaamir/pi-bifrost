@@ -287,20 +287,32 @@ it("routes real AgentSession through Pi-native classifier to a different physica
     const modelBeforePreview = `${session.model.provider}/${session.model.id}`;
     const invocationsBeforePreview = [...invocations];
     const callsBeforePreview = faux.state.callCount;
-    const output = [];
     const originalError = console.error;
-    console.error = (...args) => { output.push(args.join(" ")); };
-    try {
-      await session.prompt("/bifrost preview --json route this prompt");
-      assert.equal(classifyCalls, 2, `the JSON preview must invoke the native classifier exactly once:\n${output.join("\n")}`);
-      await session.prompt("/bifrost preview route this prompt");
-    } finally {
-      console.error = originalError;
-    }
-    assert.equal(classifyCalls, 3, `each preview must invoke the native classifier exactly once:\n${output.join("\n")}`);
+    // Each invocation is captured on its own: a shared buffer would let the
+    // `--json` run satisfy the text assertions for a plain run that printed
+    // nothing, so the test would not observe the boundary it claims.
+    const capturePreview = async (command) => {
+      const lines = [];
+      console.error = (...args) => { lines.push(args.join(" ")); };
+      try {
+        await session.prompt(command);
+      } finally {
+        console.error = originalError;
+      }
+      return lines;
+    };
+    const jsonOutput = await capturePreview("/bifrost preview --json route this prompt");
+    assert.equal(classifyCalls, 2, `the JSON preview must invoke the native classifier exactly once:\n${jsonOutput.join("\n")}`);
+    const textOutput = await capturePreview("/bifrost preview route this prompt");
+    assert.equal(classifyCalls, 3, `each preview must invoke the native classifier exactly once:\n${textOutput.join("\n")}`);
 
-    const jsonLines = output.filter((line) => line.startsWith("[bifrost-json] "));
-    assert.equal(jsonLines.length, 1, `expected one preview JSON marker line, got:\n${output.join("\n")}`);
+    const jsonLines = jsonOutput.filter((line) => line.startsWith("[bifrost-json] "));
+    assert.equal(jsonLines.length, 1, `expected one preview JSON marker line, got:\n${jsonOutput.join("\n")}`);
+    assert.equal(
+      jsonOutput.some((line) => line.includes("--- preview ---")),
+      false,
+      `the JSON preview must not also print its text report:\n${jsonOutput.join("\n")}`,
+    );
     const report = JSON.parse(jsonLines[0].slice("[bifrost-json] ".length));
     assert.equal(report.ok, true);
     assert.equal(report.prompt, "route this prompt");
@@ -316,10 +328,15 @@ it("routes real AgentSession through Pi-native classifier to a different physica
     assert.equal(report.classifierAttempt?.confidence, 0.73, "the exact rejected confidence must survive the real command path");
     assert.match(String(report.classifierAttempt?.model), /(^|\/)fixture-jev$/, "the attempt must name the classifier model that answered");
 
-    const textLines = output.filter((line) => line.startsWith("[bifrost] ")).map((line) => line.slice("[bifrost] ".length));
-    assert.ok(textLines.includes("--- preview ---"), `preview text view missing:\n${output.join("\n")}`);
-    assert.ok(textLines.includes("classifier attempt: pi-native (low_confidence, fallback=default)"), `attempt line missing:\n${output.join("\n")}`);
-    assert.ok(textLines.includes("classifier attempt confidence: 0.73"), `exact confidence line missing:\n${output.join("\n")}`);
+    assert.equal(
+      textOutput.some((line) => line.startsWith("[bifrost-json] ")),
+      false,
+      `the text preview must not emit a JSON marker:\n${textOutput.join("\n")}`,
+    );
+    const textLines = textOutput.filter((line) => line.startsWith("[bifrost] ")).map((line) => line.slice("[bifrost] ".length));
+    assert.ok(textLines.includes("--- preview ---"), `preview text view missing:\n${textOutput.join("\n")}`);
+    assert.ok(textLines.includes("classifier attempt: pi-native (low_confidence, fallback=default)"), `attempt line missing:\n${textOutput.join("\n")}`);
+    assert.ok(textLines.includes("classifier attempt confidence: 0.73"), `exact confidence line missing:\n${textOutput.join("\n")}`);
     assert.equal(textLines.some((line) => line.startsWith("confidence:")), false, "the text view must not present rejected confidence as accepted");
 
     assert.equal(faux.state.callCount, callsBeforePreview, "preview must not dispatch a generation");

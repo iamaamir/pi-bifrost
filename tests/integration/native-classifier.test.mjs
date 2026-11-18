@@ -325,9 +325,10 @@ it("routes real AgentSession through Pi-native classifier behind a proven deny-a
     assert.equal(precedenceFault.status, 0, `${precedenceFault.stdout}\n${precedenceFault.stderr}`);
     assert.match(precedenceFault.stdout, /pass 1/, "native-miss mutant must prove prompt-decoy fallback assertions");
 
-    // The previous mutant is still in place; a preview fault control must vary
+    // Both earlier faults are still on disk; a preview fault control must vary
     // exactly one file or it proves nothing.
     writeFileSync(nativePath, originalNative);
+    writeFileSync(pipelinePath, originalPipeline);
     const confidenceMutant = originalIndex.replace("        ...(confidence !== undefined ? { confidence } : {}),\n", "");
     assert.notEqual(confidenceMutant, originalIndex, "confidence mutant must remove the propagation line");
     writeFileSync(indexPath, confidenceMutant);
