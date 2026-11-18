@@ -579,13 +579,15 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       const receiptPath = join(env.work, ".pi", "bifrost-reconcile-ownership.json");
       const models = { general: ["fake/healthy"], ...(pool === undefined ? {} : { quick: pool }) };
       const config = { ...BUNDLED_PUBLIC_INIT_DEFAULTS, default: "general", classifier: { enabled: false }, rules: [], models };
-      writeFileSync(configPath, JSON.stringify(config, null, 4) + "\n\n");
+      const original = Buffer.from(JSON.stringify(config, null, 4) + "\n\n");
+      writeFileSync(configPath, original);
       writeFileSync(receiptPath, ownership(["fake/credits-exhausted", "fake/healthy"]));
       try {
         for (let run = 0; run < 2; run++) {
           const result = await runInit({ ...env, args: "--write" });
           assert.equal(result.code, 0, result.stderr);
           assert.equal(result.violations, "");
+          assert.deepEqual(readFileSync(configPath), original, "ownership-only init must preserve exact config bytes");
           assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")).models, models);
           assert.deepEqual(JSON.parse(readFileSync(receiptPath, "utf8")).tiers.quick,
             { state: intent === "deleted" ? "deleted" : "user" });
