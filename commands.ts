@@ -1910,7 +1910,8 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         for (const [key, value] of Object.entries(proposal)) {
           if (
             key !== "$schema" &&
-            (key === "models" || !inheritedFields.has(key)) &&
+            key !== "models" &&
+            !inheritedFields.has(key) &&
             existing[key] === undefined
           ) {
             existing[key] = value;
@@ -2010,7 +2011,8 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       for (const [key, value] of Object.entries(proposal)) {
         if (
           key !== "$schema" &&
-          (key === "models" || !inheritedFields.has(key)) &&
+          key !== "models" &&
+          !inheritedFields.has(key) &&
           reconciled[key] === undefined
         ) {
           reconciled[key] = value;
@@ -2095,8 +2097,8 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   }
   const savedPools = (
     JSON.parse(Buffer.from(transaction.nextConfigBytes).toString("utf8")) as Record<string, unknown>
-  ).models as Record<string, unknown>;
-  const savedModelKeys = Object.values(savedPools).flatMap((pool) =>
+  ).models as Record<string, unknown> | undefined;
+  const savedModelKeys = Object.values(savedPools ?? {}).flatMap((pool) =>
     typeof pool === "string"
       ? [pool]
       : Array.isArray(pool)
@@ -4070,7 +4072,7 @@ function persistBootstrapConfig(
         return true;
       }
     } else {
-      const receipt = buildInitOwnershipReceipt("project", generatedModels);
+      const receipt = buildInitOwnershipReceipt(source.source, generatedModels);
       if (!receipt) {
         logImportant(
           ctx,
@@ -4090,10 +4092,10 @@ function persistBootstrapConfig(
   }
   const configBytes = Buffer.from(JSON.stringify(current, null, 2) + "\n", "utf8");
   const ownership = stillFresh
-    ? buildInitOwnershipReceipt("project", generatedModels)
+    ? buildInitOwnershipReceipt(source.source, generatedModels)
     : source.ownershipBytes
       ? undefined
-      : buildInitOwnershipReceipt("project", {});
+      : buildInitOwnershipReceipt(source.source, {});
   const ownershipBytes = ownership
     ? Buffer.from(JSON.stringify(ownership, null, 2) + "\n", "utf8")
     : source.ownershipBytes

@@ -11,7 +11,7 @@ import { reliabilityPath } from "../reliability.ts";
 import { providerReliabilityPath, reliabilityV2Path } from "../runtime-reliability-v2.ts";
 import { createProviderCooldownStore } from "../runtime-reliability-v2.ts";
 import { emptyReliabilityV2State } from "../reliability-v2.ts";
-import { buildInitOwnershipReceipt } from "../reconciliation-command.ts";
+import { buildInitMembershipPlan, buildInitOwnershipReceipt } from "../reconciliation-command.ts";
 import { REGISTRY_REFRESH_TTL_MS } from "../ux-status.ts";
 import { loadConfigForReload } from "../config-load.ts";
 import { resolveClassifierEnablement } from "../runtime-state.ts";
@@ -637,7 +637,7 @@ describe("bifrost command ui", () => {
     }
   });
 
-  it("saves starter pools beside an empty selected config when a classifier is chosen", async () => {
+  for (const scope of ["user", "workspace"] as const) it(`saves starter pools with ${scope} ownership when a classifier is chosen`, async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-classifier-empty-bootstrap-"));
     const previousCwd = process.cwd();
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -646,7 +646,7 @@ describe("bifrost command ui", () => {
     mkdirSync(agentDir);
     process.chdir(tempDir);
     try {
-      const globalConfig = join(agentDir, "bifrost.json");
+      const globalConfig = scope === "user" ? join(agentDir, "bifrost.json") : join(tempDir, "bifrost.json");
       writeFileSync(globalConfig, "{}\n");
       const { ctx } = makeCtx([{ provider: "fixture", id: "chat" }], (title, options) =>
         title === "Classifier backend" ? options.find((option) => option.startsWith("typesafe")) : undefined,
@@ -662,7 +662,22 @@ describe("bifrost command ui", () => {
       assert.equal(saved.default, "quick");
       assert.deepEqual(saved.models, { quick: ["fixture/chat"] });
       assert.equal(saved.classifier.backend, "typesafe");
-      assert.ok(existsSync(join(agentDir, "bifrost-reconcile-ownership.json")));
+      const receiptPath = scope === "user"
+        ? join(agentDir, "bifrost-reconcile-ownership.json")
+        : join(tempDir, ".pi", "bifrost-reconcile-workspace-ownership.json");
+      const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+      assert.deepEqual(receipt, { version: 2, scope, tiers: { quick: { state: "generated", models: ["fixture/chat"] } } });
+      const plan = buildInitMembershipPlan({
+        source: scope,
+        configPath: globalConfig,
+        ownershipPath: receiptPath,
+        journalPath: join(tempDir, "unused.journal"),
+        configBytes: readFileSync(globalConfig),
+        ownershipBytes: readFileSync(receiptPath),
+      }, [{ provider: "fixture", status: "complete", modelsByTier: { quick: ["fixture/chat", "fixture/new"] } }], () => true);
+      assert.equal(plan.status, "ready");
+      assert.deepEqual(plan.changes.map(({ kind, tier, modelKey }) => ({ kind, tier, modelKey })),
+        [{ kind: "add", tier: "quick", modelKey: "fixture/new" }]);
       assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), false);
     } finally {
       process.chdir(previousCwd);
