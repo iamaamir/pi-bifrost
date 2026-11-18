@@ -440,8 +440,16 @@ describe("classification-pipeline", () => {
         }));
         const result = await pipeline.classify("anything");
         assert.equal(result.kind, "fallback");
-        assert.equal("confidence" in (result.classifierAttempt ?? {}), false, `confidence ${confidence} leaked`);
-        assert.equal("confidence" in (buildRouteDecisionSummary(result).classifierAttempt ?? {}), false);
+        // The attempt itself must survive; asserting absence on `?? {}` alone
+        // would also pass if the whole attempt were dropped.
+        const expectedAttempt = {
+          backend: "typesafe",
+          outcome: "low_confidence",
+          model: "jev-1.13.0",
+          fallbackKind: "default",
+        };
+        assert.deepEqual(result.classifierAttempt, expectedAttempt, `confidence ${confidence} must not change the attempt`);
+        assert.deepEqual(buildRouteDecisionSummary(result).classifierAttempt, expectedAttempt);
       }
     });
 
