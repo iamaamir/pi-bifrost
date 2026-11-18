@@ -279,6 +279,14 @@ it("routes real AgentSession through Pi-native classifier behind a proven deny-a
     assert.equal(deadline.status, 0, `${deadline.stdout}\n${deadline.stderr}`);
     assert.equal(readFileSync(violations, "utf8"), "", "deadline scenario made blocked outbound attempt");
 
+    // The only case that observes a command's visible output through a real
+    // AgentSession: `preview` is dispatched by Pi, not by a handler mock.
+    const preview = await runChild({ BIFROST_NATIVE_CLASSIFIER_SCENARIO: "preview-command" });
+    assert.equal(preview.status, 0, `${preview.stdout}\n${preview.stderr}`);
+    assert.match(preview.stdout, /ℹ pass 1\b/u, "preview command scenario must run its single assertion group");
+    assert.match(preview.stdout, /ℹ fail 0\b/u, "preview command scenario must not report a failure");
+    assert.equal(readFileSync(violations, "utf8"), "", "preview command scenario made blocked outbound attempt");
+
     const faultRoot = join(scratch, "late-result-fault-source");
     cpSync(root, faultRoot, { recursive: true, filter: (source) => !source.includes("/.git") && !source.includes("/node_modules") && !source.includes("/coverage") });
     symlinkSync(join(root, "node_modules"), join(faultRoot, "node_modules"));
@@ -286,6 +294,8 @@ it("routes real AgentSession through Pi-native classifier behind a proven deny-a
     const nativePath = join(faultRoot, "classifier-pi-native.ts");
     const originalPipeline = readFileSync(pipelinePath, "utf8");
     const originalNative = readFileSync(nativePath, "utf8");
+    const indexPath = join(faultRoot, "index.ts");
+    const originalIndex = readFileSync(indexPath, "utf8");
     const faultyPipeline = originalPipeline
       .replace("const abort = () => finish({ status: \"aborted\" });", "const abort = () => {};" )
       .replace("if (classificationOutcome === \"deadline\" || (deadlineAt !== undefined && performance.now() >= deadlineAt)) {", "if (false) {")
@@ -314,6 +324,24 @@ it("routes real AgentSession through Pi-native classifier behind a proven deny-a
     );
     assert.equal(precedenceFault.status, 0, `${precedenceFault.stdout}\n${precedenceFault.stderr}`);
     assert.match(precedenceFault.stdout, /pass 1/, "native-miss mutant must prove prompt-decoy fallback assertions");
+
+    // The previous mutant is still in place; a preview fault control must vary
+    // exactly one file or it proves nothing.
+    writeFileSync(nativePath, originalNative);
+    const confidenceMutant = originalIndex.replace("        ...(confidence !== undefined ? { confidence } : {}),\n", "");
+    assert.notEqual(confidenceMutant, originalIndex, "confidence mutant must remove the propagation line");
+    writeFileSync(indexPath, confidenceMutant);
+    const previewFault = await runChild(
+      { BIFROST_NATIVE_CLASSIFIER_SCENARIO: "preview-command" },
+      join(faultRoot, "tests/fixtures/native-classifier-child.mjs"),
+    );
+    assert.notEqual(previewFault.status, 0, `confidence mutant must fail the preview command assertions\n${previewFault.stdout}\n${previewFault.stderr}`);
+    assert.match(
+      `${previewFault.stdout}\n${previewFault.stderr}`,
+      /exact rejected confidence must survive the real command path/,
+      "mutant must fail the intended confidence assertion, not startup",
+    );
+    writeFileSync(indexPath, originalIndex);
 
     for (const fault of ["wrong-tier", "disabled", "no-extension"]) {
       const red = await runChild({ BIFROST_NATIVE_CLASSIFIER_FAULT: fault });
