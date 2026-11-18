@@ -179,7 +179,7 @@ async function assertInheritedSettingsMatrixCase(port, args, targetKind) {
     if (targetKind === "owned") {
       assert.deepEqual(saved.models, { quick: ["fake/healthy"] });
       assert.equal(saved.targetPrivateSetting, "KEEP_TARGET_CANARY");
-      assert.match(result.stdout + result.stderr, /Pools\s+\+0 \/ -0/, `expected the owned-membership case to exercise settings-only reconciliation: ${JSON.stringify(result)}`);
+      assert.match(result.stdout + result.stderr, /Pools\s+no changes/, `expected the owned-membership case to exercise settings-only reconciliation: ${JSON.stringify(result)}`);
     }
 
     const before = loadConfigForReload(env.work, ROOT).config;
