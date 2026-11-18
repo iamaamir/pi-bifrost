@@ -1962,6 +1962,15 @@ function shouldRenderClassifierAttempt(
   return attempt.confidence !== undefined && attempt.confidence !== accepted.confidence;
 }
 
+/** The attempt block, built once so a new field cannot drift between views. */
+function classifierAttemptLines(attempt: ClassifierAttemptSummary): string[] {
+  return [
+    `classifier attempt: ${attempt.backend} (${attempt.outcome}, fallback=${attempt.fallbackKind})`,
+    ...(attempt.model !== undefined ? [`classifier attempt model: ${attempt.model}`] : []),
+    ...(attempt.confidence !== undefined ? [`classifier attempt confidence: ${attempt.confidence}`] : []),
+  ];
+}
+
 export function renderTracePreview(trace: BifrostTracePreview): string[] {
   const lines = [
     "--- route trace v1 ---",
@@ -1979,10 +1988,7 @@ export function renderTracePreview(trace: BifrostTracePreview): string[] {
   }
   const traceAttempt = trace.classifierAttempt;
   if (traceAttempt && shouldRenderClassifierAttempt(traceAttempt, trace.classification.classifier)) {
-    const attempt = traceAttempt;
-    lines.push(`classifier attempt: ${attempt.backend} (${attempt.outcome}, fallback=${attempt.fallbackKind})`);
-    if (attempt.model !== undefined) lines.push(`classifier attempt model: ${attempt.model}`);
-    if (attempt.confidence !== undefined) lines.push(`classifier attempt confidence: ${attempt.confidence}`);
+    lines.push(...classifierAttemptLines(traceAttempt));
   }
   const renderPool = (label: string, pool: RouteDecisionSummary["requested"] | RouteDecisionSummary["fallback"]) => {
     if (!pool) return;
@@ -2035,11 +2041,7 @@ export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
       `model:     ${report.model ?? "none"}`,
       `confidence:${report.confidence === undefined ? " n/a" : ` ${report.confidence}`}`,
     ] : []),
-    ...(showAttempt && attempt ? [
-      `classifier attempt: ${attempt.backend} (${attempt.outcome}, fallback=${attempt.fallbackKind})`,
-      ...(attempt.model !== undefined ? [`classifier attempt model: ${attempt.model}`] : []),
-      ...(attempt.confidence !== undefined ? [`classifier attempt confidence: ${attempt.confidence}`] : []),
-    ] : []),
+    ...(showAttempt && attempt ? classifierAttemptLines(attempt) : []),
     `tier:      ${report.tier}`,
     `strategy:  ${report.strategy}`,
     `selected tier: ${report.selectedTier ?? PREVIEW_NONE}`,
@@ -2068,11 +2070,7 @@ function renderPreviewFailureReport(report: BifrostPreviewFailure): string[] {
     "--- preview ---",
     `prompt:    ${report.prompt}`,
     "source:    unclassified",
-    ...(attempt ? [
-      `classifier attempt: ${attempt.backend} (${attempt.outcome}, fallback=${attempt.fallbackKind})`,
-      ...(attempt.model !== undefined ? [`classifier attempt model: ${attempt.model}`] : []),
-      ...(attempt.confidence !== undefined ? [`classifier attempt confidence: ${attempt.confidence}`] : []),
-    ] : []),
+    ...(attempt ? classifierAttemptLines(attempt) : []),
     `result:    ${report.error}`,
     "selected:  none",
     "---------------",

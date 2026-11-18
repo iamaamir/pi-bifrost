@@ -2081,6 +2081,32 @@ describe("preview report", () => {
     assert(trace.includes("classifier attempt confidence: 0.42"));
   });
 
+  it("keeps a successful attempt whose model the classification did not report", () => {
+    // Reachable today: the pi-native observation records the resolved catalog id
+    // when the API judgment omits `model` (classifier-pi-native.ts:209), so the
+    // accepted classification has no model while the attempt does. Suppressing
+    // the block here would drop the only record of the model that answered.
+    const classification = {
+      kind: "classified" as const,
+      tier: "quick",
+      source: "classifier" as const,
+      judgment: { tier: "quick", backend: "pi-native" as const, confidence: 0.93 },
+      classifierAttempt: {
+        backend: "pi-native" as const,
+        outcome: "success" as const,
+        fallbackKind: "none" as const,
+        model: "catalog/resolved-model",
+        confidence: 0.93,
+      },
+    };
+
+    const preview = renderPreviewReport(buildPreviewReport({ prompt: "p", classification, display }));
+    assert(preview.includes("classifier attempt model: catalog/resolved-model"));
+
+    const trace = renderTracePreview(buildTracePreview(buildRouteDecisionSummary(classification), true));
+    assert(trace.includes("classifier attempt model: catalog/resolved-model"));
+  });
+
   it("serializes to one parseable line with no prose envelope", () => {
     const report = buildPreviewReport({
       prompt: "direct hit",
