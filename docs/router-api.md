@@ -84,7 +84,7 @@ An optional economic `preference.billingClass` can rank fresh explicit billing f
 
 ## Custom tiers and strategies
 
-Tier names are caller-defined. Configure any number of pools under `config.models` and per-tier strategies under `config.categoryStrategies`; the engine supports `first`, `cheapest`, `cheapest_input`, `cheapest_output`, `largest_context`, `random`, and `fastest`. Supply `random` (per resolution or at creation) for deterministic tests; omission preserves default randomness.
+Tier names are caller-defined. Configure any number of pools under `config.models` and per-tier strategies under `config.categoryStrategies`; the engine supports `first`, `cheapest`, `cheapest_input`, `cheapest_output`, `largest_context`, `best_value`, `random`, and `fastest`. Supply `random` (per resolution or at creation) for deterministic tests; omission preserves default randomness.
 
 Under `schemaVersion: 2`, a tier may declare ordered `tierPolicies.<tier>.fallbackTiers`. An explicitly empty fallback list is terminal; the resolver never escapes an explicit fallback boundary.
 

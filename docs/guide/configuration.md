@@ -157,6 +157,7 @@ Strategies choose the exact healthy candidate after a tier has resolved:
 | `cheapest_input` | Lowest input cost |
 | `cheapest_output` | Lowest output cost |
 | `largest_context` | Largest context window |
+| `best_value` | Lowest combined cost per context token |
 | `random` | Random healthy candidate |
 
 Set one global fallback and override individual tiers. In `.pi/bifrost.json`:

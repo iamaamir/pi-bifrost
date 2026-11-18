@@ -963,6 +963,27 @@ describe("routing", () => {
       assert.equal(modelKey(selectModel(tied, "largest_context")), "a/first");
     });
 
+    it("returns best value (most context per dollar)", () => {
+      const cheapSmall = makeModel("a", "cheap-small", 0.5, 0.5, 10_000);
+      const priceyBig = makeModel("b", "pricey-big", 1, 1, 100_000);
+      const m = selectModel([cheapSmall, priceyBig], "best_value");
+      assert.equal(modelKey(m), "b/pricey-big");
+    });
+
+    it("treats zero-cost models as best value", () => {
+      const paid = makeModel("a", "paid", 1, 1, 100_000);
+      const free = makeModel("b", "free", 0, 0, 32_000);
+      const m = selectModel([paid, free], "best_value");
+      assert.equal(modelKey(m), "b/free");
+    });
+
+    it("keeps candidate order for best_value ties", () => {
+      const first = makeModel("a", "first", 0.5, 0.5, 100_000);
+      const second = makeModel("b", "second", 1, 1, 200_000);
+      const m = selectModel([first, second], "best_value");
+      assert.equal(modelKey(m), "a/first");
+    });
+
     it("returns undefined for empty candidates", () => {
       assert.equal(selectModel([], "first"), undefined);
     });
