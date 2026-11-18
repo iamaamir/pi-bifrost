@@ -1645,13 +1645,16 @@ export function buildClassifierTestReport(input: {
 
   const rawPromptModel = classifier?.model;
   const configuredModel = Array.isArray(rawPromptModel) ? rawPromptModel.join(", ") : rawPromptModel;
+  // A rejected attempt's confidence belongs to the model that produced it, which
+  // may be auto-resolved from the catalog and differ from configured values.
+  const attemptedModel = result.classifierAttempt?.backend === backend ? result.classifierAttempt.model : undefined;
   const model = judgment?.backend === backend
     ? judgment.model
-    : backend === CLASSIFIER_BACKEND_IDS.typesafe
+    : attemptedModel ?? (backend === CLASSIFIER_BACKEND_IDS.typesafe
       ? classifier?.typesafe?.model ?? TYPE_SAFE_MODEL
       : backend === CLASSIFIER_BACKEND_IDS.piNative
         ? classifier?.piNative?.model ?? "catalog default"
-        : configuredModel;
+        : configuredModel);
   const finalResult = result.kind === "unclassified" ? "unclassified" : result.tier;
   const finalSource = result.kind === "classified" ? result.source : result.kind;
   const accepted = result.kind === "classified" && judgment?.backend === backend;

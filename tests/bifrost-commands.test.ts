@@ -994,6 +994,107 @@ describe("bifrost command ui", () => {
     assert(lines.includes("outcome: low_confidence"));
   });
 
+  it("attributes a rejected auto-resolved pi-native attempt to the observed model", () => {
+    const before = {
+      version: 1, model: "typesafe/jev-latest", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
+    } as const;
+    const after = {
+      ...before,
+      total: 1,
+      outcomes: { low_confidence: 1 },
+      tiers: { quick: 1 },
+      totalAttempts: 1,
+    } as const;
+
+    const lines = buildClassifierTestReport({
+      classifier: { piNative: {}, minConfidence: 0.8 },
+      effectiveBackend: { backend: "pi-native", reason: "Pi-managed TypeSafe credential", auto: true },
+      result: {
+        kind: "fallback",
+        tier: "quick",
+        classifierAttempt: {
+          backend: "pi-native",
+          outcome: "low_confidence",
+          fallbackKind: "default",
+          model: "typesafe/jev-latest",
+          confidence: 0.73,
+        },
+      },
+      before,
+      after,
+    });
+
+    assert(lines.includes("model: typesafe/jev-latest"), JSON.stringify(lines));
+    assert(lines.includes("confidence: 0.73"));
+    assert.equal(lines.some((line) => line.includes("catalog default")), false, JSON.stringify(lines));
+  });
+
+  it("attributes a rejected attempt to its observed model over an explicitly configured one", () => {
+    const before = {
+      version: 1, model: "typesafe/configured", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
+    } as const;
+    const after = {
+      ...before,
+      total: 1,
+      outcomes: { low_confidence: 1 },
+      tiers: { quick: 1 },
+      totalAttempts: 1,
+    } as const;
+
+    const lines = buildClassifierTestReport({
+      classifier: { piNative: { model: "typesafe/configured" }, minConfidence: 0.8 },
+      effectiveBackend: { backend: "pi-native", reason: "test", auto: false },
+      result: {
+        kind: "fallback",
+        tier: "quick",
+        classifierAttempt: {
+          backend: "pi-native",
+          outcome: "low_confidence",
+          fallbackKind: "default",
+          model: "typesafe/observed",
+          confidence: 0.4,
+        },
+      },
+      before,
+      after,
+    });
+
+    assert(lines.includes("model: typesafe/observed"), JSON.stringify(lines));
+    assert(lines.includes("confidence: 0.4"));
+  });
+
+  it("keeps configured model attribution when a rejected attempt observed no model", () => {
+    const before = {
+      version: 1, model: "typesafe/configured", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
+    } as const;
+    const after = {
+      ...before,
+      total: 1,
+      outcomes: { timeout: 1 },
+      tiers: { quick: 1 },
+      totalAttempts: 0,
+    } as const;
+
+    const lines = buildClassifierTestReport({
+      classifier: { piNative: { model: "typesafe/configured" }, minConfidence: 0.8 },
+      effectiveBackend: { backend: "pi-native", reason: "test", auto: false },
+      result: {
+        kind: "fallback",
+        tier: "quick",
+        classifierAttempt: {
+          backend: "pi-native",
+          outcome: "timeout",
+          fallbackKind: "default",
+        },
+      },
+      before,
+      after,
+    });
+
+    assert(lines.includes("model: typesafe/configured"), JSON.stringify(lines));
+    assert(lines.includes("confidence: n/a"), JSON.stringify(lines));
+  });
+
   it("falls back to confidence bands when a rejected attempt has no exact confidence", () => {
     const before = {
       version: 1, model: "jev-1.13.0", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
