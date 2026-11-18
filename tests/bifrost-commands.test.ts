@@ -2086,10 +2086,10 @@ describe("preview report", () => {
   });
 
   it("keeps a successful attempt whose model the classification did not report", () => {
-    // Reachable today: the pi-native observation records the resolved catalog id
-    // when the API judgment omits `model` (classifier-pi-native.ts:209), so the
-    // accepted classification has no model while the attempt does. Suppressing
-    // the block here would drop the only record of the model that answered.
+    // Synthetic renderer guard, not a reachable pi-native response: the decoder
+    // fills the resolved catalog id when the API judgment omits `model`
+    // (classifier-pi-native.ts:158), so the accepted classification carries it
+    // as well. The renderer must still not drop a model only it holds.
     const classification = {
       kind: "classified" as const,
       tier: "quick",
