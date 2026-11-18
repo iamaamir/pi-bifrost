@@ -1630,9 +1630,12 @@ export function buildClassifierTestReport(input: {
   const backendLabel = effective?.auto ? `auto: ${backend} (${effective.reason})` : backend;
   const judgment = result.kind === "classified" ? result.judgment : undefined;
   const outcome = increasedMetric(after.outcomes, before.outcomes);
+  // A rejected judgment still names the tier it proposed. Prefer that over the
+  // metrics delta, which is absent whenever metrics are disabled.
+  const attemptedTier = result.classifierAttempt?.backend === backend ? result.classifierAttempt.tier : undefined;
   const observedTier = judgment?.backend === backend
     ? judgment.tier
-    : increasedMetric(after.tiers, before.tiers);
+    : attemptedTier ?? increasedMetric(after.tiers, before.tiers);
 
   const acceptedConfidence = judgment?.backend === backend ? judgment.confidence : undefined;
   const attemptedConfidence = result.classifierAttempt?.backend === backend ? result.classifierAttempt.confidence : undefined;
@@ -1966,6 +1969,7 @@ function shouldRenderClassifierAttempt(
 function classifierAttemptLines(attempt: ClassifierAttemptSummary): string[] {
   return [
     `classifier attempt: ${attempt.backend} (${attempt.outcome}, fallback=${attempt.fallbackKind})`,
+    ...(attempt.tier !== undefined ? [`classifier attempt tier: ${attempt.tier}`] : []),
     ...(attempt.model !== undefined ? [`classifier attempt model: ${attempt.model}`] : []),
     ...(attempt.confidence !== undefined ? [`classifier attempt confidence: ${attempt.confidence}`] : []),
   ];

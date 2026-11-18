@@ -1131,6 +1131,41 @@ describe("bifrost command ui", () => {
     assert(lines.includes("confidence: <0.8"));
   });
 
+  it("reports the tier a rejected attempt proposed when metrics are disabled", () => {
+    const empty = {
+      version: 1, model: "jev-1.13.0", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
+    } as const;
+    const report = (attempt: { tier?: string; outcome?: "low_confidence" | "timeout"; confidence?: number }) => buildClassifierTestReport({
+      classifier: { backend: "typesafe", typesafe: { model: "jev-1.13.0" }, minConfidence: 0.8 },
+      result: {
+        kind: "fallback",
+        tier: "frontier",
+        classifierAttempt: {
+          backend: "typesafe",
+          outcome: attempt.outcome ?? "low_confidence",
+          fallbackKind: "default",
+          model: "jev-1.13.0",
+          ...(attempt.tier !== undefined ? { tier: attempt.tier } : {}),
+          ...(attempt.confidence !== undefined ? { confidence: attempt.confidence } : {}),
+        },
+      },
+      before: empty,
+      after: empty,
+      credential: "environment",
+    });
+
+    // No metric delta exists, so without the attempt's own tier the exact
+    // confidence would be attributable to nothing.
+    const rejected = report({ tier: "quick", confidence: 0.73 });
+    assert(rejected.includes("backend result: quick"), JSON.stringify(rejected));
+    assert(rejected.includes("confidence: 0.73"));
+    assert.equal(rejected.includes("backend result: none"), false);
+
+    // A timeout proposes nothing, so the honest answer is still absent.
+    const timedOut = report({ outcome: "timeout" });
+    assert(timedOut.includes("backend result: none"), JSON.stringify(timedOut));
+  });
+
   it("shows zero confidence for a rejected direct classifier attempt", () => {
     const before = {
       version: 1, model: "jev-1.13.0", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
@@ -2059,6 +2094,26 @@ describe("preview report", () => {
     const trace = renderTracePreview(buildTracePreview(buildRouteDecisionSummary(classification), true));
     assert(trace.includes("classifier confidence: 0.93"));
     assert.equal(trace.some((line) => line.startsWith("classifier attempt")), false);
+  });
+
+  it("names the tier a rejected attempt proposed in preview text, trace text and JSON", () => {
+    const classification = {
+      kind: "fallback" as const,
+      tier: "frontier",
+      classifierAttempt: {
+        backend: "typesafe" as const,
+        outcome: "low_confidence" as const,
+        fallbackKind: "default" as const,
+        tier: "quick",
+        model: "jev-1.13.0",
+        confidence: 0.73,
+      },
+    };
+
+    const report = buildPreviewReport({ prompt: "p", classification, display });
+    assert.equal(report.classifierAttempt?.tier, "quick");
+    assert(renderPreviewReport(report).includes("classifier attempt tier: quick"));
+    assert(renderTracePreview(buildTracePreview(buildRouteDecisionSummary(classification), true)).includes("classifier attempt tier: quick"));
   });
 
   it("keeps a successful attempt when its confidence differs from the classification", () => {
