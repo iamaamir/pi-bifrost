@@ -279,6 +279,7 @@ Set a global strategy or override it per tier. In `.pi/bifrost.json`:
   "categoryStrategies": {
     "economical": "cheapest",
     "deep": "largest_context",
+    "value": "best_value",
     "latency-sensitive": "fastest",
     "load-balanced": "random"
   }
@@ -289,6 +290,7 @@ Set a global strategy or override it per tier. In `.pi/bifrost.json`:
 - `cheapest_input`: lowest input cost.
 - `cheapest_output`: lowest output cost.
 - `largest_context`: largest context window.
+- `best_value`: lowest combined cost per context token.
 - `first`: first available candidate in list order.
 - `fastest`: behaves as `first` over the current list order; init may pre-sort that list from its one-time probe.
 - `random`: random available candidate.
