@@ -42,7 +42,7 @@ import {
 import { createPipeline, type ClassificationResult } from "../classification-pipeline.ts";
 import { CLASSIFIER_BACKEND_IDS, type ClassifierBackend } from "../classifier-backends.ts";
 import type { BifrostConfig, ClassifierConfig } from "../config.ts";
-import { buildPreviewReport, renderPreviewReport } from "../commands.ts";
+import { buildPreviewReport, renderPreviewReport, serializePreviewReport } from "../commands.ts";
 import type { RouteRule } from "../routing.ts";
 import { makeClassifierModel } from "./helpers.ts";
 
@@ -979,6 +979,10 @@ describe("preview report confidence echo", () => {
         });
 
         assert.equal(report.classifierAttempt?.confidence, confidence);
+        // The JSON path is what downstream consumers read, so round-trip it
+        // rather than trusting the in-memory object.
+        const serialized = JSON.parse(serializePreviewReport(report));
+        assert.equal(serialized.classifierAttempt.confidence, confidence);
         const lines = renderPreviewReport(report).filter((line) => line.startsWith("classifier attempt confidence:"));
         assert.deepEqual(lines, [`classifier attempt confidence: ${confidence}`]);
       }),
