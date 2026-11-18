@@ -11,21 +11,47 @@ export interface ReconciliationInventory {
   readonly modelsByTier: Readonly<Record<string, readonly string[]>>;
 }
 
-export interface ReconciliationOwnershipSource {
-  readonly generated: Readonly<Record<string, readonly string[]>>;
-  readonly tombstones: Readonly<Record<string, readonly string[]>>;
+/**
+ * Per-provider generated membership derived for one reconciliation pass.
+ * This view is never persisted; the stored payload is `ReconciliationOwnershipSnapshot`.
+ */
+export interface ReconciliationOwnershipView {
+  readonly sources: Readonly<Record<string, {
+    readonly generated: Readonly<Record<string, readonly string[]>>;
+  }>>;
 }
 
+export type OwnershipScope = "project" | "workspace" | "user";
+
+/**
+ * Stored ownership payload (v2). A tier is Bifrost-managed only while the
+ * configured pool exactly equals its ordered `models` snapshot.
+ *
+ * A tier modified in any way (add, remove, reorder, empty, delete) loses its
+ * snapshot and retains a user marker. `deleted` records deliberate removal so
+ * Keep and Merge cannot recreate the tier; an explicit Bifrost-defaults reset
+ * may restore it.
+ */
+export type ReconciliationOwnershipTier =
+  | { readonly state: "generated"; readonly models: readonly string[] }
+  | { readonly state: "user" | "deleted" };
+
+export type ConfiguredTierPool = string | readonly string[];
+
 export interface ReconciliationOwnershipSnapshot {
-  readonly version: 1;
-  readonly sources: Readonly<Record<string, ReconciliationOwnershipSource>>;
+  readonly version: 2;
+  readonly scope: OwnershipScope;
+  readonly tiers: Readonly<Record<string, ReconciliationOwnershipTier>>;
 }
+
+/** Which side owns a tier right now, judged against the configured pool. */
+export type TierOwnership = "managed" | "user" | "deleted" | "absent";
 
 export interface ReconciliationInput {
   readonly configDigest: string;
   /** Null means no ownership sidecar exists yet. */
   readonly ownershipRevision: string | null;
-  readonly ownership?: ReconciliationOwnershipSnapshot;
+  readonly ownership?: ReconciliationOwnershipView;
   /** Configured patterns remain opaque and are never adopted as owned membership. */
   readonly configuredModels: Readonly<Record<string, string | readonly string[]>>;
   readonly inventory: ReconciliationInventory;
@@ -35,18 +61,12 @@ export type ReconciliationWarningCode =
   | "inventory_incomplete"
   | "removal_suppressed"
   | "manual_entry_collision"
-  | "user_removal_tombstoned"
-  | "ownership_uninitialized";
+  | "ownership_uninitialized"
+  | "tier_user_managed";
 
 export interface ReconciliationChange {
   readonly kind: "add" | "remove";
   readonly disposition: "apply" | "advisory";
-  readonly tier: string;
-  readonly modelKey: string;
-}
-
-export interface ReconciliationOwnershipChange {
-  readonly kind: "claim" | "unclaim" | "tombstone";
   readonly tier: string;
   readonly modelKey: string;
 }
@@ -59,7 +79,6 @@ export interface ReconciliationProposal {
   readonly expectedConfigDigest?: string;
   readonly expectedOwnershipRevision?: string | null;
   readonly changes: readonly ReconciliationChange[];
-  readonly ownershipChanges: readonly ReconciliationOwnershipChange[];
   readonly warnings: readonly ReconciliationWarningCode[];
 }
 
@@ -90,12 +109,119 @@ function own(object: object, key: string): boolean {
   return Object.hasOwn(object, key);
 }
 
+function samePool(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((key, index) => key === right[index]);
+}
+
+/** Which side owns this tier right now, judged against the configured pool. */
+export function tierOwnership(
+  snapshot: ReconciliationOwnershipSnapshot | undefined,
+  tier: string,
+  pool: ConfiguredTierPool | undefined,
+): TierOwnership {
+  const entry = snapshot && own(snapshot.tiers, tier) ? snapshot.tiers[tier] : undefined;
+  if (pool === undefined) return entry ? "deleted" : "absent";
+  if (!entry || entry.state !== "generated" || typeof pool === "string") return "user";
+  return samePool(entry.models, pool) ? "managed" : "user";
+}
+
+/** Validates a stored v2 payload. Legacy v1 bytes are handled by the store, not here. */
+export function parseOwnershipSnapshot(value: unknown): ReconciliationOwnershipSnapshot | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.getPrototypeOf(value) !== Object.prototype) return undefined;
+  const record = value as Record<string, unknown>;
+  const keys = Object.keys(record);
+  if (keys.length !== 3 || !["version", "scope", "tiers"].every((key) => own(record, key))) return undefined;
+  if (record.version !== 2 || !["project", "workspace", "user"].includes(record.scope as string)) return undefined;
+  if (!record.tiers || typeof record.tiers !== "object" || Array.isArray(record.tiers)) return undefined;
+  const tiers = Object.entries(record.tiers as Record<string, unknown>);
+  if (tiers.length > MAX_TIERS) return undefined;
+  let total = 0;
+  for (const [tier, rawEntry] of tiers) {
+    if (!validTier(tier) || !rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) return undefined;
+    const entry = rawEntry as Record<string, unknown>;
+    if (entry.state !== "generated" && entry.state !== "deleted" && entry.state !== "user") return undefined;
+    const entryKeys = Object.keys(entry);
+    if (entry.state !== "generated") {
+      if (entryKeys.length !== 1) return undefined;
+      continue;
+    }
+    if (entryKeys.length !== 2 || !own(entry, "models")) return undefined;
+    if (!Array.isArray(entry.models) || entry.models.length > MAX_MODELS_PER_TIER) return undefined;
+    for (const modelKey of entry.models) if (!validModelKey(modelKey) || modelKey.includes("*")) return undefined;
+    if (new Set(entry.models).size !== entry.models.length) return undefined;
+    total += entry.models.length;
+    if (total > MAX_OWNED_MEMBERSHIPS) return undefined;
+  }
+  return value as ReconciliationOwnershipSnapshot;
+}
+
+/**
+ * Recomputes the stored snapshot after a write. `managedTiers` are the tiers
+ * this pass may own; every other tier retains generation only while unchanged.
+ * User markers survive edits so later deletion cannot look like a new tier.
+ */
+export function deriveOwnershipSnapshot(input: {
+  readonly scope: OwnershipScope;
+  readonly previous: ReconciliationOwnershipSnapshot | undefined;
+  readonly before: Readonly<Record<string, ConfiguredTierPool>>;
+  readonly after: Readonly<Record<string, ConfiguredTierPool>>;
+  readonly managedTiers: ReadonlySet<string>;
+}): ReconciliationOwnershipSnapshot {
+  const tiers: Record<string, ReconciliationOwnershipTier> = {};
+  const setTier = (tier: string, value: ReconciliationOwnershipTier) => {
+    Object.defineProperty(tiers, tier, { value, enumerable: true, configurable: true, writable: true });
+  };
+  const previous = input.previous?.scope === input.scope ? input.previous : undefined;
+  const names = new Set([...Object.keys(previous?.tiers ?? {}), ...Object.keys(input.before), ...Object.keys(input.after)]);
+  for (const tier of names) {
+    const before = own(input.before, tier) ? input.before[tier] : undefined;
+    const after = own(input.after, tier) ? input.after[tier] : undefined;
+    if (after === undefined) {
+      setTier(tier, { state: "deleted" });
+    } else if (typeof after !== "string" && (input.managedTiers.has(tier)
+      || tierOwnership(previous, tier, before) === "managed"
+        && typeof before !== "string" && before !== undefined && samePool(before, after))) {
+      setTier(tier, { state: "generated", models: [...after] });
+    } else {
+      setTier(tier, { state: "user" });
+    }
+  }
+  return Object.freeze({
+    version: 2,
+    scope: input.scope,
+    tiers: Object.freeze(tiers),
+  });
+}
+
+/**
+ * Provider-scoped generated membership derived from the whole-tier snapshot.
+ * Returns undefined when the tier is not trustworthy, so callers protect it.
+ */
+export function providerMembershipView(
+  snapshot: ReconciliationOwnershipSnapshot,
+  tier: string,
+  provider: string,
+  sourceId: string,
+): ReconciliationOwnershipView | undefined {
+  if (!own(snapshot.tiers, tier)) return undefined;
+  const entry = snapshot.tiers[tier];
+  if (!entry || entry.state !== "generated") return undefined;
+  const prefix = `${provider}/`;
+  return {
+    sources: {
+      [sourceId]: {
+        generated: { [tier]: (entry.models ?? []).filter((key) => key.startsWith(prefix)) },
+      },
+    },
+  };
+}
+
 function invalidProposal(): ReconciliationProposal {
   return Object.freeze({
     version: 1,
     status: "invalid",
     changes: Object.freeze([]),
-    ownershipChanges: Object.freeze([]),
     warnings: Object.freeze([]),
   });
 }
@@ -122,23 +248,22 @@ function validateModelTiers(value: unknown, allowPatterns: boolean): Map<string,
 }
 
 function sourceOwnership(
-  snapshot: ReconciliationOwnershipSnapshot | undefined,
+  view: ReconciliationOwnershipView | undefined,
   sourceId: string,
-): { generated: Map<string, Set<string>>; tombstones: Map<string, Set<string>> } | undefined {
-  if (!snapshot) return { generated: new Map(), tombstones: new Map() };
-  if (snapshot.version !== 1 || !snapshot.sources || typeof snapshot.sources !== "object" || Array.isArray(snapshot.sources)) return undefined;
-  const sourceIds = Object.keys(snapshot.sources);
+): { generated: Map<string, Set<string>> } | undefined {
+  if (!view) return { generated: new Map() };
+  if (!view.sources || typeof view.sources !== "object" || Array.isArray(view.sources)) return undefined;
+  const sourceIds = Object.keys(view.sources);
   if (sourceIds.length > MAX_SOURCES) return undefined;
   const claims = new Map<string, string>();
   let totalMemberships = 0;
-  let current: { generated: Map<string, Set<string>>; tombstones: Map<string, Set<string>> } | undefined;
+  let current: { generated: Map<string, Set<string>> } | undefined;
   for (const ownerId of sourceIds) {
     if (!opaqueToken(ownerId)) return undefined;
-    const source = snapshot.sources[ownerId];
+    const source = view.sources[ownerId];
     if (!source || typeof source !== "object") return undefined;
     const generated = validateModelTiers(source.generated, false);
-    const tombstones = validateModelTiers(source.tombstones, false);
-    if (!generated || !tombstones) return undefined;
+    if (!generated) return undefined;
     for (const [tier, models] of generated) {
       for (const modelKey of models) {
         totalMemberships++;
@@ -148,22 +273,19 @@ function sourceOwnership(
         claims.set(key, ownerId);
       }
     }
-    totalMemberships += [...tombstones.values()].reduce((count, models) => count + models.size, 0);
     if (totalMemberships > MAX_OWNED_MEMBERSHIPS) return undefined;
-    if (ownerId === sourceId) current = { generated, tombstones };
+    if (ownerId === sourceId) current = { generated };
   }
-  return current ?? { generated: new Map(), tombstones: new Map() };
+  return current ?? { generated: new Map() };
 }
 
 function freezeProposal(
   status: ReconciliationProposal["status"],
   input: ReconciliationInput,
   changes: ReconciliationChange[],
-  ownershipChanges: ReconciliationOwnershipChange[],
   warnings: Set<ReconciliationWarningCode>,
 ): ReconciliationProposal {
   const frozenChanges = Object.freeze(changes.map((change) => Object.freeze({ ...change })));
-  const frozenOwnershipChanges = Object.freeze(ownershipChanges.map((change) => Object.freeze({ ...change })));
   return Object.freeze({
     version: 1,
     status,
@@ -172,7 +294,6 @@ function freezeProposal(
     expectedConfigDigest: input.configDigest,
     expectedOwnershipRevision: input.ownershipRevision,
     changes: frozenChanges,
-    ownershipChanges: frozenOwnershipChanges,
     warnings: Object.freeze([...warnings].sort()),
   });
 }
@@ -196,24 +317,9 @@ export function proposeReconciliation(input: ReconciliationInput): Reconciliatio
 
   const complete = inventory.status === "complete";
   const changes: ReconciliationChange[] = [];
-  const ownershipChanges: ReconciliationOwnershipChange[] = [];
   const warnings = new Set<ReconciliationWarningCode>();
   const addedOrKept = new Set<string>();
-  const tombstoned = new Set<string>();
   const tuple = (tier: string, model: string) => `${tier}\u0000${model}`;
-
-  // A missing owned entry is already a user edit. Preserve it as a tombstone
-  // regardless of current inventory completeness or source enablement.
-  for (const [tier, models] of owned.generated) {
-    const configuredTier = configured.get(tier) ?? new Set<string>();
-    for (const modelKey of models) {
-      if (configuredTier.has(modelKey)) continue;
-      tombstoned.add(tuple(tier, modelKey));
-      ownershipChanges.push({ kind: "unclaim", tier, modelKey });
-      ownershipChanges.push({ kind: "tombstone", tier, modelKey });
-      warnings.add("user_removal_tombstoned");
-    }
-  }
 
   if (!input.ownership || !own(input.ownership.sources, inventory.sourceId)) {
     warnings.add("ownership_uninitialized");
@@ -225,20 +331,17 @@ export function proposeReconciliation(input: ReconciliationInput): Reconciliatio
     for (const [tier, models] of desired) {
       const configuredTier = configured.get(tier) ?? new Set<string>();
       const generatedTier = owned.generated.get(tier) ?? new Set<string>();
-      const tombstoneTier = owned.tombstones.get(tier) ?? new Set<string>();
       for (const modelKey of models) {
         const key = tuple(tier, modelKey);
         if (generatedTier.has(modelKey)) {
           if (configuredTier.has(modelKey)) addedOrKept.add(key);
           continue;
         }
-        if (tombstoneTier.has(modelKey) || tombstoned.has(key)) continue;
         if (configuredTier.has(modelKey)) {
           warnings.add("manual_entry_collision");
           continue;
         }
         changes.push({ kind: "add", disposition: complete ? "apply" : "advisory", tier, modelKey });
-        if (complete) ownershipChanges.push({ kind: "claim", tier, modelKey });
       }
     }
   }
@@ -249,7 +352,6 @@ export function proposeReconciliation(input: ReconciliationInput): Reconciliatio
     const desiredTier = inventory.enabled ? desired.get(tier) ?? new Set<string>() : new Set<string>();
     for (const modelKey of models) {
       if (addedOrKept.has(tuple(tier, modelKey))) continue;
-      if (tombstoned.has(tuple(tier, modelKey))) continue;
       if (!configuredTier.has(modelKey)) continue; // Already removed by a human; do not rewrite it.
       if (!complete) {
         warnings.add("removal_suppressed");
@@ -257,9 +359,8 @@ export function proposeReconciliation(input: ReconciliationInput): Reconciliatio
       }
       if (desiredTier.has(modelKey)) continue;
       changes.push({ kind: "remove", disposition: "apply", tier, modelKey });
-      ownershipChanges.push({ kind: "unclaim", tier, modelKey });
     }
   }
 
-  return freezeProposal(complete ? "ready" : "advisory", input, changes, ownershipChanges, warnings);
+  return freezeProposal(complete ? "ready" : "advisory", input, changes, warnings);
 }

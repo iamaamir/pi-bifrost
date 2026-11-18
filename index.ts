@@ -1440,7 +1440,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         try { lstatSync(path); warn(); return; }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") { warn(); return; } }
       }
-      const ownership = buildInitOwnershipReceipt(generatedModels, record.originalConfig.models ?? {});
+      const ownership = buildInitOwnershipReceipt("project", generatedModels, record.originalConfig.models ?? {});
       if (!ownership) return;
       if (!stillOwned()) {
         if (ownsPersistence()) warn();
