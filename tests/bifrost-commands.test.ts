@@ -2048,7 +2048,11 @@ describe("preview report", () => {
       },
     };
 
-    const preview = renderPreviewReport(buildPreviewReport({ prompt: "p", classification, display }));
+    const report = buildPreviewReport({ prompt: "p", classification, display });
+    // Suppression is a text-view decision: the machine-readable report keeps the
+    // attempt, so a JSON consumer can still see what was recorded.
+    assert.equal(report.classifierAttempt?.confidence, 0.93);
+    const preview = renderPreviewReport(report);
     assert(preview.includes("confidence: 0.93"));
     assert.equal(preview.some((line) => line.startsWith("classifier attempt")), false);
 
