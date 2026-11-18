@@ -84,7 +84,8 @@ Keys are omitted when they do not apply, so test for the key itself rather than 
 | `ok` | `true` when a route was resolved, `false` when it was not |
 | `prompt` | The prompt that was classified |
 | `source` | Where the tier came from: `cache`, `classifier`, `regex`, `inline`, or `fallback`. `cache` means the prompt was already classified in this session, so previewing it twice reports `cache` the second time; `inline` means a tier named in the prompt as an inline override |
-| `backend`, `model`, `confidence` | Classifier judgment; absent when no classifier ran |
+| `backend`, `model`, `confidence` | Accepted classifier judgment; absent when no classifier judgment was accepted |
+| `classifierAttempt` | Direct classifier attempt detail: `backend`, `outcome`, `fallbackKind`, plus `model` and the exact `confidence` when the backend reported one. Present even when the attempt was rejected, so a rejected value can be compared with `classifier.minConfidence`; it never implies the judgment was accepted |
 | `tier`, `strategy` | The tier that resolved and the strategy used for it |
 | `selectedTier`, `selected` | The tier and model actually chosen; both absent when nothing resolved, so a tier named `none` is not mistaken for "no choice" |
 | `fallbackReason` | Why the requested tier could not be used; absent when it was used |
@@ -98,7 +99,7 @@ A failure is still one line, so a script never has to infer the outcome from a m
 [bifrost-json] {"ok":false,"prompt":"hello","error":"unclassified"}
 ```
 
-`error` is `usage` when the prompt was missing, and `unclassified` when no tier matched and no default tier is configured. A failure report carries `prompt` and `error` only; it has no routing keys. The human `usage` and `no tier matched` messages still appear, so the same command is usable from a terminal.
+`error` is `usage` when the prompt was missing, and `unclassified` when no tier matched and no default tier is configured. A failure report carries `prompt` and `error`, plus `classifierAttempt` when a direct classifier ran and was rejected; it has no accepted-judgment or routing keys, and `ok` stays `false`. The human `usage` and `no tier matched` messages still appear, so the same command is usable from a terminal. When a rejected attempt is available, the human view also shows it with its exact confidence instead of only reporting that no tier matched.
 
 Add `--trace` as a leading flag to inspect a versioned, content-free route decision. You can use it alone or with `--json`, in either order. The text view shows the classification source, configured candidate pools, hard reserve and circuit exclusions, selected model and strategy, and any applicable affinity observation. It labels affinity as `auto_default`, `physical_default`, or `config`. Under `retain-within-tier`, affinity shows both the strategy winner and selected anchor. In the structured route summary, billing-preference evidence is separate from hard exclusions; a nonpreferred candidate remains marked eligible even when it is outside the final selection pool. `--trace --json` uses the same `[bifrost-json] ` marker and emits a version-1 `route-decision` object. It contains model identity strings and configured patterns, but never the prompt or model objects. If classifier routing is enabled, Bifrost warns that the classifier may receive the preview prompt before running classification and includes that disclosure in the result. The summary describes the resolver's selection; it does not report activation success or classifier stage timings. Without `--trace`, the existing `--json` fields and output remain unchanged.
 

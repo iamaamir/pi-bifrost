@@ -313,14 +313,14 @@ If test output says:
 
 ```text
 backend result: quick
-confidence: <0.8
+confidence: 0.42
 accepted: no
 final source: regex
 request observed: yes
 outcome: low_confidence
 ```
 
-Jev was called and returned `quick`, but Bifrost rejected it below the confidence gate and used regex.
+Jev was called and returned `quick`, but Bifrost rejected it below the confidence gate and used regex. `confidence` is the exact value Jev returned, so it can be compared with `classifier.minConfidence`; a confidence band such as `<0.8` appears only when no backend reported an exact value.
 
 ### Backend result and final result are separate
 

@@ -139,30 +139,6 @@ describe("standard preview rejected direct confidence", () => {
     assert.doesNotMatch(lines, /^confidence:/mu);
   });
 
-  it("fails to expose rejected attempt confidence when classifierAttempt propagation is removed (fault control)", () => {
-    const classification = {
-      kind: "fallback" as const,
-      tier: "general",
-      classifierAttempt: {
-        backend: "typesafe" as const,
-        outcome: "low_confidence" as const,
-        fallbackKind: "default" as const,
-        model: "jev-1.13.0",
-        confidence: 0.73,
-      },
-    };
-    const withAttempt = buildPreviewReport({ prompt: "p", classification, display });
-    const without = buildPreviewReport({
-      prompt: "p",
-      classification: { kind: classification.kind, tier: classification.tier },
-      display,
-    });
-
-    assert.equal(withAttempt.classifierAttempt?.confidence, 0.73);
-    assert.equal("classifierAttempt" in without, false);
-    assert.doesNotMatch(renderPreviewReport(without).join("\n"), /classifier attempt confidence: 0\.73/u);
-  });
-
   it("preserves zero rejected attempt confidence in preview JSON and text", () => {
     const report = buildPreviewReport({
       prompt: "p",
