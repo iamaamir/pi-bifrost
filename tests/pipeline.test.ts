@@ -388,6 +388,7 @@ describe("classification-pipeline", () => {
         observation: {
           backend: "typesafe" as const,
           outcome: "low_confidence" as const,
+          tier: "quick",
           model: "jev-1.13.0",
           confidence: 0.73,
         },
@@ -400,8 +401,12 @@ describe("classification-pipeline", () => {
       assert.equal(result.kind, "fallback");
       assert.equal(result.classifierAttempt?.confidence, 0.73);
       assert.equal(result.classifierAttempt?.outcome, "low_confidence");
+      // A rejected judgment still names the tier it proposed; dropping it here
+      // leaves the confidence unattributable when metrics are disabled.
+      assert.equal(result.classifierAttempt?.tier, "quick");
       const summary = buildRouteDecisionSummary(result);
       assert.equal(summary.classifierAttempt?.confidence, 0.73);
+      assert.equal(summary.classifierAttempt?.tier, "quick");
       assert.equal(JSON.stringify(summary).includes("ordinary prompt"), false);
     });
 

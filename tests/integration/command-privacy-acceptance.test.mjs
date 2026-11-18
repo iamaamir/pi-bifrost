@@ -595,9 +595,9 @@ function assertRouteDecisionSummary(decision, label = "decision") {
   if (decision.classificationOutcome !== undefined) assert.ok(["deadline", "aborted"].includes(decision.classificationOutcome));
   if (decision.classifierAttempt !== undefined) {
     const attempt = decision.classifierAttempt;
-    assertExactKeys(attempt, ["backend", "outcome", "fallbackKind"], ["model", "confidence", "circuitOpenUntil", "fallbackModel"], `${label}.classifierAttempt`);
+    assertExactKeys(attempt, ["backend", "outcome", "fallbackKind"], ["tier", "model", "confidence", "circuitOpenUntil", "fallbackModel"], `${label}.classifierAttempt`);
     for (const key of ["backend", "outcome", "fallbackKind"]) assertBoundedString(attempt[key], `${label}.classifierAttempt.${key}`);
-    for (const key of ["model", "fallbackModel"]) if (attempt[key] !== undefined) assertBoundedString(attempt[key], `${label}.classifierAttempt.${key}`);
+    for (const key of ["tier", "model", "fallbackModel"]) if (attempt[key] !== undefined) assertBoundedString(attempt[key], `${label}.classifierAttempt.${key}`);
     if (attempt.confidence !== undefined) assert.ok(Number.isFinite(attempt.confidence), `${label}.classifierAttempt.confidence must be finite`);
     if (attempt.circuitOpenUntil !== undefined) assertTimestamp(attempt.circuitOpenUntil, `${label}.classifierAttempt.circuitOpenUntil`);
   }

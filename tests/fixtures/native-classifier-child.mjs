@@ -326,6 +326,7 @@ it("routes real AgentSession through Pi-native classifier to a different physica
     assert.equal(report.classifierAttempt?.outcome, "low_confidence");
     assert.equal(report.classifierAttempt?.fallbackKind, "default");
     assert.equal(report.classifierAttempt?.confidence, 0.73, "the exact rejected confidence must survive the real command path");
+    assert.equal(report.classifierAttempt?.tier, "general", "the rejected attempt must name the tier the classifier proposed");
     assert.match(String(report.classifierAttempt?.model), /(^|\/)fixture-jev$/, "the attempt must name the classifier model that answered");
 
     assert.equal(
@@ -336,6 +337,7 @@ it("routes real AgentSession through Pi-native classifier to a different physica
     const textLines = textOutput.filter((line) => line.startsWith("[bifrost] ")).map((line) => line.slice("[bifrost] ".length));
     assert.ok(textLines.includes("--- preview ---"), `preview text view missing:\n${textOutput.join("\n")}`);
     assert.ok(textLines.includes("classifier attempt: pi-native (low_confidence, fallback=default)"), `attempt line missing:\n${textOutput.join("\n")}`);
+    assert.ok(textLines.includes("classifier attempt tier: general"), `proposed tier line missing:\n${textOutput.join("\n")}`);
     assert.ok(textLines.includes("classifier attempt confidence: 0.73"), `exact confidence line missing:\n${textOutput.join("\n")}`);
     assert.equal(textLines.some((line) => line.startsWith("confidence:")), false, "the text view must not present rejected confidence as accepted");
 
