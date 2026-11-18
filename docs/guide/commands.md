@@ -53,7 +53,6 @@ Every init run ends on one line: `init: <outcome>. <what changed>. <one next ste
 [bifrost] init: saved. Saved .pi/bifrost.json and reloaded. Bifrost is active with 3 tiers. Send a prompt to try it.
 [bifrost] init: saved. Saved .pi/bifrost.json and reloaded. Bifrost is configured with 3 tiers, but routing is off. Run /bifrost on to route prompts.
 [bifrost] init: declined. Nothing was saved; recent probe results are reused for an hour unless you pass -f or the catalog changes. Run /bifrost init again to review and save.
-[bifrost] init: stopped before saving. Nothing was saved; recent probe results are reused for an hour unless you pass -f or the catalog changes. Run /bifrost init in the TUI, or pass --write to save without the confirm.
 [bifrost] init: failed — no working models. Nothing was saved. Check API keys, credits, and network, then retry.
 ```
 
@@ -67,7 +66,7 @@ Every outcome init can report:
 | `unchanged` | The pools already match what init would write, so nothing was written. |
 | `declined` | You answered no to the save confirmation. |
 | `cancelled` | The catalog refresh or the probe was cancelled, or the turn was aborted after the confirmation. |
-| `stopped before saving` | No TUI could ask the save question and `--write` was not passed. |
+| `stopped before saving` | The host could not ask the save question and `--write` was not passed. |
 | `paused` | The model inventory is incomplete or stale, so membership changes were not planned. `-f` refreshes it. |
 | `stale review` | The model inventory, the inherited config, or the save destination changed while the confirmation was open. |
 | `blocked` | Init refused to write: the config or the selected source could not be read or parsed, a pool would shadow an inherited pool, the proposal was invalid or too large, or a saved ownership record exists without its config. |
@@ -76,7 +75,7 @@ Every outcome init can report:
 | `failed` | The write could not be confirmed on disk, or the written config was rejected on reload. |
 | `not started` | The arguments were not recognised; nothing was read or written. |
 
-A host without a TUI cannot answer the save question. Init still probes and shows the review there, then stops without saving unless you pass `--write`. `--write` skips the confirmation in every mode, not only headless.
+If the host cannot ask the save question, init stops before catalog refresh or probing. Pass `--write` to skip the confirmation in any mode. Automatic first-use setup runs independently.
 
 If a proposed project pool would replace a handwritten pool in your global or workspace config with different models, init stops without saving. Pools that init generated before (tracked by an ownership receipt) and empty pools do not block init. Edit the existing source or review a workspace update with `/bifrost config reconcile --source workspace`; use `-g` when you intend to update the global source.
 

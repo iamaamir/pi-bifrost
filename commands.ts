@@ -1396,6 +1396,17 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     return;
   }
   const selectedSource: ReconciliationConfigSource = tokens.includes("-g") ? "user" : "project";
+  const writeWithoutPrompt = tokens.includes("--write");
+  if (!ctx.hasUI && !writeWithoutPrompt) {
+    reportInitOutcome(
+      ctx,
+      "stopped before saving",
+      "Nothing was probed or saved.",
+      "Run /bifrost init in a host with confirmation, or pass --write to save without confirmation.",
+      "warning",
+    );
+    return;
+  }
   const bootstrapOriginalConfig = state.onInitStarted?.(ctx.sessionManager);
   const initConfig = bootstrapOriginalConfig ?? state.config;
   clearBifrostWidgets(ctx);
@@ -2176,18 +2187,6 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       `${uncategorized.length} model(s) are not in any tier. Edit ${source.configPath} to assign them.`,
       "warning",
     );
-  }
-
-  const writeWithoutPrompt = args.trim().split(/\s+/).includes("--write");
-  if (!ctx.hasUI && !writeWithoutPrompt) {
-    reportInitOutcome(
-      ctx,
-      "stopped before saving",
-      "Nothing was saved; recent probe results are reused for an hour unless you pass -f or the catalog changes.",
-      "Run /bifrost init in the TUI, or pass --write to save without the confirm.",
-      "warning",
-    );
-    return;
   }
 
   const ok =
