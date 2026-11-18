@@ -316,11 +316,11 @@ backend result: quick
 confidence: 0.42
 accepted: no
 final source: regex
-request observed: yes
+metric delta: +1 observation(s)
 outcome: low_confidence
 ```
 
-Jev was called and returned `quick`, but Bifrost rejected it below the confidence gate and used regex. `confidence` is the exact value Jev returned, so it can be compared with `classifier.minConfidence`; a confidence band such as `<0.8` appears only when no backend reported an exact value.
+Jev was called and returned `quick`, but Bifrost rejected it below the confidence gate and used regex. `confidence` is the exact value Jev returned, so it can be compared with `classifier.minConfidence`. A band such as `<0.8` appears instead when the report has no exact value for the tested backend — for example when the total classifier budget expires before the attempt is retained — and it never replaces a reported value.
 
 ### Backend result and final result are separate
 

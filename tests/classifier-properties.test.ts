@@ -985,4 +985,26 @@ describe("preview report confidence echo", () => {
       { numRuns: 250 },
     );
   });
+
+  it("echoes a generated accepted confidence unchanged into JSON and text", () => {
+    fc.assert(
+      fc.property(fc.double({ min: 0, max: 1, noNaN: true }), (confidence) => {
+        const report = buildPreviewReport({
+          prompt: "generated prompt",
+          classification: {
+            kind: "classified",
+            tier: "general",
+            source: "classifier",
+            judgment: { tier: "general", backend: CLASSIFIER_BACKEND_IDS.piNative, confidence },
+          },
+          display,
+        });
+
+        assert.equal(report.confidence, confidence);
+        const lines = renderPreviewReport(report).filter((line) => line.startsWith("confidence:"));
+        assert.deepEqual(lines, [`confidence: ${confidence}`]);
+      }),
+      { numRuns: 250 },
+    );
+  });
 });

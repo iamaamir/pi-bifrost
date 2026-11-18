@@ -73,7 +73,7 @@ describe("render trace preview", () => {
 
     assert.match(lines, /classifier attempt: pi-native \(low_confidence, fallback=default\)/u);
     assert.match(lines, /classifier attempt model: typesafe\/jev-latest/u);
-    assert.ok(lines.includes("classifier attempt confidence: 0"));
+    assert.match(lines, /^classifier attempt confidence: 0$/mu);
   });
 
   it("omits absent optional classifier attempt fields", () => {
@@ -158,7 +158,7 @@ describe("standard preview rejected direct confidence", () => {
 
     assert.equal(report.classifierAttempt?.confidence, 0);
     const lines = renderPreviewReport(report).join("\n");
-    assert.ok(lines.includes("classifier attempt confidence: 0"));
+    assert.match(lines, /^classifier attempt confidence: 0$/mu);
   });
 
   it("omits rejected attempt confidence when absent but keeps the attempt observable", () => {
@@ -304,7 +304,7 @@ describe("preview command rejected direct confidence", () => {
       const text = (await captureCommandText(async () => {
         await dispatch("preview hello", printModeCtx(ctx));
       })).join("\n");
-      if ("confidence" in attempt) assert.ok(text.includes("classifier attempt confidence: 0"));
+      if ("confidence" in attempt) assert.match(text, /^classifier attempt confidence: 0$/mu);
       else assert.doesNotMatch(text, /classifier attempt confidence:/u);
     }
   });
@@ -395,7 +395,7 @@ describe("preview command rejected direct confidence", () => {
       const traceText = (await captureCommandText(async () => {
         await dispatch("preview --trace hello", printModeCtx(ctx));
       })).join("\n");
-      if ("confidence" in attempt) assert.ok(traceText.includes("classifier attempt confidence: 0"));
+      if ("confidence" in attempt) assert.match(traceText, /^classifier attempt confidence: 0$/mu);
       else assert.doesNotMatch(traceText, /classifier attempt confidence:/u);
     }
   });
@@ -1998,31 +1998,39 @@ describe("preview report", () => {
     assert(renderPreviewReport(report).includes("confidence: 0"));
   });
 
-  it("renders five distinct confidences each as its own exact value", () => {
+  it("renders five distinct confidences each as its own exact value in preview, trace, and failure views", async () => {
     const confidences = [0, 0.42, 0.73, 0.999, 1];
-    const attemptLines = confidences.map((confidence) => {
+    const attemptLines = (lines: string[]) => lines.filter((line) => line.startsWith("classifier attempt confidence:"));
+
+    for (const confidence of confidences) {
+      const attempt = {
+        backend: "pi-native" as const,
+        outcome: "low_confidence" as const,
+        fallbackKind: "default" as const,
+        model: "jev-1.13.0",
+        confidence,
+      };
+      const expected = [`classifier attempt confidence: ${confidence}`];
+
       const report = buildPreviewReport({
         prompt: `prompt ${confidence}`,
-        classification: {
-          kind: "fallback",
-          tier: "general",
-          classifierAttempt: {
-            backend: "typesafe",
-            outcome: "low_confidence",
-            fallbackKind: "default",
-            model: "jev-1.13.0",
-            confidence,
-          },
-        },
+        classification: { kind: "fallback", tier: "general", classifierAttempt: attempt },
         display,
       });
-
       assert.equal(report.classifierAttempt?.confidence, confidence);
-      return renderPreviewReport(report).filter((line) => line.startsWith("classifier attempt confidence:"));
-    });
+      assert.deepEqual(attemptLines(renderPreviewReport(report)), expected);
 
-    // Exactly one line per report, carrying that report's own value and no other.
-    assert.deepEqual(attemptLines, confidences.map((confidence) => [`classifier attempt confidence: ${confidence}`]));
+      const trace = buildTracePreview(buildRouteDecisionSummary({ kind: "fallback", tier: "general", classifierAttempt: attempt }), true);
+      assert.deepEqual(attemptLines(renderTracePreview(trace)), expected);
+
+      const state = makeState();
+      state.getPipeline = () => ({ classify: async () => ({ kind: "unclassified" as const, classifierAttempt: attempt }) }) as never;
+      const { ctx } = makeCtx();
+      const failureText = await captureCommandText(async () => {
+        await createCommandRouter(state as never)("preview hello", printModeCtx({ ...(ctx as any), hasUI: false }) as never);
+      });
+      assert.deepEqual(attemptLines(failureText), expected);
+    }
   });
 
   it("serializes to one parseable line with no prose envelope", () => {
@@ -2295,9 +2303,11 @@ describe("preview json marker", () => {
     assert.deepEqual(traceJson.classification, { source: "unclassified" });
     assert.deepEqual(traceJson.classifierAttempt, attempt);
     assert.equal((traceJson.classification as { classifier?: unknown }).classifier, undefined);
-    const traceText = renderTracePreview(buildTracePreview(buildRouteDecisionSummary(classification), true)).join("\n");
+    const traceText = (await captureCommandText(async () => {
+      await createCommandRouter(state as never)("preview --trace hello", printModeCtx({ ...(ctx as any), hasUI: false }) as never);
+    })).join("\n");
     assert.match(traceText, /outcome: unclassified/u);
-    assert.match(traceText, /classifier attempt confidence: 0\.73/u);
+    assert.match(traceText, /^classifier attempt confidence: 0\.73$/mu);
   });
 
   it("preserves zero and missing rejected confidence on unclassified preview JSON and trace", async () => {
