@@ -12,6 +12,22 @@ Its job is to select a suitable configured model for each coding-agent turn, saf
 4. **User-owned** — configuration and explicit user actions remain the primary policy surface.
 5. **Portable** — share routing/reliability policy where host capabilities permit; keep adapters thin; do not make a proxy the default architecture.
 
+## Reusable capabilities and host boundaries
+
+**Reusable Bifrost policy should not depend on the host that invokes it.** Routing decisions and other reusable domain capabilities belong behind focused contracts; Pi-specific events, active-model switching, command execution, UI and lifecycle effects belong in host adapters. Keep dependencies directed from adapters toward reusable capabilities, not the reverse.
+
+When extracting or evolving a **reusable** capability, assess three questions:
+
+1. **Independent execution** — Can it run and be tested without initializing Pi, a Pi session or its UI?
+2. **Host-neutral contract** — Could another host or SDK consumer use it without importing Pi-specific contexts, registry objects, event types or UI concepts? Translate host data at the boundary; even type-only host imports should be justified.
+3. **Replaceable implementation** — Could its implementation change behind a small contract without requiring consumers to be rewritten?
+
+Prove the boundary with direct contract tests where appropriate, supported import-boundary checks, and existing integration/package tests. Focused mutation tests may strengthen behavioral evidence; smaller test runs are not a substitute for cross-boundary verification.
+
+**Host-neutral does not mean side-effect-free.** A capability may legitimately own focused I/O, persistence or bounded subprocess safety checks. Pi-only adapters need not pass the host-neutrality test; they should keep those host effects out of reusable policy. Prefer existing interfaces and the smallest meaningful extraction over generic ports or speculative dependency injection.
+
+Internal module contracts are **not automatically public SDK APIs**. Broader SDK exposure and additional host integrations require concrete consumer needs, explicit compatibility decisions and their own evaluation; portability alone does not authorize new packages, extension mechanisms or a proxy-first architecture.
+
 ## Gradual intelligence ladder
 
 Bifrost may add intelligence only in this order:
