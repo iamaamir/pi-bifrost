@@ -3654,6 +3654,23 @@ describe("command aliases", () => {
     }
   });
 
+  it("refuses headless init before refresh, probing, or bootstrap cancellation", async () => {
+    for (const args of ["init", "init -f", "init -g", "init -g -f"]) {
+      const { ctx } = makeCtx([makeModel("fixture", "chat")]);
+      const state = makeState();
+      let refreshes = 0;
+      let probes = 0;
+      let initStarts = 0;
+      (ctx as any).hasUI = false;
+      (ctx as any).mode = "print";
+      (ctx as any).modelRegistry.refresh = async () => { refreshes++; };
+      (ctx as any).modelRegistry.streamSimple = () => { probes++; throw new Error("unexpected probe"); };
+      (state as any).onInitStarted = () => { initStarts++; };
+      await createCommandRouter(state as never)(args, ctx);
+      assert.deepEqual({ refreshes, probes, initStarts }, { refreshes: 0, probes: 0, initStarts: 0 }, args);
+    }
+  });
+
   it("ends every init exit on the terminal footer standard", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-footer-"));
     const previousCwd = process.cwd();

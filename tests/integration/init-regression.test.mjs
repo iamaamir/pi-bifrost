@@ -414,6 +414,37 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
     });
   }
 
+  for (const args of ["", "-f", "-g", "-g -f"]) {
+    it(`stops headless init ${args || "(default)"} before provider requests or writes`, async () => {
+      requests = [];
+      const env = fixture(port, ["healthy", "credits-exhausted"]);
+      const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+      const globalBytes = Buffer.from('{"classifier":{"enabled":false}}\n');
+      const projectPath = join(env.work, ".pi", "bifrost.json");
+      const projectReceiptPath = join(env.work, ".pi", "bifrost-reconcile-ownership.json");
+      const globalReceiptPath = join(env.home, ".pi", "agent", "bifrost-reconcile-ownership.json");
+      const projectBytes = Buffer.from('{"models":{"quick":["manual/project"]}}\n');
+      const projectReceipt = Buffer.from(ownership(["manual/project"]));
+      const globalReceipt = Buffer.from(ownership([], "user"));
+      writeFileSync(globalPath, globalBytes);
+      writeFileSync(projectPath, projectBytes);
+      writeFileSync(projectReceiptPath, projectReceipt);
+      writeFileSync(globalReceiptPath, globalReceipt);
+      try {
+        const result = await runInit({ ...env, args });
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(result.violations, "");
+        assert.match(result.stdout + result.stderr, /init: stopped before saving.*--write/i);
+        assert.deepEqual(requests, []);
+        assert.deepEqual(readFileSync(globalPath), globalBytes);
+        assert.deepEqual(readFileSync(globalReceiptPath), globalReceipt);
+        assert.deepEqual(readFileSync(projectPath), projectBytes);
+        assert.deepEqual(readFileSync(projectReceiptPath), projectReceipt);
+        assert.equal(existsSync(join(env.work, ".pi", "bifrost-probe.json")), false);
+      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+    });
+  }
+
   it("probes on ordinary init and saves only successful models", async () => {
     const env = fixture(port, ["healthy", "credits-exhausted"]);
     writeFileSync(join(env.work, ".pi", "bifrost-routes.json"), "[]\n");
