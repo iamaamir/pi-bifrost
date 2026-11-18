@@ -78,9 +78,8 @@ function fixture(port, models, options = {}) {
   return { home, work, extensionPath: join(extensionDir, "index.ts") };
 }
 
-function ownership(generated) {
-  const sourceId = `pi-models-v1-${createHash("sha256").update(JSON.stringify(["fake", "quick"])).digest("hex").slice(0, 40)}`;
-  return JSON.stringify({ version: 1, sources: { [sourceId]: { generated: { quick: generated }, tombstones: {} } } });
+function ownership(generated, scope = "project") {
+  return JSON.stringify({ version: 2, scope, tiers: { quick: { state: "generated", models: generated } } });
 }
 
 function runInit({ home, work, args, extensionPath = EXTENSION, prompt = `/bifrost init ${args}` }) {
@@ -312,7 +311,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
     const receiptPath = join(env.home, ".pi", "agent", "bifrost-reconcile-ownership.json");
     const original = Buffer.from(JSON.stringify({ models: { quick: ["fake/healthy", "fake/credits-exhausted"] } }) + "\n");
     writeFileSync(globalPath, original);
-    writeFileSync(receiptPath, ownership(["fake/healthy", "fake/credits-exhausted"]));
+    writeFileSync(receiptPath, ownership(["fake/healthy", "fake/credits-exhausted"], "user"));
     try {
       const result = await runInit({ ...env, args: "--write" });
       assert.equal(result.code, 0, result.stderr);
@@ -558,7 +557,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(result.violations, "");
       assert.equal(result.code, 0, result.stderr);
       const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
-      assert.deepEqual(saved.models.quick, ["handwritten/model", "fake/healthy"]);
+      assert.deepEqual(saved.models.quick, ["fake/credits-exhausted", "handwritten/model"]);
       assert.equal(saved.cache.enabled, false);
       assert.equal(saved.strategy, "cheapest");
       assert.equal(saved.classifier.endpoint, "https://PROJECT_ENDPOINT_CANARY.invalid");
@@ -571,6 +570,37 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.match(result.stdout + result.stderr, /unverified membership preserved/u);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
+
+  for (const [intent, pool] of [["empty", []], ["deleted", undefined], ["reordered", ["fake/healthy", "fake/credits-exhausted"]]]) {
+    it(`preserves ${intent} tier through init, restart, and config reconcile`, async () => {
+      requests = [];
+      const env = fixture(port, ["healthy", "credits-exhausted"]);
+      const configPath = join(env.work, ".pi", "bifrost.json");
+      const receiptPath = join(env.work, ".pi", "bifrost-reconcile-ownership.json");
+      const models = { general: ["fake/healthy"], ...(pool === undefined ? {} : { quick: pool }) };
+      const config = { ...BUNDLED_PUBLIC_INIT_DEFAULTS, default: "general", classifier: { enabled: false }, rules: [], models };
+      writeFileSync(configPath, JSON.stringify(config, null, 4) + "\n\n");
+      writeFileSync(receiptPath, ownership(["fake/credits-exhausted", "fake/healthy"]));
+      try {
+        for (let run = 0; run < 2; run++) {
+          const result = await runInit({ ...env, args: "--write" });
+          assert.equal(result.code, 0, result.stderr);
+          assert.equal(result.violations, "");
+          assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")).models, models);
+          assert.deepEqual(JSON.parse(readFileSync(receiptPath, "utf8")).tiers.quick,
+            { state: intent === "deleted" ? "deleted" : "user" });
+        }
+        const before = readFileSync(configPath);
+        const receiptBefore = readFileSync(receiptPath);
+        const result = await runInit({ ...env, prompt: "/bifrost config reconcile --tier quick --provider fake --json" });
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(result.violations, "");
+        assert.match(result.stderr + result.stdout, /tier_protected|tier_not_explicit/);
+        assert.deepEqual(readFileSync(configPath), before);
+        assert.deepEqual(readFileSync(receiptPath), receiptBefore);
+      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+    });
+  }
 
   it("leaves existing config untouched when forced probes have zero successes", async () => {
     requests = [];

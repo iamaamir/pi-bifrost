@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -37,9 +36,8 @@ function fixture({ models = [], config = {}, initialConfig, ownership, apiKey = 
 }
 
 function writeFixtureReceipt(generatedByTier) {
-  const ownershipSource = `pi-models-v1-${createHash("sha256").update(JSON.stringify(["fake", "general"])).digest("hex").slice(0, 40)}`;
-  return JSON.stringify({ version: 1, sources: {
-    [ownershipSource]: { generated: { general: generatedByTier }, tombstones: {} },
+  return JSON.stringify({ version: 2, scope: "project", tiers: {
+    general: { state: "generated", models: generatedByTier },
   } });
 }
 
@@ -257,7 +255,7 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
     const env = fixture({
       models: [{ id: "new" }],
       initialConfig: original,
-      ownership: writeFixtureReceipt(["fake/old"]),
+      ownership: writeFixtureReceipt(["fake/old", "handwritten/model"]),
     });
     const rpc = startRpc({ fixture: env, server, model: "fake/new", jsonReports: true });
     try {
@@ -291,12 +289,12 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
       assert.deepEqual(config.retained, { owner: "user" });
       const receiptPath = join(env.project, "bifrost-reconcile-ownership.json");
       const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
-      const ownership = Object.values(receipt.sources);
-      assert.ok(ownership.some((source) => source.generated.general?.includes("fake/new")));
-      assert.equal(ownership.some((source) => source.generated.general?.includes("fake/old")), false);
+      assert.deepEqual(receipt, { version: 2, scope: "project", tiers: {
+        general: { state: "generated", models: ["handwritten/model", "fake/new"] },
+      } });
       assert.ok(existsSync(applied.applyResult.configBackupPath));
       assert.deepEqual(readFileSync(applied.applyResult.configBackupPath), original);
-      const oldReceipt = writeFixtureReceipt(["fake/old"]);
+      const oldReceipt = writeFixtureReceipt(["fake/old", "handwritten/model"]);
       assert.ok(existsSync(applied.applyResult.ownershipBackupPath));
       assert.deepEqual(readFileSync(applied.applyResult.ownershipBackupPath), Buffer.from(oldReceipt));
       const afterStats = await readStats(server.port);
@@ -347,14 +345,9 @@ describe("pinned Pi command and routing acceptance", { concurrency: 1, timeout: 
         "init probes configured models directly and does not need a provider catalog refresh");
       const saved = JSON.parse(readFileSync(join(env.project, "bifrost.json"), "utf8"));
       assert.equal(saved.metadata.createdAt, "2020-01-02T03:04:05.000Z");
-      assert.ok(saved.models.quick.includes("handwritten/model"));
-      assert.ok(saved.models.quick.includes("fake/new"));
-      assert.ok(saved.models.quick.includes("fake/probe-slow"));
+      assert.deepEqual(saved.models.quick, ["handwritten/model"]);
       const receipt = JSON.parse(readFileSync(join(env.project, "bifrost-reconcile-ownership.json"), "utf8"));
-      const generated = Object.values(receipt.sources).flatMap((source) => source.generated.quick ?? []);
-      assert.ok(generated.includes("fake/new"));
-      assert.ok(generated.includes("fake/probe-slow"));
-      assert.equal(generated.includes("handwritten/model"), false);
+      assert.deepEqual(receipt.tiers.quick, { state: "user" });
     } finally { env.cleanup(); }
   });
 

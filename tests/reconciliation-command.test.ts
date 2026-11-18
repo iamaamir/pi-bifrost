@@ -20,6 +20,16 @@ const CONFIG = Buffer.from(JSON.stringify({
   unrelated: { retained: true },
 }, null, 2) + "\n");
 
+const MANAGED_GENERAL = {
+  version: 2 as const,
+  scope: "project" as const,
+  tiers: { general: { state: "generated" as const, models: ["manual/model"] } },
+};
+
+function receipt(payload: unknown): Buffer {
+  return Buffer.from(JSON.stringify(payload));
+}
+
 function digest(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -32,7 +42,7 @@ function snapshot(overrides: Partial<ReconciliationCommandSnapshot> = {}): Recon
       ownershipPath: "/project/.pi/bifrost-ownership.json",
       journalPath: "/project/.pi/bifrost-reconcile.journal",
       configBytes: CONFIG,
-      ownershipBytes: null,
+      ownershipBytes: receipt(MANAGED_GENERAL),
     },
     registry: {
       models: [
@@ -73,27 +83,40 @@ function preview(overrides: {
 }
 
 describe("config reconciliation command boundary", () => {
-  it("refreshes memberships in one transaction while preserving manual entries and unrelated config", () => {
+  it("refreshes managed tiers while preserving whole user-managed tiers and unrelated settings", () => {
     let validated: Record<string, unknown> | undefined;
     const source = snapshot().source;
     const plan = buildInitMembershipPlan(source, [{
       provider: "openai",
       status: "complete",
-      modelsByTier: { general: ["openai/new"], quick: ["openai/quick"] },
+      modelsByTier: { general: ["manual/model", "openai/new"], quick: ["openai/quick"], frontier: ["openai/new-frontier"] },
     }], (_selected, bytes) => {
       validated = JSON.parse(Buffer.from(bytes).toString("utf8")) as Record<string, unknown>;
       return true;
     });
     assert.equal(plan.status, "ready");
-    assert.equal(plan.changes.length, 2);
+    assert.deepEqual(plan.changes.map(({ kind, tier, modelKey }) => [kind, tier, modelKey]).sort(), [
+      ["add", "general", "openai/new"],
+      ["add", "quick", "openai/quick"],
+    ]);
     assert.deepEqual(validated?.unrelated, { retained: true });
     assert.deepEqual((validated?.models as Record<string, unknown>).general, ["manual/model", "openai/new"]);
     assert.deepEqual((validated?.models as Record<string, unknown>).quick, ["openai/quick"]);
-    const receipt = JSON.parse(Buffer.from(plan.transaction!.nextOwnershipBytes).toString("utf8"));
-    assert.equal(Object.values(receipt.sources).length, 2);
+    assert.deepEqual((validated?.models as Record<string, unknown>).frontier, ["openai/old"]);
+    // Only the unchanged generated tier and genuinely new tier can refresh.
+    const nextReceipt = JSON.parse(Buffer.from(plan.transaction!.nextOwnershipBytes).toString("utf8"));
+    assert.deepEqual(nextReceipt, {
+      version: 2,
+      scope: "project",
+      tiers: {
+        general: { state: "generated", models: ["manual/model", "openai/new"] },
+        frontier: { state: "user" },
+        quick: { state: "generated", models: ["openai/quick"] },
+      },
+    });
   });
 
-  it("carries inherited global model memberships into a workspace refresh without copying other fields", () => {
+  it("creates only the discovered tier in workspace scope without copying unrelated fields", () => {
     const workspaceBytes = Buffer.from(JSON.stringify({
       enabled: false,
       rules: [{ pattern: "workspace-only", model: "strict" }],
@@ -105,33 +128,35 @@ describe("config reconciliation command boundary", () => {
       ownershipPath: "/project/.pi/bifrost-reconcile-workspace-ownership.json",
       journalPath: "/project/.pi/bifrost-reconcile-workspace.journal",
       configBytes: workspaceBytes,
+      ownershipBytes: null,
     };
     const plan = buildInitMembershipPlan(source, [{
       provider: "openai",
       status: "complete",
       modelsByTier: { general: ["openai/new"] },
-    }], () => true, { general: ["manual/global"], frontier: ["manual/frontier"] });
+    }], () => true);
     assert.equal(plan.status, "ready");
     const next = JSON.parse(Buffer.from(plan.transaction!.nextConfigBytes).toString("utf8"));
-    assert.deepEqual(next.models, {
-      general: ["manual/global", "openai/new"],
-      frontier: ["manual/frontier"],
-    });
+    assert.deepEqual(next.models, { general: ["openai/new"] });
     assert.equal(next.enabled, false);
     assert.deepEqual(next.rules, [{ pattern: "workspace-only", model: "strict" }]);
+    const nextReceipt = JSON.parse(Buffer.from(plan.transaction!.nextOwnershipBytes).toString("utf8"));
+    assert.equal(nextReceipt.scope, "workspace");
   });
 
-  it("retains removed generated memberships as tombstones and suppresses stale removals", () => {
+  it("refreshes a managed tier and suppresses removals from stale inventories", () => {
     const generated = ["openai/old"];
-    const ownership = buildInitOwnershipReceipt({ general: generated })!;
+    const ownership = buildInitOwnershipReceipt("project", { general: generated })!;
     const source = {
       ...snapshot().source,
       configBytes: Buffer.from(JSON.stringify({ models: { general: generated } })),
-      ownershipBytes: Buffer.from(JSON.stringify(ownership)),
+      ownershipBytes: receipt(ownership),
     };
     const removed = buildInitMembershipPlan(source, [{ provider: "openai", status: "complete", modelsByTier: { general: ["openai/new"] } }], () => true);
     assert.equal(removed.status, "ready");
     assert.deepEqual(removed.changes.map((change) => [change.kind, change.modelKey]), [["add", "openai/new"], ["remove", "openai/old"]]);
+    const nextReceipt = JSON.parse(Buffer.from(removed.transaction!.nextOwnershipBytes).toString("utf8"));
+    assert.deepEqual(nextReceipt.tiers.general, { state: "generated", models: ["openai/new"] });
     const stale = buildInitMembershipPlan(source, [{ provider: "openai", status: "stale", modelsByTier: { general: ["openai/new"] } }], () => true);
     assert.equal(stale.status, "advisory");
     assert.deepEqual(stale.changes, []);
@@ -161,7 +186,7 @@ describe("config reconciliation command boundary", () => {
 
   it("never removes owned membership from partial, stale, or auth-failed catalog snapshots", () => {
     const models = ["openai/old"];
-    const ownershipBytes = Buffer.from(JSON.stringify(buildInitOwnershipReceipt({ general: models })));
+    const ownershipBytes = Buffer.from(JSON.stringify(buildInitOwnershipReceipt("project", { general: models })));
     const source = {
       ...snapshot().source,
       configBytes: Buffer.from(JSON.stringify({ models: { general: models } })),
@@ -251,7 +276,7 @@ describe("config reconciliation command boundary", () => {
 
     assert.equal(result.status, "committed");
     assert.equal(transaction?.expectedConfigDigest, digest(CONFIG));
-    assert.equal(transaction?.expectedOwnershipDigest, null);
+    assert.equal(transaction?.expectedOwnershipDigest, digest(receipt(MANAGED_GENERAL)));
     assert.equal(transaction?.configPath, "/project/.pi/bifrost.json");
     assert.equal(transaction?.ownershipPath, "/project/.pi/bifrost-ownership.json");
     assert.equal(transaction?.journalPath, "/project/.pi/bifrost-reconcile.journal");
@@ -264,7 +289,7 @@ describe("config reconciliation command boundary", () => {
       enabled: false,
       rules: [{ pattern: "manual", model: "strict" }],
       tierPolicies: { general: { fallbackTiers: [] } },
-      models: { general: ["manual/keep"] },
+      models: { general: [], frontier: ["manual/keep"] },
     }, null, 2) + "\n");
     const workspace = snapshot({
       source: {
@@ -274,6 +299,7 @@ describe("config reconciliation command boundary", () => {
         ownershipPath: "/project/.pi/bifrost-reconcile-workspace-ownership.json",
         journalPath: "/project/.pi/bifrost-reconcile-workspace.journal",
         configBytes: workspaceConfig,
+        ownershipBytes: receipt(buildInitOwnershipReceipt("workspace", { general: [] })),
       },
     });
     const request = { action: "preview", source: "workspace", tier: "general", provider: "openai", json: true } as const;
@@ -295,7 +321,26 @@ describe("config reconciliation command boundary", () => {
     assert.equal(next.enabled, false);
     assert.deepEqual(next.rules, [{ pattern: "manual", model: "strict" }]);
     assert.deepEqual(next.tierPolicies, { general: { fallbackTiers: [] } });
-    assert.deepEqual(next.models.general, ["manual/keep", "openai/gpt-5.4"]);
+    assert.deepEqual(next.models.general, ["openai/gpt-5.4"]);
+    assert.deepEqual(next.models.frontier, ["manual/keep"]);
+  });
+
+  it("reconciling one tier retains other generated tiers and their order", () => {
+    const models = { general: ["openai/old"], frontier: ["other/z", "openai/frontier"] };
+    const input = snapshot({ source: { ...snapshot().source,
+      configBytes: receipt({ models }),
+      ownershipBytes: receipt(buildInitOwnershipReceipt("project", models)),
+    } });
+    const request = { action: "preview", source: "project", tier: "general", provider: "openai", json: true } as const;
+    const proposed = runReconciliationCommand(request, input, dependencies());
+    let written: ApplyReconciliationTransactionInput | undefined;
+    const applied = runReconciliationCommand({ ...request, action: "apply", proposalDigest: proposed.proposalDigest! }, input, dependencies({
+      apply: (transaction) => { written = transaction; return { status: "committed", transactionId: "fixture" }; },
+    }));
+    assert.equal(applied.status, "committed");
+    assert.deepEqual(JSON.parse(Buffer.from(written!.nextConfigBytes).toString()).models.frontier, models.frontier);
+    assert.deepEqual(JSON.parse(Buffer.from(written!.nextOwnershipBytes).toString()).tiers.frontier,
+      { state: "generated", models: models.frontier });
   });
 
   it("reports store rejection of invalid config input as a source error", () => {
@@ -311,9 +356,9 @@ describe("config reconciliation command boundary", () => {
     assert.equal(result.reason, "source_invalid");
   });
 
-  it("keeps exact config bytes when only a user removal needs an ownership tombstone", () => {
+  it("treats a human-emptied managed tier as user intent instead of tombstoning it", () => {
     const original = Buffer.from('{\n  "models" : { "general" : [] },\n  "keep" : true\n}\n');
-    const receipt = buildInitOwnershipReceipt({ general: ["openai/retired"] });
+    const receipt = buildInitOwnershipReceipt("project", { general: ["openai/retired"] });
     assert.ok(receipt);
     const ownershipBytes = Buffer.from(JSON.stringify(receipt));
     const input = snapshot({
@@ -325,37 +370,30 @@ describe("config reconciliation command boundary", () => {
       input,
       dependencies(),
     );
-    assert.equal(previewReport.status, "ready");
+    assert.equal(previewReport.status, "blocked");
+    assert.equal(previewReport.reason, "tier_protected");
     assert.deepEqual(previewReport.changes, []);
-    assert.ok(previewReport.proposalDigest);
 
-    let candidateBytes: Uint8Array | undefined;
     let applied = false;
     const appliedReport = runReconciliationCommand({
       action: "apply", source: "project", tier: "general", provider: "openai",
       proposalDigest: previewReport.proposalDigest!, json: true,
     }, input, dependencies({
-      validateMergedConfig: (_source, bytes) => { candidateBytes = bytes; return true; },
-      apply: (transaction) => {
+      apply: () => {
         applied = true;
-        assert.deepEqual(transaction.nextConfigBytes, original);
         return { status: "committed", transactionId: "00000000-0000-4000-8000-000000000001" };
       },
     }));
-    assert.equal(appliedReport.status, "committed");
-    assert.equal(applied, true);
-    assert.deepEqual(candidateBytes, original);
+    assert.equal(appliedReport.status, "blocked");
+    assert.equal(appliedReport.reason, "tier_protected");
+    assert.equal(applied, false);
   });
 
-  it("rejects a source receipt whose claimed memberships belong to another tier", () => {
-    const receipt = buildInitOwnershipReceipt({ general: ["openai/owned"] });
-    assert.ok(receipt);
-    const sourceId = Object.keys(receipt.sources)[0]!;
+  it("rejects a corrupt v2 receipt instead of trusting or ignoring it", () => {
     const malformed = {
-      version: 1,
-      sources: {
-        [sourceId]: { generated: { frontier: ["openai/owned"] }, tombstones: {} },
-      },
+      version: 2,
+      scope: "project",
+      tiers: { general: { state: "generated", models: ["openai/owned", "openai/owned"] } },
     };
     const report = preview({ snapshot: { source: {
       ...snapshot().source,
@@ -371,7 +409,7 @@ describe("config reconciliation command boundary", () => {
     let applied = false;
     const changed = snapshot({ source: {
       ...snapshot().source,
-      configBytes: Buffer.from(CONFIG.toString("utf8").replace("manual/model", "edited/model")),
+      configBytes: Buffer.from(CONFIG.toString("utf8").replace('"retained": true', '"retained": false')),
     } });
     const result = runReconciliationCommand({
       action: "apply", source: "project", tier: "general", provider: "openai",
@@ -444,21 +482,19 @@ describe("config reconciliation command boundary", () => {
     assert.doesNotMatch(JSON.stringify(recovery), /private provider|config text/u);
   });
 
-  it("creates init ownership only for exact memberships generated by that run", () => {
-    const receipt = buildInitOwnershipReceipt({
-      general: ["openai/gpt-5.4", "anthropic/sonnet"],
+  it("creates init ownership only for exact tiers wholly generated by that run", () => {
+    const receipt = buildInitOwnershipReceipt("project", {
+      general: ["anthropic/sonnet", "openai/gpt-5.4"],
       quick: ["openai/gpt-5.4-mini"],
     }, { general: ["openai/gpt-5.4", "manual/preserved"] });
     assert.ok(receipt);
-    assert.equal(receipt.version, 1);
-    assert.equal(Object.keys(receipt.sources).length, 2);
-    const generated = Object.values(receipt.sources).flatMap((source) =>
-      Object.entries(source.generated).flatMap(([tier, models]) => models.map((model) => `${tier}:${model}`)));
-    assert.deepEqual(generated.sort(), [
-      "general:anthropic/sonnet",
-      "quick:openai/gpt-5.4-mini",
-    ]);
-    assert.equal(Object.values(receipt.sources).some((source) => Object.keys(source.tombstones).length > 0), false);
-    assert.equal(buildInitOwnershipReceipt({ general: ["openai/*"] }), undefined);
+    assert.equal(receipt.version, 2);
+    assert.equal(receipt.scope, "project");
+    // `general` held a pre-existing model, so the whole tier is user-managed.
+    assert.deepEqual(receipt.tiers, {
+      quick: { state: "generated", models: ["openai/gpt-5.4-mini"] },
+    });
+    assert.equal(buildInitOwnershipReceipt("project", { general: ["openai/*"] }), undefined);
+    assert.equal(buildInitOwnershipReceipt("project", { general: ["openai/a", "openai/a"] }), undefined);
   });
 });

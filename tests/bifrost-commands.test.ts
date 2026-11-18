@@ -872,7 +872,7 @@ describe("bifrost command ui", () => {
     }
   });
 
-  it("reconciles generated memberships from a recent probe cache and keeps manual config", async () => {
+  it("keeps a manually edited whole tier when refreshing from a recent probe cache", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-refresh-"));
     const previousCwd = process.cwd();
     process.chdir(tempDir);
@@ -886,7 +886,7 @@ describe("bifrost command ui", () => {
         customSetting: { preserve: true },
       }, null, 2));
       writeFileSync(join(piDir, "bifrost-reconcile-ownership.json"), JSON.stringify(
-        buildInitOwnershipReceipt({ quick: ["fixture/old"] }),
+        buildInitOwnershipReceipt("project", { quick: ["fixture/old"] }),
       ));
       writeRecentProbeCache(join(piDir, "bifrost-probe.json"), [
         { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
@@ -903,7 +903,7 @@ describe("bifrost command ui", () => {
       const saved = JSON.parse(readFileSync(join(piDir, "bifrost.json"), "utf8"));
       assert.equal(confirmCalls, 1);
       assert.equal(refreshCalls, 1);
-      assert.deepEqual(saved.models.quick, ["manual/keep", "fixture/chat"]);
+      assert.deepEqual(saved.models.quick, ["fixture/old", "manual/keep"]);
       assert.deepEqual(saved.customSetting, { preserve: true });
       assert.deepEqual(saved.classifier, { backend: "prompt", enabled: false, model: "fixture/manual-classifier" });
       assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("Probing models")), false);
@@ -1028,7 +1028,7 @@ describe("bifrost command ui", () => {
       mkdirSync(piDir);
       writeFileSync(join(piDir, "bifrost.json"), JSON.stringify({ models: { quick: ["fixture/old"] } }));
       writeFileSync(join(piDir, "bifrost-reconcile-ownership.json"), JSON.stringify(
-        buildInitOwnershipReceipt({ quick: ["fixture/old"] }),
+        buildInitOwnershipReceipt("project", { quick: ["fixture/old"] }),
       ));
       writeRecentProbeCache(join(piDir, "bifrost-probe.json"), [
         { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
@@ -1991,10 +1991,9 @@ describe("command aliases", () => {
         { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
       ]);
       writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({ models: { quick: ["manual/keep"] } }));
-      writeFileSync(join(agentDir, "bifrost-reconcile-ownership.json"), JSON.stringify({
-        version: 1,
-        sources: { "pi-models-v1-manual": { generated: { quick: ["manual/keep"] }, tombstones: {} } },
-      }));
+      writeFileSync(join(agentDir, "bifrost-reconcile-ownership.json"), JSON.stringify(
+        buildInitOwnershipReceipt("user", { quick: ["manual/keep"] }),
+      ));
       const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
       (ctx as any).ui.confirm = async () => {
         rmSync(join(agentDir, "bifrost-reconcile-ownership.json"));
@@ -2120,6 +2119,7 @@ describe("command aliases", () => {
       assert.equal(
         notices.find((notice) => notice.includes("init: declined.")),
         "info:init: declined. Nothing was saved; recent probe results are reused for an hour unless you pass -f or the catalog changes. Run /bifrost init again to review and save.",
+        JSON.stringify(notices),
       );
       assert.ok(
         // notify() has no "success" type, so a saved footer arrives as info there.
@@ -2238,7 +2238,7 @@ describe("command aliases", () => {
       writeFileSync(configPath, JSON.stringify({ default: "quick", models: {
         quick: ["fixture/failed-existing", "manual/only"],
       } }));
-      writeFileSync(ownershipPath, JSON.stringify(buildInitOwnershipReceipt({
+      writeFileSync(ownershipPath, JSON.stringify(buildInitOwnershipReceipt("project", {
         quick: ["fixture/failed-existing"],
       })));
       const models = ["failed-existing", "verified", "failed-new"].map((id) => makeModel("fixture", id));
@@ -2266,7 +2266,7 @@ describe("command aliases", () => {
 
       const saved = JSON.parse(readFileSync(configPath, "utf8"));
       assert.equal(refreshCalls, 1);
-      assert.deepEqual(saved.models.quick.sort(), ["fixture/verified", "manual/only"]);
+      assert.deepEqual(saved.models.quick, ["fixture/failed-existing", "manual/only"]);
       assert.equal(saved.models.quick.includes("fixture/failed-new"), false);
     } finally {
       Date.now = realNow;
@@ -2286,7 +2286,7 @@ describe("command aliases", () => {
       const original = { default: "quick", models: { quick: ["fixture/existing"] } };
       writeFileSync(configPath, JSON.stringify(original));
       writeFileSync(join(piDir, "bifrost-reconcile-ownership.json"), JSON.stringify(
-        buildInitOwnershipReceipt({ quick: ["fixture/existing"] }),
+        buildInitOwnershipReceipt("project", { quick: ["fixture/existing"] }),
       ));
       const models = [makeModel("fixture", "existing"), makeModel("fixture", "verified")];
       const { ctx } = makeCtx(models);

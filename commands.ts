@@ -144,6 +144,11 @@ import {
   type ReconciliationSourceSnapshot,
 } from "./reconciliation-command.ts";
 import {
+  parseOwnershipSnapshot,
+  tierOwnership,
+  type ReconciliationOwnershipSnapshot,
+} from "./reconciliation.ts";
+import {
   applyReconciliationTransaction,
   assertOwnershipPayload,
   createReconciliationOwnershipReceipt,
@@ -706,6 +711,11 @@ const REASON_LABELS: Record<string, string> = {
 const isForced = (args: string): boolean => args?.split(/\s+/).includes("-f");
 const MAX_RECONCILIATION_OWNERSHIP_BYTES = 5_000_000;
 
+/** An empty v2 payload records that no tier is proven Bifrost-managed. */
+function emptyOwnershipBytes(scope: ReconciliationConfigSource): Buffer {
+  return Buffer.from(JSON.stringify({ version: 2, scope, tiers: {} }, null, 2) + "\n", "utf8");
+}
+
 function reconciliationPaths(source: ReconciliationConfigSource): {
   configPath: string;
   ownershipPath: string;
@@ -761,8 +771,8 @@ function readInheritedReceiptSnapshot(path: string): string | null {
 
 interface InheritedTierPool {
   readonly pool: readonly string[];
-  /** Model keys this layer's ownership receipt generated; everything else is handwritten. */
-  readonly receiptGenerated: ReadonlySet<string>;
+  /** True only when this layer's ownership receipt proves the whole pool is generated. */
+  readonly generated: boolean;
 }
 
 interface InheritedPoolSnapshot {
@@ -789,29 +799,18 @@ function normalizeModelPool(value: unknown): readonly string[] {
     : [];
 }
 
-function mergeTierKeys(byTier: Map<string, Set<string>>, tier: string, keys: unknown): void {
-  const existing = byTier.get(tier) ?? new Set<string>();
-  for (const key of normalizeModelPool(keys)) existing.add(key);
-  byTier.set(tier, existing);
-}
-
-/** Receipt-generated model keys per tier; an unreadable or invalid receipt protects every pool as handwritten. */
-function receiptGeneratedKeys(text: string | null): ReadonlyMap<string, ReadonlySet<string>> {
-  const byTier = new Map<string, Set<string>>();
-  if (text === null) return byTier;
+function readReceiptSnapshot(
+  text: string | null,
+  scope: ReconciliationConfigSource,
+): ReconciliationOwnershipSnapshot | undefined {
+  if (text === null) return undefined;
   try {
     assertOwnershipPayload(Buffer.from(text, "utf8"));
-    const receipt = JSON.parse(text) as { sources?: unknown };
-    if (!isJsonObject(receipt.sources)) return byTier;
-    for (const source of Object.values(receipt.sources)) {
-      if (!isJsonObject(source) || !isJsonObject(source.generated)) continue;
-      for (const [tier, keys] of Object.entries(source.generated))
-        mergeTierKeys(byTier, tier, keys);
-    }
+    const receipt = parseOwnershipSnapshot(JSON.parse(text));
+    return receipt?.scope === scope ? receipt : undefined;
   } catch {
-    /* fail safe toward treating pools as handwritten */
+    return undefined;
   }
-  return byTier;
 }
 
 function parseInheritedConfig(text: string): Record<string, unknown> {
@@ -833,15 +832,12 @@ function readInheritedLayerPools(layer: ReconciliationConfigSource): {
   // No pools to protect, so the receipt cannot change the decision and is not read or tracked.
   const hasPools = Object.keys(rawPools).length > 0;
   const receiptText = hasPools ? readInheritedReceiptSnapshot(paths.ownershipPath) : null;
-  const receiptKeys = receiptGeneratedKeys(receiptText);
+  const receipt = readReceiptSnapshot(receiptText, layer);
   const tiers = new Map(
-    Object.entries(rawPools).map(([tier, raw]) => [
-      tier,
-      {
-        pool: normalizeModelPool(raw),
-        receiptGenerated: receiptKeys.get(tier) ?? new Set<string>(),
-      },
-    ]),
+    Object.entries(rawPools).map(([tier, raw]) => {
+      const pool = normalizeModelPool(raw);
+      return [tier, { pool, generated: receipt ? tierOwnership(receipt, tier, raw as string | readonly string[]) === "managed" : false }];
+    }),
   );
   return {
     path: paths.configPath,
@@ -866,10 +862,9 @@ function sameMembership(left: readonly string[], right: readonly string[]): bool
   return left.length === right.length && left.every((key, index) => key === right[index]);
 }
 
-/** Init shadows a tier when it would replace a different pool that still holds handwritten models. */
+/** Init shadows a tier when it would replace a different pool that holds unowned models. */
 function isShadowedTier(proposed: readonly string[], inherited: InheritedTierPool): boolean {
-  const hasHandwrittenModel = inherited.pool.some((key) => !inherited.receiptGenerated.has(key));
-  return hasHandwrittenModel && !sameMembership(proposed, inherited.pool);
+  return inherited.pool.length > 0 && !inherited.generated && !sameMembership(proposed, inherited.pool);
 }
 
 function findShadowedTiers(
@@ -1904,7 +1899,6 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       source,
       inventories,
       (selected, bytes) => prospectiveConfigInstallable(selected, bytes, state),
-      source.source === "workspace" ? initConfig.models : undefined,
     );
     if (plan.status !== "ready" || !plan.transaction) {
       if (plan.reason === "no_changes" && plan.status === "blocked") {
@@ -1927,8 +1921,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           settingsAdded = true;
           const nextConfigBytes = Buffer.from(JSON.stringify(existing, null, 2) + "\n", "utf8");
           const ownershipBytes =
-            source.ownershipBytes ??
-            Buffer.from(JSON.stringify({ version: 1, sources: {} }, null, 2) + "\n", "utf8");
+            source.ownershipBytes ?? emptyOwnershipBytes(source.source);
           if (
             nextConfigBytes.byteLength > MAX_CONFIG_SOURCE_BYTES ||
             !prospectiveConfigInstallable(source.source, nextConfigBytes, state)
@@ -1974,10 +1967,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
             expectedConfigDigest: createHash("sha256").update(source.configBytes!).digest("hex"),
             expectedOwnershipDigest: null,
             nextConfigBytes: source.configBytes!,
-            nextOwnershipBytes: Buffer.from(
-              JSON.stringify({ version: 1, sources: {} }, null, 2) + "\n",
-              "utf8",
-            ),
+            nextOwnershipBytes: emptyOwnershipBytes(source.source),
           };
           changes = [];
         }
@@ -2027,7 +2017,9 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           settingsAdded = true;
         }
       }
-      const nextConfigBytes = Buffer.from(JSON.stringify(reconciled, null, 2) + "\n", "utf8");
+      const nextConfigBytes = settingsAdded
+        ? Buffer.from(JSON.stringify(reconciled, null, 2) + "\n", "utf8")
+        : plan.transaction.nextConfigBytes;
       if (
         nextConfigBytes.byteLength > MAX_CONFIG_SOURCE_BYTES ||
         !prospectiveConfigInstallable(source.source, nextConfigBytes, state)
@@ -2055,7 +2047,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       );
       return;
     }
-    const ownership = buildInitOwnershipReceipt(models);
+    const ownership = buildInitOwnershipReceipt(source.source, models);
     if (!ownership) {
       reportInitOutcome(
         ctx,
@@ -4078,7 +4070,7 @@ function persistBootstrapConfig(
         return true;
       }
     } else {
-      const receipt = buildInitOwnershipReceipt(generatedModels);
+      const receipt = buildInitOwnershipReceipt("project", generatedModels);
       if (!receipt) {
         logImportant(
           ctx,
@@ -4098,10 +4090,10 @@ function persistBootstrapConfig(
   }
   const configBytes = Buffer.from(JSON.stringify(current, null, 2) + "\n", "utf8");
   const ownership = stillFresh
-    ? buildInitOwnershipReceipt(generatedModels)
+    ? buildInitOwnershipReceipt("project", generatedModels)
     : source.ownershipBytes
       ? undefined
-      : buildInitOwnershipReceipt({});
+      : buildInitOwnershipReceipt("project", {});
   const ownershipBytes = ownership
     ? Buffer.from(JSON.stringify(ownership, null, 2) + "\n", "utf8")
     : source.ownershipBytes

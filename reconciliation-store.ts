@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import { constants } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { createTextFile } from "./storage.ts";
+import { parseOwnershipSnapshot } from "./reconciliation.ts";
 
 /**
  * Narrow journaled commit for one config file and its generated-membership sidecar.
@@ -211,6 +212,12 @@ export function assertPlainJsonObject(bytes: Uint8Array): Record<string, unknown
 
 export function assertOwnershipPayload(bytes: Uint8Array): void {
   const value = assertPlainJsonObject(bytes);
+  // v2 is the only shape writers emit. v1 stays readable so an upgrade does not
+  // strand a pending journal or an existing sidecar; readers treat it as unowned.
+  if (value.version === 2) {
+    if (!parseOwnershipSnapshot(value)) throw new ReconciliationStoreError("invalid_input");
+    return;
+  }
   if (!hasExactKeys(value, ["version", "sources"]) || value.version !== 1
     || !isPlainRecord(value.sources) || Object.keys(value.sources).length > MAX_RECORDS) {
     throw new ReconciliationStoreError("invalid_input");

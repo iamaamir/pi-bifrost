@@ -117,7 +117,7 @@ async function discoveryFailureScenario(createRouter: typeof createCommandRouter
     const configPath = join(configDir, "bifrost.json");
     const original = Buffer.from(JSON.stringify({ models: { general: ["openai/retired"] }, custom: true }));
     fs.writeFileSync(configPath, original);
-    fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify(buildInitOwnershipReceipt({ general: ["openai/retired"] })));
+    fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify(buildInitOwnershipReceipt("project", { general: ["openai/retired"] })));
     const h = makeHarness({
       evidence: { openai: { status: "complete", refreshedAt: Date.now() } },
       refresh: async () => { throw new Error("PRIVATE_DISCOVERY_FAILURE"); },
@@ -163,6 +163,7 @@ describe("config reconciliation command router", () => {
       fs.mkdirSync(configDir, { recursive: true });
       const original = Buffer.from(JSON.stringify({ enabled: true, models: { general: ["manual/model"] }, retained: { yes: true } }, null, 2) + "\n");
       fs.writeFileSync(join(configDir, "bifrost.json"), original);
+      fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify(buildInitOwnershipReceipt("project", { general: ["manual/model"] })));
       const evidence = { openai: { status: "complete" as const, refreshedAt: Date.now() } };
       let refreshCalls = 0;
       const h = makeHarness({ evidence, refresh: async () => { refreshCalls++; throw new Error("must not refresh preview/apply"); } });
@@ -186,8 +187,8 @@ describe("config reconciliation command router", () => {
       const updated = JSON.parse(fs.readFileSync(join(configDir, "bifrost.json"), "utf8")) as { models: Record<string, string[]>; retained: unknown };
       assert.deepEqual(updated.models.general, ["manual/model", "openai/new-model"]);
       assert.deepEqual(updated.retained, { yes: true });
-      const receipt = JSON.parse(fs.readFileSync(join(configDir, "bifrost-reconcile-ownership.json"), "utf8")) as { sources: Record<string, { generated: Record<string, string[]> }> };
-      assert.deepEqual(Object.values(receipt.sources).flatMap((source) => source.generated.general ?? []), ["openai/new-model"]);
+      const receipt = JSON.parse(fs.readFileSync(join(configDir, "bifrost-reconcile-ownership.json"), "utf8")) as { tiers: Record<string, unknown> };
+      assert.deepEqual(receipt.tiers, { general: { state: "generated", models: ["manual/model", "openai/new-model"] } });
       assert.ok(fs.existsSync(String((applied.applyResult as { configBackupPath?: string }).configBackupPath)));
       assert.deepEqual(fs.readFileSync(String((applied.applyResult as { configBackupPath?: string }).configBackupPath)), original);
     });
@@ -241,7 +242,7 @@ describe("config reconciliation command router", () => {
       fs.mkdirSync(configDir, { recursive: true });
       const configPath = join(configDir, "bifrost.json");
       fs.writeFileSync(configPath, JSON.stringify({ models: { general: ["openai/retired"] } }));
-      const receipt = buildInitOwnershipReceipt({ general: ["openai/retired"] });
+      const receipt = buildInitOwnershipReceipt("project", { general: ["openai/retired"] });
       fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify(receipt));
       let refreshCalls = 0;
       const h = makeHarness({
@@ -272,6 +273,7 @@ describe("config reconciliation command router", () => {
         models: { general: ["manual/model"] },
         unsupportedField: 1,
       }));
+      fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify(buildInitOwnershipReceipt("project", { general: ["manual/model"] })));
       const h = makeHarness({ evidence: { openai: { status: "complete", refreshedAt: Date.now() } } });
       const lines = await captureStderr(() => createCommandRouter(h.state)(
         "config reconcile --tier general --provider openai --json",
@@ -318,7 +320,7 @@ describe("config reconciliation command router", () => {
       const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models: Record<string, string[]> };
       const receipt = JSON.parse(fs.readFileSync(join(configDir, "bifrost-reconcile-ownership.json"), "utf8"));
       assert.deepEqual(fs.readFileSync(configPath), originalConfig);
-      assert.deepEqual(receipt.sources, {});
+      assert.deepEqual(receipt.tiers, { general: { state: "user" } });
       assert.equal(config.models.general.includes("openai/cached-model"), true);
       assert.equal(config.models.general.includes("manual/legacy"), true);
     });
@@ -472,7 +474,7 @@ describe("config reconciliation command router", () => {
       const configPath = join(configDir, "bifrost.json");
       const ownershipPath = join(configDir, "bifrost-reconcile-ownership.json");
       const originalConfig = Buffer.from('{ "models" : { "general" : ["openai/managed"] }, "manual" : true }\n');
-      const originalOwnership = Buffer.from(JSON.stringify(buildInitOwnershipReceipt({ general: ["openai/managed"] })));
+      const originalOwnership = Buffer.from(JSON.stringify(buildInitOwnershipReceipt("project", { general: ["openai/managed"] })));
       fs.writeFileSync(configPath, originalConfig);
       fs.writeFileSync(ownershipPath, originalOwnership);
       writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
@@ -481,10 +483,10 @@ describe("config reconciliation command router", () => {
       const h = makeHarness({ models: [makeModel("openai", "new-model", 1, 1)] });
       await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
       const updated = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models: Record<string, string[]>; manual: boolean };
-      const updatedOwnership = JSON.parse(fs.readFileSync(ownershipPath, "utf8")) as { sources: Record<string, { generated: Record<string, string[]> }> };
+      const updatedOwnership = JSON.parse(fs.readFileSync(ownershipPath, "utf8")) as { tiers: Record<string, { models: string[] }> };
       assert.deepEqual(updated.models.general, ["openai/new-model"]);
       assert.equal(updated.manual, true);
-      assert.equal(Object.values(updatedOwnership.sources).flatMap((source) => source.generated.general ?? []).includes("openai/new-model"), true);
+      assert.deepEqual(updatedOwnership.tiers.general, { state: "generated", models: ["openai/new-model"] });
     });
   });
 });

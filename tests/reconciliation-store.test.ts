@@ -17,7 +17,7 @@ import {
 const OLD_CONFIG = Buffer.from('{\n  "enabled": true,\n  "models": {"general": ["manual/model"]},\n  "unrelated": {"keep": true}\n}\n');
 const NEXT_CONFIG = Buffer.from('{"enabled":true,"models":{"general":["manual/model","openai/gpt-5.4"]},"unrelated":{"keep":true}}\n');
 const OLD_OWNERSHIP = Buffer.from('{"version":1,"sources":{"catalog":{"generated":{"general":["openai/old"]},"tombstones":{}}}}\n');
-const NEXT_OWNERSHIP = Buffer.from('{"version":1,"sources":{"catalog":{"generated":{"general":["openai/gpt-5.4"]},"tombstones":{}}}}\n');
+const NEXT_OWNERSHIP = Buffer.from('{"version":2,"scope":"project","tiers":{"general":{"state":"user"}}}\n');
 
 function hash(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
@@ -172,6 +172,23 @@ function waitForChildClose(child: ChildProcess, timeoutMs: number): Promise<void
 }
 
 describe("journaled reconciliation store", () => {
+  it("recovers an interrupted legacy journal before any ownership migration", () => {
+    withSetup(({ input, paths, ownershipPath }) => {
+      const legacyNext = Buffer.from('{"version":1,"sources":{}}\n');
+      const fault = operations({ failRename: (from) => from.endsWith(".config.stage") ? "after" : undefined });
+      assertStoreError(() => applyReconciliationTransaction(input({ nextOwnershipBytes: legacyNext }), fault), "io_failure");
+      assert.equal(recoverReconciliationTransaction(paths).status, "completed");
+      assert.deepEqual(fs.readFileSync(ownershipPath), legacyNext);
+    }, { ownership: OLD_OWNERSHIP });
+  });
+
+  it("commits ownership-only migration without changing hand-authored config bytes", () => {
+    withSetup(({ input, configPath, ownershipPath }) => {
+      applyReconciliationTransaction(input({ nextConfigBytes: OLD_CONFIG }));
+      assert.deepEqual(fs.readFileSync(configPath), OLD_CONFIG);
+      assert.deepEqual(fs.readFileSync(ownershipPath), NEXT_OWNERSHIP);
+    }, { ownership: OLD_OWNERSHIP });
+  });
   it("replaces both files atomically, keeps exact private backups, and preserves config mode", () => {
     withSetup(({ paths, input, configPath, ownershipPath }) => {
       const result = applyReconciliationTransaction(input());
