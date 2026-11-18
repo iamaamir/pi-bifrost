@@ -615,6 +615,32 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
     });
   }
 
+  it("preserves a deleted tier when the entire models property is absent", async () => {
+    requests = [];
+    const env = fixture(port, ["healthy"]);
+    const configPath = join(env.work, ".pi", "bifrost.json");
+    const receiptPath = join(env.work, ".pi", "bifrost-reconcile-ownership.json");
+    const original = Buffer.from(JSON.stringify({ ...BUNDLED_PUBLIC_INIT_DEFAULTS, default: "quick", classifier: { enabled: false }, rules: [] }, null, 4) + "\n\n");
+    writeFileSync(configPath, original);
+    writeFileSync(receiptPath, ownership(["fake/healthy"]));
+    try {
+      for (let run = 0; run < 2; run++) {
+        const result = await runInit({ ...env, args: "--write" });
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(result.violations, "");
+        assert.deepEqual(readFileSync(configPath), original);
+        assert.deepEqual(JSON.parse(readFileSync(receiptPath, "utf8")).tiers.quick, { state: "deleted" });
+      }
+      const receiptBefore = readFileSync(receiptPath);
+      const result = await runInit({ ...env, prompt: "/bifrost config reconcile --tier quick --provider fake --json" });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.violations, "");
+      assert.match(result.stderr + result.stdout, /tier_protected|tier_not_explicit/);
+      assert.deepEqual(readFileSync(configPath), original);
+      assert.deepEqual(readFileSync(receiptPath), receiptBefore);
+    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+  });
+
   it("leaves existing config untouched when forced probes have zero successes", async () => {
     requests = [];
     const env = fixture(port, ["credits-exhausted"]);
