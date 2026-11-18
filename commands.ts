@@ -1945,6 +1945,23 @@ export function buildTracePreview(
   };
 }
 
+/**
+ * The attempt line is diagnostic detail, not a second judgment. Print it only
+ * when it says something the accepted classification does not already state: a
+ * non-success outcome, a non-default fallback, another backend, or a different
+ * model or confidence. An accepted attempt that simply repeats the
+ * `classifier:` lines verbatim is dropped, so preview and trace agree.
+ */
+function shouldRenderClassifierAttempt(
+  attempt: ClassifierAttemptSummary,
+  accepted: { readonly backend?: string; readonly model?: string; readonly confidence?: number } | undefined,
+): boolean {
+  if (attempt.outcome !== "success" || attempt.fallbackKind !== "none") return true;
+  if (accepted === undefined || accepted.backend !== attempt.backend) return true;
+  if (attempt.model !== undefined && attempt.model !== accepted.model) return true;
+  return attempt.confidence !== undefined && attempt.confidence !== accepted.confidence;
+}
+
 export function renderTracePreview(trace: BifrostTracePreview): string[] {
   const lines = [
     "--- route trace v1 ---",
@@ -1960,8 +1977,9 @@ export function renderTracePreview(trace: BifrostTracePreview): string[] {
     if (trace.classification.classifier.model !== undefined) lines.push(`classifier model: ${trace.classification.classifier.model}`);
     if (trace.classification.classifier.confidence !== undefined) lines.push(`classifier confidence: ${trace.classification.classifier.confidence}`);
   }
-  if (trace.classifierAttempt) {
-    const attempt = trace.classifierAttempt;
+  const traceAttempt = trace.classifierAttempt;
+  if (traceAttempt && shouldRenderClassifierAttempt(traceAttempt, trace.classification.classifier)) {
+    const attempt = traceAttempt;
     lines.push(`classifier attempt: ${attempt.backend} (${attempt.outcome}, fallback=${attempt.fallbackKind})`);
     if (attempt.model !== undefined) lines.push(`classifier attempt model: ${attempt.model}`);
     if (attempt.confidence !== undefined) lines.push(`classifier attempt confidence: ${attempt.confidence}`);
@@ -2003,12 +2021,8 @@ export function renderTracePreview(trace: BifrostTracePreview): string[] {
 
 export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
   const attempt = report.classifierAttempt;
-  const showAttempt = attempt !== undefined && (
-    attempt.fallbackKind !== "none"
-    || attempt.outcome !== "success"
-    || report.backend !== attempt.backend
-    || (attempt.confidence !== undefined && report.confidence === undefined)
-  );
+  const showAttempt = attempt !== undefined
+    && shouldRenderClassifierAttempt(attempt, { backend: report.backend, model: report.model, confidence: report.confidence });
 
   return [
     "--- preview ---",

@@ -2033,6 +2033,54 @@ describe("preview report", () => {
     }
   });
 
+  it("does not repeat an accepted classifier attempt the classification lines already state", () => {
+    const classification = {
+      kind: "classified" as const,
+      tier: "quick",
+      source: "classifier" as const,
+      judgment: { tier: "quick", backend: "pi-native" as const, model: "jev-1.13.0", confidence: 0.93 },
+      classifierAttempt: {
+        backend: "pi-native" as const,
+        outcome: "success" as const,
+        fallbackKind: "none" as const,
+        model: "jev-1.13.0",
+        confidence: 0.93,
+      },
+    };
+
+    const preview = renderPreviewReport(buildPreviewReport({ prompt: "p", classification, display }));
+    assert(preview.includes("confidence: 0.93"));
+    assert.equal(preview.some((line) => line.startsWith("classifier attempt")), false);
+
+    const trace = renderTracePreview(buildTracePreview(buildRouteDecisionSummary(classification), true));
+    assert(trace.includes("classifier confidence: 0.93"));
+    assert.equal(trace.some((line) => line.startsWith("classifier attempt")), false);
+  });
+
+  it("keeps a successful attempt when its confidence differs from the classification", () => {
+    // Not produced by today's pipeline, which copies one value into both fields.
+    // The renderer must still prefer a visible divergence over a silent one.
+    const classification = {
+      kind: "classified" as const,
+      tier: "quick",
+      source: "classifier" as const,
+      judgment: { tier: "quick", backend: "pi-native" as const, model: "jev-1.13.0", confidence: 0.93 },
+      classifierAttempt: {
+        backend: "pi-native" as const,
+        outcome: "success" as const,
+        fallbackKind: "none" as const,
+        model: "jev-1.13.0",
+        confidence: 0.42,
+      },
+    };
+
+    const preview = renderPreviewReport(buildPreviewReport({ prompt: "p", classification, display }));
+    assert(preview.includes("classifier attempt confidence: 0.42"));
+
+    const trace = renderTracePreview(buildTracePreview(buildRouteDecisionSummary(classification), true));
+    assert(trace.includes("classifier attempt confidence: 0.42"));
+  });
+
   it("serializes to one parseable line with no prose envelope", () => {
     const report = buildPreviewReport({
       prompt: "direct hit",
