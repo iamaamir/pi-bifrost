@@ -1609,10 +1609,14 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   let probeLoaded = false;
   let ranProbe = false;
   let probeAge = "";
+  const authFailedProbeProviders = new Set<string>();
 
   if (!isForced(args)) {
     const cachedResults = readRecentCompleteProbeReport(probePath, available);
     if (cachedResults) {
+      for (const result of cachedResults) {
+        if (failureDetails(result)?.reason === "authentication_or_access") authFailedProbeProviders.add(result.provider);
+      }
       workingModels = cachedResults
         .filter((result) => result.status === "ok")
         .map((result) => ({
@@ -1665,6 +1669,9 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       return;
     }
     const { results } = probeRun;
+    for (const result of results) {
+      if (failureDetails(result)?.reason === "authentication_or_access") authFailedProbeProviders.add(result.provider);
+    }
     state.reliabilityStore.applyOutcomes(
       results.map((r) =>
         r.status === "ok"
@@ -2016,7 +2023,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           (refreshRemainsCurrent && initRefreshReceipt?.evidence.get(provider) === evidence));
       const status = state.forceRegistryRefresh
         ? ("stale" as const)
-        : authConfigured === false
+        : authConfigured === false || authFailedProbeProviders.has(provider)
           ? ("auth_failed" as const)
           : fresh && authConfigured === true
             ? ("complete" as const)

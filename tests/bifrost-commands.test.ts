@@ -1742,6 +1742,83 @@ describe("bifrost command ui", () => {
     }
   });
 
+  it("blocks managed removals when cached auth-failed probe belongs to provider among successful providers", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-auth-cache-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const piDir = join(tempDir, ".pi");
+      mkdirSync(piDir);
+      const configPath = join(piDir, "bifrost.json");
+      const original = { default: "quick", models: { quick: ["p/old"] } };
+      writeFileSync(configPath, JSON.stringify(original));
+      writeFileSync(join(piDir, "bifrost-reconcile-ownership.json"), JSON.stringify(
+        buildInitOwnershipReceipt("project", { quick: ["p/old"] }),
+      ));
+      const models = [makeModel("p", "old"), makeModel("q", "working")];
+      writeRecentProbeCache(join(piDir, "bifrost-probe.json"), [
+        { provider: "p", model: "old", status: "error", error: "HTTP 401 Unauthorized", cost_input: 0, cost_output: 0, duration_ms: 10 },
+        { provider: "q", model: "working", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const { ctx, calls } = makeCtx(models);
+      const registry = (ctx as any).modelRegistry;
+      registry.getAll = () => models;
+      registry.getProvider = (provider: string) => ({ id: provider });
+      registry.getProviderAuthStatus = () => ({ configured: true });
+      registry.getError = () => undefined;
+      registry.refresh = async () => ({ aborted: false, errors: new Map() });
+      const state = makeState() as any;
+      (ctx as any).ui.confirm = async () => { throw new Error("auth-failed inventory must not reach approval"); };
+
+      await createCommandRouter(state)("init", ctx);
+
+      assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("model inventory is incomplete or stale")));
+      assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), original);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks managed removals after fresh auth-failed probe despite another provider succeeding", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-auth-fresh-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const piDir = join(tempDir, ".pi");
+      mkdirSync(piDir);
+      const configPath = join(piDir, "bifrost.json");
+      const original = { default: "quick", models: { quick: ["p/old"] } };
+      writeFileSync(configPath, JSON.stringify(original));
+      writeFileSync(join(piDir, "bifrost-reconcile-ownership.json"), JSON.stringify(
+        buildInitOwnershipReceipt("project", { quick: ["p/old"] }),
+      ));
+      const models = [makeModel("p", "old"), makeModel("q", "working")];
+      const { ctx, calls } = makeCtx(models);
+      const registry = (ctx as any).modelRegistry;
+      registry.getAll = () => models;
+      registry.getProvider = (provider: string) => ({ id: provider });
+      registry.getProviderAuthStatus = () => ({ configured: true });
+      registry.getError = () => undefined;
+      registry.refresh = async () => ({ aborted: false, errors: new Map() });
+      registry.streamSimple = (model: { provider: string }) => ({ result: async () => {
+        if (model.provider === "p") throw new Error("HTTP 401 Unauthorized");
+        return { role: "assistant", content: [{ type: "text", text: "ok" }], usage: { totalTokens: 1 }, stopReason: "stop" };
+      } });
+      const state = makeState() as any;
+      state.reliabilityStore = { ...state.reliabilityStore, applyOutcomes: () => {} };
+      (ctx as any).ui.confirm = async () => { throw new Error("auth-failed inventory must not reach approval"); };
+
+      await createCommandRouter(state)("init -f", ctx);
+
+      assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("model inventory is incomplete or stale")));
+      assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), original);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a manually edited whole tier when refreshing from a recent probe cache", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-refresh-"));
     const previousCwd = process.cwd();
