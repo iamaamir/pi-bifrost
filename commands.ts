@@ -539,34 +539,52 @@ export function describeInitCommitFailure(failure: {
   readonly receiptOnly: boolean;
   readonly configPath: string;
   readonly nextConfigBytes: Uint8Array;
+  readonly journalPath: string;
   readonly target: string;
   readonly recoveryCommand: string;
 }): string {
   if (failure.locked) return "Init could not acquire reconciliation locks. Verify no Bifrost writer is active and repair only exact stale lock files before retrying.";
   if (failure.receiptOnly) return "Init could not safely commit the reviewed membership update; existing files were preserved.";
+  // `applyReconciliationTransaction` writes the journal before it renames either
+  // target, so a journal is what makes the staged update recoverable. Matching
+  // config bytes alone can also mean the plan never planned to change the config.
+  const journalPending = pathExists(failure.journalPath);
   switch (inspectInstalledConfig(failure.configPath, failure.nextConfigBytes)) {
     case "matches":
-      return `Init could not finish the reviewed membership update. ${failure.target} already holds the new memberships and a reconciliation journal is pending. Run ${failure.recoveryCommand} before you retry.`;
+      return journalPending
+        ? `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration and a reconciliation journal is pending. Run ${failure.recoveryCommand} before you retry.`
+        : `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration, but no reconciliation journal was written, so ${failure.recoveryCommand} has nothing to recover. Retry Init to finish updating the ownership record.`;
     case "differs":
-      return "Init could not safely commit the reviewed membership update; existing files were preserved.";
+      return journalPending
+        ? `Init could not safely commit the reviewed membership update; existing files were preserved. A reconciliation journal is pending, so run ${failure.recoveryCommand} before you retry.`
+        : "Init could not safely commit the reviewed membership update; existing files were preserved.";
     case "unknown":
       // A read failure says nothing about what is installed. Promise neither
       // preservation nor replacement; send the user to inspect the target.
-      return `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. Inspect that file and the reconciliation journal before you retry; run ${failure.recoveryCommand} if the new memberships are already installed.`;
+      return journalPending
+        ? `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. Inspect that file, then run ${failure.recoveryCommand} to finish the pending journal before you retry.`
+        : `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. No reconciliation journal was written; inspect that file before you retry.`;
   }
 }
 
-/** "unknown" is a failed read, which is not the same as a config that differs. */
+/** "unknown" is an unsafe or unreadable file, which is not the same as a config that differs. */
 type InstalledConfigState = "matches" | "differs" | "unknown";
 
+function pathExists(path: string): boolean {
+  try { lstatSync(path); return true; } catch { return false; }
+}
+
+/** Reject non-regular, oversized and unstable files instead of blocking or allocating on them. */
 function inspectInstalledConfig(configPath: string, nextConfigBytes: Uint8Array): InstalledConfigState {
-  let installed: Buffer;
+  let installed: Buffer | undefined;
   try {
-    installed = readFileSync(configPath);
-  } catch (error) {
-    // A missing config holds nothing, so the preserved wording stays true.
-    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "differs" : "unknown";
+    installed = readBoundedRegularSnapshot(configPath);
+  } catch {
+    return "unknown";
   }
+  // A missing config holds nothing, so the preserved wording stays true.
+  if (installed === undefined) return "differs";
+  if (installed.byteLength > MAX_CONFIG_SOURCE_BYTES) return "unknown";
   return installed.equals(Buffer.from(nextConfigBytes)) ? "matches" : "differs";
 }
 
@@ -1623,6 +1641,7 @@ async function handleInit(
       receiptOnly,
       configPath: transaction.configPath,
       nextConfigBytes: transaction.nextConfigBytes,
+      journalPath: transaction.journalPath,
       target: initSourceLabel(source),
       recoveryCommand: source.source === "user"
         ? "/bifrost config reconcile --source user --recover"
