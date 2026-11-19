@@ -13,11 +13,14 @@ import {
   fstatSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   readSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   loadRuntimeState,
@@ -115,7 +118,7 @@ import { reconcileEconomicSnapshot } from "./economic-config.ts";
 import { resolvePiAffinityMode, type AffinityAnchor } from "./affinity.ts";
 import {
   buildInitOwnershipReceipt,
-  buildInitMembershipPlan,
+  buildInitActionPlan,
   parseReconciliationCommandArgs,
   runReconciliationCommand,
   type ReconciliationCommandReport,
@@ -142,7 +145,6 @@ import { isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
 import { hasExplicitExtensionRoutingFile, hasUserBootstrapFiles } from "./auto-setup.ts";
 import { getCostReportData } from "./cost-report.ts";
 import { formatCostText, showCostView } from "./ui/cost-view.ts";
-import { Text } from "@earendil-works/pi-tui";
 import { log as logImportant, type NoticeLevel } from "./ui/notice.ts";
 import { setProbeProgress } from "./ui/probe-progress.ts";
 
@@ -1137,7 +1139,11 @@ function readInheritedLayerPools(layer: ReconciliationConfigSource): {
   const paths = reconciliationPaths(layer);
   const text = readInheritedConfigSnapshot(paths.configPath);
   const parsed = text === null ? {} : parseInheritedConfig(text);
+  if (parsed.models !== undefined && !isJsonObject(parsed.models)) throw new Error("invalid inherited model pools");
   const rawPools = isJsonObject(parsed.models) ? parsed.models : {};
+  if (Object.values(rawPools).some((pool) =>
+    typeof pool !== "string" && !(Array.isArray(pool) && pool.every((key) => typeof key === "string")),
+  )) throw new Error("invalid inherited model pool");
   // No pools to protect, so the receipt cannot change the decision and is not read or tracked.
   const hasPools = Object.keys(rawPools).length > 0;
   const receiptText = hasPools ? readInheritedReceiptSnapshot(paths.ownershipPath) : null;
@@ -1167,26 +1173,6 @@ function readInheritedPools(layers: readonly ReconciliationConfigSource[]): Inhe
   };
 }
 
-function sameMembership(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((key, index) => key === right[index]);
-}
-
-/** An unreviewed local pool must not freeze an inherited tier, even when identical. */
-function isShadowedTier(proposed: readonly string[], inherited: InheritedTierPool, writeWithoutPrompt: boolean): boolean {
-  return writeWithoutPrompt || (!inherited.generated && inherited.pool.length > 0 && !sameMembership(proposed, inherited.pool));
-}
-
-function findShadowedTiers(
-  proposed: Readonly<Record<string, readonly string[]>>,
-  ownedTiers: Readonly<Record<string, unknown>>,
-  inherited: ReadonlyMap<string, InheritedTierPool>,
-  writeWithoutPrompt: boolean,
-): string[] {
-  return Object.keys(proposed)
-    .filter((tier) => !Object.hasOwn(ownedTiers, tier) && inherited.has(tier))
-    .filter((tier) => isShadowedTier(proposed[tier], inherited.get(tier)!, writeWithoutPrompt));
-}
-
 function selectInitSource(): ReconciliationSourceSnapshot {
   const project = readReconciliationSource("project");
   if (project.configBytes !== null || project.ownershipBytes !== null) return project;
@@ -1202,6 +1188,46 @@ function initSourceLabel(source: ReconciliationSourceSnapshot): string {
     : source.source === "user"
       ? `user (${source.configPath})`
       : "project (.pi/bifrost.json)";
+}
+
+function initInheritanceReviewLines(input: {
+  source: ReconciliationConfigSource;
+  sourceModels: Readonly<Record<string, unknown>>;
+  inherited: ReadonlyMap<string, InheritedTierPool>;
+  generated: Readonly<Record<string, readonly string[]>>;
+  tiers?: readonly {
+    tier: string;
+    before: readonly string[] | undefined;
+    after: readonly string[] | undefined;
+  }[];
+}): string[] {
+  if (input.source !== "project") return [];
+  if (!input.tiers) {
+    return Object.entries(input.generated).flatMap(([tier, generated]) => {
+      if (Object.hasOwn(input.sourceModels, tier)) return [];
+      const inherited = input.inherited.get(tier)?.pool;
+      if (!inherited) return [];
+      const identical = inherited.length === generated.length && inherited.every((key, index) => key === generated[index]);
+      return identical
+        ? [`  ${tier}: inherited [${inherited.join(", ") || "empty"}] kept; no project override`]
+        : [`  ${tier}: inherited [${inherited.join(", ") || "empty"}]`, `    → project [${generated.join(", ")}]`];
+    });
+  }
+  const reviewed = new Set(input.tiers.map(({ tier }) => tier));
+  const lines = input.tiers.flatMap(({ tier, before, after }) => {
+    const inherited = input.inherited.get(tier)?.pool;
+    if (!inherited) return [];
+    if (before === undefined && after !== undefined)
+      return [`  ${tier}: inherited [${inherited.join(", ") || "empty"}]`, `    → project [${after.join(", ")}]`];
+    if (after === undefined)
+      return [`  ${tier}: ${before === undefined ? "inherited" : "project pool removed; inherited"} [${inherited.join(", ") || "empty"}] becomes effective`];
+    return [];
+  });
+  for (const [tier, inherited] of input.inherited) {
+    if (!reviewed.has(tier) && !Object.hasOwn(input.sourceModels, tier))
+      lines.push(`  ${tier}: inherited [${inherited.pool.join(", ") || "empty"}] remains effective`);
+  }
+  return lines;
 }
 
 function reconciliationRegistrySnapshot(
@@ -1716,7 +1742,17 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   try {
     const preflight = readReconciliationSource(selectedSource);
     if (preflight.configBytes !== null) {
-      parseInheritedConfig(Buffer.from(preflight.configBytes).toString("utf8"));
+      const targetConfig = parseInheritedConfig(Buffer.from(preflight.configBytes).toString("utf8"));
+      if (targetConfig.models !== undefined) {
+        if (!targetConfig.models || typeof targetConfig.models !== "object" || Array.isArray(targetConfig.models)) {
+          throw new Error("invalid target model pools");
+        }
+        for (const pool of Object.values(targetConfig.models)) {
+          if (typeof pool !== "string" && !(Array.isArray(pool) && pool.every((key) => typeof key === "string"))) {
+            throw new Error("invalid target model pool");
+          }
+        }
+      }
     }
     if (preflight.ownershipBytes !== null) {
       assertOwnershipPayload(preflight.ownershipBytes);
@@ -1903,6 +1939,9 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   for (const tier of Object.keys(models)) {
     models[tier].sort((a, b) => (speedMap.get(a) ?? Infinity) - (speedMap.get(b) ?? Infinity));
   }
+  const generatedPools = Object.fromEntries(
+    Object.entries(models).map(([tier, pool]) => [tier, [...pool]]),
+  );
 
   let source: ReconciliationSourceSnapshot;
   try {
@@ -1941,24 +1980,16 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     !Array.isArray(sourceConfig.models)
       ? (sourceConfig.models as Record<string, unknown>)
       : {};
+  const hasConfiguredTiers = Object.keys(sourceModels).length > 0;
   let inheritedSources: readonly InheritedPoolSnapshot[] = [];
   let inheritedTiers: ReadonlySet<string> = new Set<string>();
+  let inheritedEffective: ReadonlyMap<string, InheritedTierPool> = new Map();
   if (selectedSource === "project") {
     try {
       const inherited = readInheritedPools(["user", "workspace"]);
       inheritedSources = inherited.snapshots;
       inheritedTiers = inherited.tierNames;
-      const shadowedTiers = findShadowedTiers(models, sourceModels, inherited.effective, writeWithoutPrompt);
-      if (shadowedTiers.length > 0) {
-        reportInitOutcome(
-          ctx,
-          "blocked",
-          `Nothing was saved; pools inherited from your global or workspace config already set ${shadowedTiers.join(", ")} with different models.`,
-          "Edit the existing source, use /bifrost init -g for the global config, or review /bifrost config reconcile --source workspace.",
-          "warning",
-        );
-        return;
-      }
+      inheritedEffective = inherited.effective;
     } catch {
       reportInitOutcome(
         ctx,
@@ -1970,30 +2001,32 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       return;
     }
   }
+  if (selectedSource === "project" && Object.keys(sourceModels).length === 0) {
+    for (const [tier, inherited] of inheritedEffective) {
+      const generated = models[tier];
+      if (
+        generated &&
+        generated.length === inherited.pool.length &&
+        generated.every((key, index) => key === inherited.pool[index])
+      ) {
+        delete models[tier];
+      }
+    }
+  }
   const sourceClassifier =
     sourceConfig.classifier &&
     typeof sourceConfig.classifier === "object" &&
     !Array.isArray(sourceConfig.classifier)
       ? (sourceConfig.classifier as Record<string, unknown>)
       : {};
-  const configLayers = loadConfigForReload(process.cwd(), state.extensionDir);
+  // SAFETY: bundled public defaults are serialized config fields; this view only indexes them by config key.
   const publicDefaults = BUNDLED_PUBLIC_INIT_DEFAULTS as unknown as Record<string, unknown>;
-  const layerOrder = ["global", "workspace", "project"] as const;
-  const targetLayer =
-    source.source === "project"
-      ? "project"
-      : source.source === "workspace"
-        ? "workspace"
-        : "global";
-  const targetLayerIndex = layerOrder.indexOf(targetLayer);
   const inheritedFields = new Set(
-    configLayers.sourceFields
-      .filter(
-        ({ layer }) =>
-          layer !== "effective" &&
-          layerOrder.indexOf(layer as (typeof layerOrder)[number]) < targetLayerIndex,
-      )
-      .flatMap(({ fields }) => fields),
+    selectedSource === "project"
+      ? loadConfigForReload(process.cwd(), state.extensionDir).sourceFields
+          .filter(({ layer }) => ["global", "workspace"].includes(layer))
+          .flatMap(({ fields }) => fields)
+      : [],
   );
   const detectedClassifier = state.effectiveClassifierBackend(initConfig, ctx);
   const classifierEnabled = classifierEnablementFor(state, ctx, initConfig).enabled;
@@ -2095,7 +2128,17 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   let transaction: Parameters<typeof applyReconciliationTransaction>[0];
   let receiptOnly = false;
   let changes: readonly { kind: "add" | "remove"; tier: string; modelKey: string }[];
+  let plannedTierReview:
+    | readonly {
+        tier: string;
+        before: readonly string[] | undefined;
+        after: readonly string[] | undefined;
+        ownershipBefore: string;
+        ownershipAfter: string;
+      }[]
+    | undefined;
   let settingsAdded = false;
+  let actionSelectionApproved = false;
   if (source.configBytes !== null) {
     const byProvider = new Map<string, Record<string, string[]>>();
     for (const model of available) {
@@ -2131,11 +2174,154 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
             : ("stale" as const);
       return { provider, status, modelsByTier };
     });
-    const plan = buildInitMembershipPlan(
-      source,
-      inventories,
-      (selected, bytes) => prospectiveConfigInstallable(selected, bytes, state),
+    if (inventories.some(({ status }) => status !== "complete")) {
+      reportInitOutcome(
+        ctx,
+        "paused",
+        "Nothing was saved; the model inventory is incomplete or stale.",
+        "Run /bifrost init -f to refresh the catalog, then retry.",
+        "warning",
+      );
+      return;
+    }
+    const validateMergedConfig = (selected: ReconciliationConfigSource, bytes: Uint8Array) =>
+      prospectiveConfigInstallable(selected, bytes, state);
+    const actionPlans = new Map(
+      (["keep", "merge", "defaults"] as const).map((action) => [
+        action,
+        buildInitActionPlan({
+          action,
+          source,
+          inventories,
+          generated: models,
+          inheritedTiers,
+          validateMergedConfig,
+        }),
+      ]),
     );
+    const keepPlan = actionPlans.get("keep")!;
+    const proposedSettings = Object.keys(proposal).filter(
+      (key) => key !== "$schema" && key !== "models" && !inheritedFields.has(key) && sourceConfig[key] === undefined,
+    );
+    const planSignature = (candidate: (typeof keepPlan)) =>
+      `${candidate.status}:${candidate.reason ?? ""}:${candidate.transaction ? Buffer.from(candidate.transaction.nextConfigBytes).toString("base64") : ""}:${candidate.transaction ? Buffer.from(candidate.transaction.nextOwnershipBytes).toString("base64") : ""}`;
+    const keepSignature = planSignature(keepPlan);
+    const availableActions = (["keep", "merge", "defaults"] as const).filter((action) => {
+      const candidate = actionPlans.get(action)!;
+      return (
+        (candidate.status === "ready" && candidate.transaction !== undefined) ||
+        (candidate.status === "blocked" && candidate.reason === "no_changes")
+      ) && (action === "keep" || planSignature(candidate) !== keepSignature);
+    });
+    const hasUnavailableAction = (["keep", "merge", "defaults"] as const).some((action) => {
+      const candidate = actionPlans.get(action)!;
+      return candidate.reason !== undefined && candidate.reason !== "no_changes";
+    });
+    const actionSelectionRequired =
+      availableActions.length > 1 ||
+      (availableActions.length === 1 && (availableActions[0] !== "keep" || hasUnavailableAction));
+    if (actionSelectionRequired && !writeWithoutPrompt) {
+      const compareLines = [
+        "◆ Bifrost · Review model choices",
+        `  Save to ${initSourceLabel(source)}`,
+        ...(selectedSource === "project" ? ["  Global/workspace files stay unchanged."] : []),
+        "  Unlisted tiers remain unchanged.",
+        `  Classifier ${effectiveClassifierSummary}`,
+        ...(proposedSettings.length ? [`  Settings added: ${proposedSettings.join(", ")}`] : []),
+        "",
+      ];
+      compareLines.push(...(["keep", "merge", "defaults"] as const)
+        .filter((candidateAction) => !availableActions.includes(candidateAction))
+        .map((candidateAction) => {
+          const candidate = actionPlans.get(candidateAction)!;
+          const label = candidateAction === "keep" ? "Keep my models" : candidateAction === "merge" ? "Merge new models" : "Bifrost defaults";
+          const equivalentAction = availableActions.find((availableAction) =>
+            planSignature(actionPlans.get(availableAction)!) === planSignature(candidate),
+          );
+          if (equivalentAction) {
+            const equivalentLabel = equivalentAction === "keep" ? "Keep my models" : equivalentAction === "merge" ? "Merge new models" : "Bifrost defaults";
+            return `  ${label}: same outcome as ${equivalentLabel}.`;
+          }
+          const unavailableReason = candidate.reason === "prospective_config_invalid"
+            ? "the proposed config failed validation"
+            : candidate.reason === "source_invalid"
+              ? "the selected config needs repair"
+              : "not safe with current model results";
+          return `  ${label} unavailable: ${unavailableReason}.`;
+        }));
+      for (const action of availableActions) {
+        const candidate = actionPlans.get(action)!;
+        compareLines.push(`  ${action === "keep" ? "Keep my models" : action === "merge" ? "Merge new models" : "Bifrost defaults"}:`);
+        compareLines.push(...candidate.tiers
+          .filter(({ before, after, ownershipBefore, ownershipAfter }) =>
+            JSON.stringify(before) !== JSON.stringify(after) ||
+            ownershipBefore !== ownershipAfter ||
+            ownershipBefore === "user" ||
+            ownershipBefore === "deleted",
+          )
+          .flatMap(({ tier, before, after, ownershipBefore, ownershipAfter }) => {
+            if (selectedSource === "project" && before === undefined && after !== undefined && inheritedEffective.has(tier))
+              return [];
+            if (ownershipBefore === "deleted" && before === undefined && after === undefined)
+              return [`    ${tier}: remains deleted`];
+            if (ownershipBefore === "user" && JSON.stringify(before) === JSON.stringify(after))
+              return [`    ${tier}: custom pool retained [${before?.join(", ") ?? "empty"}]`];
+            return [
+              `    ${tier}: [${before?.join(", ") ?? "none"}] → [${after?.join(", ") ?? "none"}]${ownershipBefore !== ownershipAfter && JSON.stringify(before) === JSON.stringify(after) ? "; reset to Bifrost defaults" : ""}`,
+            ];
+          }));
+        compareLines.push(...initInheritanceReviewLines({
+          source: selectedSource,
+          sourceModels,
+          inherited: inheritedEffective,
+          generated: models,
+          tiers: candidate.tiers,
+        }).map((line) => `  ${line.trimStart()}`));
+      }
+      if (!renderInitPreview(ctx, compareLines)) {
+        clearBifrostWidgets(ctx);
+        reportInitOutcome(
+          ctx,
+          "blocked",
+          "Nothing was saved; full model details could not be written to a private file.",
+          "Check temporary-directory permissions and available storage, then rerun /bifrost init.",
+          "error",
+        );
+        return;
+      }
+    }
+    let selectedAction: (typeof availableActions)[number] = "keep";
+    if (!writeWithoutPrompt && actionSelectionRequired) {
+      const labels: string[] = availableActions.map((action) =>
+        action === "keep" ? "Keep my models (default)" : action === "merge" ? "Merge new models" : "Bifrost defaults",
+      );
+      const selectedLabel = await ctx.ui.select("How should init update your model pools?", labels);
+      const selectedIndex = selectedLabel ? labels.indexOf(selectedLabel) : -1;
+      if (selectedIndex < 0) {
+        clearBifrostWidgets(ctx);
+        reportInitOutcome(ctx, "cancelled", "Nothing was saved.", "Run /bifrost init again to review choices.", "info");
+        return;
+      }
+      selectedAction = availableActions[selectedIndex];
+      actionSelectionApproved = true;
+    }
+    const plan = actionPlans.get(selectedAction)!;
+    plannedTierReview = plan.tiers;
+    if (
+      !writeWithoutPrompt &&
+      !actionSelectionApproved &&
+      proposedSettings.length === 0 &&
+      (plan.status === "ready" || plan.reason === "no_changes")
+    ) {
+      reportInitOutcome(
+        ctx,
+        "unchanged",
+        "No distinct model update needs review; nothing was saved.",
+        undefined,
+        "info",
+      );
+      return;
+    }
     if (plan.status !== "ready" || !plan.transaction) {
       if (plan.reason === "no_changes" && plan.status === "blocked") {
         const existing = JSON.parse(Buffer.from(source.configBytes!).toString("utf8")) as Record<
@@ -2301,7 +2487,10 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         ([key]) => key === "$schema" || key === "models" || !inheritedFields.has(key),
       ),
     );
-    const configBytes = Buffer.from(JSON.stringify(installProposal, null, 2) + "\n", "utf8");
+    const nextConfig = source.configBytes === null
+      ? installProposal
+      : { ...installProposal, ...sourceConfig, models };
+    const configBytes = Buffer.from(JSON.stringify(nextConfig, null, 2) + "\n", "utf8");
     const ownershipBytes = Buffer.from(JSON.stringify(ownership, null, 2) + "\n", "utf8");
     if (
       configBytes.byteLength > MAX_CONFIG_SOURCE_BYTES ||
@@ -2321,12 +2510,18 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       configPath: source.configPath,
       ownershipPath: source.ownershipPath,
       journalPath: source.journalPath,
-      expectedConfigDigest: null,
-      expectedOwnershipDigest: null,
+      expectedConfigDigest: source.configBytes
+        ? createHash("sha256").update(source.configBytes).digest("hex")
+        : null,
+      expectedOwnershipDigest: source.ownershipBytes
+        ? createHash("sha256").update(source.ownershipBytes).digest("hex")
+        : null,
       nextConfigBytes: configBytes,
       nextOwnershipBytes: ownershipBytes,
     };
-    settingsAdded = true;
+    settingsAdded = Object.keys(installProposal).some(
+      (key) => key !== "$schema" && key !== "models" && sourceConfig[key] === undefined,
+    );
     changes = Object.entries(models).flatMap(([tier, keys]) =>
       keys.map((key) => ({ kind: "add" as const, tier, modelKey: key })),
     );
@@ -2378,7 +2573,9 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
 
   const ok =
     writeWithoutPrompt ||
-    (await ctx.ui.confirm("Save Bifrost setup?", `Apply the changes shown above?`));
+    actionSelectionApproved ||
+    ((!hasConfiguredTiers || settingsAdded) &&
+      (await ctx.ui.confirm("Save Bifrost setup?", "Apply the changes shown above?")));
   // The review card is stale from here on: every remaining exit either saves or
   // reports why not, and the footer card must be the terminal state.
   clearBifrostWidgets(ctx);

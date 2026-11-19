@@ -122,7 +122,7 @@ See [Troubleshooting](troubleshooting.md#lower-probe-pressure) for symptoms and 
 Before confirming, check:
 
 1. The save target shown by init is the configuration you intend to update.
-2. The membership-change summary and uncategorized count look reasonable.
+2. The selected model-pool choice and membership changes look reasonable, including any project-only inherited-pool override.
 3. The classifier choice matches your privacy and cost requirements.
 
 The confirmation summary does not show every model ID, strategy, or default tier. After saving, run `/bifrost inspect` to review pools and status. Edit the saved configuration before your first generation if needed.

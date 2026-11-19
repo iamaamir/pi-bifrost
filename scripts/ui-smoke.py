@@ -843,17 +843,29 @@ def capture(
                 raise AssertionError("manual init changed explicit classifier settings")
             # The preview card colors the pool delta, so strip SGR/OSC before matching copy.
             init_screen = " ".join(re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\\\)", "", log_path.read_text(errors="ignore") if log_path.exists() else "").split()).lower()
-            if init_screen.count("save bifrost setup?") != 1:
-                raise AssertionError("manual init must ask exactly once to save the refreshed setup")
+            if "review model choices" not in init_screen or "how should init update your model pools?" not in init_screen:
+                raise AssertionError("manual init did not review existing model pools before saving")
+            if not all(label in init_screen for label in (
+                "keep my models (default)", "merge new models",
+                "bifrost defaults: same outcome as keep my models.",
+            )):
+                raise AssertionError("manual init did not show Keep, Merge, and equivalent Defaults choices")
+            if "save to project (.pi/bifrost.json)" not in init_screen:
+                raise AssertionError("manual init did not identify the project config destination")
+            if "global/workspace files stay unchanged" not in init_screen or "unlisted tiers remain unchanged" not in init_screen:
+                raise AssertionError("manual init omitted the existing-init scope copy")
+            if "keep my models:" not in init_screen or "custom pool retained [manual/keep]" not in init_screen:
+                raise AssertionError("manual init did not preview the retained custom pool")
+            if "save bifrost setup?" in init_screen:
+                raise AssertionError("manual init showed obsolete fresh-setup confirmation copy")
             if "choose classifier" in init_screen or "select classifier" in init_screen:
                 raise AssertionError("manual init opened a classifier picker after save")
-            if "pools +2 / -0 memberships" not in init_screen or "save to project (.pi/bifrost.json)" not in init_screen:
-                raise AssertionError("manual init did not preview the exact project membership changes")
-            # #245: the run ends on the terminal footer, not a bare status line.
-            # The card renders its title and message on separate lines, so match
-            # the flattened text just like the preview assertions above.
-            if "init saved." not in init_screen or "send a prompt to try it" not in init_screen:
-                raise AssertionError("manual init did not end on the terminal footer")
+            # #246: saved outcome stays visible as a terminal notice card, with
+            # explicit destination, active state, and next-step copy.
+            if "saved. saved " not in init_screen or "/.pi/bifrost.json and reloaded." not in init_screen:
+                raise AssertionError("manual init did not show the current saved destination copy")
+            if "bifrost is active with 2 tiers" not in init_screen or "send a prompt to try it" not in init_screen:
+                raise AssertionError("manual init did not show the current active-state and next-step copy")
 
         time.sleep(2.0)
         raw = log_path.read_text(errors="ignore") if log_path.exists() else ""

@@ -446,6 +446,133 @@ export function buildInitMembershipPlan(
   };
 }
 
+export interface InitActionPlan extends InitMembershipPlan {
+  readonly tiers: readonly { readonly tier: string; readonly before: readonly string[] | undefined; readonly after: readonly string[] | undefined; readonly ownershipBefore: string; readonly ownershipAfter: string }[];
+}
+
+/** Plans one explicit init action against the exact selected-layer snapshot. */
+export function buildInitActionPlan(input: {
+  readonly action: "keep" | "merge" | "defaults";
+  readonly source: ReconciliationSourceSnapshot;
+  readonly inventories: readonly InitMembershipInventory[];
+  readonly generated: Readonly<Record<string, readonly string[]>>;
+  readonly inheritedTiers: ReadonlySet<string>;
+  readonly validateMergedConfig: ReconciliationCommandDependencies["validateMergedConfig"];
+}): InitActionPlan {
+  const blocked = (reason: InitMembershipPlan["reason"]): InitActionPlan => ({ status: "blocked", reason, changes: [], warnings: [], tiers: [] });
+  const { source, generated } = input;
+  if (!source.configBytes) return blocked("source_missing");
+  if (input.action !== "keep" && input.action !== "merge" && input.action !== "defaults") return blocked("source_invalid");
+  if (source.configBytes.byteLength > MAX_CONFIG_BYTES || !input.inventories.length
+    || input.inventories.length > MAX_INIT_INVENTORIES
+    || input.inventories.some((entry) => entry.status !== "complete")
+    || !isPlainRecord(generated) || Object.keys(generated).length > 100
+    || !Object.values(generated).some((pool) => Array.isArray(pool) && pool.length > 0)) return blocked("source_invalid");
+  let original: Record<string, unknown>;
+  try { original = assertPlainJsonObject(source.configBytes); } catch { return blocked("source_invalid"); }
+  if (original.models !== undefined && !isPlainRecord(original.models)) return blocked("source_invalid");
+  const before: Record<string, ConfiguredTierPool> = {};
+  for (const [tier, pool] of Object.entries(isPlainRecord(original.models) ? original.models : {})) {
+    if (!validTier(tier) || !normalizePool(pool)) return blocked("source_invalid");
+    setOwn(before, tier, pool);
+  }
+  const previous = ownershipFromBytes(source.ownershipBytes, source.source);
+  if (previous === null || source.ownershipBytes && source.ownershipBytes.byteLength > MAX_OWNERSHIP_BYTES) return blocked("source_invalid");
+  const generatedTiers = Object.entries(generated);
+  const probedByTier = new Map<string, Set<string>>();
+  for (const inventory of input.inventories) {
+    if (!validProvider(inventory.provider) || !isPlainRecord(inventory.modelsByTier)) return blocked("source_invalid");
+    for (const [tier, keys] of Object.entries(inventory.modelsByTier)) {
+      if (!validTier(tier) || !Array.isArray(keys) || keys.length > 5_000) return blocked("source_invalid");
+      const found = probedByTier.get(tier) ?? new Set<string>();
+      for (const key of keys) {
+        if (typeof key !== "string" || !key.startsWith(`${inventory.provider}/`)
+          || key.length > 512 || /[\u0000-\u0020\u007f]/u.test(key) || key.includes("*")) return blocked("source_invalid");
+        found.add(key);
+      }
+      probedByTier.set(tier, found);
+    }
+  }
+  for (const [tier, keys] of generatedTiers) {
+    if (!validTier(tier) || !Array.isArray(keys) || keys.length > 5_000) return blocked("source_invalid");
+    for (const key of keys) {
+      if (typeof key !== "string" || key.length > 512 || /[\u0000-\u0020\u007f]/u.test(key)
+        || key.trim() !== key || key.includes("*") || key.indexOf("/") <= 0 || key.indexOf("/") === key.length - 1
+        || key.slice(0, key.indexOf("/")).includes("/")) return blocked("source_invalid");
+      if (!probedByTier.get(tier)?.has(key)) return blocked("source_invalid");
+    }
+  }
+  const uniqueGeneratedTiers = generatedTiers.map(([tier, keys]) => [tier, [...new Set(keys)]] as const);
+  let candidate: Record<string, unknown> = original;
+  let warnings: readonly ReconciliationWarningCode[] = [];
+  const managedTiers = new Set<string>();
+  if (input.action === "keep") {
+    // Keep delegates to existing whole-tier reconciler; inherited-only tiers are not local candidates.
+    const safeInventories = input.inventories.map((entry) => ({ ...entry, modelsByTier: Object.fromEntries(
+      Object.entries(entry.modelsByTier).filter(([tier]) => Object.hasOwn(before, tier) || !input.inheritedTiers.has(tier)),
+    ) }));
+    const keep = buildInitMembershipPlan(source, safeInventories, input.validateMergedConfig);
+    if (keep.status === "blocked" || (keep.reason && keep.reason !== "no_changes")) return blocked(keep.reason ?? "source_invalid");
+    warnings = keep.warnings;
+    try { candidate = keep.transaction ? assertPlainJsonObject(keep.transaction.nextConfigBytes) : original; }
+    catch { return blocked("source_invalid"); }
+    const keepOwnership = keep.transaction ? ownershipFromBytes(keep.transaction.nextOwnershipBytes, source.source) : previous;
+    if (keepOwnership === null) return blocked("source_invalid");
+    for (const [tier, entry] of Object.entries(keepOwnership?.tiers ?? {})) {
+      if (entry.state === "generated") managedTiers.add(tier);
+    }
+  }
+  const nextModels: Record<string, unknown> = { ...(isPlainRecord(candidate.models) ? candidate.models : {}) };
+  if (input.action !== "keep") {
+    for (const [tier, additions] of uniqueGeneratedTiers) {
+      const current = Object.hasOwn(before, tier) ? before[tier] : undefined;
+      const owner = tierOwnership(previous, tier, current);
+      if (input.action === "merge") {
+        if (owner === "deleted" || (current !== undefined && normalizePool(current)?.length === 0)
+          || (current === undefined && input.inheritedTiers.has(tier))) continue;
+        const old = normalizePool(current) ?? [];
+        const appended = new Set(old);
+        setOwn(nextModels, tier, [...old, ...additions.filter((key) => {
+          if (appended.has(key)) return false;
+          appended.add(key);
+          return true;
+        })]);
+      } else {
+        setOwn(nextModels, tier, [...additions]);
+        managedTiers.add(tier);
+      }
+    }
+    candidate = { ...original, models: nextModels };
+  }
+  const after: Record<string, ConfiguredTierPool> = {};
+  for (const [tier, pool] of Object.entries(isPlainRecord(candidate.models) ? candidate.models : {})) {
+    if (!validTier(tier) || !normalizePool(pool)) return blocked("source_invalid");
+    setOwn(after, tier, pool);
+  }
+  const ownership = deriveOwnershipSnapshot({ scope: source.source, previous, before, after, managedTiers });
+  const changed = JSON.stringify(original) !== JSON.stringify(candidate);
+  const configBytes = changed ? serialize(candidate) : Buffer.from(source.configBytes);
+  const ownershipBytes = serialize(ownership);
+  try { assertOwnershipPayload(ownershipBytes); } catch { return blocked("source_invalid"); }
+  if (configBytes.byteLength > MAX_CONFIG_BYTES || ownershipBytes.byteLength > MAX_OWNERSHIP_BYTES
+    || !input.validateMergedConfig(source.source, configBytes)) return blocked("prospective_config_invalid");
+  const changes: ReconciliationChange[] = [];
+  const tiers = [...new Set([...Object.keys(before), ...Object.keys(after), ...Object.keys(previous?.tiers ?? {})])].sort().map((tier) => {
+    const old = normalizePool(before[tier]);
+    const next = normalizePool(after[tier]);
+    for (const key of old ?? []) if (!next?.includes(key)) changes.push({ kind: "remove", disposition: "apply", tier, modelKey: key });
+    for (const key of next ?? []) if (!old?.includes(key)) changes.push({ kind: "add", disposition: "apply", tier, modelKey: key });
+    return { tier, before: old, after: next, ownershipBefore: tierOwnership(previous, tier, before[tier]), ownershipAfter: tierOwnership(ownership, tier, after[tier]) };
+  });
+  const ownershipChanged = JSON.stringify(ownership) !== JSON.stringify(previous ?? { version: 2, scope: source.source, tiers: {} });
+  if (!changed && !ownershipChanged) return { status: "blocked", reason: "no_changes", changes, warnings: [], tiers };
+  return { status: "ready", changes, warnings, tiers, transaction: {
+    configPath: source.configPath, ownershipPath: source.ownershipPath, journalPath: source.journalPath,
+    expectedConfigDigest: sha256(source.configBytes), expectedOwnershipDigest: source.ownershipBytes ? sha256(source.ownershipBytes) : null,
+    nextConfigBytes: configBytes, nextOwnershipBytes: ownershipBytes,
+  } };
+}
+
 function normalizePool(value: unknown): readonly string[] | undefined {
   if (typeof value === "string") return [value];
   return Array.isArray(value) && value.every((entry) => typeof entry === "string")
