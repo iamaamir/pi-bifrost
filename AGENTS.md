@@ -79,6 +79,7 @@ Do not introduce a proxy as the default design. Do not build multi-agent orchest
 - Use accessible semantic HTML for site work. Native `<details>/<summary>` for FAQs/disclosure unless a custom interaction is necessary.
 - Treat prototypes as throwaway. Mark them clearly; do not promote prototype code directly to production.
 - Validate a specification against running code before building on it. When a decision cannot be checked yet, prototype rather than committing to prose across several revisions. Unverified specs surface their errors late, during review, when they cost most to fix.
+- Keep comments high-signal: explain *why* (intent, invariants, edge cases, tradeoffs, non-obvious constraints, or durable residual/issue context). Do not add comments that restate *what* code does, narrate edits or session breadcrumbs, duplicate types/signatures, or leave commented-out code. Prefer self-documenting names and structure; keep JSDoc for public contracts. Update or delete comments when behavior changes.
 
 ## Delivery lifecycle
 
