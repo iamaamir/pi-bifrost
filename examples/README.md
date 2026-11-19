@@ -64,6 +64,8 @@ pi install npm:pi-bifrost
 /bifrost init
 ```
 
+Init asks once before it saves. Use `/bifrost init --write` to save the proposal without that question, which is required outside the Pi TUI; add `-f` for fresh probes or `-g` for the global config.
+
 Copy a recipe to `.pi/bifrost.json`, then reload:
 
 ```text

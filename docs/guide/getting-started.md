@@ -76,11 +76,19 @@ The command:
 1. refreshes Pi's model catalog;
 2. proposes `quick`, `general`, and `frontier` pools from available chat models;
 3. detects a classifier backend and selects an available chat model when prompt classification needs one;
-4. shows the catalog source, save target, membership changes, classifier choice, and uncategorized count, then asks once before it saves.
+4. shows the catalog source, save target, membership changes, classifier choice, and uncategorized count, then asks once before it saves (skip that question with `--write`).
 
 After init saves, inspect the pools and status. Edit the saved configuration before your first generation if you need different pools or strategies, then run `/bifrost reload`.
 
-Init reuses probe results from the last hour. If no recent results exist, it probes models before it proposes pools. Pass `-f` to force fresh probes. By default, init saves to the project config `.pi/bifrost.json`. To save to your global user config at `~/.pi/agent/bifrost.json`, use `/bifrost init -g`. Init does not write the workspace `bifrost.json`. The displayed save target is the one init will update. Init preserves handwritten model entries and other fields in that file and leaves other configuration layers unchanged. Settings inherited from lower layers remain inherited rather than copied into the selected file.
+Init reuses probe results from the last hour. If no recent results exist, it probes models before it proposes pools. Pass `-f` to force fresh probes. By default, init saves to the project config `.pi/bifrost.json`. To save to your global user config at `~/.pi/agent/bifrost.json`, use `/bifrost init -g`. Init does not write the workspace `bifrost.json`. Pass `--write` to save without the confirmation question, which is the only way to persist from a script or another session without a terminal UI:
+
+```text
+/bifrost init --write
+/bifrost init -f --write
+/bifrost init -g --write
+```
+
+Outside a TUI without `--write`, init still refreshes the catalog and prints the proposal, then stops before writing and logs `run in TUI or use --write to persist`. `--write` skips only the question; the shadowed-pool guard and the save-failure safeguards still apply. The displayed save target is the one init will update. Init preserves handwritten model entries and other fields in that file and leaves other configuration layers unchanged. Settings inherited from lower layers remain inherited rather than copied into the selected file.
 
 If a proposed project pool would replace a handwritten pool in your global or workspace config with different models, init stops without saving. Pools that init generated before (tracked by an ownership receipt) and empty pools do not block init. Edit the existing pool, or review a workspace update with `/bifrost config reconcile --source workspace`. Use `/bifrost init -g` when you intend to update the global config.
 
