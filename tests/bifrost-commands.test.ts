@@ -588,9 +588,24 @@ function makeCtx(
       setFooter: () => {},
       setHeader: () => {},
       setTitle: () => {},
-      custom: async () => {
+      custom: async (factory: (...args: any[]) => unknown) => {
         calls.push({ kind: "custom" });
-        return customOverride?.();
+        if (customOverride) return customOverride();
+        const component = factory({ requestRender: () => {} }, {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+          style: (text: string) => text,
+          colors: {},
+        }, {}, () => {}) as { render?: (width: number) => string[]; handleInput?: (data: string) => void } | undefined;
+        if (component?.render && component.handleInput) {
+          const lines: string[] = [];
+          for (let i = 0; i < 500; i++) {
+            lines.push(...component.render(80));
+            component.handleInput("\x1b[B");
+          }
+          calls.push({ kind: "preview", lines });
+        }
+        return undefined;
       },
       pasteToEditor: () => {},
       getEditorText: () => "",
@@ -1269,7 +1284,7 @@ describe("bifrost command ui", () => {
       assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), true);
       assert(calls.some(
         (call) =>
-          call.kind === "widget" &&
+          call.kind === "preview" &&
           String(call.lines?.join("\n")).includes("Classifier") &&
           String(call.lines?.join("\n")).includes("detected default") &&
           String(call.lines?.join("\n")).includes("fixture/chat"),
@@ -1286,10 +1301,9 @@ describe("bifrost command ui", () => {
     }
   });
 
-  it("bounds large init previews in a private full-details file without requiring an overlay", async () => {
+  it("shows every exact model id in a long init preview overlay before approval", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-large-preview-"));
     const previousCwd = process.cwd();
-    let detailsDirectory: string | undefined;
     process.chdir(tempDir);
     try {
       mkdirSync(join(tempDir, ".pi"));
@@ -1305,7 +1319,6 @@ describe("bifrost command ui", () => {
         models as never,
         (_title, options) => options.find((option) => option.startsWith("Keep my models")),
       );
-      (ctx as any).ui.custom = undefined;
       (ctx as any).modelRegistry.getProviderAuthStatus = () => ({ configured: true });
       const state = makeState() as any;
       state.registryInventoryEvidence = { fixture: { status: "complete", refreshedAt: Date.now() } };
@@ -1317,42 +1330,23 @@ describe("bifrost command ui", () => {
       } finally {
         console.error = originalError;
       }
-      const preview = calls.find((call) => call.kind === "widget" && call.lines?.length && String(call.value).startsWith("bifrost-output:"));
-      const inline = preview?.lines?.join("\n") ?? "";
-      assert.ok(inline.length < 3_000, `inline preview was ${inline.length} chars`);
-      assert.match(inline, /Full ordered details: /, JSON.stringify(calls));
-      assert.doesNotMatch(inline, /fixture\/model-\d{3}/);
-      const detailsPath = inline.match(/Full ordered details: (.+)/)?.[1];
-      assert.ok(detailsPath);
-      detailsDirectory = dirname(detailsPath);
-      assert.equal(statSync(detailsPath).mode & 0o777, 0o600);
-      const detail = readFileSync(detailsPath, "utf8");
+      const preview = calls.find((call) => call.kind === "preview");
+      const visible = preview?.lines?.join("\n") ?? "";
+      assert.ok(visible.length > 3_000, `scrollable preview contained only ${visible.length} chars`);
+      assert.match(visible, /fixture\/model-000/);
+      assert.match(visible, /fixture\/model-219/);
       assert.deepEqual(stderr, []);
-      assert.equal(calls.some((call) => call.kind === "custom"), false);
-      let lastModelPosition = -1;
-      for (let index = 0; index < 220; index++) {
-        const position = detail.indexOf(`fixture/model-${String(index).padStart(3, "0")}`);
-        assert.ok(position > lastModelPosition, `missing or reordered model ${index}`);
-        lastModelPosition = position;
-      }
+      assert.equal(calls.some((call) => call.kind === "custom"), true);
       assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), true);
     } finally {
       process.chdir(previousCwd);
       rmSync(tempDir, { recursive: true, force: true });
-      if (detailsDirectory) rmSync(detailsDirectory, { recursive: true, force: true });
     }
   });
 
-  it("fails closed without config writes when private full-details file cannot be created", async () => {
+  it("fails closed without config writes when full preview cannot be displayed", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-preview-failure-"));
     const previousCwd = process.cwd();
-    const previousTmpdir = process.env.TMPDIR;
-    const previousTmp = process.env.TMP;
-    const previousTemp = process.env.TEMP;
-    const blockedTmpdir = join(tempDir, "missing-tmp");
-    process.env.TMPDIR = blockedTmpdir;
-    process.env.TMP = blockedTmpdir;
-    process.env.TEMP = blockedTmpdir;
     process.chdir(tempDir);
     try {
       mkdirSync(join(tempDir, ".pi"));
@@ -1381,25 +1375,14 @@ describe("bifrost command ui", () => {
       } finally {
         console.error = originalError;
       }
-      const preview = calls.find((call) => call.kind === "widget" && call.lines?.length && String(call.value).startsWith("bifrost-output:"));
-      const inline = preview?.lines?.join("\n") ?? "";
-      assert.ok(inline.length < 3_000, `inline preview was ${inline.length} chars`);
-      assert.match(inline, /Full details unavailable; private output failed/);
-      assert.doesNotMatch(inline, /manual\/model-\d{3}/);
+      const preview = calls.find((call) => call.kind === "preview");
+      assert.equal(preview, undefined);
       assert.deepEqual(stderr, []);
-      assert.equal(calls.some((call) => call.kind === "custom"), false);
-      assert.equal(calls.some((call) => call.kind === "select"), false);
-      assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("Nothing was saved; full model details could not be written to a private file")));
+      assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("Nothing was saved; the complete setup preview could not be displayed")));
       assert.deepEqual(readFileSync(join(tempDir, ".pi", "bifrost.json")), originalConfig);
       assert.deepEqual(readFileSync(ownershipPath), originalOwnership);
     } finally {
       process.chdir(previousCwd);
-      if (previousTmpdir === undefined) delete process.env.TMPDIR;
-      else process.env.TMPDIR = previousTmpdir;
-      if (previousTmp === undefined) delete process.env.TMP;
-      else process.env.TMP = previousTmp;
-      if (previousTemp === undefined) delete process.env.TEMP;
-      else process.env.TEMP = previousTemp;
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -1673,7 +1656,7 @@ describe("bifrost command ui", () => {
       assert.equal(calls.some((call) => call.kind === "select"), false);
       assert(calls.some(
         (call) =>
-          (call.kind === "widget" || call.kind === "notify") &&
+          (call.kind === "preview" || call.kind === "notify") &&
           String(call.lines?.join("\n") ?? call.value).includes("Classifier") &&
           String(call.lines?.join("\n") ?? call.value).includes("detected default"),
       ));
@@ -1720,7 +1703,7 @@ describe("bifrost command ui", () => {
       assert.equal(saved.classifier.typesafe, undefined);
       assert.equal(calls.some((call) => call.kind === "select"), false);
       assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("No working models found for classifier")), false);
-      assert(calls.some((call) => call.kind === "widget" && call.lines?.some((line) => line.includes("Classifier  off"))));
+      assert(calls.some((call) => call.kind === "preview" && call.lines?.some((line) => line.includes("Classifier  off"))));
     } finally {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -1754,7 +1737,7 @@ describe("bifrost command ui", () => {
 
       assert.equal(confirmCalls, 1);
       assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("No working models found for classifier")), false);
-      assert(calls.some((call) => call.kind === "widget" && call.lines?.some((line) => line.includes("prompt (no eligible model; regex fallback)"))));
+      assert(calls.some((call) => call.kind === "preview" && call.lines?.some((line) => line.includes("prompt (no eligible model; regex fallback)"))));
     } finally {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -3766,7 +3749,7 @@ describe("command aliases", () => {
         await createCommandRouter(makeState() as never)(args, ctx);
       }
       const previewLines = calls
-        .filter((call) => call.kind === "widget" && String(call.value).startsWith("bifrost-output:"))
+        .filter((call) => call.kind === "preview")
         .flatMap((call) => call.lines ?? []);
       assert.ok(previewLines.some((line) => line.includes("project (.pi/bifrost.json)")), previewLines.join("\n"));
       assert.ok(previewLines.some((line) => line.includes("user (")), previewLines.join("\n"));

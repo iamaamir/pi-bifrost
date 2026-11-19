@@ -13,14 +13,11 @@ import {
   fstatSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   openSync,
   readFileSync,
   readSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   loadRuntimeState,
@@ -2295,13 +2292,13 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           tiers: candidate.tiers,
         }).map((line) => `  ${line.trimStart()}`));
       }
-      if (!renderInitPreview(ctx, compareLines)) {
+      if (!await renderInitPreview(ctx, compareLines)) {
         clearBifrostWidgets(ctx);
         reportInitOutcome(
           ctx,
           "blocked",
-          "Nothing was saved; full model details could not be written to a private file.",
-          "Check temporary-directory permissions and available storage, then rerun /bifrost init.",
+          "Nothing was saved; the complete setup preview could not be displayed.",
+          "Rerun /bifrost init in Pi's interactive terminal to review the full preview.",
           "error",
         );
         return;

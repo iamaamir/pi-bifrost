@@ -935,7 +935,7 @@ def main() -> int:
         (
             "init-refresh",
             True,
-            [(0.5, "/bifrost init\r"), (2.0, "\r")],
+            [(0.5, "/bifrost init\r"), (2.0, "\x1b"), (0.5, "\r")],
             {
                 "schemaVersion": 2,
                 "strategy": "first",

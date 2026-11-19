@@ -29,7 +29,7 @@ export function wrapResultLines(lines: readonly string[], width: number): string
   return wrapped;
 }
 
-class ResultViewer {
+export class ResultViewer {
   private scrollOffset = 0;
   private maxOffset = 0;
   private readonly title: string;
