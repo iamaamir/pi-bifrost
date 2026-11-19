@@ -1,11 +1,5 @@
 # Acceptance coverage map
 
-This table is a record for one point in time. It is not a status report.
-
-The table shows the acceptance case or the test that must cover each requirement. It also shows the limit of that coverage. The table does not show if a candidate passes. The value `covered` in a row shows only that a named test existed when the row was written. It is not a result. The file was last edited on 2026-11-19. That date does not show that each row still matches the tests.
-
-Two items can show a pass: the ordered `evidence.json` for the candidate under review, and the `npm run verify:release` manifest for the same revision. Tests and limits change. As a result, a row can become stale. Make sure that a row is current before you use it as evidence.
-
 This map catalogs evidence boundaries for PRD.md requirements R01–R17. A covered status means the acceptance command has a named case that checks that boundary. It does not mean the current candidate passed; read the ordered result for the candidate under review in screenshots/acceptance/<runId>/evidence.json.
 
 Partial means named cases exercise only part of the requirement; the boundary column states the limit. Missing means no named result supports the requirement yet. Existing unit or integration suites still run through verify:release, but a suite filename or aggregate gate is supporting evidence only. Deferred records an accepted product-scope decision. A required case that cannot run is recorded as blocked in the run evidence and makes the run fail.

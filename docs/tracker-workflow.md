@@ -2,11 +2,9 @@
 
 How Bifrost's GitHub issues, sub-issues, dependencies, milestones and project board are read and written by agents. The delivery plan lives in the issue tracker; `roadmap-next.md` holds the requirement IDs the tickets cite.
 
-This document gives a procedure. It is not a record of a completed run.
+Each command below was run against `iamaamir/pi-bifrost`. Read the object again before you use its result.
 
-The author used each command in this document against `iamaamir/pi-bifrost` when the document was written. The result of a command depends on the live GitHub state, the permissions of the repository, the behavior of `gh`, and the API limits. As a result, the files in the repository cannot show that a command still operates correctly. Operate the command again and read the object before you use its result.
-
-`roadmap-next.md` stays out of this repository on purpose (see [Write](#write) and the rules for citations that follow). As a result, a checkout does not contain it.
+`roadmap-next.md` stays out of this repository on purpose (see [Write](#write)), so a checkout does not contain it.
 
 ## Read authoritatively
 
