@@ -5,7 +5,7 @@
 | Command | Behavior |
 |---------|----------|
 | `/bifrost` | Open dashboard and quick actions |
-| `/bifrost init` | Refresh Pi's model catalog, reuse probe results from the last hour or probe before proposing pools, then ask once before saving; pass `-f` to force fresh probes and `--write` to save without the prompt |
+| `/bifrost init` | Refresh Pi's model catalog. Bifrost reuses probe results from the last hour. If no recent results exist, it probes the models before it proposes pools. Then it asks one time before it saves. Pass `-f` to force new probes. Pass `--write` to save without the question |
 | `/bifrost probe` | Send a tiny request to each registry model and report availability; usage may apply |
 | `/bifrost preview <prompt>` | Show the route without generating; leading `--offline` uses only local cache, rules and the default tier; `--json` keeps the existing report, and `--trace` adds a content-free summary. Without `--offline`, an enabled classifier may receive the prompt. A tier name in the prompt is not applied |
 | `/bifrost on` | Enable routing policy |
@@ -49,7 +49,11 @@ Init displays its save target. It saves to project `.pi/bifrost.json` by default
 
 ### Run init without a confirmation prompt
 
-Init writes only after its one confirmation question. Pass `--write` to skip that question and save the reviewed proposal; it saves to the displayed target in a TUI and outside one. Outside a TUI without `--write`, init still refreshes the catalog and prints the proposal, then stops before writing and logs `run in TUI or use --write to persist`. Combine the flags when you also need fresh probes or the global target:
+Init writes the configuration only after one confirmation question. Pass `--write` to save the reviewed proposal without that question. In a terminal UI (TUI) and outside a TUI, `--write` saves to the target that init shows.
+
+Outside a TUI, without `--write`, init refreshes the catalog and shows the proposal. Then it stops before it writes and logs `run in TUI or use --write to persist`.
+
+If you also want new probes or the global target, use the flags together:
 
 ```text
 /bifrost init --write
@@ -57,7 +61,7 @@ Init writes only after its one confirmation question. Pass `--write` to skip tha
 /bifrost init -g --write
 ```
 
-`--write` skips only the question. Every other guard still applies: a proposal that would shadow a handwritten inherited pool, a cancelled catalog refresh, and a failed save all leave configuration unchanged.
+`--write` removes only the question. The other guards stay in effect. Init does not write a proposal that shadows a handwritten inherited pool. A canceled catalog refresh writes nothing. A failed save changes no configuration.
 
 If a proposed project pool would replace a handwritten pool in your global or workspace config with different models, init stops without saving. Pools that init generated before (tracked by an ownership receipt) and empty pools do not block init. Edit the existing source or review a workspace update with `/bifrost config reconcile --source workspace`; use `-g` when you intend to update the global source.
 
@@ -173,7 +177,7 @@ An explicit catalog refresh is network-enabled and can incur provider requests. 
 
 Reconciliation updates only exact model keys owned by its sidecar. Existing manual entries are never adopted as generated membership. Incomplete, stale, or auth-unknown inventory cannot authorize removals. Apply uses a journal and keeps exact backups. `/bifrost config reconcile --recover` resumes or reports a pending journal. If a process crashed while holding a lock, recovery does not steal it: first verify that no Bifrost writer is active, inspect the exact lock files, and remove only locks proven stale before retrying recovery.
 
-On first use, Bifrost loads provisional pools from Pi's available chat-model catalog and checks them in the background. It saves only successful generated pools and keeps manual entries and other configuration fields. Probe requests can use provider credits or reach rate limits. `/bifrost init` refreshes the catalog, reuses probe results from the last hour, or probes before proposing pools. Pass `-f` to force fresh probes and `--write` to save without the confirmation question. Init saves to `.pi/bifrost.json` by default; use `-g` to save to the global user config. Init does not write the workspace `bifrost.json`. The target is shown before confirmation. Settings from lower configuration layers remain inherited.
+On first use, Bifrost loads provisional pools from Pi's available chat-model catalog and checks them in the background. It saves only successful generated pools and keeps manual entries and other configuration fields. Probe requests can use provider credits or reach rate limits. `/bifrost init` refreshes the catalog, reuses probe results from the last hour, or probes before proposing pools. Pass `-f` to force new probes. Pass `--write` to save without the confirmation question. Init saves to `.pi/bifrost.json` by default. Use `-g` to save to the global user configuration. Init does not write the workspace `bifrost.json`. The target is shown before confirmation. Settings from lower configuration layers remain inherited.
 
 ### Diagnose unavailable models
 
