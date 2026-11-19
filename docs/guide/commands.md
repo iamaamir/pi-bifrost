@@ -65,7 +65,7 @@ If you also want new probes or the global target, use the flags together:
 
 A failure before the commit keeps the files. A failure after Bifrost replaces the configuration file can leave a pending reconciliation journal. Recover the source that init wrote. For the default project target, run `/bifrost config reconcile --recover`. After `-g`, run `/bifrost config reconcile --source user --recover`. Run the matching command before you retry.
 
-If a proposed project pool would replace a handwritten pool in your global or workspace config with different models, init stops without saving. Pools that init generated before (tracked by an ownership receipt) and empty pools do not block init. Edit the existing source or review a workspace update with `/bifrost config reconcile --source workspace`; use `-g` when you intend to update the global source.
+If a proposed project pool would replace a handwritten pool in your global or workspace config with different models, init stops without saving. Pools that init generated before (tracked by an ownership receipt) and empty pools do not block init. Edit the existing source or review a workspace update with `/bifrost config reconcile --source workspace --tier general --provider openai`; use `-g` when you intend to update the global source.
 
 For safe migration, follow the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state).
 
