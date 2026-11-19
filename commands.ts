@@ -815,7 +815,7 @@ async function handleReconciliationCommand(args: string, ctx: ExtensionContext, 
   const commandArgs = args.replace(/^config\s+reconcile(?:\s+|$)/iu, "");
   const parsed = parseReconciliationCommandArgs(commandArgs);
   if (!parsed.ok) {
-    log(ctx, "usage: /bifrost config reconcile [--source project|workspace|user] [--tier <tier> --provider <provider>] [--refresh | --apply --proposal <digest> | --recover] [--json]", "warning");
+    log(ctx, "usage: /bifrost config reconcile [--source project|workspace|user] (--tier <tier> --provider <provider> [--refresh | --apply --proposal <digest>] | --recover) [--json]", "warning");
     return;
   }
   const request = parsed.request;
@@ -1577,7 +1577,7 @@ async function handleInit(
     const locked = error instanceof ReconciliationStoreError && error.code === "locked";
     log(ctx, locked
       ? "Init could not acquire reconciliation locks. Verify no Bifrost writer is active and repair only exact stale lock files before retrying."
-      : "Init could not safely commit the reviewed membership update; existing files were preserved.", "error");
+      : "Init could not complete the membership commit. A reconciliation journal can remain. Run /bifrost config reconcile --recover to report or resume it before you retry.", "error");
     return;
   }
 
@@ -2264,7 +2264,7 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "reload", description: "Reload config after editing", menu: "common" },
   { value: "validate", description: "Validate loaded config and model references", argumentHint: "[--json]", menu: "common" },
   { value: "inspect", description: "Inspect configured models and local health", argumentHint: "[--json]", menu: "common" },
-  { value: "config reconcile", description: "Preview or apply exact generated model membership", argumentHint: "[--source project|workspace|user] [--tier <tier> --provider <provider>] [--refresh | --apply --proposal <digest> | --recover]" },
+  { value: "config reconcile", description: "Preview or apply exact generated model membership (give --tier with --provider, or --recover alone)", argumentHint: "[--source project|workspace|user] [--tier <tier> --provider <provider>] [--refresh | --apply --proposal <digest> | --recover] [--json]" },
   { value: "config migrate", description: "Preview or apply an explicit schema migration", argumentHint: "[--source project|workspace|user] [--apply --proposal <digest>]" },
   { value: "reliability", description: "Show provider cooldowns" },
   { value: "reliability reset", description: "Clear one provider cooldown", argumentHint: "--provider <provider-id>" },
