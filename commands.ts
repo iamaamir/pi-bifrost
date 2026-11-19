@@ -2432,6 +2432,16 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       selectedAction = availableActions[selectedIndex];
       actionSelectionApproved = true;
     }
+    if (!availableActions.includes(selectedAction)) {
+      reportInitOutcome(
+        ctx,
+        "blocked",
+        "Nothing was saved; the selected model action is unavailable.",
+        "Choose an available action explicitly, then rerun /bifrost init.",
+        "warning",
+      );
+      return;
+    }
     const plan = actionPlans.get(selectedAction)!;
     if (
       !writeWithoutPrompt &&
