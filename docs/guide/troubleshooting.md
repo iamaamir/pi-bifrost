@@ -49,7 +49,7 @@ The primary probe transport uses `1+1=` and caps output at 5 tokens. An empty re
 
 Preview reports:
 
-- `source`: cache, classifier, regex, inline, or fallback;
+- `source`: cache, classifier, regex, or fallback;
 - classifier backend/model/confidence when available;
 - resolved tier;
 - requested and fallback candidates;
