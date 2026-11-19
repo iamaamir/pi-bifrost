@@ -55,6 +55,54 @@ describe("result viewer", () => {
     assert.ok(longRendered.includes("TAIL-DETAIL"));
   });
 
+  it("reaches every wrapped review detail row at normal and narrow widths", () => {
+    for (const width of [80, 18]) {
+      const detail = `detail-${"abcdefghij".repeat(24)}-tail`;
+      const review = new InitReview([], [detail], ["Keep", "Merge", "Defaults"], { fg: (_color, text) => text }, () => {}, () => {});
+      const seen = new Set<string>();
+      review.handleInput("\x0f");
+      let rendered = review.render(width);
+      const collect = () => {
+        for (const line of rendered.slice(2, 6)) if (line.trim()) seen.add(line.trim());
+      };
+      collect();
+      for (let offset = 0; offset < wrapResultLines([detail], width - 2).length; offset++) {
+        review.handleInput("j");
+        rendered = review.render(width);
+        collect();
+      }
+      const expectedRows = wrapResultLines([detail], width - 2);
+      assert.ok([...seen].some((line) => line.includes("-tail")), `tail reachable at width ${width}`);
+      for (const expected of expectedRows) assert.ok(seen.has(expected), `wrapped row reachable at width ${width}: ${expected}`);
+    }
+  });
+
+  it("shows and confirms every selected action at normal and narrow widths", () => {
+    const actions = ["Keep my models", "Merge new models", "Bifrost defaults"];
+    for (const width of [80, 18]) {
+      for (let selected = 0; selected < actions.length; selected++) {
+        let result = "";
+        const review = new InitReview([], [], actions, { fg: (_color, text) => text }, (value) => { result = value; }, () => {});
+        for (let i = 0; i < selected; i++) review.handleInput("\x1b[B");
+        const rows = review.render(width);
+        assert.ok(rows.some((line) => line.startsWith("❯ ")), `selection marker visible at width ${width}`);
+        const actionStart = rows.indexOf("") + 1;
+        const visibleActions = rows.slice(actionStart, -1).map((line) => line.replace(/^❯?\s*/, "")).join("").replace(/\s/g, "");
+        for (const action of actions) assert.ok(visibleActions.includes(action.replace(/\s/g, "")), `${action} visible at width ${width}`);
+        review.handleInput("\r");
+        assert.equal(result, actions[selected]);
+      }
+    }
+  });
+
+  it("fails closed when terminal cannot render selected action marker and label", () => {
+    let result = "";
+    const review = new InitReview([], [], ["Approve"], { fg: (_color, text) => text }, (value) => { result = value; }, () => {});
+    review.render(3);
+    review.handleInput("\r");
+    assert.equal(result, "");
+  });
+
   it("keeps exact details and action approval in one pinned-Pi custom interaction", () => {
     const details = ["Setup preview", ...Array.from({ length: 12 }, (_, i) => `tier-${i}: provider/model-${i}`)];
     let result: string | undefined;
@@ -69,7 +117,7 @@ describe("result viewer", () => {
     assert.ok(review.render(80).some((line) => line.includes("Ctrl+O full details")));
     review.handleInput("\x0f");
     assert.ok(review.render(80).some((line) => line.includes("Ctrl+O summary")));
-    review.handleInput("\x1b[6~");
+    for (let i = 0; i < 20 && !review.render(80).some((line) => line.includes("tier-11: provider/model-11")); i++) review.handleInput("j");
     assert.ok(review.render(80).some((line) => line.includes("tier-11: provider/model-11")));
     review.handleInput("\x1b[B");
     review.handleInput("\r");
