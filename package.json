@@ -72,7 +72,9 @@
     "crap": "npm run test:coverage && node scripts/crap-report.mjs",
     "crap:record": "npm run test:coverage && node scripts/crap-report.mjs --record",
     "crap:trend": "node scripts/crap-report.mjs --trend",
-    "test:mutation": "stryker run",
+    "test:mutation": "node mutation/run.mjs",
+    "test:mutation:list": "node mutation/run.mjs --list",
+    "test:mutation:report": "node mutation/report.mjs --dir reports/mutation",
     "test:integration": "node --test --experimental-strip-types tests/integration/*.test.mjs",
     "test:ui": "python3 scripts/ui-smoke.py",
     "test:ui:agent-tui": "bash scripts/ui-smoke-agent-tui.sh",
@@ -126,6 +128,9 @@
     "undici": "^8.12.2",
     "test-exclude": {
       "glob": "14.0.4"
+    },
+    "@stryker-mutator/tap-runner": {
+      "glob": "14.0.4"
     }
   },
   "devDependencies": {
@@ -133,7 +138,9 @@
     "@earendil-works/pi-ai": "1.4.0",
     "@earendil-works/pi-coding-agent": "1.4.0",
     "@earendil-works/pi-tui": "1.4.0",
+    "@hughescr/stryker-bun-runner": "^1.6.0",
     "@stryker-mutator/core": "^10.0.0",
+    "@stryker-mutator/tap-runner": "^10.1.1",
     "@types/node": "^26.1.1",
     "agent-tui": "^1.1.0",
     "c8": "^12.0.0",

@@ -1,11 +1,15 @@
 // Verification workflow campaign regression tests (issue #85).
 //
-// The expanded campaign, Pi compatibility matrix, and opt-in mutation
-// experiment ride the existing Verification workflow. These tests lock the
-// invariants issue #85 requires: all seven release gates and the report
-// publishers stay intact and unconditional, campaign jobs stay opt-in for
-// normal PR/push/default manual runs, the compatibility matrix uses explicit
-// version pins, and every added job keeps a hard bound.
+// The expanded campaign and Pi compatibility matrix ride the existing
+// Verification workflow. These tests lock the invariants issue #85 requires: all
+// seven release gates and the report publishers stay intact and unconditional,
+// campaign jobs stay opt-in for normal PR/push/default manual runs, the
+// compatibility matrix uses explicit version pins, and every added job keeps a
+// hard bound.
+//
+// Mutation measurement is deliberately not here. It moved to
+// `.github/workflows/mutation.yml` because it is a scheduled measurement, not a
+// release gate; `tests/mutation-workflow.test.mjs` owns those invariants.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -66,7 +70,7 @@ function releaseGateScriptsFrom(source) {
 }
 
 const jobs = jobBlocks(workflow);
-const CAMPAIGN_JOBS = ["campaign", "pi-compatibility", "mutation-experiment"];
+const CAMPAIGN_JOBS = ["campaign", "pi-compatibility"];
 
 /**
  * The hard job-level budget of the release-gates job. GitHub enforces the
@@ -197,11 +201,11 @@ test("finalize-report joins the parallel evidence into the candidate report", ()
 });
 
 test("campaign jobs never run on ordinary PR, push, or default manual dispatch", () => {
-  assert.deepEqual(Object.keys(jobs), ["head-acceptance", "acceptance-merge", "crap-trend", "finalize-report", "release-gates", "campaign", "pi-compatibility", "mutation-experiment"]);
+  assert.deepEqual(Object.keys(jobs), ["head-acceptance", "acceptance-merge", "crap-trend", "finalize-report", "release-gates", "campaign", "pi-compatibility"]);
   const cases = [
     ["pull_request", {}],
     ["push", {}],
-    ["workflow_dispatch", { campaign: "default", mutation: false, campaign_repeats: "3", campaign_seed: "1729" }],
+    ["workflow_dispatch", { campaign: "default", campaign_repeats: "3", campaign_seed: "1729" }],
     ["workflow_dispatch", {}],
   ];
   for (const job of CAMPAIGN_JOBS) {
@@ -215,23 +219,22 @@ test("campaign jobs never run on ordinary PR, push, or default manual dispatch",
 });
 
 test("expanded mode is opt-in: campaign and compatibility run only when dispatched as expanded or scheduled", () => {
-  const expandedInputs = { campaign: "expanded", mutation: false, campaign_repeats: "3", campaign_seed: "1729" };
+  const expandedInputs = { campaign: "expanded", campaign_repeats: "3", campaign_seed: "1729" };
   for (const job of ["campaign", "pi-compatibility"]) {
     const condition = jobCondition(jobs[job]);
     assert.equal(runsFor(condition, "workflow_dispatch", expandedInputs), true, `${job} must run for expanded dispatch`);
     assert.equal(runsFor(condition, "schedule", {}), true, `${job} must run for the bounded schedule`);
     assert.equal(runsFor(condition, "workflow_dispatch", { ...expandedInputs, campaign: "default" }), false);
   }
-  const mutation = jobCondition(jobs["mutation-experiment"]);
-  assert.equal(runsFor(mutation, "workflow_dispatch", { mutation: true }), true, "mutation stays a separate manual opt-in");
-  assert.equal(runsFor(mutation, "workflow_dispatch", { mutation: false, campaign: "expanded" }), false, "expanded mode must not silently enable mutation");
-  assert.equal(runsFor(mutation, "schedule", {}), false, "the schedule must not pay for mutation");
+  // Mutation measurement lives in its own workflow and must not reappear here.
+  assert.equal(jobs["mutation-experiment"], undefined, "mutation must not be a Verification job");
+  assert.doesNotMatch(workflow, /mutation-experiment|stryker run/u, "verification must not run Stryker");
 });
 
 test("dispatch inputs default to the ordinary path with bounded campaign values", () => {
   assert.match(workflow, /^ {2}workflow_dispatch:\n/mu);
   assert.match(workflow, /^ {6}campaign:\n(?:.*\n)*?^ {8}default: default$/mu);
-  assert.match(workflow, /^ {6}mutation:\n(?:.*\n)*?^ {8}default: false$/mu);
+  assert.doesNotMatch(workflow, /^ {6}mutation:\n/mu, "the mutation dispatch input moved to the mutation workflow");
   assert.match(workflow, /^ {6}campaign_repeats:\n(?:.*\n)*?^ {8}default: "3"$/mu);
   assert.match(workflow, /^ {6}campaign_seed:\n(?:.*\n)*?^ {8}default: "1729"$/mu);
   assert.match(workflow, /^ {8}options:\n(?:.*\n)*?^ {10}- default\n(?:.*\n)*?^ {10}- expanded$/mu);

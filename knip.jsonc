@@ -8,23 +8,49 @@
   "entry": [
     "*.ts",
     "scripts/**/*.mjs",
+    // Mutation measurement tooling. The Stryker entry point and the tests import
+    // these by path, so static tracing from package.json cannot see them.
+    "mutation/**/*.mjs",
     // Tests spawn helper modules by path, so static import tracing cannot see
     // their entry status. Listing the whole test tree avoids false orphans.
     "tests/**/*.ts",
     "tests/**/*.mjs",
     "tests/**/*.cjs"
   ],
-  "project": ["*.ts", "scripts/**/*.mjs", "tests/**/*.ts", "tests/**/*.mjs", "tests/**/*.cjs"],
+  "project": [
+    "*.ts",
+    "scripts/**/*.mjs",
+    "mutation/**/*.mjs",
+    "tests/**/*.ts",
+    "tests/**/*.mjs",
+    "tests/**/*.cjs"
+  ],
   "ignore": ["dist/**", "coverage/**", "screenshots/**", "reports/**", "evidence/**", "docs/**", "examples/**"],
   "ignoreDependencies": [
     // Stryker resolves testRunner: "command" to this bundled runner. There is
     // no import site to trace, and installing it separately would duplicate core.
-    "@stryker-mutator/command-runner"
+    "@stryker-mutator/command-runner",
+    // mutation/run.mjs shells out to the `stryker` binary rather than importing
+    // the package, so there is no import site for Knip to trace.
+    "@stryker-mutator/core",
+    // Loaded by name through `appendPlugins` / `testRunner` in the generated
+    // Stryker config, never imported, so there is no import site to trace.
+    // Knip also infers `@stryker-mutator/bun-runner` from `testRunner: "bun"`
+    // by naming convention; no such package exists, the community runner above
+    // is what we use, so the inferred name is ignored too.
+    "@stryker-mutator/tap-runner",
+    "@hughescr/stryker-bun-runner",
+    "@stryker-mutator/bun-runner"
   ],
   "ignoreBinaries": [
     // Optional host tool for on-demand benchmarks, documented in
     // docs/dev-tooling.md. It is not an npm dependency by design.
-    "hyperfine"
+    "hyperfine",
+    // Provided by @stryker-mutator/core, which the mutation runner invokes.
+    "stryker",
+    // Bun runs the `bun test` suite for the default mutation runner. It is a
+    // host tool, not an npm dependency, documented in docs/mutation-testing.md.
+    "bun"
   ],
   // Entry exports are the package's public API, so unused exports are not
   // actionable here. Unused *files* would also be public subpaths.

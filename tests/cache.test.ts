@@ -220,6 +220,24 @@ describe("cache", () => {
       assert.equal(entries[0].category, "frontier");
     });
 
+    it("increments hits when updating an existing entry", () => {
+      // From the report: mutant #228 turns `hits + 1` into `hits - 1`. The
+      // existing test asserts the category changed but never the counter.
+      let entries = updateCache([], "hello", "economical", 10);
+      assert.equal(entries[0].hits, 1);
+      entries = updateCache(entries, "hello", "frontier", 10);
+      assert.equal(entries[0].hits, 2);
+    });
+
+    it("keys an entry by its semantic key", () => {
+      // Mutants #215-#218 rewrite the match predicate. Two prompts that
+      // normalize identically but carry different keys are different entries.
+      let entries = updateCache([], "same prompt", "quick", 10, "sem-a");
+      entries = updateCache(entries, "same prompt", "general", 10, "sem-b");
+      assert.equal(entries.length, 2);
+      assert.deepEqual(entries.map((e) => e.semanticKey), ["sem-a", "sem-b"]);
+    });
+
     it("evicts oldest entries over cap", () => {
       let entries: ReturnType<typeof updateCache> = [];
       for (let i = 0; i < 5; i++) {

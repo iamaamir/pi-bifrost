@@ -1,24 +1,24 @@
-// StrykerJS experiment config for issue #62.
-// Scope: measured compatibility experiment against node:test + TypeScript
-// type stripping (node >= 22.18 strips types natively for .ts files).
-// Command runner + coverageAnalysis "off" because node:test has no Stryker
-// per-test coverage plugin; every mutant runs the full bound test command.
-// Focused subset binding: only test files that directly exercise each target
-// (full-suite-per-mutant cost measured at ~21.5s and is not affordable).
-// Run: npx stryker run (expensive; not part of PR CI).
-export default {
-  mutate: ["cache.ts", "classifier-semantics.ts", "reliability.ts", "routing.ts"],
-  testRunner: "command",
-  commandRunner: {
-    command: "node --test --experimental-strip-types tests/cache.test.ts tests/classifier-cache-key.test.ts tests/classifier-detection.test.ts tests/reliability.test.ts tests/routing.test.ts",
-  },
-  coverageAnalysis: "off",
-  checkers: [],
-  reporters: ["clear-text", "progress", "json"],
-  thresholds: { high: 0, low: 0, break: null },
-  tempDirName: ".stryker-tmp",
-  // Focused 5-file suite measures ~0.6s; modest headroom keeps slower
-  // reviewer machines from producing spurious timeout "kills".
-  timeoutFactor: 2,
-  timeoutMS: 10000,
-};
+// StrykerJS configuration entry point.
+//
+// Stryker auto-detects this file at the repository root, but all configuration
+// lives in mutation/config.mjs so there is one place to tune. This shim only
+// selects the target, the shard's mutated scope, and whether this run may reuse
+// stored results.
+//
+//   node mutation/run.mjs                     # the runner sets these variables
+//   MUTATION_TARGET=routing.ts npx stryker run
+//   MUTATION_TARGET=cache.ts MUTATION_MUTATE=cache.ts:1-140 npx stryker run
+//   MUTATION_TARGET=routing.ts MUTATION_INCREMENTAL=1 npx stryker run   # local loop (TAP only)
+//
+// This is not a pull-request gate; the nightly workflow runs it.
+import { targetConfig, targetNames } from "./mutation/targets.mjs";
+
+const target = process.env.MUTATION_TARGET ?? targetNames()[0];
+
+export default targetConfig(target, {
+  mutate: process.env.MUTATION_MUTATE || undefined,
+  // Incremental is a developer convenience only. CI leaves it unset so the
+  // nightly measures every mutant instead of replaying a stored score.
+  incremental: process.env.MUTATION_INCREMENTAL === "1",
+  reportFile: process.env.MUTATION_REPORT_FILE ?? "reports/mutation/mutation.json",
+});

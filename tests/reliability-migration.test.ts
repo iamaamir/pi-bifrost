@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
-import fsDefault from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { after, describe, it } from "node:test";
 import { convertReliabilityV1Snapshot } from "../reliability-migration.ts";
 import { modelScopeKey, validateReliabilityV2State, type ReliabilityV2Config } from "../reliability-v2.ts";
@@ -47,76 +46,100 @@ function migrationError(promise: Promise<unknown>, code: string): Promise<void> 
 }
 
 describe("reliability v1 migration foundation", () => {
-  it("persists v1 state when directory sync is unsupported but fails closed on lock-file fsync errors", () => {
+  // The fault is injected by breaking a private copy of the source, not by
+  // patching `node:fs`.
+  //
+  // Patching works on Node but silently does nothing on Bun: its
+  // `syncBuiltinESMExports()` is a no-op, so an assignment to `fs.fsyncSync`
+  // never reaches code using `import * as fs from "node:fs"`. Worse, the
+  // assertions that expect the fault to be *tolerated* then pass for the wrong
+  // reason, because no fault was injected at all. Editing source text works on
+  // any runtime and cannot pass without a real defect.
+  const ROOT = fileURLToPath(new URL("..", import.meta.url));
+  const FENCE_SOURCE = "reliability-v1-fence.ts";
+
+  /** Apply `from -> to` inside one top-level function body, and prove it applied. */
+  function mutateInFunction(source: string, functionName: string, from: string, to: string): string {
+    const start = source.indexOf(`function ${functionName}(`);
+    assert.notEqual(start, -1, `${functionName} must exist in the fence source`);
+    const end = source.indexOf("\n}\n", start);
+    assert.notEqual(end, -1, `${functionName} must have a body terminator`);
+    const body = source.slice(start, end);
+    const mutated = body.replace(from, to);
+    assert.notEqual(mutated, body, `the fault must change ${functionName}`);
+    return source.slice(0, start) + mutated + source.slice(end);
+  }
+
+  /** A private copy of the root .ts modules with one file replaced. */
+  function isolatedCopy(replacements: Record<string, string>): string {
+    const scratch = fs.mkdtempSync(join(tmpdir(), "bifrost-migration-fault-"));
+    directories.push(scratch);
+    for (const entry of fs.readdirSync(ROOT)) {
+      if (!entry.endsWith(".ts") && entry !== "schema.json" && entry !== "package.json") continue;
+      fs.copyFileSync(join(ROOT, entry), join(scratch, entry));
+    }
+    fs.symlinkSync(join(ROOT, "node_modules"), join(scratch, "node_modules"));
+    for (const [file, text] of Object.entries(replacements)) fs.writeFileSync(join(scratch, file), text);
+    return scratch;
+  }
+
+  /** Load `saveReliability` from a copy whose fence has been broken. */
+  async function saveReliabilityFromBrokenFence(mutate: (source: string) => string): Promise<typeof saveReliability> {
+    const original = fs.readFileSync(join(ROOT, FENCE_SOURCE), "utf8");
+    const broken = mutate(original);
+    assert.notEqual(broken, original, "the fault mutation must change the production source");
+    const scratch = isolatedCopy({ [FENCE_SOURCE]: broken });
+    const module = await import(pathToFileURL(join(scratch, "reliability.ts")).href);
+    return module.saveReliability as typeof saveReliability;
+  }
+
+  it("persists v1 state when directory sync is unsupported but fails closed on lock-file fsync errors", async () => {
     const directory = tempDirectory();
     const statePath = join(directory, "reliability-v1.json");
     const lockPath = reliabilitySourceFencePath(statePath);
-    const syncDirectoryPath = join(directory, "");
     const state: ReliabilityState = { version: 1, models: { "provider/model": { failures: [123] } } };
-    const faultCases = ["open", "fsync", "close"] as const;
+    const unsupported = (what: string) =>
+      `throw Object.assign(new Error("injected directory ${what} failure"), { code: "EINVAL" });`;
 
-    for (const fault of faultCases) {
-      const originalOpen = fsDefault.openSync;
-      const originalFsync = fsDefault.fsyncSync;
-      const originalClose = fsDefault.closeSync;
-      try {
-        if (fault === "open") {
-          fsDefault.openSync = ((path: fs.PathLike, flags: fs.OpenMode, mode?: fs.Mode) => {
-            if (path === syncDirectoryPath && flags === fs.constants.O_RDONLY) {
-              const error = Object.assign(new Error("injected directory open failure"), { code: "EINVAL" });
-              throw error;
-            }
-            return originalOpen(path, flags, mode);
-          }) as typeof fsDefault.openSync;
-        }
-        if (fault === "fsync") {
-          fsDefault.fsyncSync = ((fd: number) => {
-            if (fsDefault.fstatSync(fd).isDirectory()) {
-              const error = Object.assign(new Error("injected directory fsync failure"), { code: "EINVAL" });
-              throw error;
-            }
-            return originalFsync(fd);
-          }) as typeof fsDefault.fsyncSync;
-        }
-        if (fault === "close") {
-          fsDefault.closeSync = ((fd: number) => {
-            const isDirectory = fsDefault.fstatSync(fd).isDirectory();
-            const result = originalClose(fd);
-            if (isDirectory) {
-              const error = Object.assign(new Error("injected directory close failure"), { code: "EINVAL" });
-              throw error;
-            }
-            return result;
-          }) as typeof fsDefault.closeSync;
-        }
-        syncBuiltinESMExports();
-        assert.equal(saveReliability(statePath, state), true, `${fault} failure must not block v1 persistence`);
-      } finally {
-        fsDefault.openSync = originalOpen;
-        fsDefault.fsyncSync = originalFsync;
-        fsDefault.closeSync = originalClose;
-        syncBuiltinESMExports();
-      }
+    // Each of these makes `syncDirectory` fail with a code the fence treats as
+    // "this filesystem cannot sync directories". The lock and the state write
+    // must still succeed.
+    const tolerated: Record<string, (source: string) => string> = {
+      open: (source) =>
+        mutateInFunction(source, "syncDirectory", "fd = fs.openSync(dirname(path), constants.O_RDONLY);", unsupported("open")),
+      fsync: (source) => mutateInFunction(source, "syncDirectory", "fs.fsyncSync(fd);", unsupported("fsync")),
+      close: (source) =>
+        // Close the descriptor before throwing: the fault is that close *fails*,
+        // and leaking the fd would leave the test holding an open directory.
+        mutateInFunction(source, "syncDirectory", "try { fs.closeSync(fd); }", `try { fs.closeSync(fd); ${unsupported("close")} }`),
+    };
+
+    for (const [fault, mutate] of Object.entries(tolerated)) {
+      const save = await saveReliabilityFromBrokenFence(mutate);
+      assert.equal(save(statePath, state), true, `${fault} directory-sync failure must not block v1 persistence`);
       assert.equal(fs.existsSync(lockPath), false, `${fault} failure must not leak the source lock`);
       assert.deepEqual(JSON.parse(fs.readFileSync(statePath, "utf8")), state);
       fs.unlinkSync(statePath);
     }
 
-    const originalFsync = fsDefault.fsyncSync;
-    try {
-      fsDefault.fsyncSync = ((fd: number) => {
-        if (fsDefault.fstatSync(fd).isFile()) {
-          const error = Object.assign(new Error("injected lock-file fsync failure"), { code: "EIO" });
-          throw error;
-        }
-        return originalFsync(fd);
-      }) as typeof fsDefault.fsyncSync;
-      syncBuiltinESMExports();
-      assert.equal(saveReliability(statePath, state), false, "failure to sync lock-file contents must fail closed");
-    } finally {
-      fsDefault.fsyncSync = originalFsync;
-      syncBuiltinESMExports();
-    }
+    // GREEN control: the same copy setup with an untouched fence saves normally.
+    // Without this, a copying mistake could make every fault look "tolerated".
+    const greenScratch = isolatedCopy({});
+    const greenModule = await import(pathToFileURL(join(greenScratch, "reliability.ts")).href);
+    assert.equal(greenModule.saveReliability(statePath, state), true, "the pristine copy must save");
+    fs.unlinkSync(statePath);
+
+    // A lock-file fsync failure is different: the lock's durability is unknown,
+    // so the save must fail closed, write no state, and remove only its own lock.
+    const save = await saveReliabilityFromBrokenFence((source) =>
+      mutateInFunction(
+        source,
+        "createOwner",
+        "fs.fsyncSync(fd);",
+        "throw Object.assign(new Error(\"injected lock-file fsync failure\"), { code: \"EIO\" });",
+      ),
+    );
+    assert.equal(save(statePath, state), false, "failure to sync lock-file contents must fail closed");
     assert.equal(fs.existsSync(statePath), false, "failed lock creation must not write reliability state");
     assert.equal(fs.existsSync(lockPath), false, "failed lock creation must remove only its owned lock");
   });

@@ -1,0 +1,250 @@
+name: Mutation measurement
+
+# Scheduled mutation testing. This is a measurement job, not a release gate: it
+# is never required for a merge and never runs on pull requests. A full
+# measurement is too slow to gate on, and a per-pull-request subset would measure
+# a different, incomparable population. One nightly run over the whole target set
+# keeps the score comparable over time.
+#
+# Each target is its own matrix job so a module gets a timeout budget sized to
+# its own bound suite. A single shared budget is a measured defect: sized for the
+# fastest module it reports every slower module's mutants as timeouts, and
+# Stryker counts a timeout as detected, which inflates the score instead of
+# failing the run.
+on:
+  schedule:
+    # 04:47 UTC daily. Scheduled runs execute from the default branch only.
+    - cron: "47 4 * * *"
+  # Every knob is also settable by hand. The defaults reproduce the nightly run
+  # exactly, so a manual dispatch with no changes measures the same thing.
+  workflow_dispatch:
+    inputs:
+      # Deliberately a free-text input, not `type: choice`. A choice list is a
+      # second copy of TARGETS that nothing derives, so adding a module silently
+      # made it undispatched-able. The plan job validates the value against
+      # mutation/config.mjs before any matrix leg starts and lists the valid
+      # targets when it is wrong; `node mutation/run.mjs --list` prints them too.
+      target:
+        description: "Module to measure (any key in mutation/config.mjs TARGETS), or 'all'"
+        required: false
+        default: all
+        type: string
+      shards:
+        description: "Shards per module (1 = no sharding, 0 = auto from measured cost)"
+        required: false
+        default: "0"
+        type: string
+      concurrency:
+        description: "Stryker worker processes (1-16)"
+        required: false
+        default: "4"
+        type: string
+      timeout_tolerance:
+        description: "Max timed-out mutants before the run is unusable (blank = max(10, 2%))"
+        required: false
+        default: ""
+        type: string
+      fail_on_unusable:
+        description: "Fail the job when the measurement is unusable (missing/timeouts/conflicts)"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Resolve the dispatch inputs into a matrix. Every knob is validated here, so a
+  # typo fails fast instead of silently measuring something else. The outputs
+  # carry the shard plan, so the matrix can express a module split across several
+  # legs without the workflow knowing how ranges are computed.
+  plan:
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+      targets: ${{ steps.resolve.outputs.targets }}
+      shard_counts: ${{ steps.resolve.outputs.shard_counts }}
+      concurrency: ${{ steps.resolve.outputs.concurrency }}
+      leg_timeout: ${{ steps.resolve.outputs.leg_timeout }}
+      timeout_tolerance: ${{ steps.resolve.outputs.timeout_tolerance }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Resolve the shard plan
+        id: resolve
+        # Inputs reach the script through the environment; nothing is
+        # interpolated into shell text.
+        env:
+          REQUESTED: ${{ inputs.target }}
+          SHARDS: ${{ inputs.shards }}
+          CONCURRENCY: ${{ inputs.concurrency }}
+          TIMEOUT_TOLERANCE: ${{ inputs.timeout_tolerance }}
+        run: node mutation/workflow.mjs plan
+
+  targets:
+    needs: [plan]
+    # A failed plan has no matrix and no leg bound; running on it only replaces
+    # the plan's message with an expression error.
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    # Per-leg bound from the plan, so one stuck shard cannot burn the whole
+    # window. GitHub's hard job limit is 6 hours and cannot be raised; the
+    # workflow's own cap is 60 minutes (TIME_BUDGET in mutation/config.mjs).
+    timeout-minutes: ${{ fromJSON(needs.plan.outputs.leg_timeout) }}
+    strategy:
+      fail-fast: false
+      # A matrix of shards, so one module can be split across several runners.
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      # The default mutation runner is `bun test`, so the binary must exist. It is
+      # a host tool, not an npm dependency: installing the npm package alone does
+      # not put `bun` on PATH.
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.0
+      - name: Install dependencies
+        run: npm ci
+      - name: Measure ${{ matrix.label }}
+        # Matrix values reach the shell through the environment, never by
+        # interpolation, so a value can never become shell text.
+        env:
+          TARGET: ${{ matrix.target }}
+          MUTATE: ${{ matrix.mutate }}
+          SHARD: ${{ matrix.shard }}
+          CONCURRENCY: ${{ needs.plan.outputs.concurrency }}
+        # The runner owns the Stryker invocation, so CI and a developer machine
+        # run the same way. `--mutate` narrows the scope to this shard.
+        #
+        # `--report` takes the full path, not a bare name: the flag writes exactly
+        # where it is pointed, so naming the reporting directory here is what makes
+        # it agree with the collection step below. A bare name would land in the
+        # repository root and the artifact would be empty.
+        run: |
+          node mutation/run.mjs "$TARGET" \
+            --mutate "$MUTATE" \
+            --report "reports/mutation/$TARGET.shard$SHARD.json" \
+            --concurrency "$CONCURRENCY"
+      - name: Collect this leg's report
+        if: always()
+        env:
+          TARGET: ${{ matrix.target }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          # The artifact name includes the shard so the summariser can merge the
+          # shards of one module back together.
+          leg="$TARGET-shard$SHARD"
+          mkdir -p "mutation-out/$leg"
+          for report in reports/mutation/*.json; do
+            [ -f "$report" ] && cp "$report" "mutation-out/$leg/"
+          done
+          if [ -f stryker.log ]; then cp stryker.log "mutation-out/$leg/stryker.log"; fi
+      - name: Upload this leg's report
+        # Always upload: this is the transport `summarise` downloads. Dropping it
+        # makes the measurement unreadable (every module becomes "missing").
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          # The shard index is part of the name so the shards of one module are
+          # distinct artifacts rather than overwriting each other.
+          name: mutation-report-${{ matrix.target }}-shard${{ matrix.shard }}-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: mutation-out/${{ matrix.target }}-shard${{ matrix.shard }}/
+          if-no-files-found: warn
+          retention-days: 30
+
+  summarise:
+    needs: [plan, targets]
+    # A failed leg must still produce a summary that names the failure; a failed
+    # plan has nothing to summarise and already failed with its own message.
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Download every leg's report
+        # Tolerant: a missing artifact becomes a reported missing module rather
+        # than a silently dropped one.
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mutation-report-*
+          path: mutation-reports
+          # Each artifact keeps its own directory. Merging them would flatten two
+          # attempts of one shard onto the same filename, so which result survived
+          # would depend on extraction order. The artifact name carries the
+          # attempt, and the reporter selects the newest attempt per shard.
+          merge-multiple: false
+      - name: Render the summary
+        env:
+          TIMEOUT_TOLERANCE: ${{ inputs.timeout_tolerance }}
+          # The plan is the source of truth for what this run was asked to
+          # measure. Without it a single-module dispatch looks like four missing
+          # modules, and a lost shard looks like a complete module.
+          PLAN_TARGETS: ${{ needs.plan.outputs.targets }}
+          PLAN_SHARDS: ${{ needs.plan.outputs.shard_counts }}
+        run: |
+          mkdir -p mutation-out
+          node mutation/workflow.mjs plan-cli > mutation-out/plan-args.txt
+          selected="$(sed -n 1p mutation-out/plan-args.txt)"
+          shards="$(sed -n 2p mutation-out/plan-args.txt)"
+          node mutation/report.mjs --dir mutation-reports \
+            --out mutation-out/summary.md \
+            --json mutation-out/summary.json \
+            --survivors mutation-out/survivors.jsonl \
+            --annotations mutation-out/annotations.txt \
+            --targets "$selected" \
+            --shards-per-target "$shards" \
+            --timeout-tolerance "${TIMEOUT_TOLERANCE:-}"
+          cat mutation-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+          node mutation/workflow.mjs summarise mutation-out/summary.json
+      - name: Annotate surviving mutants
+        # GitHub renders each annotation against its source line, so a survivor
+        # is visible without downloading an artifact. The full list is still in
+        # survivors.jsonl; this is a readable subset.
+        if: always()
+        run: |
+          if [ -f mutation-out/annotations.txt ]; then
+            cat mutation-out/annotations.txt
+          fi
+      - name: Upload the merged summary and survivor extract
+        # Always upload: the merged summary and survivor extract are the primary
+        # published outputs of the measurement.
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation-summary-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: mutation-out/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Fail on an unusable measurement
+        # Never fail on a low score: the score is the measurement, not a gate.
+        # Fail when the run cannot be trusted as a measurement. A manual dispatch
+        # may switch this off to inspect a partial run.
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.fail_on_unusable }}
+        env:
+          TIMEOUT_TOLERANCE: ${{ inputs.timeout_tolerance }}
+        run: node mutation/workflow.mjs require-usable mutation-out/summary.json

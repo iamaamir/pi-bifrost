@@ -882,6 +882,34 @@ export interface CompiledRule {
 // The structural scan remains the cheap first defense; canaries are heuristic.
 const BACKTRACKING_BUDGET_MS = 10;
 const BACKTRACKING_PROBE_TIMEOUT_MS = 500;
+/**
+ * The runtime the backtracking probe runs under.
+ *
+ * This must not be `process.execPath`: that made the probe's verdict depend on
+ * whichever runtime hosted the router. Measured under Bun, `process.execPath` is
+ * `bun`, so the probe executed a different regex engine and 4 of 989 mutants were
+ * judged differently from a Node-hosted run. Production runs on Node, so the
+ * probe pins Node and the verdict is the same everywhere.
+ *
+ * A Node host therefore probes with its own binary (`process.execPath`), which
+ * also means no PATH lookup: a substituted `node` earlier on PATH could answer
+ * "safe" for every pattern and silently disable this defense. A non-Node host
+ * (Bun, Deno) has no Node binary to reuse, so it looks up `node`; if that is
+ * absent the probe falls back to the hosting runtime rather than losing regex
+ * rules entirely. `BIFROST_PROBE_NODE` overrides the binary in either case.
+ */
+const BACKTRACKING_PROBE_NODE_ENV = "BIFROST_PROBE_NODE";
+
+/** The binary the backtracking probe runs under. */
+function probeRuntime(): string {
+  const override = process.env[BACKTRACKING_PROBE_NODE_ENV];
+  if (override) return override;
+  const versions = process.versions as Record<string, string | undefined>;
+  // Under Node, the hosting binary is the production engine. Resolving `node`
+  // through PATH would let the environment choose the verifier.
+  if (!versions.bun && !versions.deno) return process.execPath;
+  return "node";
+}
 const BACKTRACKING_CANARIES = [
   "a".repeat(10) + "b", "a".repeat(14) + "b", "a".repeat(18) + "b",
   "a".repeat(20) + "b", "a".repeat(22) + "b", "a".repeat(24) + "b",
@@ -1045,14 +1073,22 @@ function verifyRulePatterns(patterns: readonly string[]): void {
   }
   while (pending.length > 0) {
     const batch = pending.slice(0, 32);
-    const result = spawnSync(process.execPath, ["-e", BACKTRACKING_PROBE], {
+    const probeArgs = ["-e", BACKTRACKING_PROBE];
+    const probeOptions = {
       input: JSON.stringify({ patterns: batch, canaries: BACKTRACKING_CANARIES, budget: BACKTRACKING_BUDGET_MS }),
-      encoding: "utf8",
+      encoding: "utf8" as const,
       timeout: BACKTRACKING_PROBE_TIMEOUT_MS + batch.length * 20,
-      killSignal: "SIGKILL",
+      killSignal: "SIGKILL" as const,
       maxBuffer: Math.max(1024, batch.length * 4),
       env: { ...process.env, NODE_OPTIONS: "" },
-    });
+    };
+    const probeNode = probeRuntime();
+    let result = spawnSync(probeNode, probeArgs, probeOptions);
+    // A host without `node` on PATH falls back to the hosting runtime, so regex
+    // rules keep working. Only the engine-stability guarantee is lost.
+    if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT" && probeNode !== process.execPath) {
+      result = spawnSync(process.execPath, probeArgs, probeOptions);
+    }
     const lines = (result.stdout ?? "").split("\n").filter(Boolean);
     let completed = 0;
     for (const line of lines) {

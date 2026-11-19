@@ -14,11 +14,6 @@ on:
         options:
           - default
           - expanded
-      mutation:
-        description: "Also run the opt-in four-module Stryker mutation experiment (slow)"
-        required: false
-        default: false
-        type: boolean
       campaign_repeats:
         description: "Campaign attempts per target (1-5)"
         required: false
@@ -65,7 +60,7 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - run: python -m pip install Pillow==12.3.0
@@ -82,28 +77,28 @@ jobs:
         run: npm run acceptance
       - name: Upload failure logs and UI screenshots
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verification-failure-${{ github.event.pull_request.head.sha || github.sha }}
           path: screenshots/
           if-no-files-found: ignore
       - name: Upload candidate-bound manifest
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verification-manifest-${{ github.event.pull_request.head.sha || github.sha }}
           path: screenshots/verification/**/result.json
           if-no-files-found: ignore
       - name: Upload acceptance evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: acceptance-evidence-${{ github.event.pull_request.head.sha || github.sha }}
           path: screenshots/acceptance/**
           if-no-files-found: ignore
       - name: Upload candidate-bound Markdown report
         if: always() && github.event_name == 'pull_request'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-report-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ steps.acceptance.outputs.report-markdown }}
@@ -111,7 +106,7 @@ jobs:
           retention-days: 7
       - name: Upload head report data
         if: always() && github.event_name == 'pull_request'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: head-report-data-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ steps.acceptance.outputs.report-data }}
@@ -137,7 +132,7 @@ jobs:
           node-version: 24
           cache: npm
       # test:ui preflight requires Pillow, exactly like the release-gates job.
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
       - run: python -m pip install Pillow==12.3.0
@@ -147,14 +142,14 @@ jobs:
         run: npm run acceptance:deterministic
       - name: Upload merge failure logs
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verification-failure-merge-${{ github.event.pull_request.head.sha }}
           path: screenshots/
           if-no-files-found: ignore
       - name: Upload merge-result evidence
         if: always() && (steps.merge-acceptance.outcome == 'success' || steps.merge-acceptance.outcome == 'failure')
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: merge-result-evidence-${{ github.sha }}
           path: |
@@ -194,7 +189,7 @@ jobs:
           node scripts/crap-report.mjs --record --history "$CRAP_HISTORY"
       - name: Upload CRAP trend history
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: crap-history-${{ github.event.pull_request.head.sha || github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/crap-history.jsonl
@@ -224,14 +219,14 @@ jobs:
       - name: Download head report data
         if: always()
         continue-on-error: true
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: head-report-data-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/bifrost-report-input
       - name: Download CRAP trend history
         if: always()
         continue-on-error: true
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: crap-history-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/bifrost-crap-history
@@ -262,7 +257,7 @@ jobs:
 
       - name: Upload candidate-bound publisher data
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: acceptance-report-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/bifrost-report-input/report-data.json
@@ -304,7 +299,7 @@ jobs:
           NODE
       - name: Upload final candidate report
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: final-ci-report-${{ github.event.pull_request.head.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/bifrost-final-report/ci-report.md
@@ -406,7 +401,7 @@ jobs:
           npm run test:integration
       - name: Upload campaign evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: verification-campaign-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/bifrost-campaign/
@@ -475,42 +470,9 @@ jobs:
           tests/integration/native-tool-continuation.test.mjs
       - name: Upload compatibility evidence
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pi-compatibility-${{ matrix.pi }}-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/pi-compatibility-versions.json
-          if-no-files-found: ignore
-          retention-days: 14
-
-  # Opt-in mutation experiment. Manual boolean input only: it never runs on
-  # PR/push/schedule, keeps low concurrency and hard job plus step bounds, and
-  # uploads the existing Stryker JSON report and file log even on failure. The
-  # existing four-module config keeps its disclosed focused binding and
-  # survivor limits; no mutation score threshold is enforced here.
-  mutation-experiment:
-    if: github.event_name == 'workflow_dispatch' && inputs.mutation == true
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # v7.1.0
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
-        with:
-          node-version: 24
-          cache: npm
-      - run: npm ci
-      - name: Run the four-module Stryker experiment with bounded concurrency
-        timeout-minutes: 55
-        run: npx stryker run --concurrency 2 --maxConcurrentTestRunners 2 --fileLogLevel info
-      - name: Upload mutation report and log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: mutation-experiment-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: |
-            reports/mutation/
-            stryker.log
           if-no-files-found: ignore
           retention-days: 14
