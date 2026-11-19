@@ -122,11 +122,12 @@ same mutants, and both viable ones produce the same kills.
 | `bun` | per **test** | **3s** | 1m16s (not used — see below) | **1m35s** | correct |
 
 **Bun is the default.** `@hughescr/stryker-bun-runner` runs `bun test`, which
-executes this repository's `node:test` files unchanged — verified: all 30 bound test
-files pass under Bun 1.4.0. Because coverage is attributed per individual
-test, a mutant runs only the tests that reach it (~8 per mutant) instead of whole
-files, so a module bound to one heavy file no longer pays that file's runtime
-per mutant. That is the entire speed difference.
+executes this repository's `node:test` files unchanged — verified: the 27 files
+bound to Bun-run modules ran 679 tests with 0 failures under Bun 1.4.0. Because
+coverage is attributed per individual test, a mutant runs only the tests that
+reach it (~8 per mutant) instead of whole files, so a module bound to one heavy
+file no longer pays that file's runtime per mutant. That is the entire speed
+difference.
 
 **`routing.ts` stays on TAP, for a different reason.** Its rule tests
 deliberately let a catastrophic regex run in-process when a mutant bypasses the
@@ -152,7 +153,7 @@ injects the fault by editing a private source copy, which works on both runtimes
 
 `RUNNER_OVERRIDES` in `mutation/config.mjs` carries the reason a module deviates
 from the default runner; today it has exactly one entry: `routing.ts` uses `tap`
-because its verdict depends on the production regex engine. Four modules use
+because its verdict depends on the production regex engine. Five modules use
 Bun. A test asserts that any future override names a reason.
 
 Three properties hold for both runners, and all three were measured:
@@ -224,6 +225,10 @@ target under `reports/mutation/.incremental-<module>.json`. Reusing results
 across nights would publish a score for code paths the run never touched —
 incremental cannot see dependency updates, environment changes, or fixtures.
 
+Only the TAP runner's invalidation was measured, so `--incremental` is restricted
+to targets on it (`routing.ts`), and it cannot be combined with `--shards`: the
+state file is per module, so two shards would share one record.
+
 ## How it works
 
 Each target is its own matrix job, so each module gets a timeout budget sized to
@@ -255,7 +260,7 @@ config file to tune:
   setting that decides everything else.
 - `RUNNER_OVERRIDES` — per-target runner overrides with a stated reason (today:
   `routing.ts` -> `tap`, because its verdict depends on the production regex
-  engine). Four modules use Bun.
+  engine). Five modules use Bun.
 - `TAP_NODE_ARGS` — how `node:test` is invoked for the TAP runner.
 - `STRYKER_OPTIONS` — `checkers`, `thresholds`, reporters, `disableTypeChecks`.
 - `SHARDING` — overlap width, max shards, and the cost threshold that triggers it.
@@ -263,10 +268,12 @@ config file to tune:
 - `TIMEOUT_TOLERANCE` — when a run is too full of timeouts to trust.
 - `SUMMARY` — how many survivors to show per module.
 
-Adding a module to `TARGETS` is the only edit needed: the workflow matrix, local
-runner, binding derivation and summary all read from it. The derivation helpers
-in `targets.mjs` are plain functions over the file tree, so they are reusable
-without the config (for example to answer "which tests import this module?").
+Adding a module to `TARGETS` and `MUTANT_ESTIMATE` is the only edit needed: the
+workflow matrix, local runner, binding derivation and summary all read from them.
+A missing planning estimate fails the plan instead of dropping the module. The
+derivation helpers in `targets.mjs` are plain functions over the file tree, so
+they are reusable without the config (for example to answer "which tests import
+this module?").
 
 ## Binding is derived, not hand-written
 
@@ -507,7 +514,7 @@ node mutation/run.mjs                           # every target, sequentially
 node mutation/run.mjs cache.ts --shards 2       # split one module
 node mutation/run.mjs cache.ts --mutate cache.ts:1-140   # one region
 node mutation/run.mjs cache.ts --report reports/archive/cache.ts.json   # one named output file
-node mutation/run.mjs cache.ts --incremental    # local loop: reuse unchanged results
+node mutation/run.mjs routing.ts --incremental  # local loop: reuse unchanged results
 node mutation/run.mjs cache.ts --dry-run        # check the binding, no mutants
 
 # Summarise whatever ran

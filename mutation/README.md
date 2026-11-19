@@ -21,7 +21,7 @@ The workflow lives at `.github/workflows/mutation.yml`; the narrative guide is
 
 ## Adding a module
 
-Three edits, one file.
+Two edits, one file.
 
 ### 1. Declare the target
 
@@ -88,12 +88,11 @@ Sharding is automatic: `suggestedShards()` splits a module into as many legs as
 needed to land each under `targetLegMinutes` (30), capped at `SHARDING.maxShards`
 (4). Each shard is its own parallel job.
 
-### 4. Add it to the dispatch list
+### 4. Nothing else to register
 
-`.github/workflows/mutation.yml` lists targets under `workflow_dispatch.inputs.target`
-as `type: choice`. A module missing from that list cannot be dispatched on its own
-at all, so add it there too. A test asserts the list matches `TARGETS`, so
-forgetting this fails the suite rather than surfacing months later.
+`workflow_dispatch.inputs.target` is free text on purpose: the plan job validates
+the value against `TARGETS` before any leg starts and lists the valid names when
+it is wrong. A new module is dispatchable as soon as it is in `TARGETS`.
 
 Finally, run the suite:
 
@@ -331,11 +330,12 @@ survivor. Node strips types at runtime anyway, so the directive buys nothing.
 handshake file relative to cwd. Deleting `.stryker-tmp` mid-run produced 320 of
 388 `RuntimeError`.
 
-**`--incremental` is banned for authoritative runs.** With
-`coverageAnalysis: "off"` Stryker's differ returns `true` unconditionally
-(`if (!testCoverage.hasCoverage) return true`). Measured: after editing a bound
-test file, **228 of 229** results were reused and the stale score republished.
-It is opt-in for local loops only, with one state file per target.
+**`--incremental` is a local loop, never authoritative.** It is restricted to the
+TAP runner, whose invalidation was measured (editing a bound test re-ran the
+affected mutants). It cannot be combined with `--shards`, because its state file
+is per module. The retired `command` runner had no per-test coverage, so its
+differ reused every stored result unconditionally and republished a stale score
+after a bound-test edit (228 of 229 reused).
 
 **Line-range shards must overlap.** Adjacent ranges drop mutants that straddle a
 boundary: `1-100` + `100-244` recovered 176 of 229 mutants for `cache.ts`.
@@ -455,7 +455,7 @@ node mutation/run.mjs cache.ts                   # one module, full run
 node mutation/run.mjs                            # every target, sequentially
 node mutation/run.mjs cache.ts --shards 2        # split one module
 node mutation/run.mjs cache.ts --mutate cache.ts:1-140   # one region
-node mutation/run.mjs cache.ts --incremental     # local loop, reuse unchanged
+node mutation/run.mjs routing.ts --incremental # local loop, reuse unchanged
 node mutation/run.mjs cache.ts --dry-run         # check binding, no mutants
 
 node mutation/report.mjs --dir reports/mutation --out /tmp/mutation.md
@@ -490,9 +490,9 @@ There is **no `upload_reports` switch**. The leg upload is the only transport a
 report takes to the summariser, so it is unconditional; a retention knob that
 could skip it would turn a good run into "every module missing".
 
-`target` is a `type: choice` list, so a new module must be added to it as well as
-to `TARGETS`; a test asserts the two agree, because a module missing from the list
-cannot be dispatched on its own at all.
+There is no dispatch list to keep in sync: `target` is free text, validated by
+the plan job against `TARGETS`, so a new module is dispatchable without a
+workflow edit.
 
 The `plan` job validates inputs before any work starts and emits the matrix,
 the selected targets and the per-target shard counts. The summariser judges
