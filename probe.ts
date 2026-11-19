@@ -64,10 +64,12 @@ export interface RunProbeOptions {
   /** Allow a second, session-backed request when the streaming attempt returns
    * no text. Callers that promise exactly one request per model pass `false`. */
   sessionFallback?: boolean;
-  /** Write the results to the `.pi/bifrost-probe.json` cache that `/bifrost init`
-   * reads. A one-off candidate check passes `false`: its narrow transport would
-   * otherwise replace the init answer for the whole TTL. */
+  /** Write results to the cache that `/bifrost init` reads. A one-off candidate
+   * check passes `false`: its narrow transport would otherwise replace the init
+   * answer for the whole TTL. */
   persist?: boolean;
+  /** Override default project cache path when init targets another config scope. */
+  path?: string;
   timeoutMs?: number;
   concurrency?: number;
   signal?: AbortSignal;
@@ -207,7 +209,7 @@ export async function runProbe(
   options: RunProbeOptions = {},
 ): Promise<{ results: ProbeResult[]; path: string; cancelled?: true }> {
   const runId = randomUUID();
-  const outputPath = join(process.cwd(), ".pi", "bifrost-probe.json");
+  const outputPath = options.path ?? join(process.cwd(), ".pi", "bifrost-probe.json");
   const catalog = ctx.modelRegistry.getAvailable().filter(isGenerativeModel);
   const available = (options.models ?? catalog).filter(isGenerativeModel);
   const total = available.length;

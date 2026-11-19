@@ -92,7 +92,7 @@ import {
   type AffinityRoutingContext,
 } from "./routing.ts";
 import { reasonLabel } from "./virtual-routing.ts";
-import type { ReliabilityStore } from "./reliability-store.ts";
+import { ReliabilityStore } from "./reliability-store.ts";
 import type { ReliabilityV2Store } from "./reliability-v2-store.ts";
 import { ReliabilityV2StoreError } from "./reliability-v2-store.ts";
 import type { ProviderCooldownStore } from "./provider-cooldowns.ts";
@@ -1598,7 +1598,8 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     }
   }
   // Reuse recent probe data; otherwise manual init probes before proposing model pools.
-  const probePath = join(process.cwd(), ".pi", "bifrost-probe.json");
+  const initStateDirectory = selectedSource === "user" ? getAgentDir() : join(process.cwd(), CONFIG_DIR_NAME);
+  const probePath = join(initStateDirectory, "bifrost-probe.json");
   const available = ctx.modelRegistry.getAvailable().filter((model) => !isVirtualModel(model));
   let workingModels: {
     provider: string;
@@ -1642,6 +1643,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     try {
       probeRun = await runProbe(ctx, {
         ...probeOptionsFromConfig(initConfig.probe),
+        path: probePath,
         signal: ctx.signal,
 
         onProgress: (done, total, last) => {
@@ -1672,7 +1674,16 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     for (const result of results) {
       if (failureDetails(result)?.reason === "authentication_or_access") authFailedProbeProviders.add(result.provider);
     }
-    state.reliabilityStore.applyOutcomes(
+    const initReliabilityStore = selectedSource === "user"
+      ? new ReliabilityStore({
+          cwd: initStateDirectory,
+          config: {
+            ...initConfig.reliability,
+            path: join(initStateDirectory, "bifrost-reliability.json"),
+          },
+        })
+      : state.reliabilityStore;
+    initReliabilityStore.applyOutcomes(
       results.map((r) =>
         r.status === "ok"
           ? { model: `${r.provider}/${r.model}`, ok: true as const, source: "probe" }

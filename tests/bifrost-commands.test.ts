@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, buildTracePreview, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, renderTracePreview, resolveTierDisplay, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
@@ -3313,9 +3313,12 @@ describe("command aliases", () => {
     process.chdir(tempDir);
     try {
       mkdirSync(join(tempDir, ".pi"));
-      writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
-        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
-      ]);
+      mkdirSync(process.env.PI_CODING_AGENT_DIR);
+      const probeResults = [
+        { provider: "fixture", model: "chat", status: "ok" as const, cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ];
+      writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), probeResults);
+      writeRecentProbeCache(join(process.env.PI_CODING_AGENT_DIR, "bifrost-probe.json"), probeResults);
       const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
       (ctx as any).ui.confirm = async () => false;
       for (const args of ["init", "init -g"]) {
@@ -3333,6 +3336,39 @@ describe("command aliases", () => {
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
       rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps forced global init probe and reliability artifacts in global scope", async () => {
+    for (const args of ["init -g", "init -g -f"]) {
+      const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-global-artifacts-"));
+      const previousCwd = process.cwd();
+      const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+      const agentDir = join(tempDir, "agent");
+      mkdirSync(agentDir);
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      process.chdir(tempDir);
+      try {
+        const { ctx } = makeCtx([makeModel("fixture", "chat")]);
+        (ctx as any).modelRegistry.streamSimple = (model: { provider: string; id: string; api: string }) => ({
+          result: async () => ({
+            role: "assistant", api: model.api, provider: model.provider, model: model.id,
+            content: [{ type: "text", text: "ok" }], usage: { totalTokens: 1 }, stopReason: "stop", timestamp: Date.now(),
+          }),
+        });
+        (ctx as any).ui.confirm = async () => true;
+        await createCommandRouter(makeState() as never)(args, ctx as never);
+
+        assert.deepEqual(readdirSync(tempDir).sort(), ["agent"], `${args} must leave project directory unchanged`);
+        assert.ok(existsSync(join(agentDir, "bifrost.json")), `${args} must select global config`);
+        assert.ok(existsSync(join(agentDir, "bifrost-probe.json")), `${args} must cache probe results globally`);
+        assert.ok(existsSync(join(agentDir, "bifrost-reliability.json")), `${args} must persist reliability globally`);
+      } finally {
+        process.chdir(previousCwd);
+        if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+        else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+        rmSync(tempDir, { recursive: true, force: true });
+      }
     }
   });
 
@@ -3423,7 +3459,7 @@ describe("command aliases", () => {
       try {
         mkdirSync(join(tempDir, ".pi"));
         mkdirSync(agentDir);
-        writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
+        writeRecentProbeCache(join(source === "user" ? agentDir : join(tempDir, ".pi"), "bifrost-probe.json"), [
           { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
         ]);
         const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
