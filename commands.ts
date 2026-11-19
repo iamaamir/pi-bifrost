@@ -598,18 +598,31 @@ export function describeInitCommitFailure(failure: {
   readonly recoveryCommand: string;
 }): string {
   if (failure.locked) return "Init could not acquire reconciliation locks. Verify no Bifrost writer is active and repair only exact stale lock files before retrying.";
-  if (!failure.receiptOnly && configHoldsProposedBytes(failure.configPath, failure.nextConfigBytes)) {
-    return `Init could not finish the reviewed membership update. ${failure.target} already holds the new memberships and a reconciliation journal is pending. Run ${failure.recoveryCommand} before you retry.`;
+  if (failure.receiptOnly) return "Init could not safely commit the reviewed membership update; existing files were preserved.";
+  switch (inspectInstalledConfig(failure.configPath, failure.nextConfigBytes)) {
+    case "matches":
+      return `Init could not finish the reviewed membership update. ${failure.target} already holds the new memberships and a reconciliation journal is pending. Run ${failure.recoveryCommand} before you retry.`;
+    case "differs":
+      return "Init could not safely commit the reviewed membership update; existing files were preserved.";
+    case "unknown":
+      // A read failure says nothing about what is installed. Promise neither
+      // preservation nor replacement; send the user to inspect the target.
+      return `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. Inspect that file and the reconciliation journal before you retry; run ${failure.recoveryCommand} if the new memberships are already installed.`;
   }
-  return "Init could not safely commit the reviewed membership update; existing files were preserved.";
 }
 
-function configHoldsProposedBytes(configPath: string, nextConfigBytes: Uint8Array): boolean {
+/** "unknown" is a failed read, which is not the same as a config that differs. */
+type InstalledConfigState = "matches" | "differs" | "unknown";
+
+function inspectInstalledConfig(configPath: string, nextConfigBytes: Uint8Array): InstalledConfigState {
+  let installed: Buffer;
   try {
-    return readFileSync(configPath).equals(Buffer.from(nextConfigBytes));
-  } catch {
-    return false;
+    installed = readFileSync(configPath);
+  } catch (error) {
+    // A missing config holds nothing, so the preserved wording stays true.
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "differs" : "unknown";
   }
+  return installed.equals(Buffer.from(nextConfigBytes)) ? "matches" : "differs";
 }
 
 function readReconciliationSource(source: ReconciliationConfigSource): ReconciliationSourceSnapshot {
