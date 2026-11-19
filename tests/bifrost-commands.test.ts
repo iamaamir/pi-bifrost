@@ -1615,6 +1615,48 @@ describe("bifrost command ui", () => {
     }
   });
 
+  it("promises neither preservation nor replacement when the config cannot be read", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-commit-unreadable-"));
+    try {
+      // A directory at the config path makes readFileSync throw a non-ENOENT error,
+      // the same shape as a disk fault after the rename installed the new config.
+      const configPath = join(tempDir, "bifrost.json");
+      mkdirSync(configPath);
+      const nextConfigBytes = Buffer.from(JSON.stringify({ models: { quick: ["fixture/chat"] } }, null, 2) + "\n", "utf8");
+      const message = describeInitCommitFailure({
+        locked: false,
+        receiptOnly: false,
+        configPath,
+        nextConfigBytes,
+        target: "project (.pi/bifrost.json)",
+        recoveryCommand: "/bifrost config reconcile --recover",
+      });
+      assert.doesNotMatch(message, /existing files were preserved/);
+      assert.doesNotMatch(message, /already holds the new memberships/);
+      assert.match(message, /could not read project \(\.pi\/bifrost\.json\) to check what it now holds/);
+      assert.match(message, /\/bifrost config reconcile --recover/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the preserved message when the config is missing", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-commit-missing-"));
+    try {
+      const message = describeInitCommitFailure({
+        locked: false,
+        receiptOnly: false,
+        configPath: join(tempDir, "bifrost.json"),
+        nextConfigBytes: Buffer.from("{}\n", "utf8"),
+        target: "project (.pi/bifrost.json)",
+        recoveryCommand: "/bifrost config reconcile --recover",
+      });
+      assert.equal(message, "Init could not safely commit the reviewed membership update; existing files were preserved.");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not claim a replaced config when init wrote only the ownership receipt", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-commit-receipt-only-"));
     try {
