@@ -124,7 +124,7 @@ function runInit({ home, work, args, extensionPath = EXTENSION, prompt = `/bifro
   });
 }
 
-function runInteractiveInit({ home, work, extensionPath = EXTENSION, confirm }) {
+function runInteractiveInit({ home, work, extensionPath = EXTENSION, confirm, select }) {
   const base = Object.fromEntries(["PATH", "TMPDIR", "LANG", "TERM"]
     .filter((key) => process.env[key] !== undefined).map((key) => [key, process.env[key]]));
   return new Promise((resolve, reject) => {
@@ -153,6 +153,9 @@ function runInteractiveInit({ home, work, extensionPath = EXTENSION, confirm }) 
           records.push(record);
           if (record.type === "extension_ui_request" && record.method === "confirm") {
             child.stdin.write(`${JSON.stringify({ type: "extension_ui_response", id: record.id, confirmed: confirm })}\n`);
+          }
+          if (record.type === "extension_ui_request" && record.method === "select" && select) {
+            child.stdin.write(`${JSON.stringify({ type: "extension_ui_response", id: record.id, value: select })}\n`);
           }
           if (record.id === "init-command" && record.type === "response") {
             settled = true;
@@ -590,6 +593,62 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
           assert.equal(existsSync(projectPath), false);
           assert.equal(existsSync(ownershipPath), false);
           assert.match(result.stdout + result.stderr, /init: declined/i);
+        }
+      } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+    });
+  }
+
+  for (const mode of ["interactive", "write"]) {
+    for (const inherited of ["different", "identical"]) {
+      it(`fresh ${mode} preview matches saved config with ${inherited} inherited pool`, async () => {
+        requests = [];
+        const env = fixture(port, ["healthy"]);
+        const inheritedPool = inherited === "identical" ? ["fake/healthy"] : ["manual/inherited"];
+        const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+        const projectPath = join(env.work, ".pi", "bifrost.json");
+        writeFileSync(globalPath, JSON.stringify({ models: { quick: inheritedPool }, classifier: { enabled: false } }));
+        try {
+          const result = mode === "interactive"
+            ? await runInteractiveInit({ ...env, confirm: true })
+            : await runInit({ ...env, args: "--write" });
+          assert.equal(result.code, 0, result.stderr);
+          assert.equal(result.violations, "");
+          assert.equal(existsSync(projectPath), true);
+          const saved = JSON.parse(readFileSync(projectPath, "utf8"));
+          const reportsProjectOverride = /→ project \[fake\/healthy\]/.test(result.stdout + result.stderr);
+          assert.equal(reportsProjectOverride, mode === "interactive" && inherited === "different", result.stdout + result.stderr);
+          if (mode === "interactive" && inherited === "different") {
+            assert.deepEqual(saved.models.quick, ["fake/healthy"]);
+          } else {
+            assert.equal(saved.models?.quick, undefined);
+          }
+          assert.deepEqual(JSON.parse(readFileSync(globalPath, "utf8")).models.quick, inheritedPool);
+        } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+      });
+    }
+  }
+
+  for (const action of ["keep", "defaults"]) {
+    it(`deleted intent ${action} preview matches saved config`, async () => {
+      requests = [];
+      const env = fixture(port, ["healthy"]);
+      const projectPath = join(env.work, ".pi", "bifrost.json");
+      const ownershipPath = join(env.work, ".pi", "bifrost-reconcile-ownership.json");
+      writeFileSync(projectPath, JSON.stringify({ default: "general", classifier: { enabled: false }, models: { general: ["manual/base"] } }));
+      writeFileSync(ownershipPath, JSON.stringify({ version: 2, scope: "project", tiers: { quick: { state: "deleted" } } }));
+      try {
+        const result = action === "keep"
+          ? await runInit({ ...env, args: "--write" })
+          : await runInteractiveInit({ ...env, confirm: true, select: "Bifrost defaults" });
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(result.violations, "");
+        const saved = JSON.parse(readFileSync(projectPath, "utf8"));
+        if (action === "keep") {
+          assert.equal(Object.hasOwn(saved.models, "quick"), false);
+          assert.match(result.stdout + result.stderr, /quick: remains deleted/);
+        } else {
+          assert.deepEqual(saved.models.quick, ["fake/healthy"]);
+          assert.match(result.stdout + result.stderr, /quick: \[none\] → \[fake\/healthy\]/);
         }
       } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
     });
