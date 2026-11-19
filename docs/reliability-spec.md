@@ -2,7 +2,7 @@
 
 This document gives the design, the implementation notes, and the extension guide for the reliability v1 model circuit: the pre-send health filter and the failure tracking after settlement.
 
-This document does not give the complete current behavior. Later releases added reliability v2 and the provider usage and rate pauses. The sections that follow describe the v1 code path. For the current behavior, read [`docs/guide/reliability-and-cache.md`](guide/reliability-and-cache.md) and [ADR 0024](adr/0024-provider-usage-and-rate-pauses.md).
+This document does not give the complete current behavior. Reliability v2 and the provider usage and rate pauses are listed under Unreleased in `CHANGELOG.md`, not under a versioned release. The sections that follow describe the v1 code path. For the current behavior, read [`docs/guide/reliability-and-cache.md`](guide/reliability-and-cache.md) and [ADR 0024](adr/0024-provider-usage-and-rate-pauses.md).
 
 The section "Not yet implemented" is a list for one point in time. Some entries can change after a later release. Make sure that an entry is still absent before you use it as a statement about the current code.
 
