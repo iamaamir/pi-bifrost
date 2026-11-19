@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, buildTracePreview, createCommandRouter, describeInitCommitFailure, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, renderTracePreview, resolveTierDisplay, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
@@ -1614,17 +1614,48 @@ describe("bifrost command ui", () => {
       const configPath = join(tempDir, "bifrost.json");
       const nextConfigBytes = Buffer.from(JSON.stringify({ models: { quick: ["fixture/chat"] } }, null, 2) + "\n", "utf8");
       writeFileSync(configPath, nextConfigBytes);
+      // A journal written before the rename is what makes recovery possible.
+      writeFileSync(join(tempDir, "bifrost-reconcile.journal"), "{}");
       const message = describeInitCommitFailure({
         locked: false,
         receiptOnly: false,
         configPath,
         nextConfigBytes,
+        journalPath: join(tempDir, "bifrost-reconcile.journal"),
         target: "project (.pi/bifrost.json)",
         recoveryCommand: "/bifrost config reconcile --recover",
       });
-      assert.match(message, /already holds the new memberships/);
+      assert.match(message, /already holds the planned configuration/);
       assert.match(message, /a reconciliation journal is pending/);
       assert.match(message, /\/bifrost config reconcile --recover/);
+      assert.doesNotMatch(message, /existing files were preserved/);
+      assert.doesNotMatch(message, /nothing to recover/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not promise a pending journal when no journal was written", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-commit-no-journal-"));
+    try {
+      // An ownership-only plan leaves the config bytes unchanged, so matching
+      // bytes prove nothing about whether a journal was staged.
+      const configPath = join(tempDir, "bifrost.json");
+      const nextConfigBytes = Buffer.from(JSON.stringify({ models: { quick: ["fixture/chat"] } }, null, 2) + "\n", "utf8");
+      writeFileSync(configPath, nextConfigBytes);
+      const message = describeInitCommitFailure({
+        locked: false,
+        receiptOnly: false,
+        configPath,
+        nextConfigBytes,
+        journalPath: join(tempDir, "bifrost-reconcile.journal"),
+        target: "project (.pi/bifrost.json)",
+        recoveryCommand: "/bifrost config reconcile --recover",
+      });
+      assert.doesNotMatch(message, /a reconciliation journal is pending/);
+      assert.match(message, /no reconciliation journal was written/);
+      assert.match(message, /has nothing to recover/);
+      assert.match(message, /Retry Init/);
       assert.doesNotMatch(message, /existing files were preserved/);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
@@ -1642,10 +1673,36 @@ describe("bifrost command ui", () => {
         receiptOnly: false,
         configPath,
         nextConfigBytes,
+        journalPath: join(tempDir, "bifrost-reconcile.journal"),
         target: "project (.pi/bifrost.json)",
         recoveryCommand: "/bifrost config reconcile --recover",
       });
       assert.equal(message, "Init could not safely commit the reviewed membership update; existing files were preserved.");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("still points at the pending journal when the config was preserved", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-commit-preserved-journal-"));
+    try {
+      const configPath = join(tempDir, "bifrost.json");
+      const nextConfigBytes = Buffer.from(JSON.stringify({ models: { quick: ["fixture/chat"] } }, null, 2) + "\n", "utf8");
+      writeFileSync(configPath, JSON.stringify({ models: { quick: ["fixture/other"] } }, null, 2) + "\n");
+      writeFileSync(join(tempDir, "bifrost-reconcile.journal"), "{}");
+      const message = describeInitCommitFailure({
+        locked: false,
+        receiptOnly: false,
+        configPath,
+        nextConfigBytes,
+        journalPath: join(tempDir, "bifrost-reconcile.journal"),
+        target: "project (.pi/bifrost.json)",
+        recoveryCommand: "/bifrost config reconcile --recover",
+      });
+      // Retrying Init would hit the existing journal, so recovery must come first.
+      assert.match(message, /existing files were preserved/);
+      assert.match(message, /A reconciliation journal is pending/);
+      assert.match(message, /\/bifrost config reconcile --recover/);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -1664,13 +1721,40 @@ describe("bifrost command ui", () => {
         receiptOnly: false,
         configPath,
         nextConfigBytes,
+        journalPath: join(tempDir, "bifrost-reconcile.journal"),
         target: "project (.pi/bifrost.json)",
         recoveryCommand: "/bifrost config reconcile --recover",
       });
       assert.doesNotMatch(message, /existing files were preserved/);
-      assert.doesNotMatch(message, /already holds the new memberships/);
+      assert.doesNotMatch(message, /already holds the planned configuration/);
       assert.match(message, /could not read project \(\.pi\/bifrost\.json\) to check what it now holds/);
-      assert.match(message, /\/bifrost config reconcile --recover/);
+      assert.match(message, /No reconciliation journal was written/);
+      assert.doesNotMatch(message, /\/bifrost config reconcile --recover/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats a symlinked config as unknown instead of reading through it", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-commit-symlink-"));
+    try {
+      const targetPath = join(tempDir, "elsewhere.json");
+      const configPath = join(tempDir, "bifrost.json");
+      const nextConfigBytes = Buffer.from(JSON.stringify({ models: { quick: ["fixture/chat"] } }, null, 2) + "\n", "utf8");
+      writeFileSync(targetPath, nextConfigBytes);
+      symlinkSync(targetPath, configPath);
+      const message = describeInitCommitFailure({
+        locked: false,
+        receiptOnly: false,
+        configPath,
+        nextConfigBytes,
+        journalPath: join(tempDir, "bifrost-reconcile.journal"),
+        target: "project (.pi/bifrost.json)",
+        recoveryCommand: "/bifrost config reconcile --recover",
+      });
+      // The error path must not follow a link a concurrent writer swapped in.
+      assert.doesNotMatch(message, /already holds the planned configuration/);
+      assert.match(message, /could not read project \(\.pi\/bifrost\.json\) to check what it now holds/);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -1684,6 +1768,7 @@ describe("bifrost command ui", () => {
         receiptOnly: false,
         configPath: join(tempDir, "bifrost.json"),
         nextConfigBytes: Buffer.from("{}\n", "utf8"),
+        journalPath: join(tempDir, "bifrost-reconcile.journal"),
         target: "project (.pi/bifrost.json)",
         recoveryCommand: "/bifrost config reconcile --recover",
       });
@@ -1704,6 +1789,7 @@ describe("bifrost command ui", () => {
         receiptOnly: true,
         configPath,
         nextConfigBytes,
+        journalPath: join(tempDir, "bifrost-reconcile.journal"),
         target: "project (.pi/bifrost.json)",
         recoveryCommand: "/bifrost config reconcile --recover",
       });
@@ -1724,6 +1810,7 @@ describe("bifrost command ui", () => {
         receiptOnly: false,
         configPath,
         nextConfigBytes,
+        journalPath: join(tempDir, "bifrost-reconcile.journal"),
         target: "project (.pi/bifrost.json)",
         recoveryCommand: "/bifrost config reconcile --recover",
       });
