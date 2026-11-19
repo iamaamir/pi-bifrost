@@ -109,7 +109,9 @@ describe("reliability v1 migration foundation", () => {
         mutateInFunction(source, "syncDirectory", "fd = fs.openSync(dirname(path), constants.O_RDONLY);", unsupported("open")),
       fsync: (source) => mutateInFunction(source, "syncDirectory", "fs.fsyncSync(fd);", unsupported("fsync")),
       close: (source) =>
-        mutateInFunction(source, "syncDirectory", "try { fs.closeSync(fd); }", `try { ${unsupported("close")} }`),
+        // Close the descriptor before throwing: the fault is that close *fails*,
+        // and leaking the fd would leave the test holding an open directory.
+        mutateInFunction(source, "syncDirectory", "try { fs.closeSync(fd); }", `try { fs.closeSync(fd); ${unsupported("close")} }`),
     };
 
     for (const [fault, mutate] of Object.entries(tolerated)) {

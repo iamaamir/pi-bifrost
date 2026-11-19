@@ -490,6 +490,9 @@ function reportFiles(directory, depth = 2) {
         continue;
       }
       if (!entry.name.endsWith(".json")) continue;
+      // Incremental state lives beside the reports. It is not a measurement, and
+      // parsing it would invent a module for a file the run never measured.
+      if (entry.name.startsWith(".incremental-")) continue;
       const match = /-attempt-(\d+)(?:[\\/]|$)/u.exec(path);
       found.push({ name: entry.name, path, attempt: match ? Number(match[1]) : 0 });
     }
@@ -511,7 +514,11 @@ export function readReports(directory, { identityFor, shardCounts } = {}) {
       // A corrupt artifact must not vanish. Dropping it made a truncated newer
       // attempt indistinguishable from a shard that was never uploaded, so the
       // previous attempt's result was published as if it were current.
-      unreadable.push({ name, path, attempt, reason: error.message, module: parseReportShard(name).moduleName });
+      // The shard index has to survive the failed parse: without it the entry
+      // claims shard 0, and a corrupt shard 1 leaves the older shard 1 report
+      // looking authoritative.
+      const { moduleName, shard } = parseReportShard(name);
+      unreadable.push({ name, path, attempt, reason: error.message, module: moduleName, shard });
       return [];
     }
     // A file that is not a Stryker report (for example a merged summary) is

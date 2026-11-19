@@ -2290,13 +2290,13 @@ test("the identity covers the measurement's execution inputs", () => {
 const REAL_ARTIFACT = "mutation-report-inline-override.ts-shard0-69d885d57c1fc1a65797aaf86c5b7b3af0f47433-run-44123987165-attempt";
 
 function attemptFixture(entries) {
-  // entries: [{ attempt, body }] written under artifact directory names copied
-  // from a real run, so the parser is pinned to GitHub's actual layout.
+  // entries: [{ attempt, body, file? }] written under artifact directory names
+  // copied from a real run, so the parser is pinned to GitHub's actual layout.
   const directory = mkdtempSync(join(tmpdir(), "mutation-corrupt-attempt-"));
-  for (const { attempt, body } of entries) {
+  for (const { attempt, body, file = "inline-override.ts.shard0.json" } of entries) {
     const artifact = `${REAL_ARTIFACT}-${attempt}`;
     mkdirSync(join(directory, artifact), { recursive: true });
-    writeFileSync(join(directory, artifact, "inline-override.ts.shard0.json"), body);
+    writeFileSync(join(directory, artifact, file), body);
   }
   return directory;
 }
@@ -2352,6 +2352,41 @@ test("an unreadable artifact is named even when nothing else exists", () => {
     assert.equal(reports.length, 0);
     assert.equal(rejected.length, 1);
     assert.equal(rejected[0].module, "inline-override.ts");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a corrupted newer attempt of a nonzero shard does not publish the older one", () => {
+  // The failed parse has to keep the shard index. Otherwise the corrupt shard 1
+  // claims shard 0, shard 1's older attempt looks current, and the summary
+  // publishes half the module as complete.
+  const directory = attemptFixture([
+    { attempt: 1, body: goodInlineReport(), file: "inline-override.ts.shard1.json" },
+    { attempt: 2, body: "{ not json", file: "inline-override.ts.shard1.json" },
+    { attempt: 3, body: goodInlineReport() },
+  ]);
+  try {
+    const { reports, rejected } = readReports(directory);
+    assert.equal(reports.length, 0, "shard 1 attempt 1 must not stand in for attempt 2");
+    assert.ok(rejected.length > 0);
+    assert.match(rejected[0].reason, /could not be read/u);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("incremental state beside the reports is not read as a measurement", () => {
+  // An interrupted local incremental run leaves a cache file in the same
+  // directory. Reading it invented a module report for a module that no leg
+  // measured, which then failed the summary's unexpected-module check.
+  const directory = attemptFixture([{ attempt: 1, body: goodInlineReport() }]);
+  try {
+    mkdirSync(join(directory, "reports"));
+    writeFileSync(join(directory, "reports", ".incremental-inline-override.json"), "{ not json");
+    const { reports, rejected } = readReports(directory);
+    assert.equal(reports.length, 1);
+    assert.deepEqual(rejected, []);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
