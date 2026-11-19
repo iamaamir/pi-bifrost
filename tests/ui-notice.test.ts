@@ -55,16 +55,30 @@ test("notice card stays compact when collapsed and hints the expand key", () => 
   assert.ok(text.includes("ctrl+o to expand"), text);
 });
 
-test("notice card renders full details when the host cannot expand", () => {
-  const render = makeRenderer()(entry as never, {} as never, theme as never) as {
+test("notice card keeps old-host failure output bounded and links complete results", () => {
+  const failingModels = Array.from({ length: 400 }, (_, i) => `· provider/model-${i}`);
+  const largeEntry = {
+    data: {
+      ...entry.data,
+      details: ["400 failed", "provider errors ×400", "full errors: .pi/bifrost-probe.json"],
+      expandedDetails: [
+        "400 failed",
+        "provider errors ×400",
+        ...failingModels,
+        "full errors: .pi/bifrost-probe.json",
+      ],
+    },
+  };
+  const render = makeRenderer()(largeEntry as never, {} as never, theme as never) as {
     render(width: number): string[];
   };
   const text = render.render(80).join("\n");
-  // No keyHint means pi < 1.5.2: there is no expand key, so the full list must
-  // be visible and no dead hint may be shown.
-  assert.ok(text.includes("openai/chat-latest"), text);
-  assert.ok(text.includes("openai/gpt-4o-mini"), text);
+  assert.ok(text.includes("400 failed"), text);
+  assert.ok(text.includes("full errors: .pi/bifrost-probe.json"), text);
+  assert.ok(!text.includes("provider/model-0"), text);
+  assert.ok(!text.includes("provider/model-399"), text);
   assert.ok(!text.includes("to expand"), text);
+  assert.ok(text.split("\n").length < 10, text);
 });
 
 test("notice card lists every failing model when expanded", () => {

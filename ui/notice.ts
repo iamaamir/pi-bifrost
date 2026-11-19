@@ -24,8 +24,8 @@ export function registerBifrostNotices(pi: ExtensionAPI) {
     const data = entry.data as BifrostNotice;
     // shortcut: expanded/keyHint exist in pi-coding-agent >=1.5.2; the repo pins
     // 1.4.0, so read them defensively. Upgrade when the dep is bumped.
-    // Without host support the hint would name no key and `expandedDetails`
-    // would be unreachable, so render the full detail inline instead.
+    // Older hosts cannot expand entries, so keep their fallback compact; probe
+    // notices include a path to the complete persisted results in `details`.
     const hostSupportsExpand =
       typeof (options as { keyHint?: unknown }).keyHint === "function";
     const expanded = hostSupportsExpand && (options as { expanded?: boolean }).expanded === true;
@@ -64,9 +64,7 @@ export function registerBifrostNotices(pi: ExtensionAPI) {
 
     const expandable = data.expandedDetails !== undefined && hostSupportsExpand;
     const bodyLines =
-      data.expandedDetails !== undefined && (expanded || !hostSupportsExpand)
-        ? data.expandedDetails
-        : data.details;
+      data.expandedDetails !== undefined && expanded ? data.expandedDetails : data.details;
 
     if (data.message?.trim()) {
       lines.push(theme.fg("muted", data.message.trim()));
