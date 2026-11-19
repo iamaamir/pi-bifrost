@@ -344,6 +344,11 @@ test("survivors render as inline GitHub annotations, highest-signal first", () =
   // A multi-line replacement must not break the workflow-command syntax.
   const wrapped = annotationLines([{ ...survivors[1], replacement: "a\nb" }]);
   assert.equal(wrapped[0].split("\n").length, 1, "the annotation must stay on one line");
+  // GitHub requires `%` and CR escaped too; a raw `%` truncates the annotation
+  // and the replacement/source text is not under our control.
+  const escaped = annotationLines([{ ...survivors[1], replacement: "50% a\rb\rc" }])[0];
+  assert.ok(!escaped.includes("\r"), "no raw carriage return");
+  assert.match(escaped, /50%25 a%0Db%0Dc/u, "percent and CR are escaped in order");
   // The inline list is capped; the full set stays in survivors.jsonl.
   assert.equal(annotationLines(Array.from({ length: 50 }, (_, i) => ({ ...survivors[1], startLine: i + 1 }))).length, 20);
 });

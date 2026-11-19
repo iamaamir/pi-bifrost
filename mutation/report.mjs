@@ -599,15 +599,18 @@ export function annotationLines(survivors, limit = 20) {
     .slice(0, limit);
   return selected.map((row) => {
     const line = row.startLine ?? 1;
-    // Commas and newlines would break the workflow-command syntax.
-    const mutation = `Survived ${row.mutator}: ${String(row.replacement).replaceAll("\n", " ").slice(0, 100)}`;
+    // GitHub workflow commands require `%`, CR and LF escaped in the message;
+    // a comma is only special in a property value. An unescaped `%` truncates
+    // the annotation, and the source text is user-controlled.
+    const escape = (text) => String(text).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+    const mutation = `Survived ${row.mutator}: ${String(row.replacement).slice(0, 100)}`;
     // The coordinate is a hint, not the anchor: annotations are read long after
     // the run, and a shifted file makes `line=` point at the wrong code with no
     // sign of drift. The source text is what survives that.
     const detail = row.source
-      ? `${mutation} — at: ${String(row.source).replaceAll("\n", " ").trim().slice(0, 120)}`
+      ? `${mutation} — at: ${String(row.source).trim().slice(0, 120)}`
       : mutation;
-    return `::warning file=${row.module},line=${line},col=${row.startColumn ?? 1},title=Mutation survived::${detail}`;
+    return `::warning file=${row.module},line=${line},col=${row.startColumn ?? 1},title=Mutation survived::${escape(detail)}`;
   });
 }
 
