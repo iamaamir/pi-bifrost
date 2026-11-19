@@ -2345,6 +2345,43 @@ describe("command aliases", () => {
     }
   });
 
+  it("recommends recovery for the selected init config source after a transaction conflict", async () => {
+    for (const [args, source] of [["init", "project"], ["init -g", "user"]] as const) {
+      const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-recovery-source-"));
+      const previousCwd = process.cwd();
+      const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+      process.chdir(tempDir);
+      const agentDir = join(tempDir, "agent");
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      try {
+        mkdirSync(join(tempDir, ".pi"));
+        mkdirSync(agentDir);
+        writeRecentProbeCache(join(tempDir, ".pi", "bifrost-probe.json"), [
+          { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+        ]);
+        const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+        (ctx as any).ui.confirm = async () => {
+          writeFileSync(join(source === "user" ? agentDir : join(tempDir, ".pi"), "bifrost.json"), "{}\n");
+          return true;
+        };
+
+        await createCommandRouter(makeState() as never)(args, ctx as never);
+
+        assert.ok(
+          calls.some((call) =>
+            String(call.value).includes(`/bifrost config reconcile --source ${source} --recover`),
+          ),
+          JSON.stringify(calls),
+        );
+      } finally {
+        process.chdir(previousCwd);
+        if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+        else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+  });
+
   it("ends every init exit on the terminal footer standard", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-footer-"));
     const previousCwd = process.cwd();
