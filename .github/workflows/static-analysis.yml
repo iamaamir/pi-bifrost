@@ -36,6 +36,8 @@ jobs:
         run: npm run check:dead-code
       - name: Structural rules and rule self-tests
         run: npm run check:ast
+      - name: Copy-paste detection
+        run: npm run check:duplication
 
   integration-contracts:
     runs-on: ubuntu-latest

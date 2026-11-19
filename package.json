@@ -92,6 +92,7 @@
     "check:dead-code": "node scripts/toolbox.mjs dead-code",
     "check:contracts": "node scripts/check-contracts.mjs",
     "check:ast": "node scripts/toolbox.mjs ast",
+    "check:duplication": "node scripts/toolbox.mjs duplication",
     "ast:scan": "ast-grep scan --config sgconfig.yml",
     "ast:test": "ast-grep test --skip-snapshot-tests",
     "check:actions": "node scripts/toolbox.mjs actions",
@@ -146,6 +147,7 @@
     "c8": "^12.0.0",
     "dependency-cruiser": "^18.7.0",
     "fast-check": "4.10.2",
+    "jscpd": "5.4.3",
     "knip": "^6.42.1",
     "typebox": "1.3.27",
     "typescript": "6.0.3"
