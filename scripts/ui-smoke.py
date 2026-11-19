@@ -854,8 +854,8 @@ def capture(
                 raise AssertionError("manual init did not identify the project config destination")
             if "global/workspace files stay unchanged" not in init_screen or "unlisted tiers remain unchanged" not in init_screen:
                 raise AssertionError("manual init omitted the existing-init scope copy")
-            if "keep my models:" not in init_screen or "custom pool retained [manual/keep]" not in init_screen:
-                raise AssertionError("manual init did not preview the retained custom pool")
+            if "ctrl+o summary" not in init_screen or "custom pool retained [manual/keep]" not in init_screen:
+                raise AssertionError("manual init did not reveal the late retained-pool diff before selection")
             if "save bifrost setup?" in init_screen:
                 raise AssertionError("manual init showed obsolete fresh-setup confirmation copy")
             if "choose classifier" in init_screen or "select classifier" in init_screen:
@@ -935,8 +935,8 @@ def main() -> int:
         (
             "init-refresh",
             True,
-            # Close the comparison, choose Keep, then close the final preview.
-            [(0.5, "/bifrost init\r"), (2.0, "\x1b"), (0.5, "\r"), (0.5, "\x1b")],
+            # Expand full diff and page through it before confirming default Keep; then close saved notice.
+            [(0.5, "/bifrost init\r"), (1.0, "\x0f"), (0.5, "\x1b[6~"), (0.5, "\x1b[6~"), (0.5, "\r"), (0.5, "\x1b")],
             {
                 "schemaVersion": 2,
                 "strategy": "first",
