@@ -63,20 +63,6 @@ Optional classifiers, including TypeSafe/Jev and Pi-native, choose a tier. They 
 - Adaptive routing may trade prompt-cache locality for per-turn task fit. It cannot guarantee better results, lower cost, lower latency, or cache savings.
 - `/bifrost pin` is a session-local hard lock. Use it when continuity or one exact model matters more than per-message routing. A tier name at the start of a message is ignored while pinned.
 
-## Where each document belongs
-
-This repository keeps user documentation together with planning files, research files, and agent process files. This table tells you how to read each type of file.
-
-| Kind | Where | How to read it |
-|------|-------|----------------|
-| Maintained user guide | this directory, [`README.md`](../../README.md), [`examples/`](../../examples/) | The text gives the current behavior. If the text and the source disagree, the source is correct |
-| Product and acceptance contracts | [`PRODUCT.md`](../../PRODUCT.md), [`PRD.md`](../../PRD.md), [`RELEASE-PLAN.md`](../../RELEASE-PLAN.md), [`docs/product-philosophy.md`](../product-philosophy.md) | The text gives the intent and the required limits. It is not evidence that a change is present |
-| Accepted decisions | [`docs/adr/`](../adr/) | The text gives the constraints and the reasons. A proposed ADR does not permit an implementation. The ADR numbers are not contiguous, and a missing number has no file in this repository |
-| Historical records | [`docs/prd-delivery-plan.md`](../prd-delivery-plan.md), [`docs/reliability-v1-review.md`](../reliability-v1-review.md), [`docs/verification-campaign.md`](../verification-campaign.md), [`docs/research/`](../research/), [`docs/superpowers/`](../superpowers/) | The text gives a plan, a measurement, or a review for one point in time. Do not read it as a current guarantee |
-| Maintainer and agent process | [`docs/dev-tooling.md`](../dev-tooling.md), [`docs/testing-coverage.md`](../testing-coverage.md), [`docs/agent-governance.md`](../agent-governance.md), [`docs/merge-controller.md`](../merge-controller.md), [`docs/tracker-workflow.md`](../tracker-workflow.md) | The text gives a procedure. The result depends on the live environment. As a result, a checkout cannot show that the procedure succeeded |
-
-Local agent artifacts live in `.pi/`, `.plan/`, and `.pi-subagents/`. These paths are in `.gitignore`. As a result, they are not content of this repository, and a bug report or an audit snapshot in those paths is not a current statement about the source.
-
 ## More references
 
 - [README](../../README.md)

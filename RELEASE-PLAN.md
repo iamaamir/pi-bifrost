@@ -1,6 +1,6 @@
 # Release execution ledger
 
-This ledger records dated checkpoints. Read the newest entry first. An entry describes the revision that it names, and no other revision. An entry does not show that the current `main` passes a check. A pass for one revision needs the manifest from `npm run verify:release` for the same revision.
+Each entry describes the revision that it names, not the current `main`.
 
 ## V2 regression status (13 November 2026)
 
