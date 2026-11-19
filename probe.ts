@@ -252,12 +252,14 @@ export async function runProbe(
   // Use minimum of requested concurrency and total models, but at least 1
   const effectiveConcurrency = Math.max(1, Math.min(concurrency, total));
   const workers = Array.from({ length: effectiveConcurrency }, () => worker());
-  try {
-    await Promise.all(workers);
-  } catch (error) {
+  const workerOutcomes = await Promise.allSettled(workers);
+  const failedWorker = workerOutcomes.find(
+    (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected",
+  );
+  if (failedWorker) {
     const partial = results.filter((result): result is ProbeResult => result !== undefined);
     reportProbeCompletion(runId, partial, catalog.length, { cache: "not_written", cacheReason: "worker_failed" });
-    throw error;
+    throw failedWorker.reason;
   }
 
   if (signal?.aborted) {
