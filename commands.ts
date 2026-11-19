@@ -4576,7 +4576,7 @@ function persistBootstrapConfig(
     logImportant(
       ctx,
       "Classifier update failed",
-      "Could not safely save the classifier and starter model setup. Existing files were preserved.",
+      "Could not confirm whether the classifier and starter setup was saved. Run `/bifrost config reconcile --recover` to check or finish any interrupted save before retrying.",
       "error",
     );
     return false;
