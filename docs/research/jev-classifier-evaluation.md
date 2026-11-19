@@ -495,5 +495,5 @@ Related Bifrost documents:
 - [ADR 0007 — Explainable decision traces](../adr/0007-decision-traces.md)
 - [ADR 0010 — Classifier confidence](../adr/0010-classifier-confidence.md)
 - [ADR 0011 — Routing scenario corpus](../adr/0011-routing-scenario-corpus.md)
-- [Classifier backends](../guide/classifiers.md) — current timeout, fallback, and backend boundaries (the planned classifier-reliability ADR was never published)
-- [Configuration](../guide/configuration.md) — current config primitives (the planned config-primitives ADR was never published)
+- [Classifier backends](../guide/classifiers.md) gives the current timeout, fallback, and backend limits. The planned classifier-reliability ADR was never published.
+- [Configuration](../guide/configuration.md) gives the current configuration primitives. The planned configuration-primitives ADR was never published.

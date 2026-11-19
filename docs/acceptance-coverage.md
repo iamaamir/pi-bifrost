@@ -1,6 +1,10 @@
 # Acceptance coverage map
 
-**Point-in-time evidence map, not a status report.** This table records which acceptance case or test is meant to cover each requirement and where that coverage stops. It says nothing about whether any candidate passes: a row that reads `covered` is a claim about the existence of a named check, not a result. Last aligned with source on 2026-11-19. Only the ordered `evidence.json` for the candidate under review, together with the `npm run verify:release` manifest for that exact revision, can establish a pass. Rows can go stale as tests and scopes change; re-derive them before quoting this file as current evidence.
+This table is a record for one point in time. It is not a status report.
+
+The table shows the acceptance case or the test that must cover each requirement. It also shows the limit of that coverage. The table does not show if a candidate passes. The value `covered` in a row shows only that a named test exists. It is not a result. The table agrees with the source on 2026-11-19.
+
+Two items can show a pass: the ordered `evidence.json` for the candidate under review, and the `npm run verify:release` manifest for the same revision. Tests and limits change. As a result, a row can become stale. Make sure that a row is current before you use it as evidence.
 
 This map catalogs evidence boundaries for PRD.md requirements R01–R17. A covered status means the acceptance command has a named case that checks that boundary. It does not mean the current candidate passed; read the ordered result for the candidate under review in screenshots/acceptance/<runId>/evidence.json.
 
