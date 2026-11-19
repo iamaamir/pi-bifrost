@@ -1973,7 +1973,11 @@ describe("bifrost command ui", () => {
       const review = calls.find((call) => call.kind === "preview")?.lines?.join("\n") ?? "";
       for (const [key, value] of Object.entries(saved)) {
         if (key === "models" || key === "$schema") continue;
-        assert.ok(review.includes(`${key}  ${JSON.stringify(value)}`), `preview omitted saved setting ${key}`);
+        const rendered = JSON.stringify(value, null, 2).split("\n");
+        const settingPreview = rendered.length === 1
+          ? `${key}  ${rendered[0]}`
+          : `${key}:\n${rendered.map((line) => `      ${line}`).join("\n")}`;
+        assert.ok(review.includes(settingPreview), `preview omitted saved setting ${key}`);
       }
       const picker = calls.find((call) => call.kind === "select" && call.title === "Bifrost · Update project model pools?");
       assert.ok(picker);

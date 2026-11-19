@@ -1,27 +1,26 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import pty
 import re
 import select
-import fcntl
-import termios
-import struct
 import signal
-import shutil
+import struct
 import subprocess
 import tempfile
+import termios
 import threading
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "screenshots" / "ui-smoke"
@@ -379,10 +378,8 @@ def load_font(size: int) -> Any:
     _, _, ImageFont = pillow()
     for item in candidates:
         if Path(item).exists():
-            try:
+            with suppress(OSError, ValueError):
                 return ImageFont.truetype(item, size=size)
-            except Exception:
-                pass
     return ImageFont.load_default()
 
 
@@ -836,21 +833,14 @@ def capture(
         return png_path
     finally:
         stop.set()
-        try:
+        with suppress(ProcessLookupError):
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
+        with suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            try:
+            with suppress(ProcessLookupError):
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        try:
+        with suppress(OSError):
             os.close(master)
-        except OSError:
-            pass
         tmp.cleanup()
 
 
@@ -870,7 +860,7 @@ def main() -> int:
             "init-refresh",
             True,
             # Expand full diff; PgDn scrolls one row, so page through late pool/action details before Keep.
-            [(0.5, "/bifrost init\r"), (1.0, "\x0f"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.5, "\r"), (0.5, "\x1b")],
+            [(0.5, "/bifrost init\r"), (1.0, "\x0f"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.5, "\r"), (0.5, "\x1b")],
             {
                 "schemaVersion": 2,
                 "strategy": "first",

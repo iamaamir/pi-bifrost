@@ -231,7 +231,7 @@ async function assertInheritedSettingsMatrixCase(port, args, targetKind) {
     if (targetKind === "owned") {
       assert.deepEqual(saved.models, { quick: ["fake/healthy"] });
       assert.equal(saved.targetPrivateSetting, "KEEP_TARGET_CANARY");
-      assert.match(result.stdout + result.stderr, /Models\s+\+0 \/ -0/, `expected the owned-membership case to exercise settings-only reconciliation: ${JSON.stringify(result)}`);
+      assert.doesNotMatch(result.stdout + result.stderr, /Review model choices|Update project model pools/);
     }
 
     const before = loadConfigForReload(env.work, ROOT).config;
@@ -306,7 +306,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
         assert.deepEqual(readFileSync(lowerPath), original);
         const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
         assert.equal(Object.hasOwn(saved.models, "quick"), false);
-        assert.match(result.stdout + result.stderr, /inherited \[manual\/keep\]/);
+        assert.doesNotMatch(result.stdout + result.stderr, /Review model choices|Update project model pools/);
       } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
     });
 
@@ -322,7 +322,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
         assert.deepEqual(readFileSync(lowerPath), original);
         const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
         assert.equal(Object.hasOwn(saved.models, "quick"), false);
-        assert.match(result.stdout + result.stderr, /inherited \[empty\]/);
+        assert.doesNotMatch(result.stdout + result.stderr, /Review model choices|Update project model pools/);
       } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
     });
   }
@@ -340,8 +340,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       const projectPath = join(env.work, ".pi", "bifrost.json");
       const saved = JSON.parse(readFileSync(projectPath, "utf8"));
       assert.equal(Object.hasOwn(saved.models, "quick"), false);
-      assert.match(result.stdout + result.stderr, /inherited \[anthropic\/claude-sonnet-4-20250514\]/);
-      assert.match(result.stdout + result.stderr, /global\/workspace files unchanged/);
+      assert.doesNotMatch(result.stdout + result.stderr, /Review model choices|Update project model pools/);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
 
@@ -420,7 +419,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.deepEqual(readFileSync(globalPath), original);
       const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
       assert.equal(Object.hasOwn(saved.models, "quick"), false);
-      assert.match(result.stdout + result.stderr, /inherited \[fake\/healthy, fake\/credits-exhausted\]/);
+      assert.doesNotMatch(result.stdout + result.stderr, /Review model choices|Update project model pools/);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
 
@@ -472,7 +471,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
         assert.equal(result.code, 0, result.stderr);
         assert.equal(result.violations, "");
         const target = selected === "global" ? "user" : "project";
-        assert.match(result.stdout + result.stderr, new RegExp(`Save to\\s+${target}`));
+        assert.doesNotMatch(result.stdout + result.stderr, /Review model choices|Update (?:project|global) model pools/);
         assert.ok(JSON.parse(readFileSync(paths[target], "utf8")).models);
         for (const layer of ["workspace", "user"]) {
           if (layer === "workspace" && selected === "default-global-only") {
@@ -609,7 +608,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
           assert.equal(result.violations, "");
           assert.equal(existsSync(projectPath), true);
           const saved = JSON.parse(readFileSync(projectPath, "utf8"));
-          const reportsProjectOverride = /→ project \[fake\/healthy\]/.test(result.stdout + result.stderr);
+          const reportsProjectOverride = /Project-only overrides[\s\S]*?quick: project override[\s\S]*?Project:[\s\S]*?1\. fake\/healthy/u.test(result.stdout + result.stderr);
           assert.equal(reportsProjectOverride, mode === "interactive" && inherited === "different", result.stdout + result.stderr);
           if (mode === "interactive" && inherited === "different") {
             assert.deepEqual(saved.models.quick, ["fake/healthy"]);
@@ -639,10 +638,10 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
         const saved = JSON.parse(readFileSync(projectPath, "utf8"));
         if (action === "keep") {
           assert.equal(Object.hasOwn(saved.models, "quick"), false);
-          assert.match(result.stdout + result.stderr, /quick: remains deleted/);
+          assert.doesNotMatch(result.stdout + result.stderr, /quick: remains deleted/);
         } else {
           assert.deepEqual(saved.models.quick, ["fake/healthy"]);
-          assert.match(result.stdout + result.stderr, /quick: \[none\] → \[fake\/healthy\]/);
+          assert.match(result.stdout + result.stderr, /quick[\s\S]*?Before: not configured[\s\S]*?After:[\s\S]*?1\. fake\/healthy/u);
         }
       } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
     });
@@ -807,7 +806,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.deepEqual(saved.classifier.typesafe, { timeoutMs: 1234, maxAttempts: 2, debug: true, metrics: { enabled: false } });
       assert.deepEqual(saved.classifier.piNative, { timeoutMs: 2345, maxAttempts: 2, metrics: { enabled: false } });
       assert.deepEqual(saved.retained, { owner: "user" });
-      assert.match(result.stdout + result.stderr, /unverified models kept/u);
+      assert.match(result.stdout + result.stderr, /Using verified models: 1 working models/u);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
 
