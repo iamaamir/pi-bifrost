@@ -1683,6 +1683,32 @@ describe("bifrost command ui", () => {
     }
   });
 
+  it("does not report a journal it could not check as absent", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-commit-journal-unknown-"));
+    try {
+      const configPath = join(tempDir, "bifrost.json");
+      const nextConfigBytes = Buffer.from(JSON.stringify({ models: { quick: ["fixture/chat"] } }, null, 2) + "\n", "utf8");
+      writeFileSync(configPath, nextConfigBytes);
+      const message = describeInitCommitFailure({
+        locked: false,
+        receiptOnly: false,
+        configPath,
+        nextConfigBytes,
+        // A path under a regular file fails lstat with ENOTDIR, not ENOENT.
+        journalPath: join(configPath, "bifrost-reconcile.journal"),
+        target: "project (.pi/bifrost.json)",
+        recoveryCommand: "/bifrost config reconcile --recover",
+      });
+      assert.doesNotMatch(message, /no reconciliation journal was written/);
+      assert.doesNotMatch(message, /has nothing to recover/);
+      assert.match(message, /could not check whether a reconciliation journal is pending/);
+      assert.match(message, /reports nothing to recover when no journal exists/);
+      assert.match(message, /\/bifrost config reconcile --recover/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not claim preservation when a pending journal means the update may be installed", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-commit-preserved-journal-"));
     try {
