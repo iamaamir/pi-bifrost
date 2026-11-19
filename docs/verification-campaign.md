@@ -1,10 +1,10 @@
 # Bounded verification campaigns
 
-Issue #85. The `Verification` workflow gains an opt-in
-expanded campaign, a pinned Pi compatibility matrix, and an opt-in mutation
-experiment, all using the existing workflow path. No standalone workflow was
-added, and all seven release gates plus the proposed-merge report publisher
-remain unconditional on ordinary PR, push, and default manual dispatch.
+Issue #85. The `Verification` workflow gains an opt-in expanded campaign and a
+pinned Pi compatibility matrix. Both use the existing workflow path. No separate
+workflow was added. All seven release gates and the proposed-merge report
+publisher stay unconditional on an ordinary PR, push, or default manual
+dispatch.
 
 ## How to run
 
@@ -18,9 +18,8 @@ gh workflow run verification.yml --ref integration/completion-verification \
   -f campaign_seed=1729
 ```
 
-Add `-f mutation=true` to also run the existing Stryker experiment. `campaign`
-defaults to `default`, so a normal `Run workflow` click keeps only the release
-gates.
+`campaign` defaults to `default`, so a normal `Run workflow` click keeps only the
+release gates.
 
 `campaign_repeats` is hard-bounded to 1-5 and validated by
 `scripts/campaign-run.mjs --validate-only` before any attempt starts.
@@ -47,8 +46,8 @@ active cron today, and this branch does not claim one.
 
 Mutation measurement is not a campaign attempt and not part of this workflow. It
 runs nightly in [`.github/workflows/mutation.yml`](../.github/workflows/mutation.yml)
-as a scheduled measurement with one matrix job per module; see
-[`mutation-testing.md`](mutation-testing.md).
+as a scheduled measurement. The measurement starts one matrix job for each module.
+See [`mutation-testing.md`](mutation-testing.md).
 
 ## fast-check seeds
 
@@ -80,10 +79,10 @@ not because configured seeds change them.
 
 ## Mutation measurement
 
-Separate workflow, separate trigger, separate report. See
-[`mutation-testing.md`](mutation-testing.md) for the target set, the derived
-binding, the two-score rule, and why the nightly fails on an unusable run rather
-than on a low score.
+The measurement uses a different workflow, trigger, and report. See
+[`mutation-testing.md`](mutation-testing.md). That document gives the target set,
+the derived binding, and the two-score rule. It also gives the reason the nightly
+fails on an unusable run, not on a low score.
 
 ## Compatibility claims
 
@@ -95,13 +94,13 @@ broad compatibility claim beyond those executed checks.
 
 ## Bounds and measured cost
 
-Campaign job timeout 30 minutes, Pi compatibility 20 minutes, mutation 60.
-Repeat count is hard-capped at 5. Measured focused additions: a three-attempt
-properties run takes about five seconds per attempt, the integration target
-inherits the median integration gate of 43 seconds times 3 repeats, so a full
-expanded campaign is roughly three minutes plus install and overhead. Baseline
-median gate costs from `bifrost-ci-cost-inventory-verified.json`: unit 22 s,
-integration 43 s, pinned Pi UI 201 s, pinned Pi reliability UI 49 s.
+Campaign job timeout 30 minutes. Pi compatibility 20 minutes. Repeat count is
+hard-capped at 5. Measured focused additions: a three-attempt properties run takes
+about five seconds per attempt. The integration target inherits the median
+integration gate of 43 seconds times 3 repeats, so a full expanded campaign is
+roughly three minutes plus install and overhead. Baseline median gate costs from
+`bifrost-ci-cost-inventory-verified.json`: unit 22 s, integration 43 s, pinned Pi
+UI 201 s, pinned Pi reliability UI 49 s.
 
 ## Evidence and replay
 
