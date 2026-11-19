@@ -101,7 +101,7 @@ Keys are omitted when they do not apply, so test for the key itself rather than 
 |-----|---------|
 | `ok` | `true` when a route was resolved, `false` when it was not |
 | `prompt` | The prompt that was classified |
-| `source` | Where the tier came from: `cache`, `classifier`, `regex`, `inline`, or `fallback`. `cache` means the prompt was already classified in this session, so previewing it twice reports `cache` the second time; `inline` means a tier named in the prompt as an inline override |
+| `source` | Where the tier came from: `cache`, `classifier`, `regex`, or `fallback`. `cache` means the prompt was already classified in this session, so previewing it twice reports `cache` the second time. Preview does not read an inline tier name, so `inline` never appears here |
 | `backend`, `model`, `confidence` | Accepted classifier judgment; absent when no classifier judgment was accepted |
 | `classifierAttempt` | Direct classifier attempt detail: `backend`, `outcome`, `fallbackKind`, plus `fallbackModel` when one is named, `circuitOpenUntil` when the classifier circuit is open, `tier` (the tier the backend proposed, which a rejected judgment still names), `model` (the resolved classifier model, when one is known) and the exact `confidence` when the backend reported a valid value. Present even when the attempt was rejected, so a rejected value can be compared with `classifier.minConfidence`. It never implies the judgment was accepted |
 | `tier`, `strategy` | The tier that resolved and the strategy used for it |
