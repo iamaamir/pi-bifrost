@@ -628,10 +628,13 @@ describe("config reconciliation command router", () => {
         ctx.hasUI = true;
         ctx.ui = { confirm: async () => true, notify: () => {} };
 
-        await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+        const before = initialConfig === undefined ? undefined : fs.readFileSync(configPath);
+        const output = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
 
-        const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
-        assert.equal(saved.models?.general, undefined, "stale inventory must not save project override");
+        assert.ok(output.length > 0, "init reports refresh state");
+        if (initialConfig === undefined) assert.equal(fs.existsSync(configPath), false);
+        else assert.deepEqual(fs.readFileSync(configPath), before, "blocked replacement must not save other settings");
+        assert.equal(fs.existsSync(join(configDir, "bifrost-reconcile-ownership.json")), false);
         assert.deepEqual(loadConfigForReload(cwd, h.state.extensionDir).config.models?.general, ["openai/old-model"]);
       });
     });
@@ -647,7 +650,8 @@ describe("config reconciliation command router", () => {
       const configDir = join(cwd, ".pi");
       fs.mkdirSync(configDir, { recursive: true });
       const configPath = join(configDir, "bifrost.json");
-      fs.writeFileSync(configPath, "{}\n");
+      const configBytes = Buffer.from("{}\n");
+      fs.writeFileSync(configPath, configBytes);
       writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
         { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
       ]);
@@ -659,10 +663,11 @@ describe("config reconciliation command router", () => {
       ctx.hasUI = true;
       ctx.ui = { confirm: async () => true, notify: () => {} };
 
-      await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+      const output = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
 
-      const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
-      assert.equal(saved.models?.general, undefined, "absent provider cannot authorize inherited removal");
+      assert.ok(output.length > 0, "init reports refresh state");
+      assert.deepEqual(fs.readFileSync(configPath), configBytes);
+      assert.equal(fs.existsSync(join(configDir, "bifrost-reconcile-ownership.json")), false);
       assert.deepEqual(loadConfigForReload(cwd, h.state.extensionDir).config.models?.general, ["missing-provider/old-model"]);
     });
   });
@@ -682,7 +687,10 @@ describe("config reconciliation command router", () => {
       writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
         { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
       ]);
-      const h = makeHarness({ models: [makeModel("openai", "new-model", 1, 1)] });
+      const h = makeHarness({
+        models: [makeModel("openai", "new-model", 1, 1)],
+        evidence: { openai: { status: "complete", refreshedAt: Date.now() } },
+      });
       const ctx = h.ctx as unknown as {
         hasUI: boolean;
         ui: { confirm: () => Promise<boolean>; notify: () => void };
