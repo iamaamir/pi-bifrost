@@ -526,7 +526,8 @@ export function buildInitActionPlan(input: {
       Object.entries(entry.modelsByTier).filter(([tier]) => Object.hasOwn(before, tier) || !input.inheritedTiers.has(tier)),
     ) }));
     const keep = buildInitMembershipPlan(source, safeInventories, input.validateMergedConfig);
-    if (keep.status === "blocked" || (keep.reason && keep.reason !== "no_changes")) return blocked(keep.reason ?? "source_invalid");
+    if (keep.reason && keep.reason !== "no_changes") return blocked(keep.reason);
+    if (keep.status === "blocked" && !keep.reason) return blocked("source_invalid");
     warnings = keep.warnings;
     try { candidate = keep.transaction ? assertPlainJsonObject(keep.transaction.nextConfigBytes) : original; }
     catch { return blocked("source_invalid"); }
