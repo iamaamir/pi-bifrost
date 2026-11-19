@@ -13,14 +13,11 @@ import {
   fstatSync,
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   openSync,
   readFileSync,
   readSync,
-  rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   loadRuntimeState,
@@ -426,48 +423,17 @@ function uiOutput(ctx: ExtensionContext, lines: string[]) {
   }
 }
 
-const MAX_INIT_INLINE_PREVIEW_CHARS = 3_000;
-
-function compactInitPreview(lines: readonly string[], detailsPath?: string): string[] {
-  const summary = lines.filter((line, index) =>
-    index === 0 || /^(  (?:✓|\d+ catalog|Models\s|Classifier\s|Save to\s|Defaults\s|! |⚠|Global\/workspace|Unlisted|Settings added|Keep my models:|Merge new models:|Bifrost defaults:))/.test(line),
-  );
-  const omitted = lines.length - summary.length;
-  return [
-    ...summary.map((line) => line.startsWith("  Classifier")
-      ? line.replace(/\([^)]*\)/, "(model details in full file)")
-      : line),
-    `  ${omitted} detail line(s) omitted.`,
-    ...(detailsPath
-      ? [`  Full ordered details: ${detailsPath}`]
-      : ["  Full details unavailable; private output failed."]),
-  ];
-}
-
-function writeInitPreviewFile(lines: readonly string[]): string | undefined {
-  let directory: string | undefined;
-  try {
-    directory = mkdtempSync(join(tmpdir(), "bifrost-init-preview-"));
-    const path = join(directory, "preview.txt");
-    writeFileSync(path, `${lines.join("\n")}\n`, { flag: "wx", mode: 0o600 });
-    return path;
-  } catch {
-    if (directory) {
-      try { rmSync(directory, { recursive: true, force: true }); } catch { /* best effort cleanup */ }
-    }
-    return undefined;
-  }
-}
-
-function renderInitPreview(ctx: ExtensionContext, lines: readonly string[]): boolean {
-  if (ctx.mode !== "tui" || !ctx.hasUI || lines.join("\n").length <= MAX_INIT_INLINE_PREVIEW_CHARS) {
+async function renderInitPreview(ctx: ExtensionContext, lines: readonly string[]): Promise<boolean> {
+  if (ctx.mode !== "tui" || !ctx.hasUI) {
     uiOutput(ctx, [...lines]);
     return true;
   }
 
-  const detailsPath = writeInitPreviewFile(lines);
-  uiOutput(ctx, compactInitPreview(lines, detailsPath));
-  return detailsPath !== undefined;
+  try {
+    return await showBifrostResult(ctx, "Bifrost · Setup preview", lines);
+  } catch {
+    return false;
+  }
 }
 
 async function uiResult(ctx: ExtensionContext, title: string, lines: string[]): Promise<void> {
@@ -2151,13 +2117,13 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           tiers: candidate.tiers,
         }).map((line) => `  ${line.trimStart()}`));
       }
-      if (!renderInitPreview(ctx, compareLines)) {
+      if (!await renderInitPreview(ctx, compareLines)) {
         clearBifrostWidgets(ctx);
         reportInitOutcome(
           ctx,
           "blocked",
-          "Nothing was saved; full model details could not be written to a private file.",
-          "Check temporary-directory permissions and available storage, then rerun /bifrost init.",
+          "Nothing was saved; the complete setup preview could not be displayed.",
+          "Rerun /bifrost init in Pi's interactive terminal to review the full preview.",
           "error",
         );
         return;
@@ -2477,15 +2443,15 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       : []),
   ];
 
-  // Replace probing UI with bounded setup preview and scrollable full details when needed.
+  // The scrollable preview must be dismissed before the save approval appears.
   if (ctx.mode === "tui") ctx.ui.setWidget("bifrost-probe", undefined);
-  if (!renderInitPreview(ctx, previewLines)) {
+  if (!await renderInitPreview(ctx, previewLines)) {
     clearBifrostWidgets(ctx);
     reportInitOutcome(
       ctx,
       "blocked",
-      "Nothing was saved; full model details could not be written to a private file.",
-      "Check temporary-directory permissions and available storage, then rerun /bifrost init.",
+      "Nothing was saved; the complete setup preview could not be displayed.",
+      "Rerun /bifrost init in Pi's interactive terminal to review the full preview.",
       "error",
     );
     return;
