@@ -4,7 +4,7 @@ How Bifrost's GitHub issues, sub-issues, dependencies, milestones and project bo
 
 This document gives a procedure. It is not a record of a completed run.
 
-Each command in this document operated against `iamaamir/pi-bifrost` at the time of writing. The result of a command depends on the live GitHub state, the permissions of the repository, the behavior of `gh`, and the API limits. As a result, the files in the repository cannot show that a command still operates correctly. Operate the command again and read the object before you use its result.
+The author used each command in this document against `iamaamir/pi-bifrost` when the document was written. The result of a command depends on the live GitHub state, the permissions of the repository, the behavior of `gh`, and the API limits. As a result, the files in the repository cannot show that a command still operates correctly. Operate the command again and read the object before you use its result.
 
 `roadmap-next.md` stays out of this repository on purpose (see [Write](#write) and the rules for citations that follow). As a result, a checkout does not contain it.
 
