@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, buildTracePreview, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, renderTracePreview, resolveTierDisplay, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
+import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, buildTracePreview, createCommandRouter, describeInitCommitFailure, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, renderTracePreview, resolveTierDisplay, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
 import { makeModel, makePiClassifierModel, makeRegistry } from "./helpers.ts";
 import { buildRouteDecisionSummary, createPipeline } from "../classification-pipeline.ts";
 import { DEFAULT_THRESHOLD, lookupCache, touchCacheEntry, updateCache, type CacheEntry } from "../cache.ts";
@@ -1604,6 +1604,90 @@ describe("bifrost command ui", () => {
       process.chdir(previousCwd);
       if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a replaced init config instead of claiming the files were preserved", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-commit-failure-"));
+    try {
+      const configPath = join(tempDir, "bifrost.json");
+      const nextConfigBytes = Buffer.from(JSON.stringify({ models: { quick: ["fixture/chat"] } }, null, 2) + "\n", "utf8");
+      writeFileSync(configPath, nextConfigBytes);
+      const message = describeInitCommitFailure({
+        locked: false,
+        receiptOnly: false,
+        configPath,
+        nextConfigBytes,
+        target: "project (.pi/bifrost.json)",
+        recoveryCommand: "/bifrost config reconcile --recover",
+      });
+      assert.match(message, /already holds the new memberships/);
+      assert.match(message, /a reconciliation journal is pending/);
+      assert.match(message, /\/bifrost config reconcile --recover/);
+      assert.doesNotMatch(message, /existing files were preserved/);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the preserved message when the config does not hold the new memberships", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-commit-preserved-"));
+    try {
+      const configPath = join(tempDir, "bifrost.json");
+      const nextConfigBytes = Buffer.from(JSON.stringify({ models: { quick: ["fixture/chat"] } }, null, 2) + "\n", "utf8");
+      writeFileSync(configPath, JSON.stringify({ models: { quick: ["fixture/other"] } }, null, 2) + "\n");
+      const message = describeInitCommitFailure({
+        locked: false,
+        receiptOnly: false,
+        configPath,
+        nextConfigBytes,
+        target: "project (.pi/bifrost.json)",
+        recoveryCommand: "/bifrost config reconcile --recover",
+      });
+      assert.equal(message, "Init could not safely commit the reviewed membership update; existing files were preserved.");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not claim a replaced config when init wrote only the ownership receipt", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-commit-receipt-only-"));
+    try {
+      const configPath = join(tempDir, "bifrost.json");
+      const nextConfigBytes = Buffer.from(JSON.stringify({ models: { quick: ["fixture/chat"] } }, null, 2) + "\n", "utf8");
+      writeFileSync(configPath, nextConfigBytes);
+      const message = describeInitCommitFailure({
+        locked: false,
+        receiptOnly: true,
+        configPath,
+        nextConfigBytes,
+        target: "project (.pi/bifrost.json)",
+        recoveryCommand: "/bifrost config reconcile --recover",
+      });
+      assert.equal(message, "Init could not safely commit the reviewed membership update; existing files were preserved.");
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a lock failure before it inspects the config", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-commit-locked-"));
+    try {
+      const configPath = join(tempDir, "bifrost.json");
+      const nextConfigBytes = Buffer.from("{}\n", "utf8");
+      writeFileSync(configPath, nextConfigBytes);
+      const message = describeInitCommitFailure({
+        locked: true,
+        receiptOnly: false,
+        configPath,
+        nextConfigBytes,
+        target: "project (.pi/bifrost.json)",
+        recoveryCommand: "/bifrost config reconcile --recover",
+      });
+      assert.match(message, /could not acquire reconciliation locks/);
+      assert.doesNotMatch(message, /already holds the new memberships/);
+    } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
