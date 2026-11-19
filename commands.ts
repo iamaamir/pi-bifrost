@@ -1849,14 +1849,31 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     }
   }
   if (selectedSource === "project" && !hasConfiguredTiers) {
+    const availableProviders = new Set(available.map((model) => model.provider));
+    const inheritedPoolHasCompleteInventory = (pool: readonly string[]) => pool.every((key) => {
+      const separator = key.indexOf("/");
+      const provider = key.slice(0, separator);
+      const evidence = state.registryInventoryEvidence?.[provider];
+      if (!provider || separator < 1 || !availableProviders.has(provider) || state.forceRegistryRefresh) return false;
+      let authConfigured: boolean | undefined;
+      try {
+        authConfigured = ctx.modelRegistry.getProviderAuthStatus(provider)?.configured;
+      } catch {
+        authConfigured = undefined;
+      }
+      const now = Date.now();
+      return authConfigured === true && !authFailedProbeProviders.has(provider) &&
+        evidence?.status === "complete" && now >= evidence.refreshedAt &&
+        (now - evidence.refreshedAt < REGISTRY_REFRESH_TTL_MS ||
+          (refreshRemainsCurrent && initRefreshReceipt?.evidence.get(provider) === evidence));
+    });
     for (const [tier, inherited] of inheritedEffective) {
       const generated = models[tier];
-      if (
-        generated &&
-        (writeWithoutPrompt ||
-          (!hasDeletedTierIntent && generated.length === inherited.pool.length &&
-            generated.every((key, index) => key === inherited.pool[index])))
-      ) {
+      if (!generated) continue;
+      const identical = generated.length === inherited.pool.length &&
+        generated.every((key, index) => key === inherited.pool[index]);
+      if (writeWithoutPrompt || (identical && !hasDeletedTierIntent) ||
+        (!identical && !inheritedPoolHasCompleteInventory(inherited.pool))) {
         delete models[tier];
       }
     }
@@ -2009,7 +2026,34 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       if (probeLoaded && !probeVerified.has(key)) continue;
       byTier[tier] = [...(byTier[tier] ?? []), key];
     }
-    const inventories = [...byProvider.entries()].map(([provider, modelsByTier]) => {
+    const inventoryProviders = new Set(byProvider.keys());
+    const availableProviders = new Set(available.map((model) => model.provider));
+    const affectedPoolProviders = new Set<string>();
+    const addPoolProviders = (pool: readonly string[] | undefined) => {
+      for (const key of pool ?? []) {
+        const separator = key.indexOf("/");
+        if (separator > 0 && separator < key.length - 1 && !key.slice(0, separator).includes("/")) {
+          affectedPoolProviders.add(key.slice(0, separator));
+        }
+      }
+    };
+    for (const [tier, inherited] of inheritedEffective) {
+      if (models[tier] && (models[tier].length !== inherited.pool.length ||
+        models[tier].some((key, index) => key !== inherited.pool[index]))) {
+        addPoolProviders(inherited.pool);
+      }
+    }
+    for (const [tier, entry] of Object.entries(ownership?.tiers ?? {})) {
+      if (entry.state === "generated" && models[tier]) {
+        const pool = sourceModels[tier];
+        addPoolProviders(typeof pool === "string" ? [pool] : Array.isArray(pool) ? pool : undefined);
+      }
+    }
+    for (const provider of affectedPoolProviders) {
+      if (!availableProviders.has(provider)) inventoryProviders.add(provider);
+    }
+    const inventories = [...inventoryProviders].map((provider) => {
+      const modelsByTier = byProvider.get(provider) ?? {};
       const evidence = state.registryInventoryEvidence?.[provider];
       let authConfigured: boolean | undefined;
       try {
@@ -2023,7 +2067,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         now >= evidence.refreshedAt &&
         (now - evidence.refreshedAt < REGISTRY_REFRESH_TTL_MS ||
           (refreshRemainsCurrent && initRefreshReceipt?.evidence.get(provider) === evidence));
-      const status = state.forceRegistryRefresh
+      const status = state.forceRegistryRefresh || !availableProviders.has(provider)
         ? ("stale" as const)
         : authConfigured === false || authFailedProbeProviders.has(provider)
           ? ("auth_failed" as const)
@@ -2032,16 +2076,6 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
             : ("stale" as const);
       return { provider, status, modelsByTier };
     });
-    if (inventories.some(({ status }) => status !== "complete")) {
-      reportInitOutcome(
-        ctx,
-        "paused",
-        "Nothing was saved; the model inventory is incomplete or stale.",
-        "Run /bifrost init -f to refresh the catalog, then retry.",
-        "warning",
-      );
-      return;
-    }
     const validateMergedConfig = (selected: ReconciliationConfigSource, bytes: Uint8Array) =>
       prospectiveConfigInstallable(selected, bytes, state);
     const actionPlans = new Map(
@@ -2065,17 +2099,37 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     const planSignature = (candidate: (typeof keepPlan)) =>
       `${candidate.status}:${candidate.reason ?? ""}:${candidate.transaction ? Buffer.from(candidate.transaction.nextConfigBytes).toString("base64") : ""}:${candidate.transaction ? Buffer.from(candidate.transaction.nextOwnershipBytes).toString("base64") : ""}`;
     const keepSignature = planSignature(keepPlan);
+    const actionHasCompleteRemovalInventory = (candidate: (typeof keepPlan)) =>
+      candidate.tiers.every(({ tier, before, after }) => {
+        const retained = new Set(after ?? []);
+        const inherited = inheritedEffective.get(tier)?.pool;
+        const changedInherited = inherited !== undefined && JSON.stringify(after) !== JSON.stringify(inherited);
+        const affected = changedInherited ? inherited : (before ?? []).filter((model) => !retained.has(model));
+        return affected.every((model) =>
+          inventories.find(({ provider }) => provider === model.slice(0, model.indexOf("/")))?.status === "complete");
+      });
     const availableActions = (["keep", "merge", "defaults"] as const).filter((action) => {
       const candidate = actionPlans.get(action)!;
       return (
+        actionHasCompleteRemovalInventory(candidate) && (
         (candidate.status === "ready" && candidate.transaction !== undefined) ||
         (candidate.status === "blocked" && candidate.reason === "no_changes")
-      ) && (action === "keep" || planSignature(candidate) !== keepSignature);
+      ) && (action === "keep" || planSignature(candidate) !== keepSignature));
     });
     const hasUnavailableAction = (["keep", "merge", "defaults"] as const).some((action) => {
       const candidate = actionPlans.get(action)!;
       return candidate.reason !== undefined && candidate.reason !== "no_changes";
     });
+    if (availableActions.length === 0) {
+      reportInitOutcome(
+        ctx,
+        "blocked",
+        "Nothing was saved; no model update is safe with the current inventory.",
+        "Refresh the provider catalog, then rerun /bifrost init.",
+        "warning",
+      );
+      return;
+    }
     const actionSelectionRequired =
       availableActions.length > 1 ||
       (availableActions.length === 1 && (availableActions[0] !== "keep" || hasUnavailableAction));
