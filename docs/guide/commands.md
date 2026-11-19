@@ -49,19 +49,21 @@ Init displays its save target. It saves to project `.pi/bifrost.json` by default
 
 ### Run init without a confirmation prompt
 
-Init writes the configuration only after one confirmation question. Pass `--write` to save the reviewed proposal without that question. In a terminal UI (TUI) and outside a TUI, `--write` saves to the target that init shows.
+Init writes the configuration only after one confirmation question. Pass `--write` to save the reviewed proposal without that question. In a terminal UI (TUI), in an RPC session, and in a session with no UI, `--write` saves to the target that init shows.
 
-Outside a TUI, without `--write`, init refreshes the catalog and shows the proposal. Then it stops before it writes and logs `run in TUI or use --write to persist`.
+A TUI and an RPC session can ask the question. RPC reports `hasUI` as true, so Pi sends the question to the client. A session that gives Bifrost no UI cannot ask. Without `--write`, that session refreshes the catalog and shows the proposal, then stops before it writes and logs `run in TUI or use --write to persist`.
 
 If you also want new probes or the global target, use the flags together:
 
 ```text
 /bifrost init --write
 /bifrost init -f --write
-/bifrost init -g --write
+/bifrost init --write -g
 ```
 
-`--write` removes only the question. The other guards stay in effect. Init does not write a proposal that shadows a handwritten inherited pool. A canceled catalog refresh writes nothing. A failed save changes no configuration.
+`--write` removes only the question. The other guards stay in effect. Init does not write a proposal that shadows a handwritten inherited pool. A canceled catalog refresh writes nothing.
+
+A failure before the commit keeps the files. A failure after Bifrost replaces the configuration file can leave a pending reconciliation journal. Run `/bifrost config reconcile --recover` to report or resume that transaction before you retry.
 
 If a proposed project pool would replace a handwritten pool in your global or workspace config with different models, init stops without saving. Pools that init generated before (tracked by an ownership receipt) and empty pools do not block init. Edit the existing source or review a workspace update with `/bifrost config reconcile --source workspace`; use `-g` when you intend to update the global source.
 
@@ -176,6 +178,8 @@ An explicit catalog refresh is network-enabled and can incur provider requests. 
 ```text
 /bifrost config reconcile --tier general --provider openai --refresh
 ```
+
+A preview or an apply needs `--tier` and `--provider` together. `--recover` takes neither, so do not combine it with `--tier` or `--provider`. A bare `/bifrost config reconcile` prints the usage line.
 
 Reconciliation updates only exact model keys owned by its sidecar. Existing manual entries are never adopted as generated membership. Incomplete, stale, or auth-unknown inventory cannot authorize removals. Apply uses a journal and keeps exact backups. `/bifrost config reconcile --recover` resumes or reports a pending journal. If a process crashed while holding a lock, recovery does not steal it: first verify that no Bifrost writer is active, inspect the exact lock files, and remove only locks proven stale before retrying recovery.
 
