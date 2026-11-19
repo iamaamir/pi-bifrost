@@ -1640,28 +1640,21 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     for (const result of results) {
       if (failureDetails(result)?.reason === "authentication_or_access") authFailedProbeProviders.add(result.provider);
     }
-    const initReliabilityStore = selectedSource === "user"
-      ? new ReliabilityStore({
-          cwd: initStateDirectory,
-          config: {
-            ...initConfig.reliability,
-            path: join(initStateDirectory, "bifrost-reliability.json"),
-          },
-        })
-      : state.reliabilityStore;
-    initReliabilityStore.applyOutcomes(
-      results.map((r) =>
-        r.status === "ok"
-          ? { model: `${r.provider}/${r.model}`, ok: true as const, source: "probe" }
-          : {
-              model: `${r.provider}/${r.model}`,
-              ok: false as const,
-              source: "probe",
-              reason: r.error ?? r.status,
-            },
-      ),
-      Date.now(),
-    );
+    if (selectedSource !== "user") {
+      state.reliabilityStore.applyOutcomes(
+        results.map((r) =>
+          r.status === "ok"
+            ? { model: `${r.provider}/${r.model}`, ok: true as const, source: "probe" }
+            : {
+                model: `${r.provider}/${r.model}`,
+                ok: false as const,
+                source: "probe",
+                reason: r.error ?? r.status,
+              },
+        ),
+        Date.now(),
+      );
+    }
 
     workingModels = results
       .filter((r) => r.status === "ok")
