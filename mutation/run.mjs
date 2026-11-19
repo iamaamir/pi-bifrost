@@ -18,7 +18,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { SHARDING, TARGETS, estimatedMinutes } from "./config.mjs";
 import { ROOT, bindingFor, measurementIdentity, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const options = {
     targets: [],
     concurrency: null,
@@ -352,24 +352,14 @@ export function isReportFor(entry, target) {
   return new RegExp(`^${escaped}\\.shard\\d+\\.json$`, "u").test(entry);
 }
 
-function main() {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.list) {
-    inventory();
-    return;
-  }
-  const targets = options.targets.length > 0 ? options.targets : targetNames();
-  const unknown = targets.filter((target) => !(target in TARGETS));
-  if (unknown.length > 0) {
-    console.error(`unknown target(s): ${unknown.join(", ")}; known: ${targetNames().join(", ")}`);
-    process.exitCode = 1;
-    return;
-  }
-  if (options.shards !== null && targets.length > 1) {
-    // A shard is a slice of one module; applying it to several would make the
-    // report names ambiguous.
-    throw new Error("--shards applies to exactly one target");
-  }
+/**
+ * Reject flag combinations that would store or claim the wrong measurement.
+ *
+ * Separate from `main` so the rules are testable without spawning a measurement:
+ * the runner needs `bun` on PATH, and a test that fails for a missing test runner
+ * proves nothing about argument validation.
+ */
+export function assertRunArguments(options, targets) {
   if (options.mutate !== null) {
     // A scope is one module's scope, and a range is not the whole module. If a
     // partial run were allowed to write `<target>.json`, a one-shard plan would
@@ -395,6 +385,27 @@ function main() {
   if (options.dryRun && options.report !== null) {
     throw new Error("--dry-run writes no report; --report would name a file that is never produced");
   }
+}
+
+function main() {
+  const options = parseArgs(process.argv.slice(2));
+  if (options.list) {
+    inventory();
+    return;
+  }
+  const targets = options.targets.length > 0 ? options.targets : targetNames();
+  const unknown = targets.filter((target) => !(target in TARGETS));
+  if (unknown.length > 0) {
+    console.error(`unknown target(s): ${unknown.join(", ")}; known: ${targetNames().join(", ")}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (options.shards !== null && targets.length > 1) {
+    // A shard is a slice of one module; applying it to several would make the
+    // report names ambiguous.
+    throw new Error("--shards applies to exactly one target");
+  }
+  assertRunArguments(options, targets);
 
   const reportsDir = join(ROOT, "reports", "mutation");
   // Validate the boundary before creating anything: creating directories through

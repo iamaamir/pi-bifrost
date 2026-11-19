@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isInsideReports, isReportFor, reportingRoot, reportsToClear, resolveReportPath, staleReportsFor, strykerArgs } from "../mutation/run.mjs";
+import { assertRunArguments, isInsideReports, isReportFor, parseArgs, reportingRoot, reportsToClear, resolveReportPath, staleReportsFor, strykerArgs } from "../mutation/run.mjs";
 import { ROOT, bindingExclusions, bindingFor, commandFor, directConsumers, exceedsBudget, identityDigest, identityInputs, legEstimateMinutes, lineCount, measurementIdentity, runnerFor, shardsFor, suggestedShards, targetConfig, targetInventory, targetNames } from "../mutation/targets.mjs";
 import {
   BUN_RUNNER_PLUGIN,
@@ -2196,22 +2196,35 @@ test("a scoped dry run can start without naming a report", () => {
   // A dry run saves nothing, so it has no artifact that could be mistaken for the
   // whole module. Requiring --report made it impossible: --report is refused for
   // dry runs, so `--mutate <range> --dry-run` could not run at all.
-  const run = (args) => {
+  //
+  // This asserts the *plan validation*, not a measurement: spawning the real
+  // runner needs `bun` on PATH, which an arbitrary CI job does not have, and a
+  // test that fails for a missing test runner proves nothing about arguments.
+  const plan = (args) => {
+    const options = parseArgs(args);
+    const targets = options.targets.length > 0 ? options.targets : targetNames();
     try {
-      return { status: 0, out: execFileSync(process.execPath, ["mutation/run.mjs", ...args], { cwd: ROOT, encoding: "utf8", stdio: "pipe" }) };
+      assertRunArguments(options, targets);
+      return { ok: true };
     } catch (error) {
-      return { status: error.status, err: String(error.stderr) };
+      return { ok: false, message: error.message };
     }
   };
-  const dry = run(["cache.ts", "--mutate", "cache.ts:1-50", "--dry-run"]);
-  assert.equal(dry.status, 0, dry.err);
-  assert.match(dry.out, /dry-run has been completed successfully/u, "it starts and finishes");
 
-  // A real scoped run still has to name its artifact: that is what stops a
-  // partial measurement being stored as the whole module.
-  const real = run(["cache.ts", "--mutate", "cache.ts:1-50", "--concurrency", "1"]);
-  assert.notEqual(real.status, 0);
-  assert.match(real.err, /name the artifact with --report/u);
+  assert.deepEqual(plan(["cache.ts", "--mutate", "cache.ts:1-50", "--dry-run"]), { ok: true });
+  assert.deepEqual(plan(["cache.ts", "--mutate", "cache.ts:1-50", "--dry-run", "--concurrency", "1"]), { ok: true });
+
+  // A real scoped run still has to name its artifact: that is what stops a partial
+  // measurement being stored as the whole module.
+  const real = plan(["cache.ts", "--mutate", "cache.ts:1-50"]);
+  assert.equal(real.ok, false);
+  assert.match(real.message, /name the artifact with --report/u);
+
+  // And a dry run still refuses --report, which is why the requirement above
+  // could never be satisfied.
+  const conflicting = plan(["cache.ts", "--dry-run", "--report", "reports/mutation/cache.ts.shard0.json"]);
+  assert.equal(conflicting.ok, false);
+  assert.match(conflicting.message, /writes no report/u);
 });
 
 test("a symlinked reporting root is refused", () => {
