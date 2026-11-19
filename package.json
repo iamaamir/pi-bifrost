@@ -93,6 +93,7 @@
     "check:contracts": "node scripts/check-contracts.mjs",
     "check:ast": "node scripts/toolbox.mjs ast",
     "check:duplication": "node scripts/toolbox.mjs duplication",
+    "check:complexity": "node scripts/check-complexity.mjs",
     "ast:scan": "ast-grep scan --config sgconfig.yml",
     "ast:test": "ast-grep test --skip-snapshot-tests",
     "check:actions": "node scripts/toolbox.mjs actions",
