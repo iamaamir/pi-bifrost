@@ -2177,7 +2177,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           (refreshRemainsCurrent && initRefreshReceipt?.evidence.get(provider) === evidence));
       const status = state.forceRegistryRefresh
         ? ("stale" as const)
-        : authConfigured === false
+        : authConfigured === false || authFailedProbeProviders.has(provider)
           ? ("auth_failed" as const)
           : fresh && authConfigured === true
             ? ("complete" as const)
