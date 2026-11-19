@@ -2043,6 +2043,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           inventories,
           generated: models,
           inheritedTiers,
+          inheritedPools: new Map([...inheritedEffective].map(([tier, value]) => [tier, value.pool])),
           validateMergedConfig,
         }),
       ]),
@@ -2088,7 +2089,14 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           );
           if (equivalentAction) {
             const equivalentLabel = equivalentAction === "keep" ? "Keep my models" : equivalentAction === "merge" ? "Merge new models" : "Bifrost defaults";
-            return `  ${label}: same outcome as ${equivalentLabel}.`;
+            const retained = candidateAction === "keep"
+              ? candidate.tiers.flatMap(({ tier, before, after, ownershipBefore }) => {
+                  if (ownershipBefore === "deleted" && before === undefined && after === undefined) return [`    ${tier}: remains deleted`];
+                  if (ownershipBefore === "user" && JSON.stringify(before) === JSON.stringify(after)) return [`    ${tier}: custom pool retained [${before?.join(", ") ?? "empty"}]`];
+                  return [];
+                })
+              : [];
+            return [`  ${label}: same outcome as ${equivalentLabel}.`, ...retained].join("\n");
           }
           const unavailableReason = candidate.reason === "prospective_config_invalid"
             ? "the proposed config failed validation"
