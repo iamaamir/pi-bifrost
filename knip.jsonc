@@ -40,7 +40,9 @@
     // is what we use, so the inferred name is ignored too.
     "@stryker-mutator/tap-runner",
     "@hughescr/stryker-bun-runner",
-    "@stryker-mutator/bun-runner"
+    "@stryker-mutator/bun-runner",
+    // Invoked by scripts/toolbox.mjs (check:duplication), not imported.
+    "jscpd"
   ],
   "ignoreBinaries": [
     // Optional host tool for on-demand benchmarks, documented in
