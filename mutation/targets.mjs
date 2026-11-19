@@ -229,11 +229,6 @@ export function bindingExclusions() {
   );
 }
 
-/** The bound test command for one target. */
-export function commandFor(target) {
-  return ["node", "--test", "--experimental-strip-types", ...bindingFor(target)].join(" ");
-}
-
 /** Line count of the mutated module. */
 export function lineCount(target) {
   return readFileSync(join(ROOT, target), "utf8").split("\n").length;
@@ -365,6 +360,13 @@ export function targetConfig(
   // correctly invalidate on test edits, which makes it a good *local* loop, but
   // a nightly that silently replays last night's score is not a measurement.
   if (incremental) {
+    // Only the TAP runner's invalidation was measured (a bound-test edit
+    // invalidates the affected mutants). The Bun runner's incremental behaviour
+    // is unmeasured, and a solved-but-unverified reuse is exactly the stale score
+    // this comment warns about.
+    if (runner !== "tap") {
+      throw new Error(`incremental reuse is only verified for the tap runner; ${runner} invalidation is unmeasured`);
+    }
     config.incremental = true;
     // One file per target: a matrix leg must not read or write another module's
     // stored results.

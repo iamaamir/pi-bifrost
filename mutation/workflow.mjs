@@ -8,7 +8,6 @@ import { appendFileSync, readFileSync } from "node:fs";
 import {
   MATRIX,
   SHARDING,
-  TARGETS,
   TIME_BUDGET,
   estimatedMinutes,
   legMinutes,
@@ -119,10 +118,8 @@ export function planMatrix({ requested, shards, concurrency } = {}) {
   // own counts matters because an explicit operator choice can be smaller than the
   // automatic suggestion, which would make a leg slower than `legEstimateMinutes`
   // predicts and let an over-budget plan slip through.
-  const resolvedCounts = new Map();
   for (const target of targets) {
     const count = resolveShardCount(shards, target);
-    resolvedCounts.set(target, count);
     for (const shard of shardsFor(target, count)) {
       include.push({
         target,
@@ -132,6 +129,14 @@ export function planMatrix({ requested, shards, concurrency } = {}) {
         // A per-shard artifact name keeps the shards of one module distinct.
         label: shard.count === 1 ? target : `${target} (shard ${shard.index + 1}/${shard.count})`,
       });
+    }
+  }
+
+  // Every selected module must produce at least one leg. A module that produced
+  // none would vanish from the matrix while the plan still reported success.
+  for (const target of targets) {
+    if (!include.some((leg) => leg.target === target)) {
+      throw new Error(`the plan produced no legs for ${target}; check its measured cost and shard count`);
     }
   }
 
@@ -211,14 +216,6 @@ function run(command, argv) {
     for (const leg of plan.include) console.log(`  ${leg.label}: mutate ${leg.mutate}`);
     return;
   }
-  if (command === "resolve-targets") {
-    const selected = resolveTargets(process.env.REQUESTED);
-    // GITHUB_OUTPUT is only set inside a workflow step; locally this command is
-    // a plain inventory print.
-    if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `targets=${JSON.stringify(selected)}\n`);
-    console.log(`selected ${selected.length} target(s): ${selected.join(", ")}`);
-    return;
-  }
   if (command === "plan-cli") {
     // Prints the plan's completeness expectations as report.mjs CLI arguments.
     // Lives here rather than inline in the workflow: actionlint runs shellcheck
@@ -261,16 +258,7 @@ function run(command, argv) {
     console.log(`mutation measurement usable: ${data.modules.length} modules`);
     return;
   }
-  if (command === "inventory") {
-    const requested = argv[0];
-    const selected = resolveTargets(requested);
-    for (const target of selected) {
-      const budget = TARGETS[target];
-      console.log(`${target}: timeoutFactor=${budget.timeoutFactor} timeoutMS=${budget.timeoutMS}`);
-    }
-    return;
-  }
-  throw new Error(`unknown command ${command}; expected resolve-targets, summarise, require-usable, or inventory`);
+  throw new Error(`unknown command ${command}; expected plan, plan-cli, summarise, or require-usable`);
 }
 
 if (process.argv[1] && process.argv[1].endsWith("workflow.mjs")) run(process.argv[2], process.argv.slice(3));

@@ -14,10 +14,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertRunArguments, isInsideReports, isReportFor, parseArgs, reportingRoot, reportsToClear, resolveReportPath, staleReportsFor, strykerArgs } from "../mutation/run.mjs";
-import { ROOT, bindingExclusions, bindingFor, commandFor, directConsumers, exceedsBudget, identityDigest, identityInputs, legEstimateMinutes, lineCount, measurementIdentity, runnerFor, shardsFor, suggestedShards, targetConfig, targetInventory, targetNames } from "../mutation/targets.mjs";
+import { ROOT, bindingExclusions, bindingFor, directConsumers, exceedsBudget, identityDigest, identityInputs, legEstimateMinutes, lineCount, measurementIdentity, runnerFor, shardsFor, suggestedShards, targetConfig, targetInventory, targetNames } from "../mutation/targets.mjs";
 import {
   BUN_RUNNER_PLUGIN,
   MATRIX,
+  MUTANT_ESTIMATE,
   RUNNER_OVERRIDES,
   RUNTIME_ERROR_TOLERANCE,
   SANDBOX_IGNORES,
@@ -306,16 +307,6 @@ test("binding is derived from real test imports, not hand-written", () => {
   assert.ok(consumers.size > 0);
 });
 
-test("the bound command names the target's derived test files", () => {
-  for (const target of targetNames()) {
-    const command = commandFor(target);
-    assert.match(command, /^node --test --experimental-strip-types /u);
-    for (const file of bindingFor(target)) {
-      assert.ok(command.includes(file), `${target} command must include ${file}`);
-    }
-  }
-});
-
 test("no-coverage mutants count against both scores", () => {
   // With the TAP runner coverage is measured, so NoCoverage is real: no bound
   // test reaches that line. Excluding it from the denominator (as the old
@@ -419,21 +410,47 @@ test("the TAP fallback still works, and every override states why it exists", ()
   }
 });
 
-test("incremental reuse is opt-in and stays out of the authoritative run", () => {
+test("incremental reuse is opt-in, tap-only, and stays out of the authoritative run", () => {
   // The nightly is the measurement, so a default config must measure every
-  // mutant. Reuse is a local convenience, keyed per target so matrix legs do not
-  // read each other's stored results.
+  // mutant. Reuse is a local convenience whose invalidation was only measured on
+  // the TAP runner; the Bun runner's behaviour is unverified, so it is refused
+  // there instead of publishing a possibly stale score.
   for (const target of targetNames()) {
     assert.equal("incremental" in targetConfig(target), false, `${target} must default to a full run`);
   }
-  const local = targetConfig("cache.ts", { incremental: true });
+  assert.throws(() => targetConfig("cache.ts", { incremental: true }), /only verified for the tap runner/u);
+
+  const local = targetConfig("routing.ts", { incremental: true });
   assert.equal(local.incremental, true);
-  assert.match(local.incrementalFile, /^reports\/mutation\/\.incremental-cache\.json$/u);
-  assert.notEqual(
-    targetConfig("routing.ts", { incremental: true }).incrementalFile,
-    local.incrementalFile,
-    "each target needs its own incremental file",
+  assert.match(local.incrementalFile, /^reports\/mutation\/\.incremental-routing\.json$/u);
+});
+
+test("incremental cannot share one state file across shards", () => {
+  const options = parseArgs(["routing.ts", "--shards", "2", "--incremental"]);
+  assert.throws(
+    () => assertRunArguments(options, ["routing.ts"]),
+    /--incremental cannot be combined with --shards/u,
   );
+});
+
+test("a target without a planning estimate fails instead of silently vanishing", () => {
+  // `NaN` cost used to produce zero legs and still exit 0: the module was
+  // dropped from the matrix while the plan reported success.
+  const saved = MUTANT_ESTIMATE["inline-override.ts"];
+  try {
+    delete MUTANT_ESTIMATE["inline-override.ts"];
+    assert.throws(() => estimatedMinutes("inline-override.ts"), /has no mutant estimate/u);
+    assert.throws(() => planMatrix({ requested: "inline-override.ts" }), /has no mutant estimate/u);
+  } finally {
+    MUTANT_ESTIMATE["inline-override.ts"] = saved;
+  }
+});
+
+test("every selected module gets at least one matrix leg", () => {
+  const plan = planMatrix({ requested: "all", shards: "0" });
+  for (const target of plan.targets) {
+    assert.ok(plan.include.some((leg) => leg.target === target), `${target} must be dispatched`);
+  }
 });
 
 test("an unknown runner is rejected rather than silently defaulting", () => {
