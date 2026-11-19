@@ -63,6 +63,18 @@ Optional classifiers, including TypeSafe/Jev and Pi-native, choose a tier. They 
 - Adaptive routing may trade prompt-cache locality for per-turn task fit. It cannot guarantee better results, lower cost, lower latency, or cache savings.
 - `/bifrost pin` is a session-local hard lock. Use it when continuity or one exact model matters more than per-message routing. A tier name at the start of a message is ignored while pinned.
 
+## Where each document belongs
+
+The repository mixes user documentation with planning, research and agent process files. Read a file according to its kind:
+
+| Kind | Where | How to read it |
+|------|-------|----------------|
+| Maintained user guide | this directory, [`README.md`](../../README.md), [`examples/`](../../examples/) | Describes current behavior. Source is authoritative when they disagree |
+| Product and acceptance contracts | [`PRODUCT.md`](../../PRODUCT.md), [`PRD.md`](../../PRD.md), [`RELEASE-PLAN.md`](../../RELEASE-PLAN.md), [`docs/product-philosophy.md`](../product-philosophy.md) | Intent and required boundaries. Not evidence that a change shipped |
+| Accepted decisions | [`docs/adr/`](../adr/) | Constraints and rationale. Proposed ADRs are not implementation approval. ADR numbers are not contiguous; gaps mean a proposal was never published |
+| Historical records | [`docs/prd-delivery-plan.md`](../prd-delivery-plan.md), [`docs/reliability-v1-review.md`](../reliability-v1-review.md), [`docs/verification-campaign.md`](../verification-campaign.md), [`docs/research/`](../research/), [`docs/superpowers/`](../superpowers/) | Point-in-time plans, measurements and reviews. Never read them as current guarantees |
+| Maintainer and agent process | [`docs/dev-tooling.md`](../dev-tooling.md), [`docs/testing-coverage.md`](../testing-coverage.md), [`docs/agent-governance.md`](../agent-governance.md), [`docs/merge-controller.md`](../merge-controller.md), [`docs/tracker-workflow.md`](../tracker-workflow.md) | Procedures whose results depend on the live environment, so a checkout cannot prove they succeeded |
+
 ## More references
 
 - [README](../../README.md)
