@@ -8,7 +8,7 @@
 //   node mutation/run.mjs                     # the runner sets these variables
 //   MUTATION_TARGET=routing.ts npx stryker run
 //   MUTATION_TARGET=cache.ts MUTATION_MUTATE=cache.ts:1-140 npx stryker run
-//   MUTATION_TARGET=cache.ts MUTATION_INCREMENTAL=1 npx stryker run   # local loop
+//   MUTATION_TARGET=routing.ts MUTATION_INCREMENTAL=1 npx stryker run   # local loop (TAP only)
 //
 // This is not a pull-request gate; the nightly workflow runs it.
 import { targetConfig, targetNames } from "./mutation/targets.mjs";
