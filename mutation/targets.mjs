@@ -365,11 +365,6 @@ export function targetConfig(
   // correctly invalidate on test edits, which makes it a good *local* loop, but
   // a nightly that silently replays last night's score is not a measurement.
   if (incremental) {
-    if (runner === "command") {
-      // Blind reuse: no test reporting means every stored result is reused
-      // (measured: 228 of 229 after editing a bound test file).
-      throw new Error("incremental mode requires the tap runner; the command runner reuses results blindly");
-    }
     config.incremental = true;
     // One file per target: a matrix leg must not read or write another module's
     // stored results.

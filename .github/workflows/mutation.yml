@@ -93,7 +93,9 @@ jobs:
 
   targets:
     needs: [plan]
-    if: ${{ !cancelled() }}
+    # A failed plan has no matrix and no leg bound; running on it only replaces
+    # the plan's message with an expression error.
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
     runs-on: ubuntu-latest
     # Per-leg bound from the plan, so one stuck shard cannot burn the whole
     # window. GitHub's hard job limit is 6 hours and cannot be raised; the
@@ -169,8 +171,9 @@ jobs:
 
   summarise:
     needs: [plan, targets]
-    # A failed leg must still produce a summary that names the failure.
-    if: ${{ !cancelled() }}
+    # A failed leg must still produce a summary that names the failure; a failed
+    # plan has nothing to summarise and already failed with its own message.
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
