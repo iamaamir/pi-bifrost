@@ -4885,7 +4885,14 @@ export function createCommandRouter(
       state.pinned = false;
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
-      logImportant(ctx, "Bifrost unpinned", "Automatic model switching is enabled.", "success");
+      logImportant(
+        ctx,
+        "Bifrost unpinned",
+        state.enabled
+          ? "Automatic model switching is enabled."
+          : "The model is unpinned, but routing is off. Run /bifrost on to route prompts.",
+        "success",
+      );
     }),
     exact("reload", (_, ctx) => {
       reloadBifrostConfig(state, ctx, true);
