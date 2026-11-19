@@ -63,7 +63,7 @@ If you also want new probes or the global target, use the flags together:
 
 `--write` removes only the question. The other guards stay in effect. Init does not write a proposal that shadows a handwritten inherited pool. A canceled catalog refresh writes nothing.
 
-A failure before the commit keeps the files. A failure after Bifrost replaces the configuration file can leave a pending reconciliation journal. Run `/bifrost config reconcile --recover` to report or resume that transaction before you retry.
+A failure before the commit keeps the files. A failure after Bifrost replaces the configuration file can leave a pending reconciliation journal. Recover the source that init wrote. For the default project target, run `/bifrost config reconcile --recover`. After `-g`, run `/bifrost config reconcile --source user --recover`. Run the matching command before you retry.
 
 If a proposed project pool would replace a handwritten pool in your global or workspace config with different models, init stops without saving. Pools that init generated before (tracked by an ownership receipt) and empty pools do not block init. Edit the existing source or review a workspace update with `/bifrost config reconcile --source workspace`; use `-g` when you intend to update the global source.
 
