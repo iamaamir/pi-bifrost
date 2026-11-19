@@ -2006,7 +2006,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       return;
     }
   }
-  if (selectedSource === "project" && !hasConfiguredTiers && (hasDeletedTierIntent || writeWithoutPrompt)) {
+  if (selectedSource === "project" && !hasConfiguredTiers) {
     for (const [tier, inherited] of inheritedEffective) {
       const generated = models[tier];
       if (
