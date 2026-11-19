@@ -76,7 +76,7 @@ import {
   failureDetails,
 } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
-import { showBifrostResult } from "./result-viewer.ts";
+import { showBifrostResult, showInitReview } from "./result-viewer.ts";
 import {
   findCandidates,
   buildTierResolutionOptions,
@@ -883,6 +883,12 @@ function selectInitSource(): ReconciliationSourceSnapshot {
   return user.configBytes !== null || user.ownershipBytes !== null ? user : project;
 }
 
+function initPoolReviewLines(label: string, pool: readonly string[] | undefined): string[] {
+  if (pool === undefined) return [`${label}: not configured`];
+  if (pool.length === 0) return [`${label}: empty`];
+  return [`${label}:`, ...pool.map((model, index) => `      ${index + 1}. ${model}`)];
+}
+
 function initSourceLabel(source: ReconciliationSourceSnapshot): string {
   return source.source === "workspace"
     ? "workspace (bifrost.json)"
@@ -910,12 +916,12 @@ function initInheritanceReviewLines(input: {
       if (!inherited) return [];
       const identical = inherited.length === generated.length && inherited.every((key, index) => key === generated[index]);
       return identical
-        ? [`  ${tier}: inherited [${inherited.join(", ") || "empty"}] kept; no project override`]
-        : [`  ${tier}: inherited [${inherited.join(", ") || "empty"}]`, `    → project [${generated.join(", ")}]`];
+        ? [`  ${tier}: inherited pool kept; no project override`, ...initPoolReviewLines("    Inherited", inherited)]
+        : [`  ${tier}: project override`, ...initPoolReviewLines("    Inherited", inherited), ...initPoolReviewLines("    Project", generated)];
     });
     for (const [tier, inherited] of input.inherited) {
       if (!Object.hasOwn(input.sourceModels, tier) && !Object.hasOwn(input.generated, tier))
-        lines.push(`  ${tier}: inherited [${inherited.pool.join(", ") || "empty"}] remains effective`);
+        lines.push(`  ${tier}: inherited pool remains effective`, ...initPoolReviewLines("    Inherited", inherited.pool));
     }
     return lines;
   }
@@ -924,14 +930,14 @@ function initInheritanceReviewLines(input: {
     const inherited = input.inherited.get(tier)?.pool;
     if (!inherited) return [];
     if (before === undefined && after !== undefined)
-      return [`  ${tier}: inherited [${inherited.join(", ") || "empty"}]`, `    → project [${after.join(", ")}]`];
+      return [`  ${tier}: project override`, ...initPoolReviewLines("    Inherited", inherited), ...initPoolReviewLines("    Project", after)];
     if (after === undefined)
-      return [`  ${tier}: ${before === undefined ? "inherited" : "project pool removed; inherited"} [${inherited.join(", ") || "empty"}] becomes effective`];
+      return [`  ${tier}: ${before === undefined ? "inherited" : "project pool removed; inherited"} pool becomes effective`, ...initPoolReviewLines("    Inherited", inherited)];
     return [];
   });
   for (const [tier, inherited] of input.inherited) {
     if (!reviewed.has(tier) && !Object.hasOwn(input.sourceModels, tier))
-      lines.push(`  ${tier}: inherited [${inherited.pool.join(", ") || "empty"}] remains effective`);
+      lines.push(`  ${tier}: inherited pool remains effective`, ...initPoolReviewLines("    Inherited", inherited.pool));
   }
   return lines;
 }
@@ -2048,13 +2054,14 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     const actionSelectionRequired =
       availableActions.length > 1 ||
       (availableActions.length === 1 && (availableActions[0] !== "keep" || hasUnavailableAction));
+    let selectedAction: (typeof availableActions)[number] = "keep";
     if (actionSelectionRequired && !writeWithoutPrompt) {
       const actionLabel = (action: (typeof availableActions)[number] | "defaults") =>
         action === "keep" ? "Keep my models" : action === "merge" ? "Merge new models" : "Bifrost defaults";
       const retainedTierLine = ({ tier, before, after, ownershipBefore }: (typeof keepPlan.tiers)[number]) => {
         if (ownershipBefore === "deleted" && before === undefined && after === undefined) return `    ${tier}: remains deleted`;
         if (ownershipBefore === "user" && JSON.stringify(before) === JSON.stringify(after))
-          return `    ${tier}: custom pool retained [${before?.join(", ") ?? "empty"}]`;
+          return `    ${tier}: custom pool retained`;
         return undefined;
       };
       const compareLines = [
@@ -2098,9 +2105,15 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
             if (selectedSource === "project" && tier.before === undefined && tier.after !== undefined && inheritedEffective.has(tier.tier))
               return [];
             const retainedLine = retainedTierLine(tier);
-            if (retainedLine) return [retainedLine];
+            if (retainedLine) {
+              return tier.ownershipBefore === "user"
+                ? [retainedLine, ...initPoolReviewLines("      Model", tier.before)]
+                : [retainedLine];
+            }
             return [
-              `    ${tier.tier}: [${tier.before?.join(", ") ?? "none"}] → [${tier.after?.join(", ") ?? "none"}]${tier.ownershipBefore !== tier.ownershipAfter && JSON.stringify(tier.before) === JSON.stringify(tier.after) ? "; reset to Bifrost defaults" : ""}`,
+              `    ${tier.tier}${tier.ownershipBefore !== tier.ownershipAfter && JSON.stringify(tier.before) === JSON.stringify(tier.after) ? " (reset to Bifrost defaults)" : ""}`,
+              ...initPoolReviewLines("      Before", tier.before),
+              ...initPoolReviewLines("      After", tier.after),
             ];
           }));
         compareLines.push(...initInheritanceReviewLines({
@@ -2111,20 +2124,35 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
           tiers: candidate.tiers,
         }).map((line) => `  ${line.trimStart()}`));
       }
-      if (!await renderInitPreview(ctx, compareLines)) {
-        clearBifrostWidgets(ctx);
-        reportInitOutcome(
-          ctx,
-          "blocked",
-          "Nothing was saved; the complete setup preview could not be displayed.",
-          "Rerun /bifrost init in Pi's interactive terminal to review the full preview.",
-          "error",
+      if (ctx.mode === "tui" && ctx.hasUI) {
+        const labels = availableActions.map((action) =>
+          action === "keep" ? "Keep my models (default)" : action === "merge" ? "Merge new models" : "Bifrost defaults",
         );
+        try {
+          const selection = await showInitReview(ctx, compareLines.slice(0, 12), compareLines, labels);
+          const selectedIndex = selection ? labels.findIndex((label) => label === selection) : -1;
+          if (selectedIndex >= 0) {
+            selectedAction = availableActions[selectedIndex];
+            actionSelectionApproved = true;
+          } else {
+            clearBifrostWidgets(ctx);
+            reportInitOutcome(ctx, "cancelled", "Nothing was saved.", "Run /bifrost init again to review choices.", "info");
+            return;
+          }
+        } catch {
+          if (!await renderInitPreview(ctx, compareLines)) {
+            clearBifrostWidgets(ctx);
+            reportInitOutcome(ctx, "blocked", "Nothing was saved; the complete setup preview could not be displayed.", "Rerun /bifrost init in Pi's interactive terminal to review the full preview.", "error");
+            return;
+          }
+        }
+      } else if (!await renderInitPreview(ctx, compareLines)) {
+        clearBifrostWidgets(ctx);
+        reportInitOutcome(ctx, "blocked", "Nothing was saved; the complete setup preview could not be displayed.", "Rerun /bifrost init in Pi's interactive terminal to review the full preview.", "error");
         return;
       }
     }
-    let selectedAction: (typeof availableActions)[number] = "keep";
-    if (!writeWithoutPrompt && actionSelectionRequired) {
+    if (!writeWithoutPrompt && actionSelectionRequired && !actionSelectionApproved) {
       const labels: string[] = availableActions.map((action) =>
         action === "keep" ? "Keep my models (default)" : action === "merge" ? "Merge new models" : "Bifrost defaults",
       );
@@ -2391,7 +2419,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
   const poolLines = changedTiers.flatMap((tier) => {
     const reviewedTier = plannedTierReview?.find((entry) => entry.tier === tier);
     if (!reviewedTier && !hasConfiguredTiers && generatedPools[tier]) {
-      return [`  ${tier}: [${generatedPools[tier].join(", ")}]`];
+      return [`  ${tier}:`, ...generatedPools[tier].map((key, index) => `    ${index + 1}. ${key}`)];
     }
     if (reviewedTier) {
       if (selectedSource === "project" && reviewedTier.before === undefined && reviewedTier.after !== undefined && inheritedEffective.has(tier))
@@ -2399,16 +2427,19 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       if (reviewedTier.ownershipBefore === "deleted" && reviewedTier.before === undefined && reviewedTier.after === undefined)
         return [`  ${tier}: remains deleted`];
       if (reviewedTier.ownershipBefore === "user" && JSON.stringify(reviewedTier.before) === JSON.stringify(reviewedTier.after))
-        return [`  ${tier}: custom pool retained [${reviewedTier.before?.join(", ") ?? "empty"}]`];
+        return [`  ${tier}: custom pool retained`, ...initPoolReviewLines("    Model", reviewedTier.before)];
       return [
-        `  ${tier}: [${reviewedTier.before?.join(", ") ?? "none"}] → [${reviewedTier.after?.join(", ") ?? "none"}]${reviewedTier.ownershipBefore !== reviewedTier.ownershipAfter && JSON.stringify(reviewedTier.before) === JSON.stringify(reviewedTier.after) ? "; reset to Bifrost defaults" : ""}`,
+        `  ${tier}${reviewedTier.ownershipBefore !== reviewedTier.ownershipAfter && JSON.stringify(reviewedTier.before) === JSON.stringify(reviewedTier.after) ? " (reset to Bifrost defaults)" : ""}`,
+        ...initPoolReviewLines("    Before", reviewedTier.before),
+        ...initPoolReviewLines("    After", reviewedTier.after),
       ];
     }
     const additions = added.filter((change) => change.tier === tier).map((change) => change.modelKey);
     const removals = removed.filter((change) => change.tier === tier).map((change) => change.modelKey);
     return [
-      `  ${tier}: ${additions.length ? `+ ${additions.join(", ")}` : "no additions"}`,
-      ...(removals.length ? [`    - ${removals.join(", ")}`] : []),
+      `  ${tier}:`,
+      ...(additions.length ? ["    Added:", ...additions.map((key, index) => `      ${index + 1}. ${key}`)] : ["    No additions"]),
+      ...(removals.length ? ["    Removed:", ...removals.map((key, index) => `      ${index + 1}. ${key}`)] : []),
     ];
   });
   const inheritedOverrideLines = initInheritanceReviewLines({
@@ -2441,18 +2472,30 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       : []),
   ];
 
-  // The scrollable preview must be dismissed before the save approval appears.
-  if (ctx.mode === "tui") ctx.ui.setWidget("bifrost-probe", undefined);
-  if (!await renderInitPreview(ctx, previewLines)) {
-    clearBifrostWidgets(ctx);
-    reportInitOutcome(
-      ctx,
-      "blocked",
-      "Nothing was saved; the complete setup preview could not be displayed.",
-      "Rerun /bifrost init in Pi's interactive terminal to review the full preview.",
-      "error",
-    );
-    return;
+  if (!actionSelectionApproved) {
+    if (ctx.mode === "tui") ctx.ui.setWidget("bifrost-probe", undefined);
+    const needsApproval = !hasConfiguredTiers || settingsAdded;
+    if (ctx.mode === "tui" && ctx.hasUI && needsApproval) {
+      try {
+        const result = await showInitReview(ctx, previewLines.slice(0, 12), previewLines, ["Approve and save", "Cancel"]);
+        if (result !== "Approve and save") {
+          clearBifrostWidgets(ctx);
+          reportInitOutcome(ctx, "declined", "Nothing was saved; recent probe results are reused for an hour unless you pass -f or the catalog changes.", "Run /bifrost init again to review and save.", "info");
+          return;
+        }
+        actionSelectionApproved = true;
+      } catch {
+        if (!await renderInitPreview(ctx, previewLines)) {
+          clearBifrostWidgets(ctx);
+          reportInitOutcome(ctx, "blocked", "Nothing was saved; the complete setup preview could not be displayed.", "Rerun /bifrost init in Pi's interactive terminal to review the full preview.", "error");
+          return;
+        }
+      }
+    } else if (!await renderInitPreview(ctx, previewLines)) {
+      clearBifrostWidgets(ctx);
+      reportInitOutcome(ctx, "blocked", "Nothing was saved; the complete setup preview could not be displayed.", "Rerun /bifrost init in Pi's interactive terminal to review the full preview.", "error");
+      return;
+    }
   }
 
   if (uncategorized.length > 0) {
