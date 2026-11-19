@@ -2012,7 +2012,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       if (
         generated &&
         (writeWithoutPrompt ||
-          (generated.length === inherited.pool.length &&
+          (!hasDeletedTierIntent && generated.length === inherited.pool.length &&
             generated.every((key, index) => key === inherited.pool[index])))
       ) {
         delete models[tier];

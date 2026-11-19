@@ -472,6 +472,56 @@ describe("config reconciliation command router", () => {
     });
   });
 
+  it("lets interactive Defaults restore identical inherited pool for deleted tier while Keep protects it", async () => {
+    for (const selected of ["Bifrost defaults", "Keep my models (default)"]) {
+      await withCwd(async (cwd) => {
+        const agentDir = process.env.PI_CODING_AGENT_DIR!;
+        fs.mkdirSync(agentDir, { recursive: true });
+        fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+          classifier: { enabled: false },
+          default: "general",
+          models: { general: ["openai/cached-model"] },
+        }));
+        const configDir = join(cwd, ".pi");
+        fs.mkdirSync(configDir, { recursive: true });
+        const configPath = join(configDir, "bifrost.json");
+        fs.writeFileSync(configPath, "{}\n");
+        const receipt = buildInitOwnershipReceipt("project", { general: [] })!;
+        fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify({
+          ...receipt,
+          tiers: { general: { state: "deleted" } },
+        }));
+        writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+          { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+        ]);
+        const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
+        const ctx = h.ctx as unknown as {
+          hasUI: boolean;
+          ui: { confirm: () => Promise<boolean>; notify: () => void; select: (_title: string, choices: string[]) => Promise<string> };
+        };
+        ctx.hasUI = true;
+        ctx.ui = {
+          confirm: async () => true,
+          notify: () => {},
+          select: async (_title, choices) => {
+            assert(choices.includes(selected), `missing ${selected}: ${choices.join(", ")}`);
+            return selected;
+          },
+        };
+
+        const preview = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+        const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
+        if (selected === "Bifrost defaults") {
+          assert.deepEqual(saved.models?.general, ["openai/cached-model"], "Defaults restores deleted only-tier pool");
+          assert.match(preview.join("\n"), /general: inherited \[openai\/cached-model\][\s\S]*→ project \[openai\/cached-model\]/);
+        } else {
+          assert.equal(saved.models?.general, undefined, "Keep preserves deleted intent");
+          assert.match(preview.join("\n"), /general: remains deleted/);
+        }
+      });
+    }
+  });
+
   it("keeps trusted deleted-tier intent protected during fresh setup detection", async () => {
     await withCwd(async (cwd) => {
       const agentDir = process.env.PI_CODING_AGENT_DIR!;
