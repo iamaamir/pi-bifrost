@@ -2061,10 +2061,18 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       if (!generated) continue;
       const identical = generated.length === inherited.pool.length &&
         generated.every((key, index) => key === inherited.pool[index]);
-      if (writeWithoutPrompt || (identical && !hasDeletedTierIntent) ||
-        (!identical && !inheritedPoolHasCompleteInventory(inherited.pool))) {
-        delete models[tier];
+      const completeInventory = inheritedPoolHasCompleteInventory(inherited.pool);
+      if (!writeWithoutPrompt && !identical && !completeInventory) {
+        reportInitOutcome(
+          ctx,
+          "blocked",
+          `Nothing was saved; inherited ${tier} pool cannot be safely replaced because its provider inventory is unknown, unsigned-in, or stale.`,
+          "Sign in to each inherited provider and refresh its model catalog, then rerun /bifrost init to review the replacement.",
+          "warning",
+        );
+        return;
       }
+      if (writeWithoutPrompt || (identical && !hasDeletedTierIntent)) delete models[tier];
     }
   }
   const generatedPools = Object.fromEntries(
