@@ -1726,7 +1726,7 @@ async function handleConfigCommand(
 type InitReviewValue = null | boolean | number | string | InitReviewValue[] | { [key: string]: InitReviewValue };
 
 function initReviewValue(value: unknown, key?: string): InitReviewValue {
-  if (key && /api.?key|secret|token|password|credential|system.?prompt|endpoint/iu.test(key)) {
+  if (key && /api.?key|secret|password|credential|system.?prompt|endpoint|(?:access|auth|refresh|bearer|session).?token|^token$/iu.test(key)) {
     return "[redacted]";
   }
   if (value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "number") {

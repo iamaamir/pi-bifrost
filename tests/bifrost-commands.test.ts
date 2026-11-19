@@ -17,6 +17,7 @@ import { REGISTRY_REFRESH_TTL_MS } from "../ux-status.ts";
 import { loadConfigForReload } from "../config-load.ts";
 import { flushDebug, setupDebug } from "../debug.ts";
 import { resolveClassifierEnablement } from "../runtime-state.ts";
+import { wrapResultLines } from "../result-viewer.ts";
 
 it("renders missing configured entries in text route traces", () => {
   const trace = buildTracePreview({
@@ -599,9 +600,11 @@ function makeCtx(
           colors: {},
         }, {}, () => {}) as { render?: (width: number) => string[]; handleInput?: (data: string) => void } | undefined;
         if (component?.render && component.handleInput) {
+          component.handleInput("\x0f");
           const lines: string[] = [];
           for (let i = 0; i < 500; i++) {
             lines.push(...component.render(80));
+            component.handleInput("j");
             component.handleInput("\x1b[B");
           }
           calls.push({ kind: "preview", lines });
