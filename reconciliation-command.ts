@@ -450,6 +450,40 @@ export interface InitActionPlan extends InitMembershipPlan {
   readonly tiers: readonly { readonly tier: string; readonly before: readonly string[] | undefined; readonly after: readonly string[] | undefined; readonly ownershipBefore: string; readonly ownershipAfter: string }[];
 }
 
+function collectProbedModels(inventories: readonly InitMembershipInventory[]): Map<string, Set<string>> | undefined {
+  const probedByTier = new Map<string, Set<string>>();
+  for (const inventory of inventories) {
+    if (!validProvider(inventory.provider) || !isPlainRecord(inventory.modelsByTier)) return undefined;
+    for (const [tier, keys] of Object.entries(inventory.modelsByTier)) {
+      if (!validTier(tier) || !Array.isArray(keys) || keys.length > 5_000) return undefined;
+      const found = probedByTier.get(tier) ?? new Set<string>();
+      for (const key of keys) {
+        if (typeof key !== "string" || !key.startsWith(`${inventory.provider}/`)
+          || key.length > 512 || /[\u0000-\u0020\u007f]/u.test(key) || key.includes("*")) return undefined;
+        found.add(key);
+      }
+      probedByTier.set(tier, found);
+    }
+  }
+  return probedByTier;
+}
+
+function generatedModelsAreProbed(
+  generatedTiers: readonly (readonly [string, readonly string[]])[],
+  probedByTier: ReadonlyMap<string, ReadonlySet<string>>,
+): boolean {
+  for (const [tier, keys] of generatedTiers) {
+    if (!validTier(tier) || !Array.isArray(keys) || keys.length > 5_000) return false;
+    for (const key of keys) {
+      if (typeof key !== "string" || key.length > 512 || /[\u0000-\u0020\u007f]/u.test(key)
+        || key.trim() !== key || key.includes("*") || key.indexOf("/") <= 0 || key.indexOf("/") === key.length - 1
+        || key.slice(0, key.indexOf("/")).includes("/")) return false;
+      if (!probedByTier.get(tier)?.has(key)) return false;
+    }
+  }
+  return true;
+}
+
 /** Plans one explicit init action against the exact selected-layer snapshot. */
 export function buildInitActionPlan(input: {
   readonly action: "keep" | "merge" | "defaults";
@@ -480,29 +514,8 @@ export function buildInitActionPlan(input: {
   const previous = ownershipFromBytes(source.ownershipBytes, source.source);
   if (previous === null || source.ownershipBytes && source.ownershipBytes.byteLength > MAX_OWNERSHIP_BYTES) return blocked("source_invalid");
   const generatedTiers = Object.entries(generated);
-  const probedByTier = new Map<string, Set<string>>();
-  for (const inventory of input.inventories) {
-    if (!validProvider(inventory.provider) || !isPlainRecord(inventory.modelsByTier)) return blocked("source_invalid");
-    for (const [tier, keys] of Object.entries(inventory.modelsByTier)) {
-      if (!validTier(tier) || !Array.isArray(keys) || keys.length > 5_000) return blocked("source_invalid");
-      const found = probedByTier.get(tier) ?? new Set<string>();
-      for (const key of keys) {
-        if (typeof key !== "string" || !key.startsWith(`${inventory.provider}/`)
-          || key.length > 512 || /[\u0000-\u0020\u007f]/u.test(key) || key.includes("*")) return blocked("source_invalid");
-        found.add(key);
-      }
-      probedByTier.set(tier, found);
-    }
-  }
-  for (const [tier, keys] of generatedTiers) {
-    if (!validTier(tier) || !Array.isArray(keys) || keys.length > 5_000) return blocked("source_invalid");
-    for (const key of keys) {
-      if (typeof key !== "string" || key.length > 512 || /[\u0000-\u0020\u007f]/u.test(key)
-        || key.trim() !== key || key.includes("*") || key.indexOf("/") <= 0 || key.indexOf("/") === key.length - 1
-        || key.slice(0, key.indexOf("/")).includes("/")) return blocked("source_invalid");
-      if (!probedByTier.get(tier)?.has(key)) return blocked("source_invalid");
-    }
-  }
+  const probedByTier = collectProbedModels(input.inventories);
+  if (!probedByTier || !generatedModelsAreProbed(generatedTiers, probedByTier)) return blocked("source_invalid");
   const uniqueGeneratedTiers = generatedTiers.map(([tier, keys]) => [tier, [...new Set(keys)]] as const);
   let candidate: Record<string, unknown> = original;
   let warnings: readonly ReconciliationWarningCode[] = [];
