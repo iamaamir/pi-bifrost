@@ -45,7 +45,7 @@ Provider usage and billing pauses use Pi's configured provider ID. Bifrost does 
 
 Init remains available to refresh the catalog or reconcile model lists. It reuses probe results from the last hour unless you pass `-f`. Review presents **Keep my models** (default), **Merge new models**, and **Bifrost defaults** when choices differ; unavailable choices are explained. The choice changes model pools in the displayed save target; init may also add missing settings there. Other config files remain unchanged. Unlisted tiers remain unchanged. The review shows inherited pools that a proposed project pool would override; that project-only override is applied only after review and leaves global/workspace files unchanged. Init does not copy private classifier templates or pin inherited user settings into the edited file. Its summary does not show every model ID, selection rule, or default tier. After init saves, inspect the lists and status. Edit the saved configuration before a model answers if needed.
 
-Init displays its save target. It saves to project `.pi/bifrost.json` by default, or to user `~/.pi/agent/bifrost.json` when you pass `-g`.
+Init displays its save target. It saves to project `.pi/bifrost.json` by default, or to user `~/.pi/agent/bifrost.json` when you pass `-g`. Global init does not change reliability state from probe results.
 
 Every init run ends on one line: `init: <outcome>. <what changed>. <one next step>`. In a TUI that line is an `init` notice card and it is the last thing the run renders. Headless prints it on stderr with the `[bifrost]` prefix every Bifrost diagnostic carries. For example:
 
