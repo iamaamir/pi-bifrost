@@ -1,6 +1,6 @@
 # Pi-Bifrost Reliability System
 
-Design, implementation notes, and extension guide for the reliability v1 model circuit: the pre-send health filter and the failure tracking after settlement. Reliability v2 and the provider usage and rate pauses are unreleased. For the current behavior, read [`docs/guide/reliability-and-cache.md`](guide/reliability-and-cache.md) and [ADR 0024](adr/0024-provider-usage-and-rate-pauses.md).
+Design, implementation notes, and extension guide for the reliability v1 model circuit: the pre-send health filter and the failure tracking after settlement. This page does not describe the opt-in v2 admission state (`reliability.stateVersion: 2`) or the provider usage and rate pauses. For the current behavior, read [`docs/guide/reliability-and-cache.md`](guide/reliability-and-cache.md) and [ADR 0024](adr/0024-provider-usage-and-rate-pauses.md).
 
 ## Table of Contents
 
