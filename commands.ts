@@ -1431,6 +1431,24 @@ async function handleConfigCommand(
   await handleReconciliationCommand(args, ctx, state);
 }
 
+type InitReviewValue = null | boolean | number | string | InitReviewValue[] | { [key: string]: InitReviewValue };
+
+function initReviewValue(value: unknown): InitReviewValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "number") {
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(initReviewValue);
+  if (typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, nested]) => [
+      key,
+      /api.?key|secret|token|password|credential|system.?prompt|endpoint/iu.test(key)
+        ? "[redacted]"
+        : initReviewValue(nested),
+    ]));
+  }
+  return String(value);
+}
+
 async function handleInit(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
   const tokens = args.trim().split(/\s+/).slice(1);
   const unknownArgument = tokens.find((token) => !["-f", "--write", "-g"].includes(token));
@@ -2070,7 +2088,11 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         ...(selectedSource === "project" ? ["  Global/workspace files stay unchanged."] : []),
         "  Unlisted tiers remain unchanged.",
         `  Classifier ${effectiveClassifierSummary}`,
-        ...(proposedSettings.length ? [`  Settings added: ${proposedSettings.join(", ")}`] : []),
+        ...(proposedSettings.length
+          ? ["  Settings added:", ...proposedSettings.map((key) =>
+              `    ${key}  ${JSON.stringify(initReviewValue(proposal[key]))}`,
+            )]
+          : []),
         "",
       ];
       compareLines.push(...(["keep", "merge", "defaults"] as const)
@@ -2450,6 +2472,15 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     tiers: plannedTierReview,
   });
 
+  const savedConfigForPreview = JSON.parse(
+    Buffer.from(transaction.nextConfigBytes).toString("utf8"),
+  ) as Record<string, unknown>;
+  const addedSettings = Object.keys(proposal).filter(
+    (key) => key !== "$schema" && key !== "models" && !inheritedFields.has(key) && sourceConfig[key] === undefined,
+  );
+  const settingsReviewLines = addedSettings.map((key) =>
+    `  ${key}  ${JSON.stringify(initReviewValue(savedConfigForPreview[key]))}`,
+  );
   const previewLines = [
     "◆ Bifrost · Setup preview",
     "",
@@ -2465,14 +2496,14 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       : []),
     `  Classifier  ${effectiveClassifierSummary}`,
     `  Save to     ${initSourceLabel(source)}`,
-    ...(settingsAdded ? ["  Defaults    Added where missing"] : []),
+    ...(settingsAdded ? ["  Settings added:", ...settingsReviewLines] : []),
     ...(uncategorized.length ? [`  ! ${uncategorized.length} uncategorized models excluded`] : []),
     ...(unverifiedSavedCount
       ? [` ⚠️ ${unverifiedSavedCount} unverified models kept`]
       : []),
   ];
 
-  if (!actionSelectionApproved) {
+  if (!writeWithoutPrompt && !actionSelectionApproved) {
     if (ctx.mode === "tui") ctx.ui.setWidget("bifrost-probe", undefined);
     const needsApproval = !hasConfiguredTiers || settingsAdded;
     if (ctx.mode === "tui" && ctx.hasUI && needsApproval) {

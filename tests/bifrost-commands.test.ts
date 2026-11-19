@@ -1247,14 +1247,7 @@ describe("bifrost command ui", () => {
       const state = makeState();
       await createCommandRouter(state as never)("init --write", ctx as never);
       assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), true);
-      assert(calls.some(
-        (call) =>
-          call.kind === "preview" &&
-          String(call.lines?.join("\n")).includes("Classifier") &&
-          String(call.lines?.join("\n")).includes("detected default") &&
-          String(call.lines?.join("\n")).includes("fixture/chat"),
-      ));
-      assert.equal(calls.some((call) => call.kind === "select"), false);
+      assert.equal(calls.some((call) => call.kind === "custom" || call.kind === "preview" || call.kind === "select"), false);
       const saved = JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8"));
       assert.equal(saved.classifier.backend, undefined);
       assert.equal(saved.classifier.model, "fixture/chat", "fresh init persists only a detected model backed by a recent healthy probe");
@@ -1825,12 +1818,47 @@ describe("bifrost command ui", () => {
       const state = makeState() as any;
       state.registryInventoryEvidence = { fixture: { status: "complete", refreshedAt: Date.now() } };
       await createCommandRouter(state)("init --write", ctx as never);
+      assert.equal(calls.some((call) => call.kind === "custom" || call.kind === "preview" || call.kind === "select"), false);
       const originalConfig = readFileSync(configPath);
       const originalOwnership = readFileSync(ownershipPath);
       await createCommandRouter(state)("init", ctx as never);
       assert.deepEqual(readFileSync(configPath), originalConfig);
       assert.deepEqual(readFileSync(ownershipPath), originalOwnership);
       assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("No distinct model update needs review; nothing was saved.")));
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips every TUI review surface for existing model changes with --write", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-write-existing-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const piDir = join(tempDir, ".pi");
+      mkdirSync(piDir);
+      writeFileSync(join(piDir, "bifrost.json"), JSON.stringify({ models: { quick: ["fixture/old"] } }));
+      writeFileSync(join(piDir, "bifrost-reconcile-ownership.json"), JSON.stringify(
+        buildInitOwnershipReceipt("project", { quick: ["fixture/old"] }),
+      ));
+      writeRecentProbeCache(join(piDir, "bifrost-probe.json"), [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const model = makeModel("fixture", "chat", 0.2, 0.2);
+      const { ctx, calls } = makeCtx([model as never]);
+      const registry = (ctx as any).modelRegistry;
+      registry.getAll = () => [model];
+      registry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+      registry.refresh = async () => ({ aborted: false, errors: new Map() });
+      const state = makeState() as any;
+      state.registryInventoryEvidence = { fixture: { status: "complete", refreshedAt: Date.now() } };
+
+      await createCommandRouter(state)("init --write", ctx as never);
+
+      const saved = JSON.parse(readFileSync(join(piDir, "bifrost.json"), "utf8"));
+      assert.deepEqual(saved.models.quick, ["fixture/chat"]);
+      assert.equal(calls.some((call) => call.kind === "custom" || call.kind === "preview" || call.kind === "select"), false);
     } finally {
       process.chdir(previousCwd);
       rmSync(tempDir, { recursive: true, force: true });
@@ -1942,6 +1970,11 @@ describe("bifrost command ui", () => {
 
       const saved = JSON.parse(readFileSync(join(piDir, "bifrost.json"), "utf8"));
       assert.deepEqual(saved.models.quick, ["fixture/old", "fixture/chat"]);
+      const review = calls.find((call) => call.kind === "preview")?.lines?.join("\n") ?? "";
+      for (const [key, value] of Object.entries(saved)) {
+        if (key === "models" || key === "$schema") continue;
+        assert.ok(review.includes(`${key}  ${JSON.stringify(value)}`), `preview omitted saved setting ${key}`);
+      }
       const picker = calls.find((call) => call.kind === "select" && call.title === "Bifrost · Update project model pools?");
       assert.ok(picker);
       assert.deepEqual(picker.options, ["Keep my models (default)", "Merge new models"]);
