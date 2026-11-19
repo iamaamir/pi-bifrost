@@ -41,7 +41,7 @@ while it exists; the first file found wins.
 | `cache`, `debug`, `probe`, `reliability` | see below | operational, not routing shape |
 
 Strategies: `first` (pool order), `cheapest` (input+output per 1M), `cheapest_input`,
-`cheapest_output`, `largest_context`, `random`, `fastest`.
+`cheapest_output`, `largest_context`, `best_value`, `random`, `fastest`.
 
 ## Rules and inline tier prefixes
 

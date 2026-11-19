@@ -439,7 +439,7 @@ function activeClassifierCacheKey(config: BifrostConfig, detectionEngine: Return
   });
 }
 
-function boundedClassifierModel(value: unknown): string | undefined {
+function boundedClassifierId(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 && value.length <= 200 && !/[\u0000-\u001f\u007f]/.test(value)
     ? value
     : undefined;
@@ -452,7 +452,11 @@ function directClassifierAttempt(
   reliabilityStore?: ReliabilityStore,
   config?: BifrostConfig,
 ): DirectClassifierAttempt {
-  const model = boundedClassifierModel(observation?.model);
+  const model = boundedClassifierId(observation?.model);
+  const tier = boundedClassifierId(observation?.tier);
+  const confidence = typeof observation?.confidence === "number" && Number.isFinite(observation.confidence)
+    ? observation.confidence
+    : undefined;
   const circuitKey = model ? `classifier/${backend}/${model}` : undefined;
   const circuit = circuitKey && reliabilityStore && config?.reliability?.enabled !== false
     ? getCircuitState(reliabilityStore.getState(), circuitKey, Date.now(), config?.reliability)
@@ -468,7 +472,9 @@ function directClassifierAttempt(
       observation: {
         backend,
         outcome: observation.outcome,
+        ...(tier ? { tier } : {}),
         ...(model ? { model } : {}),
+        ...(confidence !== undefined ? { confidence } : {}),
         ...(circuitOpenUntil !== undefined ? { circuitOpenUntil } : {}),
       },
     } : {}),

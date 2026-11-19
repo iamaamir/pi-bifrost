@@ -67,6 +67,7 @@ import {
   type ClassificationPipeline,
   type ClassificationResult,
   type ClassificationSource,
+  type ClassifierAttemptSummary,
   type RouteDecisionSummary,
 } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
@@ -2696,24 +2697,40 @@ export function buildClassifierTestReport(input: {
   const backendLabel = effective?.auto ? `auto: ${backend} (${effective.reason})` : backend;
   const judgment = result.kind === "classified" ? result.judgment : undefined;
   const outcome = increasedMetric(after.outcomes, before.outcomes);
+  // A rejected judgment still names the tier it proposed. Prefer that over the
+  // metrics delta, which is absent whenever metrics are disabled.
+  const attemptedTier =
+    result.classifierAttempt?.backend === backend ? result.classifierAttempt.tier : undefined;
   const observedTier =
-    judgment?.backend === backend ? judgment.tier : increasedMetric(after.tiers, before.tiers);
-  const observedConfidence =
-    judgment?.backend === backend && judgment.confidence !== undefined
-      ? String(judgment.confidence)
-      : (increasedMetric(after.confidenceBands, before.confidenceBands) ?? "n/a");
+    judgment?.backend === backend
+      ? judgment.tier
+      : attemptedTier ?? increasedMetric(after.tiers, before.tiers);
+
+  const acceptedConfidence = judgment?.backend === backend ? judgment.confidence : undefined;
+  const attemptedConfidence =
+    result.classifierAttempt?.backend === backend ? result.classifierAttempt.confidence : undefined;
+  let observedConfidence = increasedMetric(after.confidenceBands, before.confidenceBands) ?? "n/a";
+  if (acceptedConfidence !== undefined) {
+    observedConfidence = String(acceptedConfidence);
+  } else if (attemptedConfidence !== undefined) {
+    observedConfidence = String(attemptedConfidence);
+  }
+
   const rawPromptModel = classifier?.model;
-  const configuredModel = Array.isArray(rawPromptModel)
-    ? rawPromptModel.join(", ")
-    : rawPromptModel;
+  const configuredModel = Array.isArray(rawPromptModel) ? rawPromptModel.join(", ") : rawPromptModel;
+  // A rejected attempt's confidence belongs to the model that produced it, which
+  // may be auto-resolved from the catalog and differ from configured values.
+  const attemptedModel =
+    result.classifierAttempt?.backend === backend ? result.classifierAttempt.model : undefined;
   const model =
     judgment?.backend === backend
       ? judgment.model
-      : backend === CLASSIFIER_BACKEND_IDS.typesafe
-        ? (classifier?.typesafe?.model ?? TYPE_SAFE_MODEL)
-        : backend === CLASSIFIER_BACKEND_IDS.piNative
-          ? (classifier?.piNative?.model ?? "catalog default")
-          : configuredModel;
+      : attemptedModel ??
+        (backend === CLASSIFIER_BACKEND_IDS.typesafe
+          ? classifier?.typesafe?.model ?? TYPE_SAFE_MODEL
+          : backend === CLASSIFIER_BACKEND_IDS.piNative
+            ? classifier?.piNative?.model ?? "catalog default"
+            : configuredModel);
   const finalResult = result.kind === "unclassified" ? "unclassified" : result.tier;
   const finalSource = result.kind === "classified" ? result.source : result.kind;
   const accepted = result.kind === "classified" && judgment?.backend === backend;
@@ -2901,6 +2918,7 @@ export type BifrostPreviewSuccess = {
   readonly backend?: string;
   readonly model?: string;
   readonly confidence?: number;
+  readonly classifierAttempt?: ClassifierAttemptSummary;
   readonly tier: string;
   readonly strategy: string;
   readonly selectedTier?: string;
@@ -2919,11 +2937,12 @@ export type BifrostPreviewSuccess = {
   }>;
 };
 
-/** No routing decision was made, so no routing field is reported. */
+/** No routing decision was made, so no accepted routing decision is reported. Diagnostic classifier-attempt detail may still be present for unclassified outcomes. */
 export type BifrostPreviewFailure = {
   readonly ok: false;
   readonly prompt: string;
   readonly error: "usage" | "unclassified" | "config_invalid";
+  readonly classifierAttempt?: ClassifierAttemptSummary;
 };
 
 /** Marker prefix for machine-readable command output, so a caller can find the line without guessing. */
@@ -2978,8 +2997,9 @@ export function parsePreviewArgs(
 export function buildPreviewFailure(
   prompt: string,
   error: BifrostPreviewFailure["error"],
+  classifierAttempt?: ClassifierAttemptSummary,
 ): BifrostPreviewFailure {
-  return { ok: false, prompt, error };
+  return { ok: false, prompt, error, ...(classifierAttempt ? { classifierAttempt } : {}) };
 }
 
 export function buildPreviewReport(input: {
@@ -2989,6 +3009,8 @@ export function buildPreviewReport(input: {
 }): BifrostPreviewSuccess {
   const { prompt, classification, display } = input;
   const judgment = classification.kind === "classified" ? classification.judgment : undefined;
+  const attempt = classification.classifierAttempt;
+
   return {
     ok: true,
     prompt,
@@ -2996,6 +3018,7 @@ export function buildPreviewReport(input: {
     ...(judgment ? { backend: judgment.backend } : {}),
     ...(judgment?.model !== undefined ? { model: judgment.model } : {}),
     ...(judgment?.confidence !== undefined ? { confidence: judgment.confidence } : {}),
+    ...(attempt ? { classifierAttempt: attempt } : {}),
     tier: classification.tier,
     strategy: display.strategy,
     // An unresolved selection arrives as an absent value, so omitting the key is
@@ -3041,6 +3064,33 @@ export function buildTracePreview(
   };
 }
 
+/**
+ * The attempt line is diagnostic detail, not a second judgment. Print it only
+ * when it says something the accepted classification does not already state: a
+ * non-success outcome, a non-default fallback, another backend, or a different
+ * model or confidence. An accepted attempt that simply repeats the
+ * `classifier:` lines verbatim is dropped, so preview and trace agree.
+ */
+function shouldRenderClassifierAttempt(
+  attempt: ClassifierAttemptSummary,
+  accepted: { readonly backend?: string; readonly model?: string; readonly confidence?: number } | undefined,
+): boolean {
+  if (attempt.outcome !== "success" || attempt.fallbackKind !== "none") return true;
+  if (accepted === undefined || accepted.backend !== attempt.backend) return true;
+  if (attempt.model !== undefined && attempt.model !== accepted.model) return true;
+  return attempt.confidence !== undefined && attempt.confidence !== accepted.confidence;
+}
+
+/** The attempt block, built once so a new field cannot drift between views. */
+function classifierAttemptLines(attempt: ClassifierAttemptSummary): string[] {
+  return [
+    `classifier attempt: ${attempt.backend} (${attempt.outcome}, fallback=${attempt.fallbackKind})`,
+    ...(attempt.tier !== undefined ? [`classifier attempt tier: ${attempt.tier}`] : []),
+    ...(attempt.model !== undefined ? [`classifier attempt model: ${attempt.model}`] : []),
+    ...(attempt.confidence !== undefined ? [`classifier attempt confidence: ${attempt.confidence}`] : []),
+  ];
+}
+
 export function renderTracePreview(trace: BifrostTracePreview): string[] {
   const lines = [
     "--- route trace v1 ---",
@@ -3059,6 +3109,10 @@ export function renderTracePreview(trace: BifrostTracePreview): string[] {
       lines.push(`classifier model: ${trace.classification.classifier.model}`);
     if (trace.classification.classifier.confidence !== undefined)
       lines.push(`classifier confidence: ${trace.classification.classifier.confidence}`);
+  }
+  const traceAttempt = trace.classifierAttempt;
+  if (traceAttempt && shouldRenderClassifierAttempt(traceAttempt, trace.classification.classifier)) {
+    lines.push(...classifierAttemptLines(traceAttempt));
   }
   const renderPool = (
     label: string,
@@ -3111,6 +3165,10 @@ export function renderTracePreview(trace: BifrostTracePreview): string[] {
 }
 
 export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
+  const attempt = report.classifierAttempt;
+  const showAttempt = attempt !== undefined
+    && shouldRenderClassifierAttempt(attempt, { backend: report.backend, model: report.model, confidence: report.confidence });
+
   return [
     "--- preview ---",
     `prompt:    ${report.prompt}`,
@@ -3124,6 +3182,7 @@ export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
           `confidence:${report.confidence === undefined ? " n/a" : ` ${report.confidence}`}`,
         ]
       : []),
+    ...(showAttempt && attempt ? classifierAttemptLines(attempt) : []),
     `tier:      ${report.tier}`,
     `strategy:  ${report.strategy}`,
     `selected tier: ${report.selectedTier ?? PREVIEW_NONE}`,
@@ -3146,6 +3205,20 @@ export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
         ]
       : []),
     `selected:  ${report.selected ?? PREVIEW_NONE}`,
+    "---------------",
+  ];
+}
+
+function renderPreviewFailureReport(report: BifrostPreviewFailure): string[] {
+  const attempt = report.classifierAttempt;
+  return [
+    "--- preview ---",
+    `prompt:    ${report.prompt}`,
+    "source:    unclassified",
+    ...(attempt ? classifierAttemptLines(attempt) : []),
+    ...(report.error === "unclassified" ? ["reason: no tier matched"] : []),
+    `result:    ${report.error}`,
+    "selected:  none",
     "---------------",
   ];
 }
@@ -3249,8 +3322,18 @@ async function handlePreview(
       else await uiResult(ctx, "Bifrost route trace", renderTracePreview(report));
       return;
     }
-    if (json) emitPreviewReport(buildPreviewFailure(prompt, "unclassified"));
-    logImportant(ctx, "No route matched", "No configured tier matched the prompt.", "warning");
+    const failure = buildPreviewFailure(prompt, "unclassified", classification.classifierAttempt);
+    if (json) {
+      emitPreviewReport(failure);
+    } else if (classification.classifierAttempt) {
+      await uiResult(ctx, "Bifrost preview", renderPreviewFailureReport(failure));
+    }
+    logImportant(
+      ctx,
+      "No route matched",
+      "No configured tier matched the prompt (no tier matched).",
+      "warning",
+    );
     return;
   }
 

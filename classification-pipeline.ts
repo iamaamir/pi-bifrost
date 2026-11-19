@@ -16,7 +16,10 @@ export type ClassifierFallbackKind = "none" | "prompt" | "regex" | "default";
 export interface DirectClassifierObservation {
   readonly backend: "typesafe" | "pi-native";
   readonly outcome: TypeSafeOutcome;
+  /** The tier the backend proposed, which a rejected judgment still reports. */
+  readonly tier?: string;
   readonly model?: string;
+  readonly confidence?: number;
   readonly circuitOpenUntil?: number;
 }
 
@@ -47,12 +50,18 @@ function safeModelId(value: unknown): string | undefined {
 function safeDirectObservation(value: DirectClassifierObservation | undefined): DirectClassifierObservation | undefined {
   if (!value || (value.backend !== "typesafe" && value.backend !== "pi-native") || !DIRECT_CLASSIFIER_OUTCOMES.has(value.outcome)) return undefined;
   const model = safeModelId(value.model);
+  const tier = safeModelId(value.tier);
+  const confidence = typeof value.confidence === "number" && Number.isFinite(value.confidence)
+    ? value.confidence
+    : undefined;
   const circuitOpenUntil = Number.isSafeInteger(value.circuitOpenUntil) && (value.circuitOpenUntil ?? 0) > 0
     && (value.circuitOpenUntil ?? 0) <= 8_640_000_000_000_000 ? value.circuitOpenUntil : undefined;
   return {
     backend: value.backend,
     outcome: value.outcome,
+    ...(tier ? { tier } : {}),
     ...(model ? { model } : {}),
+    ...(confidence !== undefined ? { confidence } : {}),
     ...(circuitOpenUntil ? { circuitOpenUntil } : {}),
   };
 }

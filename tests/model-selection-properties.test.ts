@@ -32,6 +32,7 @@ const ALL_STRATEGIES: readonly RoutingStrategy[] = [
   "cheapest_output",
   "largest_context",
   "random",
+  "best_value",
 ];
 
 const STRATEGY = fc.constantFrom<RoutingStrategy>(...ALL_STRATEGIES);
@@ -225,6 +226,31 @@ describe("model selection properties", () => {
     });
   });
 
+  describe("best value", () => {
+    it("selects the documented minimum combined cost per context token", () => {
+      fc.assert(
+        fc.property(CATALOG, (entries) => {
+          const models = buildCatalog(entries);
+          const selected = selectModel([...models], "best_value", RNG);
+          if (entries.length === 0) {
+            assert.equal(selected, undefined);
+            return;
+          }
+          const ratios = entries.map((entry) => totalCost(entry) / entry.contextWindow);
+          assert.equal(
+            modelKey(selected as Model<Api>),
+            modelKey(models[firstIndexOfMin(ratios)]),
+          );
+          assert.equal(
+            modelCost(selected as Model<Api>) / modelContextSize(selected as Model<Api>),
+            Math.min(...ratios),
+          );
+        }),
+        { numRuns: 250 },
+      );
+    });
+  });
+
   describe("stable ties", () => {
     it("keeps the earliest candidate among equal combined costs", () => {
       fc.assert(
@@ -267,6 +293,31 @@ describe("model selection properties", () => {
             modelKey(selectModel([...models], "largest_context", RNG) as Model<Api>),
             modelKey(models[firstIndexOfMax(contexts)]),
           );
+        }),
+        { numRuns: 250 },
+      );
+    });
+
+    it("keeps the earliest candidate among equal best-value ratios", () => {
+      fc.assert(
+        fc.property(TIED_COST_LIST, fc.integer({ min: 1_000, max: 1_010 }), (specs, baseContext) => {
+          const minimum = firstIndexOfMin(specs.map(totalCost));
+          const priced: CostSpec[] = [
+            ...specs.slice(0, minimum + 1),
+            specs[minimum],
+            ...specs.slice(minimum + 1),
+            { input: 1_000_000, output: 1_000_000 },
+          ];
+          const models = priced.map((spec, index) => makeModel("fixture", `pool-${index}`, spec.input, spec.output, baseContext));
+          const ratios = priced.map((spec) => totalCost(spec) / baseContext);
+          const atMinimum = ratios.filter((ratio) => ratio === Math.min(...ratios)).length;
+          assert.ok(atMinimum >= 2, "fixture must place at least one duplicate at the minimum");
+          assert.ok(
+            firstIndexOfMin(ratios) < ratios.length - 1,
+            "the best-value candidate must not be last, or first-wins and last-wins agree",
+          );
+          const winner = firstIndexOfMin(ratios);
+          assert.equal(modelKey(selectModel([...models], "best_value", RNG) as Model<Api>), modelKey(models[winner]));
         }),
         { numRuns: 250 },
       );

@@ -14,6 +14,7 @@ export type RoutingStrategy =
   | "cheapest_output"
   | "largest_context"
   | "random"
+  | "best_value"
   | "fastest";
 
 export interface RouteRule {
@@ -254,6 +255,10 @@ export function selectModel<M extends RoutingModelBase>(
       }
       return candidates[Math.floor(pick * candidates.length)];
     }
+
+    case "best_value":
+      // Maximize context per dollar: minimize cost per context token.
+      return minBy(candidates, (m) => modelCost(m) / m.contextWindow);
     default:
       // "first", "fastest" — list order is assumed meaningful.
       return candidates[0];

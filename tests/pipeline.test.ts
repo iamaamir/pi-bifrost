@@ -382,6 +382,82 @@ describe("classification-pipeline", () => {
       assert.equal(JSON.stringify(buildRouteDecisionSummary(defaultResult)).includes("PRIVATE_PROMPT"), false);
     });
 
+    it("propagates rejected direct confidence into classifier attempts and route summaries", async () => {
+      const directFailure = {
+        kind: "direct-classifier-attempt" as const,
+        observation: {
+          backend: "typesafe" as const,
+          outcome: "low_confidence" as const,
+          tier: "quick",
+          model: "jev-1.13.0",
+          confidence: 0.73,
+        },
+      };
+      const pipeline = createPipeline(deps({
+        classifyDirect: async () => directFailure,
+        defaultTier: "economical",
+      }));
+      const result = await pipeline.classify("ordinary prompt");
+      assert.equal(result.kind, "fallback");
+      assert.equal(result.classifierAttempt?.confidence, 0.73);
+      assert.equal(result.classifierAttempt?.outcome, "low_confidence");
+      // A rejected judgment still names the tier it proposed; dropping it here
+      // leaves the confidence unattributable when metrics are disabled.
+      assert.equal(result.classifierAttempt?.tier, "quick");
+      const summary = buildRouteDecisionSummary(result);
+      assert.equal(summary.classifierAttempt?.confidence, 0.73);
+      assert.equal(summary.classifierAttempt?.tier, "quick");
+      assert.equal(JSON.stringify(summary).includes("ordinary prompt"), false);
+    });
+
+    it("preserves zero confidence for rejected direct attempts", async () => {
+      const pipeline = createPipeline(deps({
+        classifyDirect: async () => ({
+          kind: "direct-classifier-attempt",
+          observation: {
+            backend: "pi-native" as const,
+            outcome: "low_confidence" as const,
+            model: "typesafe/jev-latest",
+            confidence: 0,
+          },
+        }),
+        defaultTier: "economical",
+      }));
+      const result = await pipeline.classify("anything");
+      assert.equal(result.kind, "fallback");
+      assert.equal(result.classifierAttempt?.confidence, 0);
+      assert.equal(buildRouteDecisionSummary(result).classifierAttempt?.confidence, 0);
+    });
+
+    it("drops non-finite direct confidence instead of fabricating numeric evidence", async () => {
+      for (const confidence of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+        const pipeline = createPipeline(deps({
+          classifyDirect: async () => ({
+            kind: "direct-classifier-attempt",
+            observation: {
+              backend: "typesafe" as const,
+              outcome: "low_confidence" as const,
+              model: "jev-1.13.0",
+              confidence,
+            },
+          }),
+          defaultTier: "economical",
+        }));
+        const result = await pipeline.classify("anything");
+        assert.equal(result.kind, "fallback");
+        // The attempt itself must survive; asserting absence on `?? {}` alone
+        // would also pass if the whole attempt were dropped.
+        const expectedAttempt = {
+          backend: "typesafe",
+          outcome: "low_confidence",
+          model: "jev-1.13.0",
+          fallbackKind: "default",
+        };
+        assert.deepEqual(result.classifierAttempt, expectedAttempt, `confidence ${confidence} must not change the attempt`);
+        assert.deepEqual(buildRouteDecisionSummary(result).classifierAttempt, expectedAttempt);
+      }
+    });
+
     it("retains prompt backend and model metadata", async () => {
       const p = createPipeline(deps({
         classifierModels: [makeClassifierModel("fixture", "prompt-model")],

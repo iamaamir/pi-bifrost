@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { BIFROST_COMMAND_OPTIONS, BIFROST_JSON_PREFIX, buildClassifierTestReport, buildPreviewFailure, buildPreviewReport, buildTracePreview, createCommandRouter, getBifrostCommandCompletions, log, nextClassifierConfig, parsePreviewArgs, renderPreviewReport, renderTracePreview, resolveTierDisplay, runBifrostCommand, serializePreviewReport, type BifrostPreviewSuccess } from "../commands.ts";
 import { makeModel, makePiClassifierModel, makeRegistry } from "./helpers.ts";
-import { createPipeline } from "../classification-pipeline.ts";
+import { buildRouteDecisionSummary, createPipeline } from "../classification-pipeline.ts";
 import { DEFAULT_THRESHOLD, lookupCache, touchCacheEntry, updateCache, type CacheEntry } from "../cache.ts";
 import { reliabilityPath } from "../reliability.ts";
 import { providerReliabilityPath, reliabilityV2Path } from "../runtime-reliability-v2.ts";
@@ -30,6 +30,503 @@ it("renders missing configured entries in text route traces", () => {
   const text = renderTracePreview(trace).join("\n");
   assert.match(text, /fake\/missing.*model_unavailable.*registry_snapshot/u);
   assert.match(text, /fuzzy.*pattern_unavailable.*registry_snapshot/u);
+});
+
+describe("render trace preview", () => {
+  it("renders classifier attempt details with exact confidence", () => {
+    const lines = renderTracePreview({
+      version: 1,
+      kind: "route-decision",
+      outcome: "unresolved",
+      classification: { source: "fallback", tier: "general" },
+      classifierAttempt: {
+        backend: "typesafe",
+        outcome: "low_confidence",
+        fallbackKind: "prompt",
+        model: "jev-1.13.0",
+        fallbackModel: "fixture/classifier",
+        confidence: 0.73,
+      },
+      classifierDisclosure: { enabled: true, configuredClassifierMayReceivePrompt: true },
+    }).join("\n");
+
+    assert.match(lines, /classifier attempt: typesafe \(low_confidence, fallback=prompt\)/u);
+    assert.match(lines, /classifier attempt model: jev-1\.13\.0/u);
+    assert.match(lines, /classifier attempt confidence: 0\.73/u);
+  });
+
+  it("renders classifier attempt details with zero confidence", () => {
+    const lines = renderTracePreview({
+      version: 1,
+      kind: "route-decision",
+      outcome: "unresolved",
+      classification: { source: "fallback", tier: "general" },
+      classifierAttempt: {
+        backend: "pi-native",
+        outcome: "low_confidence",
+        fallbackKind: "default",
+        model: "typesafe/jev-latest",
+        confidence: 0,
+      },
+      classifierDisclosure: { enabled: true, configuredClassifierMayReceivePrompt: true },
+    }).join("\n");
+
+    assert.match(lines, /classifier attempt: pi-native \(low_confidence, fallback=default\)/u);
+    assert.match(lines, /classifier attempt model: typesafe\/jev-latest/u);
+    assert.match(lines, /^classifier attempt confidence: 0$/mu);
+  });
+
+  it("omits absent optional classifier attempt fields", () => {
+    const lines = renderTracePreview({
+      version: 1,
+      kind: "route-decision",
+      outcome: "unresolved",
+      classification: { source: "fallback", tier: "general" },
+      classifierAttempt: {
+        backend: "typesafe",
+        outcome: "timeout",
+        fallbackKind: "regex",
+      },
+      classifierDisclosure: { enabled: true, configuredClassifierMayReceivePrompt: true },
+    }).join("\n");
+
+    assert.match(lines, /classifier attempt: typesafe \(timeout, fallback=regex\)/u);
+    assert.doesNotMatch(lines, /classifier attempt model:/u);
+    assert.doesNotMatch(lines, /classifier attempt confidence:/u);
+  });
+});
+
+describe("standard preview rejected direct confidence", () => {
+  const display = {
+    strategy: "first-available",
+    selected: "fake/chat",
+    selectedTier: "general",
+    fallbackReason: undefined as string | undefined,
+    requestedCandidateLines: ["fake/chat"],
+    fallbackCandidateLines: [] as string[],
+    defaultTier: "general",
+  };
+
+  it("exposes rejected direct attempt confidence in preview JSON and text without inventing accepted confidence", () => {
+    const report = buildPreviewReport({
+      prompt: "p",
+      classification: {
+        kind: "fallback",
+        tier: "general",
+        classifierAttempt: {
+          backend: "typesafe",
+          outcome: "low_confidence",
+          fallbackKind: "default",
+          model: "jev-1.13.0",
+          confidence: 0.73,
+        },
+      },
+      display,
+    });
+
+    assert.equal("backend" in report, false);
+    assert.equal("model" in report, false);
+    assert.equal("confidence" in report, false);
+    assert.equal(report.classifierAttempt?.backend, "typesafe");
+    assert.equal(report.classifierAttempt?.confidence, 0.73);
+    assert.equal(report.classifierAttempt?.outcome, "low_confidence");
+
+    const lines = renderPreviewReport(report).join("\n");
+    assert.match(lines, /classifier attempt: typesafe \(low_confidence, fallback=default\)/u);
+    assert.match(lines, /classifier attempt model: jev-1\.13\.0/u);
+    assert.match(lines, /classifier attempt confidence: 0\.73/u);
+    assert.doesNotMatch(lines, /^backend:   /mu);
+    assert.doesNotMatch(lines, /^confidence:/mu);
+  });
+
+  it("preserves zero rejected attempt confidence in preview JSON and text", () => {
+    const report = buildPreviewReport({
+      prompt: "p",
+      classification: {
+        kind: "fallback",
+        tier: "general",
+        classifierAttempt: {
+          backend: "pi-native",
+          outcome: "low_confidence",
+          fallbackKind: "default",
+          model: "typesafe/jev-latest",
+          confidence: 0,
+        },
+      },
+      display,
+    });
+
+    assert.equal(report.classifierAttempt?.confidence, 0);
+    const lines = renderPreviewReport(report).join("\n");
+    assert.match(lines, /^classifier attempt confidence: 0$/mu);
+  });
+
+  it("omits rejected attempt confidence when absent but keeps the attempt observable", () => {
+    const report = buildPreviewReport({
+      prompt: "p",
+      classification: {
+        kind: "fallback",
+        tier: "general",
+        classifierAttempt: {
+          backend: "typesafe",
+          outcome: "timeout",
+          fallbackKind: "regex",
+        },
+      },
+      display,
+    });
+
+    assert.equal(report.classifierAttempt?.backend, "typesafe");
+    assert.equal("confidence" in (report.classifierAttempt ?? {}), false);
+    const lines = renderPreviewReport(report).join("\n");
+    assert.match(lines, /classifier attempt: typesafe \(timeout, fallback=regex\)/u);
+    assert.doesNotMatch(lines, /classifier attempt confidence:/u);
+  });
+
+  it("keeps accepted judgment and rejected attempt distinct after prompt fallback", () => {
+    const report = buildPreviewReport({
+      prompt: "p",
+      classification: {
+        kind: "classified",
+        tier: "frontier",
+        source: "classifier",
+        judgment: { tier: "frontier", backend: "prompt", model: "fixture/classifier", confidence: 0.91 },
+        classifierAttempt: {
+          backend: "typesafe",
+          outcome: "low_confidence",
+          fallbackKind: "prompt",
+          model: "jev-1.13.0",
+          fallbackModel: "fixture/classifier",
+          confidence: 0.73,
+        },
+      },
+      display: { ...display, selectedTier: "frontier", selected: "fixture/frontier" },
+    });
+
+    assert.equal(report.backend, "prompt");
+    assert.equal(report.model, "fixture/classifier");
+    assert.equal(report.confidence, 0.91);
+    assert.equal(report.classifierAttempt?.backend, "typesafe");
+    assert.equal(report.classifierAttempt?.confidence, 0.73);
+
+    const lines = renderPreviewReport(report).join("\n");
+    assert.match(lines, /^backend:   prompt$/mu);
+    assert.match(lines, /^model:     fixture\/classifier$/mu);
+    assert.match(lines, /^confidence: 0\.91$/mu);
+    assert.match(lines, /classifier attempt: typesafe \(low_confidence, fallback=prompt\)/u);
+    assert.match(lines, /classifier attempt confidence: 0\.73/u);
+  });
+});
+
+describe("preview command rejected direct confidence", () => {
+  const generalDisplayState = (tiers: Record<string, string[]> = { general: ["fixture/chat"] }) => {
+    const models = [...new Set(Object.values(tiers).flat())].map((key) => {
+      const slash = key.indexOf("/");
+      return makeModel(slash >= 0 ? key.slice(0, slash) : "fixture", slash >= 0 ? key.slice(slash + 1) : key);
+    });
+    const { ctx } = makeCtx(models, undefined, undefined, {
+      find: (provider: string, id: string) => models.find((model) => model.provider === provider && model.id === id),
+      getAll: () => models,
+      getAvailable: () => models,
+    } as never);
+    const state = makeState();
+    state.config.models = tiers;
+    state.config.default = "general";
+    return { ctx, state };
+  };
+
+  it("surfaces rejected direct confidence in /bifrost preview output", async () => {
+    const { ctx, state } = generalDisplayState();
+    state.getPipeline = () => ({
+      classify: async () => ({
+        kind: "fallback" as const,
+        tier: "general",
+        classifierAttempt: {
+          backend: "typesafe" as const,
+          outcome: "low_confidence" as const,
+          fallbackKind: "default" as const,
+          model: "jev-1.13.0",
+          confidence: 0.73,
+        },
+      }),
+    }) as never;
+    const lines = await captureCommandText(async () => {
+      await createCommandRouter(state as never)("preview hello", printModeCtx(ctx));
+    });
+    const text = lines.join("\n");
+
+    assert.match(text, /classifier attempt: typesafe \(low_confidence, fallback=default\)/u);
+    assert.match(text, /classifier attempt confidence: 0\.73/u);
+    assert.doesNotMatch(text, /^confidence:/mu);
+  });
+
+  it("surfaces rejected direct confidence in /bifrost preview --json", async () => {
+    const { ctx, state } = generalDisplayState();
+    state.getPipeline = () => ({
+      classify: async () => ({
+        kind: "fallback" as const,
+        tier: "general",
+        classifierAttempt: {
+          backend: "typesafe" as const,
+          outcome: "low_confidence" as const,
+          fallbackKind: "default" as const,
+          model: "jev-1.13.0",
+          confidence: 0.73,
+        },
+      }),
+    }) as never;
+    const [report] = await captureJsonReports(async () => {
+      await createCommandRouter(state as never)("preview --json hello", ctx as never);
+    }) as Array<Record<string, any>>;
+
+    assert.equal(report.ok, true);
+    assert.equal("confidence" in report, false);
+    assert.equal(report.classifierAttempt?.backend, "typesafe");
+    assert.equal(report.classifierAttempt?.confidence, 0.73);
+  });
+
+  it("surfaces zero and missing rejected confidence in standard preview command outputs", async () => {
+    for (const attempt of [
+      { backend: "pi-native" as const, outcome: "low_confidence" as const, fallbackKind: "default" as const, model: "jev-latest", confidence: 0 },
+      { backend: "typesafe" as const, outcome: "timeout" as const, fallbackKind: "regex" as const },
+    ]) {
+      const { ctx, state } = generalDisplayState();
+      state.getPipeline = () => ({ classify: async () => ({ kind: "fallback" as const, tier: "general", classifierAttempt: attempt }) }) as never;
+      const dispatch = createCommandRouter(state as never);
+
+      const [json] = await captureJsonReports(async () => {
+        await dispatch("preview --json hello", ctx as never);
+      }) as Array<Record<string, any>>;
+      assert.equal(json.classifierAttempt?.backend, attempt.backend);
+      if ("confidence" in attempt) assert.equal(json.classifierAttempt?.confidence, 0);
+      else assert.equal("confidence" in (json.classifierAttempt ?? {}), false);
+
+      const text = (await captureCommandText(async () => {
+        await dispatch("preview hello", printModeCtx(ctx));
+      })).join("\n");
+      if ("confidence" in attempt) assert.match(text, /^classifier attempt confidence: 0$/mu);
+      else assert.doesNotMatch(text, /classifier attempt confidence:/u);
+    }
+  });
+
+  it("keeps accepted prompt confidence distinct in standard preview command outputs after direct rejection", async () => {
+    const { ctx, state } = generalDisplayState({ general: ["fixture/chat"], frontier: ["fixture/chat"] });
+    state.getPipeline = () => ({
+      classify: async () => ({
+        kind: "classified" as const,
+        tier: "frontier",
+        source: "classifier" as const,
+        judgment: { tier: "frontier", backend: "prompt", model: "fixture/classifier", confidence: 0.91 },
+        classifierAttempt: {
+          backend: "typesafe" as const,
+          outcome: "low_confidence" as const,
+          fallbackKind: "prompt" as const,
+          model: "jev-1.13.0",
+          fallbackModel: "fixture/classifier",
+          confidence: 0.73,
+        },
+      }),
+    }) as never;
+    const dispatch = createCommandRouter(state as never);
+
+    const [json] = await captureJsonReports(async () => {
+      await dispatch("preview --json hello", ctx as never);
+    }) as Array<Record<string, any>>;
+    assert.equal(json.backend, "prompt");
+    assert.equal(json.confidence, 0.91);
+    assert.equal(json.classifierAttempt?.backend, "typesafe");
+    assert.equal(json.classifierAttempt?.confidence, 0.73);
+
+    const text = (await captureCommandText(async () => {
+      await dispatch("preview hello", printModeCtx(ctx));
+    })).join("\n");
+    assert.match(text, /^backend:   prompt$/mu);
+    assert.match(text, /^confidence: 0\.91$/mu);
+    assert.match(text, /classifier attempt: typesafe \(low_confidence, fallback=prompt\)/u);
+    assert.match(text, /classifier attempt confidence: 0\.73/u);
+  });
+
+  it("surfaces rejected direct confidence in /bifrost preview --trace text and JSON", async () => {
+    const { ctx, state } = generalDisplayState();
+    state.getPipeline = () => ({
+      classify: async () => ({
+        kind: "fallback" as const,
+        tier: "general",
+        classifierAttempt: {
+          backend: "typesafe" as const,
+          outcome: "low_confidence" as const,
+          fallbackKind: "default" as const,
+          model: "jev-1.13.0",
+          confidence: 0.73,
+        },
+      }),
+    }) as never;
+    const dispatch = createCommandRouter(state as never);
+
+    const [traceJson] = await captureJsonReports(async () => {
+      await dispatch("preview --trace --json hello", ctx as never);
+    }) as Array<Record<string, any>>;
+    assert.equal(traceJson.classifierAttempt?.backend, "typesafe");
+    assert.equal(traceJson.classifierAttempt?.confidence, 0.73);
+
+    const traceText = (await captureCommandText(async () => {
+      await dispatch("preview --trace hello", printModeCtx(ctx));
+    })).join("\n");
+    assert.match(traceText, /classifier attempt: typesafe \(low_confidence, fallback=default\)/u);
+    assert.match(traceText, /classifier attempt confidence: 0\.73/u);
+  });
+
+  it("surfaces zero and missing rejected confidence in trace command outputs", async () => {
+    for (const attempt of [
+      { backend: "pi-native" as const, outcome: "low_confidence" as const, fallbackKind: "default" as const, model: "jev-latest", confidence: 0 },
+      { backend: "typesafe" as const, outcome: "timeout" as const, fallbackKind: "regex" as const },
+    ]) {
+      const { ctx, state } = generalDisplayState();
+      state.getPipeline = () => ({ classify: async () => ({ kind: "fallback" as const, tier: "general", classifierAttempt: attempt }) }) as never;
+      const dispatch = createCommandRouter(state as never);
+
+      const [traceJson] = await captureJsonReports(async () => {
+        await dispatch("preview --trace --json hello", ctx as never);
+      }) as Array<Record<string, any>>;
+      assert.equal(traceJson.classifierAttempt?.backend, attempt.backend);
+      if ("confidence" in attempt) assert.equal(traceJson.classifierAttempt?.confidence, 0);
+      else assert.equal("confidence" in (traceJson.classifierAttempt ?? {}), false);
+
+      const traceText = (await captureCommandText(async () => {
+        await dispatch("preview --trace hello", printModeCtx(ctx));
+      })).join("\n");
+      if ("confidence" in attempt) assert.match(traceText, /^classifier attempt confidence: 0$/mu);
+      else assert.doesNotMatch(traceText, /classifier attempt confidence:/u);
+    }
+  });
+
+  it("keeps rejected attempt confidence distinct in trace outputs after accepted prompt fallback", async () => {
+    const { ctx, state } = generalDisplayState({ general: ["fixture/chat"], frontier: ["fixture/chat"] });
+    state.getPipeline = () => ({
+      classify: async () => ({
+        kind: "classified" as const,
+        tier: "frontier",
+        source: "classifier" as const,
+        judgment: { tier: "frontier", backend: "prompt", model: "fixture/classifier", confidence: 0.91 },
+        classifierAttempt: {
+          backend: "typesafe" as const,
+          outcome: "low_confidence" as const,
+          fallbackKind: "prompt" as const,
+          model: "jev-1.13.0",
+          fallbackModel: "fixture/classifier",
+          confidence: 0.73,
+        },
+      }),
+    }) as never;
+    const dispatch = createCommandRouter(state as never);
+
+    const [traceJson] = await captureJsonReports(async () => {
+      await dispatch("preview --trace --json hello", ctx as never);
+    }) as Array<Record<string, any>>;
+    assert.equal(traceJson.classification?.classifier?.backend, "prompt");
+    assert.equal(traceJson.classification?.classifier?.confidence, 0.91);
+    assert.equal(traceJson.classifierAttempt?.backend, "typesafe");
+    assert.equal(traceJson.classifierAttempt?.confidence, 0.73);
+
+    const traceText = (await captureCommandText(async () => {
+      await dispatch("preview --trace hello", printModeCtx(ctx));
+    })).join("\n");
+    assert.match(traceText, /classifier: prompt/u);
+    assert.match(traceText, /classifier confidence: 0\.91/u);
+    assert.match(traceText, /classifier attempt: typesafe \(low_confidence, fallback=prompt\)/u);
+    assert.match(traceText, /classifier attempt confidence: 0\.73/u);
+  });
+});
+
+describe("classifier test command rejected direct confidence", () => {
+  it("reports exact rejected direct confidence and keeps final prompt fallback distinct", async () => {
+    const { ctx } = makeCtx([makeModel("fixture", "classifier")]);
+    const state = makeState() as any;
+    const before = {
+      version: 1, model: "jev-1.13.0", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
+    };
+    const after = {
+      ...before,
+      total: 1,
+      outcomes: { low_confidence: 1 },
+      tiers: { quick: 1 },
+      confidenceBands: { "<0.8": 1 },
+      totalAttempts: 1,
+    };
+    let snapshot = before;
+    state.config.classifier = { enabled: true, backend: "typesafe", typesafe: { model: "jev-1.13.0" }, minConfidence: 0.8 };
+    state.effectiveClassifierBackend = () => ({ backend: "typesafe", reason: "configured", auto: false });
+    state.classifierMetricsStore = { snapshot: () => snapshot, reload: () => {} };
+    state.getPipeline = () => ({
+      classify: async () => {
+        snapshot = after;
+        return {
+          kind: "classified" as const,
+          tier: "frontier",
+          source: "classifier" as const,
+          judgment: { tier: "frontier", backend: "prompt", model: "fixture/classifier", confidence: 0.91 },
+          classifierAttempt: {
+            backend: "typesafe" as const,
+            outcome: "low_confidence" as const,
+            fallbackKind: "prompt" as const,
+            fallbackModel: "fixture/classifier",
+            model: "jev-1.13.0",
+            confidence: 0.73,
+          },
+        };
+      },
+    }) as never;
+
+    const lines = (await captureCommandText(async () => {
+      await createCommandRouter(state as never)("classifier test", printModeCtx(ctx));
+    })).join("\n");
+
+    assert.match(lines, /backend: typesafe/u);
+    assert.match(lines, /backend result: quick/u);
+    assert.match(lines, /^confidence: 0\.73$/mu);
+    assert.match(lines, /accepted: no/u);
+    assert.match(lines, /final result: frontier/u);
+    assert.match(lines, /final backend: prompt/u);
+    assert.match(lines, /final model: fixture\/classifier/u);
+  });
+
+  it("reports zero and missing rejected direct confidence in classifier test output", async () => {
+    const { ctx } = makeCtx();
+    const state = makeState() as any;
+    state.config.classifier = { enabled: true, backend: "typesafe", typesafe: { model: "jev-1.13.0" }, minConfidence: 0.8 };
+    state.effectiveClassifierBackend = () => ({ backend: "typesafe", reason: "configured", auto: false });
+
+    for (const [attempt, expectedConfidence] of [
+      [{ backend: "typesafe" as const, outcome: "low_confidence" as const, fallbackKind: "default" as const, model: "jev-1.13.0", confidence: 0 }, /^confidence: 0$/mu],
+      [{ backend: "typesafe" as const, outcome: "low_confidence" as const, fallbackKind: "default" as const, model: "jev-1.13.0" }, /^confidence: <0\.8$/mu],
+    ] as const) {
+      const before = {
+        version: 1, model: "jev-1.13.0", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
+      };
+      const after = {
+        ...before,
+        total: 1,
+        outcomes: { low_confidence: 1 },
+        tiers: { quick: 1 },
+        confidenceBands: { "<0.8": 1 },
+        totalAttempts: 1,
+      };
+      let snapshot = before;
+      state.classifierMetricsStore = { snapshot: () => snapshot, reload: () => {} };
+      state.getPipeline = () => ({
+        classify: async () => {
+          snapshot = after;
+          return { kind: "fallback" as const, tier: "general", classifierAttempt: attempt };
+        },
+      }) as never;
+
+      const lines = (await captureCommandText(async () => {
+        await createCommandRouter(state as never)("classifier test", printModeCtx(ctx));
+      })).join("\n");
+      assert.match(lines, expectedConfidence);
+      assert.match(lines, /accepted: no/u);
+    }
+  });
 });
 
 function writeRecentProbeCache(path: string, results: unknown): void {
@@ -192,6 +689,26 @@ async function captureJsonReports(run: () => Promise<void>): Promise<unknown[]> 
   const marked = lines.filter((line) => line.startsWith(BIFROST_JSON_PREFIX));
   assert.equal(marked.length, 1, `expected exactly one marker line, got:\n${lines.join("\n")}`);
   return [JSON.parse(marked[0].slice(BIFROST_JSON_PREFIX.length))];
+}
+
+async function captureCommandText(run: () => Promise<void>): Promise<string[]> {
+  const original = console.error;
+  const lines: string[] = [];
+  console.error = (...args: unknown[]) => {
+    lines.push(args.map((arg) => String(arg)).join(" "));
+  };
+  try {
+    await run();
+  } finally {
+    console.error = original;
+  }
+  return lines
+    .filter((line) => line.startsWith("[bifrost] "))
+    .map((line) => line.slice("[bifrost] ".length));
+}
+
+function printModeCtx(ctx: unknown): never {
+  return { ...(ctx as Record<string, unknown>), mode: "print" } as never;
 }
 
 describe("classifier chooser config", () => {
@@ -461,6 +978,14 @@ describe("bifrost command ui", () => {
         tier: "frontier",
         source: "classifier",
         judgment: { tier: "frontier", backend: "prompt", model: "fixture/classifier" },
+        classifierAttempt: {
+          backend: "typesafe",
+          outcome: "low_confidence",
+          fallbackKind: "prompt",
+          fallbackModel: "fixture/classifier",
+          model: "jev-1.13.0",
+          confidence: 0.73,
+        },
       },
       before,
       after,
@@ -470,13 +995,224 @@ describe("bifrost command ui", () => {
     assert(lines.includes("backend: typesafe"));
     assert(lines.includes("model: jev-1.13.0"));
     assert(lines.includes("backend result: quick"));
-    assert(lines.includes("confidence: <0.8"));
+    assert(lines.includes("confidence: 0.73"));
     assert(lines.includes("accepted: no"));
     assert(lines.includes("final result: frontier"));
     assert(lines.includes("final source: classifier"));
     assert(lines.includes("final backend: prompt"));
     assert(lines.includes("final model: fixture/classifier"));
+    assert(lines.includes("classifier fallback: prompt"));
     assert(lines.includes("outcome: low_confidence"));
+  });
+
+  it("attributes a rejected auto-resolved pi-native attempt to the observed model", () => {
+    const before = {
+      version: 1, model: "typesafe/jev-latest", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
+    } as const;
+    const after = {
+      ...before,
+      total: 1,
+      outcomes: { low_confidence: 1 },
+      tiers: { quick: 1 },
+      totalAttempts: 1,
+    } as const;
+
+    const lines = buildClassifierTestReport({
+      classifier: { piNative: {}, minConfidence: 0.8 },
+      effectiveBackend: { backend: "pi-native", reason: "Pi-managed TypeSafe credential", auto: true },
+      result: {
+        kind: "fallback",
+        tier: "quick",
+        classifierAttempt: {
+          backend: "pi-native",
+          outcome: "low_confidence",
+          fallbackKind: "default",
+          model: "typesafe/jev-latest",
+          confidence: 0.73,
+        },
+      },
+      before,
+      after,
+    });
+
+    assert(lines.includes("model: typesafe/jev-latest"), JSON.stringify(lines));
+    assert(lines.includes("confidence: 0.73"));
+    assert.equal(lines.some((line) => line.includes("catalog default")), false, JSON.stringify(lines));
+  });
+
+  it("attributes a rejected attempt to its observed model over an explicitly configured one", () => {
+    const before = {
+      version: 1, model: "typesafe/configured", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
+    } as const;
+    const after = {
+      ...before,
+      total: 1,
+      outcomes: { low_confidence: 1 },
+      tiers: { quick: 1 },
+      totalAttempts: 1,
+    } as const;
+
+    const lines = buildClassifierTestReport({
+      classifier: { piNative: { model: "typesafe/configured" }, minConfidence: 0.8 },
+      effectiveBackend: { backend: "pi-native", reason: "test", auto: false },
+      result: {
+        kind: "fallback",
+        tier: "quick",
+        classifierAttempt: {
+          backend: "pi-native",
+          outcome: "low_confidence",
+          fallbackKind: "default",
+          model: "typesafe/observed",
+          confidence: 0.4,
+        },
+      },
+      before,
+      after,
+    });
+
+    assert(lines.includes("model: typesafe/observed"), JSON.stringify(lines));
+    assert(lines.includes("confidence: 0.4"));
+  });
+
+  it("keeps configured model attribution when a rejected attempt observed no model", () => {
+    const before = {
+      version: 1, model: "typesafe/configured", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
+    } as const;
+    const after = {
+      ...before,
+      total: 1,
+      outcomes: { timeout: 1 },
+      tiers: { quick: 1 },
+      totalAttempts: 0,
+    } as const;
+
+    const lines = buildClassifierTestReport({
+      classifier: { piNative: { model: "typesafe/configured" }, minConfidence: 0.8 },
+      effectiveBackend: { backend: "pi-native", reason: "test", auto: false },
+      result: {
+        kind: "fallback",
+        tier: "quick",
+        classifierAttempt: {
+          backend: "pi-native",
+          outcome: "timeout",
+          fallbackKind: "default",
+        },
+      },
+      before,
+      after,
+    });
+
+    assert(lines.includes("model: typesafe/configured"), JSON.stringify(lines));
+    assert(lines.includes("confidence: n/a"), JSON.stringify(lines));
+  });
+
+  it("falls back to confidence bands when a rejected attempt has no exact confidence", () => {
+    const before = {
+      version: 1, model: "jev-1.13.0", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
+    } as const;
+    const after = {
+      ...before,
+      total: 1,
+      outcomes: { low_confidence: 1 },
+      tiers: { quick: 1 },
+      confidenceBands: { "<0.8": 1 },
+      totalAttempts: 1,
+    } as const;
+
+    const lines = buildClassifierTestReport({
+      classifier: { backend: "typesafe", typesafe: { model: "jev-1.13.0" }, minConfidence: 0.8 },
+      result: {
+        kind: "classified",
+        tier: "frontier",
+        source: "classifier",
+        judgment: { tier: "frontier", backend: "prompt", model: "fixture/classifier" },
+        classifierAttempt: {
+          backend: "typesafe",
+          outcome: "low_confidence",
+          fallbackKind: "prompt",
+          fallbackModel: "fixture/classifier",
+          model: "jev-1.13.0",
+        },
+      },
+      before,
+      after,
+      credential: "environment",
+    });
+
+    assert(lines.includes("confidence: <0.8"));
+  });
+
+  it("reports the tier a rejected attempt proposed when metrics are disabled", () => {
+    const empty = {
+      version: 1, model: "jev-1.13.0", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
+    } as const;
+    const report = (attempt: { tier?: string; outcome?: "low_confidence" | "timeout"; confidence?: number }) => buildClassifierTestReport({
+      classifier: { backend: "typesafe", typesafe: { model: "jev-1.13.0" }, minConfidence: 0.8 },
+      result: {
+        kind: "fallback",
+        tier: "frontier",
+        classifierAttempt: {
+          backend: "typesafe",
+          outcome: attempt.outcome ?? "low_confidence",
+          fallbackKind: "default",
+          model: "jev-1.13.0",
+          ...(attempt.tier !== undefined ? { tier: attempt.tier } : {}),
+          ...(attempt.confidence !== undefined ? { confidence: attempt.confidence } : {}),
+        },
+      },
+      before: empty,
+      after: empty,
+      credential: "environment",
+    });
+
+    // No metric delta exists, so without the attempt's own tier the exact
+    // confidence would be attributable to nothing.
+    const rejected = report({ tier: "quick", confidence: 0.73 });
+    assert(rejected.includes("backend result: quick"), JSON.stringify(rejected));
+    assert(rejected.includes("confidence: 0.73"));
+    assert.equal(rejected.includes("backend result: none"), false);
+
+    // A timeout proposes nothing, so the honest answer is still absent.
+    const timedOut = report({ outcome: "timeout" });
+    assert(timedOut.includes("backend result: none"), JSON.stringify(timedOut));
+  });
+
+  it("shows zero confidence for a rejected direct classifier attempt", () => {
+    const before = {
+      version: 1, model: "jev-1.13.0", total: 0, outcomes: {}, tiers: {}, confidenceBands: {}, latencyBuckets: {}, totalLatencyMs: 0, totalAttempts: 0,
+    } as const;
+    const after = {
+      ...before,
+      total: 1,
+      outcomes: { low_confidence: 1 },
+      tiers: { quick: 1 },
+      confidenceBands: { "<0.8": 1 },
+      totalAttempts: 1,
+    } as const;
+
+    const lines = buildClassifierTestReport({
+      classifier: { backend: "typesafe", typesafe: { model: "jev-1.13.0" }, minConfidence: 0.8 },
+      result: {
+        kind: "fallback",
+        tier: "frontier",
+        classifierAttempt: {
+          backend: "typesafe",
+          outcome: "low_confidence",
+          fallbackKind: "default",
+          model: "jev-1.13.0",
+          confidence: 0,
+        },
+      },
+      before,
+      after,
+      credential: "environment",
+    });
+
+    assert(lines.includes("backend result: quick"));
+    assert(lines.includes("confidence: 0"));
+    assert(lines.includes("accepted: no"));
+    assert(lines.includes("final result: frontier"));
+    assert(lines.includes("final source: fallback"));
   });
 
   it("uses detected classifier defaults after init without opening the picker", async () => {
@@ -1495,6 +2231,139 @@ describe("preview report", () => {
     assert(renderPreviewReport(report).includes("confidence: 0"));
   });
 
+  it("renders five distinct confidences each as its own exact value in preview, trace, and failure views", async () => {
+    const confidences = [0, 0.42, 0.73, 0.999, 1];
+    const attemptLines = (lines: string[]) => lines.filter((line) => line.startsWith("classifier attempt confidence:"));
+
+    for (const confidence of confidences) {
+      const attempt = {
+        backend: "pi-native" as const,
+        outcome: "low_confidence" as const,
+        fallbackKind: "default" as const,
+        model: "jev-1.13.0",
+        confidence,
+      };
+      const expected = [`classifier attempt confidence: ${confidence}`];
+
+      const report = buildPreviewReport({
+        prompt: `prompt ${confidence}`,
+        classification: { kind: "fallback", tier: "general", classifierAttempt: attempt },
+        display,
+      });
+      assert.equal(report.classifierAttempt?.confidence, confidence);
+      assert.deepEqual(attemptLines(renderPreviewReport(report)), expected);
+
+      const trace = buildTracePreview(buildRouteDecisionSummary({ kind: "fallback", tier: "general", classifierAttempt: attempt }), true);
+      assert.deepEqual(attemptLines(renderTracePreview(trace)), expected);
+
+      const state = makeState();
+      state.getPipeline = () => ({ classify: async () => ({ kind: "unclassified" as const, classifierAttempt: attempt }) }) as never;
+      const { ctx } = makeCtx();
+      const failureText = await captureCommandText(async () => {
+        await createCommandRouter(state as never)("preview hello", printModeCtx({ ...(ctx as any), hasUI: false }) as never);
+      });
+      assert.deepEqual(attemptLines(failureText), expected);
+    }
+  });
+
+  it("does not repeat an accepted classifier attempt the classification lines already state", () => {
+    const classification = {
+      kind: "classified" as const,
+      tier: "quick",
+      source: "classifier" as const,
+      judgment: { tier: "quick", backend: "pi-native" as const, model: "jev-1.13.0", confidence: 0.93 },
+      classifierAttempt: {
+        backend: "pi-native" as const,
+        outcome: "success" as const,
+        fallbackKind: "none" as const,
+        model: "jev-1.13.0",
+        confidence: 0.93,
+      },
+    };
+
+    const report = buildPreviewReport({ prompt: "p", classification, display });
+    // Suppression is a text-view decision: the machine-readable report keeps the
+    // attempt, so a JSON consumer can still see what was recorded.
+    assert.equal(report.classifierAttempt?.confidence, 0.93);
+    const preview = renderPreviewReport(report);
+    assert(preview.includes("confidence: 0.93"));
+    assert.equal(preview.some((line) => line.startsWith("classifier attempt")), false);
+
+    const trace = renderTracePreview(buildTracePreview(buildRouteDecisionSummary(classification), true));
+    assert(trace.includes("classifier confidence: 0.93"));
+    assert.equal(trace.some((line) => line.startsWith("classifier attempt")), false);
+  });
+
+  it("names the tier a rejected attempt proposed in preview text, trace text and JSON", () => {
+    const classification = {
+      kind: "fallback" as const,
+      tier: "frontier",
+      classifierAttempt: {
+        backend: "typesafe" as const,
+        outcome: "low_confidence" as const,
+        fallbackKind: "default" as const,
+        tier: "quick",
+        model: "jev-1.13.0",
+        confidence: 0.73,
+      },
+    };
+
+    const report = buildPreviewReport({ prompt: "p", classification, display });
+    assert.equal(report.classifierAttempt?.tier, "quick");
+    assert(renderPreviewReport(report).includes("classifier attempt tier: quick"));
+    assert(renderTracePreview(buildTracePreview(buildRouteDecisionSummary(classification), true)).includes("classifier attempt tier: quick"));
+  });
+
+  it("keeps a successful attempt when its confidence differs from the classification", () => {
+    // Not produced by today's pipeline, which copies one value into both fields.
+    // The renderer must still prefer a visible divergence over a silent one.
+    const classification = {
+      kind: "classified" as const,
+      tier: "quick",
+      source: "classifier" as const,
+      judgment: { tier: "quick", backend: "pi-native" as const, model: "jev-1.13.0", confidence: 0.93 },
+      classifierAttempt: {
+        backend: "pi-native" as const,
+        outcome: "success" as const,
+        fallbackKind: "none" as const,
+        model: "jev-1.13.0",
+        confidence: 0.42,
+      },
+    };
+
+    const preview = renderPreviewReport(buildPreviewReport({ prompt: "p", classification, display }));
+    assert(preview.includes("classifier attempt confidence: 0.42"));
+
+    const trace = renderTracePreview(buildTracePreview(buildRouteDecisionSummary(classification), true));
+    assert(trace.includes("classifier attempt confidence: 0.42"));
+  });
+
+  it("keeps a successful attempt whose model the classification did not report", () => {
+    // Synthetic renderer guard, not a reachable pi-native response: the decoder
+    // fills the resolved catalog id when the API judgment omits `model`
+    // (classifier-pi-native.ts:158), so the accepted classification carries it
+    // as well. The renderer must still not drop a model only it holds.
+    const classification = {
+      kind: "classified" as const,
+      tier: "quick",
+      source: "classifier" as const,
+      judgment: { tier: "quick", backend: "pi-native" as const, confidence: 0.93 },
+      classifierAttempt: {
+        backend: "pi-native" as const,
+        outcome: "success" as const,
+        fallbackKind: "none" as const,
+        model: "catalog/resolved-model",
+        confidence: 0.93,
+      },
+    };
+
+    const preview = renderPreviewReport(buildPreviewReport({ prompt: "p", classification, display }));
+    assert(preview.includes("classifier attempt model: catalog/resolved-model"));
+
+    const trace = renderTracePreview(buildTracePreview(buildRouteDecisionSummary(classification), true));
+    assert(trace.includes("classifier attempt model: catalog/resolved-model"));
+  });
+
   it("serializes to one parseable line with no prose envelope", () => {
     const report = buildPreviewReport({
       prompt: "direct hit",
@@ -1617,11 +2486,49 @@ describe("preview failure report", () => {
     });
   });
 
+  it("carries rejected classifier-attempt detail on unclassified failures without fabricating acceptance", () => {
+    const attempt = {
+      backend: "pi-native" as const,
+      outcome: "low_confidence" as const,
+      fallbackKind: "none" as const,
+      model: "fixture/prompt",
+      confidence: 0.73,
+    };
+    assert.deepEqual(buildPreviewFailure("hello", "unclassified", attempt), {
+      ok: false,
+      prompt: "hello",
+      error: "unclassified",
+      classifierAttempt: attempt,
+    });
+  });
+
   it("serializes to one parseable line", () => {
     const line = serializePreviewReport(buildPreviewFailure("hello", "unclassified"));
 
     assert.equal(line.split("\n").length, 1);
     assert.deepEqual(JSON.parse(line), { ok: false, prompt: "hello", error: "unclassified" });
+  });
+
+  it("serializes unclassified rejected-attempt confidence without implying acceptance", () => {
+    const line = serializePreviewReport(buildPreviewFailure("hello", "unclassified", {
+      backend: "pi-native",
+      outcome: "low_confidence",
+      fallbackKind: "none",
+      model: "fixture/prompt",
+      confidence: 0.73,
+    }));
+    assert.deepEqual(JSON.parse(line), {
+      ok: false,
+      prompt: "hello",
+      error: "unclassified",
+      classifierAttempt: {
+        backend: "pi-native",
+        outcome: "low_confidence",
+        fallbackKind: "none",
+        model: "fixture/prompt",
+        confidence: 0.73,
+      },
+    });
   });
 });
 
@@ -1677,6 +2584,89 @@ describe("preview json marker", () => {
 
     assert.deepEqual(report, { ok: false, prompt: "hello", error: "unclassified" });
     assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("No configured tier matched")));
+  });
+
+  it("surfaces rejected direct-classifier confidence in unclassified /bifrost preview --json, text, and trace", async () => {
+    const attempt = {
+      backend: "pi-native" as const,
+      outcome: "low_confidence" as const,
+      fallbackKind: "none" as const,
+      model: "fixture/prompt",
+      confidence: 0.73,
+    };
+    const classification = { kind: "unclassified" as const, classifierAttempt: attempt };
+    const { ctx, calls } = makeCtx();
+    const state = makeState();
+    state.getPipeline = () => ({ classify: async () => classification }) as never;
+
+    const [jsonReport] = await captureJsonReports(async () => {
+      await createCommandRouter(state as never)("preview --json hello", ctx as never);
+    });
+
+    assert.deepEqual(jsonReport, {
+      ok: false,
+      prompt: "hello",
+      error: "unclassified",
+      classifierAttempt: attempt,
+    });
+    assert.equal("backend" in (jsonReport as Record<string, unknown>), false);
+    assert.equal("confidence" in (jsonReport as Record<string, unknown>), false);
+    assert.equal("tier" in (jsonReport as Record<string, unknown>), false);
+    assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("no tier matched")));
+
+    const { ctx: textCtx } = makeCtx();
+    const text = (await captureCommandText(async () => {
+      await createCommandRouter(state as never)("preview hello", printModeCtx({ ...(textCtx as any), hasUI: false }) as never);
+    })).join("\n");
+    assert.match(text, /--- preview ---/u);
+    assert.match(text, /source:    unclassified/u);
+    assert.match(text, /classifier attempt: pi-native \(low_confidence, fallback=none\)/u);
+    assert.match(text, /classifier attempt confidence: 0\.73/u);
+    assert.match(text, /result:    unclassified/u);
+    assert.doesNotMatch(text, /^backend:/mu);
+    assert.doesNotMatch(text, /^confidence:/mu);
+    assert.match(text, /no tier matched/u);
+
+    const [traceJson] = await captureJsonReports(async () => {
+      await createCommandRouter(state as never)("preview --trace --json hello", ctx as never);
+    }) as Array<Record<string, any>>;
+    assert.equal(traceJson.outcome, "unclassified");
+    assert.deepEqual(traceJson.classification, { source: "unclassified" });
+    assert.deepEqual(traceJson.classifierAttempt, attempt);
+    assert.equal((traceJson.classification as { classifier?: unknown }).classifier, undefined);
+    const traceText = (await captureCommandText(async () => {
+      await createCommandRouter(state as never)("preview --trace hello", printModeCtx({ ...(ctx as any), hasUI: false }) as never);
+    })).join("\n");
+    assert.match(traceText, /outcome: unclassified/u);
+    assert.match(traceText, /^classifier attempt confidence: 0\.73$/mu);
+  });
+
+  it("preserves zero and missing rejected confidence on unclassified preview JSON and trace", async () => {
+    for (const attempt of [
+      { backend: "pi-native" as const, outcome: "low_confidence" as const, fallbackKind: "none" as const, model: "fixture/prompt", confidence: 0 },
+      { backend: "typesafe" as const, outcome: "timeout" as const, fallbackKind: "none" as const },
+    ]) {
+      const classification = { kind: "unclassified" as const, classifierAttempt: attempt };
+      const { ctx } = makeCtx();
+      const state = makeState();
+      state.getPipeline = () => ({ classify: async () => classification }) as never;
+      const dispatch = createCommandRouter(state as never);
+
+      const [jsonReport] = await captureJsonReports(async () => {
+        await dispatch("preview --json hello", ctx as never);
+      }) as Array<Record<string, any>>;
+      assert.equal(jsonReport.ok, false);
+      assert.equal(jsonReport.error, "unclassified");
+      assert.equal(jsonReport.classifierAttempt?.backend, attempt.backend);
+      if ("confidence" in attempt) assert.equal(jsonReport.classifierAttempt?.confidence, 0);
+      else assert.equal("confidence" in (jsonReport.classifierAttempt ?? {}), false);
+
+      const [traceJson] = await captureJsonReports(async () => {
+        await dispatch("preview --trace --json hello", ctx as never);
+      }) as Array<Record<string, any>>;
+      if ("confidence" in attempt) assert.equal(traceJson.classifierAttempt?.confidence, 0);
+      else assert.equal("confidence" in (traceJson.classifierAttempt ?? {}), false);
+    }
   });
 
   it("marks a successful report as ok", async () => {
