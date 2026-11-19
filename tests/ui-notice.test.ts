@@ -91,6 +91,29 @@ test("notice card lists every failing model when expanded", () => {
   assert.ok(!text.includes("to expand"), text);
 });
 
+test("TUI notices append one typed entry and fall back to notify when append fails", () => {
+  const calls: Array<[string, unknown]> = [];
+  registerBifrostNotices({
+    registerEntryRenderer: () => {},
+    appendEntry: (type: string, data: unknown) => { calls.push([type, data]); },
+  } as never);
+  const ctx = { mode: "tui", hasUI: true, ui: { notify: () => assert.fail("unexpected notification") } } as never;
+  log(ctx, "Saved", "Config updated", "success", ["one detail"], ["full detail"]);
+  assert.deepEqual(calls, [["bifrost-notice", {
+    title: "Saved", message: "Config updated", level: "success",
+    details: ["one detail"], expandedDetails: ["full detail"],
+  }]]);
+
+  const notifications: unknown[][] = [];
+  registerBifrostNotices({
+    registerEntryRenderer: () => {},
+    appendEntry: () => { throw new Error("no session"); },
+  } as never);
+  log({ mode: "tui", hasUI: true, ui: { notify: (...args: unknown[]) => notifications.push(args) } } as never,
+    "Saved", "Config updated", "success", ["one detail"]);
+  assert.deepEqual(notifications, [["Saved: Config updated\none detail", "info"]]);
+});
+
 test("headless notices stay on stderr for every level", () => {
   const original = { log: console.log, info: console.info, warn: console.warn, error: console.error };
   const seen: Array<[string, string]> = [];

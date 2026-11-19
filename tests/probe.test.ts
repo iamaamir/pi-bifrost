@@ -610,15 +610,20 @@ describe("probe debug evidence", () => {
     try {
       process.chdir(cwd);
       setupDebug({ enabled: true, path: logPath }, cwd);
-      const model = { provider: "fixture", id: "one", api: "openai-completions", cost: { input: 1, output: 1 } };
-      const ctx = { modelRegistry: { getAvailable: () => [model], streamSimple: () => ({ result: async () => ({
+      const models = ["one", "two"].map((id) => ({ provider: "fixture", id, api: "openai-completions", cost: { input: 1, output: 1 } }));
+      const ctx = { modelRegistry: { getAvailable: () => models, streamSimple: () => ({ result: async () => ({
         stopReason: "stop", content: [{ type: "text", text: "2" }], usage: { totalTokens: 1 },
       }) }) } } as never;
-      await assert.rejects(runProbe(ctx, { onProgress: () => { throw failure; } }), (error) => error === failure);
+      let progressCalls = 0;
+      await assert.rejects(runProbe(ctx, { concurrency: 2, onProgress: () => {
+        progressCalls++;
+        if (progressCalls === 1) throw failure;
+      } }), (error) => error === failure);
+      assert.equal(progressCalls, 2, "all workers settle before the failed probe returns");
       await flushDebug(1_000);
       const rows = readFileSync(logPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
       assert.equal(rows.find((row) => row.event === "complete").cacheReason, "worker_failed");
-      assert.equal(rows.filter((row) => row.event === "model_result").length, 1);
+      assert.equal(rows.filter((row) => row.event === "model_result").length, 2);
     } finally {
       setupDebug({ enabled: false, path: logPath }, cwd);
       process.chdir(cwdBefore);
