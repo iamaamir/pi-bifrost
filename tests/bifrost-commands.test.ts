@@ -1803,6 +1803,72 @@ describe("bifrost command ui", () => {
     }
   });
 
+  it("reports unchanged for interactive Keep when pools, ownership, and settings already match", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-keep-noop-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const piDir = join(tempDir, ".pi");
+      mkdirSync(piDir);
+      const configPath = join(piDir, "bifrost.json");
+      const ownershipPath = join(piDir, "bifrost-reconcile-ownership.json");
+      writeFileSync(configPath, JSON.stringify({ models: { quick: ["fixture/chat"] } }));
+      writeFileSync(ownershipPath, JSON.stringify(buildInitOwnershipReceipt("project", { quick: ["fixture/chat"] })));
+      writeRecentProbeCache(join(piDir, "bifrost-probe.json"), [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const registryModel = makeModel("fixture", "chat", 0.2, 0.2);
+      const { ctx, calls } = makeCtx([registryModel as never], (_title, options) => options.find((option) => option.startsWith("Keep my models")));
+      (ctx as any).modelRegistry.getAll = () => [registryModel];
+      (ctx as any).modelRegistry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+      (ctx as any).modelRegistry.refresh = async () => ({ aborted: false, errors: new Map() });
+      const state = makeState() as any;
+      state.registryInventoryEvidence = { fixture: { status: "complete", refreshedAt: Date.now() } };
+      await createCommandRouter(state)("init --write", ctx as never);
+      const originalConfig = readFileSync(configPath);
+      const originalOwnership = readFileSync(ownershipPath);
+      await createCommandRouter(state)("init", ctx as never);
+      assert.deepEqual(readFileSync(configPath), originalConfig);
+      assert.deepEqual(readFileSync(ownershipPath), originalOwnership);
+      assert.ok(calls.some((call) => call.kind === "notify" && String(call.value).includes("No distinct model update needs review; nothing was saved.")));
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("saves managed pool refresh when Keep is selected", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-keep-refresh-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const piDir = join(tempDir, ".pi");
+      mkdirSync(piDir);
+      writeFileSync(join(piDir, "bifrost.json"), JSON.stringify({ models: { quick: ["fixture/old"] } }));
+      writeFileSync(join(piDir, "bifrost-reconcile-ownership.json"), JSON.stringify(
+        buildInitOwnershipReceipt("project", { quick: ["fixture/old"] }),
+      ));
+      writeRecentProbeCache(join(piDir, "bifrost-probe.json"), [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const model = makeModel("fixture", "chat", 0.2, 0.2);
+      const { ctx, calls } = makeCtx([model as never], (_title, options) => options.find((option) => option.startsWith("Keep my models")));
+      const registry = (ctx as any).modelRegistry;
+      registry.getAll = () => [model];
+      registry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+      registry.refresh = async () => ({ aborted: false, errors: new Map() });
+      const state = makeState() as any;
+      state.registryInventoryEvidence = { fixture: { status: "complete", refreshedAt: Date.now() } };
+      await createCommandRouter(state)("init", ctx as never);
+      const saved = JSON.parse(readFileSync(join(piDir, "bifrost.json"), "utf8"));
+      assert.deepEqual(saved.models.quick, ["fixture/chat"]);
+      assert.ok(calls.some((call) => call.kind === "select" && call.title === "Bifrost · Update project model pools?"));
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps a manually edited whole tier when refreshing from a recent probe cache", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-refresh-"));
     const previousCwd = process.cwd();
