@@ -317,12 +317,14 @@ export const SUMMARY = {
  *   and the evaluated sets were not exactly complementary (4 phantom
  *   `CallExpression` mutants appeared).
  *
- * `incremental` must never be enabled as a speed lever. With
- * `coverageAnalysis: "off"` there is no per-test coverage, and Stryker's
- * `IncrementalDiffer` then reuses every stored result unconditionally
- * (`if (!testCoverage.hasCoverage) return true`). Measured: after editing a
- * bound test file, 228 of 229 results were reused and the old score was
- * republished. A stale measurement is worse than a slow one.
+ * `incremental` is a local loop only, never the nightly. Stored results cannot
+ * see changes outside the mutated module and its bound tests (dependency
+ * updates, environment, fixtures). With the retired `command` runner there was
+ * no per-test coverage at all, so Stryker's `IncrementalDiffer` reused every
+ * stored result unconditionally (`if (!testCoverage.hasCoverage) return true`):
+ * measured, after editing a bound test file, 228 of 229 results were reused and
+ * the old score was republished. `mutation/run.mjs --incremental` is opt-in,
+ * and CI never sets it.
  */
 export const SHARDING = {
   /** Lines of overlap between adjacent shards. Must exceed the longest mutation span. */

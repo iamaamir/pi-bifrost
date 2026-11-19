@@ -215,7 +215,11 @@ test("summarise runs even when a module leg fails, and uploads its output", () =
   const block = jobs.summarise;
   assert.ok(block, "summarise job must exist");
   assert.match(block, /^ {4}needs: \[plan, targets\]$/mu);
-  assert.match(block, /if: \$\{\{ !cancelled\(\) \}\}/u, "a failed leg must still summarise");
+  assert.match(
+    block,
+    /if: \$\{\{ !cancelled\(\) && needs\.plan\.result == 'success' \}\}/u,
+    "a failed leg must still summarise, but a failed plan has nothing to summarise",
+  );
   assert.match(block, /continue-on-error: true/u, "a missing artifact must be reported, not crash the job");
   assert.match(block, /name: mutation-summary-\$\{\{ github\.sha \}\}/u);
   assert.match(block, /path: mutation-out\//u);
