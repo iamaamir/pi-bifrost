@@ -261,7 +261,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
     });
 
-    it(`saves a project pool when an inherited ${layer} pool is empty`, async () => {
+    it(`preserves an inherited ${layer} empty pool during noninteractive init`, async () => {
       const env = fixture(port, ["healthy"]);
       const lowerPath = layer === "user" ? join(env.home, ".pi", "agent", "bifrost.json") : join(env.work, "bifrost.json");
       const original = Buffer.from(JSON.stringify({ models: { quick: [] }, classifier: { enabled: false } }) + "\n");
@@ -270,10 +270,10 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
         const result = await runInit({ ...env, args: "--write" });
         assert.equal(result.code, 0, result.stderr);
         assert.equal(result.violations, "");
-        assert.doesNotMatch(result.stdout + result.stderr, /shadow/i);
+        assert.match(result.stdout + result.stderr, /init: blocked/i);
         assert.deepEqual(readFileSync(lowerPath), original);
-        const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
-        assert.deepEqual(saved.models.quick, ["fake/healthy"]);
+        assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
+        assert.equal(existsSync(join(env.work, ".pi", "bifrost-reconcile-ownership.json")), false);
       } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
     });
   }
@@ -294,8 +294,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
 
-  // Issue #224 acceptance: "global exists + project absent" must still create the project config.
-  it("saves a project config when the inherited global pool already matches the proposal", async () => {
+  it("does not freeze an identical inherited pool during noninteractive init", async () => {
     const env = fixture(port, ["healthy"]);
     const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
     const original = Buffer.from(JSON.stringify({ models: { quick: ["fake/healthy"], general: [], frontier: [] } }) + "\n");
@@ -304,14 +303,13 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       const result = await runInit({ ...env, args: "--write" });
       assert.equal(result.code, 0, result.stderr);
       assert.equal(result.violations, "");
-      assert.doesNotMatch(result.stdout + result.stderr, /shadow/i);
+      assert.match(result.stdout + result.stderr, /init: blocked/i);
       assert.deepEqual(readFileSync(globalPath), original);
-      const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
-      assert.deepEqual(saved.models.quick, ["fake/healthy"]);
+      assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
 
-  it("saves a project config when inherited pools are receipt-generated even when they differ", async () => {
+  it("does not override a generated inherited pool during noninteractive init", async () => {
     const env = fixture(port, ["healthy", "credits-exhausted"]);
     const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
     const receiptPath = join(env.home, ".pi", "agent", "bifrost-reconcile-ownership.json");
@@ -322,10 +320,9 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       const result = await runInit({ ...env, args: "--write" });
       assert.equal(result.code, 0, result.stderr);
       assert.equal(result.violations, "");
-      assert.doesNotMatch(result.stdout + result.stderr, /shadow/i);
+      assert.match(result.stdout + result.stderr, /init: blocked/i);
       assert.deepEqual(readFileSync(globalPath), original);
-      const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
-      assert.deepEqual(saved.models.quick, ["fake/healthy"]);
+      assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
 
@@ -444,6 +441,23 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
     });
   }
+
+  it("rejects an invalid project config before provider probing", async () => {
+    requests = [];
+    const env = fixture(port, ["healthy"]);
+    const configPath = join(env.work, ".pi", "bifrost.json");
+    const original = Buffer.from("{invalid\n");
+    writeFileSync(configPath, original);
+    try {
+      const result = await runInit({ ...env, args: "--write" });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.violations, "");
+      assert.match(result.stdout + result.stderr, /init: blocked.*Nothing was probed or saved/i);
+      assert.deepEqual(requests, []);
+      assert.deepEqual(readFileSync(configPath), original);
+      assert.equal(existsSync(join(env.work, ".pi", "bifrost-reconcile-ownership.json")), false);
+    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+  });
 
   it("probes on ordinary init and saves only successful models", async () => {
     const env = fixture(port, ["healthy", "credits-exhausted"]);

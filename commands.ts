@@ -1172,19 +1172,20 @@ function sameMembership(left: readonly string[], right: readonly string[]): bool
   return left.length === right.length && left.every((key, index) => key === right[index]);
 }
 
-/** Init shadows a tier when it would replace a different pool that holds unowned models. */
-function isShadowedTier(proposed: readonly string[], inherited: InheritedTierPool): boolean {
-  return inherited.pool.length > 0 && !inherited.generated && !sameMembership(proposed, inherited.pool);
+/** An unreviewed local pool must not freeze an inherited tier, even when identical. */
+function isShadowedTier(proposed: readonly string[], inherited: InheritedTierPool, writeWithoutPrompt: boolean): boolean {
+  return writeWithoutPrompt || (!inherited.generated && inherited.pool.length > 0 && !sameMembership(proposed, inherited.pool));
 }
 
 function findShadowedTiers(
   proposed: Readonly<Record<string, readonly string[]>>,
   ownedTiers: Readonly<Record<string, unknown>>,
   inherited: ReadonlyMap<string, InheritedTierPool>,
+  writeWithoutPrompt: boolean,
 ): string[] {
   return Object.keys(proposed)
     .filter((tier) => !Object.hasOwn(ownedTiers, tier) && inherited.has(tier))
-    .filter((tier) => isShadowedTier(proposed[tier], inherited.get(tier)!));
+    .filter((tier) => isShadowedTier(proposed[tier], inherited.get(tier)!, writeWithoutPrompt));
 }
 
 function selectInitSource(): ReconciliationSourceSnapshot {
@@ -1713,6 +1714,25 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     );
     return;
   }
+  try {
+    const preflight = readReconciliationSource(selectedSource);
+    if (preflight.configBytes !== null) {
+      parseInheritedConfig(Buffer.from(preflight.configBytes).toString("utf8"));
+    }
+    if (preflight.ownershipBytes !== null) {
+      assertOwnershipPayload(preflight.ownershipBytes);
+    }
+    if (selectedSource === "project") readInheritedPools(["user", "workspace"]);
+  } catch {
+    reportInitOutcome(
+      ctx,
+      "blocked",
+      "Nothing was probed or saved; a config file could not be read safely.",
+      "Check your selected and inherited config files, then retry.",
+      "error",
+    );
+    return;
+  }
   const bootstrapOriginalConfig = state.onInitStarted?.(ctx.sessionManager);
   const initConfig = bootstrapOriginalConfig ?? state.config;
   clearBifrostWidgets(ctx);
@@ -1929,7 +1949,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       const inherited = readInheritedPools(["user", "workspace"]);
       inheritedSources = inherited.snapshots;
       inheritedTiers = inherited.tierNames;
-      const shadowedTiers = findShadowedTiers(models, sourceModels, inherited.effective);
+      const shadowedTiers = findShadowedTiers(models, sourceModels, inherited.effective, writeWithoutPrompt);
       if (shadowedTiers.length > 0) {
         reportInitOutcome(
           ctx,

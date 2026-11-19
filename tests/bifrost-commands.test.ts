@@ -3671,6 +3671,40 @@ describe("command aliases", () => {
     }
   });
 
+  it("rejects invalid selected and inherited sources before discovery", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-preflight-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(tempDir, "agent");
+    process.chdir(tempDir);
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      mkdirSync(join(tempDir, "agent"));
+      for (const [args, path] of [
+        ["init --write", join(tempDir, ".pi", "bifrost.json")],
+        ["init --write", join(tempDir, "agent", "bifrost.json")],
+        ["init -g --write", join(tempDir, "agent", "bifrost.json")],
+      ]) {
+        writeFileSync(path, "{invalid");
+        const { ctx, calls } = makeCtx([makeModel("fixture", "chat")]);
+        let refreshes = 0;
+        let probes = 0;
+        (ctx as any).modelRegistry.refresh = async () => { refreshes++; };
+        (ctx as any).modelRegistry.streamSimple = () => { probes++; throw new Error("unexpected probe"); };
+        await createCommandRouter(makeState() as never)(args, ctx as never);
+        assert.deepEqual({ refreshes, probes }, { refreshes: 0, probes: 0 }, args);
+        assert.ok(calls.some((call) => String(call.value).includes("init: blocked")), JSON.stringify(calls));
+        assert.equal(readFileSync(path, "utf8"), "{invalid");
+        rmSync(path);
+      }
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("ends every init exit on the terminal footer standard", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-footer-"));
     const previousCwd = process.cwd();
