@@ -178,7 +178,7 @@ async function assertInheritedSettingsMatrixCase(port, args, targetKind) {
     if (targetKind === "owned") {
       assert.deepEqual(saved.models, { quick: ["fake/healthy"] });
       assert.equal(saved.targetPrivateSetting, "KEEP_TARGET_CANARY");
-      assert.match(result.stdout + result.stderr, /Pools\s+\+0 \/ -0/, `expected the owned-membership case to exercise settings-only reconciliation: ${JSON.stringify(result)}`);
+      assert.match(result.stdout + result.stderr, /Models\s+\+0 \/ -0/, `expected the owned-membership case to exercise settings-only reconciliation: ${JSON.stringify(result)}`);
     }
 
     const before = loadConfigForReload(env.work, ROOT).config;
@@ -241,7 +241,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
   }
 
   for (const layer of ["user", "workspace"]) {
-    it(`does not shadow an inherited ${layer} manual pool`, async () => {
+    it(`creates an explicit project override for an inherited ${layer} manual pool`, async () => {
       const env = fixture(port, ["healthy"]);
       const lowerPath = layer === "user" ? join(env.home, ".pi", "agent", "bifrost.json") : join(env.work, "bifrost.json");
       const original = Buffer.from(JSON.stringify({ models: { quick: ["manual/keep"] }, classifier: { enabled: false } }) + "\n");
@@ -250,14 +250,15 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
         const result = await runInit({ ...env, args: "--write" });
         assert.equal(result.code, 0, result.stderr);
         assert.equal(result.violations, "");
-        assert.match(result.stdout + result.stderr, /init: blocked\. Nothing was saved; pools inherited from your global or workspace config already set quick with different models/i);
         assert.deepEqual(readFileSync(lowerPath), original);
-        assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
-        assert.equal(existsSync(join(env.work, ".pi", "bifrost-reconcile-ownership.json")), false);
+        const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
+        assert.deepEqual(saved.models.quick, ["fake/healthy"]);
+        assert.match(result.stdout + result.stderr, /inherited \[manual\/keep\]/);
+        assert.match(result.stdout + result.stderr, /project \[fake\/healthy\]/);
       } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
     });
 
-    it(`preserves an inherited ${layer} empty pool during noninteractive init`, async () => {
+    it(`allows reviewed init to replace an inherited ${layer} empty pool locally`, async () => {
       const env = fixture(port, ["healthy"]);
       const lowerPath = layer === "user" ? join(env.home, ".pi", "agent", "bifrost.json") : join(env.work, "bifrost.json");
       const original = Buffer.from(JSON.stringify({ models: { quick: [] }, classifier: { enabled: false } }) + "\n");
@@ -266,13 +267,32 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
         const result = await runInit({ ...env, args: "--write" });
         assert.equal(result.code, 0, result.stderr);
         assert.equal(result.violations, "");
-        assert.match(result.stdout + result.stderr, /init: blocked/i);
         assert.deepEqual(readFileSync(lowerPath), original);
-        assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
-        assert.equal(existsSync(join(env.work, ".pi", "bifrost-reconcile-ownership.json")), false);
+        const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
+        assert.deepEqual(saved.models.quick, ["fake/healthy"]);
+        assert.match(result.stdout + result.stderr, /inherited \[empty\]/);
       } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
     });
   }
+
+  it("creates reviewed project pools over inherited tiers without changing global config", async () => {
+    const env = fixture(port, ["healthy"]);
+    const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
+    const original = Buffer.from(JSON.stringify({ models: { quick: ["anthropic/claude-sonnet-4-20250514"], frontier: ["manual/global-frontier"] } }) + "\n");
+    writeFileSync(globalPath, original);
+    try {
+      const result = await runInit({ ...env, args: "--write" });
+      assert.equal(result.code, 0, result.stderr);
+      assert.equal(result.violations, "");
+      assert.deepEqual(readFileSync(globalPath), original);
+      const projectPath = join(env.work, ".pi", "bifrost.json");
+      const saved = JSON.parse(readFileSync(projectPath, "utf8"));
+      assert.ok(saved.models.quick.includes("fake/healthy"));
+      assert.match(result.stdout + result.stderr, /inherited \[anthropic\/claude-sonnet-4-20250514\]/);
+      assert.match(result.stdout + result.stderr, /project \[fake\/healthy\]/);
+      assert.match(result.stdout + result.stderr, /global\/workspace files unchanged/);
+    } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
+  });
 
   it("creates a project pool when inherited tiers do not overlap", async () => {
     const env = fixture(port, ["healthy"]);
@@ -290,7 +310,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
 
-  it("does not freeze an identical inherited pool during noninteractive init", async () => {
+  it("does not create a local override when generated and inherited pools are identical", async () => {
     const env = fixture(port, ["healthy"]);
     const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
     const original = Buffer.from(JSON.stringify({ models: { quick: ["fake/healthy"], general: [], frontier: [] } }) + "\n");
@@ -299,13 +319,13 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       const result = await runInit({ ...env, args: "--write" });
       assert.equal(result.code, 0, result.stderr);
       assert.equal(result.violations, "");
-      assert.match(result.stdout + result.stderr, /init: blocked/i);
       assert.deepEqual(readFileSync(globalPath), original);
-      assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
+      const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
+      assert.equal(Object.hasOwn(saved.models, "quick"), false);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
 
-  it("does not override a generated inherited pool during noninteractive init", async () => {
+  it("allows an explicit fresh project override of a generated inherited pool", async () => {
     const env = fixture(port, ["healthy", "credits-exhausted"]);
     const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
     const receiptPath = join(env.home, ".pi", "agent", "bifrost-reconcile-ownership.json");
@@ -316,13 +336,14 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       const result = await runInit({ ...env, args: "--write" });
       assert.equal(result.code, 0, result.stderr);
       assert.equal(result.violations, "");
-      assert.match(result.stdout + result.stderr, /init: blocked/i);
       assert.deepEqual(readFileSync(globalPath), original);
-      assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
+      const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
+      assert.deepEqual(saved.models.quick, ["fake/healthy"]);
+      assert.match(result.stdout + result.stderr, /inherited \[fake\/healthy, fake\/credits-exhausted\]/);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
 
-  it("blocks when an inherited pool is handwritten because its receipt is invalid", async () => {
+  it("allows explicit fresh project override without trusting inherited ownership receipt", async () => {
     const env = fixture(port, ["healthy"]);
     const globalPath = join(env.home, ".pi", "agent", "bifrost.json");
     const receiptPath = join(env.home, ".pi", "agent", "bifrost-reconcile-ownership.json");
@@ -334,9 +355,9 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       const result = await runInit({ ...env, args: "--write" });
       assert.equal(result.code, 0, result.stderr);
       assert.equal(result.violations, "");
-      assert.match(result.stdout + result.stderr, /init: blocked\. Nothing was saved; pools inherited from your global or workspace config already set quick with different models/i);
       assert.deepEqual(readFileSync(globalPath), original);
-      assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
+      const saved = JSON.parse(readFileSync(join(env.work, ".pi", "bifrost.json"), "utf8"));
+      assert.deepEqual(saved.models.quick, ["fake/healthy"]);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
 

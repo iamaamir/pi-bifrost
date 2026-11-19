@@ -351,10 +351,10 @@ describe("config reconciliation command router", () => {
       const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
       const ctx = h.ctx as unknown as {
         hasUI: boolean;
-        ui: { confirm: () => Promise<boolean>; notify: () => void };
+        ui: { select: () => Promise<string | undefined>; notify: () => void };
       };
       ctx.hasUI = true;
-      ctx.ui = { confirm: async () => false, notify: () => {} };
+      ctx.ui = { select: async () => undefined, notify: () => {} };
       await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
       assert.equal(fs.existsSync(join(configDir, "bifrost-reconcile-ownership.json")), false);
     });
@@ -393,6 +393,52 @@ describe("config reconciliation command router", () => {
       assert.deepEqual(Object.keys(saved.models), ["quick"]);
       assert(saved.rules.length > 0);
       assert(saved.rules.every(({ model }) => model === "quick"));
+    });
+  });
+
+  it("confirms interactive settings-only top-up when init has no model changes", async () => {
+    await withCwd(async (cwd) => {
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      const configPath = join(configDir, "bifrost.json");
+      fs.writeFileSync(configPath, JSON.stringify({
+        default: "general",
+        models: { general: ["openai/cached-model"] },
+      }));
+      fs.writeFileSync(
+        join(configDir, "bifrost-reconcile-ownership.json"),
+        JSON.stringify(buildInitOwnershipReceipt("project", { general: ["openai/cached-model"] })),
+      );
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
+      let confirmations = 0;
+      let selections = 0;
+      const ctx = h.ctx as unknown as {
+        hasUI: boolean;
+        ui: {
+          confirm: () => Promise<boolean>;
+          notify: () => void;
+          select: (_title: string, choices: string[]) => Promise<string>;
+        };
+      };
+      ctx.hasUI = true;
+      ctx.ui = {
+        confirm: async () => { confirmations++; return true; },
+        notify: () => {},
+        select: async (_title, choices) => { selections++; return choices[0]; },
+      };
+
+      await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+
+      assert.equal(selections, 0, "no distinct model action should require selection");
+      const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+      assert.deepEqual(saved.strategy, BUNDLED_PUBLIC_INIT_DEFAULTS.strategy);
+      assert.deepEqual(saved.cache, BUNDLED_PUBLIC_INIT_DEFAULTS.cache);
+      assert.deepEqual(saved.reliability, BUNDLED_PUBLIC_INIT_DEFAULTS.reliability);
+      assert.deepEqual(saved.classifier, BUNDLED_PUBLIC_INIT_DEFAULTS.classifier);
+      assert.equal(confirmations, 1, "settings-only changes require explicit user confirmation");
     });
   });
 
