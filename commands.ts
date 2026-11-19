@@ -2070,6 +2070,14 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       availableActions.length > 1 ||
       (availableActions.length === 1 && (availableActions[0] !== "keep" || hasUnavailableAction));
     if (actionSelectionRequired && !writeWithoutPrompt) {
+      const actionLabel = (action: (typeof availableActions)[number] | "defaults") =>
+        action === "keep" ? "Keep my models" : action === "merge" ? "Merge new models" : "Bifrost defaults";
+      const retainedTierLine = ({ tier, before, after, ownershipBefore }: (typeof keepPlan.tiers)[number]) => {
+        if (ownershipBefore === "deleted" && before === undefined && after === undefined) return `    ${tier}: remains deleted`;
+        if (ownershipBefore === "user" && JSON.stringify(before) === JSON.stringify(after))
+          return `    ${tier}: custom pool retained [${before?.join(", ") ?? "empty"}]`;
+        return undefined;
+      };
       const compareLines = [
         "◆ Bifrost · Review model choices",
         `  Save to ${initSourceLabel(source)}`,
@@ -2083,20 +2091,18 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         .filter((candidateAction) => !availableActions.includes(candidateAction))
         .map((candidateAction) => {
           const candidate = actionPlans.get(candidateAction)!;
-          const label = candidateAction === "keep" ? "Keep my models" : candidateAction === "merge" ? "Merge new models" : "Bifrost defaults";
+          const label = actionLabel(candidateAction);
           const equivalentAction = availableActions.find((availableAction) =>
             planSignature(actionPlans.get(availableAction)!) === planSignature(candidate),
           );
           if (equivalentAction) {
-            const equivalentLabel = equivalentAction === "keep" ? "Keep my models" : equivalentAction === "merge" ? "Merge new models" : "Bifrost defaults";
             const retained = candidateAction === "keep"
-              ? candidate.tiers.flatMap(({ tier, before, after, ownershipBefore }) => {
-                  if (ownershipBefore === "deleted" && before === undefined && after === undefined) return [`    ${tier}: remains deleted`];
-                  if (ownershipBefore === "user" && JSON.stringify(before) === JSON.stringify(after)) return [`    ${tier}: custom pool retained [${before?.join(", ") ?? "empty"}]`];
-                  return [];
+              ? candidate.tiers.flatMap((tier) => {
+                  const line = retainedTierLine(tier);
+                  return line ? [line] : [];
                 })
               : [];
-            return [`  ${label}: same outcome as ${equivalentLabel}.`, ...retained].join("\n");
+            return [`  ${label}: same outcome as ${actionLabel(equivalentAction)}.`, ...retained].join("\n");
           }
           const unavailableReason = candidate.reason === "prospective_config_invalid"
             ? "the proposed config failed validation"
@@ -2107,7 +2113,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         }));
       for (const action of availableActions) {
         const candidate = actionPlans.get(action)!;
-        compareLines.push(`  ${action === "keep" ? "Keep my models" : action === "merge" ? "Merge new models" : "Bifrost defaults"}:`);
+        compareLines.push(`  ${actionLabel(action)}:`);
         compareLines.push(...candidate.tiers
           .filter(({ before, after, ownershipBefore, ownershipAfter }) =>
             JSON.stringify(before) !== JSON.stringify(after) ||
@@ -2115,15 +2121,13 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
             ownershipBefore === "user" ||
             ownershipBefore === "deleted",
           )
-          .flatMap(({ tier, before, after, ownershipBefore, ownershipAfter }) => {
-            if (selectedSource === "project" && before === undefined && after !== undefined && inheritedEffective.has(tier))
+          .flatMap((tier) => {
+            if (selectedSource === "project" && tier.before === undefined && tier.after !== undefined && inheritedEffective.has(tier.tier))
               return [];
-            if (ownershipBefore === "deleted" && before === undefined && after === undefined)
-              return [`    ${tier}: remains deleted`];
-            if (ownershipBefore === "user" && JSON.stringify(before) === JSON.stringify(after))
-              return [`    ${tier}: custom pool retained [${before?.join(", ") ?? "empty"}]`];
+            const retainedLine = retainedTierLine(tier);
+            if (retainedLine) return [retainedLine];
             return [
-              `    ${tier}: [${before?.join(", ") ?? "none"}] → [${after?.join(", ") ?? "none"}]${ownershipBefore !== ownershipAfter && JSON.stringify(before) === JSON.stringify(after) ? "; reset to Bifrost defaults" : ""}`,
+              `    ${tier.tier}: [${tier.before?.join(", ") ?? "none"}] → [${tier.after?.join(", ") ?? "none"}]${tier.ownershipBefore !== tier.ownershipAfter && JSON.stringify(tier.before) === JSON.stringify(tier.after) ? "; reset to Bifrost defaults" : ""}`,
             ];
           }));
         compareLines.push(...initInheritanceReviewLines({
