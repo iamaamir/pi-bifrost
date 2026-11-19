@@ -75,6 +75,8 @@ This repository keeps user documentation together with planning files, research 
 | Historical records | [`docs/prd-delivery-plan.md`](../prd-delivery-plan.md), [`docs/reliability-v1-review.md`](../reliability-v1-review.md), [`docs/verification-campaign.md`](../verification-campaign.md), [`docs/research/`](../research/), [`docs/superpowers/`](../superpowers/) | The text gives a plan, a measurement, or a review for one point in time. Do not read it as a current guarantee |
 | Maintainer and agent process | [`docs/dev-tooling.md`](../dev-tooling.md), [`docs/testing-coverage.md`](../testing-coverage.md), [`docs/agent-governance.md`](../agent-governance.md), [`docs/merge-controller.md`](../merge-controller.md), [`docs/tracker-workflow.md`](../tracker-workflow.md) | The text gives a procedure. The result depends on the live environment. As a result, a checkout cannot show that the procedure succeeded |
 
+Local agent artifacts live in `.pi/`, `.plan/`, and `.pi-subagents/`. These paths are in `.gitignore`. As a result, they are not content of this repository, and a bug report or an audit snapshot in those paths is not a current statement about the source.
+
 ## More references
 
 - [README](../../README.md)

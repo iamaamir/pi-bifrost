@@ -1,5 +1,7 @@
 # Release execution ledger
 
+This ledger records dated checkpoints. Read the newest entry first. An entry describes the revision that it names, and no other revision. An entry does not show that the current `main` passes a check. A pass for one revision needs the manifest from `npm run verify:release` for the same revision.
+
 ## V2 regression status (13 November 2026)
 
 No release candidate is recorded for this checkpoint. At this checkpoint, `main` is `c1c60b983d4e2d3111b94a61be876a6c97918919`. Its [scheduled verification](https://github.com/iamaamir/pi-bifrost/actions/runs/43424968480) passed, including head acceptance, the campaign, and Pi 1.3.0 and 1.4.0 compatibility. Mutation was skipped. The [push verification](https://github.com/iamaamir/pi-bifrost/actions/runs/43424174924) for the same commit was cancelled. Automated checks do not establish release readiness or current live-provider coverage.
