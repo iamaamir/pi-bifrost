@@ -427,16 +427,50 @@ describe("config reconciliation command router", () => {
           select: async (_title, choices) => { selections++; return choices[0]!; },
         };
 
-        await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+        const preview = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
 
         assert.equal(selections, 0, "fresh setup must not ask existing-model action choices");
         assert.equal(confirmations, 1, "fresh setup asks one Yes/No confirmation");
         const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { classifier?: { enabled?: boolean }; models?: Record<string, string[]> };
-        assert.deepEqual(saved.models, { general: ["openai/cached-model"] });
+        assert.equal(saved.models?.general, undefined, "identical inherited pool must not be copied into project config");
         assert.equal(saved.classifier?.enabled, initialConfig.classifier?.enabled);
+        const effective = loadConfigForReload(cwd, h.state.extensionDir).config;
+        assert.deepEqual(effective.models?.general, ["openai/cached-model"], "effective inherited pool remains unchanged");
+        assert.match(preview.join("\n"), /general: inherited \[openai\/cached-model\] kept; no project override/);
       });
     });
   }
+
+  it("lets interactive fresh init confirm a differing inherited pool override", async () => {
+    await withCwd(async (cwd) => {
+      const agentDir = process.env.PI_CODING_AGENT_DIR!;
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+        default: "general",
+        models: { general: ["openai/old-model"] },
+      }));
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      const configPath = join(configDir, "bifrost.json");
+      fs.writeFileSync(configPath, "{}\n");
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({ models: [makeModel("openai", "new-model", 1, 1)] });
+      const ctx = h.ctx as unknown as {
+        hasUI: boolean;
+        ui: { confirm: () => Promise<boolean>; notify: () => void };
+      };
+      ctx.hasUI = true;
+      ctx.ui = { confirm: async () => true, notify: () => {} };
+
+      const preview = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+
+      const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
+      assert.deepEqual(saved.models?.general, ["openai/new-model"]);
+      assert.match(preview.join("\n"), /general: inherited \[openai\/old-model\][\s\S]*→ project \[openai\/new-model\]/);
+    });
+  });
 
   it("keeps trusted deleted-tier intent protected during fresh setup detection", async () => {
     await withCwd(async (cwd) => {
