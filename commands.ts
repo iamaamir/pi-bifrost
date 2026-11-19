@@ -604,9 +604,9 @@ export function describeInitCommitFailure(failure: {
   // target. A journal therefore means a rename may already have happened, while
   // its absence proves none did. Matching config bytes prove only the current
   // content, because an ownership-only plan never changes the config.
-  const journalPending = pathExists(failure.journalPath);
+  const journal = inspectJournalState(failure.journalPath);
   const installed = inspectInstalledConfig(failure.configPath, failure.nextConfigBytes);
-  if (!journalPending) {
+  if (journal === "absent") {
     if (installed === "matches") {
       return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration, but no reconciliation journal was written, so ${failure.recoveryCommand} has nothing to recover. Retry Init to finish updating the ownership record.`;
     }
@@ -615,6 +615,18 @@ export function describeInitCommitFailure(failure: {
       return `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. No reconciliation journal was written; inspect that file before you retry.`;
     }
     return "Init could not safely commit the reviewed membership update; existing files were preserved.";
+  }
+  if (journal === "unknown") {
+    // A failed check cannot be reported as absence: recovery degrades to
+    // `nothing_to_recover`, so asking for it first is safe even with no journal.
+    const advice = `Run ${failure.recoveryCommand} before you retry; it reports nothing to recover when no journal exists.`;
+    if (installed === "matches") {
+      return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration, but Init could not check whether a reconciliation journal is pending. ${advice}`;
+    }
+    if (installed === "unknown") {
+      return `Init could not finish the reviewed membership update, and could not read ${failure.target} or check whether a reconciliation journal is pending. Inspect that file. ${advice}`;
+    }
+    return `Init could not finish the reviewed membership update. ${failure.target} does not hold the planned configuration, and Init could not check whether a reconciliation journal is pending, so the new memberships may already be partly installed. ${advice}`;
   }
   if (installed === "matches") {
     return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration and a reconciliation journal is pending. Run ${failure.recoveryCommand} before you retry.`;
@@ -630,8 +642,16 @@ export function describeInitCommitFailure(failure: {
 /** "unknown" is an unsafe or unreadable file, which is not the same as a config that differs. */
 type InstalledConfigState = "matches" | "differs" | "unknown";
 
-function pathExists(path: string): boolean {
-  try { lstatSync(path); return true; } catch { return false; }
+/** "unknown" is a failed check, which must not be reported as a missing journal. */
+type JournalState = "present" | "absent" | "unknown";
+
+function inspectJournalState(path: string): JournalState {
+  try {
+    lstatSync(path);
+    return "present";
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unknown";
+  }
 }
 
 /** Reject non-regular, oversized and unstable files instead of blocking or allocating on them. */
