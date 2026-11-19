@@ -50,8 +50,9 @@ Forcing a tier skips the tier choice, but the name alone does not pick the model
 ### When a tier name is recognized
 
 - The tier name must be the first word of the message, followed by a space.
-- Matching ignores letter case, so `Quick` also works.
-- The tier key must be a single alphabetic word, such as `quick` or `frontier`. Tier keys may use any name you like (`long-context`, `code_review`), but you cannot type those names at the start of a message.
+- The tier key must be one lowercase alphabetic word, such as `quick` or `frontier`. A key with uppercase letters, such as `Quick`, never matches, because Bifrost looks up the lowercased first word as an exact key.
+- You can type the prefix in any letter case, so `Quick` selects the `quick` tier.
+- Tier keys may use any name you like (`long-context`, `code_review`), but you cannot type those names at the start of a message.
 - Digits, hyphens, punctuation, and multiword names are not recognized.
 - There is no separate list of aliases.
 - If the first word is not a configured tier, the whole message is routed normally.

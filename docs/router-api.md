@@ -88,7 +88,7 @@ Tier names are caller-defined. Configure any number of pools under `config.model
 
 Under `schemaVersion: 2`, a tier may declare ordered `tierPolicies.<tier>.fallbackTiers`. An explicitly empty fallback list is terminal; the resolver never escapes an explicit fallback boundary.
 
-Each `resolve` result carries structured exclusions. A pool candidate has `status: "excluded"`, an `exclusion` code, and an `exclusionEvidence` entry that names the source of the code.
+A completed `resolve` result carries structured exclusions. An aborted result carries no decision and no exclusions. A pool candidate has `status: "excluded"`, an `exclusion` code, and an `exclusionEvidence` entry that names the source of the code.
 
 The package emits four candidate codes. `open_circuit` and `trial_active` come from the reliability snapshot you supply, with `reliability_state` evidence. `provider_not_allowed` comes from `routingScope`, with `config_snapshot` evidence and a `scope` value of `global` or `tier`. `economic_reserve` comes from a policy-mode reserve rejection, with `economic_snapshot` evidence.
 

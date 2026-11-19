@@ -80,7 +80,7 @@ The command:
 
 After init saves, inspect the pools and status. Edit the saved configuration before your first generation if you need different pools or strategies, then run `/bifrost reload`.
 
-Init reuses probe results from the last hour. If no recent results exist, it probes models before it proposes pools. Pass `-f` to force fresh probes. By default, init saves to the project config `.pi/bifrost.json`. To save to your global user config at `~/.pi/agent/bifrost.json`, use `/bifrost init -g`. Init does not write the workspace `bifrost.json`. Pass `--write` to save without the confirmation question. A script, or a session that gives Bifrost no UI, must use `--write` to save:
+Init reuses probe results from the last hour only when they cover the current catalog. If no recent results exist, or the catalog changed, it probes models before it proposes pools. Pass `-f` to force fresh probes. By default, init saves to the project config `.pi/bifrost.json`. To save to your global user config at `~/.pi/agent/bifrost.json`, use `/bifrost init -g`. Init does not write the workspace `bifrost.json`. Pass `--write` to save without the confirmation question. A script, or a session that gives Bifrost no UI, must use `--write` to save:
 
 ```text
 /bifrost init --write
