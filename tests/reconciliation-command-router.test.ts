@@ -396,6 +396,79 @@ describe("config reconciliation command router", () => {
     });
   });
 
+  for (const initialConfig of [{}, { classifier: { enabled: false } }]) {
+    it(`uses fresh-init confirmation for ${Object.keys(initialConfig).length ? "settings-only" : "empty"} project config with inherited tiers`, async () => {
+      await withCwd(async (cwd) => {
+        const agentDir = process.env.PI_CODING_AGENT_DIR!;
+        fs.mkdirSync(agentDir, { recursive: true });
+        fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+          classifier: { enabled: false },
+          default: "general",
+          models: { general: ["openai/cached-model"] },
+        }));
+        const configDir = join(cwd, ".pi");
+        fs.mkdirSync(configDir, { recursive: true });
+        const configPath = join(configDir, "bifrost.json");
+        fs.writeFileSync(configPath, JSON.stringify(initialConfig));
+        writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+          { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+        ]);
+        const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
+        let confirmations = 0;
+        let selections = 0;
+        const ctx = h.ctx as unknown as {
+          hasUI: boolean;
+          ui: { confirm: () => Promise<boolean>; notify: () => void; select: (_title: string, choices: string[]) => Promise<string> };
+        };
+        ctx.hasUI = true;
+        ctx.ui = {
+          confirm: async () => { confirmations++; return true; },
+          notify: () => {},
+          select: async (_title, choices) => { selections++; return choices[0]!; },
+        };
+
+        await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+
+        assert.equal(selections, 0, "fresh setup must not ask existing-model action choices");
+        assert.equal(confirmations, 1, "fresh setup asks one Yes/No confirmation");
+        const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { classifier?: { enabled?: boolean }; models?: Record<string, string[]> };
+        assert.deepEqual(saved.models, { general: ["openai/cached-model"] });
+        assert.equal(saved.classifier?.enabled, initialConfig.classifier?.enabled);
+      });
+    });
+  }
+
+  it("keeps trusted deleted-tier intent protected during fresh setup detection", async () => {
+    await withCwd(async (cwd) => {
+      const agentDir = process.env.PI_CODING_AGENT_DIR!;
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+        default: "general",
+        models: { general: ["openai/cached-model"] },
+      }));
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      const configPath = join(configDir, "bifrost.json");
+      fs.writeFileSync(configPath, "{}\n");
+      const receipt = buildInitOwnershipReceipt("project", { general: [] })!;
+      fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify({
+        ...receipt,
+        tiers: { general: { state: "deleted" } },
+      }));
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
+      await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
+      const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
+      const savedReceipt = JSON.parse(fs.readFileSync(join(configDir, "bifrost-reconcile-ownership.json"), "utf8")) as {
+        tiers: Record<string, { state: string }>;
+      };
+      assert.equal(saved.models?.general, undefined, "deleted inherited tier must not be recreated");
+      assert.deepEqual(savedReceipt.tiers.general, { state: "deleted" });
+    });
+  });
+
   it("confirms interactive settings-only top-up when init has no model changes", async () => {
     await withCwd(async (cwd) => {
       const configDir = join(cwd, ".pi");

@@ -1812,6 +1812,11 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       ? (sourceConfig.models as Record<string, unknown>)
       : {};
   const hasConfiguredTiers = Object.keys(sourceModels).length > 0;
+  const ownership = source.ownershipBytes === null
+    ? undefined
+    : parseOwnershipSnapshot(JSON.parse(Buffer.from(source.ownershipBytes).toString("utf8")));
+  const hasDeletedTierIntent = ownership?.scope === source.source
+    && Object.keys(ownership.tiers).some((tier) => !(tier in sourceModels));
   let inheritedSources: readonly InheritedPoolSnapshot[] = [];
   let inheritedTiers: ReadonlySet<string> = new Set<string>();
   let inheritedEffective: ReadonlyMap<string, InheritedTierPool> = new Map();
@@ -1832,13 +1837,14 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       return;
     }
   }
-  if (selectedSource === "project" && Object.keys(sourceModels).length === 0) {
+  if (selectedSource === "project" && !hasConfiguredTiers && (hasDeletedTierIntent || writeWithoutPrompt)) {
     for (const [tier, inherited] of inheritedEffective) {
       const generated = models[tier];
       if (
         generated &&
-        generated.length === inherited.pool.length &&
-        generated.every((key, index) => key === inherited.pool[index])
+        (writeWithoutPrompt ||
+          (generated.length === inherited.pool.length &&
+            generated.every((key, index) => key === inherited.pool[index])))
       ) {
         delete models[tier];
       }
@@ -1977,7 +1983,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     | undefined;
   let settingsAdded = false;
   let actionSelectionApproved = false;
-  if (source.configBytes !== null) {
+  if (source.configBytes !== null && (hasConfiguredTiers || hasDeletedTierIntent)) {
     const byProvider = new Map<string, Record<string, string[]>>();
     for (const model of available) {
       if (isBifrostAuto(model)) continue;
