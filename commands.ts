@@ -527,6 +527,36 @@ function reconciliationPaths(source: ReconciliationConfigSource): { configPath: 
   };
 }
 
+/**
+ * Describe an Init commit failure without claiming the files were preserved.
+ *
+ * `applyReconciliationTransaction` installs the staged config before it writes the
+ * ownership sidecar and the final journal records, so a failure after that rename
+ * leaves the reviewed memberships on disk.
+ */
+export function describeInitCommitFailure(failure: {
+  readonly locked: boolean;
+  readonly receiptOnly: boolean;
+  readonly configPath: string;
+  readonly nextConfigBytes: Uint8Array;
+  readonly target: string;
+  readonly recoveryCommand: string;
+}): string {
+  if (failure.locked) return "Init could not acquire reconciliation locks. Verify no Bifrost writer is active and repair only exact stale lock files before retrying.";
+  if (!failure.receiptOnly && configHoldsProposedBytes(failure.configPath, failure.nextConfigBytes)) {
+    return `Init could not finish the reviewed membership update. ${failure.target} already holds the new memberships and a reconciliation journal is pending. Run ${failure.recoveryCommand} before you retry.`;
+  }
+  return "Init could not safely commit the reviewed membership update; existing files were preserved.";
+}
+
+function configHoldsProposedBytes(configPath: string, nextConfigBytes: Uint8Array): boolean {
+  try {
+    return readFileSync(configPath).equals(Buffer.from(nextConfigBytes));
+  } catch {
+    return false;
+  }
+}
+
 function readReconciliationSource(source: ReconciliationConfigSource): ReconciliationSourceSnapshot {
   const paths = reconciliationPaths(source);
   const configBytes = readBoundedRegularSnapshot(paths.configPath) ?? null;
@@ -1575,9 +1605,16 @@ async function handleInit(
   }
   catch (error) {
     const locked = error instanceof ReconciliationStoreError && error.code === "locked";
-    log(ctx, locked
-      ? "Init could not acquire reconciliation locks. Verify no Bifrost writer is active and repair only exact stale lock files before retrying."
-      : "Init could not safely commit the reviewed membership update; existing files were preserved.", "error");
+    log(ctx, describeInitCommitFailure({
+      locked,
+      receiptOnly,
+      configPath: transaction.configPath,
+      nextConfigBytes: transaction.nextConfigBytes,
+      target: initSourceLabel(source),
+      recoveryCommand: source.source === "user"
+        ? "/bifrost config reconcile --source user --recover"
+        : "/bifrost config reconcile --recover",
+    }), "error");
     return;
   }
 
