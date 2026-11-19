@@ -73,7 +73,7 @@ import {
   type AffinityRoutingContext,
 } from "./routing.ts";
 import { reasonLabel } from "./virtual-routing.ts";
-import type { ReliabilityStore } from "./reliability-store.ts";
+import { ReliabilityStore } from "./reliability-store.ts";
 import type { ReliabilityV2Store } from "./reliability-v2-store.ts";
 import { ReliabilityV2StoreError } from "./reliability-v2-store.ts";
 import type { ProviderCooldownStore } from "./provider-cooldowns.ts";
@@ -1859,7 +1859,8 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     }
   }
   // Reuse recent probe data; otherwise manual init probes before proposing model pools.
-  const probePath = join(process.cwd(), ".pi", "bifrost-probe.json");
+  const initStateDirectory = selectedSource === "user" ? getAgentDir() : join(process.cwd(), CONFIG_DIR_NAME);
+  const probePath = join(initStateDirectory, "bifrost-probe.json");
   const available = ctx.modelRegistry.getAvailable().filter((model) => !isVirtualModel(model));
   const forced = isForced(args);
   const reused = forced ? undefined : readRecentCompleteProbeReportCacheHit(probePath, available);
