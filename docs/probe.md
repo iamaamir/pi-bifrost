@@ -25,7 +25,7 @@ The probe sends a minimal prompt (`1+1=`) to every available model in the regist
 
 ## Scalability Analysis (Large Model Lists)
 
-The measurements in this section come from one point in time. They are not a current benchmark. Make sure that a number still holds before you quote it.
+The measurements in this section come from one point in time. They are not a current benchmark. Check a number before you quote it.
 
 When handling a large number of models (e.g., 500+), the current implementation faces several bottlenecks:
 
