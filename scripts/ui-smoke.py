@@ -790,7 +790,7 @@ def capture(
                 for model in tier["models"]
             ]
             if "fake/usage-exhausted" in generated or not {"fake/healthy", "fake/classifier"}.issubset(generated):
-                raise AssertionError("manual init ownership receipt does not match successful probe results")
+                raise AssertionError(f"manual init ownership receipt does not match successful probe results: {receipt}")
             if saved.get("customSetting") != {"preserve": True}:
                 raise AssertionError("manual init changed an unrelated config field")
             if saved.get("classifier") != {
@@ -869,9 +869,8 @@ def main() -> int:
         (
             "init-refresh",
             True,
-            # Close full setup preview, then explicitly choose Merge rather than
-            # accepting the selector's default Keep action.
-            [(0.5, "/bifrost init\r"), (2.0, "\x1b"), (0.5, "\x1b[B"), (0.5, "\r")],
+            # Close the comparison, choose Keep, then close the final preview.
+            [(0.5, "/bifrost init\r"), (2.0, "\x1b"), (0.5, "\r"), (0.5, "\x1b")],
             {
                 "schemaVersion": 2,
                 "strategy": "first",
