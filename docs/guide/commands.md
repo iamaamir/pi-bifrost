@@ -15,7 +15,7 @@
 | `/bifrost reload` | Reload merged configuration |
 | `/bifrost validate` | Check the active loaded configuration and local registry references; run `/bifrost reload` after editing config files |
 | `/bifrost inspect` | Show configured model availability, auth presence, and local reliability circuits without routing, classifying, or probing |
-| `/bifrost config reconcile` | Preview exact generated model membership for one selected config source, tier, and provider; apply only with the reviewed digest |
+| `/bifrost config reconcile` | Preview exact generated model entries for one selected config source, tier, and provider; apply only with the reviewed digest |
 | `/bifrost config migrate` | Preview schema-version migration for one config source; apply only with the reviewed digest and exact backup |
 | `/bifrost reliability migrate` | Prepare migrated reliability state; see the [existing-user migration steps](reliability-and-cache.md#existing-users-migrate-reliability-state) |
 | `/bifrost reliability` | Show active provider pauses and recovery trials |
@@ -37,7 +37,7 @@
 
 `validate` and `inspect` accept a leading `--json` flag. Both commands are read-only: they do not classify, refresh the registry, probe providers, or write reliability state. They report configured classifier policy and effective session state. `inspect` shows local registry/auth/circuit snapshots and the effective affinity mode: Auto defaults to within-tier retention, while physical routing defaults off. It reports the mode source and, when active, the proven Auto anchor's model and age without branch or prompt data. Its “Bifrost last registry refresh age” is the time since this extension last refreshed Pi's registry, not a freshness claim about provider data. JSON mode emits a version-1 `[bifrost-json] ` report line to stderr. The validation report names its source as `loaded-effective-config`; it does not read un-reloaded disk edits.
 
-On first use, when no meaningful configuration, route file, runtime routing preference, or explicit routing override blocks setup, Bifrost loads provisional pools from Pi's catalog before generation. It checks model access in the background and saves only successful generated pools with an ownership receipt. An empty `{}` configuration does not block setup. If every probe fails or a safe save cannot finish, Bifrost leaves configuration unchanged and warns. Probe requests can use provider credits or reach rate limits.
+On first use, when no meaningful configuration, route file, runtime routing preference, or explicit routing override blocks setup, Bifrost loads provisional pools from Pi's catalog before generation. It checks model access in the background and saves only successful generated pools with an ownership file. An empty `{}` configuration does not block setup. If every probe fails or a safe save cannot finish, Bifrost leaves configuration unchanged and warns. Probe requests can use provider credits or reach rate limits.
 
 Provider usage and billing pauses use Pi's configured provider ID. Bifrost does not identify shared billing accounts. Use `/bifrost reliability` to see active pauses. The reset command accepts only one exact provider ID that Bifrost knows. It stops during an active recovery trial.
 
@@ -67,9 +67,9 @@ Every outcome init can report:
 | `declined` | You answered no to the save confirmation. |
 | `cancelled` | The catalog refresh or the probe was cancelled, or the turn was aborted after the confirmation. |
 | `stopped before saving` | The host could not ask the save question and `--write` was not passed. |
-| `paused` | The model inventory is incomplete or stale, so membership changes were not planned. `-f` refreshes it. |
+| `paused` | The model inventory is incomplete or stale, so model-pool changes were not planned. `-f` refreshes it. |
 | `stale review` | The model inventory, the inherited config, or the save destination changed while the confirmation was open. |
-| `blocked` | Init refused to write: the config or the selected source could not be read or parsed, a pool would shadow an inherited pool, the proposal was invalid or too large, or a saved ownership record exists without its config. |
+| `blocked` | Init refused to write: the config or selected source could not be read or parsed, the proposal was invalid or too large, or a saved ownership file exists without its config. |
 | `blocked by a lock` | Another Bifrost writer holds the lock. |
 | `failed — no working models` | The probe found no usable model. |
 | `failed` | The write could not be confirmed on disk, or the written config was rejected on reload. |

@@ -1729,7 +1729,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     logImportant(
       ctx,
       "Using verified models",
-      `${workingModels.length} probe-verified models (${probeAge}).`,
+      `${workingModels.length} working models (${probeAge}).`,
       "info",
     );
   }
@@ -2267,7 +2267,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
               ? "Nothing was saved; the existing configuration is invalid."
               : plan.reason === "prospective_config_invalid"
                 ? "Nothing was saved; the proposed configuration failed validation."
-                : `Nothing was saved; membership changes could not be prepared (${plan.reason ?? "unknown reason"}).`,
+                : `Nothing was saved; the pool changes could not be prepared (${plan.reason ?? "unknown reason"}).`,
             "Fix the configuration and retry.",
             "error",
           );
@@ -2313,7 +2313,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       reportInitOutcome(
         ctx,
         "blocked",
-        "Nothing was saved; a saved ownership record exists without its config.",
+        "Nothing was saved; a saved ownership file exists without its config.",
         "Review the target directory, then retry.",
         "error",
       );
@@ -2324,7 +2324,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       reportInitOutcome(
         ctx,
         "blocked",
-        "Nothing was saved; the ownership record for this init could not be created.",
+        "Nothing was saved; the ownership file for this init could not be created.",
         "Retry; if it fails again, inspect the target directory.",
         "error",
       );
@@ -2435,7 +2435,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     "",
     probeLoaded
       ? `  ✓ ${workingModels.length} working models (${probeAge})`
-      : `  ${available.length} catalog models (not probe-verified)`,
+      : `  ${available.length} catalog models (not tested)`,
     "",
     `  Models      +${added.length} / -${removed.length}`,
     ...(hasConfiguredTiers ? ["  Unlisted tiers remain unchanged."] : []),
@@ -2448,7 +2448,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
     ...(settingsAdded ? ["  Defaults    Added where missing"] : []),
     ...(uncategorized.length ? [`  ! ${uncategorized.length} uncategorized models excluded`] : []),
     ...(unverifiedSavedCount
-      ? [` ⚠️ ${unverifiedSavedCount} unverified membership preserved`]
+      ? [` ⚠️ ${unverifiedSavedCount} unverified models kept`]
       : []),
   ];
 
@@ -4330,7 +4330,7 @@ function persistBootstrapConfig(
     logImportant(
       ctx,
       "Classifier update blocked",
-      "An ownership receipt exists without its config. No files were changed.",
+      "An ownership file exists without its config. No files were changed.",
       "error",
     );
     return false;

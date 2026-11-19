@@ -76,7 +76,7 @@ The command:
 1. refreshes Pi's model catalog;
 2. proposes `quick`, `general`, and `frontier` pools from available chat models;
 3. detects a classifier backend and selects an available chat model when prompt classification needs one;
-4. shows the catalog source, save target, membership changes, classifier choice, and uncategorized count; when model-pool choices differ, review **Keep my models** (default), **Merge new models**, or **Bifrost defaults** before saving. Unavailable choices are explained.
+4. shows the catalog source, save target, model-pool changes, classifier choice, and uncategorized count; when model-pool choices differ, review **Keep my models** (default), **Merge new models**, or **Bifrost defaults** before saving. Unavailable choices are explained.
 
 After init saves, inspect the pools and status. Edit the saved configuration before your first generation if you need different pools or strategies, then run `/bifrost reload`.
 
