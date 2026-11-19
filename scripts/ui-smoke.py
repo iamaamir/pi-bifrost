@@ -935,7 +935,9 @@ def main() -> int:
         (
             "init-refresh",
             True,
-            [(0.5, "/bifrost init\r"), (2.0, "\x1b"), (0.5, "\r")],
+            # Close full setup preview, then explicitly choose Merge rather than
+            # accepting the selector's default Keep action.
+            [(0.5, "/bifrost init\r"), (2.0, "\x1b"), (0.5, "\x1b[B"), (0.5, "\r")],
             {
                 "schemaVersion": 2,
                 "strategy": "first",
