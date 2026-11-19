@@ -2258,13 +2258,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
             planSignature(actionPlans.get(availableAction)!) === planSignature(candidate),
           );
           if (equivalentAction) {
-            const retained = candidateAction === "keep"
-              ? candidate.tiers.flatMap((tier) => {
-                  const line = retainedTierLine(tier);
-                  return line ? [line] : [];
-                })
-              : [];
-            return [`  ${label}: same outcome as ${actionLabel(equivalentAction)}.`, ...retained].join("\n");
+            return `  ${label}: same outcome as ${actionLabel(equivalentAction)}.`;
           }
           const unavailableReason = candidate.reason === "prospective_config_invalid"
             ? "the proposed config failed validation"

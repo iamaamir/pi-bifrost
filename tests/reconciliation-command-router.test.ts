@@ -483,8 +483,7 @@ describe("config reconciliation command router", () => {
       const rendered = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
       const comparison = rendered.join("\n");
       assert.match(comparison, /Review model choices/);
-      assert.match(comparison, /Keep my models:\n\[bifrost\]   general: inherited \[openai\/cached-model\] remains effective/);
-      assert.match(comparison, /Bifrost defaults:[\s\S]*custom: custom pool retained \[manual\/custom-model\][\s\S]*deleted: remains deleted/);
+      assert.match(comparison, /Keep my models:\n\[bifrost\]     custom: custom pool retained \[manual\/custom-model\]\n\[bifrost\]     deleted: remains deleted\n\[bifrost\]   general: inherited \[openai\/cached-model\] remains effective/);
     });
   });
 
