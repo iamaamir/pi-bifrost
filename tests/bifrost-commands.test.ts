@@ -1475,6 +1475,43 @@ describe("bifrost command ui", () => {
     }
   });
 
+  it("recommends recovery for the selected source when classifier bootstrap save conflicts", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-classifier-bootstrap-conflict-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = join(tempDir, "agent");
+    const configBytes = Buffer.from("{}\n");
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    mkdirSync(agentDir);
+    writeFileSync(join(agentDir, "bifrost.json"), configBytes);
+    writeFileSync(join(agentDir, "bifrost-reconcile.journal"), "existing journal");
+    process.chdir(tempDir);
+    try {
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }], (title, options) =>
+        title === "Classifier backend" ? options.find((option) => option.startsWith("typesafe")) : undefined,
+      );
+      const state = makeState() as any;
+      state.bootstrapModelsInMemory = true;
+      state.config.default = "quick";
+      state.config.models = { quick: ["fixture/chat"] };
+
+      await createCommandRouter(state)("classifier", ctx);
+
+      const notices = calls.filter((call) => call.kind === "notify").map((call) => String(call.value));
+      assert.deepEqual(readFileSync(join(agentDir, "bifrost.json")), configBytes);
+      assert.ok(notices.some((notice) => notice.includes("/bifrost config reconcile --source user --recover")), JSON.stringify(notices));
+      assert.ok(notices.some((notice) => notice.includes("Could not confirm whether")), JSON.stringify(notices));
+      assert.ok(!notices.some((notice) => notice.includes("Existing files were preserved")), JSON.stringify(notices));
+      assert.ok(!notices.some((notice) => notice.includes("Classifier backend updated")), JSON.stringify(notices));
+      assert.ok(!notices.some((notice) => notice.includes("Starter models saved")), JSON.stringify(notices));
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("saves in-memory starter pools and their default atomically with a manual classifier choice", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-classifier-save-bootstrap-"));
     const previousCwd = process.cwd();
