@@ -1837,7 +1837,7 @@ describe("bifrost command ui", () => {
       const saved = JSON.parse(readFileSync(join(piDir, "bifrost.json"), "utf8"));
       assert.equal(confirmCalls, 0);
       assert.equal(refreshCalls, 1);
-      assert.ok(calls.some((call) => call.kind === "select" && call.title === "How should init update your model pools?"));
+      assert.ok(calls.some((call) => call.kind === "select" && call.title === "Bifrost · Update project model pools?"));
       assert.deepEqual(saved.models.quick, ["fixture/old", "manual/keep"]);
       assert.deepEqual(saved.customSetting, { preserve: true });
       assert.deepEqual(saved.classifier, { backend: "prompt", enabled: false, model: "fixture/manual-classifier" });
@@ -1876,12 +1876,47 @@ describe("bifrost command ui", () => {
 
       const saved = JSON.parse(readFileSync(join(piDir, "bifrost.json"), "utf8"));
       assert.deepEqual(saved.models.quick, ["fixture/old", "fixture/chat"]);
-      const picker = calls.find((call) => call.kind === "select" && call.title === "How should init update your model pools?");
+      const picker = calls.find((call) => call.kind === "select" && call.title === "Bifrost · Update project model pools?");
       assert.ok(picker);
       assert.deepEqual(picker.options, ["Keep my models (default)", "Merge new models"]);
       assert.ok(calls.some((call) => call.kind === "preview"));
     } finally {
       process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("names global scope in the init model-pool picker", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-global-picker-"));
+    const previousCwd = process.cwd();
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.chdir(tempDir);
+    const agentDir = join(tempDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      mkdirSync(join(tempDir, ".pi"));
+      mkdirSync(agentDir);
+      writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({ models: { quick: ["fixture/old"] } }));
+      writeFileSync(join(agentDir, "bifrost-reconcile-ownership.json"), JSON.stringify(
+        buildInitOwnershipReceipt("user", { quick: ["fixture/old"] }),
+      ));
+      writeRecentProbeCache(join(agentDir, "bifrost-probe.json"), [
+        { provider: "fixture", model: "chat", status: "ok", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const { ctx, calls } = makeCtx(
+        [{ provider: "fixture", id: "chat" }],
+        (_title, options) => options.find((option) => option === "Merge new models"),
+      );
+      const registry = (ctx as any).modelRegistry;
+      registry.getAll = () => [makeModel("fixture", "chat", 0.2, 0.2)];
+      registry.getProviderAuthStatus = () => ({ configured: true, source: "stored" });
+      registry.refresh = async () => ({ aborted: false, errors: new Map() });
+      await createCommandRouter(makeState() as never)("init -g", ctx as never);
+      assert.ok(calls.some((call) => call.kind === "select" && call.title === "Bifrost · Update global model pools?"));
+    } finally {
+      process.chdir(previousCwd);
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
       rmSync(tempDir, { recursive: true, force: true });
     }
   });
@@ -3530,7 +3565,7 @@ describe("command aliases", () => {
       // #245: `init: <outcome>. <what changed>. <one next step>`, TUI and headless.
       assert.equal(
         notices.find((notice) => notice.includes("init: not started.")),
-        "warning:init: not started. Nothing was read or written. Usage: /bifrost init [-f] [--write] [-g].",
+        "warning:init: not started. Nothing was read or written. Unknown argument: --bogus. Usage: /bifrost init [-f] [--write] [-g].",
       );
       assert.equal(
         notices.find((notice) => notice.includes("init: declined.")),
