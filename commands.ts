@@ -2264,7 +2264,7 @@ export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   { value: "reload", description: "Reload config after editing", menu: "common" },
   { value: "validate", description: "Validate loaded config and model references", argumentHint: "[--json]", menu: "common" },
   { value: "inspect", description: "Inspect configured models and local health", argumentHint: "[--json]", menu: "common" },
-  { value: "config reconcile", description: "Preview or apply exact generated model membership", argumentHint: "[flags]" },
+  { value: "config reconcile", description: "Preview or apply exact generated model membership", argumentHint: "[--source project|workspace|user] [--tier <tier> --provider <provider>] [--refresh | --apply --proposal <digest> | --recover]" },
   { value: "config migrate", description: "Preview or apply an explicit schema migration", argumentHint: "[--source project|workspace|user] [--apply --proposal <digest>]" },
   { value: "reliability", description: "Show provider cooldowns" },
   { value: "reliability reset", description: "Clear one provider cooldown", argumentHint: "--provider <provider-id>" },
