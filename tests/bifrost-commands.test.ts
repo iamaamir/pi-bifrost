@@ -8,6 +8,7 @@ import { makeModel, makePiClassifierModel, makeRegistry } from "./helpers.ts";
 import { buildRouteDecisionSummary, createPipeline } from "../classification-pipeline.ts";
 import { DEFAULT_THRESHOLD, lookupCache, touchCacheEntry, updateCache, type CacheEntry } from "../cache.ts";
 import { reliabilityPath } from "../reliability.ts";
+import { ReliabilityStore } from "../reliability-store.ts";
 import { providerReliabilityPath, reliabilityV2Path } from "../runtime-reliability-v2.ts";
 import { createProviderCooldownStore } from "../runtime-reliability-v2.ts";
 import { emptyReliabilityV2State } from "../reliability-v2.ts";
@@ -3763,16 +3764,28 @@ describe("command aliases", () => {
     }
   });
 
-  it("keeps forced global init probe and reliability artifacts in global scope", async () => {
+  it("keeps global init probes out of reliability state while retaining probe artifacts", async () => {
     for (const args of ["init -g", "init -g -f"]) {
       const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-global-artifacts-"));
       const previousCwd = process.cwd();
       const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
       const agentDir = join(tempDir, "agent");
+      const externalReliabilityPath = join(tempDir, "external-reliability.json");
+      const now = Date.now();
+      const persistedState = { version: 1 as const, models: { "fixture/chat": { failures: [now - 1000], openUntil: now + 60_000 } } };
       mkdirSync(agentDir);
+      mkdirSync(join(tempDir, ".pi"));
+      const externalBytes = Buffer.from(JSON.stringify(persistedState));
+      const projectBytes = Buffer.from('{"version":1,"models":{"project/model":{"failures":[1]}}}');
+      writeFileSync(externalReliabilityPath, externalBytes);
+      writeFileSync(join(tempDir, ".pi", "bifrost-reliability.json"), projectBytes);
       process.env.PI_CODING_AGENT_DIR = agentDir;
       process.chdir(tempDir);
       try {
+        const state = makeState() as any;
+        state.config.reliability.path = externalReliabilityPath;
+        let reliabilityWrites = 0;
+        state.reliabilityStore = { ...makeStore(persistedState.models), applyOutcomes: () => { reliabilityWrites++; } };
         const { ctx } = makeCtx([makeModel("fixture", "chat")]);
         (ctx as any).modelRegistry.streamSimple = (model: { provider: string; id: string; api: string }) => ({
           result: async () => ({
@@ -3781,18 +3794,47 @@ describe("command aliases", () => {
           }),
         });
         (ctx as any).ui.confirm = async () => true;
-        await createCommandRouter(makeState() as never)(args, ctx as never);
+        await createCommandRouter(state)(args, ctx as never);
 
-        assert.deepEqual(readdirSync(tempDir).sort(), ["agent"], `${args} must leave project directory unchanged`);
+        assert.equal(state.reliabilityStore.getState().models["fixture/chat"]?.openUntil, persistedState.models["fixture/chat"].openUntil, `${args} must preserve in-memory open circuit`);
+        assert.equal(reliabilityWrites, 0, `${args} must not apply probe outcomes to active reliability store`);
+        assert.deepEqual(readFileSync(externalReliabilityPath), externalBytes, `${args} must preserve configured reliability bytes`);
+        assert.deepEqual(readFileSync(join(tempDir, ".pi", "bifrost-reliability.json")), projectBytes, `${args} must preserve project reliability bytes`);
+        const restartedStore = new ReliabilityStore({ cwd: tempDir, config: { enabled: true, path: externalReliabilityPath } });
+        assert.equal(restartedStore.getState().models["fixture/chat"]?.openUntil, persistedState.models["fixture/chat"].openUntil, `${args} must preserve restart state`);
         assert.ok(existsSync(join(agentDir, "bifrost.json")), `${args} must select global config`);
         assert.ok(existsSync(join(agentDir, "bifrost-probe.json")), `${args} must cache probe results globally`);
-        assert.ok(existsSync(join(agentDir, "bifrost-reliability.json")), `${args} must persist reliability globally`);
+        assert.equal(existsSync(join(agentDir, "bifrost-reliability.json")), false, `${args} must not create global reliability state`);
       } finally {
         process.chdir(previousCwd);
         if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
         else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
         rmSync(tempDir, { recursive: true, force: true });
       }
+    }
+  });
+
+  it("still applies probe outcomes during project init", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-project-reliability-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      let reliabilityWrites = 0;
+      const state = makeState() as any;
+      state.reliabilityStore = { ...makeStore(), applyOutcomes: () => { reliabilityWrites++; } };
+      const { ctx } = makeCtx([makeModel("fixture", "chat")]);
+      (ctx as any).modelRegistry.streamSimple = (model: { provider: string; id: string; api: string }) => ({
+        result: async () => ({
+          role: "assistant", api: model.api, provider: model.provider, model: model.id,
+          content: [{ type: "text", text: "ok" }], usage: { totalTokens: 1 }, stopReason: "stop", timestamp: Date.now(),
+        }),
+      });
+      (ctx as any).ui.confirm = async () => true;
+      await createCommandRouter(state)("init -f", ctx as never);
+      assert.equal(reliabilityWrites, 1);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
