@@ -2618,7 +2618,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         : `The reviewed update to ${source.configPath} could not be confirmed.`,
       locked
         ? "Verify no other Bifrost writer is active and remove only exact stale lock files, then retry."
-        : "Inspect the file and run /bifrost config reconcile --recover before retrying.",
+        : `Inspect the file and run /bifrost config reconcile --source ${selectedSource} --recover before retrying.`,
       "error",
     );
     return;
@@ -4727,7 +4727,14 @@ export function createCommandRouter(
       state.pinned = false;
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
-      logImportant(ctx, "Bifrost unpinned", "Automatic model switching is enabled.", "success");
+      logImportant(
+        ctx,
+        "Bifrost unpinned",
+        state.enabled
+          ? "Automatic model switching is enabled."
+          : "The model is unpinned, but routing is off. Run /bifrost on to route prompts.",
+        "success",
+      );
     }),
     exact("reload", (_, ctx) => {
       reloadBifrostConfig(state, ctx, true);

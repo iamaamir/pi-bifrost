@@ -2655,13 +2655,20 @@ describe("route dispatch", () => {
     assert.equal(state.enabled, false);
   });
 
-  it("routes pin and unpin", async () => {
-    const { ctx } = makeCtx();
+  it("routes pin and unpin without claiming routing is enabled when off", async () => {
+    const { ctx, calls } = makeCtx();
     const state = makeState();
     await createCommandRouter(state as never)("pin", ctx as never);
     assert.equal(state.pinned, true);
+    await createCommandRouter(state as never)("off", ctx as never);
     await createCommandRouter(state as never)("unpin", ctx as never);
     assert.equal(state.pinned, false);
+    assert.ok(calls.some((call) => String(call.value).includes("The model is unpinned, but routing is off. Run /bifrost on to route prompts.")));
+
+    state.enabled = true;
+    state.pinned = true;
+    await createCommandRouter(state as never)("unpin", ctx as never);
+    assert.ok(calls.some((call) => String(call.value).includes("Automatic model switching is enabled.")));
   });
 
   it("routes classifier on and off as session-only choices", async () => {
