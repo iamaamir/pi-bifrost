@@ -546,25 +546,30 @@ export function describeInitCommitFailure(failure: {
   if (failure.locked) return "Init could not acquire reconciliation locks. Verify no Bifrost writer is active and repair only exact stale lock files before retrying.";
   if (failure.receiptOnly) return "Init could not safely commit the reviewed membership update; existing files were preserved.";
   // `applyReconciliationTransaction` writes the journal before it renames either
-  // target, so a journal is what makes the staged update recoverable. Matching
-  // config bytes alone can also mean the plan never planned to change the config.
+  // target. A journal therefore means a rename may already have happened, while
+  // its absence proves none did. Matching config bytes prove only the current
+  // content, because an ownership-only plan never changes the config.
   const journalPending = pathExists(failure.journalPath);
-  switch (inspectInstalledConfig(failure.configPath, failure.nextConfigBytes)) {
-    case "matches":
-      return journalPending
-        ? `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration and a reconciliation journal is pending. Run ${failure.recoveryCommand} before you retry.`
-        : `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration, but no reconciliation journal was written, so ${failure.recoveryCommand} has nothing to recover. Retry Init to finish updating the ownership record.`;
-    case "differs":
-      return journalPending
-        ? `Init could not safely commit the reviewed membership update; existing files were preserved. A reconciliation journal is pending, so run ${failure.recoveryCommand} before you retry.`
-        : "Init could not safely commit the reviewed membership update; existing files were preserved.";
-    case "unknown":
-      // A read failure says nothing about what is installed. Promise neither
-      // preservation nor replacement; send the user to inspect the target.
-      return journalPending
-        ? `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. Inspect that file, then run ${failure.recoveryCommand} to finish the pending journal before you retry.`
-        : `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. No reconciliation journal was written; inspect that file before you retry.`;
+  const installed = inspectInstalledConfig(failure.configPath, failure.nextConfigBytes);
+  if (!journalPending) {
+    if (installed === "matches") {
+      return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration, but no reconciliation journal was written, so ${failure.recoveryCommand} has nothing to recover. Retry Init to finish updating the ownership record.`;
+    }
+    if (installed === "unknown") {
+      // Unreadable proves nothing either way; promise neither outcome.
+      return `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. No reconciliation journal was written; inspect that file before you retry.`;
+    }
+    return "Init could not safely commit the reviewed membership update; existing files were preserved.";
   }
+  if (installed === "matches") {
+    return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration and a reconciliation journal is pending. Run ${failure.recoveryCommand} before you retry.`;
+  }
+  if (installed === "unknown") {
+    return `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. A reconciliation journal is pending; inspect that file, then run ${failure.recoveryCommand} before you retry.`;
+  }
+  // The journal can reach `config_installed` before a later conflict throws, so
+  // differing bytes no longer prove the rename did not happen.
+  return `Init could not finish the reviewed membership update. ${failure.target} does not hold the planned configuration, but a reconciliation journal is pending, so the new memberships may already be partly installed. Run ${failure.recoveryCommand} before you retry.`;
 }
 
 /** "unknown" is an unsafe or unreadable file, which is not the same as a config that differs. */
