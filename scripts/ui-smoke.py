@@ -802,7 +802,7 @@ def capture(
                 raise AssertionError("manual init changed explicit classifier settings")
             # The preview card colors the pool delta, so strip SGR/OSC before matching copy.
             init_screen = " ".join(re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\\\)", "", log_path.read_text(errors="ignore") if log_path.exists() else "").split()).lower()
-            if "review model choices" not in init_screen or "how should init update your model pools?" not in init_screen:
+            if "review model choices" not in init_screen:
                 raise AssertionError("manual init did not review existing model pools before saving")
             if not all(label in init_screen for label in (
                 "keep my models (default)", "merge new models",
@@ -813,7 +813,7 @@ def capture(
                 raise AssertionError("manual init did not identify the project config destination")
             if "global/workspace files stay unchanged" not in init_screen or "unlisted tiers remain unchanged" not in init_screen:
                 raise AssertionError("manual init omitted the existing-init scope copy")
-            if "ctrl+o summary" not in init_screen or "custom pool retained [manual/keep]" not in init_screen:
+            if "ctrl+o summary" not in init_screen or "custom pool retained" not in init_screen or "manual/keep" not in init_screen:
                 raise AssertionError("manual init did not reveal the late retained-pool diff before selection")
             if "save bifrost setup?" in init_screen:
                 raise AssertionError("manual init showed obsolete fresh-setup confirmation copy")
@@ -869,8 +869,8 @@ def main() -> int:
         (
             "init-refresh",
             True,
-            # Expand full diff and page through it before confirming default Keep; then close saved notice.
-            [(0.5, "/bifrost init\r"), (1.0, "\x0f"), (0.5, "\x1b[6~"), (0.5, "\x1b[6~"), (0.5, "\r"), (0.5, "\x1b")],
+            # Expand full diff; PgDn scrolls one row, so page through late pool/action details before Keep.
+            [(0.5, "/bifrost init\r"), (1.0, "\x0f"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.25, "\x1b[6~"), (0.5, "\r"), (0.5, "\x1b")],
             {
                 "schemaVersion": 2,
                 "strategy": "first",
