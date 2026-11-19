@@ -937,7 +937,7 @@ function initInheritanceReviewLines(input: {
 }): string[] {
   if (input.source !== "project") return [];
   if (!input.tiers) {
-    return Object.entries(input.generated).flatMap(([tier, generated]) => {
+    const lines = Object.entries(input.generated).flatMap(([tier, generated]) => {
       if (Object.hasOwn(input.sourceModels, tier)) return [];
       const inherited = input.inherited.get(tier)?.pool;
       if (!inherited) return [];
@@ -946,6 +946,11 @@ function initInheritanceReviewLines(input: {
         ? [`  ${tier}: inherited [${inherited.join(", ") || "empty"}] kept; no project override`]
         : [`  ${tier}: inherited [${inherited.join(", ") || "empty"}]`, `    → project [${generated.join(", ")}]`];
     });
+    for (const [tier, inherited] of input.inherited) {
+      if (!Object.hasOwn(input.sourceModels, tier) && !Object.hasOwn(input.generated, tier))
+        lines.push(`  ${tier}: inherited [${inherited.pool.join(", ") || "empty"}] remains effective`);
+    }
+    return lines;
   }
   const reviewed = new Set(input.tiers.map(({ tier }) => tier));
   const lines = input.tiers.flatMap(({ tier, before, after }) => {
@@ -1770,10 +1775,6 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       models[tier].sort((a, b) => (speedMap.get(a) ?? Infinity) - (speedMap.get(b) ?? Infinity));
     }
   }
-  const generatedPools = Object.fromEntries(
-    Object.entries(models).map(([tier, pool]) => [tier, [...pool]]),
-  );
-
   let source: ReconciliationSourceSnapshot;
   try {
     source = readReconciliationSource(selectedSource);
@@ -1850,6 +1851,9 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       }
     }
   }
+  const generatedPools = Object.fromEntries(
+    Object.entries(models).map(([tier, pool]) => [tier, [...pool]]),
+  );
   const sourceClassifier =
     sourceConfig.classifier &&
     typeof sourceConfig.classifier === "object" &&

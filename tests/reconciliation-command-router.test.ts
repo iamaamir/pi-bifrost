@@ -436,7 +436,7 @@ describe("config reconciliation command router", () => {
         assert.equal(saved.classifier?.enabled, initialConfig.classifier?.enabled);
         const effective = loadConfigForReload(cwd, h.state.extensionDir).config;
         assert.deepEqual(effective.models?.general, ["openai/cached-model"], "effective inherited pool remains unchanged");
-        assert.match(preview.join("\n"), /general: inherited \[openai\/cached-model\] kept; no project override/);
+        assert.match(preview.join("\n"), /general: inherited \[openai\/cached-model\] remains effective/);
       });
     });
   }
