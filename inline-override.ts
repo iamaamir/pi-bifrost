@@ -29,7 +29,7 @@ export function parseInlineOverride(
   if (!firstWord) return { forcedTier: undefined, promptText: text };
 
   const candidate = firstWord[1].toLowerCase();
-  if (models[candidate]) {
+  if (Object.hasOwn(models, candidate) && models[candidate]) {
     return {
       forcedTier: candidate,
       promptText: text.slice(firstWord[0].length),
