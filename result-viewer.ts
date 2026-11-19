@@ -100,6 +100,7 @@ export class InitReview {
   private scrollOffset = 0;
   private maxOffset = 0;
   private expanded = false;
+  private canConfirm = false;
   private readonly summary: readonly string[];
   private readonly details: readonly string[];
   private readonly actions: readonly string[];
@@ -131,9 +132,11 @@ export class InitReview {
     if (data === "\x0f") this.expanded = !this.expanded;
     else if (data === "\x1b[A") this.selected = (this.selected + this.actions.length - 1) % this.actions.length;
     else if (data === "\x1b[B") this.selected = (this.selected + 1) % this.actions.length;
-    else if (data === "k" || data === "\x1b[5~") this.scrollOffset = Math.max(0, this.scrollOffset - MAX_VISIBLE_LINES);
-    else if (data === "j" || data === "\x1b[6~") this.scrollOffset = Math.min(this.maxOffset, this.scrollOffset + MAX_VISIBLE_LINES);
-    else if (data === "\r" || data === "\n") this.done(this.actions[this.selected]);
+    else if (data === "k" || data === "\x1b[5~") this.scrollOffset = Math.max(0, this.scrollOffset - 1);
+    else if (data === "j" || data === "\x1b[6~") this.scrollOffset = Math.min(this.maxOffset, this.scrollOffset + 1);
+    else if (data === "\r" || data === "\n") {
+      if (this.canConfirm && this.actions.length > 0) this.done(this.actions[this.selected]);
+    }
     else return;
     this.requestRender();
   }
@@ -146,12 +149,18 @@ export class InitReview {
     this.scrollOffset = Math.min(this.scrollOffset, this.maxOffset);
     const visible = content.slice(this.scrollOffset, this.scrollOffset + 4);
     const row = (text: string, color: "text" | "accent" | "dim" = "text") => this.theme.fg(color, text.slice(0, contentWidth));
+    const actionRows = this.actions.flatMap((action, index) => {
+      const labelWidth = contentWidth - 2;
+      const labelLines = wrapResultLines([action], Math.max(1, labelWidth));
+      return labelLines.map((line, lineIndex) => row(`${lineIndex === 0 && index === this.selected ? "❯ " : "  "}${line}`, "accent"));
+    });
+    this.canConfirm = contentWidth >= 3 && this.actions.length > 0;
     return [
       row("Bifrost · Review setup", "accent"),
       row(this.expanded ? "Ctrl+O summary · PgUp/PgDn or jk scroll" : "Ctrl+O full details · PgUp/PgDn or jk scroll", "dim"),
       ...visible.map((line) => row(line)),
       row(""),
-      row(this.actions.map((action, index) => `${index === this.selected ? "❯" : " "} ${action}`).join("   "), "accent"),
+      ...actionRows,
       row("↑↓ select · enter confirm · esc cancel", "dim"),
     ];
   }
