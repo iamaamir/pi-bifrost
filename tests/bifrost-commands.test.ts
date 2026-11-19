@@ -1283,14 +1283,7 @@ describe("bifrost command ui", () => {
       const state = makeState();
       await createCommandRouter(state as never)("init --write", ctx as never);
       assert.equal(existsSync(join(tempDir, ".pi", "bifrost.json")), true);
-      assert(calls.some(
-        (call) =>
-          call.kind === "preview" &&
-          String(call.lines?.join("\n")).includes("Classifier") &&
-          String(call.lines?.join("\n")).includes("detected default") &&
-          String(call.lines?.join("\n")).includes("fixture/chat"),
-      ));
-      assert.equal(calls.some((call) => call.kind === "select"), false);
+      assert.equal(calls.some((call) => call.kind === "custom" || call.kind === "preview" || call.kind === "select"), false);
       const saved = JSON.parse(readFileSync(join(tempDir, ".pi", "bifrost.json"), "utf8"));
       assert.equal(saved.classifier.backend, undefined);
       assert.equal(saved.classifier.model, "fixture/chat", "fresh init persists only a detected model backed by a recent healthy probe");
