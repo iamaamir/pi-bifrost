@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { isEscapeKey, ResultViewer, wrapResultLines } from "../result-viewer.ts";
+import { InitReview, isEscapeKey, ResultViewer, wrapResultLines } from "../result-viewer.ts";
 
 describe("result viewer", () => {
   it("wraps long lines without dropping text", () => {
@@ -53,6 +53,32 @@ describe("result viewer", () => {
       longRendered = longViewer.render(40).join("\n");
     }
     assert.ok(longRendered.includes("TAIL-DETAIL"));
+  });
+
+  it("keeps exact details and action approval in one pinned-Pi custom interaction", () => {
+    const details = ["Setup preview", ...Array.from({ length: 12 }, (_, i) => `tier-${i}: provider/model-${i}`)];
+    let result: string | undefined;
+    const review = new InitReview(
+      ["Setup preview", "12 model pools will change"],
+      details,
+      ["Keep my models", "Merge new models", "Bifrost defaults"],
+      { fg: (_color, text) => text },
+      (value) => { result = value; },
+      () => {},
+    );
+    assert.ok(review.render(80).some((line) => line.includes("Ctrl+O full details")));
+    review.handleInput("\x0f");
+    assert.ok(review.render(80).some((line) => line.includes("Ctrl+O summary")));
+    review.handleInput("\x1b[6~");
+    assert.ok(review.render(80).some((line) => line.includes("tier-11: provider/model-11")));
+    review.handleInput("\x1b[B");
+    review.handleInput("\r");
+    assert.equal(result, "Merge new models");
+
+    let cancelled: string | undefined = "not-cancelled";
+    const cancelReview = new InitReview([], details, ["Approve", "Cancel"], { fg: (_color, text) => text }, (value) => { cancelled = value; }, () => {});
+    cancelReview.handleInput("\x1b");
+    assert.equal(cancelled, "");
   });
 
   it("recognizes terminal escape encodings", () => {

@@ -436,7 +436,7 @@ describe("config reconciliation command router", () => {
         assert.equal(saved.classifier?.enabled, initialConfig.classifier?.enabled);
         const effective = loadConfigForReload(cwd, h.state.extensionDir).config;
         assert.deepEqual(effective.models?.general, ["openai/cached-model"], "effective inherited pool remains unchanged");
-        assert.match(preview.join("\n"), /general: inherited \[openai\/cached-model\] remains effective/);
+        assert.match(preview.join("\n"), /general: inherited pool remains effective[\s\S]*Inherited:[\s\S]*1\. openai\/cached-model/);
       });
     });
   }
@@ -483,7 +483,7 @@ describe("config reconciliation command router", () => {
       const rendered = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
       const comparison = rendered.join("\n");
       assert.match(comparison, /Review model choices/);
-      assert.match(comparison, /Keep my models:\n\[bifrost\]     custom: custom pool retained \[manual\/custom-model\]\n\[bifrost\]     deleted: remains deleted\n\[bifrost\]   general: inherited \[openai\/cached-model\] remains effective/);
+      assert.match(comparison, /Keep my models:\n\[bifrost\]     custom: custom pool retained\n\[bifrost\]       Model:\n\[bifrost\]       1\. manual\/custom-model\n\[bifrost\]     deleted: remains deleted\n\[bifrost\]   general: inherited pool remains effective/);
     });
   });
 
@@ -514,7 +514,7 @@ describe("config reconciliation command router", () => {
 
       const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
       assert.deepEqual(saved.models?.general, ["openai/new-model"]);
-      assert.match(preview.join("\n"), /general: inherited \[openai\/old-model\][\s\S]*→ project \[openai\/new-model\]/);
+      assert.match(preview.join("\n"), /general: project override[\s\S]*Inherited:[\s\S]*1\. openai\/old-model[\s\S]*Project:[\s\S]*1\. openai\/new-model/);
     });
   });
 
@@ -601,7 +601,7 @@ describe("config reconciliation command router", () => {
         const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
         if (selected === "Bifrost defaults") {
           assert.deepEqual(saved.models?.general, ["openai/cached-model"], "Defaults restores deleted only-tier pool");
-          assert.match(preview.join("\n"), /general: inherited \[openai\/cached-model\][\s\S]*→ project \[openai\/cached-model\]/);
+          assert.match(preview.join("\n"), /general: project override[\s\S]*Inherited:[\s\S]*1\. openai\/cached-model[\s\S]*Project:[\s\S]*1\. openai\/cached-model/);
         } else {
           assert.equal(saved.models?.general, undefined, "Keep preserves deleted intent");
           assert.match(preview.join("\n"), /general: remains deleted/);

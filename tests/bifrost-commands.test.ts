@@ -1331,7 +1331,7 @@ describe("bifrost command ui", () => {
       } finally {
         console.error = originalError;
       }
-      const preview = calls.find((call) => call.kind === "preview");
+      const preview = calls.filter((call) => call.kind === "preview").at(-1);
       const visible = preview?.lines?.join("\n") ?? "";
       assert.ok(visible.length > 3_000, `scrollable preview contained only ${visible.length} chars`);
       assert.match(visible, /fixture\/model-000/);
