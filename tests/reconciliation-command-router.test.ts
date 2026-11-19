@@ -441,6 +441,53 @@ describe("config reconciliation command router", () => {
     });
   }
 
+  it("renders actual Keep comparison row and reports preserved custom/deleted tiers", async () => {
+    await withCwd(async (cwd) => {
+      const agentDir = process.env.PI_CODING_AGENT_DIR!;
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+        classifier: { enabled: false },
+        default: "general",
+        models: { general: ["openai/cached-model"] },
+      }));
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      const configPath = join(configDir, "bifrost.json");
+      fs.writeFileSync(configPath, JSON.stringify({
+        classifier: { enabled: false },
+        models: { custom: ["manual/custom-model"] },
+      }));
+      const receipt = buildInitOwnershipReceipt("project", { custom: ["manual/custom-model"], deleted: [] })!;
+      fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify({
+        ...receipt,
+        tiers: { custom: { state: "user" }, deleted: { state: "deleted" } },
+      }));
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({ models: [makeModel("openai", "new-model", 1, 1)] });
+      const ctx = h.ctx as unknown as {
+        hasUI: boolean;
+        ui: { confirm: () => Promise<boolean>; notify: () => void; select: (_title: string, choices: string[]) => Promise<string> };
+      };
+      ctx.hasUI = true;
+      ctx.ui = {
+        confirm: async () => true,
+        notify: () => {},
+        select: async (_title, choices) => {
+          assert(choices.includes("Bifrost defaults"));
+          return "Bifrost defaults";
+        },
+      };
+
+      const rendered = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+      const comparison = rendered.join("\n");
+      assert.match(comparison, /Review model choices/);
+      assert.match(comparison, /Keep my models:\n\[bifrost\]   general: inherited \[openai\/cached-model\] remains effective/);
+      assert.match(comparison, /Bifrost defaults:[\s\S]*custom: custom pool retained \[manual\/custom-model\][\s\S]*deleted: remains deleted/);
+    });
+  });
+
   it("lets interactive fresh init confirm a differing inherited pool override", async () => {
     await withCwd(async (cwd) => {
       const agentDir = process.env.PI_CODING_AGENT_DIR!;
@@ -469,6 +516,48 @@ describe("config reconciliation command router", () => {
       const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
       assert.deepEqual(saved.models?.general, ["openai/new-model"]);
       assert.match(preview.join("\n"), /general: inherited \[openai\/old-model\][\s\S]*→ project \[openai\/new-model\]/);
+    });
+  });
+
+  it("Defaults keeps identical inherited tier inherited alongside local and deleted tiers", async () => {
+    await withCwd(async (cwd) => {
+      const agentDir = process.env.PI_CODING_AGENT_DIR!;
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+        classifier: { enabled: false },
+        default: "general",
+        models: { general: ["openai/cached-model"] },
+      }));
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      const configPath = join(configDir, "bifrost.json");
+      fs.writeFileSync(configPath, JSON.stringify({ models: { custom: ["manual/local-model"] } }));
+      const receipt = buildInitOwnershipReceipt("project", { custom: ["manual/local-model"], deleted: [] })!;
+      fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify({
+        ...receipt,
+        tiers: { custom: { state: "user" }, deleted: { state: "deleted" } },
+      }));
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
+      const ctx = h.ctx as unknown as {
+        hasUI: boolean;
+        ui: { confirm: () => Promise<boolean>; notify: () => void; select: (_title: string, choices: string[]) => Promise<string> };
+      };
+      ctx.hasUI = true;
+      ctx.ui = { confirm: async () => true, notify: () => {}, select: async () => "Bifrost defaults" };
+
+      await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+      const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
+      assert.deepEqual(saved.models?.custom, ["manual/local-model"], "unlisted local tier remains saved");
+      assert.equal(saved.models?.general, undefined, "identical inherited tier is not written locally");
+      assert.equal(saved.models?.deleted, undefined, "deleted tier stays omitted");
+      assert.deepEqual(loadConfigForReload(cwd, h.state.extensionDir).config.models?.general, ["openai/cached-model"], "inheritance stays effective");
+      const savedReceipt = JSON.parse(fs.readFileSync(join(configDir, "bifrost-reconcile-ownership.json"), "utf8")) as {
+        tiers: Record<string, { state: string }>;
+      };
+      assert.deepEqual(savedReceipt.tiers.deleted, { state: "deleted" }, "deleted-tier restoration remains available to explicit Defaults");
     });
   });
 
