@@ -16,6 +16,7 @@ import { buildInitMembershipPlan, buildInitOwnershipReceipt } from "../reconcili
 import { REGISTRY_REFRESH_TTL_MS } from "../ux-status.ts";
 import { loadConfigForReload } from "../config-load.ts";
 import { resolveClassifierEnablement } from "../runtime-state.ts";
+import { wrapResultLines } from "../result-viewer.ts";
 
 it("renders missing configured entries in text route traces", () => {
   const trace = buildTracePreview({
@@ -598,9 +599,11 @@ function makeCtx(
           colors: {},
         }, {}, () => {}) as { render?: (width: number) => string[]; handleInput?: (data: string) => void } | undefined;
         if (component?.render && component.handleInput) {
+          component.handleInput("\x0f");
           const lines: string[] = [];
           for (let i = 0; i < 500; i++) {
             lines.push(...component.render(80));
+            component.handleInput("j");
             component.handleInput("\x1b[B");
           }
           calls.push({ kind: "preview", lines });
@@ -1970,14 +1973,26 @@ describe("bifrost command ui", () => {
 
       const saved = JSON.parse(readFileSync(join(piDir, "bifrost.json"), "utf8"));
       assert.deepEqual(saved.models.quick, ["fixture/old", "fixture/chat"]);
-      const review = calls.find((call) => call.kind === "preview")?.lines?.join("\n") ?? "";
+      const review = calls.filter((call) => call.kind === "preview").flatMap((call) => call.lines ?? []).join("\n");
+      const redact = (value: unknown, key: string): unknown => {
+        if (/api.?key|secret|password|credential|system.?prompt|endpoint|(?:access|auth|refresh|bearer|session).?token|^token$/iu.test(key)) return "[redacted]";
+        if (Array.isArray(value)) return value.map((item) => redact(item, ""));
+        if (value && typeof value === "object") {
+          return Object.fromEntries(Object.entries(value).map(([nestedKey, nested]) => [nestedKey, redact(nested, nestedKey)]));
+        }
+        return value;
+      };
       for (const [key, value] of Object.entries(saved)) {
         if (key === "models" || key === "$schema") continue;
-        const rendered = JSON.stringify(value, null, 2).split("\n");
-        const settingPreview = rendered.length === 1
-          ? `${key}  ${rendered[0]}`
-          : `${key}:\n${rendered.map((line) => `      ${line}`).join("\n")}`;
-        assert.ok(review.includes(settingPreview), `preview omitted saved setting ${key}`);
+        const rendered = JSON.stringify(redact(value, key), null, 2).split("\n");
+        const settingLines = rendered.length === 1
+          ? [`    ${key}  ${rendered[0]}`]
+          : [`    ${key}:`, ...rendered.map((line) => `      ${line}`)];
+        for (const settingLine of settingLines) {
+          for (const wrappedLine of wrapResultLines([settingLine], 78)) {
+            assert.ok(review.includes(wrappedLine), `preview omitted saved setting ${key}: ${wrappedLine}`);
+          }
+        }
       }
       const picker = calls.find((call) => call.kind === "select" && call.title === "Bifrost · Update project model pools?");
       assert.ok(picker);
