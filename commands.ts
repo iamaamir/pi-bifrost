@@ -1719,12 +1719,13 @@ async function handleConfigCommand(
 
 async function handleInit(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
   const tokens = args.trim().split(/\s+/).slice(1);
-  if (tokens.some((token) => !["-f", "--write", "-g"].includes(token))) {
+  const unknownArgument = tokens.find((token) => !["-f", "--write", "-g"].includes(token));
+  if (unknownArgument) {
     reportInitOutcome(
       ctx,
       "not started",
       "Nothing was read or written.",
-      "Usage: /bifrost init [-f] [--write] [-g].",
+      `Unknown argument: ${unknownArgument}. Usage: /bifrost init [-f] [--write] [-g].`,
       "warning",
     );
     return;
@@ -2309,7 +2310,10 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       const labels: string[] = availableActions.map((action) =>
         action === "keep" ? "Keep my models (default)" : action === "merge" ? "Merge new models" : "Bifrost defaults",
       );
-      const selectedLabel = await ctx.ui.select("How should init update your model pools?", labels);
+      const selectedLabel = await ctx.ui.select(
+        `Bifrost · Update ${selectedSource === "user" ? "global" : "project"} model pools?`,
+        labels,
+      );
       const selectedIndex = selectedLabel ? labels.indexOf(selectedLabel) : -1;
       if (selectedIndex < 0) {
         clearBifrostWidgets(ctx);
