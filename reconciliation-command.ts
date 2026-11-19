@@ -494,25 +494,53 @@ export function buildInitActionPlan(input: {
   readonly inheritedPools?: ReadonlyMap<string, readonly string[]>;
   readonly validateMergedConfig: ReconciliationCommandDependencies["validateMergedConfig"];
 }): InitActionPlan {
-  const blocked = (reason: InitMembershipPlan["reason"]): InitActionPlan => ({ status: "blocked", reason, changes: [], warnings: [], tiers: [] });
+  const blocked = (reason: InitMembershipPlan["reason"]): InitActionPlan => ({
+    status: "blocked",
+    reason,
+    changes: [],
+    warnings: [],
+    tiers: [],
+  });
   const { source, generated } = input;
   if (!source.configBytes) return blocked("source_missing");
-  if (input.action !== "keep" && input.action !== "merge" && input.action !== "defaults") return blocked("source_invalid");
-  if (source.configBytes.byteLength > MAX_CONFIG_BYTES || !input.inventories.length
-    || input.inventories.length > MAX_INIT_INVENTORIES
-    || input.inventories.some((entry) => entry.status !== "complete")
-    || !isPlainRecord(generated) || Object.keys(generated).length > 100
-    || !Object.values(generated).some((pool) => Array.isArray(pool) && pool.length > 0)) return blocked("source_invalid");
+  if (input.action !== "keep" && input.action !== "merge" && input.action !== "defaults") {
+    return blocked("source_invalid");
+  }
+
+  const inventories = input.inventories;
+  if (
+    source.configBytes.byteLength > MAX_CONFIG_BYTES ||
+    inventories.length === 0 ||
+    inventories.length > MAX_INIT_INVENTORIES ||
+    inventories.some((entry) => entry.status !== "complete") ||
+    !isPlainRecord(generated) ||
+    Object.keys(generated).length > 100 ||
+    !Object.values(generated).some((pool) => Array.isArray(pool) && pool.length > 0)
+  ) {
+    return blocked("source_invalid");
+  }
+
   let original: Record<string, unknown>;
-  try { original = assertPlainJsonObject(source.configBytes); } catch { return blocked("source_invalid"); }
-  if (original.models !== undefined && !isPlainRecord(original.models)) return blocked("source_invalid");
+  try {
+    original = assertPlainJsonObject(source.configBytes);
+  } catch {
+    return blocked("source_invalid");
+  }
+  if (original.models !== undefined && !isPlainRecord(original.models)) {
+    return blocked("source_invalid");
+  }
+
   const before: Record<string, ConfiguredTierPool> = {};
-  for (const [tier, pool] of Object.entries(isPlainRecord(original.models) ? original.models : {})) {
+  const originalModels = isPlainRecord(original.models) ? original.models : {};
+  for (const [tier, pool] of Object.entries(originalModels)) {
     if (!validTier(tier) || !normalizePool(pool)) return blocked("source_invalid");
     setOwn(before, tier, pool);
   }
+
   const previous = ownershipFromBytes(source.ownershipBytes, source.source);
-  if (previous === null || source.ownershipBytes && source.ownershipBytes.byteLength > MAX_OWNERSHIP_BYTES) return blocked("source_invalid");
+  if (previous === null || (source.ownershipBytes && source.ownershipBytes.byteLength > MAX_OWNERSHIP_BYTES)) {
+    return blocked("source_invalid");
+  }
   const generatedTiers = Object.entries(generated);
   const probedByTier = collectProbedModels(input.inventories);
   if (!probedByTier || !generatedModelsAreProbed(generatedTiers, probedByTier)) return blocked("source_invalid");
