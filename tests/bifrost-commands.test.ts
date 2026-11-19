@@ -1683,7 +1683,7 @@ describe("bifrost command ui", () => {
     }
   });
 
-  it("still points at the pending journal when the config was preserved", () => {
+  it("does not claim preservation when a pending journal means the update may be installed", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-commit-preserved-journal-"));
     try {
       const configPath = join(tempDir, "bifrost.json");
@@ -1699,9 +1699,13 @@ describe("bifrost command ui", () => {
         target: "project (.pi/bifrost.json)",
         recoveryCommand: "/bifrost config reconcile --recover",
       });
-      // Retrying Init would hit the existing journal, so recovery must come first.
-      assert.match(message, /existing files were preserved/);
-      assert.match(message, /A reconciliation journal is pending/);
+      // The journal can reach `config_installed` and then conflict, so differing
+      // bytes do not prove the config rename never happened. Retrying Init would
+      // also hit the existing journal, so recovery must come first.
+      assert.doesNotMatch(message, /existing files were preserved/);
+      assert.match(message, /does not hold the planned configuration/);
+      assert.match(message, /may already be partly installed/);
+      assert.match(message, /a reconciliation journal is pending/);
       assert.match(message, /\/bifrost config reconcile --recover/);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
