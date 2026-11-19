@@ -74,6 +74,25 @@ describe("inline tier override", () => {
     assert.equal(r.promptText, "123 frontier debug");
   });
 
+  it("does not match an inherited property name as a tier", () => {
+    const r = parseInlineOverride("constructor hello world", models);
+    assert.equal(r.forcedTier, undefined);
+    assert.equal(r.promptText, "constructor hello world");
+  });
+
+  it("does not match a tier inherited from the prototype chain", () => {
+    const inherited = Object.create(models) as Record<string, string[]>;
+    const r = parseInlineOverride("frontier debug this", inherited);
+    assert.equal(r.forcedTier, undefined);
+    assert.equal(r.promptText, "frontier debug this");
+  });
+
+  it("matches an own tier key named constructor", () => {
+    const r = parseInlineOverride("constructor debug this", { constructor: ["model1"] });
+    assert.equal(r.forcedTier, "constructor");
+    assert.equal(r.promptText, "debug this");
+  });
+
   it("strips all whitespace after a matched tier word", () => {
     const r = parseInlineOverride("frontier  debug this", models);
     assert.equal(r.forcedTier, "frontier");
