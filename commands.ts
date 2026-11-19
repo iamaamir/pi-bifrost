@@ -1725,20 +1725,27 @@ async function handleConfigCommand(
 
 type InitReviewValue = null | boolean | number | string | InitReviewValue[] | { [key: string]: InitReviewValue };
 
-function initReviewValue(value: unknown): InitReviewValue {
+function initReviewValue(value: unknown, key?: string): InitReviewValue {
+  if (key && /api.?key|secret|token|password|credential|system.?prompt|endpoint/iu.test(key)) {
+    return "[redacted]";
+  }
   if (value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "number") {
     return value;
   }
-  if (Array.isArray(value)) return value.map(initReviewValue);
+  if (Array.isArray(value)) return value.map((item) => initReviewValue(item));
   if (typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([key, nested]) => [
-      key,
-      /api.?key|secret|token|password|credential|system.?prompt|endpoint/iu.test(key)
-        ? "[redacted]"
-        : initReviewValue(nested),
+    return Object.fromEntries(Object.entries(value).map(([nestedKey, nested]) => [
+      nestedKey,
+      initReviewValue(nested, nestedKey),
     ]));
   }
   return String(value);
+}
+
+function initReviewSettingLines(key: string, value: unknown): string[] {
+  const serialized = JSON.stringify(initReviewValue(value, key), null, 2).split("\n");
+  if (serialized.length === 1) return [`    ${key}  ${serialized[0]}`];
+  return [`    ${key}:`, ...serialized.map((line) => `      ${line}`)];
 }
 
 async function handleInit(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
@@ -2271,9 +2278,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         "  Unlisted tiers remain unchanged.",
         `  Classifier ${effectiveClassifierSummary}`,
         ...(proposedSettings.length
-          ? ["  Settings added:", ...proposedSettings.map((key) =>
-              `    ${key}  ${JSON.stringify(initReviewValue(proposal[key]))}`,
-            )]
+          ? ["  Settings added:", ...proposedSettings.flatMap((key) => initReviewSettingLines(key, proposal[key]))]
           : []),
         "",
       ];
