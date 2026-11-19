@@ -3980,6 +3980,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
     pendingAllowanceFailureBySession.delete(ctx.sessionManager);
     const retry = await retryAllowanceFailure(ctx, pending, event);
     if (retry) return retry;
+    return;
   });
 
   pi.on("agent_settled", async (_event, ctx) => {

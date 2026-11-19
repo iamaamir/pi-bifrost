@@ -1,0 +1,8 @@
+id: no-as-any-in-extension
+valid:
+  - 'const value = input as string;'
+  - 'const value = input as unknown;'
+  - 'const value = input as number | undefined;'
+invalid:
+  - 'const value = input as any;'
+  - 'return (result as any).id;'
