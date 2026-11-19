@@ -626,6 +626,17 @@ def wait_stable(path: Path, timeout: float = 8.0, stable_for: float = 0.6) -> No
     raise TimeoutError(f"log not stable: {path}")
 
 
+def stop_process_group(proc: subprocess.Popen[Any], timeout: float = 3) -> None:
+    with suppress(ProcessLookupError):
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        with suppress(ProcessLookupError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        proc.wait()
+
+
 def capture(
     name: str,
     enabled: bool,
@@ -899,12 +910,7 @@ def capture(
         return png_path
     finally:
         stop.set()
-        with suppress(ProcessLookupError):
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        with suppress(subprocess.TimeoutExpired):
-            proc.wait(timeout=3)
-            with suppress(ProcessLookupError):
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        stop_process_group(proc)
         with suppress(OSError):
             os.close(master)
         tmp.cleanup()
