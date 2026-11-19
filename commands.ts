@@ -42,7 +42,6 @@ import {
 import {
   loadConfigForReload,
   loadConfigWithSourceOverride,
-  readBoundedConfigText,
   type ConfigLoadDiagnostic,
 } from "./config-load.ts";
 import {
@@ -1064,10 +1063,10 @@ function readReconciliationSource(source: ReconciliationConfigSource): Reconcili
 }
 
 function readInheritedConfigSnapshot(path: string): string | null {
-  if (!existsSync(path)) return null;
-  const { text } = readBoundedConfigText(path);
-  if (text === undefined) throw new Error("unsafe inherited config");
-  return text;
+  const bytes = readBoundedRegularSnapshot(path);
+  if (bytes === undefined) return null;
+  if (bytes.byteLength > MAX_CONFIG_SOURCE_BYTES) throw new Error("unsafe inherited config");
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
 /** An unreadable receipt provides no ownership coverage; every pool stays protected as handwritten. */

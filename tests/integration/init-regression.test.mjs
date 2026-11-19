@@ -225,7 +225,8 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
 
   for (const layer of ["user", "workspace"]) {
     for (const conflict of [false, true]) {
-      it(`handles a linked ${layer} config ${conflict ? "with an inherited pool" : "without an inherited pool"}`, async () => {
+      it(`rejects a linked ${layer} config ${conflict ? "with an inherited pool" : "without an inherited pool"} before probing`, async () => {
+        requests = [];
         const env = fixture(port, ["healthy"]);
         const link = layer === "user" ? join(env.home, ".pi", "agent", "bifrost.json") : join(env.work, "bifrost.json");
         const target = join(env.home, "linked-config.json");
@@ -237,8 +238,9 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
           assert.equal(result.code, 0, result.stderr);
           assert.equal(result.violations, "");
           assert.deepEqual(readFileSync(target), original);
-          assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), !conflict);
-          if (conflict) assert.match(result.stdout + result.stderr, /init: blocked\. Nothing was saved; pools inherited from your global or workspace config already set quick with different models/i);
+          assert.equal(existsSync(join(env.work, ".pi", "bifrost.json")), false);
+          assert.deepEqual(requests, []);
+          assert.match(result.stdout + result.stderr, /init: blocked.*Nothing was probed or saved/i);
         } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
       });
     }
