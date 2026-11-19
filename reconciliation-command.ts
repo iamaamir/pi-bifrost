@@ -457,6 +457,7 @@ export function buildInitActionPlan(input: {
   readonly inventories: readonly InitMembershipInventory[];
   readonly generated: Readonly<Record<string, readonly string[]>>;
   readonly inheritedTiers: ReadonlySet<string>;
+  readonly inheritedPools?: ReadonlyMap<string, readonly string[]>;
   readonly validateMergedConfig: ReconciliationCommandDependencies["validateMergedConfig"];
 }): InitActionPlan {
   const blocked = (reason: InitMembershipPlan["reason"]): InitActionPlan => ({ status: "blocked", reason, changes: [], warnings: [], tiers: [] });
@@ -538,6 +539,9 @@ export function buildInitActionPlan(input: {
           return true;
         })]);
       } else {
+        const inherited = input.inheritedPools?.get(tier);
+        if (current === undefined && owner !== "deleted" && inherited
+          && additions.length === inherited.length && additions.every((key, index) => key === inherited[index])) continue;
         setOwn(nextModels, tier, [...additions]);
         managedTiers.add(tier);
       }

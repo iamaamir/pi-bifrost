@@ -9,8 +9,8 @@ const source = (models: Record<string, unknown>, receipt: unknown = null) => ({
 });
 const baseline = { quick: ["p/new", "p/old"], general: ["p/g"] };
 const inventory = [{ provider: "p", status: "complete" as const, modelsByTier: baseline }];
-const plan = (action: "keep" | "merge" | "defaults", input: ReturnType<typeof source>, inherited: string[] = []) =>
-  buildInitActionPlan({ action, source: input, inventories: inventory, generated: baseline, inheritedTiers: new Set(inherited), validateMergedConfig: () => true });
+const plan = (action: "keep" | "merge" | "defaults", input: ReturnType<typeof source>, inherited: string[] = [], inheritedPools = new Map<string, readonly string[]>()) =>
+  buildInitActionPlan({ action, source: input, inventories: inventory, generated: baseline, inheritedTiers: new Set(inherited), inheritedPools, validateMergedConfig: () => true });
 const config = (value: ReturnType<typeof plan>) => JSON.parse(Buffer.from(value.transaction!.nextConfigBytes).toString());
 const receipt = (value: ReturnType<typeof plan>) => JSON.parse(Buffer.from(value.transaction!.nextOwnershipBytes).toString());
 
@@ -110,6 +110,39 @@ describe("init action planner", () => {
       generated: { quick: ["p/new", "p/old", "p/new"] }, inheritedTiers: new Set(), validateMergedConfig: () => true,
     });
     assert.deepEqual(config(defaults).models.quick, ["p/new", "p/old"]);
+  });
+
+  it("previews retained custom/deleted tiers and saves their ownership on Keep", () => {
+    const ownership = {
+      version: 2, scope: "project",
+      tiers: { custom: { state: "user" }, deleted: { state: "deleted" } },
+    };
+    const value = plan("keep", source({ custom: ["manual/x"] }, ownership));
+    assert.equal(value.status, "ready");
+    assert.deepEqual(value.tiers.find(({ tier }) => tier === "custom"), {
+      tier: "custom", before: ["manual/x"], after: ["manual/x"], ownershipBefore: "user", ownershipAfter: "user",
+    });
+    assert.deepEqual(value.tiers.find(({ tier }) => tier === "deleted"), {
+      tier: "deleted", before: undefined, after: undefined, ownershipBefore: "deleted", ownershipAfter: "deleted",
+    });
+    assert.deepEqual(receipt(value).tiers.custom, { state: "user" });
+    assert.deepEqual(receipt(value).tiers.deleted, { state: "deleted" });
+    assert.deepEqual(config(value).models.custom, ["manual/x"]);
+    assert.deepEqual(value.tiers.find(({ tier }) => tier === "deleted")?.after, undefined);
+  });
+
+  it("does not freeze identical inherited pools on Defaults, but restores deleted tiers explicitly", () => {
+    const inheritedPools = new Map([["quick", baseline.quick]]);
+    const input = source({ general: ["manual/local"] });
+    const defaults = plan("defaults", input, ["quick"], inheritedPools);
+    assert.deepEqual(config(defaults).models, { general: baseline.general });
+    assert.equal(Object.hasOwn(config(defaults).models, "quick"), false);
+    assert.deepEqual(receipt(defaults).tiers.quick, undefined);
+
+    const ownership = { version: 2, scope: "project", tiers: { quick: { state: "deleted" } } };
+    const restored = plan("defaults", source({ general: ["manual/local"] }, ownership), ["quick"], inheritedPools);
+    assert.deepEqual(config(restored).models.quick, baseline.quick);
+    assert.deepEqual(receipt(restored).tiers.quick, { state: "generated", models: baseline.quick });
   });
 
   it("preserves empty and deleted pools on Merge while Defaults restores ownership", () => {
