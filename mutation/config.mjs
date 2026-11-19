@@ -136,8 +136,14 @@ export const MUTANT_ESTIMATE = {
 export function estimatedMinutes(target, { planned = true } = {}) {
   const spec = TARGETS[target];
   if (!spec?.secondsPerMutant) throw new Error(`mutation target ${target} has no measured cost`);
+  // A missing estimate used to produce NaN, which made `suggestedShards` build
+  // zero legs: the plan dropped the module and still reported success.
+  const mutants = MUTANT_ESTIMATE[target];
+  if (!Number.isFinite(mutants) || mutants <= 0) {
+    throw new Error(`mutation target ${target} has no mutant estimate; add it to MUTANT_ESTIMATE`);
+  }
   const factor = planned ? TIME_BUDGET.ciSlowdownFactor : 1;
-  return Math.max(1, (MUTANT_ESTIMATE[target] * spec.secondsPerMutant * factor) / 60);
+  return Math.max(1, (mutants * spec.secondsPerMutant * factor) / 60);
 }
 
 /**
@@ -146,21 +152,19 @@ export function estimatedMinutes(target, { planned = true } = {}) {
  *
  * `bun` (default, measured fastest)
  *   `@hughescr/stryker-bun-runner` runs `bun test`, which executes this
- *   repository's `node:test` files unchanged (verified: 29 of 30 bound test
- *   files pass under Bun 1.4.0). It reports coverage **per test**, not per file,
- *   so each mutant runs only the individual tests that reach it.
+ *   repository's `node:test` files unchanged (verified: the 27 files bound to
+ *   Bun-run modules ran 679 tests with 0 failures under Bun 1.4.0). It reports
+ *   coverage **per test**, not per file, so each mutant runs only the individual
+ *   tests that reach it.
  *
  * `tap`
  *   `@stryker-mutator/tap-runner` drives `node --test --test-reporter=tap` and
  *   reports coverage **per test file**. Slower, but it is the only option for a
  *   module whose bound tests Bun cannot run.
  *
- * Measured, same mutants, same kill counts unless noted:
- *
- *   module            TAP            Bun          agreement
- *   cache.ts          27s            4s           identical (172/48/9)
- *   reliability-v2    5m30s/227      10s/227      226 of 227 mutants
- *   routing.ts        5m31s          1m16s        680 killed either way
+ * The measured runner comparison, including the cross-engine results that are
+ * stable enough to quote, lives in ../docs/mutation-testing.md. It is not
+ * duplicated here: the earlier copy in this file drifted from the measurement.
  *
  * The per-test granularity is what buys the speed: Bun runs ~8 tests per mutant
  * where TAP runs whole files, so a module bound to one heavy file no longer pays
@@ -250,6 +254,9 @@ export const STRYKER_OPTIONS = {
   thresholds: { high: 0, low: 0, break: null },
   tempDirName: ".stryker-tmp",
   reporters: ["clear-text", "progress", "json"],
+  // The leg uploads `stryker.log`; Stryker's default level is "off", so without
+  // this the documented log never exists.
+  fileLogLevel: "info",
   reportFile: "reports/mutation/mutation.json",
   /**
    * Stryker's default inserts `// @ts-nocheck` at the top of every sandbox

@@ -385,6 +385,11 @@ export function assertRunArguments(options, targets) {
   if (options.dryRun && options.report !== null) {
     throw new Error("--dry-run writes no report; --report would name a file that is never produced");
   }
+  if (options.incremental && options.shards !== null) {
+    // The stored state is per module, so every shard would read and write the
+    // same file and a shard could reuse results another shard never measured.
+    throw new Error("--incremental cannot be combined with --shards; its stored state is per module");
+  }
 }
 
 function main() {
