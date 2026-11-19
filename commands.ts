@@ -2324,12 +2324,12 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       actionSelectionApproved = true;
     }
     const plan = actionPlans.get(selectedAction)!;
-    plannedTierReview = plan.tiers;
     if (
       !writeWithoutPrompt &&
-      !actionSelectionApproved &&
-      proposedSettings.length === 0 &&
-      (plan.status === "ready" || plan.reason === "no_changes")
+      selectedAction === "keep" &&
+      plan.status === "blocked" &&
+      plan.reason === "no_changes" &&
+      proposedSettings.length === 0
     ) {
       reportInitOutcome(
         ctx,
@@ -2340,6 +2340,7 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
       );
       return;
     }
+    plannedTierReview = plan.tiers;
     if (plan.status !== "ready" || !plan.transaction) {
       if (plan.reason === "no_changes" && plan.status === "blocked") {
         const existing = JSON.parse(Buffer.from(source.configBytes!).toString("utf8")) as Record<
