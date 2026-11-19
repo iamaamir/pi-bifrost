@@ -49,7 +49,7 @@ Init displays its save target. It saves to project `.pi/bifrost.json` by default
 
 ### Run init without a confirmation prompt
 
-Init writes the configuration only after one confirmation question. Pass `--write` to save the reviewed proposal without that question. In a terminal UI (TUI), in an RPC session, and in a session with no UI, `--write` saves to the target that init shows.
+Init writes the configuration only after one confirmation question. Pass `--write` to save the reviewed proposal without that question. `--write` saves to the target that init shows.
 
 A TUI and an RPC session can ask the question. RPC reports `hasUI` as true, so Pi sends the question to the client. A session that gives Bifrost no UI cannot ask. Without `--write`, that session refreshes the catalog and shows the proposal, then stops before it writes and logs `run in TUI or use --write to persist`.
 
