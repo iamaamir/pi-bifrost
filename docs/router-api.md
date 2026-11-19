@@ -50,7 +50,7 @@ if (result.status === "completed" && result.decision.outcome === "selected") {
 
 A complete runnable copy is `examples/router-standalone.mjs` (shipped in the package). It covers custom tiers, selected and no-decision results, and known-but-unavailable reporting.
 
-`status: "completed"` means the evaluation finished. It does not mean a model was selected: inspect `decision.outcome` — `"selected"`, `"unresolved"`, `"unclassified"`, `"usage"`, or `"config_invalid"`. A no-decision result never masquerades as a selection.
+`status: "completed"` means the evaluation finished. It does not mean a model was selected. Inspect `decision.outcome`: `"selected"`, `"unresolved"`, `"unclassified"`, `"usage"`, or `"config_invalid"`. A no-decision result never masquerades as a selection. A result can also have `status: "aborted"`, which carries only `version`, `status`, and `asOf`, and no decision.
 
 ## TypeScript usage
 
@@ -88,7 +88,7 @@ Tier names are caller-defined. Configure any number of pools under `config.model
 
 Under `schemaVersion: 2`, a tier may declare ordered `tierPolicies.<tier>.fallbackTiers`. An explicitly empty fallback list is terminal; the resolver never escapes an explicit fallback boundary.
 
-Each `resolve` result carries structured exclusions: per-pool candidates with `exclusion` reasons (`open_circuit`, `trial_active`, `economic_reserve`) and a machine-readable `fallbackReason` where applicable.
+Each `resolve` result carries structured exclusions. A pool candidate has `status: "excluded"` and an `exclusion` code. The codes are `open_circuit`, `trial_active`, `provider_not_allowed`, `sign_in_unavailable`, `virtual_model`, `classifier_model`, and `economic_reserve`. Each excluded candidate also gives its `exclusionEvidence` source, such as `reliability_state`, `economic_snapshot`, or `sign_in_check`. A result also gives a machine-readable `fallbackReason` where applicable, for example `requested_tier_excluded` when a reserve rule held back the whole pool.
 
 ## Integrating a custom host
 

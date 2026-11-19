@@ -12,9 +12,9 @@ The probe sends a minimal prompt (`1+1=`) to every available model in the regist
 2. **Concurrent Execution**: Up to 50 concurrent workers are spawned to process the model list (configurable via `probe.concurrency`, see [Configuration](#configuration)).
 3. **Probing Process (`probeOne`)**:
    - **Authentication**: Retrieves provider and authentication details for the model.
-   - **Primary Attempt**: Uses `provider.streamSimple()` for a lightweight check.
-     - Constraints: Max 5 tokens, 10s timeout, temperature 0.
-   - **Fallback Attempt**: If the stream fails or returns an empty response, it attempts a `promptWithMinimalSession()` call (full session transport).
+   - **Primary Attempt**: Uses `provider.streamSimple()` (a stream request without a session) for a lightweight check.
+     - Constraints: `maxTokens` of 5, the probe timeout, and `cacheRetention: "none"`. The probe does not set `temperature`.
+   - **Fallback Attempt**: If the primary attempt returns no text, the probe attempts one `promptWithMinimalSession()` call (full session transport). A stream error does not start the fallback. It reports `status: "error"`.
 4. **Result Recording**: For each model, the following metrics are captured:
    - `status`: `ok`, `error`, `timeout`, or `skipped`.
    - `duration_ms`: Time taken for the response.
@@ -24,6 +24,8 @@ The probe sends a minimal prompt (`1+1=`) to every available model in the regist
 5. **Persistence**: The final results are written to `.pi/bifrost-probe.json`.
 
 ## Scalability Analysis (Large Model Lists)
+
+The measurements in this section come from one point in time. They are not a current benchmark. Make sure that a number still holds before you quote it.
 
 When handling a large number of models (e.g., 500+), the current implementation faces several bottlenecks:
 
