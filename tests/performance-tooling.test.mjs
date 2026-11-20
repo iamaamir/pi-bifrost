@@ -350,7 +350,13 @@ test("the pull request template asks for evidence on every fast gate", () => {
   const listed = templateGates(template);
   assert.deepEqual(listed, ["check:ast", "check:duplication", "check:complexity"]);
   for (const name of listed) assert.equal(Object.hasOwn(scripts, name), true, `${name} must be a real script`);
-  assert.match(template, /^## Gate evidence$/mu);
+  // The template follows the `pr` skill's shape (Summary, Evidence, Merge
+  // Danger) so the two do not compete: a skill-written body satisfies the
+  // template, and the gate field is a subsection of Evidence rather than a
+  // replacement heading.
+  for (const heading of ["## Summary", "## Evidence", "### Gate evidence", "## Merge Danger", "## Verification"]) {
+    assert.match(template, new RegExp(`^${heading}$`, "mu"), `template must keep the ${heading} section`);
+  }
   assert.doesNotMatch(template, /Co-Authored-By|Generated with/u,
     "a pull request body must carry no agent attribution");
 });
