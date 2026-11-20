@@ -5,22 +5,22 @@
     "source": {
       "files": 62,
       "functions": 2076,
-      "maxCyc": 1559,
-      "maxCog": 1860,
-      "cycGt30": 67,
-      "cycGt50": 29,
-      "cogGt30": 95,
-      "cogGt50": 46
+      "maxCyc": 190,
+      "maxCog": 262,
+      "cycGt30": 50,
+      "cycGt50": 16,
+      "cogGt30": 74,
+      "cogGt50": 35
     },
     "tests": {
       "files": 93,
-      "functions": 4829,
-      "maxCyc": 50,
-      "maxCog": 72,
-      "cycGt30": 8,
+      "functions": 4832,
+      "maxCyc": 49,
+      "maxCog": 66,
+      "cycGt30": 3,
       "cycGt50": 0,
-      "cogGt30": 11,
-      "cogGt50": 4
+      "cogGt30": 3,
+      "cogGt50": 2
     }
   },
   "files": {
@@ -28,37 +28,37 @@
       "scope": "source",
       "lines": 203,
       "funcs": 11,
-      "maxCyc": 19,
-      "maxCog": 17,
-      "sumCyc": 56,
-      "sumCog": 42
+      "maxCyc": 18,
+      "maxCog": 16,
+      "sumCyc": 55,
+      "sumCog": 41
     },
     "auto-setup.ts": {
       "scope": "source",
       "lines": 261,
       "funcs": 30,
-      "maxCyc": 38,
-      "maxCog": 27,
-      "sumCyc": 204,
-      "sumCog": 164
+      "maxCyc": 33,
+      "maxCog": 23,
+      "sumCyc": 181,
+      "sumCog": 141
     },
     "cache.ts": {
       "scope": "source",
       "lines": 245,
       "funcs": 21,
-      "maxCyc": 25,
-      "maxCog": 33,
-      "sumCyc": 73,
-      "sumCog": 75
+      "maxCyc": 22,
+      "maxCog": 30,
+      "sumCyc": 67,
+      "sumCog": 64
     },
     "classification-pipeline.ts": {
       "scope": "source",
       "lines": 654,
       "funcs": 39,
-      "maxCyc": 93,
-      "maxCog": 123,
-      "sumCyc": 331,
-      "sumCog": 370
+      "maxCyc": 55,
+      "maxCog": 80,
+      "sumCyc": 194,
+      "sumCog": 193
     },
     "classifier-backends.ts": {
       "scope": "source",
@@ -75,8 +75,8 @@
       "funcs": 11,
       "maxCyc": 7,
       "maxCog": 5,
-      "sumCyc": 29,
-      "sumCog": 17
+      "sumCyc": 26,
+      "sumCog": 14
     },
     "classifier-metrics.ts": {
       "scope": "source",
@@ -85,16 +85,16 @@
       "maxCyc": 20,
       "maxCog": 31,
       "sumCyc": 57,
-      "sumCog": 52
+      "sumCog": 51
     },
     "classifier-pi-native.ts": {
       "scope": "source",
       "lines": 394,
       "funcs": 26,
-      "maxCyc": 60,
-      "maxCog": 116,
-      "sumCyc": 198,
-      "sumCog": 291
+      "maxCyc": 47,
+      "maxCog": 101,
+      "sumCyc": 130,
+      "sumCog": 164
     },
     "classifier-semantics.ts": {
       "scope": "source",
@@ -102,44 +102,44 @@
       "funcs": 18,
       "maxCyc": 12,
       "maxCog": 7,
-      "sumCyc": 53,
-      "sumCog": 30
+      "sumCyc": 49,
+      "sumCog": 26
     },
     "classifier.ts": {
       "scope": "source",
       "lines": 431,
       "funcs": 28,
-      "maxCyc": 34,
-      "maxCog": 60,
-      "sumCyc": 139,
-      "sumCog": 133
+      "maxCyc": 31,
+      "maxCog": 55,
+      "sumCyc": 108,
+      "sumCog": 102
     },
     "commands.ts": {
       "scope": "source",
       "lines": 3428,
       "funcs": 254,
-      "maxCyc": 201,
-      "maxCog": 318,
-      "sumCyc": 1343,
-      "sumCog": 1465
+      "maxCyc": 161,
+      "maxCog": 261,
+      "sumCyc": 1178,
+      "sumCog": 1215
     },
     "config-agent-report.ts": {
       "scope": "source",
       "lines": 270,
       "funcs": 21,
-      "maxCyc": 49,
-      "maxCog": 75,
-      "sumCyc": 168,
-      "sumCog": 212
+      "maxCyc": 48,
+      "maxCog": 74,
+      "sumCyc": 163,
+      "sumCog": 205
     },
     "config-agent.ts": {
       "scope": "source",
       "lines": 2525,
       "funcs": 175,
-      "maxCyc": 78,
-      "maxCog": 86,
-      "sumCyc": 859,
-      "sumCog": 885
+      "maxCyc": 69,
+      "maxCog": 76,
+      "sumCyc": 744,
+      "sumCog": 738
     },
     "config-approval.ts": {
       "scope": "source",
@@ -147,17 +147,17 @@
       "funcs": 13,
       "maxCyc": 18,
       "maxCog": 16,
-      "sumCyc": 58,
-      "sumCog": 53
+      "sumCyc": 53,
+      "sumCog": 43
     },
     "config-load.ts": {
       "scope": "source",
       "lines": 454,
       "funcs": 31,
-      "maxCyc": 40,
-      "maxCog": 75,
-      "sumCyc": 143,
-      "sumCog": 196
+      "maxCyc": 34,
+      "maxCog": 72,
+      "sumCyc": 138,
+      "sumCog": 188
     },
     "config-migration.ts": {
       "scope": "source",
@@ -173,99 +173,99 @@
       "lines": 195,
       "funcs": 15,
       "maxCyc": 11,
-      "maxCog": 11,
-      "sumCyc": 60,
-      "sumCog": 42
+      "maxCog": 10,
+      "sumCyc": 49,
+      "sumCog": 31
     },
     "config.ts": {
       "scope": "source",
       "lines": 1027,
       "funcs": 35,
-      "maxCyc": 159,
-      "maxCog": 246,
-      "sumCyc": 358,
-      "sumCog": 534
+      "maxCyc": 158,
+      "maxCog": 245,
+      "sumCyc": 353,
+      "sumCog": 525
     },
     "cost-report.ts": {
       "scope": "source",
       "lines": 213,
       "funcs": 21,
-      "maxCyc": 36,
-      "maxCog": 45,
-      "sumCyc": 78,
-      "sumCog": 69
+      "maxCyc": 28,
+      "maxCog": 36,
+      "sumCyc": 71,
+      "sumCog": 60
     },
     "debug.ts": {
       "scope": "source",
       "lines": 205,
       "funcs": 19,
       "maxCyc": 15,
-      "maxCog": 22,
-      "sumCyc": 75,
-      "sumCog": 77
+      "maxCog": 17,
+      "sumCyc": 65,
+      "sumCog": 60
     },
     "diagnostics.ts": {
       "scope": "source",
       "lines": 425,
       "funcs": 28,
-      "maxCyc": 28,
-      "maxCog": 35,
-      "sumCyc": 155,
-      "sumCog": 158
+      "maxCyc": 24,
+      "maxCog": 34,
+      "sumCyc": 133,
+      "sumCog": 131
     },
     "economic-config.ts": {
       "scope": "source",
       "lines": 137,
       "funcs": 24,
-      "maxCyc": 21,
-      "maxCog": 31,
-      "sumCyc": 68,
-      "sumCog": 53
+      "maxCyc": 16,
+      "maxCog": 26,
+      "sumCyc": 63,
+      "sumCog": 46
     },
     "economic-preferences.ts": {
       "scope": "source",
       "lines": 343,
       "funcs": 43,
-      "maxCyc": 30,
-      "maxCog": 23,
-      "sumCyc": 152,
-      "sumCog": 103
+      "maxCyc": 23,
+      "maxCog": 22,
+      "sumCyc": 144,
+      "sumCog": 90
     },
     "economic-signals.ts": {
       "scope": "source",
       "lines": 781,
       "funcs": 70,
-      "maxCyc": 85,
-      "maxCog": 94,
-      "sumCyc": 432,
-      "sumCog": 381
+      "maxCyc": 84,
+      "maxCog": 93,
+      "sumCyc": 410,
+      "sumCog": 354
     },
     "failure-observations.ts": {
       "scope": "source",
       "lines": 326,
       "funcs": 20,
-      "maxCyc": 57,
-      "maxCog": 40,
-      "sumCyc": 171,
-      "sumCog": 133
+      "maxCyc": 50,
+      "maxCog": 35,
+      "sumCyc": 165,
+      "sumCog": 126
     },
     "index.ts": {
       "scope": "source",
       "lines": 4780,
       "funcs": 274,
-      "maxCyc": 1559,
-      "maxCog": 1860,
-      "sumCyc": 4335,
-      "sumCog": 4791
+      "maxCyc": 190,
+      "maxCog": 262,
+      "sumCyc": 2007,
+      "sumCog": 2014
     },
     "inline-override.ts": {
       "scope": "source",
       "lines": 41,
       "funcs": 1,
-      "maxCyc": 4,
-      "maxCog": 3,
-      "sumCyc": 4,
-      "sumCog": 3
+      "maxCyc": 5,
+      "maxCog": 4,
+      "sumCyc": 5,
+      "sumCog": 4
     },
     "probe.ts": {
       "scope": "source",
@@ -273,26 +273,26 @@
       "funcs": 24,
       "maxCyc": 27,
       "maxCog": 33,
-      "sumCyc": 130,
-      "sumCog": 129
+      "sumCyc": 123,
+      "sumCog": 120
     },
     "provider-cooldowns.ts": {
       "scope": "source",
       "lines": 290,
       "funcs": 38,
-      "maxCyc": 17,
-      "maxCog": 15,
-      "sumCyc": 148,
-      "sumCog": 96
+      "maxCyc": 13,
+      "maxCog": 11,
+      "sumCyc": 125,
+      "sumCog": 72
     },
     "reconciliation-command.ts": {
       "scope": "source",
       "lines": 730,
       "funcs": 42,
-      "maxCyc": 60,
-      "maxCog": 91,
-      "sumCyc": 294,
-      "sumCog": 311
+      "maxCyc": 59,
+      "maxCog": 90,
+      "sumCyc": 288,
+      "sumCog": 306
     },
     "reconciliation-store.ts": {
       "scope": "source",
@@ -317,9 +317,9 @@
       "lines": 92,
       "funcs": 11,
       "maxCyc": 15,
-      "maxCog": 13,
-      "sumCyc": 56,
-      "sumCog": 39
+      "maxCog": 5,
+      "sumCyc": 37,
+      "sumCog": 18
     },
     "reliability-migration.ts": {
       "scope": "source",
@@ -327,8 +327,8 @@
       "funcs": 11,
       "maxCyc": 30,
       "maxCog": 45,
-      "sumCyc": 58,
-      "sumCog": 59
+      "sumCyc": 57,
+      "sumCog": 58
     },
     "reliability-observation-projection.ts": {
       "scope": "source",
@@ -363,8 +363,8 @@
       "funcs": 4,
       "maxCyc": 10,
       "maxCog": 11,
-      "sumCyc": 23,
-      "sumCog": 18
+      "sumCyc": 19,
+      "sumCog": 15
     },
     "reliability-v2-store.ts": {
       "scope": "source",
@@ -372,8 +372,8 @@
       "funcs": 72,
       "maxCyc": 71,
       "maxCog": 102,
-      "sumCyc": 345,
-      "sumCog": 369
+      "sumCyc": 336,
+      "sumCog": 361
     },
     "reliability-v2.ts": {
       "scope": "source",
@@ -381,8 +381,8 @@
       "funcs": 80,
       "maxCyc": 81,
       "maxCog": 115,
-      "sumCyc": 655,
-      "sumCog": 516
+      "sumCyc": 626,
+      "sumCog": 499
     },
     "reliability.ts": {
       "scope": "source",
@@ -390,8 +390,8 @@
       "funcs": 16,
       "maxCyc": 28,
       "maxCog": 28,
-      "sumCyc": 102,
-      "sumCog": 79
+      "sumCyc": 101,
+      "sumCog": 78
     },
     "result-viewer.ts": {
       "scope": "source",
@@ -406,10 +406,10 @@
       "scope": "source",
       "lines": 733,
       "funcs": 47,
-      "maxCyc": 34,
-      "maxCog": 34,
-      "sumCyc": 359,
-      "sumCog": 332
+      "maxCyc": 29,
+      "maxCog": 32,
+      "sumCyc": 318,
+      "sumCog": 284
     },
     "routing-scope.ts": {
       "scope": "source",
@@ -425,18 +425,18 @@
       "lines": 1155,
       "funcs": 74,
       "maxCyc": 37,
-      "maxCog": 72,
-      "sumCyc": 340,
-      "sumCog": 413
+      "maxCog": 70,
+      "sumCyc": 314,
+      "sumCog": 377
     },
     "runtime-affinity.ts": {
       "scope": "source",
       "lines": 175,
       "funcs": 12,
-      "maxCyc": 23,
-      "maxCog": 25,
-      "sumCyc": 96,
-      "sumCog": 84
+      "maxCyc": 15,
+      "maxCog": 17,
+      "sumCyc": 74,
+      "sumCog": 59
     },
     "runtime-reliability-v2.ts": {
       "scope": "source",
@@ -453,8 +453,8 @@
       "funcs": 8,
       "maxCyc": 17,
       "maxCog": 30,
-      "sumCyc": 36,
-      "sumCog": 42
+      "sumCyc": 31,
+      "sumCog": 37
     },
     "runtime-state.ts": {
       "scope": "source",
@@ -462,8 +462,8 @@
       "funcs": 12,
       "maxCyc": 10,
       "maxCog": 11,
-      "sumCyc": 46,
-      "sumCog": 34
+      "sumCyc": 43,
+      "sumCog": 32
     },
     "schema-version.ts": {
       "scope": "source",
@@ -478,19 +478,19 @@
       "scope": "source",
       "lines": 481,
       "funcs": 63,
-      "maxCyc": 34,
-      "maxCog": 37,
-      "sumCyc": 221,
-      "sumCog": 200
+      "maxCyc": 32,
+      "maxCog": 35,
+      "sumCyc": 211,
+      "sumCog": 182
     },
     "scripts/routing-release-benchmark.ts": {
       "scope": "source",
       "lines": 329,
       "funcs": 33,
-      "maxCyc": 12,
-      "maxCog": 17,
-      "sumCyc": 87,
-      "sumCog": 61
+      "maxCyc": 10,
+      "maxCog": 15,
+      "sumCyc": 78,
+      "sumCog": 52
     },
     "session-fallback.ts": {
       "scope": "source",
@@ -514,10 +514,10 @@
       "scope": "tests",
       "lines": 181,
       "funcs": 32,
-      "maxCyc": 3,
-      "maxCog": 3,
-      "sumCyc": 37,
-      "sumCog": 8
+      "maxCyc": 2,
+      "maxCog": 2,
+      "sumCyc": 34,
+      "sumCog": 3
     },
     "tests/affinity-retention-eval.test.ts": {
       "scope": "tests",
@@ -532,46 +532,46 @@
       "scope": "tests",
       "lines": 170,
       "funcs": 13,
-      "maxCyc": 6,
-      "maxCog": 5,
-      "sumCyc": 23,
-      "sumCog": 10
+      "maxCyc": 3,
+      "maxCog": 2,
+      "sumCyc": 18,
+      "sumCog": 5
     },
     "tests/auto-bootstrap-runtime.test.ts": {
       "scope": "tests",
       "lines": 753,
       "funcs": 107,
-      "maxCyc": 23,
-      "maxCog": 24,
-      "sumCyc": 179,
-      "sumCog": 88
+      "maxCyc": 5,
+      "maxCog": 6,
+      "sumCyc": 144,
+      "sumCog": 42
     },
     "tests/auto-setup.test.ts": {
       "scope": "tests",
       "lines": 298,
       "funcs": 15,
-      "maxCyc": 6,
-      "maxCog": 5,
-      "sumCyc": 25,
-      "sumCog": 10
+      "maxCyc": 3,
+      "maxCog": 2,
+      "sumCyc": 20,
+      "sumCog": 5
     },
     "tests/bifrost-commands.test.ts": {
       "scope": "tests",
       "lines": 4164,
       "funcs": 619,
-      "maxCyc": 47,
-      "maxCog": 54,
-      "sumCyc": 910,
-      "sumCog": 399
+      "maxCyc": 6,
+      "maxCog": 9,
+      "sumCyc": 755,
+      "sumCog": 167
     },
     "tests/cache-properties.test.ts": {
       "scope": "tests",
       "lines": 304,
       "funcs": 60,
-      "maxCyc": 14,
-      "maxCog": 14,
-      "sumCyc": 115,
-      "sumCog": 61
+      "maxCyc": 8,
+      "maxCog": 8,
+      "sumCyc": 82,
+      "sumCog": 23
     },
     "tests/cache.test.ts": {
       "scope": "tests",
@@ -579,8 +579,8 @@
       "funcs": 43,
       "maxCyc": 2,
       "maxCog": 1,
-      "sumCyc": 46,
-      "sumCog": 3
+      "sumCyc": 44,
+      "sumCog": 1
     },
     "tests/classifier-backends.test.ts": {
       "scope": "tests",
@@ -588,8 +588,8 @@
       "funcs": 5,
       "maxCyc": 2,
       "maxCog": 1,
-      "sumCyc": 7,
-      "sumCog": 3
+      "sumCyc": 6,
+      "sumCog": 1
     },
     "tests/classifier-cache-key.test.ts": {
       "scope": "tests",
@@ -604,19 +604,19 @@
       "scope": "tests",
       "lines": 80,
       "funcs": 15,
-      "maxCyc": 4,
-      "maxCog": 4,
-      "sumCyc": 23,
-      "sumCog": 11
+      "maxCyc": 2,
+      "maxCog": 2,
+      "sumCyc": 18,
+      "sumCog": 4
     },
     "tests/classifier-degradation-runtime.test.ts": {
       "scope": "tests",
       "lines": 413,
       "funcs": 104,
-      "maxCyc": 22,
-      "maxCog": 27,
-      "sumCyc": 156,
-      "sumCog": 78
+      "maxCyc": 3,
+      "maxCog": 4,
+      "sumCyc": 125,
+      "sumCog": 27
     },
     "tests/classifier-detection.test.ts": {
       "scope": "tests",
@@ -624,8 +624,8 @@
       "funcs": 37,
       "maxCyc": 3,
       "maxCog": 3,
-      "sumCyc": 43,
-      "sumCog": 8
+      "sumCyc": 40,
+      "sumCog": 4
     },
     "tests/classifier-effective-validation.test.ts": {
       "scope": "tests",
@@ -658,19 +658,19 @@
       "scope": "tests",
       "lines": 616,
       "funcs": 165,
-      "maxCyc": 12,
-      "maxCog": 13,
-      "sumCyc": 195,
-      "sumCog": 38
+      "maxCyc": 4,
+      "maxCog": 5,
+      "sumCyc": 179,
+      "sumCog": 16
     },
     "tests/classifier-properties.test.ts": {
       "scope": "tests",
       "lines": 1015,
       "funcs": 130,
       "maxCyc": 17,
-      "maxCog": 18,
-      "sumCyc": 336,
-      "sumCog": 239
+      "maxCog": 14,
+      "sumCyc": 232,
+      "sumCog": 112
     },
     "tests/classifier-registry-helper.test.ts": {
       "scope": "tests",
@@ -685,109 +685,109 @@
       "scope": "tests",
       "lines": 188,
       "funcs": 33,
-      "maxCyc": 19,
-      "maxCog": 23,
-      "sumCyc": 90,
-      "sumCog": 73
+      "maxCyc": 7,
+      "maxCog": 6,
+      "sumCyc": 51,
+      "sumCog": 21
     },
     "tests/classifier.test.ts": {
       "scope": "tests",
       "lines": 580,
       "funcs": 116,
-      "maxCyc": 13,
-      "maxCog": 15,
-      "sumCyc": 149,
-      "sumCog": 39
+      "maxCyc": 4,
+      "maxCog": 5,
+      "sumCyc": 131,
+      "sumCog": 17
     },
     "tests/commands.test.ts": {
       "scope": "tests",
       "lines": 154,
       "funcs": 25,
-      "maxCyc": 4,
-      "maxCog": 3,
-      "sumCyc": 34,
-      "sumCog": 9
+      "maxCyc": 3,
+      "maxCog": 2,
+      "sumCyc": 28,
+      "sumCog": 3
     },
     "tests/config-agent.test.ts": {
       "scope": "tests",
       "lines": 3158,
       "funcs": 356,
-      "maxCyc": 35,
-      "maxCog": 34,
-      "sumCyc": 605,
-      "sumCog": 296
+      "maxCyc": 12,
+      "maxCog": 11,
+      "sumCyc": 489,
+      "sumCog": 146
     },
     "tests/config-approval.test.ts": {
       "scope": "tests",
       "lines": 140,
       "funcs": 24,
-      "maxCyc": 10,
-      "maxCog": 12,
-      "sumCyc": 46,
-      "sumCog": 30
+      "maxCyc": 5,
+      "maxCog": 5,
+      "sumCyc": 35,
+      "sumCog": 15
     },
     "tests/config-load.test.ts": {
       "scope": "tests",
       "lines": 469,
       "funcs": 28,
-      "maxCyc": 8,
-      "maxCog": 7,
-      "sumCyc": 43,
-      "sumCog": 20
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 35,
+      "sumCog": 7
     },
     "tests/config-migration.test.ts": {
       "scope": "tests",
       "lines": 126,
       "funcs": 14,
-      "maxCyc": 6,
-      "maxCog": 5,
-      "sumCyc": 29,
-      "sumCog": 16
+      "maxCyc": 3,
+      "maxCog": 2,
+      "sumCyc": 22,
+      "sumCog": 8
     },
     "tests/config-schema.test.ts": {
       "scope": "tests",
       "lines": 505,
       "funcs": 57,
-      "maxCyc": 15,
-      "maxCog": 11,
-      "sumCyc": 99,
-      "sumCog": 38
+      "maxCyc": 4,
+      "maxCog": 2,
+      "sumCyc": 73,
+      "sumCog": 13
     },
     "tests/config-skill.test.ts": {
       "scope": "tests",
       "lines": 194,
       "funcs": 30,
-      "maxCyc": 13,
-      "maxCog": 12,
-      "sumCyc": 58,
-      "sumCog": 32
+      "maxCyc": 5,
+      "maxCog": 7,
+      "sumCyc": 46,
+      "sumCog": 19
     },
     "tests/config-source-override.test.ts": {
       "scope": "tests",
       "lines": 249,
       "funcs": 38,
-      "maxCyc": 8,
-      "maxCog": 10,
-      "sumCyc": 58,
-      "sumCog": 28
+      "maxCyc": 3,
+      "maxCog": 2,
+      "sumCyc": 46,
+      "sumCog": 9
     },
     "tests/config.test.ts": {
       "scope": "tests",
       "lines": 603,
       "funcs": 134,
-      "maxCyc": 16,
-      "maxCog": 15,
-      "sumCyc": 174,
-      "sumCog": 55
+      "maxCyc": 3,
+      "maxCog": 2,
+      "sumCyc": 154,
+      "sumCog": 20
     },
     "tests/cost-report.test.ts": {
       "scope": "tests",
       "lines": 190,
       "funcs": 35,
-      "maxCyc": 3,
-      "maxCog": 3,
-      "sumCyc": 40,
-      "sumCog": 7
+      "maxCyc": 2,
+      "maxCog": 2,
+      "sumCyc": 37,
+      "sumCog": 3
     },
     "tests/cost-view.test.ts": {
       "scope": "tests",
@@ -795,8 +795,8 @@
       "funcs": 15,
       "maxCyc": 2,
       "maxCog": 1,
-      "sumCyc": 17,
-      "sumCog": 2
+      "sumCyc": 16,
+      "sumCog": 1
     },
     "tests/debug.test.ts": {
       "scope": "tests",
@@ -804,26 +804,26 @@
       "funcs": 19,
       "maxCyc": 3,
       "maxCog": 2,
-      "sumCyc": 23,
-      "sumCog": 4
+      "sumCyc": 21,
+      "sumCog": 2
     },
     "tests/diagnostics.test.ts": {
       "scope": "tests",
       "lines": 359,
       "funcs": 52,
-      "maxCyc": 13,
-      "maxCog": 12,
-      "sumCyc": 100,
-      "sumCog": 52
+      "maxCyc": 3,
+      "maxCog": 2,
+      "sumCyc": 76,
+      "sumCog": 22
     },
     "tests/discovery-properties.test.ts": {
       "scope": "tests",
       "lines": 110,
       "funcs": 24,
-      "maxCyc": 7,
-      "maxCog": 8,
-      "sumCyc": 47,
-      "sumCog": 29
+      "maxCyc": 4,
+      "maxCog": 5,
+      "sumCyc": 34,
+      "sumCog": 12
     },
     "tests/dispatch-ownership.test.ts": {
       "scope": "tests",
@@ -831,26 +831,26 @@
       "funcs": 11,
       "maxCyc": 2,
       "maxCog": 1,
-      "sumCyc": 13,
-      "sumCog": 2
+      "sumCyc": 12,
+      "sumCog": 1
     },
     "tests/docs-command-drift.test.ts": {
       "scope": "tests",
       "lines": 73,
       "funcs": 8,
-      "maxCyc": 5,
-      "maxCog": 6,
-      "sumCyc": 16,
-      "sumCog": 11
+      "maxCyc": 4,
+      "maxCog": 5,
+      "sumCyc": 14,
+      "sumCog": 8
     },
     "tests/economic-config.test.ts": {
       "scope": "tests",
       "lines": 179,
       "funcs": 21,
-      "maxCyc": 4,
-      "maxCog": 3,
-      "sumCyc": 27,
-      "sumCog": 8
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 24,
+      "sumCog": 3
     },
     "tests/economic-preferences.test.ts": {
       "scope": "tests",
@@ -865,37 +865,37 @@
       "scope": "tests",
       "lines": 222,
       "funcs": 29,
-      "maxCyc": 6,
-      "maxCog": 6,
-      "sumCyc": 39,
-      "sumCog": 14
+      "maxCyc": 2,
+      "maxCog": 2,
+      "sumCyc": 35,
+      "sumCog": 7
     },
     "tests/economic-signals.test.ts": {
       "scope": "tests",
       "lines": 476,
       "funcs": 41,
-      "maxCyc": 5,
-      "maxCog": 4,
-      "sumCyc": 49,
-      "sumCog": 8
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 45,
+      "sumCog": 4
     },
     "tests/expandable-rows.test.ts": {
       "scope": "tests",
       "lines": 112,
       "funcs": 23,
-      "maxCyc": 3,
-      "maxCog": 2,
-      "sumCyc": 27,
-      "sumCog": 4
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 25,
+      "sumCog": 2
     },
     "tests/failure-observations.test.ts": {
       "scope": "tests",
       "lines": 353,
       "funcs": 23,
-      "maxCyc": 10,
-      "maxCog": 9,
-      "sumCyc": 41,
-      "sumCog": 18
+      "maxCyc": 3,
+      "maxCog": 2,
+      "sumCyc": 32,
+      "sumCog": 9
     },
     "tests/fixtures/config-approval-extension.ts": {
       "scope": "tests",
@@ -903,8 +903,8 @@
       "funcs": 4,
       "maxCyc": 11,
       "maxCog": 12,
-      "sumCyc": 24,
-      "sumCog": 24
+      "sumCyc": 14,
+      "sumCog": 12
     },
     "tests/fixtures/cost-view-extension.ts": {
       "scope": "tests",
@@ -919,18 +919,18 @@
       "scope": "tests",
       "lines": 128,
       "funcs": 23,
-      "maxCyc": 7,
-      "maxCog": 6,
-      "sumCyc": 32,
-      "sumCog": 13
+      "maxCyc": 3,
+      "maxCog": 2,
+      "sumCyc": 29,
+      "sumCog": 6
     },
     "tests/inline-override.test.ts": {
       "scope": "tests",
-      "lines": 83,
-      "funcs": 13,
+      "lines": 102,
+      "funcs": 16,
       "maxCyc": 1,
       "maxCog": 0,
-      "sumCyc": 13,
+      "sumCyc": 16,
       "sumCog": 0
     },
     "tests/jev-benchmark.test.ts": {
@@ -939,89 +939,89 @@
       "funcs": 28,
       "maxCyc": 2,
       "maxCog": 1,
-      "sumCyc": 31,
-      "sumCog": 3
+      "sumCyc": 30,
+      "sumCog": 2
     },
     "tests/model-selection-properties.test.ts": {
       "scope": "tests",
       "lines": 698,
       "funcs": 110,
-      "maxCyc": 24,
-      "maxCog": 27,
-      "sumCyc": 203,
-      "sumCog": 113
+      "maxCyc": 5,
+      "maxCog": 6,
+      "sumCyc": 141,
+      "sumCog": 39
     },
     "tests/pipeline.test.ts": {
       "scope": "tests",
       "lines": 719,
       "funcs": 111,
-      "maxCyc": 29,
-      "maxCog": 30,
-      "sumCyc": 197,
-      "sumCog": 90
+      "maxCyc": 4,
+      "maxCog": 5,
+      "sumCyc": 139,
+      "sumCog": 30
     },
     "tests/probe.test.ts": {
       "scope": "tests",
       "lines": 804,
       "funcs": 106,
-      "maxCyc": 7,
-      "maxCog": 10,
-      "sumCyc": 152,
-      "sumCog": 70
+      "maxCyc": 5,
+      "maxCog": 6,
+      "sumCyc": 122,
+      "sumCog": 21
     },
     "tests/provider-cooldown-runtime.test.ts": {
       "scope": "tests",
       "lines": 881,
       "funcs": 108,
-      "maxCyc": 26,
-      "maxCog": 39,
-      "sumCyc": 205,
-      "sumCog": 132
+      "maxCyc": 13,
+      "maxCog": 12,
+      "sumCyc": 157,
+      "sumCog": 59
     },
     "tests/provider-cooldowns.test.ts": {
       "scope": "tests",
       "lines": 282,
       "funcs": 30,
-      "maxCyc": 14,
-      "maxCog": 13,
-      "sumCyc": 58,
-      "sumCog": 30
+      "maxCyc": 5,
+      "maxCog": 4,
+      "sumCyc": 44,
+      "sumCog": 14
     },
     "tests/reconciliation-command-router.test.ts": {
       "scope": "tests",
       "lines": 491,
       "funcs": 94,
-      "maxCyc": 7,
+      "maxCyc": 4,
       "maxCog": 5,
-      "sumCyc": 122,
-      "sumCog": 33
+      "sumCyc": 109,
+      "sumCog": 17
     },
     "tests/reconciliation-command.test.ts": {
       "scope": "tests",
       "lines": 465,
       "funcs": 56,
-      "maxCyc": 3,
-      "maxCog": 2,
-      "sumCyc": 60,
-      "sumCog": 4
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 58,
+      "sumCog": 2
     },
     "tests/reconciliation-store.test.ts": {
       "scope": "tests",
       "lines": 620,
       "funcs": 132,
-      "maxCyc": 26,
-      "maxCog": 30,
-      "sumCyc": 238,
-      "sumCog": 130
+      "maxCyc": 4,
+      "maxCog": 3,
+      "sumCyc": 178,
+      "sumCog": 47
     },
     "tests/reconciliation.test.ts": {
       "scope": "tests",
       "lines": 239,
       "funcs": 16,
-      "maxCyc": 3,
-      "maxCog": 2,
-      "sumCyc": 20,
-      "sumCog": 4
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 18,
+      "sumCog": 2
     },
     "tests/registry-refresh-evidence.test.ts": {
       "scope": "tests",
@@ -1047,17 +1047,17 @@
       "funcs": 33,
       "maxCyc": 6,
       "maxCog": 7,
-      "sumCyc": 60,
-      "sumCog": 29
+      "sumCyc": 54,
+      "sumCog": 23
     },
     "tests/reliability-migration.test.ts": {
       "scope": "tests",
       "lines": 453,
       "funcs": 41,
-      "maxCyc": 8,
-      "maxCog": 8,
-      "sumCyc": 56,
-      "sumCog": 17
+      "maxCyc": 6,
+      "maxCog": 6,
+      "sumCyc": 49,
+      "sumCog": 9
     },
     "tests/reliability-observation-projection.test.ts": {
       "scope": "tests",
@@ -1074,8 +1074,8 @@
       "funcs": 51,
       "maxCyc": 16,
       "maxCog": 25,
-      "sumCyc": 128,
-      "sumCog": 89
+      "sumCyc": 110,
+      "sumCog": 69
     },
     "tests/reliability-store.test.ts": {
       "scope": "tests",
@@ -1083,8 +1083,8 @@
       "funcs": 36,
       "maxCyc": 2,
       "maxCog": 1,
-      "sumCyc": 38,
-      "sumCog": 2
+      "sumCyc": 37,
+      "sumCog": 1
     },
     "tests/reliability-v2-routing.test.ts": {
       "scope": "tests",
@@ -1099,46 +1099,46 @@
       "scope": "tests",
       "lines": 903,
       "funcs": 147,
-      "maxCyc": 50,
-      "maxCog": 65,
-      "sumCyc": 289,
-      "sumCog": 181
+      "maxCyc": 49,
+      "maxCog": 64,
+      "sumCyc": 237,
+      "sumCog": 112
     },
     "tests/reliability-v2-state-machine.test.ts": {
       "scope": "tests",
       "lines": 963,
       "funcs": 79,
-      "maxCyc": 36,
-      "maxCog": 34,
-      "sumCyc": 260,
-      "sumCog": 165
+      "maxCyc": 35,
+      "maxCog": 33,
+      "sumCyc": 234,
+      "sumCog": 133
     },
     "tests/reliability-v2-store.test.ts": {
       "scope": "tests",
       "lines": 432,
       "funcs": 47,
-      "maxCyc": 10,
-      "maxCog": 11,
-      "sumCyc": 77,
-      "sumCog": 37
+      "maxCyc": 5,
+      "maxCog": 5,
+      "sumCyc": 58,
+      "sumCog": 13
     },
     "tests/reliability-v2.test.ts": {
       "scope": "tests",
       "lines": 624,
       "funcs": 33,
-      "maxCyc": 4,
-      "maxCog": 3,
-      "sumCyc": 41,
-      "sumCog": 8
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 38,
+      "sumCog": 5
     },
     "tests/reliability.test.ts": {
       "scope": "tests",
       "lines": 365,
       "funcs": 19,
-      "maxCyc": 5,
-      "maxCog": 5,
-      "sumCyc": 27,
-      "sumCog": 10
+      "maxCyc": 3,
+      "maxCog": 3,
+      "sumCyc": 23,
+      "sumCog": 5
     },
     "tests/result-viewer.test.ts": {
       "scope": "tests",
@@ -1153,10 +1153,10 @@
       "scope": "tests",
       "lines": 1003,
       "funcs": 115,
-      "maxCyc": 43,
-      "maxCog": 45,
-      "sumCyc": 209,
-      "sumCog": 105
+      "maxCyc": 4,
+      "maxCog": 5,
+      "sumCyc": 159,
+      "sumCog": 48
     },
     "tests/routing-release-corpus.test.ts": {
       "scope": "tests",
@@ -1164,8 +1164,8 @@
       "funcs": 17,
       "maxCyc": 11,
       "maxCog": 10,
-      "sumCyc": 43,
-      "sumCog": 34
+      "sumCyc": 37,
+      "sumCog": 24
     },
     "tests/routing-scope.test.ts": {
       "scope": "tests",
@@ -1173,44 +1173,44 @@
       "funcs": 30,
       "maxCyc": 2,
       "maxCog": 1,
-      "sumCyc": 33,
-      "sumCog": 3
+      "sumCyc": 31,
+      "sumCog": 1
     },
     "tests/routing.test.ts": {
       "scope": "tests",
       "lines": 2038,
       "funcs": 190,
-      "maxCyc": 42,
-      "maxCog": 72,
-      "sumCyc": 315,
-      "sumCog": 220
+      "maxCyc": 11,
+      "maxCog": 25,
+      "sumCyc": 231,
+      "sumCog": 70
     },
     "tests/runtime-affinity.test.ts": {
       "scope": "tests",
       "lines": 173,
       "funcs": 14,
-      "maxCyc": 4,
-      "maxCog": 3,
-      "sumCyc": 21,
-      "sumCog": 7
+      "maxCyc": 3,
+      "maxCog": 2,
+      "sumCyc": 18,
+      "sumCog": 4
     },
     "tests/runtime-reliability-hooks.test.ts": {
       "scope": "tests",
       "lines": 307,
       "funcs": 41,
-      "maxCyc": 9,
-      "maxCog": 9,
-      "sumCyc": 71,
-      "sumCog": 34
+      "maxCyc": 5,
+      "maxCog": 4,
+      "sumCyc": 57,
+      "sumCog": 17
     },
     "tests/runtime-reliability-tracker.test.ts": {
       "scope": "tests",
       "lines": 74,
       "funcs": 9,
-      "maxCyc": 4,
-      "maxCog": 4,
-      "sumCyc": 15,
-      "sumCog": 8
+      "maxCyc": 3,
+      "maxCog": 3,
+      "sumCyc": 12,
+      "sumCog": 4
     },
     "tests/runtime-reliability.test.ts": {
       "scope": "tests",
@@ -1218,8 +1218,8 @@
       "funcs": 6,
       "maxCyc": 2,
       "maxCog": 1,
-      "sumCyc": 8,
-      "sumCog": 2
+      "sumCyc": 7,
+      "sumCog": 1
     },
     "tests/runtime-setmodel-throw.test.ts": {
       "scope": "tests",
@@ -1236,17 +1236,17 @@
       "funcs": 11,
       "maxCyc": 3,
       "maxCog": 3,
-      "sumCyc": 15,
-      "sumCog": 6
+      "sumCyc": 13,
+      "sumCog": 3
     },
     "tests/schema.test.ts": {
       "scope": "tests",
       "lines": 176,
       "funcs": 23,
-      "maxCyc": 7,
-      "maxCog": 5,
-      "sumCyc": 36,
-      "sumCog": 12
+      "maxCyc": 4,
+      "maxCog": 2,
+      "sumCyc": 29,
+      "sumCog": 5
     },
     "tests/self-select-tracker.test.ts": {
       "scope": "tests",
@@ -1270,37 +1270,37 @@
       "scope": "tests",
       "lines": 675,
       "funcs": 75,
-      "maxCyc": 22,
-      "maxCog": 25,
-      "sumCyc": 117,
-      "sumCog": 50
+      "maxCyc": 10,
+      "maxCog": 9,
+      "sumCyc": 100,
+      "sumCog": 27
     },
     "tests/storage.test.ts": {
       "scope": "tests",
       "lines": 323,
       "funcs": 48,
-      "maxCyc": 17,
-      "maxCog": 16,
-      "sumCyc": 101,
-      "sumCog": 53
+      "maxCyc": 5,
+      "maxCog": 3,
+      "sumCyc": 65,
+      "sumCog": 17
     },
     "tests/strict-runtime.test.ts": {
       "scope": "tests",
       "lines": 421,
       "funcs": 61,
-      "maxCyc": 16,
-      "maxCog": 17,
-      "sumCyc": 93,
-      "sumCog": 39
+      "maxCyc": 5,
+      "maxCog": 4,
+      "sumCyc": 80,
+      "sumCog": 21
     },
     "tests/typesafe-classifier.test.ts": {
       "scope": "tests",
       "lines": 417,
       "funcs": 75,
-      "maxCyc": 6,
-      "maxCog": 5,
-      "sumCyc": 93,
-      "sumCog": 18
+      "maxCyc": 4,
+      "maxCog": 3,
+      "sumCyc": 83,
+      "sumCog": 8
     },
     "tests/typesafe-prompt-precedence.test.ts": {
       "scope": "tests",
@@ -1315,19 +1315,19 @@
       "scope": "tests",
       "lines": 111,
       "funcs": 13,
-      "maxCyc": 8,
-      "maxCog": 7,
-      "sumCyc": 27,
-      "sumCog": 14
+      "maxCyc": 7,
+      "maxCog": 6,
+      "sumCyc": 20,
+      "sumCog": 7
     },
     "tests/virtual-config-reload.test.ts": {
       "scope": "tests",
       "lines": 115,
       "funcs": 16,
-      "maxCyc": 4,
-      "maxCog": 5,
-      "sumCyc": 23,
-      "sumCog": 12
+      "maxCyc": 3,
+      "maxCog": 4,
+      "sumCyc": 19,
+      "sumCog": 5
     },
     "tests/virtual-override.test.ts": {
       "scope": "tests",
@@ -1344,17 +1344,17 @@
       "funcs": 53,
       "maxCyc": 3,
       "maxCog": 3,
-      "sumCyc": 61,
-      "sumCog": 10
+      "sumCyc": 57,
+      "sumCog": 5
     },
     "typesafe-classifier.ts": {
       "scope": "source",
       "lines": 385,
       "funcs": 25,
-      "maxCyc": 45,
-      "maxCog": 82,
-      "sumCyc": 178,
-      "sumCog": 237
+      "maxCyc": 34,
+      "maxCog": 69,
+      "sumCyc": 131,
+      "sumCog": 148
     },
     "ui/cost-view.ts": {
       "scope": "source",
@@ -1362,17 +1362,17 @@
       "funcs": 30,
       "maxCyc": 6,
       "maxCog": 6,
-      "sumCyc": 56,
-      "sumCog": 31
+      "sumCyc": 53,
+      "sumCog": 26
     },
     "ui/expandable-rows.ts": {
       "scope": "source",
       "lines": 174,
       "funcs": 16,
-      "maxCyc": 20,
-      "maxCog": 26,
-      "sumCyc": 81,
-      "sumCog": 83
+      "maxCyc": 15,
+      "maxCog": 19,
+      "sumCyc": 69,
+      "sumCog": 63
     },
     "ui/panel.ts": {
       "scope": "source",
@@ -1416,9 +1416,9 @@
       "funcs": 15,
       "maxCyc": 22,
       "maxCog": 29,
-      "sumCyc": 69,
-      "sumCog": 73
+      "sumCyc": 56,
+      "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-19T17:37:43.656Z"
+  "generatedAt": "2026-11-20T07:11:10.602Z"
 }

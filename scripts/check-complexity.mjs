@@ -43,10 +43,13 @@ function scopeOf(rel) {
   return null;
 }
 
-function inScopeFiles() {
-  return walk(ROOT)
+function inScopeFiles(root = ROOT) {
+  return walk(root)
     .filter((f) => f.endsWith(".ts") && !f.endsWith(".d.ts"))
-    .map((f) => ({ file: f, rel: path.relative(ROOT, f), scope: scopeOf(path.relative(ROOT, f)) }))
+    .map((f) => {
+      const rel = path.relative(root, f).replace(/\\/g, "/");
+      return { file: f, rel, scope: scopeOf(rel) };
+    })
     .filter((x) => x.scope);
 }
 
@@ -86,6 +89,7 @@ function getName(node, sourceFile) {
 function cyclomatic(node) {
   let c = 1;
   function visit(n) {
+    if (n !== node && isFunctionLike(n)) return;
     switch (n.kind) {
       case ts.SyntaxKind.IfStatement:
       case ts.SyntaxKind.ForStatement:
@@ -111,7 +115,7 @@ function cyclomatic(node) {
     }
     ts.forEachChild(n, visit);
   }
-  if (node.body) ts.forEachChild(node.body, visit);
+  if (node.body) visit(node.body);
   else ts.forEachChild(node, visit);
   return c;
 }
@@ -148,6 +152,7 @@ function cognitive(node) {
   }
   function visit(n, nesting, inConditionCtx = false) {
     if (!n) return;
+    if (n !== node && isFunctionLike(n)) return;
     switch (n.kind) {
       case ts.SyntaxKind.IfStatement: {
         const isElseIf = ts.isIfStatement(n.parent) && n.parent.elseStatement === n;
@@ -230,8 +235,8 @@ function cognitive(node) {
   return score;
 }
 
-function analyze() {
-  const files = inScopeFiles().sort((a, b) => a.rel.localeCompare(b.rel));
+function analyze({ root = ROOT } = {}) {
+  const files = inScopeFiles(root).sort((a, b) => a.rel.localeCompare(b.rel));
   const fileData = {};
   const scopeFuncs = { source: [], tests: [] };
   for (const { file, rel, scope } of files) {
@@ -407,4 +412,19 @@ function main(argv = process.argv.slice(2)) {
   return 1;
 }
 
-process.exitCode = main();
+export {
+  analyze,
+  cognitive,
+  compare,
+  cyclomatic,
+  getName,
+  inScopeFiles,
+  isFunctionLike,
+  main,
+  scopeOf,
+  walk,
+};
+
+const isDirectRun =
+  process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isDirectRun) process.exitCode = main();
