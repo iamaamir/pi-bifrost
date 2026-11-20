@@ -55,13 +55,13 @@ make "the gate measured nothing" a failure.
 - Changing `format`, `minTokens`, or `minLines` changes the denominator. Rerun
   the audit and move the budget in the same change.
 - The clone population has been audited: [`docs/quality/duplication-audit.md`](../quality/duplication-audit.md)
-  shows that 87% of the duplication at `minLines 6` sat inside `tests/`, and
-  that the 6-9 line band was short test scaffolding. `minLines` moved to 10 and
+  shows that 87% of the duplication at a 6-line minimum sat inside `tests/`,
+  and that the 6-9 line band was short test scaffolding. `minLines` moved to 10 and
   the budget came down with it, so the gate still measures the tree it guards.
   `tests/**` stays measured; a copy-pasted test is still a liability.
 - This is a **budget**, not a ratchet: adding unique lines lowers the
   percentage. A true duplicated-line ratchet is deferred until the clone
-  population needs it; the audit records the current headroom, about 190 lines.
+  population needs it. The committed audit records the current headroom.
 
 ### Complexity (TypeScript compiler API)
 
@@ -118,8 +118,9 @@ make "the gate measured nothing" a failure.
   expected: it is the record of the new ceiling.
 - A contributor who lowers complexity should regenerate the baseline in the same
   change, otherwise the ratchet keeps the old, higher ceiling.
-- Duplication can drift upward within the 3.3% budget, about 300 lines of
-  headroom today. Trend history is tracked in #291 rather than in this ADR.
+- Duplication can drift upward within the 3.3% budget. The committed audit
+  records the current headroom. Trend history is tracked in #291 rather than in
+  this ADR.
 - The gates run on Linux CI and macOS locally; there is no Windows leg. Windows
   separator handling is normalized before comparison and unit-tested with
   `path.win32`, but a native Windows run remains unproven.
