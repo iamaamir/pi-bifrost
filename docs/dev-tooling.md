@@ -126,6 +126,28 @@ tree into a crash. Read errors other than `ENOENT` still fail, and
 `--update-baseline` refuses an incomplete snapshot instead of recording a
 baseline that omits a real file.
 
+## Documented commands and links
+
+Two tests read the documents in `docs/` and the root guides.
+
+`tests/docs-executable.test.mjs` resolves each `npm run <script>` and each
+`node scripts/<file>` that a document shows. It makes sure that the script is in
+`package.json`, that the file exists, and that the script source contains each
+flag on the command line. It also runs the documented `--json` call of
+`check:complexity` and the documented `--help` call of `toolbox.mjs`.
+
+`tests/docs-links.test.mjs` resolves each relative link and each heading anchor
+in the documentation set. If a file moves or a heading changes, the test fails.
+
+`tests/docs-fact-drift.test.ts` reads the duplication settings from
+`.jscpd.json` and compares them with the numbers that the guide and the ADR
+quote. If a threshold or a minimum moves, the prose must move in the same
+change.
+
+These tests do not prove that a command prints the output that a document shows.
+A captured output block is evidence only when it names the revision, and when a
+clean working tree produced it.
+
 ## Before you verify a change
 
 The smallest useful check covers the change's **blast radius**, not only the file
