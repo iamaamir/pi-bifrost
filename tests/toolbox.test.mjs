@@ -170,7 +170,11 @@ test("wires the duplication check to a deterministic jscpd report path and failu
   const reportPath = join(temp, "jscpd-report.json");
   mkdirSync(temp, { recursive: true });
   writeFileSync(reportPath, JSON.stringify({ statistics: { total: { percentage: 7.25, duplicatedLines: 29, lines: 400, clones: 3 } } }));
-  const findings = CHECKS.duplication.parse(plan.read());
+  // Pin the threshold in the fixture root instead of inheriting the committed
+  // one: a legal budget change must not break this wiring test, which asserts
+  // that the report is read from the planned path and turned into a finding.
+  writeFileSync(join(temp, ".jscpd.json"), JSON.stringify({ threshold: 5.5 }));
+  const findings = CHECKS.duplication.parse(plan.read(), temp);
   assert.equal(findings.length, 1);
   assert.equal(findings[0].rule, "duplication-threshold");
   assert.match(findings[0].message, /7\.25%/);

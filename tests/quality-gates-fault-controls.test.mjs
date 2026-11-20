@@ -74,7 +74,11 @@ test("check:ast exits 1 when a rule's scope matches no tracked file and 0 when i
 function duplicationFixture(threshold) {
   const dir = mkdtempSync(join(tmpdir(), "bifrost-gate-duplication-"));
   const config = JSON.parse(readFileSync(join(root, ".jscpd.json"), "utf8"));
-  writeFileSync(join(dir, ".jscpd.json"), JSON.stringify({ ...config, threshold }, null, 2));
+  // The clone geometry is this fixture's own input. Pin the detection knobs so
+  // moving the committed ones cannot silently remove the clone the exit-code
+  // assertion depends on; the committed values are pinned in
+  // tests/duplication-audit.test.mjs.
+  writeFileSync(join(dir, ".jscpd.json"), JSON.stringify({ ...config, threshold, minLines: 6, minTokens: 50 }, null, 2));
   const block = [
     "export function computeValue(input: number) {",
     "  const doubled = input * 2;",
