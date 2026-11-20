@@ -4,7 +4,7 @@
   "scopes": {
     "source": {
       "files": 94,
-      "functions": 2799,
+      "functions": 2801,
       "maxCyc": 190,
       "maxCog": 262,
       "cycGt30": 59,
@@ -13,8 +13,8 @@
       "cogGt50": 40
     },
     "tests": {
-      "files": 191,
-      "functions": 8329,
+      "files": 195,
+      "functions": 8367,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -575,12 +575,12 @@
     },
     "scripts/check-complexity.mjs": {
       "scope": "source",
-      "lines": 552,
-      "funcs": 63,
+      "lines": 612,
+      "funcs": 65,
       "maxCyc": 28,
       "maxCog": 29,
-      "sumCyc": 217,
-      "sumCog": 161
+      "sumCyc": 240,
+      "sumCog": 189
     },
     "scripts/check-contracts.mjs": {
       "scope": "source",
@@ -935,12 +935,12 @@
     },
     "tests/check-complexity.test.mjs": {
       "scope": "tests",
-      "lines": 365,
-      "funcs": 32,
+      "lines": 434,
+      "funcs": 37,
       "maxCyc": 7,
       "maxCog": 3,
-      "sumCyc": 43,
-      "sumCog": 8
+      "sumCyc": 49,
+      "sumCog": 9
     },
     "tests/check-issue-refs.test.mjs": {
       "scope": "tests",
@@ -1248,6 +1248,33 @@
       "sumCyc": 14,
       "sumCog": 8
     },
+    "tests/docs-executable.test.mjs": {
+      "scope": "tests",
+      "lines": 146,
+      "funcs": 18,
+      "maxCyc": 12,
+      "maxCog": 28,
+      "sumCyc": 42,
+      "sumCog": 48
+    },
+    "tests/docs-fact-drift.test.ts": {
+      "scope": "tests",
+      "lines": 79,
+      "funcs": 5,
+      "maxCyc": 8,
+      "maxCog": 11,
+      "sumCyc": 13,
+      "sumCog": 12
+    },
+    "tests/docs-links.test.mjs": {
+      "scope": "tests",
+      "lines": 144,
+      "funcs": 23,
+      "maxCyc": 13,
+      "maxCog": 30,
+      "sumCyc": 51,
+      "sumCog": 53
+    },
     "tests/duplication-audit.test.mjs": {
       "scope": "tests",
       "lines": 107,
@@ -1472,6 +1499,15 @@
       "maxCog": 6,
       "sumCyc": 23,
       "sumCog": 15
+    },
+    "tests/fixtures/owned-process.mjs": {
+      "scope": "tests",
+      "lines": 165,
+      "funcs": 18,
+      "maxCyc": 8,
+      "maxCog": 14,
+      "sumCyc": 53,
+      "sumCog": 45
     },
     "tests/fixtures/pack-lock.mjs": {
       "scope": "tests",
@@ -1790,12 +1826,12 @@
     },
     "tests/integration/native-classifier.test.mjs": {
       "scope": "tests",
-      "lines": 369,
-      "funcs": 24,
+      "lines": 228,
+      "funcs": 7,
       "maxCyc": 10,
-      "maxCog": 14,
-      "sumCyc": 70,
-      "sumCog": 57
+      "maxCog": 11,
+      "sumCyc": 18,
+      "sumCog": 12
     },
     "tests/integration/native-faux-lifecycle.test.mjs": {
       "scope": "tests",
@@ -1826,12 +1862,12 @@
     },
     "tests/integration/native-tool-continuation.test.mjs": {
       "scope": "tests",
-      "lines": 246,
-      "funcs": 22,
+      "lines": 104,
+      "funcs": 5,
       "maxCyc": 9,
-      "maxCog": 14,
-      "sumCyc": 65,
-      "sumCog": 55
+      "maxCog": 10,
+      "sumCyc": 13,
+      "sumCog": 10
     },
     "tests/integration/preview-invalid-config-acceptance.test.mjs": {
       "scope": "tests",
@@ -1970,11 +2006,11 @@
     },
     "tests/mutation-workflow.test.mjs": {
       "scope": "tests",
-      "lines": 2494,
-      "funcs": 218,
+      "lines": 2510,
+      "funcs": 221,
       "maxCyc": 8,
       "maxCog": 13,
-      "sumCyc": 297,
+      "sumCyc": 300,
       "sumCog": 94
     },
     "tests/pack-lock.test.mjs": {
@@ -2590,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T07:35:13.093Z",
-  "sourceCommit": "0eecfbbe3df9d005156d1ff91f9c1f347022192d"
+  "generatedAt": "2026-11-21T07:35:41.102Z",
+  "sourceCommit": "c1c8478d5a1225b0afe6d7645039bd4bc913ce27"
 }
