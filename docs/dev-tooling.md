@@ -51,10 +51,13 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run test:quick` | Quick local tier: typecheck + root tests minus the four heavy files (see `scripts/test-quick.mjs`) | `npm ci` |
 | `scripts/git-hooks/pre-push` | Optional pre-push gate running `test:quick` plus the fast gates (`check:ast`, `check:duplication`, `check:complexity`); enable with `git config core.hooksPath scripts/git-hooks`, bypass with `--no-verify` | `npm ci` |
 
-A pull request that adds, removes, or changes a gate states the gate's evidence in
-the **Gate evidence** field of [`.github/PULL_REQUEST_TEMPLATE.md`](../.github/PULL_REQUEST_TEMPLATE.md):
-the command, its real output, and what it catches that the other gates do not. A
-test pins that field to the fast gates, so a new gate cannot be omitted silently.
+The pull request template follows the shape of the `pr` skill — Summary,
+Evidence, Merge Danger, Verification — so a skill-written body and GitHub's
+template describe the same PR. A PR that adds, removes, or changes a gate states
+the gate's evidence in the **Gate evidence** subsection of Evidence: the command,
+its real output, and what it catches that the other gates do not. A test pins
+that subsection to the fast gates and checks the surrounding headings, so a new
+gate or a dropped section cannot pass silently.
 
 Add `--json` for a structured result:
 

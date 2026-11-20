@@ -1988,12 +1988,12 @@
     },
     "tests/performance-tooling.test.mjs": {
       "scope": "tests",
-      "lines": 373,
+      "lines": 379,
       "funcs": 63,
       "maxCyc": 3,
-      "maxCog": 1,
-      "sumCyc": 68,
-      "sumCog": 4
+      "maxCog": 2,
+      "sumCyc": 69,
+      "sumCog": 5
     },
     "tests/pipeline.test.ts": {
       "scope": "tests",
@@ -2590,6 +2590,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-20T10:28:37.119Z",
-  "sourceCommit": "04db172241ffbe8f95782109609d15695e8c2952"
+  "generatedAt": "2026-11-20T10:56:16.888Z",
+  "sourceCommit": "7cdc9a3617cac3fd22c5f892fb7e04af742dd03c"
 }
