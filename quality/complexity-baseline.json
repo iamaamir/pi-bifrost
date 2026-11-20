@@ -14,7 +14,7 @@
     },
     "tests": {
       "files": 189,
-      "functions": 8208,
+      "functions": 8214,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -575,7 +575,7 @@
     },
     "scripts/check-complexity.mjs": {
       "scope": "source",
-      "lines": 432,
+      "lines": 433,
       "funcs": 37,
       "maxCyc": 28,
       "maxCog": 42,
@@ -746,12 +746,12 @@
     },
     "scripts/toolbox.mjs": {
       "scope": "source",
-      "lines": 573,
+      "lines": 586,
       "funcs": 54,
       "maxCyc": 12,
       "maxCog": 19,
-      "sumCyc": 183,
-      "sumCog": 158
+      "sumCyc": 185,
+      "sumCog": 161
     },
     "scripts/verify-release.mjs": {
       "scope": "source",
@@ -926,11 +926,11 @@
     },
     "tests/check-complexity.test.mjs": {
       "scope": "tests",
-      "lines": 184,
-      "funcs": 10,
+      "lines": 214,
+      "funcs": 13,
       "maxCyc": 7,
       "maxCog": 3,
-      "sumCyc": 19,
+      "sumCyc": 22,
       "sumCog": 6
     },
     "tests/check-issue-refs.test.mjs": {
@@ -2384,11 +2384,11 @@
     },
     "tests/toolbox.test.mjs": {
       "scope": "tests",
-      "lines": 268,
-      "funcs": 22,
+      "lines": 282,
+      "funcs": 25,
       "maxCyc": 3,
       "maxCog": 2,
-      "sumCyc": 29,
+      "sumCyc": 32,
       "sumCog": 7
     },
     "tests/tooling-config.test.mjs": {
@@ -2563,5 +2563,5 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-20T08:06:47.584Z"
+  "generatedAt": "2026-11-20T09:04:25.453Z"
 }
