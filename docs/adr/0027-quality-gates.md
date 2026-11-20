@@ -120,6 +120,9 @@ make "the gate measured nothing" a failure.
   change, otherwise the ratchet keeps the old, higher ceiling.
 - Duplication can drift upward within the 3.3% budget, about 300 lines of
   headroom today. Trend history is tracked in #291 rather than in this ADR.
+- The gates run on Linux CI and macOS locally; there is no Windows leg. Windows
+  separator handling is normalized before comparison and unit-tested with
+  `path.win32`, but a native Windows run remains unproven.
 
 ## Alternatives considered
 
