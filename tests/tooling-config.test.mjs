@@ -1,11 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, matchesGlob } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CHECKS } from "../scripts/toolbox.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const packageManifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+const knipSource = readFileSync(join(root, "knip.jsonc"), "utf8");
+const gitignore = readFileSync(join(root, ".gitignore"), "utf8");
 const workflowDirectory = join(root, ".github", "workflows");
 const workflows = readdirSync(workflowDirectory)
   .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
@@ -162,6 +166,111 @@ test("the secret allowlist check rejects weakening fixture path and value matchi
   const escapedDot = config.replace("^fixture/anchor$", "^fixture/anch\\.r$");
   assert.notEqual(escapedDot, config, "the escaped-punctuation control must apply");
   assert.deepEqual(gitleaksScopeProblems(escapedDot), []);
+});
+
+function knipConfigFrom(source) {
+  // knip.jsonc allows full-line comments; the schema URL keeps its own `//`.
+  return JSON.parse(source.replace(/^\s*\/\/.*$/gmu, ""));
+}
+
+function trackedFiles() {
+  const result = spawnSync("git", ["ls-files"], { cwd: root, encoding: "utf8" });
+  assert.equal(result.status, 0, `git ls-files failed: ${result.stderr}`);
+  return result.stdout.split("\n").filter(Boolean);
+}
+
+// Knip cannot report on an entry or project glob that matches nothing, and it
+// cannot warn about an ignore that hides no file. These exceptions carry their
+// reason here so a silent no-op ignore cannot accumulate.
+const KNIP_DEPENDENCY_EXCEPTIONS = {
+  "@stryker-mutator/command-runner": "bundled with @stryker-mutator/core and resolved by name from testRunner: command",
+  "@stryker-mutator/bun-runner": "name Knip infers from testRunner: bun; the community runner above is used instead",
+};
+
+const KNIP_BINARY_EXCEPTIONS = {
+  hyperfine: "optional host benchmark tool documented in docs/dev-tooling.md",
+  stryker: "binary provided by @stryker-mutator/core, which the mutation runner invokes",
+  bun: "host test runner for the default mutation runner, documented in docs/mutation-testing.md",
+};
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function knipScopeProblems({ config, files, manifest, gitignoreText, dependencyExceptions, binaryExceptions }) {
+  const problems = [];
+  const declared = new Set([
+    ...Object.keys(manifest.dependencies ?? {}),
+    ...Object.keys(manifest.devDependencies ?? {}),
+    ...Object.keys(manifest.peerDependencies ?? {}),
+  ]);
+  for (const field of ["entry", "project"]) {
+    if (!Array.isArray(config[field]) || config[field].length === 0) {
+      problems.push(`missing ${field} globs`);
+      continue;
+    }
+    for (const glob of config[field]) {
+      if (!files.some((file) => matchesGlob(file, glob))) problems.push(`${field} glob ${glob} matches no tracked file`);
+    }
+  }
+  for (const pattern of config.ignore ?? []) {
+    const prefix = pattern.replace(/\/\*\*$/u, "");
+    const matchesTracked = files.some((file) => matchesGlob(file, pattern) || file.startsWith(`${prefix}/`));
+    const matchesGenerated = new RegExp(`^${escapeRegExp(prefix)}/?$`, "mu").test(gitignoreText);
+    if (!matchesTracked && !matchesGenerated) problems.push(`ignore ${pattern} matches neither a tracked file nor a gitignored artifact`);
+  }
+  for (const [field, exceptions] of [
+    ["ignoreDependencies", dependencyExceptions],
+    ["ignoreBinaries", binaryExceptions],
+  ]) {
+    const ignored = config[field] ?? [];
+    for (const name of ignored) {
+      const isDeclared = field === "ignoreDependencies" && declared.has(name);
+      if (!isDeclared && !Object.hasOwn(exceptions, name)) problems.push(`${field} ${name} is neither declared nor a documented exception`);
+    }
+    for (const name of Object.keys(exceptions)) {
+      if (!ignored.includes(name)) problems.push(`documented ${field} exception ${name} is not configured`);
+    }
+  }
+  return problems;
+}
+
+test("Knip entry, ignore, and exception scopes match the tree", () => {
+  const problems = knipScopeProblems({
+    config: knipConfigFrom(knipSource),
+    files: trackedFiles(),
+    manifest: packageManifest,
+    gitignoreText: gitignore,
+    dependencyExceptions: KNIP_DEPENDENCY_EXCEPTIONS,
+    binaryExceptions: KNIP_BINARY_EXCEPTIONS,
+  });
+  assert.deepEqual(problems, []);
+});
+
+test("the Knip scope audit reports dead globs, undeclared ignores, and stale exceptions", () => {
+  const config = knipConfigFrom(knipSource);
+  const base = {
+    files: trackedFiles(),
+    manifest: packageManifest,
+    gitignoreText: gitignore,
+    dependencyExceptions: KNIP_DEPENDENCY_EXCEPTIONS,
+    binaryExceptions: KNIP_BINARY_EXCEPTIONS,
+  };
+  const problemsFor = (mutate) => knipScopeProblems({ ...base, config: mutate(structuredClone(config)) });
+
+  assert.equal(problemsFor((copy) => { copy.project = ["*.nope"]; return copy; })
+    .includes("project glob *.nope matches no tracked file"), true);
+  assert.equal(problemsFor((copy) => { copy.ignore = ["src/**"]; return copy; })
+    .includes("ignore src/** matches neither a tracked file nor a gitignored artifact"), true);
+  assert.equal(problemsFor((copy) => { copy.ignoreDependencies.push("left-pad"); return copy; })
+    .includes("ignoreDependencies left-pad is neither declared nor a documented exception"), true);
+  const withoutException = structuredClone(config);
+  withoutException.ignoreDependencies = withoutException.ignoreDependencies.filter((name) => name !== "@stryker-mutator/bun-runner");
+  assert.equal(knipScopeProblems({ ...base, config: withoutException })
+    .includes("documented ignoreDependencies exception @stryker-mutator/bun-runner is not configured"), true,
+  "a stale exception must be removed, not left behind");
+  assert.equal(problemsFor((copy) => { copy.ignoreBinaries = ["hyperfine", "stryker"]; return copy; })
+    .includes("documented ignoreBinaries exception bun is not configured"), true);
 });
 
 test("Renovate pins action digests and requires approval for major upgrades", () => {
