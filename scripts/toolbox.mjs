@@ -203,18 +203,19 @@ export function parseOsv(stdout) {
   return findings;
 }
 
+const DUPLICATION_THRESHOLD = JSON.parse(readFileSync(join(ROOT, ".jscpd.json"), "utf8")).threshold;
+
 export function parseJscpd(reportJson) {
   const data = JSON.parse(reportJson);
   const total = data.statistics?.total ?? {};
   const percentage = Number(total.percentage ?? 0);
-  const threshold = 6;
-  if (percentage > threshold) {
+  if (percentage > DUPLICATION_THRESHOLD) {
     return [
       {
         rule: "duplication-threshold",
         file: ".jscpd.json",
         line: null,
-        message: `${percentage.toFixed(2)}% duplicated lines (${total.duplicatedLines ?? 0}/${total.lines ?? 0}) over ${threshold}% threshold; clones=${total.clones ?? 0}`,
+        message: `${percentage.toFixed(2)}% duplicated lines (${total.duplicatedLines ?? 0}/${total.lines ?? 0}) over ${DUPLICATION_THRESHOLD}% threshold; clones=${total.clones ?? 0}`,
       },
     ];
   }
@@ -338,7 +339,7 @@ export const CHECKS = {
     command: (temp) => {
       const report = join(temp, "jscpd-report.json");
       return {
-        args: [".", "--config", ".jscpd.json", "--reporters", "json", "--output", temp, "--threshold", "6"],
+        args: [".", "--config", ".jscpd.json", "--reporters", "json", "--output", temp],
         read: () => readFileSync(report, "utf8"),
       };
     },
