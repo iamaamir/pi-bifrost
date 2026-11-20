@@ -1259,7 +1259,7 @@
     },
     "tests/docs-fact-drift.test.ts": {
       "scope": "tests",
-      "lines": 79,
+      "lines": 93,
       "funcs": 5,
       "maxCyc": 8,
       "maxCog": 11,
@@ -2626,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T07:35:41.102Z",
-  "sourceCommit": "c1c8478d5a1225b0afe6d7645039bd4bc913ce27"
+  "generatedAt": "2026-11-21T07:35:41.893Z",
+  "sourceCommit": "d5bbcbbeef8380797d634c80b00be734134347eb"
 }
