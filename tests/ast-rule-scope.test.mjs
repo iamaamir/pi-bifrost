@@ -5,6 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { fileMatchesGlob, ruleScopeFindings } from "../scripts/toolbox.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const binary = join(root, "node_modules", ".bin", process.platform === "win32" ? "ast-grep.cmd" : "ast-grep");
@@ -30,6 +31,22 @@ function ruleDirectoryProblems(config, baseDirectory) {
   }
   return problems;
 }
+
+// ast-grep's globset lets `*` cross directory separators; Node's matchesGlob
+// does not. The guard must follow the scanner, or a nested-only tree reports an
+// empty scope for a rule the scanner still applies.
+test("the scope guard follows the scanner's glob semantics for nested files", () => {
+  assert.equal(fileMatchesGlob("probe.ts", "*.ts"), true);
+  assert.equal(fileMatchesGlob("src/probe.ts", "*.ts"), true);
+  assert.equal(fileMatchesGlob("ui/panel.ts", "ui/**"), true);
+  assert.equal(fileMatchesGlob("ui/panel.ts", "tests/**"), false);
+
+  assert.deepEqual(ruleScopeFindings([{ id: "nested", files: ["*.ts"], ignores: [] }], ["src/probe.ts"]), []);
+  assert.deepEqual(
+    ruleScopeFindings([{ id: "nested", files: ["*.ts"], ignores: ["src/**"] }], ["src/probe.ts"]).map((finding) => finding.rule),
+    ["ast-grep-empty-scope"],
+  );
+});
 
 test("every configured ast-grep rule directory exists and holds rules", () => {
   const config = readFileSync(join(root, "sgconfig.yml"), "utf8");
@@ -74,8 +91,13 @@ test("committed ast-grep rules match their intended scope through the real scann
     });
     assert.equal(result.status, 1, result.stderr || result.stdout);
     const matches = JSON.parse(result.stdout);
+    // ast-grep returns native separators on Windows; the assertions below are
+    // repository-relative with forward slashes.
     const filesFor = (ruleId) =>
-      matches.filter((match) => match.ruleId === ruleId).map((match) => match.file).sort();
+      matches
+        .filter((match) => match.ruleId === ruleId)
+        .map((match) => match.file.replaceAll("\\", "/"))
+        .sort();
 
     for (const ruleId of [
       "no-as-any-in-extension",

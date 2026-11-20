@@ -19,7 +19,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, matchesGlob, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -191,6 +191,27 @@ export function parseRuleGlobs(text) {
   return globs;
 }
 
+// ast-grep's `files`/`ignores` use globset defaults, where `*` matches across
+// directory separators. Node's matchesGlob stops at a separator, so using it
+// here would call a rule scoped to nothing while the scanner still matches a
+// nested file. Knip keeps its own glob semantics; this matcher is for ast-grep.
+export function fileMatchesGlob(file, glob) {
+  let pattern = "^";
+  for (let i = 0; i < glob.length; i += 1) {
+    const char = glob[i];
+    if (char === "*") {
+      if (glob[i + 1] === "*") i += 1;
+      if (glob[i + 1] === "/") i += 1;
+      pattern += ".*";
+    } else if (char === "?") {
+      pattern += ".";
+    } else {
+      pattern += char.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    }
+  }
+  return new RegExp(`${pattern}$`, "u").test(file);
+}
+
 export function ruleScopeFindings(rules, files) {
   // An empty or unavailable file list proves nothing about any rule's scope.
   // Skipping the guard here would recreate the silent pass it exists to remove.
@@ -210,8 +231,8 @@ export function ruleScopeFindings(rules, files) {
     const patterns = include.length > 0 ? include : ["**"];
     const eligible = files.some(
       (file) =>
-        patterns.some((glob) => matchesGlob(file, glob)) &&
-        !ignores.some((glob) => matchesGlob(file, glob)),
+        patterns.some((glob) => fileMatchesGlob(file, glob)) &&
+        !ignores.some((glob) => fileMatchesGlob(file, glob)),
     );
     if (eligible) return [];
     return [

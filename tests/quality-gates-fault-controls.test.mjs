@@ -5,6 +5,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { fixtureGitEnv } from "./fixtures/git-env.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const toolbox = join(root, "scripts", "toolbox.mjs");
@@ -12,19 +13,24 @@ const complexity = join(root, "scripts", "check-complexity.mjs");
 
 // These tests drive the real gate entry points, not helper functions: the
 // contract a contributor relies on is the process exit code.
+// Strip repo-redirecting variables (issue #231) so a suite run under a git hook
+// cannot stage or commit the operator's work. Signing is off because the fixture
+// identity has no key.
 function gitFixture(dir) {
-  const run = (args) => spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+  const env = fixtureGitEnv();
+  const run = (args) => spawnSync("git", args, { cwd: dir, env, encoding: "utf8" });
   assert.equal(run(["init", "-q"]).status, 0);
   assert.equal(run(["add", "-A"]).status, 0);
   assert.equal(run([
-    "-c", "user.name=gate-test", "-c", "user.email=gate@example.com",
-    "commit", "-qm", "fixture",
+    "-c", "user.name=gate-test", "-c", "user.email=gate@example.com", "-c", "commit.gpgSign=false",
+    "commit", "--no-gpg-sign", "-qm", "fixture",
   ]).status, 0);
 }
 
 function runToolbox(dir, check) {
   const result = spawnSync(process.execPath, [toolbox, check, "--root", dir, "--json"], {
     cwd: root,
+    env: fixtureGitEnv(),
     encoding: "utf8",
   });
   return {

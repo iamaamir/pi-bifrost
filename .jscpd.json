@@ -1,8 +1,8 @@
 {
-  "threshold": 2.5,
+  "threshold": 3.3,
   "minLines": 10,
   "minTokens": 50,
-  "format": ["typescript"],
+  "format": ["typescript", "javascript"],
   "ignore": [
     "**/node_modules/**",
     "**/dist/**",

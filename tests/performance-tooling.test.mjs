@@ -190,8 +190,18 @@ function checkScripts(all) {
   return Object.keys(all).filter((name) => name.startsWith("check:")).sort();
 }
 
+// A commented-out step is not a step. Dropping comment lines keeps a disabled
+// gate from vouching for its own coverage; only whole-line comments are removed
+// so a quoted `#` inside a command cannot corrupt the parse.
+function executableYaml(sources) {
+  return sources
+    .split("\n")
+    .filter((line) => !/^\s*#/u.test(line))
+    .join("\n");
+}
+
 function workflowCommands(sources) {
-  return new Set([...sources.matchAll(/npm run (check:[a-z0-9:-]+)/gu)].map((match) => match[1]));
+  return new Set([...executableYaml(sources).matchAll(/npm run (check:[a-z0-9:-]+)/gu)].map((match) => match[1]));
 }
 
 // A gate counts as CI-covered when a workflow names it, or when a workflow runs
@@ -230,7 +240,7 @@ function uncoveredGates(names, commands, equivalents, onDemand = {}) {
 
 function staleEvidence(map, sources) {
   return Object.entries(map)
-    .filter(([, { evidence }]) => !evidence.test(sources))
+    .filter(([, { evidence }]) => !evidence.test(executableYaml(sources)))
     .map(([name]) => name);
 }
 
@@ -286,6 +296,20 @@ test("fault control: the gate inventory reports an unregistered gate, stale evid
 
   const typoWorkflow = `${workflowSources}\n      - run: npm run check:archt\n`;
   assert.deepEqual(unknownWorkflowCommands(typoWorkflow, scripts), ["check:archt"]);
+
+  const astStep = workflowSources.match(/^.*npm run check:ast.*$/mu)?.[0];
+  assert.ok(astStep, "the ast step must exist to comment it out");
+  const commentedAst = workflowSources.replace(astStep, `# ${astStep.trim()}`);
+  assert.notEqual(commentedAst, workflowSources, "the step-comment mutation must apply");
+  assert.deepEqual(uncoveredGates(checkScripts(scripts), workflowCommands(commentedAst), CI_EQUIVALENTS, ON_DEMAND_CHECKS), ["check:ast"],
+    "a commented-out gate step must not count as CI coverage");
+
+  // The workflow runs the Semgrep evidence twice, so comment every line it uses.
+  const commentedSemgrep = workflowSources.replace(/^(.*semgrep scan --config semgrep\/.*)$/gmu, "# $1");
+  assert.notEqual(commentedSemgrep, workflowSources, "the evidence-comment mutation must apply");
+  assert.equal(executableYaml(commentedSemgrep).includes("semgrep scan --config semgrep/"), false);
+  assert.deepEqual(staleEvidence(CI_EQUIVALENTS, commentedSemgrep), ["check:sast"],
+    "commented evidence must invalidate the exception");
 });
 
 test("package scripts expose on-demand performance entry points", () => {

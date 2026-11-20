@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import { directoryOf, renderMarkdown, summarizeDuplicates } from "../scripts/duplication-audit.mjs";
+
+const root = fileURLToPath(new URL("..", import.meta.url));
 
 function clone(first, second, lines) {
   return { lines, firstFile: { name: first }, secondFile: { name: second } };
@@ -51,10 +57,36 @@ test("credits a cross-directory clone half to each side and sorts the pair key",
 test("the committed budget matches the audited decision", () => {
   const config = JSON.parse(readFileSync(new URL("../.jscpd.json", import.meta.url), "utf8"));
   // Pinned so a silent loosening of the budget fails here as well as in
-  // docs/quality/duplication-audit.md. Change all three together.
-  assert.equal(config.threshold, 2.5);
+  // docs/quality/duplication-audit.md. Change these together.
+  assert.equal(config.threshold, 3.3);
   assert.equal(config.minLines, 10);
   assert.equal(config.minTokens, 50);
+  assert.deepEqual(config.format, ["typescript", "javascript"]);
+});
+
+// jscpd maps `.mjs` to the `javascript` format. Without it in `format`, every
+// script and tooling test was outside the gate, so this case runs the real
+// binary against a duplicated `.mjs` pair.
+test("the committed config measures JavaScript sources, not only TypeScript", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bifrost-jscpd-js-"));
+  const block = `${Array.from({ length: 12 }, (_, index) => `export const value${index} = ${index} * 2;`).join("\n")}\n`;
+  try {
+    writeFileSync(join(dir, "a.mjs"), block);
+    writeFileSync(join(dir, "b.mjs"), block);
+    const output = join(dir, "report");
+    const result = spawnSync(
+      process.execPath,
+      [join(root, "node_modules", "jscpd", "run-jscpd.js"), ".", "--config", join(root, ".jscpd.json"),
+        "--reporters", "json", "--output", output, "--threshold", "100", "--silent"],
+      { cwd: dir, encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(readFileSync(join(output, "jscpd-report.json"), "utf8"));
+    assert.equal(report.statistics.formats.javascript?.sources, 2, "both .mjs files must be measured");
+    assert.ok(report.statistics.total.clones >= 1, "a duplicated .mjs block must be detected");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("renderMarkdown prints one totals row per grid point and escapes nothing else", () => {
