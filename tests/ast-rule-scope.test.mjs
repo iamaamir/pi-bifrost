@@ -3,11 +3,14 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { fileMatchesGlob, ruleScopeFindings } from "../scripts/toolbox.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
+// ast-grep reports native separators; assertions compare repository-relative
+// forward slashes, so the helper the scan test uses is normalized here.
+const toPosix = (file) => file.replaceAll("\\", "/");
 const binary = join(root, "node_modules", ".bin", process.platform === "win32" ? "ast-grep.cmd" : "ast-grep");
 
 function ruleDirectories(config) {
@@ -67,6 +70,14 @@ test("the rule-directory check reports a missing or empty configured directory",
 });
 
 // `ast-grep test` does not apply a rule's `files` filter, so the rule
+// Best effort without a Windows host: run the exact helper the scan assertion
+// uses, over paths built with the Windows separator. Only a real Windows CI leg
+// can also prove ast-grep's own output shape there.
+test("scanner paths normalize to forward slashes on Windows", () => {
+  assert.equal(toPosix(win32.join("src", "probe.ts")), "src/probe.ts");
+  assert.equal(toPosix(win32.join("tests", "nested", "probe.test.mjs")), "tests/nested/probe.test.mjs");
+});
+
 // self-tests cannot catch an inert scope. Only a real scan can.
 test("committed ast-grep rules match their intended scope through the real scanner", () => {
   const dir = mkdtempSync(join(tmpdir(), "bifrost-ast-scope-"));
@@ -96,7 +107,7 @@ test("committed ast-grep rules match their intended scope through the real scann
     const filesFor = (ruleId) =>
       matches
         .filter((match) => match.ruleId === ruleId)
-        .map((match) => match.file.replaceAll("\\", "/"))
+        .map((match) => toPosix(match.file))
         .sort();
 
     for (const ruleId of [
