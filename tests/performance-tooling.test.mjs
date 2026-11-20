@@ -190,13 +190,27 @@ function checkScripts(all) {
   return Object.keys(all).filter((name) => name.startsWith("check:")).sort();
 }
 
-// A commented-out step is not a step. Dropping comment lines keeps a disabled
-// gate from vouching for its own coverage; only whole-line comments are removed
-// so a quoted `#` inside a command cannot corrupt the parse.
+// A commented-out step is not a step, whether the `#` starts the line or trails
+// a command. Quoted `#` is left intact so a command string is not truncated.
+function stripInlineComment(line) {
+  let quote = "";
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    if (quote) {
+      if (char === quote) quote = "";
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    } else if (char === "#" && (i === 0 || /\s/u.test(line[i - 1]))) {
+      return line.slice(0, i);
+    }
+  }
+  return line;
+}
 function executableYaml(sources) {
   return sources
     .split("\n")
     .filter((line) => !/^\s*#/u.test(line))
+    .map(stripInlineComment)
     .join("\n");
 }
 
@@ -310,6 +324,18 @@ test("fault control: the gate inventory reports an unregistered gate, stale evid
   assert.equal(executableYaml(commentedSemgrep).includes("semgrep scan --config semgrep/"), false);
   assert.deepEqual(staleEvidence(CI_EQUIVALENTS, commentedSemgrep), ["check:sast"],
     "commented evidence must invalidate the exception");
+
+  // An inline comment is the second way to disable coverage while the text stays.
+  const inline = '  - run: echo ok # npm run check:complexity\n';
+  assert.deepEqual([...workflowCommands(inline)], [],
+    "a command in an inline YAML comment must not count as CI coverage");
+  assert.deepEqual(
+    staleEvidence({ "check:sast": { evidence: /semgrep scan --config semgrep\//u } }, inline),
+    ["check:sast"],
+    "evidence named only in an inline comment is stale",
+  );
+  assert.equal(executableYaml('  - run: echo "# npm run check:ast"\n').includes("npm run check:ast"), true,
+    "a quoted # must not truncate the command");
 });
 
 test("package scripts expose on-demand performance entry points", () => {
