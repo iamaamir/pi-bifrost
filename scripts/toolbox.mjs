@@ -16,7 +16,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, matchesGlob, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -147,6 +147,58 @@ export function parseAstGrep(stdout) {
   }));
 }
 
+// Minimal reader for the `files:`/`ignores:` lists in rules/*.yml. The rule
+// files use plain block or inline string lists, so a YAML dependency is not
+// worth it here.
+export function parseRuleGlobs(text) {
+  const globs = { files: [], ignores: [] };
+  let key = null;
+  for (const raw of String(text).split(/\r?\n/)) {
+    const line = raw.trim();
+    const inline = /^(files|ignores):\s*\[(.*)\]\s*$/.exec(line);
+    if (inline) {
+      globs[inline[1]] = inline[2]
+        .split(",")
+        .map((entry) => entry.trim().replace(/^["']|["']$/g, ""))
+        .filter(Boolean);
+      key = null;
+      continue;
+    }
+    const block = /^(files|ignores):\s*$/.exec(line);
+    if (block) {
+      key = block[1];
+      continue;
+    }
+    if (key && line.startsWith("- ")) {
+      globs[key].push(line.slice(2).trim().replace(/^["']|["']$/g, ""));
+      continue;
+    }
+    if (line && !line.startsWith("#")) key = null;
+  }
+  return globs;
+}
+
+export function ruleScopeFindings(rules, files) {
+  if (files.length === 0) return [];
+  return rules.flatMap(({ id, files: include, ignores }) => {
+    const patterns = include.length > 0 ? include : ["**"];
+    const eligible = files.some(
+      (file) =>
+        patterns.some((glob) => matchesGlob(file, glob)) &&
+        !ignores.some((glob) => matchesGlob(file, glob)),
+    );
+    if (eligible) return [];
+    return [
+      {
+        rule: "ast-grep-empty-scope",
+        file: `rules/${id}.yml`,
+        line: null,
+        message: `rule ${id} matches no repository files (files: ${patterns.join(", ")})`,
+      },
+    ];
+  });
+}
+
 export function parseActionlint(stdout) {
   const findings = [];
   for (const line of String(stdout).split("\n")) {
@@ -257,12 +309,26 @@ function gitleaksCommand(history) {
   };
 }
 
-export function runAstGrep(runTool) {
+function loadRuleScopes() {
+  const dir = join(ROOT, "rules");
+  return readdirSync(dir)
+    .filter((file) => file.endsWith(".yml"))
+    .map((file) => ({ id: file.replace(/\.yml$/, ""), ...parseRuleGlobs(readFileSync(join(dir, file), "utf8")) }));
+}
+
+function trackedFiles() {
+  const result = spawnCapture("git", ["ls-files"]);
+  if (result.missing || result.status !== 0) return [];
+  return result.stdout.split("\n").filter(Boolean);
+}
+
+export function runAstGrep(runTool, { rules = loadRuleScopes(), files = trackedFiles() } = {}) {
   const tests = runTool("ast-grep", ["test", "--skip-snapshot-tests"]);
   if (tests.missing) return tests;
   const scan = runTool("ast-grep", ["scan", "--config", "sgconfig.yml", "--json"]);
   if (scan.missing) return scan;
   const findings = parseAstGrep(scan.stdout);
+  findings.push(...ruleScopeFindings(rules, files));
   if (tests.status !== 0) {
     findings.push({ rule: "ast-grep-rule-tests", file: "rule-tests", line: null, message: tail(tests.stdout || tests.stderr, 2000) });
   }
