@@ -36,7 +36,7 @@ CI installs the same versions. Do not upgrade one side alone.
 | --- | --- | --- |
 | `npm run check:arch` | Import boundaries and cycles (`.dependency-cruiser.cjs`) | `npm ci` |
 | `npm run check:dead-code` | Unused and unlisted dependencies (`knip.jsonc`) | `npm ci` |
-| `npm run check:ast` | Structural rules and rule self-tests (`sgconfig.yml`) | `npm ci` |
+| `npm run check:ast` | Structural rules, rule self-tests, and rule scope against tracked files (`sgconfig.yml`) | `npm ci` |
 | `npm run check:duplication` | Copy-paste detection and threshold (`.jscpd.json`) | `npm ci` |
 | `npm run check:complexity` | Per-function complexity against `quality/complexity-baseline.json` | `npm ci` |
 | `npm run check:actions` | Workflow syntax and expressions (actionlint) | actionlint |
@@ -46,7 +46,7 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run check:deps` | Lockfile vulnerabilities (OSV) | osv-scanner |
 | `npm run toolbox:doctor` | Tool availability and install hints | none |
 | `npm run test:quick` | Quick local tier: typecheck + root tests minus the four heavy files (see `scripts/test-quick.mjs`) | `npm ci` |
-| `scripts/git-hooks/pre-push` | Optional pre-push gate running `test:quick`; enable with `git config core.hooksPath scripts/git-hooks`, bypass with `--no-verify` | `npm ci` |
+| `scripts/git-hooks/pre-push` | Optional pre-push gate running `test:quick` plus the fast gates (`check:ast`, `check:duplication`, `check:complexity`); enable with `git config core.hooksPath scripts/git-hooks`, bypass with `--no-verify` | `npm ci` |
 
 Add `--json` for a structured result:
 
