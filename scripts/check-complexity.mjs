@@ -37,9 +37,10 @@ function walk(dir) {
 }
 
 function scopeOf(rel) {
-  if (/^[^/]+\.(ts|mjs|cjs)$/.test(rel)) return "source";
-  if (rel.startsWith("ui/") || rel.startsWith("scripts/")) return "source";
-  if (rel.startsWith("tests/")) return "tests";
+  const normalized = rel.replace(/\\/g, "/");
+  if (/^[^/]+\.(ts|mjs|cjs)$/.test(normalized)) return "source";
+  if (normalized.startsWith("ui/") || normalized.startsWith("scripts/")) return "source";
+  if (normalized.startsWith("tests/")) return "tests";
   return null;
 }
 
