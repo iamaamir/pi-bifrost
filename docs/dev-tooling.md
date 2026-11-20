@@ -39,6 +39,7 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run check:ast` | Structural rules, rule self-tests, and rule scope against tracked files (`sgconfig.yml`) | `npm ci` |
 | `npm run check:duplication` | Copy-paste detection and threshold (`.jscpd.json`) | `npm ci` |
 | `npm run check:complexity` | Per-function complexity against `quality/complexity-baseline.json` | `npm ci` |
+| `npm run check:complexity:baseline` | The committed baseline matches the tree; stale records fail (see [Baselines after a rebase](#baselines-after-a-rebase)) | `npm ci` |
 | `npm run check:contracts` | Host integration contracts read from `index.ts` and `debug.ts` (`scripts/check-contracts.mjs`) | `npm ci` |
 | `npm run check:actions` | Workflow syntax and expressions (actionlint) | actionlint |
 | `npm run check:sast` | Repository Semgrep rules | semgrep |
@@ -76,6 +77,25 @@ one `ok:` example. `npm run check:sast` scans the tree; the CI job also runs
 stay aligned.
 
 The Gitleaks allowlist in `.gitleaks.toml` covers only the `generic-api-key` rule. It ignores two exact synthetic canary values used by redaction fixtures regardless of file path, and additional reviewed fixture values only when their exact test-file paths also match. It does not allowlist whole files or other rules.
+
+## Baselines after a rebase
+
+`quality/complexity-baseline.json` must describe the tree in the same commit.
+After a rebase, or any change that intentionally moves a ceiling:
+
+```bash
+npm run check:complexity -- --update-baseline
+```
+
+Commit the regenerated baseline with the change that moved it, and never
+hand-edit a ceiling. `npm run check:complexity:baseline` re-measures in memory
+and fails with `complexity-baseline-stale` when any record differs, so a stale
+baseline cannot merge. That covers line and function counts as well as maxima: a
+baseline describing an older tree is stale even when the ratchet still passes.
+
+`generatedAt` and `sourceCommit` record provenance and are never compared.
+`sourceCommit` names the HEAD the numbers were measured from, which is the
+baseline commit's parent, because a commit cannot contain its own SHA.
 
 ## Continuous integration
 

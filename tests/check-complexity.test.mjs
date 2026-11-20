@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { analyze, compare, cyclomatic, cognitive, inScopeFiles, main, scopeOf } from "../scripts/check-complexity.mjs";
+import { analyze, compare, cyclomatic, cognitive, inScopeFiles, main, resolveSourceCommit, scopeOf, stalenessFindings } from "../scripts/check-complexity.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const require = createRequire(join(ROOT, "package.json"));
@@ -189,6 +189,86 @@ test("compare accepts unchanged, flags increased and new files over scope max, a
     assert.deepEqual(compare(baseline, removed), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("staleness check accepts a regenerated baseline and reports record drift", () => {
+  const root = fixtureRoot();
+  try {
+    const baseline = analyze({ root });
+    assert.deepEqual(stalenessFindings(baseline, analyze({ root })), []);
+
+    writeFileSync(
+      join(root, "a.ts"),
+      `export function added(x: boolean) { return x ? 1 : 2; }\n${readFileSync(join(root, "a.ts"), "utf8")}`,
+    );
+    const drift = stalenessFindings(baseline, analyze({ root }));
+    assert.deepEqual(drift.map((f) => [f.rule, f.file]), [["complexity-baseline-stale", "a.ts"]]);
+    assert.match(drift[0].message, /lines \d+ -> \d+/u);
+
+    const scopeOnly = structuredClone(baseline);
+    scopeOnly.scopes.source.maxCog += 1;
+    assert.deepEqual(stalenessFindings(baseline, scopeOnly).map((f) => f.file), ["(scope)"],
+      "a drifted scope summary must fail even when every file record matches");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("staleness check reports files added after and missing from the baseline", () => {
+  const root = fixtureRoot();
+  try {
+    const baseline = analyze({ root });
+    const removed = structuredClone(baseline);
+    delete removed.files["a.ts"];
+    const removedFindings = stalenessFindings(baseline, removed);
+    assert.deepEqual(removedFindings.map((f) => f.file), ["a.ts"]);
+    assert.match(removedFindings[0].message, /no longer exists/u);
+
+    const added = structuredClone(baseline);
+    added.files["z-new.ts"] = { ...added.files["a.ts"] };
+    const addedFindings = stalenessFindings(baseline, added);
+    assert.deepEqual(addedFindings.map((f) => f.file), ["z-new.ts"]);
+    assert.match(addedFindings[0].message, /not recorded in the baseline/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("source provenance prefers the CI SHA and degrades to null outside a repository", () => {
+  assert.equal(resolveSourceCommit({ GITHUB_SHA: "abc123" }), "abc123");
+  const outside = mkdtempSync(join(tmpdir(), "bifrost-no-git-"));
+  try {
+    assert.equal(resolveSourceCommit({}, outside), null);
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("--check-baseline passes the committed record and fails a tampered one", () => {
+  const script = join(ROOT, "scripts/check-complexity.mjs");
+  const clean = spawnSync(process.execPath, [script, "--check-baseline", "--json"], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(clean.status, 0, clean.stderr || clean.stdout);
+  assert.match(JSON.parse(clean.stdout).message, /Complexity baseline matches the tree/u);
+
+  const committed = JSON.parse(readFileSync(join(ROOT, "quality", "complexity-baseline.json"), "utf8"));
+  const [firstFile] = Object.keys(committed.files);
+  const tampered = structuredClone(committed);
+  tampered.files[firstFile].lines += 1;
+  const tamperedPath = join(tmpdir(), `bifrost-stale-baseline-${process.pid}-${Date.now()}.json`);
+  try {
+    writeFileSync(tamperedPath, JSON.stringify(tampered));
+    const stale = spawnSync(process.execPath, [script, "--check-baseline", "--baseline", tamperedPath, "--json"], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
+    assert.equal(stale.status, 1);
+    const parsed = JSON.parse(stale.stdout);
+    assert.equal(parsed.status, "failed");
+    assert.deepEqual(parsed.findings.map((f) => [f.rule, f.file]), [["complexity-baseline-stale", firstFile]]);
+    assert.match(parsed.findings[0].message, /lines \d+ -> \d+/u);
+  } finally {
+    rmSync(tamperedPath, { force: true });
   }
 });
 

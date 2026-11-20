@@ -10,9 +10,12 @@
  * Usage:
  *   node scripts/check-complexity.mjs [--json] [--baseline <path>]
  *   node scripts/check-complexity.mjs --update-baseline [--baseline <path>]
+ *   node scripts/check-complexity.mjs --check-baseline [--baseline <path>]
  *
- * Exit codes: 0 clean/updated, 1 regression, 2 error or missing baseline.
+ * Exit codes: 0 clean/updated, 1 regression or stale baseline, 2 error or
+ * missing baseline.
  */
+import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import fs from "node:fs";
 import path from "node:path";
@@ -24,6 +27,8 @@ const ts = require("typescript");
 
 const DEFAULT_BASELINE = path.join(ROOT, "quality", "complexity-baseline.json");
 const EXCLUDED_DIRS = new Set(["node_modules", "dist", ".git", "coverage", "reports", ".worktrees", ".commandcode"]);
+const RECORD_FIELDS = ["lines", "funcs", "maxCyc", "maxCog", "sumCyc", "sumCog"];
+const SCOPE_FIELDS = ["files", "functions", "maxCyc", "maxCog", "cycGt30", "cycGt50", "cogGt30", "cogGt50"];
 
 function walk(dir) {
   let results = [];
@@ -303,6 +308,74 @@ function analyze({ root = ROOT } = {}) {
   };
 }
 
+// Provenance only, never compared. A baseline cannot name the commit that will
+// contain it, so this records the HEAD its numbers were measured from.
+function resolveSourceCommit(env = process.env, cwd = ROOT) {
+  const fromCi = env.GITHUB_SHA?.trim();
+  if (fromCi) return fromCi;
+  const result = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" });
+  return result.status === 0 ? result.stdout.trim() || null : null;
+}
+
+function staleFinding(file, reason) {
+  return { rule: "complexity-baseline-stale", file, line: null, message: `${reason}; run with --update-baseline` };
+}
+
+function recordDifferences(rel, base, now) {
+  const changed = RECORD_FIELDS
+    .filter((key) => (base[key] ?? 0) !== (now[key] ?? 0))
+    .map((key) => `${key} ${base[key] ?? 0} -> ${now[key] ?? 0}`);
+  return changed.length === 0 ? [] : [{
+    rule: "complexity-baseline-stale",
+    file: rel,
+    line: null,
+    message: changed.join(", "),
+  }];
+}
+
+function scopeDifferences(baseline, current) {
+  return ["source", "tests"].flatMap((scope) => SCOPE_FIELDS
+    .filter((key) => (baseline.scopes?.[scope]?.[key] ?? 0) !== (current.scopes?.[scope]?.[key] ?? 0))
+    .map((key) => `${scope}.${key} ${baseline.scopes?.[scope]?.[key] ?? 0} -> ${current.scopes?.[scope]?.[key] ?? 0}`));
+}
+
+// Staleness is not a ratchet regression: the gate can pass while the committed
+// ceilings describe a different tree. Compare the whole record, so line and
+// function drift fails too, not only maxima.
+function stalenessFindings(baseline, current) {
+  const baselineFiles = baseline.files ?? {};
+  const currentFiles = current.files ?? {};
+  const findings = [];
+  for (const rel of [...new Set([...Object.keys(baselineFiles), ...Object.keys(currentFiles)])].sort()) {
+    if (!baselineFiles[rel]) findings.push(staleFinding(rel, "not recorded in the baseline"));
+    else if (!currentFiles[rel]) findings.push(staleFinding(rel, "recorded in the baseline but no longer exists"));
+    else findings.push(...recordDifferences(rel, baselineFiles[rel], currentFiles[rel]));
+  }
+  if (findings.length === 0) {
+    const changed = scopeDifferences(baseline, current);
+    if (changed.length > 0) findings.push({ rule: "complexity-baseline-stale", file: "(scope)", line: null, message: changed.join(", ") });
+  }
+  return findings;
+}
+
+function runStalenessCheck({ baseline, current, json }) {
+  const findings = stalenessFindings(baseline, current);
+  if (findings.length > 0) {
+    if (json) console.log(JSON.stringify({ check: "complexity", status: "failed", exitCode: 1, findings }, null, 2));
+    else {
+      console.error(`FAIL complexity baseline: ${findings.length} stale record(s); run --update-baseline`);
+      for (const f of findings.slice(0, 40)) console.error(`  ${f.rule}  ${f.file}  ${f.message}`);
+      if (findings.length > 40) console.error(`  ... ${findings.length - 40} more`);
+    }
+    return 1;
+  }
+  const provenance = baseline.sourceCommit ? `, generated from ${baseline.sourceCommit.slice(0, 12)}` : "";
+  const msg = `Complexity baseline matches the tree (${Object.keys(current.files).length} files${provenance})`;
+  if (json) console.log(JSON.stringify({ check: "complexity", status: "passed", exitCode: 0, findings: [], message: msg }, null, 2));
+  else console.log(msg);
+  return 0;
+}
+
 function compare(baseline, current) {
   const findings = [];
   for (const scope of ["source", "tests"]) {
@@ -354,6 +427,7 @@ function compare(baseline, current) {
 function main(argv = process.argv.slice(2)) {
   const json = argv.includes("--json");
   const update = argv.includes("--update-baseline");
+  const stale = argv.includes("--check-baseline");
   const bIdx = argv.indexOf("--baseline");
   const baselinePath = bIdx !== -1 && argv[bIdx + 1] ? path.resolve(argv[bIdx + 1]) : DEFAULT_BASELINE;
 
@@ -370,6 +444,7 @@ function main(argv = process.argv.slice(2)) {
   if (update) {
     fs.mkdirSync(path.dirname(baselinePath), { recursive: true });
     current.generatedAt = new Date().toISOString();
+    current.sourceCommit = resolveSourceCommit();
     fs.writeFileSync(baselinePath, JSON.stringify(current, null, 2) + "\n");
     const msg = `Updated complexity baseline: ${path.relative(ROOT, baselinePath)} (source maxCyc=${current.scopes.source.maxCyc}, maxCog=${current.scopes.source.maxCog}, cycGt50=${current.scopes.source.cycGt50}, cogGt50=${current.scopes.source.cogGt50})`;
     if (json) console.log(JSON.stringify({ check: "complexity", status: "passed", exitCode: 0, findings: [], message: msg }, null, 2));
@@ -393,6 +468,8 @@ function main(argv = process.argv.slice(2)) {
     else console.error(msg);
     return 2;
   }
+
+  if (stale) return runStalenessCheck({ baseline, current, json });
 
   const findings = compare(baseline, current);
   if (findings.length === 0) {
@@ -423,7 +500,9 @@ export {
   inScopeFiles,
   isFunctionLike,
   main,
+  resolveSourceCommit,
   scopeOf,
+  stalenessFindings,
   walk,
 };
 

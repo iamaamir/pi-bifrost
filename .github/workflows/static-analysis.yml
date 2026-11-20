@@ -40,6 +40,8 @@ jobs:
         run: npm run check:duplication
       - name: Complexity budgets
         run: npm run check:complexity
+      - name: Complexity baseline matches the candidate tree
+        run: npm run check:complexity:baseline
 
   integration-contracts:
     runs-on: ubuntu-latest
