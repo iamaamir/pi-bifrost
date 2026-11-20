@@ -75,6 +75,10 @@ make "the gate measured nothing" a failure.
 - `generatedAt` and `sourceCommit` are provenance and are never compared.
   `sourceCommit` names the generation-time HEAD, which is the baseline commit's
   parent, because a commit cannot contain its own SHA.
+- A file that disappears while the analyzer reads the tree is skipped with a
+  warning, so a moving tree on a developer machine is not a crash. Read errors
+  other than `ENOENT` still fail, and `--update-baseline` refuses an incomplete
+  analysis rather than recording a baseline that omits a real file.
 
 ### Process
 
