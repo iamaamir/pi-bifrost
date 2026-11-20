@@ -197,7 +197,7 @@ test("summarizes findings by descending count then rule name", () => {
   ]), "b (2), a (1)");
 });
 
-function cruiseFixture(routerSource, { mutateConfig } = {}) {
+function cruiseFixture(files, { mutateConfig } = {}) {
   const directory = mkdtempSync(join(tmpdir(), "bifrost-arch-fixture-"));
   mkdirSync(join(directory, "node_modules", "@earendil-works", "pi-coding-agent"), { recursive: true });
   writeFileSync(join(directory, "node_modules", "@earendil-works", "pi-coding-agent", "package.json"), JSON.stringify({
@@ -210,7 +210,20 @@ function cruiseFixture(routerSource, { mutateConfig } = {}) {
   for (const dependency of ["typescript", "dependency-cruiser"]) {
     symlinkSync(join(root, "node_modules", dependency), join(directory, "node_modules", dependency), "dir");
   }
-  writeFileSync(join(directory, "router.ts"), routerSource);
+  // package.json classifies resolved packages as production or dev, which the
+  // production-no-dev-dependency rule depends on.
+  writeFileSync(join(directory, "package.json"), JSON.stringify({
+    name: "bifrost-arch-fixture",
+    version: "0.0.0",
+    type: "module",
+    dependencies: {},
+    devDependencies: { typescript: "*", "dependency-cruiser": "*" },
+  }));
+  for (const [name, source] of Object.entries(files)) {
+    const target = join(directory, name);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, source);
+  }
   const config = readFileSync(join(root, ".dependency-cruiser.cjs"), "utf8");
   const source = mutateConfig ? mutateConfig(config) : config;
   writeFileSync(join(directory, "depcruise.cjs"), source);
@@ -218,7 +231,7 @@ function cruiseFixture(routerSource, { mutateConfig } = {}) {
     join(root, "node_modules", "dependency-cruiser", "bin", "dependency-cruiser.mjs"),
     "--config", join(directory, "depcruise.cjs"),
     "--output-type", "json",
-    "router.ts",
+    ...Object.keys(files),
   ], { cwd: directory, encoding: "utf8" });
   const stdout = result.stdout.trim();
   assert.notEqual(stdout, "", `dependency-cruiser produced no JSON: ${result.stderr}`);
@@ -226,16 +239,60 @@ function cruiseFixture(routerSource, { mutateConfig } = {}) {
 }
 
 test("rejects a runtime host-SDK import in the resolve-only router and accepts the type-only form", () => {
-  const runtime = cruiseFixture('import { marker } from "@earendil-works/pi-coding-agent";\nexport const value = marker;\n');
+  const runtime = cruiseFixture({ "router.ts": 'import { marker } from "@earendil-works/pi-coding-agent";\nexport const value = marker;\n' });
   assert.deepEqual(runtime.map((finding) => finding.rule), ["router-no-runtime-host-sdk"]);
 
-  const typeOnly = cruiseFixture('import type { ExtensionContext } from "@earendil-works/pi-coding-agent";\nexport type Context = ExtensionContext;\n');
+  const typeOnly = cruiseFixture({ "router.ts": 'import type { ExtensionContext } from "@earendil-works/pi-coding-agent";\nexport type Context = ExtensionContext;\n' });
   assert.deepEqual(typeOnly, []);
+});
+
+// Each committed rule must reject a minimal fixture on its own. A rule whose
+// patterns stop matching the tree would otherwise pass CI while enforcing
+// nothing, which is the inertness this issue exists to remove.
+test("every committed boundary rule fires on a minimal violating fixture", () => {
+  const cases = [
+    ["no-circular", {
+      "a.ts": 'import { b } from "./b";\nexport const a = b;\n',
+      "b.ts": 'import { a } from "./a";\nexport const b = a;\n',
+    }],
+    ["router-no-runtime-host-sdk", {
+      "router.ts": 'import { marker } from "@earendil-works/pi-coding-agent";\nexport const value = marker;\n',
+    }],
+    ["router-no-host-adapters", {
+      "router.ts": 'import { cost } from "./ui/cost-view";\nexport const value = cost;\n',
+      "ui/cost-view.ts": "export const cost = 1;\n",
+    }],
+    ["host-ui-imports-only-from-adapter-entry", {
+      "policy.ts": 'import { status } from "./ux-status";\nexport const value = status;\n',
+      "ux-status.ts": "export const status = 1;\n",
+    }],
+    ["production-no-dev-dependency", {
+      "router.ts": 'import { version } from "typescript";\nexport const value = version;\n',
+    }],
+    ["production-no-repository-tooling", {
+      "router.ts": 'import { probe } from "./scripts/probe.mjs";\nexport const value = probe;\n',
+      "scripts/probe.mjs": "export const probe = 1;\n",
+    }],
+    ["no-unresolvable", {
+      "router.ts": 'import { missing } from "./missing";\nexport const value = missing;\n',
+    }],
+  ];
+  const fired = [];
+  for (const [rule, files] of cases) {
+    const names = [...new Set(cruiseFixture(files).map((finding) => finding.rule))];
+    assert.deepEqual(names, [rule], `${rule} must fire alone on its fixture`);
+    fired.push(rule);
+  }
+
+  const config = readFileSync(join(root, ".dependency-cruiser.cjs"), "utf8");
+  const configured = [...config.matchAll(/^\s*name:\s*"([a-z-]+)",$/gmu)].map((match) => match[1]);
+  assert.deepEqual(fired.sort(), configured.sort(),
+    "every configured rule needs a firing fixture, and every fixture needs a configured rule");
 });
 
 test("the type-only allowance is load-bearing: removing it turns the passing fixture red", () => {
   const mutated = cruiseFixture(
-    'import type { ExtensionContext } from "@earendil-works/pi-coding-agent";\nexport type Context = ExtensionContext;\n',
+    { "router.ts": 'import type { ExtensionContext } from "@earendil-works/pi-coding-agent";\nexport type Context = ExtensionContext;\n' },
     {
       mutateConfig: (config) => {
         const anchor = 'dependencyTypesNot: ["type-only"],';
