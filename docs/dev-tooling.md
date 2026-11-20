@@ -104,6 +104,12 @@ Tests must not write inside a measured path: root `*.ts`, `ui/`, `scripts/`, or
 concurrent run. Write fixtures to a temp directory instead, and pin any relative
 import to an absolute URL if the fixture must run from outside the repository.
 
+Analysis tolerates a file that disappears while it is reading the tree: the file
+is skipped and a warning goes to stderr, so a live machine does not turn a moving
+tree into a crash. Read errors other than `ENOENT` still fail, and
+`--update-baseline` refuses an incomplete snapshot instead of recording a
+baseline that omits a real file.
+
 ## Continuous integration
 
 | Workflow | Trigger | Checks |

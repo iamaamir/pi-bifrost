@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -232,6 +232,66 @@ test("staleness check reports files added after and missing from the baseline", 
     assert.match(addedFindings[0].message, /not recorded in the baseline/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+function vanishWhileReading(target, code = "ENOENT") {
+  const original = fs.readFileSync;
+  fs.readFileSync = (file, ...rest) => {
+    if (String(file) === target) {
+      const error = new Error(`simulated ${code} for ${target}`);
+      error.code = code;
+      throw error;
+    }
+    return original.call(fs, file, ...rest);
+  };
+  return () => {
+    fs.readFileSync = original;
+    assert.equal(fs.readFileSync, original, "the reader must be restored");
+  };
+}
+
+test("analyze skips a file that vanishes between the walk and the read", () => {
+  const root = fixtureRoot();
+  const skipped = [];
+  let restore;
+  try {
+    restore = vanishWhileReading(join(root, "a.ts"));
+    const report = analyze({ root, skipped });
+    assert.deepEqual(skipped, ["a.ts"]);
+    assert.equal(Object.hasOwn(report.files, "a.ts"), false);
+    assert.equal(report.scopes.source.files, 0, "a vanished file must not be counted");
+  } finally {
+    restore?.();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("analyze still fails on a read error other than a vanished file", () => {
+  const root = fixtureRoot();
+  let restore;
+  try {
+    restore = vanishWhileReading(join(root, "a.ts"), "EACCES");
+    assert.throws(() => analyze({ root }), /simulated EACCES/u);
+  } finally {
+    restore?.();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("main tolerates a vanished file for checks and refuses to write a baseline", () => {
+  const target = join(tmpdir(), `incomplete-baseline-${process.pid}-${Date.now()}.json`);
+  let restore;
+  try {
+    restore = vanishWhileReading(join(ROOT, "config.ts"));
+    const stale = main(["--check-baseline", "--json"]);
+    assert.equal(stale, 1, "a recorded file that vanished is a stale record, not a crash");
+    const update = main(["--update-baseline", "--baseline", target, "--json"]);
+    assert.equal(update, 2, "an incomplete snapshot must not become a baseline");
+    assert.equal(existsSync(target), false);
+  } finally {
+    restore?.();
+    rmSync(target, { force: true });
   }
 });
 

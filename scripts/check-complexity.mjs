@@ -31,8 +31,16 @@ const RECORD_FIELDS = ["lines", "funcs", "maxCyc", "maxCog", "sumCyc", "sumCog"]
 const SCOPE_FIELDS = ["files", "functions", "maxCyc", "maxCog", "cycGt30", "cycGt50", "cogGt30", "cogGt50"];
 
 function walk(dir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch (error) {
+    // A directory can vanish mid-walk on a live machine; its files are gone too.
+    if (error?.code === "ENOENT") return [];
+    throw error;
+  }
   let results = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  for (const entry of entries) {
     if (EXCLUDED_DIRS.has(entry.name)) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) results = results.concat(walk(full));
@@ -241,12 +249,27 @@ function cognitive(node) {
   return score;
 }
 
-function analyze({ root = ROOT } = {}) {
+// A file can disappear between the walk and the read on a live machine: a test
+// fixture, an editor save, a rebase. Skipping it keeps the gate from crashing on
+// a tree that moved. Callers that write a baseline refuse an incomplete snapshot
+// instead of recording one that omits a real file.
+function readIfPresent(file, rel, skipped) {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    skipped.push(rel);
+    return null;
+  }
+}
+
+function analyze({ root = ROOT, skipped = [] } = {}) {
   const files = inScopeFiles(root).sort((a, b) => a.rel.localeCompare(b.rel));
   const fileData = {};
   const scopeFuncs = { source: [], tests: [] };
   for (const { file, rel, scope } of files) {
-    const text = fs.readFileSync(file, "utf8");
+    const text = readIfPresent(file, rel, skipped);
+    if (text === null) continue;
     const scriptKind = /\.(mjs|cjs)$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
     const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKind);
     const funcs = [];
@@ -424,6 +447,12 @@ function compare(baseline, current) {
   return findings;
 }
 
+function warnVanished(skipped) {
+  if (skipped.length === 0) return;
+  const shown = skipped.slice(0, 5).join(", ");
+  console.error(`warning: skipped ${skipped.length} file(s) that vanished during analysis: ${shown}${skipped.length > 5 ? ", ..." : ""}`);
+}
+
 function main(argv = process.argv.slice(2)) {
   const json = argv.includes("--json");
   const update = argv.includes("--update-baseline");
@@ -432,8 +461,9 @@ function main(argv = process.argv.slice(2)) {
   const baselinePath = bIdx !== -1 && argv[bIdx + 1] ? path.resolve(argv[bIdx + 1]) : DEFAULT_BASELINE;
 
   let current;
+  const skipped = [];
   try {
-    current = analyze();
+    current = analyze({ skipped });
   } catch (error) {
     const msg = `complexity analysis failed: ${error.message}`;
     if (json) console.log(JSON.stringify({ check: "complexity", status: "failed", exitCode: 2, findings: [], error: msg }, null, 2));
@@ -441,7 +471,15 @@ function main(argv = process.argv.slice(2)) {
     return 2;
   }
 
+  warnVanished(skipped);
+
   if (update) {
+    if (skipped.length > 0) {
+      const msg = `refusing to write a baseline from an incomplete analysis: ${skipped.length} file(s) vanished; re-run when the tree is stable`;
+      if (json) console.log(JSON.stringify({ check: "complexity", status: "failed", exitCode: 2, findings: [], error: msg }, null, 2));
+      else console.error(msg);
+      return 2;
+    }
     fs.mkdirSync(path.dirname(baselinePath), { recursive: true });
     current.generatedAt = new Date().toISOString();
     current.sourceCommit = resolveSourceCommit();
