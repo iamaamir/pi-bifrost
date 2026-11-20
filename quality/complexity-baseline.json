@@ -14,7 +14,7 @@
     },
     "tests": {
       "files": 191,
-      "functions": 8323,
+      "functions": 8326,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -863,11 +863,11 @@
     },
     "tests/ast-rule-scope.test.mjs": {
       "scope": "tests",
-      "lines": 115,
-      "funcs": 12,
+      "lines": 126,
+      "funcs": 14,
       "maxCyc": 4,
       "maxCog": 5,
-      "sumCyc": 18,
+      "sumCyc": 20,
       "sumCog": 8
     },
     "tests/auto-bootstrap-runtime.test.ts": {
@@ -1988,12 +1988,12 @@
     },
     "tests/performance-tooling.test.mjs": {
       "scope": "tests",
-      "lines": 403,
-      "funcs": 65,
-      "maxCyc": 3,
-      "maxCog": 2,
-      "sumCyc": 71,
-      "sumCog": 5
+      "lines": 429,
+      "funcs": 66,
+      "maxCyc": 9,
+      "maxCog": 13,
+      "sumCyc": 80,
+      "sumCog": 18
     },
     "tests/pipeline.test.ts": {
       "scope": "tests",
@@ -2590,6 +2590,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-20T11:18:16.144Z",
-  "sourceCommit": "82b8db8fcbccfd27da69e3e6cfe1eff1c554aab9"
+  "generatedAt": "2026-11-20T12:04:28.363Z",
+  "sourceCommit": "0ff62930f9d8ed713001501e9fe93729208600b6"
 }
