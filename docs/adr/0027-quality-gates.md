@@ -86,6 +86,11 @@ make "the gate measured nothing" a failure.
   side effect of a refactor.
 - CI runs the staleness check after the ratchet, so a forgotten regeneration is
   a red build rather than a review note.
+- Gate exit codes are covered by fault controls in
+  `tests/quality-gates-fault-controls.test.mjs`, which drive `check:ast`,
+  `check:duplication`, and `check:complexity` against fixture trees. A scope
+  guard that stops reporting, or a threshold that ignores the measured tree,
+  turns those tests red.
 - The optional pre-push hook runs the quick tests and the fast gates
   (`check:ast`, `check:duplication`, `check:complexity`).
 
