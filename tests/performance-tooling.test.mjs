@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -14,6 +14,13 @@ const scripts = packageManifest.scripts;
 const knipConfig = readFileSync(join(root, "knip.jsonc"), "utf8");
 const gitleaksConfig = readFileSync(join(root, ".gitleaks.toml"), "utf8");
 const guide = readFileSync(join(root, "docs", "dev-tooling.md"), "utf8");
+const trackerGuide = readFileSync(join(root, "docs", "tracker-workflow.md"), "utf8");
+const workflowDirectory = join(root, ".github", "workflows");
+const workflowSources = readdirSync(workflowDirectory)
+  .filter((name) => name.endsWith(".yml"))
+  .sort()
+  .map((name) => readFileSync(join(workflowDirectory, name), "utf8"))
+  .join("\n");
 
 function workload(iterations) {
   const result = spawnSync(process.execPath, [
@@ -169,6 +176,98 @@ test("every npm script named in the developer guide exists", () => {
 test("the command drift check reports an unknown npm script", () => {
   assert.deepEqual(npmScriptsIn("Run `npm run check:arch` and `npm run not-a-script`."), ["check:arch", "not-a-script"]);
   assert.deepEqual(missingScripts("Run `npm run not-a-script`.", scripts), ["not-a-script"]);
+});
+
+function checkScripts(all) {
+  return Object.keys(all).filter((name) => name.startsWith("check:")).sort();
+}
+
+function workflowCommands(sources) {
+  return new Set([...sources.matchAll(/npm run (check:[a-z0-9:-]+)/gu)].map((match) => match[1]));
+}
+
+// A gate counts as CI-covered when a workflow names it, or when a workflow runs
+// a pinned equivalent directly. The equivalent carries its own evidence pattern
+// so deleting that workflow step makes the gate uncovered again instead of
+// leaving a comment that silently vouches for nothing.
+const CI_EQUIVALENTS = {
+  "check:sast": {
+    why: "static-analysis.yml runs the pinned Semgrep rules with a baseline diff instead of this wrapper",
+    evidence: /semgrep scan --config semgrep\//u,
+  },
+  "check:secrets": {
+    why: "static-analysis.yml runs the Gitleaks action and the pull-request history scanner with .gitleaks.toml",
+    evidence: /gitleaks-action@|scan-gitleaks-pr-history\.sh/u,
+  },
+  "check:deps": {
+    why: "static-analysis.yml uses the pinned OSV-Scanner reusable pull-request workflow",
+    evidence: /osv-scanner-reusable-pr\.yml@[a-f0-9]{40}/u,
+  },
+};
+
+// Needs a live tracker and issue numbers, so it cannot run against a candidate
+// tree. It is documented for on-demand use rather than executed by CI.
+const ON_DEMAND_CHECKS = {
+  "check:issue-refs": {
+    why: "checks repository paths cited in tracker issues; needs a live issue and gh",
+    evidence: /node scripts\/check-issue-refs\.mjs/u,
+  },
+};
+
+function uncoveredGates(names, commands, equivalents, onDemand = {}) {
+  return names.filter((name) => !commands.has(name)
+    && !Object.hasOwn(equivalents, name)
+    && !Object.hasOwn(onDemand, name));
+}
+
+function staleEvidence(map, sources) {
+  return Object.entries(map)
+    .filter(([, { evidence }]) => !evidence.test(sources))
+    .map(([name]) => name);
+}
+
+function gatesMissingFromGuide(names, markdown) {
+  return names.filter((name) => !markdown.includes(`npm run ${name}`));
+}
+
+function unknownWorkflowCommands(sources, available) {
+  return [...workflowCommands(sources)].filter((name) => !Object.hasOwn(available, name)).sort();
+}
+
+test("every check: script is covered by CI or by asserted exception evidence", () => {
+  const gates = checkScripts(scripts);
+  assert.equal(gates.length >= 10, true, `expected the gate inventory, found ${gates.join(", ")}`);
+  assert.deepEqual(uncoveredGates(gates, workflowCommands(workflowSources), CI_EQUIVALENTS, ON_DEMAND_CHECKS), []);
+  assert.deepEqual(staleEvidence(CI_EQUIVALENTS, workflowSources), []);
+  assert.deepEqual(staleEvidence(ON_DEMAND_CHECKS, trackerGuide), []);
+});
+
+test("every check: script appears in the developer guide", () => {
+  assert.deepEqual(gatesMissingFromGuide(checkScripts(scripts), guide), []);
+});
+
+test("every check: command named in a workflow exists as an npm script", () => {
+  assert.equal(workflowCommands(workflowSources).size >= 8, true);
+  assert.deepEqual(unknownWorkflowCommands(workflowSources, scripts), []);
+});
+
+test("fault control: the gate inventory reports an unregistered gate, stale evidence, and a missing guide row", () => {
+  const commands = workflowCommands(workflowSources);
+  assert.deepEqual(uncoveredGates([...checkScripts(scripts), "check:new-gate"], commands, CI_EQUIVALENTS, ON_DEMAND_CHECKS), ["check:new-gate"]);
+  assert.deepEqual(uncoveredGates(["check:sast"], new Set(), {}, {}), ["check:sast"],
+    "an equivalent must be registered, not assumed");
+
+  const withoutSemgrep = workflowSources.replace(/semgrep scan --config semgrep\//gu, "semgrep scan");
+  assert.notEqual(withoutSemgrep, workflowSources, "the Semgrep step removal must apply");
+  assert.deepEqual(staleEvidence(CI_EQUIVALENTS, withoutSemgrep), ["check:sast"],
+    "deleting the CI step must invalidate its exception, not preserve the claim");
+
+  const missingRow = guide.replace("`npm run check:complexity`", "`run the complexity gate`");
+  assert.notEqual(missingRow, guide, "the guide-row mutation must apply");
+  assert.deepEqual(gatesMissingFromGuide(checkScripts(scripts), missingRow), ["check:complexity"]);
+
+  const typoWorkflow = `${workflowSources}\n      - run: npm run check:archt\n`;
+  assert.deepEqual(unknownWorkflowCommands(typoWorkflow, scripts), ["check:archt"]);
 });
 
 test("package scripts expose on-demand performance entry points", () => {
