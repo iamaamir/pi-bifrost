@@ -14,7 +14,9 @@ import {
   parseJscpd,
   parseKnip,
   parseOsv,
+  parseRuleGlobs,
   parseSemgrep,
+  ruleScopeFindings,
   runAstGrep,
   summarizeFindings,
   toolExecutable,
@@ -86,6 +88,32 @@ test("parses ast-grep, Semgrep, actionlint, and OSV output shapes", () => {
   assert.deepEqual(parseOsv(JSON.stringify({
     results: [{ source: { path: "package-lock.json" }, packages: [{ package: { name: "pkg", version: "1.0.0" }, vulnerabilities: [{ id: "GHSA-1" }] }] }],
   })), [{ rule: "GHSA-1", file: "package-lock.json", line: null, message: "pkg@1.0.0:" }]);
+});
+
+test("parses rule file globs from block and inline lists", () => {
+  assert.deepEqual(parseRuleGlobs('files:\n  - "*.ts"\nignores:\n  - "tests/**"\n'), {
+    files: ["*.ts"],
+    ignores: ["tests/**"],
+  });
+  assert.deepEqual(parseRuleGlobs("files: ['tests/**/*.mjs', 'tests/**/*.js']\n"), {
+    files: ["tests/**/*.mjs", "tests/**/*.js"],
+    ignores: [],
+  });
+});
+
+test("flags ast-grep rules whose scope matches no repository file", () => {
+  const files = ["index.ts", "tests/a.test.mjs", "ui/panel.ts", "scripts/tool.mjs"];
+  const rules = [
+    { id: "root-only", files: ["*.ts"], ignores: ["tests/**", "ui/**", "scripts/**"] },
+    { id: "tests-only", files: ["tests/**/*.mjs"], ignores: [] },
+    { id: "no-files-key", files: [], ignores: [] },
+    { id: "inert", files: ["/*.ts"], ignores: [] },
+  ];
+  const findings = ruleScopeFindings(rules, files);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "ast-grep-empty-scope");
+  assert.equal(findings[0].file, "rules/inert.yml");
+  assert.match(findings[0].message, /matches no repository files/);
 });
 
 test("fails ast checks when scan exits without findings", () => {
