@@ -4,7 +4,7 @@
   "scopes": {
     "source": {
       "files": 93,
-      "functions": 2770,
+      "functions": 2774,
       "maxCyc": 190,
       "maxCog": 262,
       "cycGt30": 59,
@@ -13,8 +13,8 @@
       "cogGt50": 40
     },
     "tests": {
-      "files": 189,
-      "functions": 8281,
+      "files": 190,
+      "functions": 8293,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -746,12 +746,12 @@
     },
     "scripts/toolbox.mjs": {
       "scope": "source",
-      "lines": 586,
-      "funcs": 54,
-      "maxCyc": 12,
-      "maxCog": 19,
-      "sumCyc": 185,
-      "sumCog": 161
+      "lines": 611,
+      "funcs": 58,
+      "maxCyc": 13,
+      "maxCog": 20,
+      "sumCyc": 198,
+      "sumCog": 169
     },
     "scripts/verify-release.mjs": {
       "scope": "source",
@@ -2022,6 +2022,15 @@
       "sumCyc": 44,
       "sumCog": 14
     },
+    "tests/quality-gates-fault-controls.test.mjs": {
+      "scope": "tests",
+      "lines": 137,
+      "funcs": 12,
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 14,
+      "sumCog": 2
+    },
     "tests/reconciliation-command-router.test.ts": {
       "scope": "tests",
       "lines": 491,
@@ -2563,6 +2572,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-20T09:15:05.399Z",
-  "sourceCommit": "ae0ab49e0db4f27c9ab7bf0f3dfbc80a77e891f6"
+  "generatedAt": "2026-11-20T09:27:26.096Z",
+  "sourceCommit": "a242776ede57213ea86dcd726fc97ed499d0d0c4"
 }

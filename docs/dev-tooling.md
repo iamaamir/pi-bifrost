@@ -58,7 +58,9 @@ npm run check:arch -- --json
 ```
 
 Exit codes are `0` clean, `1` findings, and `2` unavailable tool or invalid
-invocation.
+invocation. Each check also accepts `--root <path>` to measure another tree with
+this repository's tool binaries; the fault-control tests use it to run a real
+gate against a fixture and assert its exit code.
 
 The architecture rules encode existing seams: the resolve-only router may use
 Pi types but not the Pi runtime, host UI modules are imported only by the Pi
