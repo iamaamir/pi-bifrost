@@ -116,6 +116,20 @@ test("flags ast-grep rules whose scope matches no repository file", () => {
   assert.match(findings[0].message, /matches no repository files/);
 });
 
+test("fails ast checks when the tracked file list cannot verify rule scope", () => {
+  const rules = [{ id: "root-only", files: ["*.ts"], ignores: ["tests/**"] }];
+  assert.equal(ruleScopeFindings(rules, [])[0].rule, "ast-grep-scope-unverified");
+  assert.equal(ruleScopeFindings(rules, null)[0].rule, "ast-grep-scope-unverified");
+  assert.match(ruleScopeFindings(rules, null)[0].message, /git ls-files failed/);
+
+  const result = runAstGrep(
+    () => ({ missing: false, status: 0, stdout: "", stderr: "" }),
+    { rules, files: [] },
+  );
+  assert.equal(result.status, 1);
+  assert.deepEqual(result.findings.map((f) => f.rule), ["ast-grep-scope-unverified"]);
+});
+
 test("fails ast checks when scan exits without findings", () => {
   let calls = 0;
   const result = runAstGrep(() => {
