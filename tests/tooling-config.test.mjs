@@ -197,42 +197,49 @@ function escapeRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
-function knipScopeProblems({ config, files, manifest, gitignoreText, dependencyExceptions, binaryExceptions }) {
-  const problems = [];
-  const declared = new Set([
-    ...Object.keys(manifest.dependencies ?? {}),
-    ...Object.keys(manifest.devDependencies ?? {}),
-    ...Object.keys(manifest.peerDependencies ?? {}),
-  ]);
-  for (const field of ["entry", "project"]) {
-    if (!Array.isArray(config[field]) || config[field].length === 0) {
-      problems.push(`missing ${field} globs`);
-      continue;
-    }
-    for (const glob of config[field]) {
-      if (!files.some((file) => matchesGlob(file, glob))) problems.push(`${field} glob ${glob} matches no tracked file`);
-    }
-  }
-  for (const pattern of config.ignore ?? []) {
+function globProblems(config, files) {
+  return ["entry", "project"].flatMap((field) => {
+    const globs = Array.isArray(config[field]) ? config[field] : [];
+    if (globs.length === 0) return [`missing ${field} globs`];
+    return globs
+      .filter((glob) => !files.some((file) => matchesGlob(file, glob)))
+      .map((glob) => `${field} glob ${glob} matches no tracked file`);
+  });
+}
+
+function ignoreProblems(patterns, files, gitignoreText) {
+  return (patterns ?? []).flatMap((pattern) => {
     const prefix = pattern.replace(/\/\*\*$/u, "");
     const matchesTracked = files.some((file) => matchesGlob(file, pattern) || file.startsWith(`${prefix}/`));
     const matchesGenerated = new RegExp(`^${escapeRegExp(prefix)}/?$`, "mu").test(gitignoreText);
-    if (!matchesTracked && !matchesGenerated) problems.push(`ignore ${pattern} matches neither a tracked file nor a gitignored artifact`);
-  }
-  for (const [field, exceptions] of [
-    ["ignoreDependencies", dependencyExceptions],
-    ["ignoreBinaries", binaryExceptions],
-  ]) {
-    const ignored = config[field] ?? [];
-    for (const name of ignored) {
-      const isDeclared = field === "ignoreDependencies" && declared.has(name);
-      if (!isDeclared && !Object.hasOwn(exceptions, name)) problems.push(`${field} ${name} is neither declared nor a documented exception`);
-    }
-    for (const name of Object.keys(exceptions)) {
-      if (!ignored.includes(name)) problems.push(`documented ${field} exception ${name} is not configured`);
-    }
-  }
-  return problems;
+    return matchesTracked || matchesGenerated
+      ? []
+      : [`ignore ${pattern} matches neither a tracked file nor a gitignored artifact`];
+  });
+}
+
+function declaredNames(manifest) {
+  return new Set(Object.keys({ ...manifest.dependencies, ...manifest.devDependencies, ...manifest.peerDependencies }));
+}
+
+function exceptionProblems(field, ignored, allowed, isDeclared = () => false) {
+  const unknown = ignored
+    .filter((name) => !isDeclared(name) && !Object.hasOwn(allowed, name))
+    .map((name) => `${field} ${name} is neither declared nor a documented exception`);
+  const stale = Object.keys(allowed)
+    .filter((name) => !ignored.includes(name))
+    .map((name) => `documented ${field} exception ${name} is not configured`);
+  return [...unknown, ...stale];
+}
+
+function knipScopeProblems({ config, files, manifest, gitignoreText, dependencyExceptions, binaryExceptions }) {
+  const declared = declaredNames(manifest);
+  return [
+    ...globProblems(config, files),
+    ...ignoreProblems(config.ignore, files, gitignoreText),
+    ...exceptionProblems("ignoreDependencies", config.ignoreDependencies ?? [], dependencyExceptions, (name) => declared.has(name)),
+    ...exceptionProblems("ignoreBinaries", config.ignoreBinaries ?? [], binaryExceptions),
+  ];
 }
 
 test("Knip entry, ignore, and exception scopes match the tree", () => {
