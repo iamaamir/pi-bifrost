@@ -14,7 +14,7 @@
     },
     "tests": {
       "files": 189,
-      "functions": 8237,
+      "functions": 8256,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -1970,12 +1970,12 @@
     },
     "tests/performance-tooling.test.mjs": {
       "scope": "tests",
-      "lines": 229,
-      "funcs": 38,
-      "maxCyc": 2,
+      "lines": 328,
+      "funcs": 57,
+      "maxCyc": 3,
       "maxCog": 1,
-      "sumCyc": 40,
-      "sumCog": 2
+      "sumCyc": 61,
+      "sumCog": 3
     },
     "tests/pipeline.test.ts": {
       "scope": "tests",
@@ -2563,5 +2563,5 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-20T09:04:27.210Z"
+  "generatedAt": "2026-11-20T09:04:27.788Z"
 }
