@@ -40,6 +40,7 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run check:duplication` | Copy-paste detection and threshold (`.jscpd.json`: TypeScript and JavaScript, `minTokens 50`, `minLines 10`, budget 3.3%) | `npm ci` |
 | `npm run check:complexity` | Per-function complexity against `quality/complexity-baseline.json` | `npm ci` |
 | `npm run check:complexity:baseline` | The committed baseline matches the tree; stale records fail (see [Baselines after a rebase](#baselines-after-a-rebase)) | `npm ci` |
+| `npm run check:complexity:base` | The tree against the baseline recorded at a revision, such as the base commit of a pull request (see [Comparison against the base revision](#comparison-against-the-base-revision)) | `npm ci`, git |
 | `npm run check:contracts` | Host integration contracts read from `index.ts` and `debug.ts` (`scripts/check-contracts.mjs`) | `npm ci` |
 | `npm run check:actions` | Workflow syntax and expressions (actionlint) | actionlint |
 | `npm run check:sast` | Repository Semgrep rules | semgrep |
@@ -125,6 +126,21 @@ is skipped and a warning goes to stderr, so a live machine does not turn a movin
 tree into a crash. Read errors other than `ENOENT` still fail, and
 `--update-baseline` refuses an incomplete snapshot instead of recording a
 baseline that omits a real file.
+
+### Comparison against the base revision
+
+The committed baseline lives in the candidate. A pull request can therefore
+lower a recorded maximum and regenerate the baseline in the same change. The
+budget check and the staleness check cannot see that move, because both read the
+candidate file.
+
+`npm run check:complexity:base -- <rev>` compares the working tree with the
+baseline that `<rev>` records. CI runs it on pull requests with the base commit
+SHA. A new file is judged against the scope maxima in that revision's record.
+
+If `<rev>` has no baseline, the gate fails with
+`complexity-base-baseline-missing`. A comparison that cannot be made is not a
+pass.
 
 ## Documented commands and links
 

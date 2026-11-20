@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { analyze, compare, cyclomatic, cognitive, inScopeFiles, main, resolveSourceCommit, scopeOf, stalenessFindings } from "../scripts/check-complexity.mjs";
+import { analyze, baselineAtRef, compare, cyclomatic, cognitive, inScopeFiles, main, resolveSourceCommit, scopeOf, stalenessFindings } from "../scripts/check-complexity.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const require = createRequire(join(ROOT, "package.json"));
@@ -341,6 +341,75 @@ test("--check-baseline passes the committed record and fails a tampered one", ()
   } finally {
     rmSync(tamperedPath, { force: true });
   }
+});
+
+function gitFixture() {
+  const dir = mkdtempSync(join(tmpdir(), "bifrost-complexity-git-"));
+  const git = (...args) => {
+    const result = spawnSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+      cwd: dir,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+  git("init", "-q");
+  mkdirSync(join(dir, "quality"), { recursive: true });
+  const baselinePath = join(dir, "quality", "complexity-baseline.json");
+  writeFileSync(baselinePath, JSON.stringify({ version: 1, marker: "base" }));
+  git("add", "quality/complexity-baseline.json");
+  git("commit", "-q", "-m", "base");
+  return { dir, baselinePath };
+}
+
+test("reads the baseline from a revision instead of the working tree", () => {
+  const { dir, baselinePath } = gitFixture();
+  try {
+    // The candidate can rewrite the working-tree record; the comparison must
+    // use the bytes the base revision committed.
+    writeFileSync(baselinePath, JSON.stringify({ version: 1, marker: "head" }));
+    assert.equal(baselineAtRef({ ref: "HEAD", baselinePath, root: dir }).baseline.marker, "base");
+
+    assert.deepEqual(
+      baselineAtRef({ ref: "HEAD", baselinePath: join(dir, "quality", "absent.json"), root: dir }),
+      { missing: true },
+      "an absent record at the revision is a missing comparison, not an empty one",
+    );
+
+    const unknown = baselineAtRef({ ref: "no-such-ref", baselinePath, root: dir });
+    assert.match(unknown.error, /no-such-ref/u);
+
+    const outside = baselineAtRef({ ref: "HEAD", baselinePath: join(tmpdir(), "outside-baseline.json"), root: dir });
+    assert.match(outside.error, /inside the repository/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("--baseline-ref fails closed and cannot be mixed with a baseline write", () => {
+  const script = join(ROOT, "scripts/check-complexity.mjs");
+  const absent = join(ROOT, "quality", `absent-baseline-${process.pid}.json`);
+  assert.equal(existsSync(absent), false, "the fixture path must not exist on disk");
+  const missing = spawnSync(process.execPath, [script, "--baseline-ref", "HEAD", "--baseline", absent, "--json"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(missing.status, 1, missing.stderr || missing.stdout);
+  const parsed = JSON.parse(missing.stdout);
+  assert.equal(parsed.baselineRef, "HEAD");
+  assert.deepEqual(parsed.findings.map((finding) => finding.rule), ["complexity-base-baseline-missing"]);
+  assert.match(parsed.findings[0].message, /no baseline at HEAD/u);
+
+  const combined = spawnSync(process.execPath, [script, "--baseline-ref", "HEAD", "--update-baseline", "--json"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(combined.status, 2);
+  assert.match(JSON.parse(combined.stdout).error, /cannot be combined/u);
+
+  const noRevision = spawnSync(process.execPath, [script, "--baseline-ref", "--json"], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(noRevision.status, 2);
+  assert.match(JSON.parse(noRevision.stdout).error, /requires a revision/u);
 });
 
 test("main reports a missing baseline as a deterministic error", () => {

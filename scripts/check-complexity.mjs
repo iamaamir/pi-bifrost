@@ -11,6 +11,12 @@
  *   node scripts/check-complexity.mjs [--json] [--baseline <path>]
  *   node scripts/check-complexity.mjs --update-baseline [--baseline <path>]
  *   node scripts/check-complexity.mjs --check-baseline [--baseline <path>]
+ *   node scripts/check-complexity.mjs --baseline-ref <rev> [--json]
+ *
+ * `--baseline-ref` compares this tree against the baseline recorded at a git
+ * revision. A pull request can regenerate the committed baseline in the same
+ * change, so the committed file cannot prove the branch did not lower a ceiling;
+ * the base revision can.
  *
  * Exit codes: 0 clean/updated, 1 regression or stale baseline, 2 error or
  * missing baseline.
@@ -481,6 +487,29 @@ function updateBaseline({ current, baselinePath, json, skipped }) {
   return emitPass(json, `Updated complexity baseline: ${path.relative(ROOT, baselinePath)} (${summary(current)})`);
 }
 
+function repoRelative(baselinePath, root = ROOT) {
+  const rel = path.relative(root, baselinePath).split(path.sep).join("/");
+  return rel.startsWith("..") ? null : rel;
+}
+
+// A baseline absent at the base revision cannot be compared. That is reported
+// as a finding, not a pass: a comparison that cannot be made proves nothing.
+function baselineAtRef({ ref, baselinePath = DEFAULT_BASELINE, root = ROOT }) {
+  const rel = repoRelative(baselinePath, root);
+  if (!rel) return { error: "--baseline must name a path inside the repository for --baseline-ref" };
+  const show = spawnSync("git", ["show", `${ref}:${rel}`], { cwd: root, encoding: "utf8" });
+  if (show.status !== 0) {
+    const stderr = String(show.stderr ?? "").trim();
+    if (/does not exist|but not in|not in '|not in "/iu.test(stderr)) return { missing: true };
+    return { error: `could not read ${rel} at ${ref}: ${stderr || "git show failed"}` };
+  }
+  try {
+    return { baseline: JSON.parse(show.stdout) };
+  } catch (error) {
+    return { error: `could not parse ${rel} at ${ref}: ${error.message}` };
+  }
+}
+
 function readBaseline(baselinePath, json) {
   if (!fs.existsSync(baselinePath)) {
     return { exitCode: emitFailure(json, `complexity baseline not found: ${path.relative(ROOT, baselinePath)} (run with --update-baseline)`) };
@@ -492,13 +521,21 @@ function readBaseline(baselinePath, json) {
   }
 }
 
-function reportBudgets({ findings, current, json }) {
-  if (findings.length === 0) return emitPass(json, `Complexity budgets OK (${summary(current)})`);
+function reportBudgets({ findings, current, json, against }) {
+  const target = against ? ` against ${against}` : "";
+  if (findings.length === 0) {
+    const message = `Complexity budgets OK${target} (${summary(current)})`;
+    if (json) {
+      console.log(JSON.stringify({ check: "complexity", status: "passed", exitCode: 0, findings: [], ...(against ? { baselineRef: against } : {}), message }, null, 2));
+      return 0;
+    }
+    return emitPass(json, message);
+  }
   if (json) {
-    console.log(JSON.stringify({ check: "complexity", status: "failed", exitCode: 1, findings }, null, 2));
+    console.log(JSON.stringify({ check: "complexity", status: "failed", exitCode: 1, findings, ...(against ? { baselineRef: against } : {}) }, null, 2));
     return 1;
   }
-  console.error(`FAIL complexity: ${findings.length} regression(s)`);
+  console.error(`FAIL complexity${target}: ${findings.length} regression(s)`);
   for (const finding of findings.slice(0, 40)) {
     const location = finding.line ? `${finding.file}:${finding.line}` : finding.file;
     console.error(`  ${finding.rule}  ${location}  ${finding.message}`);
@@ -513,6 +550,14 @@ function main(argv = process.argv.slice(2)) {
   const stale = argv.includes("--check-baseline");
   const bIdx = argv.indexOf("--baseline");
   const baselinePath = bIdx !== -1 && argv[bIdx + 1] ? path.resolve(argv[bIdx + 1]) : DEFAULT_BASELINE;
+  const rIdx = argv.indexOf("--baseline-ref");
+  const baselineRef = rIdx !== -1 ? argv[rIdx + 1] : null;
+  if (rIdx !== -1 && (!baselineRef || baselineRef.startsWith("--"))) {
+    return emitFailure(json, "--baseline-ref requires a revision");
+  }
+  if (baselineRef && (update || stale)) {
+    return emitFailure(json, "--baseline-ref cannot be combined with --update-baseline or --check-baseline");
+  }
 
   const skipped = [];
   let current;
@@ -525,6 +570,20 @@ function main(argv = process.argv.slice(2)) {
 
   if (update) return updateBaseline({ current, baselinePath, json, skipped });
 
+  if (baselineRef) {
+    const fromRef = baselineAtRef({ ref: baselineRef, baselinePath });
+    if (fromRef.error) return emitFailure(json, fromRef.error);
+    const findings = fromRef.missing
+      ? [{
+          rule: "complexity-base-baseline-missing",
+          file: repoRelative(baselinePath),
+          line: null,
+          message: `no baseline at ${baselineRef}; run this gate against a revision that records one`,
+        }]
+      : compare(fromRef.baseline, current);
+    return reportBudgets({ findings, current, json, against: baselineRef });
+  }
+
   const loaded = readBaseline(baselinePath, json);
   if (loaded.exitCode !== undefined) return loaded.exitCode;
   if (stale) return runStalenessCheck({ baseline: loaded.baseline, current, json });
@@ -533,6 +592,7 @@ function main(argv = process.argv.slice(2)) {
 
 export {
   analyze,
+  baselineAtRef,
   cognitive,
   compare,
   cyclomatic,

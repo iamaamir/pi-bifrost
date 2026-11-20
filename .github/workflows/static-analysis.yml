@@ -45,6 +45,21 @@ jobs:
         run: npm run check:complexity
       - name: Complexity baseline is not stale
         run: npm run check:complexity:baseline
+      # The committed baseline lives in the candidate, so it cannot show a
+      # ceiling this pull request lowered. Fetch the base revision explicitly:
+      # a fork's history need not contain the base commit, so `origin` alone is
+      # not enough. Then compare the same tree against that revision's record.
+      - name: Fetch the base revision baseline
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REPO: ${{ github.event.pull_request.base.repo.clone_url }}
+        run: git fetch --no-tags --depth=1 "$BASE_REPO" "$BASE_SHA"
+      - name: Complexity budgets against the base revision
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: npm run check:complexity:base -- "$BASE_SHA"
 
   integration-contracts:
     runs-on: ubuntu-latest
