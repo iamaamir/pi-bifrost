@@ -6,10 +6,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  CHECKS,
   parseActionlint,
   parseAstGrep,
   parseDependencyCruiser,
   parseGitleaks,
+  parseJscpd,
   parseKnip,
   parseOsv,
   parseSemgrep,
@@ -99,6 +101,35 @@ test("fails ast checks when scan exits without findings", () => {
   assert.match(result.stderr, /scan crashed/);
 });
 
+test("parses jscpd reports and enforces the ratcheted duplication threshold", () => {
+  const below = JSON.stringify({ statistics: { total: { percentage: 5.49, duplicatedLines: 100, lines: 1669, clones: 10 } } });
+  const at = JSON.stringify({ statistics: { total: { percentage: 5.5, duplicatedLines: 102, lines: 1700, clones: 11 } } });
+  const above = JSON.stringify({ statistics: { total: { percentage: 5.51, duplicatedLines: 103, lines: 1713, clones: 12 } } });
+  assert.deepEqual(parseJscpd(below), []);
+  assert.deepEqual(parseJscpd(at), []);
+  const findings = parseJscpd(above);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "duplication-threshold");
+  assert.equal(findings[0].file, ".jscpd.json");
+  assert.equal(findings[0].line, null);
+  assert.match(findings[0].message, /5\.51% duplicated lines \(103\/1713\) over 5\.5% threshold; clones=12/);
+});
+
+test("wires the duplication check to a deterministic jscpd report path and failure result", () => {
+  const temp = join(tmpdir(), "bifrost-jscpd-contract");
+  const plan = CHECKS.duplication.command(temp);
+  assert.deepEqual(plan.args, [".", "--config", ".jscpd.json", "--reporters", "json", "--output", temp]);
+  assert.equal(CHECKS.duplication.fileReport, true);
+
+  const reportPath = join(temp, "jscpd-report.json");
+  mkdirSync(temp, { recursive: true });
+  writeFileSync(reportPath, JSON.stringify({ statistics: { total: { percentage: 7.25, duplicatedLines: 29, lines: 400, clones: 3 } } }));
+  const findings = CHECKS.duplication.parse(plan.read());
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].rule, "duplication-threshold");
+  assert.match(findings[0].message, /7\.25%/);
+});
+
 test("the committed ast-grep rules pass their own valid and invalid fixtures", () => {
   const binary = join(root, "node_modules", ".bin", process.platform === "win32" ? "ast-grep.cmd" : "ast-grep");
   const result = spawnSync(binary, ["test", "--skip-snapshot-tests"], {
@@ -107,7 +138,7 @@ test("the committed ast-grep rules pass their own valid and invalid fixtures", (
     shell: process.platform === "win32",
   });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  assert.match(result.stdout, /4 passed; 0 failed/);
+  assert.match(result.stdout, /\d+ passed; 0 failed/);
 });
 
 test("uses npm command shims and native executables on Windows", () => {

@@ -1,0 +1,15 @@
+id: no-debugger-in-extension
+language: TypeScript
+severity: error
+message: >-
+  debugger statements pause execution in the host. Remove them from shipped
+  extension code.
+rule:
+  pattern: debugger
+files:
+  - "*.ts"
+ignores:
+  - "tests/**"
+  - "ui/**"
+  - "scripts/**"
+  - ".worktrees/**"

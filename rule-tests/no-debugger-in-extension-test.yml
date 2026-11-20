@@ -1,0 +1,6 @@
+id: no-debugger-in-extension
+valid:
+  - 'const debuggerEnabled = false;'
+  - 'log(ctx, "debug");'
+invalid:
+  - 'debugger;'

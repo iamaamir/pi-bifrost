@@ -7,4 +7,9 @@ message: >-
 rule:
   pattern: process.exit($$$ARGS)
 files:
-  - "/*.ts"
+  - "*.ts"
+ignores:
+  - "tests/**"
+  - "ui/**"
+  - "scripts/**"
+  - ".worktrees/**"

@@ -1,0 +1,16 @@
+id: no-as-any-in-extension
+language: TypeScript
+severity: error
+message: >-
+  `as any` disables type checking in shipped extension code. Use a precise
+  type, unknown with narrowing, or a documented adapter boundary instead.
+  Repository tests, scripts, and UI modules are excluded by this rule's scope.
+rule:
+  pattern: $EXPR as any
+files:
+  - "*.ts"
+ignores:
+  - "tests/**"
+  - "ui/**"
+  - "scripts/**"
+  - ".worktrees/**"
