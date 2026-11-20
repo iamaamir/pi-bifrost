@@ -4,7 +4,7 @@
   "scopes": {
     "source": {
       "files": 93,
-      "functions": 2774,
+      "functions": 2776,
       "maxCyc": 190,
       "maxCog": 262,
       "cycGt30": 59,
@@ -14,7 +14,7 @@
     },
     "tests": {
       "files": 190,
-      "functions": 8293,
+      "functions": 8300,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -575,12 +575,12 @@
     },
     "scripts/check-complexity.mjs": {
       "scope": "source",
-      "lines": 512,
-      "funcs": 48,
+      "lines": 550,
+      "funcs": 50,
       "maxCyc": 28,
       "maxCog": 42,
-      "sumCyc": 206,
-      "sumCog": 189
+      "sumCyc": 217,
+      "sumCog": 205
     },
     "scripts/check-contracts.mjs": {
       "scope": "source",
@@ -926,12 +926,12 @@
     },
     "tests/check-complexity.test.mjs": {
       "scope": "tests",
-      "lines": 294,
-      "funcs": 22,
+      "lines": 354,
+      "funcs": 29,
       "maxCyc": 7,
       "maxCog": 3,
-      "sumCyc": 32,
-      "sumCog": 7
+      "sumCyc": 40,
+      "sumCog": 8
     },
     "tests/check-issue-refs.test.mjs": {
       "scope": "tests",
@@ -2572,6 +2572,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-20T09:34:48.908Z",
-  "sourceCommit": "125b7faf3f0c2f4979ae71a47197490618ce76cf"
+  "generatedAt": "2026-11-20T09:50:01.387Z",
+  "sourceCommit": "b9443ebcb11c7bc9959f15e99b41c167ba76fafe"
 }
