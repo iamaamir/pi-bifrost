@@ -281,15 +281,26 @@ test("analyze still fails on a read error other than a vanished file", () => {
 
 test("main tolerates a vanished file for checks and refuses to write a baseline", () => {
   const target = join(tmpdir(), `incomplete-baseline-${process.pid}-${Date.now()}.json`);
+  const originalLog = console.log;
+  const originalError = console.error;
+  const printed = { log: [], error: [] };
   let restore;
   try {
     restore = vanishWhileReading(join(ROOT, "config.ts"));
+    // Capture instead of printing: this exercises the real baseline against the
+    // real tree, and its JSON would otherwise read like a failure in CI output.
+    console.log = (...args) => printed.log.push(args.join(" "));
+    console.error = (...args) => printed.error.push(args.join(" "));
     const stale = main(["--check-baseline", "--json"]);
     assert.equal(stale, 1, "a recorded file that vanished is a stale record, not a crash");
+    assert.equal(printed.error.some((line) => line.includes("skipped 1 file(s) that vanished during analysis: config.ts")), true,
+      "the vanished file must be reported on stderr, not silently dropped");
     const update = main(["--update-baseline", "--baseline", target, "--json"]);
     assert.equal(update, 2, "an incomplete snapshot must not become a baseline");
     assert.equal(existsSync(target), false);
   } finally {
+    console.log = originalLog;
+    console.error = originalError;
     restore?.();
     rmSync(target, { force: true });
   }

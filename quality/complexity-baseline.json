@@ -14,7 +14,7 @@
     },
     "tests": {
       "files": 191,
-      "functions": 8310,
+      "functions": 8313,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -935,11 +935,11 @@
     },
     "tests/check-complexity.test.mjs": {
       "scope": "tests",
-      "lines": 354,
-      "funcs": 29,
+      "lines": 365,
+      "funcs": 32,
       "maxCyc": 7,
       "maxCog": 3,
-      "sumCyc": 40,
+      "sumCyc": 43,
       "sumCog": 8
     },
     "tests/check-issue-refs.test.mjs": {
@@ -2042,7 +2042,7 @@
     },
     "tests/quality-gates-fault-controls.test.mjs": {
       "scope": "tests",
-      "lines": 137,
+      "lines": 141,
       "funcs": 12,
       "maxCyc": 2,
       "maxCog": 1,
@@ -2411,7 +2411,7 @@
     },
     "tests/toolbox.test.mjs": {
       "scope": "tests",
-      "lines": 343,
+      "lines": 347,
       "funcs": 28,
       "maxCyc": 4,
       "maxCog": 3,
@@ -2590,6 +2590,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-20T10:06:07.609Z",
-  "sourceCommit": "01c6201b599da8993b4435fcd5565f98e4d309a8"
+  "generatedAt": "2026-11-20T10:22:33.799Z",
+  "sourceCommit": "e8a9c11ce8be32e2638fa3ba9ec7bf8d2ed96d3e"
 }
