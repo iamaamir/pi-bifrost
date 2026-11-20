@@ -61,18 +61,32 @@ describe("documented gate facts", () => {
   });
 
   it("turns red when a document keeps an old threshold or a setting", () => {
+    // Derived from the committed settings: a legal config change must update
+    // the documents, not break this control.
+    const staleThreshold = Math.round((SETTINGS.threshold + 0.1) * 10) / 10;
     const guide = DOCUMENTS[0];
-    assert.notEqual(guide.text, guide.text.replace("budget 3.3%", "budget 3.4%"), "the threshold mutation must apply");
-    const threshold = duplicationDrift({ ...guide, text: guide.text.replace(/budget \d+(?:\.\d+)?%/u, "budget 3.4%") });
+    assert.notEqual(
+      guide.text,
+      guide.text.replace(/budget \d+(?:\.\d+)?%/u, `budget ${staleThreshold}%`),
+      "the threshold mutation must apply",
+    );
+    const threshold = duplicationDrift({ ...guide, text: guide.text.replace(/budget \d+(?:\.\d+)?%/u, `budget ${staleThreshold}%`) });
     assert.equal(threshold.length, 1);
-    assert.match(threshold[0], /3\.4% budget but \.jscpd\.json sets/u);
+    assert.match(threshold[0], new RegExp(`${staleThreshold}% budget but \\.jscpd\\.json sets`, "u"));
 
     const adr = DOCUMENTS[1];
-    const setting = duplicationDrift({ ...adr, text: adr.text.replace(/`minLines \d+`/u, "`minLines 12`") });
+    const staleLines = SETTINGS.minLines + 2;
+    const setting = duplicationDrift({ ...adr, text: adr.text.replace(/`minLines \d+`/u, `\`minLines ${staleLines}\``) });
     assert.equal(setting.length >= 1, true, "a stale setting quote must be reported");
-    assert.match(setting[0], /minLines 12/u);
+    assert.match(setting[0], new RegExp(`minLines ${staleLines}`, "u"));
 
-    assert.deepEqual(duplicationDrift({ file: "inline", text: "minTokens 50 and `minLines 10`, budget 3.3%" }), []);
+    assert.deepEqual(
+      duplicationDrift({
+        file: "inline",
+        text: `minTokens ${SETTINGS.minTokens} and \`minLines ${SETTINGS.minLines}\`, budget ${SETTINGS.threshold}%`,
+      }),
+      [],
+    );
     assert.deepEqual(duplicationQuoteCount({ text: "no numbers here" }), 0);
   });
 });
