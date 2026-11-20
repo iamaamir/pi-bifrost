@@ -575,7 +575,7 @@
     },
     "scripts/check-complexity.mjs": {
       "scope": "source",
-      "lines": 551,
+      "lines": 552,
       "funcs": 63,
       "maxCyc": 28,
       "maxCog": 29,
@@ -2590,6 +2590,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-20T11:12:35.129Z",
-  "sourceCommit": "cd12a8857690a77260413f732d6e3ebd1a68791b"
+  "generatedAt": "2026-11-20T11:18:16.144Z",
+  "sourceCommit": "82b8db8fcbccfd27da69e3e6cfe1eff1c554aab9"
 }

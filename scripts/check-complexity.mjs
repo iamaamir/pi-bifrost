@@ -448,7 +448,8 @@ function compare(baseline, current) {
 function warnVanished(skipped) {
   if (skipped.length === 0) return;
   const shown = skipped.slice(0, 5).join(", ");
-  console.error(`warning: skipped ${skipped.length} file(s) that vanished during analysis: ${shown}${skipped.length > 5 ? ", ..." : ""}`);
+  // Entries can be files or a `dir/` marker, so they are paths, not files.
+  console.error(`warning: skipped ${skipped.length} path(s) that vanished during analysis: ${shown}${skipped.length > 5 ? ", ..." : ""}`);
 }
 
 // The JSON envelope is a contract tests and CI parse, so it is written once.
