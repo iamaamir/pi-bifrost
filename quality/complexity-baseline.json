@@ -14,7 +14,7 @@
     },
     "tests": {
       "files": 189,
-      "functions": 8228,
+      "functions": 8231,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -2384,12 +2384,12 @@
     },
     "tests/toolbox.test.mjs": {
       "scope": "tests",
-      "lines": 282,
-      "funcs": 25,
-      "maxCyc": 3,
-      "maxCog": 2,
-      "sumCyc": 32,
-      "sumCog": 7
+      "lines": 339,
+      "funcs": 28,
+      "maxCyc": 4,
+      "maxCog": 3,
+      "sumCyc": 37,
+      "sumCog": 9
     },
     "tests/tooling-config.test.mjs": {
       "scope": "tests",
@@ -2563,5 +2563,5 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-20T09:04:26.040Z"
+  "generatedAt": "2026-11-20T09:04:26.629Z"
 }
