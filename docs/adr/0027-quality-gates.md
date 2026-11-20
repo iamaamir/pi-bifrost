@@ -68,6 +68,13 @@ make "the gate measured nothing" a failure.
   Windows and POSIX agree.
 - Regenerate the baseline with `npm run check:complexity -- --update-baseline`
   after rebasing onto `main` or after an intentional complexity reduction.
+- `npm run check:complexity:baseline` re-measures in memory and fails with
+  `complexity-baseline-stale` when any record differs, so a baseline that
+  describes an older tree cannot merge. Every recorded field is compared, not
+  only maxima, so line and function drift fails too.
+- `generatedAt` and `sourceCommit` are provenance and are never compared.
+  `sourceCommit` names the generation-time HEAD, which is the baseline commit's
+  parent, because a commit cannot contain its own SHA.
 
 ### Process
 
@@ -77,6 +84,8 @@ make "the gate measured nothing" a failure.
   not unrelated entries.
 - Tightening a threshold is a deliberate change with its own evidence, not a
   side effect of a refactor.
+- CI runs the staleness check after the ratchet, so a forgotten regeneration is
+  a red build rather than a review note.
 - The optional pre-push hook runs the quick tests and the fast gates
   (`check:ast`, `check:duplication`, `check:complexity`).
 
