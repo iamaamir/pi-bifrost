@@ -95,6 +95,7 @@
     "check:duplication": "node scripts/toolbox.mjs duplication",
     "check:complexity": "node scripts/check-complexity.mjs",
     "check:complexity:baseline": "node scripts/check-complexity.mjs --check-baseline",
+    "check:complexity:base": "node scripts/check-complexity.mjs --baseline-ref",
     "ast:scan": "ast-grep scan --config sgconfig.yml",
     "ast:test": "ast-grep test --skip-snapshot-tests",
     "check:actions": "node scripts/toolbox.mjs actions",
