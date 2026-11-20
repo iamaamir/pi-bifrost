@@ -1,7 +1,7 @@
 # Mutation testing
 
-Mutation measurement for the core policy modules. This is a scheduled
-measurement, not a release gate. It never runs on a pull request and never
+Mutation measurement for the core policy modules and for the structural gate.
+This is a scheduled measurement, not a release gate. It never runs on a pull request and never
 blocks a merge. The workflow run page publishes the results, and the results are
 also artifacts.
 
@@ -44,20 +44,41 @@ inline-override.ts      1.0m  shards 1 ->  1.0m/leg
 reliability.ts          1.0m  shards 1 ->  1.0m/leg
 reliability-v2.ts       4.8m  shards 1 ->  4.8m/leg
 routing.ts             22.4m  shards 1 -> 22.4m/leg   (TAP: production engine)
+scripts/toolbox.mjs      2.1m  shards 1 ->  2.1m/leg   (in place: reads git ls-files)
 ```
 
 Real `node mutation/workflow.mjs plan` output:
 
 ```
-targets: cache.ts, classifier-semantics.ts, inline-override.ts, reliability.ts, reliability-v2.ts, routing.ts
-matrix legs: 6 (concurrency 4)
-projected wall clock: 34.5m of the 60m planning budget, 1 wave(s) of 6 leg(s) across 8 lanes (per-leg hard bound 48m)
+targets: cache.ts, classifier-semantics.ts, inline-override.ts, reliability.ts, reliability-v2.ts, routing.ts, scripts/toolbox.mjs
+matrix legs: 7 (concurrency 4)
+projected wall clock: 34.5m of the 60m planning budget, 1 wave(s) of 7 leg(s) across 8 lanes (per-leg hard bound 48m)
 the projection is a planning objective, not a deadline: GitHub enforces no workflow-wide wall clock
 ```
 
-Sharding is currently unused. Six legs fit in one wave, so the plan projects
+Sharding is currently unused. Seven legs fit in one wave, so the plan projects
 34.5 minutes. The machinery stays because a future module can outgrow the
 budget. The plan switches to shards automatically when a module outgrows it.
+
+### The gate script target
+
+`scripts/toolbox.mjs` is a target, and it is not a product module. Its bound
+tests cover the structural rule scope, the duplication threshold, and the parsers
+that turn tool output into findings. A mutant that survives there means a gate
+accepts a tree that it must fail. That is a hole in the safety net. It is not a
+routing risk.
+
+The target runs in place, not in a Stryker sandbox. The sandbox always excludes
+`.git`, and the gate calls `git ls-files` to learn which files it guards. From a
+sandbox path, that command finds no tracked file, so every bound test fails in
+the dry run. `IN_PLACE_TARGETS` in [`mutation/config.mjs`](../mutation/config.mjs)
+marks the target. Stryker writes the mutated bytes to the checkout and restores
+the originals when the run ends. The measured value on a 10-core host was 855
+mutants in 43 seconds.
+
+The complexity script is not a target. Its own suite measures the repository,
+and Stryker's instrumented copy inflates the numbers that the suite asserts, so
+the dry run cannot start.
 
 ### How the projection is computed
 
@@ -520,10 +541,10 @@ A first dispatch is useful in all cases, because it calibrates
 
 ## Local runs
 
-Prerequisites: Node (24 in CI) and Bun 1.4.0. Five of six modules run under
-`bun test`, which is the default runner, so `bun` must be on `PATH`. The workflow
-installs it with `oven-sh/setup-bun`. `routing.ts` uses the TAP runner (Node) and
-does not need Bun. There is no flag to pick a runner for one invocation. The
+Prerequisites: Node (24 in CI) and Bun 1.4.0. Six of the seven targets run
+under `bun test`, which is the default runner, so `bun` must be on `PATH`. The
+workflow installs it with `oven-sh/setup-bun`. `routing.ts` uses the TAP runner
+(Node) and does not need Bun. There is no flag to pick a runner for one invocation. The
 choice is in `RUNNER_OVERRIDES` in `mutation/config.mjs`.
 
 ```bash
@@ -658,8 +679,8 @@ Stryker copies the tree into `.stryker-tmp/`. Four items matter:
 ## Limitations
 
 - Coverage granularity depends on the runner. Bun attributes coverage per test,
-  and the TAP fallback attributes it per test file. Five of six modules use Bun.
-  `routing.ts` uses TAP because its verdict depends on the regex engine.
+  and the TAP fallback attributes it per test file. Six of the seven targets use
+  Bun. `routing.ts` uses TAP because its verdict depends on the regex engine.
 - Concurrency has almost no gain. Under TAP, throughput measured 1.61 s/mutant at
   6 workers and 1.67 at 4 (ratio 0.97). The cost was process startup for each
   mutant, not CPU. Sharding across machines is the main lever, and this is the

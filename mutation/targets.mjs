@@ -12,6 +12,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  IN_PLACE_TARGETS,
   SANDBOX_IGNORES,
   SHARDING,
   STRYKER_OPTIONS,
@@ -331,6 +332,9 @@ export function targetConfig(
     tempDirName: STRYKER_OPTIONS.tempDirName,
     testRunner: runner,
   };
+  // A gate script reads the tracked-file list, and the sandbox excludes `.git`,
+  // so it is measured in the checkout instead.
+  if (IN_PLACE_TARGETS.has(target)) config.inPlace = true;
   if (runner === "bun") {
     // Per-test coverage: each mutant runs only the individual tests that reach
     // it, which is what makes this the fastest option.
