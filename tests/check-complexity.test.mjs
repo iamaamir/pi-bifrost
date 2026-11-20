@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { analyze, compare, cyclomatic, cognitive, main } from "../scripts/check-complexity.mjs";
+import { analyze, compare, cyclomatic, cognitive, main, scopeOf } from "../scripts/check-complexity.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const require = createRequire(join(ROOT, "package.json"));
@@ -83,6 +83,14 @@ test("scores branch counts and does not inflate outer functions with nested func
   const cogInner = cognitive(parseFirstFunction("const inner=()=>{ if(flag){ if(flag){ return 1; } } };".replace("const inner=", "")));
   assert.equal(cogOuter, 1); // outer if only, nested function excluded
   assert.ok(cogInner >= 3);
+});
+
+test("classifies Windows-style relative paths with either separator", () => {
+  assert.equal(scopeOf("index.ts"), "source");
+  assert.equal(scopeOf("ui\\panel.ts"), "source");
+  assert.equal(scopeOf("scripts\\tool.mjs"), "source");
+  assert.equal(scopeOf("tests\\a.test.ts"), "tests");
+  assert.equal(scopeOf("mutation\\run.mjs"), null);
 });
 
 test("analyze scopes files, normalizes relative paths, and produces stable per-file metrics", () => {
