@@ -37,7 +37,7 @@ function walk(dir) {
 }
 
 function scopeOf(rel) {
-  if (/^[^/]+\.ts$/.test(rel)) return "source";
+  if (/^[^/]+\.(ts|mjs|cjs)$/.test(rel)) return "source";
   if (rel.startsWith("ui/") || rel.startsWith("scripts/")) return "source";
   if (rel.startsWith("tests/")) return "tests";
   return null;
@@ -45,7 +45,7 @@ function scopeOf(rel) {
 
 function inScopeFiles(root = ROOT) {
   return walk(root)
-    .filter((f) => f.endsWith(".ts") && !f.endsWith(".d.ts"))
+    .filter((f) => /\.(ts|mjs|cjs)$/.test(f) && !f.endsWith(".d.ts"))
     .map((f) => {
       const rel = path.relative(root, f).replace(/\\/g, "/");
       return { file: f, rel, scope: scopeOf(rel) };
@@ -241,7 +241,8 @@ function analyze({ root = ROOT } = {}) {
   const scopeFuncs = { source: [], tests: [] };
   for (const { file, rel, scope } of files) {
     const text = fs.readFileSync(file, "utf8");
-    const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const scriptKind = /\.(mjs|cjs)$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
+    const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKind);
     const funcs = [];
     function walkNode(n) {
       if (isFunctionLike(n) && n.body) {
