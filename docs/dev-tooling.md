@@ -99,6 +99,11 @@ baseline describing an older tree is stale even when the ratchet still passes.
 `sourceCommit` names the HEAD the numbers were measured from, which is the
 baseline commit's parent, because a commit cannot contain its own SHA.
 
+Tests must not write inside a measured path: root `*.ts`, `ui/`, `scripts/`, or
+`tests/`. The staleness check reads the tree, so a temporary file there fails a
+concurrent run. Write fixtures to a temp directory instead, and pin any relative
+import to an absolute URL if the fixture must run from outside the repository.
+
 ## Continuous integration
 
 | Workflow | Trigger | Checks |
