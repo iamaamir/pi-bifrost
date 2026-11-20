@@ -28,11 +28,11 @@ It shows effective routing and reliability state after configuration layers merg
 | First-use setup cannot save verified pools | `/bifrost debug`; inspect provider access | No model passed its background probe, or a configuration changed before the safe save | Fix provider access and run `/bifrost init -f`; review the save target before confirming |
 | Prompt classifier fails | `/bifrost classifier test`; `/bifrost classifier status` | Missing model, provider error, invalid response, or fallback configuration | Select a working classifier model or disable classifier for rules/default-only routing |
 | TypeSafe/Jev or Pi-native is unavailable | `/bifrost classifier status`; `/bifrost classifier test` | Missing TypeSafe credential, empty Pi classifier catalog, timeout, rate limit, or open classifier circuit | Run `/login` or set `TYPESAFE_API_KEY`; inspect Pi's catalog and `enabledModels` filter; use prompt/regex fallback |
-| Tier prefix reaches model unchanged | `/bifrost debug` | Session is pinned, prefix is unknown, or tier key is unsupported syntax | Unpin; use a configured lowercase alphabetic single-word tier followed by whitespace |
+| Tier prefix reaches model unchanged | `/bifrost debug` | The session is pinned, the prefix is not a configured tier, or the tier key is not one lowercase word | Unpin, then type one configured lowercase alphabetic tier name followed by a space. The typed prefix can use either case |
 
 ## Lower probe pressure
 
-`/bifrost probe` sends a tiny request to every available chat model. `/bifrost init` reuses results from the last hour or probes when they are missing or old. Pass `-f` to force fresh probes. Manual probe concurrency defaults to 50. First-use background concurrency defaults to 3. The default timeout is 10 seconds per model. `probe.concurrency` and `probe.timeoutMs` apply to both paths. These probe results expire after one hour. Before a probe, lower concurrency in `~/.pi/agent/bifrost.json` or `.pi/bifrost.json` when providers enforce tight burst limits:
+`/bifrost probe` sends a tiny request to every available chat model. `/bifrost init` reuses results from the last hour when they cover the current catalog, and probes when they are missing, old, or do not match the catalog. Pass `-f` to force fresh probes. Manual probe concurrency defaults to 50. First-use background concurrency defaults to 3. The default timeout is 10 seconds per model. `probe.concurrency` and `probe.timeoutMs` apply to both paths. These probe results expire after one hour. Before a probe, lower concurrency in `~/.pi/agent/bifrost.json` or `.pi/bifrost.json` when providers enforce tight burst limits:
 
 ```json
 {
@@ -49,7 +49,7 @@ The primary probe transport uses `1+1=` and caps output at 5 tokens. An empty re
 
 Preview reports:
 
-- `source`: cache, classifier, rule, or fallback;
+- `source`: cache, classifier, regex, or fallback;
 - classifier backend/model/confidence when available;
 - resolved tier;
 - requested and fallback candidates;

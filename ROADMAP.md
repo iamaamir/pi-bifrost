@@ -2,6 +2,8 @@
 
 This roadmap is grouped by status, not by version. Each item links to its ADR when one exists, and each item lists an effort estimate (Low / Medium / High) plus the user it reaches. Items move up when paired with a concrete user report; speculative features stay in **Backlog / Intentionally deferred** until reported.
 
+A status label gives the state at the last edit of this file, not the current source.
+
 ## How we decide what to build
 
 We keep Bifrost a **configuration-first router**, not a policy engine. See [`docs/product-philosophy.md`](docs/product-philosophy.md): explicit configuration → observable signal → advisory recommendation → explicit opt-in → bounded automation.

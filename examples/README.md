@@ -64,7 +64,7 @@ pi install npm:pi-bifrost
 /bifrost init
 ```
 
-In a host without a TUI, add `--write` to `/bifrost init` to save without the confirmation. `--write` skips the confirmation in the TUI as well.
+When Pi gives Bifrost no UI, use `/bifrost init --write` to save without review or confirmation. `--write` also skips review in the TUI. Add `-f` for new probes or `-g` for the global configuration.
 
 Copy a recipe to `.pi/bifrost.json`, then reload:
 

@@ -1,6 +1,6 @@
 # Acceptance coverage map
 
-This map catalogs evidence boundaries for PRD.md requirements R01–R17. A covered status means the acceptance command has a named case that checks that boundary. It does not mean the current candidate passed; read the ordered result for the candidate under review in screenshots/acceptance/<runId>/evidence.json.
+This map catalogs evidence boundaries for PRD.md requirements R01–R17. A covered status means the acceptance command had a named case that checked that boundary when the row was written. It does not show a current passing run, or that the boundary still holds. For a current result, read the ordered result for the candidate under review in screenshots/acceptance/<runId>/evidence.json, and read the `npm run verify:release` manifest for the same revision. That command prints its manifest path when it finishes.
 
 Partial means named cases exercise only part of the requirement; the boundary column states the limit. Missing means no named result supports the requirement yet. Existing unit or integration suites still run through verify:release, but a suite filename or aggregate gate is supporting evidence only. Deferred records an accepted product-scope decision. A required case that cannot run is recorded as blocked in the run evidence and makes the run fail.
 
