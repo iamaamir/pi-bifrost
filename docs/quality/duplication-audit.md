@@ -14,7 +14,7 @@ node scripts/duplication-audit.mjs          # this table
 node scripts/duplication-audit.mjs --json   # same data for a script
 ```
 
-Output captured on 2026-11-21 at `cd12a88`, verbatim:
+Output captured on 2026-11-21 at `e137d7f` with a clean working tree, verbatim:
 
 ```text
 ### Totals
@@ -345,7 +345,7 @@ Output captured on 2026-11-21 at `cd12a88`, verbatim:
 | `format` | `typescript`, `javascript` | `.mjs` and `.cjs` are JavaScript to jscpd; a typescript-only filter silently excluded them |
 | `minTokens` | 50 | Not the binding knob, so it keeps token-light clones out |
 | `minLines` | 10 | Removes the 6-9 line test-boilerplate band (50% of the old total) |
-| `threshold` | 3.3 | Measured 3.02% plus about 304 lines of headroom, so the budget stays a ratchet |
+| `threshold` | 3.3 | Measured 3.02% plus about 303 lines of headroom, so the budget stays a ratchet |
 
 Everything stays measured: `tests/**` is not excluded. A copy-pasted test is a
 maintenance liability, and excluding it would hide the number this audit exposes.
