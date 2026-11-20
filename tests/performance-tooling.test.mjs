@@ -226,8 +226,15 @@ function staleEvidence(map, sources) {
     .map(([name]) => name);
 }
 
+// Only the command table documents a gate. A mention in prose or a shell
+// example is not a promise that the gate exists and is wired up.
+function guideCommands(markdown) {
+  return new Set([...markdown.matchAll(/^\|\s*`npm run (check:[a-z0-9:-]+)`\s*\|/gmu)].map((match) => match[1]));
+}
+
 function gatesMissingFromGuide(names, markdown) {
-  return names.filter((name) => !markdown.includes(`npm run ${name}`));
+  const documented = guideCommands(markdown);
+  return names.filter((name) => !documented.has(name));
 }
 
 function unknownWorkflowCommands(sources, available) {
@@ -262,9 +269,12 @@ test("fault control: the gate inventory reports an unregistered gate, stale evid
   assert.deepEqual(staleEvidence(CI_EQUIVALENTS, withoutSemgrep), ["check:sast"],
     "deleting the CI step must invalidate its exception, not preserve the claim");
 
-  const missingRow = guide.replace("`npm run check:complexity`", "`run the complexity gate`");
+  const missingRow = guide.replace(/^\| `npm run check:complexity` \|.*$/mu, "| the complexity gate | (removed) |");
   assert.notEqual(missingRow, guide, "the guide-row mutation must apply");
   assert.deepEqual(gatesMissingFromGuide(checkScripts(scripts), missingRow), ["check:complexity"]);
+  const proseOnly = guide.replace(/^\| `npm run check:complexity` \|.*$/mu, "Run `npm run check:complexity`.");
+  assert.deepEqual(gatesMissingFromGuide(["check:complexity"], proseOnly), ["check:complexity"],
+    "prose or a shell example must not count as a documented gate row");
 
   const typoWorkflow = `${workflowSources}\n      - run: npm run check:archt\n`;
   assert.deepEqual(unknownWorkflowCommands(typoWorkflow, scripts), ["check:archt"]);
