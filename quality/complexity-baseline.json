@@ -4,17 +4,17 @@
   "scopes": {
     "source": {
       "files": 94,
-      "functions": 2784,
+      "functions": 2798,
       "maxCyc": 190,
       "maxCog": 262,
       "cycGt30": 59,
       "cycGt50": 19,
-      "cogGt30": 85,
+      "cogGt30": 83,
       "cogGt50": 40
     },
     "tests": {
       "files": 191,
-      "functions": 8317,
+      "functions": 8323,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -575,12 +575,12 @@
     },
     "scripts/check-complexity.mjs": {
       "scope": "source",
-      "lines": 550,
-      "funcs": 50,
+      "lines": 551,
+      "funcs": 63,
       "maxCyc": 28,
-      "maxCog": 42,
+      "maxCog": 29,
       "sumCyc": 217,
-      "sumCog": 205
+      "sumCog": 161
     },
     "scripts/check-contracts.mjs": {
       "scope": "source",
@@ -638,7 +638,7 @@
     },
     "scripts/duplication-audit.mjs": {
       "scope": "source",
-      "lines": 149,
+      "lines": 143,
       "funcs": 8,
       "maxCyc": 13,
       "maxCog": 15,
@@ -755,12 +755,12 @@
     },
     "scripts/toolbox.mjs": {
       "scope": "source",
-      "lines": 611,
-      "funcs": 58,
+      "lines": 632,
+      "funcs": 59,
       "maxCyc": 13,
       "maxCog": 20,
-      "sumCyc": 198,
-      "sumCog": 169
+      "sumCyc": 204,
+      "sumCog": 180
     },
     "scripts/verify-release.mjs": {
       "scope": "source",
@@ -863,11 +863,11 @@
     },
     "tests/ast-rule-scope.test.mjs": {
       "scope": "tests",
-      "lines": 93,
-      "funcs": 10,
+      "lines": 115,
+      "funcs": 12,
       "maxCyc": 4,
       "maxCog": 5,
-      "sumCyc": 16,
+      "sumCyc": 18,
       "sumCog": 8
     },
     "tests/auto-bootstrap-runtime.test.ts": {
@@ -1250,11 +1250,11 @@
     },
     "tests/duplication-audit.test.mjs": {
       "scope": "tests",
-      "lines": 75,
-      "funcs": 10,
+      "lines": 107,
+      "funcs": 12,
       "maxCyc": 1,
       "maxCog": 0,
-      "sumCyc": 10,
+      "sumCyc": 12,
       "sumCog": 0
     },
     "tests/economic-config.test.ts": {
@@ -1988,11 +1988,11 @@
     },
     "tests/performance-tooling.test.mjs": {
       "scope": "tests",
-      "lines": 379,
-      "funcs": 63,
+      "lines": 403,
+      "funcs": 65,
       "maxCyc": 3,
       "maxCog": 2,
-      "sumCyc": 69,
+      "sumCyc": 71,
       "sumCog": 5
     },
     "tests/pipeline.test.ts": {
@@ -2042,7 +2042,7 @@
     },
     "tests/quality-gates-fault-controls.test.mjs": {
       "scope": "tests",
-      "lines": 141,
+      "lines": 147,
       "funcs": 12,
       "maxCyc": 2,
       "maxCog": 1,
@@ -2590,6 +2590,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-20T10:56:16.888Z",
-  "sourceCommit": "7cdc9a3617cac3fd22c5f892fb7e04af742dd03c"
+  "generatedAt": "2026-11-20T11:12:35.129Z",
+  "sourceCommit": "cd12a8857690a77260413f732d6e3ebd1a68791b"
 }

@@ -38,9 +38,12 @@ jobs:
         run: npm run check:ast
       - name: Copy-paste detection
         run: npm run check:duplication
+      # Two different questions. Budgets fail when a function grows past the
+      # committed ceiling. The baseline step fails when the committed record no
+      # longer describes this tree at all, which the budget check cannot see.
       - name: Complexity budgets
         run: npm run check:complexity
-      - name: Complexity baseline matches the candidate tree
+      - name: Complexity baseline is not stale
         run: npm run check:complexity:baseline
 
   integration-contracts:

@@ -48,8 +48,12 @@ make "the gate measured nothing" a failure.
 
 - `.jscpd.json` is the single source of the threshold. `scripts/toolbox.mjs`
   reads it; the CLI does not pass a second copy.
-- The budget is 2.5% of duplicated lines, measured with `minTokens 50` and
-  `minLines 10` (2.21% when adopted).
+- The budget is 3.3% of duplicated lines, measured with `minTokens 50` and
+  `minLines 10` over TypeScript and JavaScript (3.02% when adopted). `format`
+  must list both: jscpd maps `.mjs`/`.cjs` to the `javascript` format, so a
+  typescript-only filter silently excluded every script and tooling test.
+- Changing `format`, `minTokens`, or `minLines` changes the denominator. Rerun
+  the audit and move the budget in the same change.
 - The clone population has been audited: [`docs/quality/duplication-audit.md`](../quality/duplication-audit.md)
   shows that 87% of the duplication at `minLines 6` sat inside `tests/`, and
   that the 6-9 line band was short test scaffolding. `minLines` moved to 10 and
@@ -82,9 +86,11 @@ make "the gate measured nothing" a failure.
   `sourceCommit` names the generation-time HEAD, which is the baseline commit's
   parent, because a commit cannot contain its own SHA.
 - A file that disappears while the analyzer reads the tree is skipped with a
-  warning, so a moving tree on a developer machine is not a crash. Read errors
-  other than `ENOENT` still fail, and `--update-baseline` refuses an incomplete
-  analysis rather than recording a baseline that omits a real file.
+  warning, so a moving tree on a developer machine is not a crash. A directory
+  that disappears during the walk is recorded the same way, because its files
+  are equally absent from the snapshot. Read errors other than `ENOENT` still
+  fail, and `--update-baseline` refuses an incomplete analysis rather than
+  recording a baseline that omits real files.
 
 ### Process
 
@@ -112,7 +118,7 @@ make "the gate measured nothing" a failure.
   expected: it is the record of the new ceiling.
 - A contributor who lowers complexity should regenerate the baseline in the same
   change, otherwise the ratchet keeps the old, higher ceiling.
-- Duplication can drift upward within the 2.5% budget, about 190 lines of
+- Duplication can drift upward within the 3.3% budget, about 300 lines of
   headroom today. Trend history is tracked in #291 rather than in this ADR.
 
 ## Alternatives considered

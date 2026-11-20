@@ -30,20 +30,22 @@ const EXCLUDED_DIRS = new Set(["node_modules", "dist", ".git", "coverage", "repo
 const RECORD_FIELDS = ["lines", "funcs", "maxCyc", "maxCog", "sumCyc", "sumCog"];
 const SCOPE_FIELDS = ["files", "functions", "maxCyc", "maxCog", "cycGt30", "cycGt50", "cogGt30", "cogGt50"];
 
-function walk(dir) {
+function walk(dir, root = dir, skipped = []) {
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch (error) {
-    // A directory can vanish mid-walk on a live machine; its files are gone too.
-    if (error?.code === "ENOENT") return [];
-    throw error;
+    // A directory can vanish mid-walk on a live machine; its files are gone from
+    // this snapshot too, so the caller must know the analysis is incomplete.
+    if (error?.code !== "ENOENT") throw error;
+    skipped.push(`${path.relative(root, dir) || "."}/`);
+    return [];
   }
   let results = [];
   for (const entry of entries) {
     if (EXCLUDED_DIRS.has(entry.name)) continue;
     const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) results = results.concat(walk(full));
+    if (entry.isDirectory()) results = results.concat(walk(full, root, skipped));
     else results.push(full);
   }
   return results;
@@ -57,8 +59,8 @@ function scopeOf(rel) {
   return null;
 }
 
-function inScopeFiles(root = ROOT) {
-  return walk(root)
+function inScopeFiles(root = ROOT, skipped = []) {
+  return walk(root, root, skipped)
     .filter((f) => /\.(ts|mjs|cjs)$/.test(f) && !f.endsWith(".d.ts"))
     .map((f) => {
       const rel = path.relative(root, f).replace(/\\/g, "/");
@@ -264,7 +266,7 @@ function readIfPresent(file, rel, skipped) {
 }
 
 function analyze({ root = ROOT, skipped = [] } = {}) {
-  const files = inScopeFiles(root).sort((a, b) => a.rel.localeCompare(b.rel));
+  const files = inScopeFiles(root, skipped).sort((a, b) => a.rel.localeCompare(b.rel));
   const fileData = {};
   const scopeFuncs = { source: [], tests: [] };
   for (const { file, rel, scope } of files) {
@@ -399,49 +401,45 @@ function runStalenessCheck({ baseline, current, json }) {
   return 0;
 }
 
+const SCOPE_RATCHET_FIELDS = ["maxCyc", "maxCog", "cycGt30", "cycGt50", "cogGt30", "cogGt50"];
+const FILE_RATCHET_FIELDS = ["maxCyc", "maxCog"];
+
+function increasedFields(actual, ceiling, fields) {
+  return fields.filter((key) => (actual[key] ?? 0) > (ceiling[key] ?? 0));
+}
+
+function scopeFindings(baseline, current) {
+  return ["source", "tests"].flatMap((scope) => {
+    const before = baseline.scopes?.[scope] || {};
+    const after = current.scopes?.[scope] || {};
+    return increasedFields(after, before, SCOPE_RATCHET_FIELDS).map((key) => ({
+      rule: `scope-${scope}-${key}-regression`,
+      file: "(scope)",
+      line: null,
+      message: `${scope}.${key} increased: ${before[key] ?? 0} -> ${after[key] ?? 0}`,
+    }));
+  });
+}
+
+// A baselined file is judged against its own record; a new file is judged against
+// its scope ceiling until the first baseline that records it.
+function fileFindings(rel, data, baseline) {
+  const base = baseline.files?.[rel];
+  const ceiling = base ?? (baseline.scopes?.[data.scope] || {});
+  return increasedFields(data, ceiling, FILE_RATCHET_FIELDS).map((key) => ({
+    rule: base ? `file-${key}-regression` : `new-file-${key}-exceeds-scope-max`,
+    file: rel,
+    line: null,
+    message: base
+      ? `${key} increased: ${base[key] ?? 0} -> ${data[key] ?? 0}`
+      : `new file ${key} ${data[key] ?? 0} exceeds ${data.scope} baseline max ${ceiling[key] ?? 0}`,
+  }));
+}
+
 function compare(baseline, current) {
-  const findings = [];
-  for (const scope of ["source", "tests"]) {
-    const b = baseline.scopes?.[scope] || {};
-    const c = current.scopes?.[scope] || {};
-    for (const key of ["maxCyc", "maxCog", "cycGt30", "cycGt50", "cogGt30", "cogGt50"]) {
-      if ((c[key] ?? 0) > (b[key] ?? 0)) {
-        findings.push({
-          rule: `scope-${scope}-${key}-regression`,
-          file: "(scope)",
-          line: null,
-          message: `${scope}.${key} increased: ${b[key] ?? 0} -> ${c[key] ?? 0}`,
-        });
-      }
-    }
-  }
-  const baselineFiles = baseline.files || {};
+  const findings = scopeFindings(baseline, current);
   for (const [rel, data] of Object.entries(current.files || {})) {
-    const base = baselineFiles[rel];
-    if (base) {
-      for (const key of ["maxCyc", "maxCog"]) {
-        if ((data[key] ?? 0) > (base[key] ?? 0)) {
-          findings.push({
-            rule: `file-${key}-regression`,
-            file: rel,
-            line: null,
-            message: `${key} increased: ${base[key] ?? 0} -> ${data[key] ?? 0}`,
-          });
-        }
-      }
-    } else {
-      const scopeBase = (baseline.scopes && baseline.scopes[data.scope]) || {};
-      for (const key of ["maxCyc", "maxCog"]) {
-        if ((data[key] ?? 0) > (scopeBase[key] ?? 0)) {
-          findings.push({
-            rule: `new-file-${key}-exceeds-scope-max`,
-            file: rel,
-            line: null,
-            message: `new file ${key} ${data[key] ?? 0} exceeds ${data.scope} baseline max ${scopeBase[key] ?? 0}`,
-          });
-        }
-      }
-    }
+    findings.push(...fileFindings(rel, data, baseline));
   }
   // Removed files are improvements; not reported as findings.
   return findings;
@@ -453,6 +451,61 @@ function warnVanished(skipped) {
   console.error(`warning: skipped ${skipped.length} file(s) that vanished during analysis: ${shown}${skipped.length > 5 ? ", ..." : ""}`);
 }
 
+// The JSON envelope is a contract tests and CI parse, so it is written once.
+function emitFailure(json, message) {
+  if (json) console.log(JSON.stringify({ check: "complexity", status: "failed", exitCode: 2, findings: [], error: message }, null, 2));
+  else console.error(message);
+  return 2;
+}
+
+function emitPass(json, message) {
+  if (json) console.log(JSON.stringify({ check: "complexity", status: "passed", exitCode: 0, findings: [], message }, null, 2));
+  else console.log(message);
+  return 0;
+}
+
+function summary(current) {
+  const { maxCyc, maxCog, cycGt50, cogGt50 } = current.scopes.source;
+  return `source maxCyc=${maxCyc}, maxCog=${maxCog}, cycGt50=${cycGt50}, cogGt50=${cogGt50}`;
+}
+
+function updateBaseline({ current, baselinePath, json, skipped }) {
+  if (skipped.length > 0) {
+    return emitFailure(json, `refusing to write a baseline from an incomplete analysis: ${skipped.length} file(s) vanished; re-run when the tree is stable`);
+  }
+  fs.mkdirSync(path.dirname(baselinePath), { recursive: true });
+  current.generatedAt = new Date().toISOString();
+  current.sourceCommit = resolveSourceCommit();
+  fs.writeFileSync(baselinePath, JSON.stringify(current, null, 2) + "\n");
+  return emitPass(json, `Updated complexity baseline: ${path.relative(ROOT, baselinePath)} (${summary(current)})`);
+}
+
+function readBaseline(baselinePath, json) {
+  if (!fs.existsSync(baselinePath)) {
+    return { exitCode: emitFailure(json, `complexity baseline not found: ${path.relative(ROOT, baselinePath)} (run with --update-baseline)`) };
+  }
+  try {
+    return { baseline: JSON.parse(fs.readFileSync(baselinePath, "utf8")) };
+  } catch (error) {
+    return { exitCode: emitFailure(json, `could not read complexity baseline: ${error.message}`) };
+  }
+}
+
+function reportBudgets({ findings, current, json }) {
+  if (findings.length === 0) return emitPass(json, `Complexity budgets OK (${summary(current)})`);
+  if (json) {
+    console.log(JSON.stringify({ check: "complexity", status: "failed", exitCode: 1, findings }, null, 2));
+    return 1;
+  }
+  console.error(`FAIL complexity: ${findings.length} regression(s)`);
+  for (const finding of findings.slice(0, 40)) {
+    const location = finding.line ? `${finding.file}:${finding.line}` : finding.file;
+    console.error(`  ${finding.rule}  ${location}  ${finding.message}`);
+  }
+  if (findings.length > 40) console.error(`  ... ${findings.length - 40} more`);
+  return 1;
+}
+
 function main(argv = process.argv.slice(2)) {
   const json = argv.includes("--json");
   const update = argv.includes("--update-baseline");
@@ -460,73 +513,21 @@ function main(argv = process.argv.slice(2)) {
   const bIdx = argv.indexOf("--baseline");
   const baselinePath = bIdx !== -1 && argv[bIdx + 1] ? path.resolve(argv[bIdx + 1]) : DEFAULT_BASELINE;
 
-  let current;
   const skipped = [];
+  let current;
   try {
     current = analyze({ skipped });
   } catch (error) {
-    const msg = `complexity analysis failed: ${error.message}`;
-    if (json) console.log(JSON.stringify({ check: "complexity", status: "failed", exitCode: 2, findings: [], error: msg }, null, 2));
-    else console.error(msg);
-    return 2;
+    return emitFailure(json, `complexity analysis failed: ${error.message}`);
   }
-
   warnVanished(skipped);
 
-  if (update) {
-    if (skipped.length > 0) {
-      const msg = `refusing to write a baseline from an incomplete analysis: ${skipped.length} file(s) vanished; re-run when the tree is stable`;
-      if (json) console.log(JSON.stringify({ check: "complexity", status: "failed", exitCode: 2, findings: [], error: msg }, null, 2));
-      else console.error(msg);
-      return 2;
-    }
-    fs.mkdirSync(path.dirname(baselinePath), { recursive: true });
-    current.generatedAt = new Date().toISOString();
-    current.sourceCommit = resolveSourceCommit();
-    fs.writeFileSync(baselinePath, JSON.stringify(current, null, 2) + "\n");
-    const msg = `Updated complexity baseline: ${path.relative(ROOT, baselinePath)} (source maxCyc=${current.scopes.source.maxCyc}, maxCog=${current.scopes.source.maxCog}, cycGt50=${current.scopes.source.cycGt50}, cogGt50=${current.scopes.source.cogGt50})`;
-    if (json) console.log(JSON.stringify({ check: "complexity", status: "passed", exitCode: 0, findings: [], message: msg }, null, 2));
-    else console.log(msg);
-    return 0;
-  }
+  if (update) return updateBaseline({ current, baselinePath, json, skipped });
 
-  if (!fs.existsSync(baselinePath)) {
-    const msg = `complexity baseline not found: ${path.relative(ROOT, baselinePath)} (run with --update-baseline)`;
-    if (json) console.log(JSON.stringify({ check: "complexity", status: "failed", exitCode: 2, findings: [], error: msg }, null, 2));
-    else console.error(msg);
-    return 2;
-  }
-
-  let baseline;
-  try {
-    baseline = JSON.parse(fs.readFileSync(baselinePath, "utf8"));
-  } catch (error) {
-    const msg = `could not read complexity baseline: ${error.message}`;
-    if (json) console.log(JSON.stringify({ check: "complexity", status: "failed", exitCode: 2, findings: [], error: msg }, null, 2));
-    else console.error(msg);
-    return 2;
-  }
-
-  if (stale) return runStalenessCheck({ baseline, current, json });
-
-  const findings = compare(baseline, current);
-  if (findings.length === 0) {
-    const msg = `Complexity budgets OK (source maxCyc=${current.scopes.source.maxCyc}, maxCog=${current.scopes.source.maxCog}, cycGt50=${current.scopes.source.cycGt50}, cogGt50=${current.scopes.source.cogGt50})`;
-    if (json) console.log(JSON.stringify({ check: "complexity", status: "passed", exitCode: 0, findings: [], message: msg }, null, 2));
-    else console.log(msg);
-    return 0;
-  }
-
-  if (json) console.log(JSON.stringify({ check: "complexity", status: "failed", exitCode: 1, findings }, null, 2));
-  else {
-    console.error(`FAIL complexity: ${findings.length} regression(s)`);
-    for (const f of findings.slice(0, 40)) {
-      const loc = f.line ? `${f.file}:${f.line}` : f.file;
-      console.error(`  ${f.rule}  ${loc}  ${f.message}`);
-    }
-    if (findings.length > 40) console.error(`  ... ${findings.length - 40} more`);
-  }
-  return 1;
+  const loaded = readBaseline(baselinePath, json);
+  if (loaded.exitCode !== undefined) return loaded.exitCode;
+  if (stale) return runStalenessCheck({ baseline: loaded.baseline, current, json });
+  return reportBudgets({ findings: compare(loaded.baseline, current), current, json });
 }
 
 export {

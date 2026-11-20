@@ -37,7 +37,7 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run check:arch` | Import boundaries and cycles (`.dependency-cruiser.cjs`) | `npm ci` |
 | `npm run check:dead-code` | Unused and unlisted dependencies (`knip.jsonc`) | `npm ci` |
 | `npm run check:ast` | Structural rules, rule self-tests, and rule scope against tracked files (`sgconfig.yml`) | `npm ci` |
-| `npm run check:duplication` | Copy-paste detection and threshold (`.jscpd.json`: `minTokens 50`, `minLines 10`, budget 2.5%) | `npm ci` |
+| `npm run check:duplication` | Copy-paste detection and threshold (`.jscpd.json`: TypeScript and JavaScript, `minTokens 50`, `minLines 10`, budget 3.3%) | `npm ci` |
 | `npm run check:complexity` | Per-function complexity against `quality/complexity-baseline.json` | `npm ci` |
 | `npm run check:complexity:baseline` | The committed baseline matches the tree; stale records fail (see [Baselines after a rebase](#baselines-after-a-rebase)) | `npm ci` |
 | `npm run check:contracts` | Host integration contracts read from `index.ts` and `debug.ts` (`scripts/check-contracts.mjs`) | `npm ci` |
@@ -66,9 +66,11 @@ npm run check:arch -- --json
 ```
 
 Exit codes are `0` clean, `1` findings, and `2` unavailable tool or invalid
-invocation. Each check also accepts `--root <path>` to measure another tree with
-this repository's tool binaries; the fault-control tests use it to run a real
-gate against a fixture and assert its exit code.
+invocation. Every toolbox-backed check (`check:arch`, `check:dead-code`,
+`check:ast`, `check:duplication`) accepts `--root <path>` to measure another tree
+with this repository's tool binaries; the fault-control tests use it to run a real
+gate against a fixture and assert its exit code. `check:complexity` is its own
+script and uses `--baseline <path>` instead.
 
 The architecture rules encode existing seams: the resolve-only router may use
 Pi types but not the Pi runtime, host UI modules are imported only by the Pi
@@ -113,8 +115,8 @@ baseline describing an older tree is stale even when the ratchet still passes.
 `sourceCommit` names the HEAD the numbers were measured from, which is the
 baseline commit's parent, because a commit cannot contain its own SHA.
 
-Tests must not write inside a measured path: root `*.ts`, `ui/`, `scripts/`, or
-`tests/`. The staleness check reads the tree, so a temporary file there fails a
+Tests must not write inside a measured path: root `*.ts`, `*.mjs`, `*.cjs`,
+`ui/`, `scripts/`, or `tests/`. The staleness check reads the tree, so a temporary file there fails a
 concurrent run. Write fixtures to a temp directory instead, and pin any relative
 import to an absolute URL if the fixture must run from outside the repository.
 

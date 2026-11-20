@@ -1,21 +1,13 @@
 #!/usr/bin/env node
 /**
- * Duplication denominator audit.
+ * Duplication denominator audit. Maintainer tool, not part of the user guide.
  *
- * `check:duplication` answers one question: is the duplicated-line percentage
- * under the threshold? It does not say where the duplicated lines live, or how
- * much of the number is a threshold choice rather than shared code. This audit
- * answers both, read-only, so the budget in `.jscpd.json` can be set from measured
- * numbers instead of a guess.
+ * Shows where duplicated lines live and how the settings move the number, so the
+ * budget in `.jscpd.json` comes from measurement. Read-only; the gate is
+ * `npm run check:duplication`.
  *
- * It runs jscpd over a `minTokens` x `minLines` grid and reports, for each point,
- * the duplicated lines by directory pair and by directory. A clone whose two
- * sides sit in the same directory credits that directory in full; a clone that
- * crosses directories credits half to each side.
- *
- * Usage:
- *   node scripts/duplication-audit.mjs            # markdown report
- *   node scripts/duplication-audit.mjs --json     # same data, machine-readable
+ *   node scripts/duplication-audit.mjs            markdown report
+ *   node scripts/duplication-audit.mjs --json     same data for a script
  *
  * Exit codes: 0 report produced, 2 jscpd missing or crashed.
  */
@@ -69,6 +61,8 @@ export function summarizeDuplicates(report) {
     }
   }
 
+  // Same-directory clones credit their directory once; a cross-directory clone
+  // splits its lines between both sides.
   const byLines = (a, b) => b.lines - a.lines || a.pair?.localeCompare(b.pair) || a.dir.localeCompare(b.dir);
   return {
     totals: {
