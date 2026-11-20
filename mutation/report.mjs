@@ -16,7 +16,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { BLOCKING, SUMMARY, measurementDiagnostics, timeoutTolerance } from "./config.mjs";
-import { ROOT, bindingExclusions, bindingFor, measurementIdentity, shardsFor, targetNames } from "./targets.mjs";
+import { ROOT, bindingExclusions, bindingFor, measurementIdentity, reportStem, shardsFor, targetNames } from "./targets.mjs";
 
 const COUNTED_STATUSES = ["Killed", "Timeout", "Survived", "NoCoverage", "RuntimeError", "CompileError"];
 
@@ -170,6 +170,27 @@ function parseReportShard(name) {
 }
 
 /**
+ * The module a Stryker report names, as a repository-relative target.
+ *
+ * Stryker keys `files` by absolute path inside the checkout or the sandbox, so a
+ * basename is the target only when the target sits at the repository root. A gate
+ * script lives at `scripts/toolbox.mjs`; reducing it to `toolbox.mjs` made the
+ * reporter unable to match its plan, its binding, or its measurement identity, so
+ * the module was rejected as both missing and unexpected. The longest configured
+ * target the path ends with wins; anything else keeps its basename, which is how
+ * a report for an unplanned module is still named.
+ */
+function moduleForPath(absolutePath) {
+  const known = targetNames();
+  const parts = String(absolutePath).split(/[\\/]+/u);
+  for (let index = 0; index < parts.length; index += 1) {
+    const candidate = parts.slice(index).join("/");
+    if (known.includes(candidate)) return candidate;
+  }
+  return basename(absolutePath);
+}
+
+/**
  * Split one Stryker JSON report into per-module results. A matrix leg writes a
  * report with exactly one file; a single combined run writes several. Both are
  * supported so a hand-run local report can be summarised the same way.
@@ -202,7 +223,7 @@ export function modulesOf(report, name, attempt = 0) {
       const mutants = file.mutants ?? [];
       return {
         name,
-        module: basename(absolutePath),
+        module: moduleForPath(absolutePath),
         shard,
         file: absolutePath,
         mutants,
@@ -518,7 +539,11 @@ export function readReports(directory, { identityFor, shardCounts } = {}) {
       // claims shard 0, and a corrupt shard 1 leaves the older shard 1 report
       // looking authoritative.
       const { moduleName, shard } = parseReportShard(name);
-      unreadable.push({ name, path, attempt, reason: error.message, module: moduleName, shard });
+      // The file name carries the flat stem, so an unreadable report still has to
+      // name the module the plan knows. Otherwise a corrupt artifact is reported
+      // against a module that does not exist.
+      const target = targetNames().find((candidate) => reportStem(candidate) === moduleName);
+      unreadable.push({ name, path, attempt, reason: error.message, module: target ?? moduleName, shard });
       return [];
     }
     // A file that is not a Stryker report (for example a merged summary) is

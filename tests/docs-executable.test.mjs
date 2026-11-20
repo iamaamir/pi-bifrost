@@ -44,6 +44,29 @@ function shellCommands(markdown) {
   return commands;
 }
 
+/**
+ * Command examples outside a fenced block: inline code spans, and the table cells
+ * they usually sit in.
+ *
+ * A script renamed in a table row is the same broken promise as one renamed in a
+ * block, and the fenced-only scan stayed green while this guide's own
+ * `npm run check:complexity:base` row went stale. Only spans that name a command
+ * count, so ordinary inline code is not treated as one.
+ */
+function inlineCommands(markdown) {
+  const commands = [];
+  for (const span of markdown.matchAll(/`([^`\n]+)`/gu)) {
+    const text = span[1].trim().replace(/\s+/gu, " ");
+    if (/^(?:npm run|node)(?:\s|$)/u.test(text)) commands.push(text);
+  }
+  return commands;
+}
+
+/** Every command example in a document, fenced or inline, without duplicates. */
+function documentCommands(markdown) {
+  return [...new Set([...shellCommands(markdown), ...inlineCommands(markdown)])];
+}
+
 /** The long options a command line passes, without the `--` separator itself. */
 function commandFlags(command) {
   return [...command.matchAll(/(?:^|\s)(--[a-z][\w-]*)/gu)].map((match) => match[1]);
@@ -56,7 +79,7 @@ function commandFlags(command) {
 function commandProblems({ documents, scripts, read = (file) => readFileSync(join(ROOT, file), "utf8"), exists = (file) => existsSync(join(ROOT, file)) }) {
   const problems = [];
   for (const document of documents) {
-    for (const command of shellCommands(document.text)) {
+    for (const command of documentCommands(document.text)) {
       const npm = /npm run ([\w:-]+)/u.exec(command);
       const direct = /node\s+(?:--[\w-]+\s+)*(scripts\/[\w.-]+)/u.exec(command);
       let target = null;
@@ -109,6 +132,20 @@ test("fault control: a renamed script, a removed flag, and a missing file are re
   assert.deepEqual(commandProblems({ documents: removedFlag, scripts, read, exists }), [
     "guide.md: scripts/demo.mjs does not accept --base-line",
   ]);
+
+  // A table cell and a sentence hide a command the same way a block does.
+  const inline = [
+    { file: "guide.md", text: "| `npm run check:gone` | rename |\n\nRun `node scripts/absent.mjs --json` from the root.\n" },
+  ];
+  assert.deepEqual(commandProblems({ documents: inline, scripts, read, exists }), [
+    "guide.md: documents an unknown npm script, check:gone",
+    "guide.md: names scripts/absent.mjs, which does not exist",
+  ]);
+  const inlineFlag = [{ file: "guide.md", text: "Use `npm run check:demo -- --removed-flag` for it.\n" }];
+  assert.deepEqual(commandProblems({ documents: inlineFlag, scripts, read, exists }), [
+    "guide.md: scripts/demo.mjs does not accept --removed-flag",
+  ]);
+  assert.deepEqual(inlineCommands("plain `code` and `npm test` are not script references"), []);
 
   assert.deepEqual(shellCommands("```bash\nnpm run check:demo \\\n  --json\n```\n"), ["npm run check:demo --json"]);
   assert.deepEqual(commandFlags("npm run check:demo -- --json --root tree"), ["--json", "--root"]);

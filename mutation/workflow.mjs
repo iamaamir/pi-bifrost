@@ -14,7 +14,7 @@ import {
   timeoutTolerance,
   unusableReasons,
 } from "./config.mjs";
-import { exceedsBudget, measurementIdentity, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
+import { exceedsBudget, measurementIdentity, reportNameFor, reportStem, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
 
 /** Resolve the dispatched target selection into a matrix list. */
 export function resolveTargets(requested, known = targetNames()) {
@@ -126,6 +126,12 @@ export function planMatrix({ requested, shards, concurrency } = {}) {
         shard: shard.index,
         shardCount: shard.count,
         mutate: shard.mutate,
+        // The report name and the artifact name are derived here, once, because
+        // the runner and the workflow must agree on them. A target in a
+        // subdirectory would otherwise produce a nested path that the collection
+        // glob misses, and an artifact name containing `/`, which GitHub rejects.
+        stem: reportStem(target),
+        report: reportNameFor(target, shard.index),
         // A per-shard artifact name keeps the shards of one module distinct.
         label: shard.count === 1 ? target : `${target} (shard ${shard.index + 1}/${shard.count})`,
       });

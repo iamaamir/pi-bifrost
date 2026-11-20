@@ -16,7 +16,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { SHARDING, TARGETS, estimatedMinutes } from "./config.mjs";
-import { ROOT, bindingFor, measurementIdentity, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
+import { ROOT, bindingFor, measurementIdentity, reportNameFor, reportStem, shardsFor, suggestedShards, targetNames } from "./targets.mjs";
 
 export function parseArgs(argv) {
   const options = {
@@ -349,8 +349,8 @@ export function reportsToClear(options, run, reportsDir, entries, reportsRoot = 
  * silently shrink that module's measured population.
  */
 export function isReportFor(entry, target) {
-  if (entry === `${target}.json`) return true;
-  const escaped = target.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  if (entry === reportNameFor(target)) return true;
+  const escaped = reportStem(target).replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
   return new RegExp(`^${escaped}\\.shard\\d+\\.json$`, "u").test(entry);
 }
 
@@ -466,14 +466,14 @@ function main() {
   // its own report so the summariser can merge them back together.
   const runs = targets.flatMap((target) => {
     if (options.mutate) {
-      return [{ target, mutate: options.mutate, reportName: `${target}.json`, label: options.mutate }];
+      return [{ target, mutate: options.mutate, reportName: reportNameFor(target), label: options.mutate }];
     }
     const shards = shardsFor(target, options.shards ?? 1);
-    if (shards.length === 1) return [{ target, mutate: target, reportName: `${target}.json`, label: target }];
+    if (shards.length === 1) return [{ target, mutate: target, reportName: reportNameFor(target), label: target }];
     return shards.map((shard) => ({
       target,
       mutate: shard.mutate,
-      reportName: `${target}.shard${shard.index}.json`,
+      reportName: reportNameFor(target, shard.index),
       label: `${target} shard ${shard.index + 1}/${shard.count}`,
     }));
   });
