@@ -490,6 +490,8 @@ The run page shows the per-module table, health flags, a survivor breakdown by
 mutator, and the first survivors with their source lines. Artifacts:
 
 - `mutation-report-<module>-…`: raw Stryker JSON per module, plus `stryker.log`.
+  The name carries the target's flat stem, so `scripts/toolbox.mjs` becomes
+  `scripts__toolbox.mjs`, because an artifact name may not contain `/`.
 - `mutation-summary-…`: `summary.md`, `summary.json`, and `survivors.jsonl`.
 
 `survivors.jsonl` carries one row per survivor with module, mutant id, mutator,
@@ -578,7 +580,9 @@ mutants. The nightly does not use it, because the nightly must measure every
 mutant.
 
 Reports go to `reports/mutation/` (gitignored) and the run merges them per
-module, so a sharded run summarizes like an unsharded run.
+module, so a sharded run summarizes like an unsharded run. A target in a
+subdirectory still writes a top-level file, because the workflow's collection step
+reads `reports/mutation/*.json`.
 `npm run test:mutation` is the same runner. CI calls the runner too, so the two
 paths cannot drift apart.
 

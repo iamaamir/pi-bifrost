@@ -129,6 +129,7 @@ jobs:
           TARGET: ${{ matrix.target }}
           MUTATE: ${{ matrix.mutate }}
           SHARD: ${{ matrix.shard }}
+          REPORT: ${{ matrix.report }}
           CONCURRENCY: ${{ needs.plan.outputs.concurrency }}
         # The runner owns the Stryker invocation, so CI and a developer machine
         # run the same way. `--mutate` narrows the scope to this shard.
@@ -137,20 +138,24 @@ jobs:
         # where it is pointed, so naming the reporting directory here is what makes
         # it agree with the collection step below. A bare name would land in the
         # repository root and the artifact would be empty.
+        #
+        # The file name comes from the plan, not from `$TARGET`: a target in a
+        # subdirectory would nest the report under `reports/mutation/scripts/`,
+        # where the collection glob does not look.
         run: |
           node mutation/run.mjs "$TARGET" \
             --mutate "$MUTATE" \
-            --report "reports/mutation/$TARGET.shard$SHARD.json" \
+            --report "reports/mutation/$REPORT" \
             --concurrency "$CONCURRENCY"
       - name: Collect this leg's report
         if: always()
         env:
-          TARGET: ${{ matrix.target }}
+          STEM: ${{ matrix.stem }}
           SHARD: ${{ matrix.shard }}
         run: |
           # The artifact name includes the shard so the summariser can merge the
           # shards of one module back together.
-          leg="$TARGET-shard$SHARD"
+          leg="$STEM-shard$SHARD"
           mkdir -p "mutation-out/$leg"
           for report in reports/mutation/*.json; do
             [ -f "$report" ] && cp "$report" "mutation-out/$leg/"
@@ -163,9 +168,10 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           # The shard index is part of the name so the shards of one module are
-          # distinct artifacts rather than overwriting each other.
-          name: mutation-report-${{ matrix.target }}-shard${{ matrix.shard }}-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
-          path: mutation-out/${{ matrix.target }}-shard${{ matrix.shard }}/
+          # distinct artifacts rather than overwriting each other. The stem, not
+          # the target, because an artifact name may not contain `/`.
+          name: mutation-report-${{ matrix.stem }}-shard${{ matrix.shard }}-${{ github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: mutation-out/${{ matrix.stem }}-shard${{ matrix.shard }}/
           if-no-files-found: warn
           retention-days: 30
 

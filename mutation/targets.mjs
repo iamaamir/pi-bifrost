@@ -292,6 +292,25 @@ export function targetNames() {
 }
 
 /**
+ * Flat on-disk stem for one target's reports.
+ *
+ * A target can sit in a subdirectory (`scripts/toolbox.mjs`). Naming the report
+ * after the target path puts it in a nested directory, which the workflow's
+ * collection glob and the artifact upload both read as a top-level file, so the
+ * run published no report and failed its own completeness gate. One flat stem
+ * keeps every report beside the others.
+ */
+export function reportStem(target) {
+  return target.replaceAll("/", "__");
+}
+
+/** The report file name for one target measurement, with the shard when sharded. */
+export function reportNameFor(target, shardIndex = null) {
+  const stem = reportStem(target);
+  return shardIndex === null ? `${stem}.json` : `${stem}.shard${shardIndex}.json`;
+}
+
+/**
  * The runner a target uses: its override, else the default. Absent means
  * `TEST_RUNNER`. Kept as a function so callers cannot disagree with config.
  */

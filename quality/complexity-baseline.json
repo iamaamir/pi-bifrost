@@ -14,7 +14,7 @@
     },
     "tests": {
       "files": 195,
-      "functions": 8367,
+      "functions": 8374,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -1250,12 +1250,12 @@
     },
     "tests/docs-executable.test.mjs": {
       "scope": "tests",
-      "lines": 146,
-      "funcs": 18,
+      "lines": 183,
+      "funcs": 20,
       "maxCyc": 12,
       "maxCog": 28,
-      "sumCyc": 42,
-      "sumCog": 48
+      "sumCyc": 46,
+      "sumCog": 51
     },
     "tests/docs-fact-drift.test.ts": {
       "scope": "tests",
@@ -2006,12 +2006,12 @@
     },
     "tests/mutation-workflow.test.mjs": {
       "scope": "tests",
-      "lines": 2510,
-      "funcs": 221,
+      "lines": 2595,
+      "funcs": 226,
       "maxCyc": 8,
       "maxCog": 13,
-      "sumCyc": 300,
-      "sumCog": 94
+      "sumCyc": 306,
+      "sumCog": 95
     },
     "tests/pack-lock.test.mjs": {
       "scope": "tests",
@@ -2626,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T07:35:41.893Z",
-  "sourceCommit": "d5bbcbbeef8380797d634c80b00be734134347eb"
+  "generatedAt": "2026-11-21T07:35:42.660Z",
+  "sourceCommit": "d3c251084767e41d679b670a2315ba020dbe3dec"
 }

@@ -14,7 +14,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertRunArguments, isInsideReports, isReportFor, parseArgs, reportingRoot, reportsToClear, resolveReportPath, staleReportsFor, strykerArgs } from "../mutation/run.mjs";
-import { ROOT, bindingExclusions, bindingFor, directConsumers, exceedsBudget, identityDigest, identityInputs, legEstimateMinutes, lineCount, measurementIdentity, runnerFor, shardsFor, suggestedShards, targetConfig, targetInventory, targetNames } from "../mutation/targets.mjs";
+import { ROOT, bindingExclusions, bindingFor, directConsumers, exceedsBudget, identityDigest, identityInputs, legEstimateMinutes, lineCount, measurementIdentity, reportNameFor, reportStem, runnerFor, shardsFor, suggestedShards, targetConfig, targetInventory, targetNames } from "../mutation/targets.mjs";
 import {
   BUN_RUNNER_PLUGIN,
   MATRIX,
@@ -46,7 +46,7 @@ import {
   resolveTimeoutTolerance,
   summaryLines,
 } from "../mutation/workflow.mjs";
-import { annotationLines, buildPayload, mergeShardReports, readReports, renderSummary, selectMeasurement, summarise, survivorRows } from "../mutation/report.mjs";
+import { annotationLines, buildPayload, mergeShardReports, modulesOf, readReports, renderSummary, selectMeasurement, summarise, survivorRows } from "../mutation/report.mjs";
 
 const workflow = readFileSync(new URL("../.github/workflows/mutation.yml", import.meta.url), "utf8");
 const verificationWorkflow = readFileSync(new URL("../.github/workflows/verification.yml", import.meta.url), "utf8");
@@ -110,7 +110,7 @@ test("every target is a matrix leg, and each leg gets its own timeout budget", (
   assert.match(block, /node mutation\/run\.mjs "\$TARGET"/u);
   assert.match(block, /--mutate "\$MUTATE"/u);
   // The full path, not a bare name: it must land where the artifact step reads.
-  assert.match(block, /--report "reports\/mutation\/\$TARGET\.shard\$SHARD\.json"/u);
+  assert.match(block, /--report "reports\/mutation\/\$REPORT"/u);
   assert.match(block, /--concurrency "\$CONCURRENCY"/u);
   // And no `${{
   assert.doesNotMatch(
@@ -1291,8 +1291,93 @@ test("the workflow names the report path that its collection step reads", () => 
   // `--report` writes exactly where it is pointed. A bare filename would land in
   // the repository root while the artifact step globs reports/mutation/*.json, and
   // every uploaded artifact would be empty — a run that publishes "no modules".
-  assert.match(jobs.targets, /--report "reports\/mutation\/\$TARGET\.shard\$SHARD\.json"/u);
+  assert.match(jobs.targets, /--report "reports\/mutation\/\$REPORT"/u);
   assert.match(jobs.targets, /for report in reports\/mutation\/\*\.json; do/u);
+});
+
+test("a target in a subdirectory keeps a flat report and artifact name", () => {
+  // Both halves failed for `scripts/toolbox.mjs` before this: the report landed in
+  // reports/mutation/scripts/, outside the collection glob, and the artifact name
+  // contained `/`, which GitHub rejects. Either one publishes no report and the
+  // run fails its own completeness gate.
+  assert.equal(reportStem("scripts/toolbox.mjs"), "scripts__toolbox.mjs");
+  assert.equal(reportNameFor("scripts/toolbox.mjs"), "scripts__toolbox.mjs.json");
+  assert.equal(reportNameFor("scripts/toolbox.mjs", 2), "scripts__toolbox.mjs.shard2.json");
+  assert.equal(reportNameFor("cache.ts"), "cache.ts.json", "a root target keeps its name");
+
+  const plan = planMatrix({ requested: "scripts/toolbox.mjs", shards: "2" });
+  assert.equal(plan.include.length, 2);
+  assert.equal(new Set(plan.include.map((leg) => leg.report)).size, 2, "each shard writes its own file");
+  for (const leg of plan.include) {
+    assert.doesNotMatch(leg.report, /[\\/]/u, `${leg.report} must stay at the top level`);
+    assert.doesNotMatch(leg.stem, /[\\/]/u, `${leg.stem} must be a valid artifact name`);
+    assert.ok(leg.report.startsWith(leg.stem));
+  }
+
+  // Clearing only ever touches this target's own files, under the flat name.
+  assert.ok(isReportFor(reportNameFor("scripts/toolbox.mjs"), "scripts/toolbox.mjs"));
+  assert.ok(isReportFor(reportNameFor("scripts/toolbox.mjs", 1), "scripts/toolbox.mjs"));
+  assert.ok(!isReportFor("toolbox.mjs.json", "scripts/toolbox.mjs"));
+  assert.ok(!isReportFor(reportNameFor("scripts/toolbox.mjs"), "cache.ts"));
+
+  // And the workflow takes the plan's names instead of rebuilding them from the
+  // target, which is what reintroduced the nested path.
+  assert.match(jobs.targets, /^ {10}REPORT: \$\{\{ matrix\.report \}\}$/mu);
+  assert.match(jobs.targets, /^ {10}STEM: \$\{\{ matrix\.stem \}\}$/mu);
+  assert.doesNotMatch(jobs.targets, /\$TARGET\.shard/u);
+  assert.doesNotMatch(workflow, /name: [^\n]*matrix\.target[^\n]*shard/u, "an artifact name may not contain a slash");
+});
+
+test("a nested target is reported under its repository-relative name", () => {
+  // Stryker keys `files` by absolute path, so a basename is only the target at the
+  // repository root. `toolbox.mjs` matched no plan entry, no binding and no
+  // measurement identity, so the module was rejected as both missing and
+  // unexpected and the merged score was empty.
+  assert.equal(modulesOf({ files: { "/checkout/scripts/toolbox.mjs": { mutants: [] } } }, "scripts__toolbox.mjs.shard0.json")[0].module, "scripts/toolbox.mjs");
+  assert.equal(modulesOf({ files: { "/repo/cache.ts": { mutants: [] } } }, "cache.ts.json")[0].module, "cache.ts");
+  // A module the plan did not select keeps its basename, so it is still named.
+  assert.equal(modulesOf({ files: { "/repo/other.ts": { mutants: [] } } }, "other.ts.json")[0].module, "other.ts");
+});
+
+test("a gate-script measurement reaches the score and passes the gate", () => {
+  // The whole chain: flat file name, repository-relative module, planned scope,
+  // measurement identity, and a source line for a survivor. Each link used to
+  // break on the subdirectory alone.
+  const directory = mkdtempSync(join(tmpdir(), "mutation-nested-target-"));
+  try {
+    const target = "scripts/toolbox.mjs";
+    const report = {
+      schemaVersion: "1.0",
+      framework: { name: "StrykerJS", version: "10.0.0" },
+      thresholds: { high: 0, low: 0, break: null },
+      bifrost: { measurement: measurementIdentity(target), scope: shardsFor(target, 1)[0].mutate },
+      files: {
+        [join(ROOT, target)]: {
+          mutants: [
+            { id: "1", mutatorName: "EqualityOperator", replacement: "!==", status: "Killed", location: { start: { line: 1, column: 1 }, end: { line: 1, column: 5 } } },
+            { id: "2", mutatorName: "ConditionalExpression", replacement: "false", status: "Survived", location: { start: { line: 2, column: 1 }, end: { line: 2, column: 5 } } },
+          ],
+        },
+      },
+    };
+    writeFileSync(join(directory, reportNameFor(target)), JSON.stringify(report));
+
+    const { reports, rejected } = readReports(directory);
+    assert.deepEqual(rejected, []);
+    assert.deepEqual(reports.map((entry) => entry.module), [target]);
+
+    const payload = buildPayload({ reports, expectedTargets: [target] });
+    assert.deepEqual(payload.missingTargets, []);
+    assert.deepEqual(payload.unexpectedTargets, []);
+    assert.equal(payload.aggregate.total, 2, "the mutants are in the population");
+    assert.deepEqual(unusableReasons(payload, { identityFor: measurementIdentity }), []);
+
+    // A survivor is only actionable with its source line, which needs the
+    // repository-relative module.
+    assert.ok(survivorRows(reports)[0].source, "the survivor keeps its source line");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("the gate rejects a module-local failure through the shipped CLI", () => {

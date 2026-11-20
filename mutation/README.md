@@ -380,6 +380,13 @@ its artifact with `--report`. The summariser rejects an unsharded report whose
 scope is a range. Without that rule, a one-shard plan scores part of a module as
 all of it. Sharded reports can carry ranges. That is what a shard is.
 
+A report file sits at the top level of `reports/mutation/`, even when its module
+sits in a subdirectory: `scripts/toolbox.mjs` writes
+`scripts__toolbox.mjs.json`. The collection step and the artifact upload both
+read top-level names, and an artifact name may not contain `/`. The module inside
+the report is still the repository-relative target, because a basename matches no
+plan entry, no binding, and no measurement identity.
+
 A dry run never clears reports. `--dry-run` measures nothing and writes nothing. A
 deletion of the previous measurement destroys a real result to make room for a
 report that never exists. The runner refuses `--dry-run` with `--report`, which
