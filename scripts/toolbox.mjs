@@ -179,7 +179,20 @@ export function parseRuleGlobs(text) {
 }
 
 export function ruleScopeFindings(rules, files) {
-  if (files.length === 0) return [];
+  // An empty or unavailable file list proves nothing about any rule's scope.
+  // Skipping the guard here would recreate the silent pass it exists to remove.
+  if (!files || files.length === 0) {
+    return [
+      {
+        rule: "ast-grep-scope-unverified",
+        file: "rules",
+        line: null,
+        message: files
+          ? "no tracked files found; rule scope is unverified"
+          : "could not list tracked files (git ls-files failed); rule scope is unverified",
+      },
+    ];
+  }
   return rules.flatMap(({ id, files: include, ignores }) => {
     const patterns = include.length > 0 ? include : ["**"];
     const eligible = files.some(
@@ -318,7 +331,7 @@ function loadRuleScopes() {
 
 function trackedFiles() {
   const result = spawnCapture("git", ["ls-files"]);
-  if (result.missing || result.status !== 0) return [];
+  if (result.missing || result.status !== 0) return null;
   return result.stdout.split("\n").filter(Boolean);
 }
 
