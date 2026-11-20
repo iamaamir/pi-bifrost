@@ -2051,10 +2051,11 @@ async function handleInit(args: string, ctx: ExtensionContext, state: BifrostSta
         addPoolProviders(inherited.pool);
       }
     }
-    for (const [tier, entry] of Object.entries(ownership?.tiers ?? {})) {
-      if (entry.state === "generated" && models[tier]) {
-        const pool = sourceModels[tier];
-        addPoolProviders(typeof pool === "string" ? [pool] : Array.isArray(pool) ? pool : undefined);
+    for (const tier of Object.keys(ownership?.tiers ?? {})) {
+      const pool = sourceModels[tier];
+      if (models[tier] && (typeof pool === "string" || (Array.isArray(pool) && pool.every((key) => typeof key === "string"))) &&
+        tierOwnership(ownership, tier, pool) === "managed") {
+        addPoolProviders(typeof pool === "string" ? [pool] : pool);
       }
     }
     for (const provider of affectedPoolProviders) {
