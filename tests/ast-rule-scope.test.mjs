@@ -1,13 +1,53 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const binary = join(root, "node_modules", ".bin", process.platform === "win32" ? "ast-grep.cmd" : "ast-grep");
+
+function ruleDirectories(config) {
+  // `testConfigs` entries are `key: value`, so only bare list values are dirs.
+  return [...config.matchAll(/^\s*-\s+([A-Za-z0-9_./-]+)\s*$/gmu)].map((match) => match[1]);
+}
+
+// A rule directory that is missing or empty disables every rule in it while
+// leaving `ast-grep test` and the scope guard with nothing to complain about.
+function ruleDirectoryProblems(config, baseDirectory) {
+  const problems = [];
+  for (const directory of ruleDirectories(config)) {
+    const absolute = join(baseDirectory, directory);
+    if (!existsSync(absolute)) {
+      problems.push(`${directory} is missing`);
+      continue;
+    }
+    if (!readdirSync(absolute).some((name) => name.endsWith(".yml") || name.endsWith(".yaml"))) {
+      problems.push(`${directory} holds no rules`);
+    }
+  }
+  return problems;
+}
+
+test("every configured ast-grep rule directory exists and holds rules", () => {
+  const config = readFileSync(join(root, "sgconfig.yml"), "utf8");
+  assert.equal(ruleDirectories(config).includes("rules"), true, "sgconfig must configure the rules dir");
+  assert.deepEqual(ruleDirectoryProblems(config, root), []);
+});
+
+test("the rule-directory check reports a missing or empty configured directory", () => {
+  const directory = mkdtempSync(join(tmpdir(), "bifrost-rule-dirs-"));
+  try {
+    mkdirSync(join(directory, "empty"));
+    assert.deepEqual(ruleDirectories("ruleDirs:\n  - rules\ntestConfigs:\n  - testDir: rule-tests\n"), ["rules"],
+      "testConfigs values must not be read as rule directories");
+    assert.deepEqual(ruleDirectoryProblems("ruleDirs:\n  - empty\n  - missing\n", directory), ["empty holds no rules", "missing is missing"]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 // `ast-grep test` does not apply a rule's `files` filter, so the rule
 // self-tests cannot catch an inert scope. Only a real scan can.

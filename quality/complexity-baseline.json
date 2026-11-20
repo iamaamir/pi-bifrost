@@ -14,7 +14,7 @@
     },
     "tests": {
       "files": 189,
-      "functions": 8231,
+      "functions": 8237,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -854,12 +854,12 @@
     },
     "tests/ast-rule-scope.test.mjs": {
       "scope": "tests",
-      "lines": 53,
-      "funcs": 4,
-      "maxCyc": 3,
-      "maxCog": 2,
-      "sumCyc": 6,
-      "sumCog": 2
+      "lines": 93,
+      "funcs": 10,
+      "maxCyc": 4,
+      "maxCog": 5,
+      "sumCyc": 16,
+      "sumCog": 8
     },
     "tests/auto-bootstrap-runtime.test.ts": {
       "scope": "tests",
@@ -2563,5 +2563,5 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-20T09:04:26.629Z"
+  "generatedAt": "2026-11-20T09:04:27.210Z"
 }
