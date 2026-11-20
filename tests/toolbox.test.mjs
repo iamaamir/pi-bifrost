@@ -102,9 +102,9 @@ test("fails ast checks when scan exits without findings", () => {
 });
 
 test("parses jscpd reports and enforces the ratcheted duplication threshold", () => {
-  const below = JSON.stringify({ statistics: { total: { percentage: 5.99, duplicatedLines: 100, lines: 1669, clones: 10 } } });
-  const at = JSON.stringify({ statistics: { total: { percentage: 6, duplicatedLines: 102, lines: 1700, clones: 11 } } });
-  const above = JSON.stringify({ statistics: { total: { percentage: 6.01, duplicatedLines: 103, lines: 1713, clones: 12 } } });
+  const below = JSON.stringify({ statistics: { total: { percentage: 5.49, duplicatedLines: 100, lines: 1669, clones: 10 } } });
+  const at = JSON.stringify({ statistics: { total: { percentage: 5.5, duplicatedLines: 102, lines: 1700, clones: 11 } } });
+  const above = JSON.stringify({ statistics: { total: { percentage: 5.51, duplicatedLines: 103, lines: 1713, clones: 12 } } });
   assert.deepEqual(parseJscpd(below), []);
   assert.deepEqual(parseJscpd(at), []);
   const findings = parseJscpd(above);
@@ -112,7 +112,7 @@ test("parses jscpd reports and enforces the ratcheted duplication threshold", ()
   assert.equal(findings[0].rule, "duplication-threshold");
   assert.equal(findings[0].file, ".jscpd.json");
   assert.equal(findings[0].line, null);
-  assert.match(findings[0].message, /6\.01% duplicated lines \(103\/1713\) over 6% threshold; clones=12/);
+  assert.match(findings[0].message, /5\.51% duplicated lines \(103\/1713\) over 5\.5% threshold; clones=12/);
 });
 
 test("wires the duplication check to a deterministic jscpd report path and failure result", () => {
