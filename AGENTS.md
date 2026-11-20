@@ -97,7 +97,7 @@ See [handoff examples and readiness dispositions](docs/agent-governance.md). The
 
 ## Verification
 
-Local iteration runs `npm run test:quick` (typecheck + root test tier, ~20s; red means don't push) and runs a touched heavy file directly (`node --test tests/<file>`); CI owns full-suite validation. An optional pre-push gate runs the same tier before every push (`git config core.hooksPath scripts/git-hooks`). See `docs/dev-tooling.md`.
+Local iteration runs `npm run test:quick` (typecheck + root test tier, ~20s; red means don't push) and runs a touched heavy file directly (`node --test tests/<file>`); CI owns full-suite validation. An optional pre-push gate runs the same tier plus the fast quality gates (`check:ast`, `check:duplication`, `check:complexity`) before every push (`git config core.hooksPath scripts/git-hooks`). See `docs/dev-tooling.md`.
 
 For feature and regression changes, follow [the coverage contract](docs/testing-coverage.md).
 
