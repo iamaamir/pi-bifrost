@@ -293,7 +293,7 @@ test("main tolerates a vanished file for checks and refuses to write a baseline"
     console.error = (...args) => printed.error.push(args.join(" "));
     const stale = main(["--check-baseline", "--json"]);
     assert.equal(stale, 1, "a recorded file that vanished is a stale record, not a crash");
-    assert.equal(printed.error.some((line) => line.includes("skipped 1 file(s) that vanished during analysis: config.ts")), true,
+    assert.equal(printed.error.some((line) => line.includes("skipped 1 path(s) that vanished during analysis: config.ts")), true,
       "the vanished file must be reported on stderr, not silently dropped");
     const update = main(["--update-baseline", "--baseline", target, "--json"]);
     assert.equal(update, 2, "an incomplete snapshot must not become a baseline");
