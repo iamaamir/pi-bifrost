@@ -8,19 +8,32 @@
  * like a pass.
  *
  * Usage:
- *   node scripts/toolbox.mjs <check> [--json]
+ *   node scripts/toolbox.mjs <check> [--json] [--root <path>]
  *   node scripts/toolbox.mjs doctor [--json]
+ *
+ * `--root` measures another tree with the same tool binaries, which is how the
+ * fault-control tests drive a real gate against a fixture.
  *
  * Exit codes: 0 clean, 1 findings, 2 unavailable tool or invalid invocation.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, matchesGlob, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const MAX_CAPTURE_BYTES = 32 * 1024 * 1024;
+
+function parseRoot(argv) {
+  const index = argv.indexOf("--root");
+  if (index === -1) return { root: ROOT };
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) return { error: "--root requires a path" };
+  const root = resolve(value);
+  if (!existsSync(root) || !statSync(root).isDirectory()) return { error: `--root is not a directory: ${value}` };
+  return { root };
+}
 const STDERR_TAIL_BYTES = 4096;
 
 const TOOLS = {
@@ -268,27 +281,31 @@ export function parseOsv(stdout) {
   return findings;
 }
 
-const DUPLICATION_THRESHOLD = JSON.parse(readFileSync(join(ROOT, ".jscpd.json"), "utf8")).threshold;
+function duplicationThreshold(root = ROOT) {
+  return JSON.parse(readFileSync(join(root, ".jscpd.json"), "utf8")).threshold;
+}
 
-export function parseJscpd(reportJson) {
+const DUPLICATION_THRESHOLD = duplicationThreshold();
+
+export function parseJscpd(reportJson, threshold = DUPLICATION_THRESHOLD) {
   const data = JSON.parse(reportJson);
   const total = data.statistics?.total ?? {};
   const percentage = Number(total.percentage ?? 0);
-  if (percentage > DUPLICATION_THRESHOLD) {
+  if (percentage > threshold) {
     return [
       {
         rule: "duplication-threshold",
         file: ".jscpd.json",
         line: null,
-        message: `${percentage.toFixed(2)}% duplicated lines (${total.duplicatedLines ?? 0}/${total.lines ?? 0}) over ${DUPLICATION_THRESHOLD}% threshold; clones=${total.clones ?? 0}`,
+        message: `${percentage.toFixed(2)}% duplicated lines (${total.duplicatedLines ?? 0}/${total.lines ?? 0}) over ${threshold}% threshold; clones=${total.clones ?? 0}`,
       },
     ];
   }
   return [];
 }
 
-function workflowFiles() {
-  const directory = join(ROOT, ".github", "workflows");
+function workflowFiles(root = ROOT) {
+  const directory = join(root, ".github", "workflows");
   try {
     return readdirSync(directory)
       .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
@@ -322,15 +339,15 @@ function gitleaksCommand(history) {
   };
 }
 
-function loadRuleScopes() {
-  const dir = join(ROOT, "rules");
+function loadRuleScopes(root = ROOT) {
+  const dir = join(root, "rules");
   return readdirSync(dir)
     .filter((file) => file.endsWith(".yml"))
     .map((file) => ({ id: file.replace(/\.yml$/, ""), ...parseRuleGlobs(readFileSync(join(dir, file), "utf8")) }));
 }
 
-function trackedFiles() {
-  const result = spawnCapture("git", ["ls-files"]);
+function trackedFiles(root = ROOT) {
+  const result = spawnCapture("git", ["ls-files"], { cwd: root });
   if (result.missing || result.status !== 0) return null;
   return result.stdout.split("\n").filter(Boolean);
 }
@@ -369,13 +386,13 @@ export const CHECKS = {
   ast: {
     tool: "ast-grep",
     summary: "Structural rules and rule self-tests (ast-grep)",
-    run: runAstGrep,
+    run: (runTool, root = ROOT) => runAstGrep(runTool, { rules: loadRuleScopes(root), files: trackedFiles(root) }),
   },
   actions: {
     tool: "actionlint",
     summary: "GitHub Actions syntax and expression checks (actionlint)",
-    run: (runTool) => {
-      const files = workflowFiles();
+    run: (runTool, root = ROOT) => {
+      const files = workflowFiles(root);
       if (files.length === 0) return { status: 1, findings: [{ rule: "actionlint", file: ".github/workflows", line: null, message: "no workflow files found" }] };
       const result = runTool("actionlint", ["-no-color", "-oneline", ...files]);
       if (result.missing) return result;
@@ -423,7 +440,7 @@ export const CHECKS = {
       };
     },
     fileReport: true,
-    parse: parseJscpd,
+    parse: (raw, root = ROOT) => parseJscpd(raw, duplicationThreshold(root)),
   },
 };
 
@@ -435,18 +452,18 @@ export function summarizeFindings(findings) {
     .join(", ");
 }
 
-function executeCheck(name, definition) {
+function executeCheck(name, definition, root = ROOT) {
   const started = Date.now();
   const temp = mkdtempSync(join(tmpdir(), "bifrost-toolbox-"));
   try {
     if (definition.run) {
-      const result = definition.run((command, args) => spawnCapture(command, args));
+      const result = definition.run((command, args) => spawnCapture(command, args, { cwd: root }), root);
       if (result.missing) return unavailable(name, definition);
       const findings = result.findings ?? [];
       return envelope(name, definition, result.status, findings, started, result.stderr);
     }
-    const plan = definition.command(temp);
-    const result = spawnCapture(definition.tool, plan.args);
+    const plan = definition.command(temp, root);
+    const result = spawnCapture(definition.tool, plan.args, { cwd: root });
     if (result.missing) return unavailable(name, definition);
     let raw = result.stdout;
     if (definition.fileReport) {
@@ -458,7 +475,7 @@ function executeCheck(name, definition) {
     }
     let findings;
     try {
-      findings = definition.parse(raw);
+      findings = definition.parse(raw, root);
     } catch (error) {
       return {
         check: name,
@@ -540,7 +557,7 @@ function printResult(result) {
 
 function usage() {
   return [
-    "Usage: node scripts/toolbox.mjs <check> [--json]",
+    "Usage: node scripts/toolbox.mjs <check> [--json] [--root <path>]",
     "",
     "Checks:",
     ...Object.entries(CHECKS).map(([name, definition]) => `  ${name.padEnd(16)} ${definition.summary}`),
@@ -552,7 +569,15 @@ function usage() {
 
 export function main(argv = process.argv.slice(2)) {
   const json = argv.includes("--json");
-  const rest = argv.filter((argument) => argument !== "--json");
+  const parsedRoot = parseRoot(argv);
+  if (parsedRoot.error) {
+    console.error(parsedRoot.error);
+    return 2;
+  }
+  const rootIndex = argv.indexOf("--root");
+  const rest = argv.filter((argument, index) => argument !== "--json"
+    && argument !== "--root"
+    && (rootIndex === -1 || index !== rootIndex + 1));
   const name = rest[0];
   if (!name || name === "--help" || name === "-h") {
     console.log(usage());
@@ -574,7 +599,7 @@ export function main(argv = process.argv.slice(2)) {
     console.error(`Unknown check: ${name}\n\n${usage()}`);
     return 2;
   }
-  const result = executeCheck(name, definition);
+  const result = executeCheck(name, definition, parsedRoot.root);
   if (json) console.log(JSON.stringify(result, null, 2));
   else printResult(result);
   return result.exitCode;
