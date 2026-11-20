@@ -8,4 +8,9 @@ message: >-
 rule:
   pattern: $EXPR as any
 files:
-  - "/*.ts"
+  - "*.ts"
+ignores:
+  - "tests/**"
+  - "ui/**"
+  - "scripts/**"
+  - ".worktrees/**"
