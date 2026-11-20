@@ -14,16 +14,14 @@
     // Tests spawn helper modules by path, so static import tracing cannot see
     // their entry status. Listing the whole test tree avoids false orphans.
     "tests/**/*.ts",
-    "tests/**/*.mjs",
-    "tests/**/*.cjs"
+    "tests/**/*.mjs"
   ],
   "project": [
     "*.ts",
     "scripts/**/*.mjs",
     "mutation/**/*.mjs",
     "tests/**/*.ts",
-    "tests/**/*.mjs",
-    "tests/**/*.cjs"
+    "tests/**/*.mjs"
   ],
   "ignore": ["dist/**", "coverage/**", "screenshots/**", "reports/**", "evidence/**", "docs/**", "examples/**"],
   "ignoreDependencies": [
