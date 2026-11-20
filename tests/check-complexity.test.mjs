@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { analyze, compare, cyclomatic, cognitive, main, scopeOf } from "../scripts/check-complexity.mjs";
+import { analyze, compare, cyclomatic, cognitive, inScopeFiles, main, scopeOf } from "../scripts/check-complexity.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const require = createRequire(join(ROOT, "package.json"));
@@ -91,6 +91,28 @@ test("classifies Windows-style relative paths with either separator", () => {
   assert.equal(scopeOf("scripts\\tool.mjs"), "source");
   assert.equal(scopeOf("tests\\a.test.ts"), "tests");
   assert.equal(scopeOf("mutation\\run.mjs"), null);
+});
+
+test("measures .mjs and .cjs sources alongside .ts", () => {
+  const root = fixtureRoot();
+  try {
+    writeFileSync(join(root, "tool.mjs"), "export function pick(a) { return a ? 1 : 2; }\n");
+    writeFileSync(join(root, "tests", "b.test.cjs"), "module.exports = 1;\n");
+    assert.deepEqual(
+      inScopeFiles(root).map((f) => [f.rel, f.scope]).sort(),
+      [
+        ["a.ts", "source"],
+        ["tests/a.test.ts", "tests"],
+        ["tests/b.test.cjs", "tests"],
+        ["tool.mjs", "source"],
+      ],
+    );
+    const report = analyze({ root });
+    assert.equal(report.scopes.source.files, 2);
+    assert.equal(report.files["tool.mjs"].maxCyc, 2);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("analyze scopes files, normalizes relative paths, and produces stable per-file metrics", () => {
