@@ -3,27 +3,36 @@
   "note": "Cyclomatic: McCabe-style (base 1 + branches/logical ops). Cognitive: Sonar-inspired approximation (structural/nesting increments, simplified logical chains) for relative hotspots, not exact Sonar parity. Ratchet: source/test scope counts (>30,>50) and maxima must not increase; per-file maxima must not increase for baselined files; new files must not exceed scope baseline maxima.",
   "scopes": {
     "source": {
-      "files": 62,
-      "functions": 2076,
+      "files": 93,
+      "functions": 2759,
       "maxCyc": 190,
       "maxCog": 262,
-      "cycGt30": 50,
-      "cycGt50": 16,
-      "cogGt30": 74,
-      "cogGt50": 35
+      "cycGt30": 59,
+      "cycGt50": 19,
+      "cogGt30": 85,
+      "cogGt50": 40
     },
     "tests": {
-      "files": 93,
-      "functions": 4832,
-      "maxCyc": 49,
-      "maxCog": 66,
-      "cycGt30": 3,
-      "cycGt50": 0,
-      "cogGt30": 3,
-      "cogGt50": 2
+      "files": 189,
+      "functions": 8208,
+      "maxCyc": 67,
+      "maxCog": 124,
+      "cycGt30": 6,
+      "cycGt50": 1,
+      "cogGt30": 12,
+      "cogGt50": 6
     }
   },
   "files": {
+    ".dependency-cruiser.cjs": {
+      "scope": "source",
+      "lines": 91,
+      "funcs": 0,
+      "maxCyc": 0,
+      "maxCog": 0,
+      "sumCyc": 0,
+      "sumCog": 0
+    },
     "affinity.ts": {
       "scope": "source",
       "lines": 203,
@@ -474,6 +483,168 @@
       "sumCyc": 3,
       "sumCog": 1
     },
+    "scripts/acceptance-deterministic.mjs": {
+      "scope": "source",
+      "lines": 5,
+      "funcs": 0,
+      "maxCyc": 0,
+      "maxCog": 0,
+      "sumCyc": 0,
+      "sumCog": 0
+    },
+    "scripts/acceptance.mjs": {
+      "scope": "source",
+      "lines": 694,
+      "funcs": 38,
+      "maxCyc": 21,
+      "maxCog": 28,
+      "sumCyc": 180,
+      "sumCog": 171
+    },
+    "scripts/acceptance/core.mjs": {
+      "scope": "source",
+      "lines": 241,
+      "funcs": 32,
+      "maxCyc": 32,
+      "maxCog": 55,
+      "sumCyc": 108,
+      "sumCog": 108
+    },
+    "scripts/acceptance/journeys.mjs": {
+      "scope": "source",
+      "lines": 586,
+      "funcs": 49,
+      "maxCyc": 35,
+      "maxCog": 36,
+      "sumCyc": 131,
+      "sumCog": 85
+    },
+    "scripts/acceptance/profiles/contract.mjs": {
+      "scope": "source",
+      "lines": 141,
+      "funcs": 12,
+      "maxCyc": 24,
+      "maxCog": 23,
+      "sumCyc": 36,
+      "sumCog": 24
+    },
+    "scripts/acceptance/profiles/live.mjs": {
+      "scope": "source",
+      "lines": 592,
+      "funcs": 84,
+      "maxCyc": 65,
+      "maxCog": 90,
+      "sumCyc": 271,
+      "sumCog": 205
+    },
+    "scripts/acceptance/test-event-reporter.mjs": {
+      "scope": "source",
+      "lines": 53,
+      "funcs": 3,
+      "maxCyc": 12,
+      "maxCog": 12,
+      "sumCyc": 21,
+      "sumCog": 20
+    },
+    "scripts/bench.mjs": {
+      "scope": "source",
+      "lines": 171,
+      "funcs": 10,
+      "maxCyc": 16,
+      "maxCog": 22,
+      "sumCyc": 55,
+      "sumCog": 56
+    },
+    "scripts/build-router.mjs": {
+      "scope": "source",
+      "lines": 25,
+      "funcs": 0,
+      "maxCyc": 0,
+      "maxCog": 0,
+      "sumCyc": 0,
+      "sumCog": 0
+    },
+    "scripts/campaign-run.mjs": {
+      "scope": "source",
+      "lines": 279,
+      "funcs": 17,
+      "maxCyc": 24,
+      "maxCog": 35,
+      "sumCyc": 70,
+      "sumCog": 65
+    },
+    "scripts/check-complexity.mjs": {
+      "scope": "source",
+      "lines": 432,
+      "funcs": 37,
+      "maxCyc": 28,
+      "maxCog": 42,
+      "sumCyc": 169,
+      "sumCog": 153
+    },
+    "scripts/check-contracts.mjs": {
+      "scope": "source",
+      "lines": 25,
+      "funcs": 3,
+      "maxCyc": 1,
+      "maxCog": 0,
+      "sumCyc": 3,
+      "sumCog": 0
+    },
+    "scripts/check-issue-refs.mjs": {
+      "scope": "source",
+      "lines": 215,
+      "funcs": 22,
+      "maxCyc": 14,
+      "maxCog": 14,
+      "sumCyc": 68,
+      "sumCog": 53
+    },
+    "scripts/ci-report-publish.mjs": {
+      "scope": "source",
+      "lines": 223,
+      "funcs": 37,
+      "maxCyc": 46,
+      "maxCog": 37,
+      "sumCyc": 171,
+      "sumCog": 116
+    },
+    "scripts/ci-report.mjs": {
+      "scope": "source",
+      "lines": 446,
+      "funcs": 50,
+      "maxCyc": 44,
+      "maxCog": 56,
+      "sumCyc": 244,
+      "sumCog": 201
+    },
+    "scripts/crap-history.mjs": {
+      "scope": "source",
+      "lines": 87,
+      "funcs": 4,
+      "maxCyc": 20,
+      "maxCog": 25,
+      "sumCyc": 29,
+      "sumCog": 33
+    },
+    "scripts/crap-report.mjs": {
+      "scope": "source",
+      "lines": 619,
+      "funcs": 37,
+      "maxCyc": 18,
+      "maxCog": 22,
+      "sumCyc": 156,
+      "sumCog": 133
+    },
+    "scripts/fake-provider-server.mjs": {
+      "scope": "source",
+      "lines": 198,
+      "funcs": 27,
+      "maxCyc": 57,
+      "maxCog": 60,
+      "sumCyc": 113,
+      "sumCog": 100
+    },
     "scripts/jev-benchmark.ts": {
       "scope": "source",
       "lines": 481,
@@ -483,6 +654,69 @@
       "sumCyc": 211,
       "sumCog": 182
     },
+    "scripts/merge-controller.mjs": {
+      "scope": "source",
+      "lines": 645,
+      "funcs": 54,
+      "maxCyc": 97,
+      "maxCog": 58,
+      "sumCyc": 371,
+      "sumCog": 240
+    },
+    "scripts/merge-eligibility.mjs": {
+      "scope": "source",
+      "lines": 306,
+      "funcs": 30,
+      "maxCyc": 22,
+      "maxCog": 28,
+      "sumCyc": 175,
+      "sumCog": 168
+    },
+    "scripts/perf-workload.mjs": {
+      "scope": "source",
+      "lines": 64,
+      "funcs": 3,
+      "maxCyc": 5,
+      "maxCog": 4,
+      "sumCyc": 7,
+      "sumCog": 4
+    },
+    "scripts/profile.mjs": {
+      "scope": "source",
+      "lines": 128,
+      "funcs": 5,
+      "maxCyc": 14,
+      "maxCog": 16,
+      "sumCyc": 28,
+      "sumCog": 29
+    },
+    "scripts/provider-projection-benchmark.mjs": {
+      "scope": "source",
+      "lines": 200,
+      "funcs": 20,
+      "maxCyc": 4,
+      "maxCog": 4,
+      "sumCyc": 26,
+      "sumCog": 7
+    },
+    "scripts/release.mjs": {
+      "scope": "source",
+      "lines": 181,
+      "funcs": 6,
+      "maxCyc": 22,
+      "maxCog": 30,
+      "sumCyc": 35,
+      "sumCog": 36
+    },
+    "scripts/resolve-test-binary.mjs": {
+      "scope": "source",
+      "lines": 104,
+      "funcs": 7,
+      "maxCyc": 9,
+      "maxCog": 11,
+      "sumCyc": 17,
+      "sumCog": 13
+    },
     "scripts/routing-release-benchmark.ts": {
       "scope": "source",
       "lines": 329,
@@ -491,6 +725,42 @@
       "maxCog": 15,
       "sumCyc": 78,
       "sumCog": 52
+    },
+    "scripts/test-outbound-guard.cjs": {
+      "scope": "source",
+      "lines": 69,
+      "funcs": 5,
+      "maxCyc": 7,
+      "maxCog": 5,
+      "sumCyc": 22,
+      "sumCog": 15
+    },
+    "scripts/test-quick.mjs": {
+      "scope": "source",
+      "lines": 38,
+      "funcs": 2,
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 3,
+      "sumCog": 1
+    },
+    "scripts/toolbox.mjs": {
+      "scope": "source",
+      "lines": 573,
+      "funcs": 54,
+      "maxCyc": 12,
+      "maxCog": 19,
+      "sumCyc": 183,
+      "sumCog": 158
+    },
+    "scripts/verify-release.mjs": {
+      "scope": "source",
+      "lines": 252,
+      "funcs": 35,
+      "maxCyc": 16,
+      "maxCog": 13,
+      "sumCyc": 84,
+      "sumCog": 59
     },
     "session-fallback.ts": {
       "scope": "source",
@@ -509,6 +779,42 @@
       "maxCog": 15,
       "sumCyc": 45,
       "sumCog": 42
+    },
+    "stryker.config.mjs": {
+      "scope": "source",
+      "lines": 25,
+      "funcs": 0,
+      "maxCyc": 0,
+      "maxCog": 0,
+      "sumCyc": 0,
+      "sumCog": 0
+    },
+    "tests/acceptance-journeys.test.mjs": {
+      "scope": "tests",
+      "lines": 199,
+      "funcs": 25,
+      "maxCyc": 6,
+      "maxCog": 5,
+      "sumCyc": 30,
+      "sumCog": 5
+    },
+    "tests/acceptance-live.test.mjs": {
+      "scope": "tests",
+      "lines": 439,
+      "funcs": 56,
+      "maxCyc": 10,
+      "maxCog": 13,
+      "sumCyc": 79,
+      "sumCog": 27
+    },
+    "tests/acceptance-runner.test.mjs": {
+      "scope": "tests",
+      "lines": 694,
+      "funcs": 83,
+      "maxCyc": 7,
+      "maxCog": 7,
+      "sumCyc": 111,
+      "sumCog": 32
     },
     "tests/affinity-auto-default-runtime.test.ts": {
       "scope": "tests",
@@ -536,6 +842,24 @@
       "maxCog": 2,
       "sumCyc": 18,
       "sumCog": 5
+    },
+    "tests/agent-governance.test.mjs": {
+      "scope": "tests",
+      "lines": 55,
+      "funcs": 6,
+      "maxCyc": 4,
+      "maxCog": 6,
+      "sumCyc": 11,
+      "sumCog": 8
+    },
+    "tests/ast-rule-scope.test.mjs": {
+      "scope": "tests",
+      "lines": 53,
+      "funcs": 4,
+      "maxCyc": 3,
+      "maxCog": 2,
+      "sumCyc": 6,
+      "sumCog": 2
     },
     "tests/auto-bootstrap-runtime.test.ts": {
       "scope": "tests",
@@ -581,6 +905,60 @@
       "maxCog": 1,
       "sumCyc": 44,
       "sumCog": 1
+    },
+    "tests/campaign-run.test.mjs": {
+      "scope": "tests",
+      "lines": 202,
+      "funcs": 19,
+      "maxCyc": 4,
+      "maxCog": 2,
+      "sumCyc": 24,
+      "sumCog": 4
+    },
+    "tests/campaign-seed.test.mjs": {
+      "scope": "tests",
+      "lines": 123,
+      "funcs": 15,
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 18,
+      "sumCog": 3
+    },
+    "tests/check-complexity.test.mjs": {
+      "scope": "tests",
+      "lines": 184,
+      "funcs": 10,
+      "maxCyc": 7,
+      "maxCog": 3,
+      "sumCyc": 19,
+      "sumCog": 6
+    },
+    "tests/check-issue-refs.test.mjs": {
+      "scope": "tests",
+      "lines": 204,
+      "funcs": 41,
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 42,
+      "sumCog": 1
+    },
+    "tests/ci-report-publish.test.mjs": {
+      "scope": "tests",
+      "lines": 392,
+      "funcs": 42,
+      "maxCyc": 3,
+      "maxCog": 2,
+      "sumCyc": 47,
+      "sumCog": 5
+    },
+    "tests/ci-report.test.mjs": {
+      "scope": "tests",
+      "lines": 254,
+      "funcs": 24,
+      "maxCyc": 1,
+      "maxCog": 0,
+      "sumCyc": 24,
+      "sumCog": 0
     },
     "tests/classifier-backends.test.ts": {
       "scope": "tests",
@@ -798,6 +1176,24 @@
       "sumCyc": 16,
       "sumCog": 1
     },
+    "tests/crap-report.test.mjs": {
+      "scope": "tests",
+      "lines": 332,
+      "funcs": 33,
+      "maxCyc": 1,
+      "maxCog": 0,
+      "sumCyc": 33,
+      "sumCog": 0
+    },
+    "tests/debug-contract.test.mjs": {
+      "scope": "tests",
+      "lines": 57,
+      "funcs": 7,
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 9,
+      "sumCog": 2
+    },
     "tests/debug.test.ts": {
       "scope": "tests",
       "lines": 126,
@@ -897,6 +1293,69 @@
       "sumCyc": 32,
       "sumCog": 9
     },
+    "tests/fixtures/child-auto-descendant-cli.mjs": {
+      "scope": "tests",
+      "lines": 18,
+      "funcs": 2,
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 3,
+      "sumCog": 1
+    },
+    "tests/fixtures/child-auto-inline-extension.mjs": {
+      "scope": "tests",
+      "lines": 8,
+      "funcs": 1,
+      "maxCyc": 1,
+      "maxCog": 0,
+      "sumCyc": 1,
+      "sumCog": 0
+    },
+    "tests/fixtures/child-auto-inline-harness.mjs": {
+      "scope": "tests",
+      "lines": 449,
+      "funcs": 54,
+      "maxCyc": 7,
+      "maxCog": 7,
+      "sumCyc": 97,
+      "sumCog": 46
+    },
+    "tests/fixtures/child-auto-normal-close-cli.mjs": {
+      "scope": "tests",
+      "lines": 16,
+      "funcs": 1,
+      "maxCyc": 1,
+      "maxCog": 0,
+      "sumCyc": 1,
+      "sumCog": 0
+    },
+    "tests/fixtures/child-auto-pipe-race-descendant-cli.mjs": {
+      "scope": "tests",
+      "lines": 26,
+      "funcs": 1,
+      "maxCyc": 1,
+      "maxCog": 0,
+      "sumCyc": 1,
+      "sumCog": 0
+    },
+    "tests/fixtures/child-auto-runner-worker.mjs": {
+      "scope": "tests",
+      "lines": 44,
+      "funcs": 3,
+      "maxCyc": 1,
+      "maxCog": 0,
+      "sumCyc": 3,
+      "sumCog": 0
+    },
+    "tests/fixtures/concurrent-sessions-child.mjs": {
+      "scope": "tests",
+      "lines": 334,
+      "funcs": 40,
+      "maxCyc": 8,
+      "maxCog": 13,
+      "sumCyc": 64,
+      "sumCog": 32
+    },
     "tests/fixtures/config-approval-extension.ts": {
       "scope": "tests",
       "lines": 51,
@@ -906,6 +1365,15 @@
       "sumCyc": 14,
       "sumCog": 12
     },
+    "tests/fixtures/controlled-source-fault.mjs": {
+      "scope": "tests",
+      "lines": 129,
+      "funcs": 18,
+      "maxCyc": 4,
+      "maxCog": 5,
+      "sumCyc": 24,
+      "sumCog": 8
+    },
     "tests/fixtures/cost-view-extension.ts": {
       "scope": "tests",
       "lines": 15,
@@ -914,6 +1382,123 @@
       "maxCog": 0,
       "sumCyc": 2,
       "sumCog": 0
+    },
+    "tests/fixtures/faux-harness.mjs": {
+      "scope": "tests",
+      "lines": 472,
+      "funcs": 37,
+      "maxCyc": 9,
+      "maxCog": 10,
+      "sumCyc": 78,
+      "sumCog": 49
+    },
+    "tests/fixtures/git-env.mjs": {
+      "scope": "tests",
+      "lines": 53,
+      "funcs": 2,
+      "maxCyc": 5,
+      "maxCog": 7,
+      "sumCyc": 7,
+      "sumCog": 8
+    },
+    "tests/fixtures/http-pi-harness.mjs": {
+      "scope": "tests",
+      "lines": 574,
+      "funcs": 64,
+      "maxCyc": 12,
+      "maxCog": 31,
+      "sumCyc": 137,
+      "sumCog": 112
+    },
+    "tests/fixtures/native-activation-cancel-child.mjs": {
+      "scope": "tests",
+      "lines": 492,
+      "funcs": 38,
+      "maxCyc": 11,
+      "maxCog": 12,
+      "sumCyc": 72,
+      "sumCog": 40
+    },
+    "tests/fixtures/native-classifier-child.mjs": {
+      "scope": "tests",
+      "lines": 353,
+      "funcs": 25,
+      "maxCyc": 18,
+      "maxCog": 22,
+      "sumCyc": 59,
+      "sumCog": 43
+    },
+    "tests/fixtures/native-faux-lifecycle-child.mjs": {
+      "scope": "tests",
+      "lines": 171,
+      "funcs": 7,
+      "maxCyc": 13,
+      "maxCog": 17,
+      "sumCyc": 21,
+      "sumCog": 19
+    },
+    "tests/fixtures/native-faux-provider-child.mjs": {
+      "scope": "tests",
+      "lines": 45,
+      "funcs": 4,
+      "maxCyc": 1,
+      "maxCog": 0,
+      "sumCyc": 4,
+      "sumCog": 0
+    },
+    "tests/fixtures/native-tool-continuation-child.mjs": {
+      "scope": "tests",
+      "lines": 153,
+      "funcs": 9,
+      "maxCyc": 7,
+      "maxCog": 6,
+      "sumCyc": 23,
+      "sumCog": 15
+    },
+    "tests/fixtures/pack-lock.mjs": {
+      "scope": "tests",
+      "lines": 148,
+      "funcs": 13,
+      "maxCyc": 6,
+      "maxCog": 9,
+      "sumCyc": 40,
+      "sumCog": 35
+    },
+    "tests/fixtures/provider-scope-faux-child.mjs": {
+      "scope": "tests",
+      "lines": 67,
+      "funcs": 2,
+      "maxCyc": 3,
+      "maxCog": 2,
+      "sumCyc": 4,
+      "sumCog": 2
+    },
+    "tests/fixtures/replay-fault-control.mjs": {
+      "scope": "tests",
+      "lines": 712,
+      "funcs": 38,
+      "maxCyc": 15,
+      "maxCog": 17,
+      "sumCyc": 113,
+      "sumCog": 84
+    },
+    "tests/fixtures/sign-in-faux-child.mjs": {
+      "scope": "tests",
+      "lines": 95,
+      "funcs": 1,
+      "maxCyc": 5,
+      "maxCog": 4,
+      "sumCyc": 5,
+      "sumCog": 4
+    },
+    "tests/git-fixture-env.test.mjs": {
+      "scope": "tests",
+      "lines": 78,
+      "funcs": 6,
+      "maxCyc": 2,
+      "maxCog": 2,
+      "sumCyc": 9,
+      "sumCog": 5
     },
     "tests/helpers.ts": {
       "scope": "tests",
@@ -933,6 +1518,384 @@
       "sumCyc": 16,
       "sumCog": 0
     },
+    "tests/integration/activation-cancellation-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 401,
+      "funcs": 67,
+      "maxCyc": 8,
+      "maxCog": 7,
+      "sumCyc": 96,
+      "sumCog": 33
+    },
+    "tests/integration/affinity-lifecycle-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 432,
+      "funcs": 65,
+      "maxCyc": 6,
+      "maxCog": 8,
+      "sumCyc": 109,
+      "sumCog": 47
+    },
+    "tests/integration/affinity-policy-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 391,
+      "funcs": 59,
+      "maxCyc": 8,
+      "maxCog": 6,
+      "sumCyc": 80,
+      "sumCog": 22
+    },
+    "tests/integration/auto-bootstrap-selection.test.mjs": {
+      "scope": "tests",
+      "lines": 575,
+      "funcs": 94,
+      "maxCyc": 9,
+      "maxCog": 19,
+      "sumCyc": 185,
+      "sumCog": 93
+    },
+    "tests/integration/auto-missing-route-fault.test.mjs": {
+      "scope": "tests",
+      "lines": 38,
+      "funcs": 3,
+      "maxCyc": 1,
+      "maxCog": 0,
+      "sumCyc": 3,
+      "sumCog": 0
+    },
+    "tests/integration/auto-virtual.test.mjs": {
+      "scope": "tests",
+      "lines": 1575,
+      "funcs": 222,
+      "maxCyc": 9,
+      "maxCog": 21,
+      "sumCyc": 387,
+      "sumCog": 194
+    },
+    "tests/integration/cache-lifecycle-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 674,
+      "funcs": 73,
+      "maxCyc": 10,
+      "maxCog": 15,
+      "sumCyc": 123,
+      "sumCog": 75
+    },
+    "tests/integration/child-auto-finally-propagation.test.mjs": {
+      "scope": "tests",
+      "lines": 128,
+      "funcs": 10,
+      "maxCyc": 15,
+      "maxCog": 36,
+      "sumCyc": 29,
+      "sumCog": 41
+    },
+    "tests/integration/child-auto-inline.test.mjs": {
+      "scope": "tests",
+      "lines": 909,
+      "funcs": 78,
+      "maxCyc": 43,
+      "maxCog": 87,
+      "sumCyc": 253,
+      "sumCog": 322
+    },
+    "tests/integration/classifier-transport-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 774,
+      "funcs": 135,
+      "maxCyc": 6,
+      "maxCog": 5,
+      "sumCyc": 149,
+      "sumCog": 16
+    },
+    "tests/integration/command-policy-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 461,
+      "funcs": 25,
+      "maxCyc": 8,
+      "maxCog": 12,
+      "sumCyc": 45,
+      "sumCog": 28
+    },
+    "tests/integration/command-privacy-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 1663,
+      "funcs": 126,
+      "maxCyc": 29,
+      "maxCog": 48,
+      "sumCyc": 339,
+      "sumCog": 312
+    },
+    "tests/integration/concurrent-sessions.test.mjs": {
+      "scope": "tests",
+      "lines": 751,
+      "funcs": 75,
+      "maxCyc": 67,
+      "maxCog": 124,
+      "sumCyc": 262,
+      "sumCog": 288
+    },
+    "tests/integration/config-agent-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 363,
+      "funcs": 51,
+      "maxCyc": 11,
+      "maxCog": 15,
+      "sumCyc": 93,
+      "sumCog": 60
+    },
+    "tests/integration/config-approval-tui.test.mjs": {
+      "scope": "tests",
+      "lines": 39,
+      "funcs": 4,
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 6,
+      "sumCog": 2
+    },
+    "tests/integration/config-startup-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 378,
+      "funcs": 49,
+      "maxCyc": 8,
+      "maxCog": 19,
+      "sumCyc": 64,
+      "sumCog": 28
+    },
+    "tests/integration/cost-report-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 69,
+      "funcs": 6,
+      "maxCyc": 7,
+      "maxCog": 7,
+      "sumCyc": 17,
+      "sumCog": 14
+    },
+    "tests/integration/cost-view-tui.test.mjs": {
+      "scope": "tests",
+      "lines": 12,
+      "funcs": 1,
+      "maxCyc": 1,
+      "maxCog": 0,
+      "sumCyc": 1,
+      "sumCog": 0
+    },
+    "tests/integration/decision-parity-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 711,
+      "funcs": 63,
+      "maxCyc": 10,
+      "maxCog": 15,
+      "sumCyc": 122,
+      "sumCog": 72
+    },
+    "tests/integration/dispatch-identity-later-handler.mjs": {
+      "scope": "tests",
+      "lines": 46,
+      "funcs": 7,
+      "maxCyc": 6,
+      "maxCog": 5,
+      "sumCyc": 19,
+      "sumCog": 12
+    },
+    "tests/integration/dispatch-identity-observer.mjs": {
+      "scope": "tests",
+      "lines": 112,
+      "funcs": 20,
+      "maxCyc": 5,
+      "maxCog": 4,
+      "sumCyc": 43,
+      "sumCog": 21
+    },
+    "tests/integration/dispatch-identity.test.mjs": {
+      "scope": "tests",
+      "lines": 326,
+      "funcs": 60,
+      "maxCyc": 4,
+      "maxCog": 4,
+      "sumCyc": 80,
+      "sumCog": 22
+    },
+    "tests/integration/economic-policy-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 447,
+      "funcs": 56,
+      "maxCyc": 12,
+      "maxCog": 21,
+      "sumCyc": 83,
+      "sumCog": 39
+    },
+    "tests/integration/fake-provider-ownership.test.mjs": {
+      "scope": "tests",
+      "lines": 273,
+      "funcs": 21,
+      "maxCyc": 14,
+      "maxCog": 23,
+      "sumCyc": 49,
+      "sumCog": 41
+    },
+    "tests/integration/init-regression.test.mjs": {
+      "scope": "tests",
+      "lines": 723,
+      "funcs": 54,
+      "maxCyc": 10,
+      "maxCog": 15,
+      "sumCyc": 108,
+      "sumCog": 69
+    },
+    "tests/integration/integration.test.mjs": {
+      "scope": "tests",
+      "lines": 291,
+      "funcs": 27,
+      "maxCyc": 3,
+      "maxCog": 2,
+      "sumCyc": 31,
+      "sumCog": 4
+    },
+    "tests/integration/legacy-behavior.test.mjs": {
+      "scope": "tests",
+      "lines": 318,
+      "funcs": 22,
+      "maxCyc": 3,
+      "maxCog": 2,
+      "sumCyc": 33,
+      "sumCog": 11
+    },
+    "tests/integration/native-activation-cancel.test.mjs": {
+      "scope": "tests",
+      "lines": 304,
+      "funcs": 21,
+      "maxCyc": 10,
+      "maxCog": 14,
+      "sumCyc": 53,
+      "sumCog": 41
+    },
+    "tests/integration/native-classifier.test.mjs": {
+      "scope": "tests",
+      "lines": 369,
+      "funcs": 24,
+      "maxCyc": 10,
+      "maxCog": 14,
+      "sumCyc": 70,
+      "sumCog": 57
+    },
+    "tests/integration/native-faux-lifecycle.test.mjs": {
+      "scope": "tests",
+      "lines": 107,
+      "funcs": 2,
+      "maxCyc": 6,
+      "maxCog": 7,
+      "sumCyc": 10,
+      "sumCog": 10
+    },
+    "tests/integration/native-faux-provider.test.mjs": {
+      "scope": "tests",
+      "lines": 67,
+      "funcs": 4,
+      "maxCyc": 3,
+      "maxCog": 4,
+      "sumCyc": 6,
+      "sumCog": 4
+    },
+    "tests/integration/native-lifecycle-cleanup.test.mjs": {
+      "scope": "tests",
+      "lines": 104,
+      "funcs": 7,
+      "maxCyc": 10,
+      "maxCog": 9,
+      "sumCyc": 16,
+      "sumCog": 9
+    },
+    "tests/integration/native-tool-continuation.test.mjs": {
+      "scope": "tests",
+      "lines": 246,
+      "funcs": 22,
+      "maxCyc": 9,
+      "maxCog": 14,
+      "sumCyc": 65,
+      "sumCog": 55
+    },
+    "tests/integration/preview-invalid-config-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 136,
+      "funcs": 23,
+      "maxCyc": 5,
+      "maxCog": 4,
+      "sumCyc": 29,
+      "sumCog": 7
+    },
+    "tests/integration/preview-offline-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 119,
+      "funcs": 22,
+      "maxCyc": 5,
+      "maxCog": 4,
+      "sumCyc": 28,
+      "sumCog": 7
+    },
+    "tests/integration/provider-control-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 449,
+      "funcs": 51,
+      "maxCyc": 3,
+      "maxCog": 3,
+      "sumCyc": 71,
+      "sumCog": 20
+    },
+    "tests/integration/provider-scope-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 91,
+      "funcs": 8,
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 9,
+      "sumCog": 1
+    },
+    "tests/integration/release-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 301,
+      "funcs": 38,
+      "maxCyc": 4,
+      "maxCog": 3,
+      "sumCyc": 62,
+      "sumCog": 24
+    },
+    "tests/integration/reliability-migration-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 364,
+      "funcs": 43,
+      "maxCyc": 3,
+      "maxCog": 3,
+      "sumCyc": 57,
+      "sumCog": 15
+    },
+    "tests/integration/reliability-v2-auto.test.mjs": {
+      "scope": "tests",
+      "lines": 1634,
+      "funcs": 182,
+      "maxCyc": 16,
+      "maxCog": 19,
+      "sumCyc": 406,
+      "sumCog": 225
+    },
+    "tests/integration/replay-fault-lifecycle.test.mjs": {
+      "scope": "tests",
+      "lines": 211,
+      "funcs": 20,
+      "maxCyc": 17,
+      "maxCog": 14,
+      "sumCyc": 54,
+      "sumCog": 32
+    },
+    "tests/integration/sign-in-eligibility-acceptance.test.mjs": {
+      "scope": "tests",
+      "lines": 113,
+      "funcs": 9,
+      "maxCyc": 3,
+      "maxCog": 3,
+      "sumCyc": 11,
+      "sumCog": 3
+    },
     "tests/jev-benchmark.test.ts": {
       "scope": "tests",
       "lines": 140,
@@ -941,6 +1904,42 @@
       "maxCog": 1,
       "sumCyc": 30,
       "sumCog": 2
+    },
+    "tests/landing-command-menu.test.mjs": {
+      "scope": "tests",
+      "lines": 18,
+      "funcs": 5,
+      "maxCyc": 1,
+      "maxCog": 0,
+      "sumCyc": 5,
+      "sumCog": 0
+    },
+    "tests/merge-ancestry.test.mjs": {
+      "scope": "tests",
+      "lines": 40,
+      "funcs": 3,
+      "maxCyc": 1,
+      "maxCog": 0,
+      "sumCyc": 3,
+      "sumCog": 0
+    },
+    "tests/merge-controller.test.mjs": {
+      "scope": "tests",
+      "lines": 865,
+      "funcs": 97,
+      "maxCyc": 9,
+      "maxCog": 8,
+      "sumCyc": 126,
+      "sumCog": 30
+    },
+    "tests/merge-eligibility.test.mjs": {
+      "scope": "tests",
+      "lines": 523,
+      "funcs": 71,
+      "maxCyc": 6,
+      "maxCog": 6,
+      "sumCyc": 98,
+      "sumCog": 25
     },
     "tests/model-selection-properties.test.ts": {
       "scope": "tests",
@@ -951,6 +1950,33 @@
       "sumCyc": 141,
       "sumCog": 39
     },
+    "tests/mutation-workflow.test.mjs": {
+      "scope": "tests",
+      "lines": 2494,
+      "funcs": 218,
+      "maxCyc": 8,
+      "maxCog": 13,
+      "sumCyc": 297,
+      "sumCog": 94
+    },
+    "tests/pack-lock.test.mjs": {
+      "scope": "tests",
+      "lines": 274,
+      "funcs": 23,
+      "maxCyc": 5,
+      "maxCog": 7,
+      "sumCyc": 27,
+      "sumCog": 7
+    },
+    "tests/performance-tooling.test.mjs": {
+      "scope": "tests",
+      "lines": 229,
+      "funcs": 38,
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 40,
+      "sumCog": 2
+    },
     "tests/pipeline.test.ts": {
       "scope": "tests",
       "lines": 719,
@@ -959,6 +1985,15 @@
       "maxCog": 5,
       "sumCyc": 139,
       "sumCog": 30
+    },
+    "tests/preload/fast-check-seed.mjs": {
+      "scope": "tests",
+      "lines": 60,
+      "funcs": 3,
+      "maxCyc": 7,
+      "maxCog": 5,
+      "sumCyc": 11,
+      "sumCog": 7
     },
     "tests/probe.test.ts": {
       "scope": "tests",
@@ -1039,6 +2074,33 @@
       "maxCyc": 1,
       "maxCog": 0,
       "sumCyc": 11,
+      "sumCog": 0
+    },
+    "tests/release-cli.test.mjs": {
+      "scope": "tests",
+      "lines": 163,
+      "funcs": 18,
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 23,
+      "sumCog": 5
+    },
+    "tests/release-package.test.mjs": {
+      "scope": "tests",
+      "lines": 19,
+      "funcs": 1,
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 2,
+      "sumCog": 1
+    },
+    "tests/release.test.mjs": {
+      "scope": "tests",
+      "lines": 67,
+      "funcs": 20,
+      "maxCyc": 1,
+      "maxCog": 0,
+      "sumCyc": 20,
       "sumCog": 0
     },
     "tests/reliability-filter-properties.test.ts": {
@@ -1140,6 +2202,24 @@
       "sumCyc": 23,
       "sumCog": 5
     },
+    "tests/replay-fault-targeting.test.mjs": {
+      "scope": "tests",
+      "lines": 333,
+      "funcs": 35,
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 42,
+      "sumCog": 7
+    },
+    "tests/resolve-test-binary.test.mjs": {
+      "scope": "tests",
+      "lines": 124,
+      "funcs": 9,
+      "maxCyc": 1,
+      "maxCog": 0,
+      "sumCyc": 9,
+      "sumCog": 0
+    },
     "tests/result-viewer.test.ts": {
       "scope": "tests",
       "lines": 31,
@@ -1148,6 +2228,15 @@
       "maxCog": 0,
       "sumCyc": 5,
       "sumCog": 0
+    },
+    "tests/router-package.test.mjs": {
+      "scope": "tests",
+      "lines": 376,
+      "funcs": 23,
+      "maxCyc": 9,
+      "maxCog": 19,
+      "sumCyc": 48,
+      "sumCog": 34
     },
     "tests/router.test.ts": {
       "scope": "tests",
@@ -1293,6 +2382,24 @@
       "sumCyc": 80,
       "sumCog": 21
     },
+    "tests/toolbox.test.mjs": {
+      "scope": "tests",
+      "lines": 268,
+      "funcs": 22,
+      "maxCyc": 3,
+      "maxCog": 2,
+      "sumCyc": 29,
+      "sumCog": 7
+    },
+    "tests/tooling-config.test.mjs": {
+      "scope": "tests",
+      "lines": 193,
+      "funcs": 37,
+      "maxCyc": 11,
+      "maxCog": 11,
+      "sumCyc": 69,
+      "sumCog": 44
+    },
     "tests/typesafe-classifier.test.ts": {
       "scope": "tests",
       "lines": 417,
@@ -1311,6 +2418,24 @@
       "sumCyc": 12,
       "sumCog": 0
     },
+    "tests/ui-package.test.mjs": {
+      "scope": "tests",
+      "lines": 23,
+      "funcs": 2,
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 3,
+      "sumCog": 1
+    },
+    "tests/ui-smoke-screen.test.mjs": {
+      "scope": "tests",
+      "lines": 107,
+      "funcs": 7,
+      "maxCyc": 1,
+      "maxCog": 0,
+      "sumCyc": 7,
+      "sumCog": 0
+    },
     "tests/ux-status.test.ts": {
       "scope": "tests",
       "lines": 111,
@@ -1319,6 +2444,24 @@
       "maxCog": 6,
       "sumCyc": 20,
       "sumCog": 7
+    },
+    "tests/verification-workflow.test.mjs": {
+      "scope": "tests",
+      "lines": 328,
+      "funcs": 33,
+      "maxCyc": 6,
+      "maxCog": 9,
+      "sumCyc": 49,
+      "sumCog": 21
+    },
+    "tests/verify-release.test.mjs": {
+      "scope": "tests",
+      "lines": 176,
+      "funcs": 31,
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 37,
+      "sumCog": 6
     },
     "tests/virtual-config-reload.test.ts": {
       "scope": "tests",
@@ -1420,5 +2563,5 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-20T07:11:10.602Z"
+  "generatedAt": "2026-11-20T08:06:47.584Z"
 }
