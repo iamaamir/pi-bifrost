@@ -14,12 +14,12 @@
     },
     "tests": {
       "files": 189,
-      "functions": 8256,
+      "functions": 8270,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
       "cycGt50": 1,
-      "cogGt30": 13,
+      "cogGt30": 12,
       "cogGt50": 6
     }
   },
@@ -2393,12 +2393,12 @@
     },
     "tests/tooling-config.test.mjs": {
       "scope": "tests",
-      "lines": 302,
-      "funcs": 51,
-      "maxCyc": 21,
-      "maxCog": 35,
-      "sumCyc": 104,
-      "sumCog": 80
+      "lines": 309,
+      "funcs": 65,
+      "maxCyc": 11,
+      "maxCog": 11,
+      "sumCyc": 106,
+      "sumCog": 53
     },
     "tests/typesafe-classifier.test.ts": {
       "scope": "tests",
@@ -2563,5 +2563,5 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-20T09:04:27.788Z"
+  "generatedAt": "2026-11-20T09:04:28.372Z"
 }
