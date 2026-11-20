@@ -39,6 +39,13 @@ export const TARGETS = {
   "reliability.ts": { timeoutFactor: 4, timeoutMS: 30_000, secondsPerMutant: 0.04 },
   "reliability-v2.ts": { timeoutFactor: 2, timeoutMS: 30_000, secondsPerMutant: 0.039 },
   "routing.ts": { timeoutFactor: 4, timeoutMS: 30_000, secondsPerMutant: 0.449 },
+  // A gate script, not a product module. Its bound tests cover the structural
+  // rule scope, the duplication threshold, and the parsers that turn tool
+  // output into findings. A mutant survives when a gate stops failing a tree it
+  // must fail, which is a silent regression in the safety net itself. The
+  // complexity script is not a target: its own suite analyzes the repository,
+  // and Stryker's instrumented copy inflates the numbers that suite asserts.
+  "scripts/toolbox.mjs": { timeoutFactor: 2, timeoutMS: 30_000, secondsPerMutant: 0.05 },
 };
 
 /**
@@ -123,6 +130,7 @@ export const MUTANT_ESTIMATE = {
   "reliability.ts": 352,
   "reliability-v2.ts": 2447,
   "routing.ts": 1000,
+  "scripts/toolbox.mjs": 855,
 };
 
 /**
@@ -201,6 +209,18 @@ export const BUN_RUNNER_PLUGIN = "@hughescr/stryker-bun-runner";
  * a no-op there, and a `node:fs` mock cannot be undone). It now injects the fault
  * by editing a private source copy, so it runs on both runtimes.
  */
+/**
+ * Targets that Stryker measures in place instead of in a sandbox.
+ *
+ * The sandbox always excludes `.git`, so a bound test that runs `git ls-files`
+ * sees an empty index and fails before any mutant is measured. The gate scripts
+ * read the tracked-file list, so they need the real checkout. In-place mutation
+ * writes the mutated bytes into the checkout and puts the originals back when
+ * the run ends. Use it only for the scheduled measurement and a deliberate
+ * local run.
+ */
+export const IN_PLACE_TARGETS = new Set(["scripts/toolbox.mjs"]);
+
 export const RUNNER_OVERRIDES = {
   "routing.ts": {
     runner: "tap",

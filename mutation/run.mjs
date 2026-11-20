@@ -59,7 +59,9 @@ export function parseArgs(argv) {
   ) {
     throw new Error(`--shards must be an integer 1-${SHARDING.maxShards}`);
   }
-  if (options.mutate !== null && !/^[\w.-]+(:\d+(:\d+)?-\d+(:\d+)?)?$/u.test(options.mutate)) {
+  // A target can sit in a subdirectory (`scripts/toolbox.mjs`), so the path
+  // allows `/` as well as the line range suffix.
+  if (options.mutate !== null && !/^[\w./-]+(?::\d+(?::\d+)?-\d+(?::\d+)?)?$/u.test(options.mutate)) {
     throw new Error("--mutate must look like file.ts or file.ts:120-260");
   }
   if (options.mutate !== null && options.targets.length === 0) {

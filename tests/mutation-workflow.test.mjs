@@ -438,6 +438,21 @@ test("incremental cannot share one state file across shards", () => {
   );
 });
 
+test("a mutate scope accepts a target in a subdirectory", () => {
+  // Sharded measurements of a script pass `scripts/<file>.mjs:<start>-<end>`,
+  // which the first pattern rejected because it allowed no path separator.
+  const options = parseArgs(["scripts/toolbox.mjs", "--mutate", "scripts/toolbox.mjs:1-120"]);
+  assert.equal(options.mutate, "scripts/toolbox.mjs:1-120");
+  assert.throws(() => parseArgs(["scripts/toolbox.mjs", "--mutate", "scripts/toolbox.mjs:later"]), /must look like/u);
+});
+
+test("the gate script target runs in place so git ls-files sees the checkout", () => {
+  const config = targetConfig("scripts/toolbox.mjs");
+  assert.equal(config.inPlace, true);
+  assert.equal(config.testRunner, "bun");
+  assert.equal(targetConfig("cache.ts").inPlace, undefined, "a product module keeps the sandbox");
+});
+
 test("a target without a planning estimate fails instead of silently vanishing", () => {
   // `NaN` cost used to produce zero legs and still exit 0: the module was
   // dropped from the matrix while the plan reported success.
@@ -1244,9 +1259,10 @@ test("an errored mutant lowers the population score rather than disappearing", (
 
 test("the projection models matrix waves instead of assuming every leg starts at once", () => {
   const plan = planMatrix({ requested: "all", shards: "4", concurrency: "4" });
-  assert.equal(plan.include.length, 24, "six modules sharded four ways");
+  // Derived from the target list, so a new target updates the expectation.
+  assert.equal(plan.include.length, targetNames().length * 4, "every target sharded four ways");
   assert.ok(plan.include.length > MATRIX.maxParallel, "this plan needs more legs than lanes");
-  assert.equal(plan.waves, 3);
+  assert.equal(plan.waves, Math.ceil(plan.include.length / MATRIX.maxParallel));
 
   const slowestLeg = Math.max(...plan.include.map((leg) => estimatedMinutes(leg.target) / leg.shardCount));
   assert.ok(
