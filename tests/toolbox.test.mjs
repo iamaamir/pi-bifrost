@@ -144,12 +144,16 @@ test("fails ast checks when scan exits without findings", () => {
 });
 
 test("parses jscpd reports and enforces the ratcheted duplication threshold", () => {
+  // The threshold is explicit: this test covers the parser, not the committed
+  // budget, so a budget change must not require editing it. The committed value
+  // is asserted in tests/duplication-audit.test.mjs.
+  const budget = 5.5;
   const below = JSON.stringify({ statistics: { total: { percentage: 5.49, duplicatedLines: 100, lines: 1669, clones: 10 } } });
   const at = JSON.stringify({ statistics: { total: { percentage: 5.5, duplicatedLines: 102, lines: 1700, clones: 11 } } });
   const above = JSON.stringify({ statistics: { total: { percentage: 5.51, duplicatedLines: 103, lines: 1713, clones: 12 } } });
-  assert.deepEqual(parseJscpd(below), []);
-  assert.deepEqual(parseJscpd(at), []);
-  const findings = parseJscpd(above);
+  assert.deepEqual(parseJscpd(below, budget), []);
+  assert.deepEqual(parseJscpd(at, budget), []);
+  const findings = parseJscpd(above, budget);
   assert.equal(findings.length, 1);
   assert.equal(findings[0].rule, "duplication-threshold");
   assert.equal(findings[0].file, ".jscpd.json");

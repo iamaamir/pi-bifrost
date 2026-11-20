@@ -48,10 +48,16 @@ make "the gate measured nothing" a failure.
 
 - `.jscpd.json` is the single source of the threshold. `scripts/toolbox.mjs`
   reads it; the CLI does not pass a second copy.
-- The budget is 5.5% of duplicated lines (measured 4.99% when adopted).
+- The budget is 2.5% of duplicated lines, measured with `minTokens 50` and
+  `minLines 10` (2.21% when adopted).
+- The clone population has been audited: [`docs/quality/duplication-audit.md`](../quality/duplication-audit.md)
+  shows that 87% of the duplication at `minLines 6` sat inside `tests/`, and
+  that the 6-9 line band was short test scaffolding. `minLines` moved to 10 and
+  the budget came down with it, so the gate still measures the tree it guards.
+  `tests/**` stays measured; a copy-pasted test is still a liability.
 - This is a **budget**, not a ratchet: adding unique lines lowers the
   percentage. A true duplicated-line ratchet is deferred until the clone
-  population is audited.
+  population needs it; the audit records the current headroom, about 190 lines.
 
 ### Complexity (TypeScript compiler API)
 
@@ -106,8 +112,8 @@ make "the gate measured nothing" a failure.
   expected: it is the record of the new ceiling.
 - A contributor who lowers complexity should regenerate the baseline in the same
   change, otherwise the ratchet keeps the old, higher ceiling.
-- Duplication can drift upward within the 5.5% budget. Trend history is tracked
-  in #291 rather than in this ADR.
+- Duplication can drift upward within the 2.5% budget, about 190 lines of
+  headroom today. Trend history is tracked in #291 rather than in this ADR.
 
 ## Alternatives considered
 

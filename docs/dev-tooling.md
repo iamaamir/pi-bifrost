@@ -37,7 +37,7 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run check:arch` | Import boundaries and cycles (`.dependency-cruiser.cjs`) | `npm ci` |
 | `npm run check:dead-code` | Unused and unlisted dependencies (`knip.jsonc`) | `npm ci` |
 | `npm run check:ast` | Structural rules, rule self-tests, and rule scope against tracked files (`sgconfig.yml`) | `npm ci` |
-| `npm run check:duplication` | Copy-paste detection and threshold (`.jscpd.json`) | `npm ci` |
+| `npm run check:duplication` | Copy-paste detection and threshold (`.jscpd.json`: `minTokens 50`, `minLines 10`, budget 2.5%) | `npm ci` |
 | `npm run check:complexity` | Per-function complexity against `quality/complexity-baseline.json` | `npm ci` |
 | `npm run check:complexity:baseline` | The committed baseline matches the tree; stale records fail (see [Baselines after a rebase](#baselines-after-a-rebase)) | `npm ci` |
 | `npm run check:contracts` | Host integration contracts read from `index.ts` and `debug.ts` (`scripts/check-contracts.mjs`) | `npm ci` |
@@ -71,6 +71,12 @@ Knip treats every root module as an entry point. `package.json` exports `./*`
 and ships `*.ts`, so every root file is a public subpath. Knip still reports
 unused dependencies, unlisted imports, unlisted binaries, and unresolved
 paths. It does not report unused entry exports.
+
+The duplication budget is measured, not guessed. `node scripts/duplication-audit.mjs`
+runs jscpd over a `minTokens` x `minLines` grid and groups every clone by
+directory, so the settings can be chosen from the clone population. It is an
+audit, not a gate. Its captured output is committed in
+[`quality/duplication-audit.md`](quality/duplication-audit.md).
 
 The Semgrep rules live in `semgrep/`. Each rule has a matching fixture in
 `tests/semgrep/targets/`. The fixture must contain one `ruleid:` example and
