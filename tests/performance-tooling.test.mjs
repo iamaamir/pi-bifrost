@@ -47,9 +47,17 @@ test("the deterministic routing workload rejects an unexpected model selection",
   const source = readFileSync(join(root, "scripts", "perf-workload.mjs"), "utf8");
   const anchor = "models: { quick: models.map((model) => `${model.provider}/${model.id}`) },";
   assert.equal(source.split(anchor).length, 2, "workload model-pool anchor must be unique");
-  const copy = join(root, "scripts", `.perf-workload-fault-${process.pid}-${Date.now()}.mjs`);
+  // The copy must live outside the measured tree: a temporary .mjs under
+  // scripts/ would appear in a concurrent complexity baseline check and fail it
+  // for a reason this test is not asserting. Pin the import so the copy can sit
+  // in a temp directory instead.
+  const importAnchor = 'import { createRouter } from "../router.ts";';
+  assert.equal(source.split(importAnchor).length, 2, "workload router import anchor must be unique");
+  const pinnedSource = source.replace(importAnchor, `import { createRouter } from "${pathToFileURL(join(root, "router.ts")).href}";`);
+  const directory = mkdtempSync(join(tmpdir(), "bifrost-perf-fault-workload-"));
+  const copy = join(directory, "perf-workload.mjs");
   try {
-    writeFileSync(copy, source.replace(anchor, "models: { quick: [...models].reverse().map((model) => `${model.provider}/${model.id}`) },"));
+    writeFileSync(copy, pinnedSource.replace(anchor, "models: { quick: [...models].reverse().map((model) => `${model.provider}/${model.id}`) },"));
     const result = spawnSync(process.execPath, ["--experimental-strip-types", copy, "--iterations", "1"], {
       cwd: root,
       encoding: "utf8",
@@ -57,7 +65,7 @@ test("the deterministic routing workload rejects an unexpected model selection",
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /unexpected selected model: example\/model-9/u);
   } finally {
-    rmSync(copy, { force: true });
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 
