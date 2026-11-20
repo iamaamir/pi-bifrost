@@ -8,4 +8,9 @@ message: >-
 rule:
   pattern: console.log($$$ARGS)
 files:
-  - "/*.ts"
+  - "*.ts"
+ignores:
+  - "tests/**"
+  - "ui/**"
+  - "scripts/**"
+  - ".worktrees/**"

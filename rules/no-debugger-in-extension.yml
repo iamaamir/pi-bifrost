@@ -7,4 +7,9 @@ message: >-
 rule:
   pattern: debugger
 files:
-  - "/*.ts"
+  - "*.ts"
+ignores:
+  - "tests/**"
+  - "ui/**"
+  - "scripts/**"
+  - ".worktrees/**"
