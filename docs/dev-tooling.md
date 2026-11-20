@@ -37,6 +37,8 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run check:arch` | Import boundaries and cycles (`.dependency-cruiser.cjs`) | `npm ci` |
 | `npm run check:dead-code` | Unused and unlisted dependencies (`knip.jsonc`) | `npm ci` |
 | `npm run check:ast` | Structural rules and rule self-tests (`sgconfig.yml`) | `npm ci` |
+| `npm run check:duplication` | Copy-paste detection and threshold (`.jscpd.json`) | `npm ci` |
+| `npm run check:complexity` | Per-function complexity against `quality/complexity-baseline.json` | `npm ci` |
 | `npm run check:actions` | Workflow syntax and expressions (actionlint) | actionlint |
 | `npm run check:sast` | Repository Semgrep rules | semgrep |
 | `npm run check:secrets` | Working-tree secret scan | gitleaks |
