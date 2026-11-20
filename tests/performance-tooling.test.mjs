@@ -338,6 +338,33 @@ test("the developer guide describes the full security audit as dispatch-only", (
   assert.doesNotMatch(guide, /weekly full-history|full scan weekly|Weekly schedule/u);
 });
 
+// The template is the only place a contributor is asked for gate evidence, so a
+// gate missing from it is silently unasked for. Pinned as an exact list: adding
+// a fast gate means editing the template and this assertion together.
+function templateGates(text) {
+  return [...text.matchAll(/^- \[ \] `npm run (check:[a-z0-9:-]+)`/gmu)].map((match) => match[1]);
+}
+
+test("the pull request template asks for evidence on every fast gate", () => {
+  const template = readFileSync(join(root, ".github", "PULL_REQUEST_TEMPLATE.md"), "utf8");
+  const listed = templateGates(template);
+  assert.deepEqual(listed, ["check:ast", "check:duplication", "check:complexity"]);
+  for (const name of listed) assert.equal(Object.hasOwn(scripts, name), true, `${name} must be a real script`);
+  assert.match(template, /^## Gate evidence$/mu);
+  assert.doesNotMatch(template, /Co-Authored-By|Generated with/u,
+    "a pull request body must carry no agent attribution");
+});
+
+test("fault control: dropping a gate from the template is visible", () => {
+  const template = readFileSync(join(root, ".github", "PULL_REQUEST_TEMPLATE.md"), "utf8");
+  const dropped = template.replace(/^- \[ \] `npm run check:complexity`.*$/mu, "");
+  assert.notEqual(dropped, template, "the template-row mutation must apply");
+  assert.deepEqual(templateGates(dropped), ["check:ast", "check:duplication"]);
+  const commented = template.replace(/^- \[ \] `npm run check:ast`.*$/mu, "<!-- npm run check:ast -->");
+  assert.deepEqual(templateGates(commented), ["check:duplication", "check:complexity"],
+    "a commented-out gate must not count as asked for");
+});
+
 test("the agent guide links to the developer tooling guide", () => {
   const agentGuide = readFileSync(join(root, "AGENTS.md"), "utf8");
   assert.match(agentGuide, /docs\/dev-tooling\.md/u);
