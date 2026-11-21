@@ -290,8 +290,8 @@ function renderPreview(result: ConfigAgentPreviewResult): string {
       if (entry.unavailable.length > 0) lines.push(`    known but unavailable: ${entry.unavailable.join(", ")}`);
     }
   }
-  for (const note of result.notes) lines.push(`note: ${note}`);
-  const tail = [...digestLines(result.proposalDigest, result.guards), "-------------------------------------------"];
+  const noteLines = result.notes.map((note) => `note: ${note}`);
+  const tail = [...noteLines, ...digestLines(result.proposalDigest, result.guards), "-------------------------------------------"];
   return boundedWithTail(lines, tail).join("\n");
 }
 

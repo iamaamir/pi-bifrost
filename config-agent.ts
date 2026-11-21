@@ -1601,6 +1601,104 @@ export interface ConfigAgentPreviewInput extends ConfigAgentCheckInput {
   readonly now: number;
 }
 
+interface PreviewPromptCoverage {
+  readonly suppliedPrompts: readonly unknown[];
+  readonly consideredPrompts: readonly unknown[];
+  skippedPrompts: number;
+  blankInspectedPrefixPrompts: number;
+  readonly truncatedPromptPositions: number[];
+}
+
+function createPreviewPromptCoverage(suppliedPrompts: readonly unknown[]): PreviewPromptCoverage {
+  return {
+    suppliedPrompts,
+    consideredPrompts: suppliedPrompts.slice(0, MAX_PROMPTS),
+    skippedPrompts: 0,
+    blankInspectedPrefixPrompts: 0,
+    truncatedPromptPositions: [],
+  };
+}
+
+function previewPromptFromRaw(raw: unknown, index: number, coverage: PreviewPromptCoverage): string | undefined {
+  if (typeof raw !== "string") {
+    coverage.skippedPrompts += 1;
+    return undefined;
+  }
+
+  const inspectedPrompt = raw.slice(0, MAX_PROMPT_CHARS);
+  if (inspectedPrompt.trim().length === 0) {
+    coverage.skippedPrompts += 1;
+    // Bounded: only inspect .length and the first MAX_PROMPT_CHARS. If the raw prompt
+    // is longer than the inspected prefix, it had uninspected content after a blank prefix.
+    if (raw.length > MAX_PROMPT_CHARS) coverage.blankInspectedPrefixPrompts += 1;
+    return undefined;
+  }
+
+  if (raw.length > MAX_PROMPT_CHARS) coverage.truncatedPromptPositions.push(index + 1);
+  return inspectedPrompt;
+}
+
+type PreviewDecision = {
+  classification: { source: string; tier?: string };
+  outcome: string;
+};
+
+function previewDecidedBy(decision: PreviewDecision): ConfigAgentPreviewCase["decidedBy"] {
+  if (decision.classification.source === "inline") return "inline_tier_prefix";
+  if (decision.classification.source === "regex") return "regex_rule";
+  return decision.outcome === "unclassified" ? "none" : "default_tier";
+}
+
+function previewCaseConfidence(
+  decision: PreviewDecision,
+  decidedBy: ConfigAgentPreviewCase["decidedBy"],
+  tierNames: ReadonlySet<string>,
+  classifiersCanChangeRoutes: boolean,
+  signInEligibility: BifrostConfig["signInEligibility"],
+): ConfigAgentPreviewCase["confidence"] {
+  if (signInEligibility === "exclude") return "sign_in_dependent";
+
+  const ruleNamesPhysicalModel = decidedBy === "regex_rule"
+    && typeof decision.classification.tier === "string"
+    && decision.classification.tier.includes("/")
+    && !tierNames.has(decision.classification.tier);
+
+  if (decidedBy === "inline_tier_prefix" || ruleNamesPhysicalModel) return "deterministic";
+  if (decision.outcome !== "unclassified" && !classifiersCanChangeRoutes) return "deterministic";
+  return "classifier_dependent";
+}
+
+function previewPromptCoverageNotes(coverage: PreviewPromptCoverage, evaluatedPrompts: number): string[] {
+  const notes: string[] = [];
+  const promptLimit = MAX_PROMPT_CHARS.toLocaleString("en-US");
+  const inspectedPrefixNote = coverage.blankInspectedPrefixPrompts > 0
+    ? ` (${coverage.blankInspectedPrefixPrompts} had no text in the first ${promptLimit} characters inspected)`
+    : "";
+
+  if (coverage.suppliedPrompts.length > MAX_PROMPTS) {
+    const considered = coverage.consideredPrompts.length;
+    const supplied = coverage.suppliedPrompts.length;
+    if (coverage.skippedPrompts > 0) {
+      const skippedVerb = coverage.skippedPrompts === 1 ? "was" : "were";
+      const evaluatedVerb = evaluatedPrompts === 1 ? "was" : "were";
+      notes.push(`preview considered the first ${considered} of ${supplied} supplied prompts; ${coverage.skippedPrompts} ${skippedVerb} blank or not text${inspectedPrefixNote}, so ${evaluatedPrompts} ${evaluatedVerb} evaluated.`);
+    } else {
+      notes.push(`preview considered the first ${considered} of ${supplied} supplied prompts.`);
+    }
+  } else if (coverage.skippedPrompts > 0) {
+    const supplied = coverage.suppliedPrompts.length;
+    const evaluatedVerb = evaluatedPrompts === 1 ? "was" : "were";
+    notes.push(`preview skipped ${coverage.skippedPrompts} of ${supplied} supplied prompts as blank or not text${inspectedPrefixNote}, so ${evaluatedPrompts} ${evaluatedVerb} evaluated.`);
+  }
+
+  if (coverage.truncatedPromptPositions.length > 0) {
+    const label = coverage.truncatedPromptPositions.length === 1 ? "prompt" : "prompts";
+    notes.push(`${label} ${coverage.truncatedPromptPositions.join(", ")} exceeded ${promptLimit} characters; each route was computed from the first ${promptLimit} characters.`);
+  }
+
+  return notes;
+}
+
 export async function previewConfigCandidate(input: ConfigAgentPreviewInput): Promise<ConfigAgentPreviewResult> {
   const { request, catalog, cwd, now } = input;
   const checked = checkConfigCandidate({
@@ -1688,40 +1786,27 @@ export async function previewConfigCandidate(input: ConfigAgentPreviewInput): Pr
   }
 
   const tierNames = new Set(Object.keys(routerConfig.models ?? {}));
+  const promptCoverage = createPreviewPromptCoverage(request.prompts ?? []);
   const cases: ConfigAgentPreviewCase[] = [];
-  for (const raw of (request.prompts ?? []).slice(0, MAX_PROMPTS)) {
-    if (typeof raw !== "string") continue;
-    const prompt = raw.slice(0, MAX_PROMPT_CHARS);
-    if (prompt.trim().length === 0) continue;
+  for (const [index, raw] of promptCoverage.consideredPrompts.entries()) {
+    const prompt = previewPromptFromRaw(raw, index, promptCoverage);
+    if (prompt === undefined) continue;
+
     const resolved = await router.resolve({ prompt, random: () => 0 });
     if (resolved.status !== "completed") continue;
+
     const decision = resolved.decision;
-    const source = decision.classification.source;
-    const decidedBy: ConfigAgentPreviewCase["decidedBy"] = source === "inline" ? "inline_tier_prefix"
-      : source === "regex" ? "regex_rule"
-        : decision.outcome === "unclassified" ? "none" : "default_tier";
-    // An inline tier prefix is decided before any classification, and a rule that
-    // names a physical model is applied before the pipeline ever calls a classifier,
-    // so both are deterministic. A rule that names a tier only runs after the live
-    // classifier (see classification-pipeline.ts), so with classification enabled
-    // this offline case shows the classifier-free fallback, not the live route.
-    const ruleNamesModel = typeof decision.classification.tier === "string"
-      && decision.classification.tier.includes("/")
-      && !tierNames.has(decision.classification.tier);
-    let confidence: ConfigAgentPreviewCase["confidence"] =
-      decidedBy === "inline_tier_prefix" || (decidedBy === "regex_rule" && ruleNamesModel)
-        ? "deterministic"
-        : decision.outcome !== "unclassified" && !classifiersCanChangeRoutes ? "deterministic" : "classifier_dependent";
-    if (afterConfig.signInEligibility === "exclude") confidence = "sign_in_dependent";
+    const decidedBy = previewDecidedBy(decision);
     cases.push({
       prompt,
       decidedBy,
-      confidence,
+      confidence: previewCaseConfidence(decision, decidedBy, tierNames, classifiersCanChangeRoutes, afterConfig.signInEligibility),
       ...(decision.classification.tier !== undefined ? { tier: decision.classification.tier } : {}),
       ...(decision.selected ? { selected: decision.selected } : {}),
       ...(decision.selectedTier !== undefined ? { selectedTier: decision.selectedTier } : {}),
       ...(decision.fallbackReason !== undefined ? { fallbackReason: decision.fallbackReason } : {}),
-      excluded: (decision.requested?.candidates ?? []).filter((candidate) => candidate.status === "excluded")
+      excluded: (decision.requested?.candidates ?? [])
+        .filter((candidate) => candidate.status === "excluded")
         .map((candidate) => ({ model: candidate.model, exclusion: candidate.exclusion ?? "excluded" })),
       unavailable: resolved.knownUnavailableModels,
     });
@@ -1745,6 +1830,7 @@ export async function previewConfigCandidate(input: ConfigAgentPreviewInput): Pr
   if (catalog.available.length === 0) {
     notes.push("The model catalog reported no available models, so every tier resolves empty.");
   }
+  notes.push(...previewPromptCoverageNotes(promptCoverage, cases.length));
   return { ...base, status: "ok", cases, tiers, routing, notes };
 }
 

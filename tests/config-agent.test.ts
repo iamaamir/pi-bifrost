@@ -1745,6 +1745,170 @@ describe("preview is offline, deterministic, and non-mutating", () => {
       harness.cleanup();
     }
   });
+
+  it("stays silent about prompt coverage when every supplied prompt was evaluated", async () => {
+    const harness = freshHarness();
+    try {
+      const prompts = Array.from({ length: 8 }, (_, index) => `task ${index + 1}`);
+      const details = detailsOf<ConfigAgentPreviewResult>(
+        await harness.run({ operation: "preview", candidate: threeRoleGoal, prompts }),
+      );
+      assert.equal(details.cases.length, 8);
+      assert.equal(details.notes.some((note) => /supplied prompts|exceeded|blank/.test(note)), false);
+
+      const none = detailsOf<ConfigAgentPreviewResult>(
+        await harness.run({ operation: "preview", candidate: threeRoleGoal, prompts: [] }),
+      );
+      assert.deepEqual(none.cases, []);
+      assert.equal(none.notes.some((note) => /supplied prompts|exceeded|blank/.test(note)), false);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("reports prompts beyond the evaluation limit", async () => {
+    const harness = freshHarness();
+    try {
+      const prompts = Array.from({ length: 11 }, (_, index) => `task ${index + 1}`);
+      const result = await harness.run({ operation: "preview", candidate: threeRoleGoal, prompts });
+      const details = detailsOf<ConfigAgentPreviewResult>(result);
+      assert.equal(details.cases.length, 8);
+      assert.ok(details.notes.includes("preview considered the first 8 of 11 supplied prompts."));
+      assert.match(contentOf(result), /note: preview considered the first 8 of 11 supplied prompts\./);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("reports skipped blank or non-text entries instead of counting them as evaluated", async () => {
+    const harness = freshHarness();
+    try {
+      const prompts: unknown[] = ["task 1", "", "task 3", "   ", 42, "task 6", "task 7", "task 8", "task 9"];
+      const details = detailsOf<ConfigAgentPreviewResult>(
+        await harness.run({ operation: "preview", candidate: threeRoleGoal, prompts }),
+      );
+      assert.equal(details.cases.length, 5);
+      assert.ok(details.notes.includes("preview considered the first 8 of 9 supplied prompts; 3 were blank or not text, so 5 were evaluated."));
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("reports skipped entries when the prompt limit was not reached", async () => {
+    const harness = freshHarness();
+    try {
+      const details = detailsOf<ConfigAgentPreviewResult>(
+        await harness.run({ operation: "preview", candidate: threeRoleGoal, prompts: ["task 1", "", "task 3"] }),
+      );
+      assert.equal(details.cases.length, 2);
+      assert.ok(details.notes.includes("preview skipped 1 of 3 supplied prompts as blank or not text, so 2 were evaluated."));
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("reports when every considered prompt in an over-limit request was skipped", async () => {
+    const harness = freshHarness();
+    try {
+      const prompts: unknown[] = ["", " ", 1, null, undefined, "\t", {}, [], "task 9"];
+      const details = detailsOf<ConfigAgentPreviewResult>(
+        await harness.run({ operation: "preview", candidate: threeRoleGoal, prompts }),
+      );
+      assert.equal(details.cases.length, 0);
+      assert.ok(details.notes.includes("preview considered the first 8 of 9 supplied prompts; 8 were blank or not text, so 0 were evaluated."));
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("distinguishes a blank input from a prompt whose inspected prefix was blank", async () => {
+    const harness = freshHarness();
+    try {
+      const overlongBlankPrefix = " ".repeat(2_000) + "SENSITIVE-TAIL";
+      const details = detailsOf<ConfigAgentPreviewResult>(
+        await harness.run({
+          operation: "preview",
+          candidate: threeRoleGoal,
+          prompts: ["", overlongBlankPrefix, "task 3"],
+        }),
+      );
+      assert.equal(details.cases.length, 1);
+      assert.deepEqual(details.cases.map((c) => c.prompt), ["task 3"]);
+      assert.ok(details.notes.includes("preview skipped 2 of 3 supplied prompts as blank or not text (1 had no text in the first 2,000 characters inspected), so 1 was evaluated."));
+      assert.equal(details.notes.some((note) => /exceeded 2,000 characters/.test(note)), false);
+      assert.ok(details.notes.every((note) => !note.includes("SENSITIVE-TAIL")));
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("reports truncated prompts by position without echoing the tail", async () => {
+    const harness = freshHarness();
+    try {
+      const long = `review ${"x".repeat(1_000_000)} SENSITIVE-TAIL`;
+      const exact = "y".repeat(2_000);
+      const details = detailsOf<ConfigAgentPreviewResult>(
+        await harness.run({ operation: "preview", candidate: threeRoleGoal, prompts: ["task 1", long, exact] }),
+      );
+      assert.equal(details.cases[1]?.prompt.length, 2_000);
+      assert.ok(!details.cases[1]?.prompt.includes("SENSITIVE-TAIL"));
+      assert.equal(details.cases[2]?.prompt.length, 2_000);
+      assert.ok(details.notes.includes("prompt 2 exceeded 2,000 characters; each route was computed from the first 2,000 characters."));
+      assert.ok(details.notes.every((note) => !note.includes("SENSITIVE-TAIL")));
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("reports both limit overflow and truncation", async () => {
+    const harness = freshHarness();
+    try {
+      const long = "x".repeat(2_001);
+      const prompts = ["ok", long, ...Array.from({ length: 7 }, (_, i) => `task ${i + 3}`)];
+      const details = detailsOf<ConfigAgentPreviewResult>(
+        await harness.run({ operation: "preview", candidate: threeRoleGoal, prompts }),
+      );
+      assert.equal(details.cases.length, 8);
+      assert.ok(details.notes.includes("preview considered the first 8 of 9 supplied prompts."));
+      assert.ok(details.notes.includes("prompt 2 exceeded 2,000 characters; each route was computed from the first 2,000 characters."));
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("keeps coverage notes and digests visible when preview report exceeds the 120-line bound", async () => {
+    const harness = freshHarness();
+    try {
+      const prompts = Array.from({ length: 11 }, (_, i) => `task ${i + 1} ${"detail ".repeat(30)}`);
+      prompts[1] = "x".repeat(2_001);
+      const result = await harness.run({ operation: "preview", candidate: threeRoleGoal, prompts });
+      const details = detailsOf<ConfigAgentPreviewResult>(result);
+      const bigCase = {
+        prompt: "x".repeat(200),
+        decidedBy: "default_tier" as const,
+        confidence: "deterministic" as const,
+        tier: "implement",
+        selectedTier: "implement",
+        selected: "beta/code",
+        excluded: Array.from({ length: 200 }, (_, i) => ({ model: `missing/model-${i}`, exclusion: "not_in_catalog" })),
+        unavailable: Array.from({ length: 200 }, (_, i) => `missing/model-${i}`),
+      };
+      const synthetic: ConfigAgentPreviewResult = {
+        ...details,
+        cases: Array.from({ length: 8 }, () => bigCase),
+      };
+      const text = reportText(synthetic);
+      const lines = text.split("\n");
+      assert.match(text, /note: preview considered the first 8 of 11 supplied prompts\./);
+      assert.match(text, /note: prompt 2 exceeded 2,000 characters; each route was computed from the first 2,000 characters\./);
+      assert.match(text, /proposalDigest: [a-f0-9]{64}/);
+      assert.match(text, /catalogDigest: [a-f0-9]{64}/);
+      assert.equal(lines.length, 120, `report should respect 120-line bound, got ${lines.length}`);
+      assert.ok(lines.some((line) => line.includes("more line(s)")), "expected report to be bounded in this fixture");
+    } finally {
+      harness.cleanup();
+    }
+  });
 });
 
 describe("config layers stay respected", () => {
