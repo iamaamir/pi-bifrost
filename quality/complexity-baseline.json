@@ -854,7 +854,7 @@
     },
     "tests/agent-governance.test.mjs": {
       "scope": "tests",
-      "lines": 65,
+      "lines": 66,
       "funcs": 7,
       "maxCyc": 4,
       "maxCog": 6,
@@ -2626,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T20:30:00.000Z",
-  "sourceCommit": "c39f5eb953d903423012157d8647a1dcc525407f"
+  "generatedAt": "2026-11-21T20:20:51.046Z",
+  "sourceCommit": "bc2dc313db8b56626ae017abc4615910c4170fee"
 }
