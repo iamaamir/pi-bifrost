@@ -2634,6 +2634,12 @@ function renderDiagnosticLines(report: ValidateDiagnosticsReport | (InspectDiagn
     if (report.registry.bifrostLastRefreshAgeMs !== undefined) {
       lines.push(`Bifrost last registry refresh age: ${report.registry.bifrostLastRefreshAgeMs} ms`);
     }
+    if (report.registry.bifrostRefreshTtlMs !== undefined) {
+      lines.push(`Bifrost registry refresh TTL: ${report.registry.bifrostRefreshTtlMs} ms (fixed internal policy; forced refresh may bypass it)`);
+    }
+    if (report.registry.forceRegistryRefresh !== undefined) {
+      lines.push(`Bifrost registry refresh forced: ${report.registry.forceRegistryRefresh}`);
+    }
     for (const tier of report.tiers) {
       lines.push(`${tier.tier}: ${tier.configuredEntryCount} configured entries`);
       for (const candidate of tier.candidates) {
@@ -2728,6 +2734,7 @@ async function handleDiagnosticsCommand(
       reliabilityState,
       reliabilityConfig: state.config.reliability,
       lastRegistryRefreshAt: state.lastRegistryRefreshAt,
+      forceRegistryRefresh: state.forceRegistryRefresh === true,
       classifierEnabled: classifierRuntime.enabled,
       classifierEnablementSource: classifierRuntime.source,
       effectiveClassifierBackend: state.effectiveClassifierBackend(state.config, ctx).backend,
@@ -3361,6 +3368,7 @@ export function createCommandRouter(
         `debug: ${debugLog.enabled ? "on" : "off"}`,
         `debugLog: ${debugLog.path ? displayPath(debugLog.path) : "(not initialized)"}`,
         `debugRotation: ${debugLog.maxBytes / (1024 * 1024)} MiB per file${debugLog.rotatedPath ? ` → ${displayPath(debugLog.rotatedPath)}` : ""} (replaced at each rotation)`,
+        `registryRefresh: ${REGISTRY_REFRESH_TTL_MS} ms (fixed internal policy; forced refresh may bypass it)`,
         `cache: ${state.cacheEntries.length} entries (retention ${state.config.cache?.ttlHours ?? 720}h)`,
         `reliability: ${JSON.stringify(state.config.reliability ?? {})}`,
         `openCircuits: ${openCircuitCount(state)}`,
