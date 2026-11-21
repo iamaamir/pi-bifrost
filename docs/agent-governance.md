@@ -55,23 +55,17 @@ separate. Review/repair bounds never turn a missing gate into a pass.
 
 ## Conditional Product & UX Review
 
-Axiom reports `REQUIRED` or `NOT REQUIRED` for every candidate, with a reason
-from the actual diff. A separate review is required when a change makes a
-material user-facing choice, such as a new configuration option, meaningful
-status/error wording, command interaction, recovery action, public output
-contract or user task. A file path alone does not qualify a change. Purely
-mechanical changes and trivial copy edits normally do not trigger the review.
+Axiom checks each diff for material changes to the user experience.
+It records REQUIRED or NOT REQUIRED with a reason.
+File paths alone do not trigger this review.
 
-Axiom returns REVIEW INCOMPLETE when a required specialist review of the same
-head is missing, incomplete or stale. The owner launches the specialist as a
-fresh non-author run and supplies the accepted contract, diff and captured
-observable output. The reviewer returns APPROVED, CHANGES REQUIRED or REVIEW
-INCOMPLETE with specific evidence. Axiom incorporates the result and rechecks
-only affected behavior after fixes. A material contract change needs owner
-adjudication before implementation. The specialist never merges, changes the
-issue or replaces existing technical/CI gates; the usual correction-round limit
-still applies. No agent is automatically dispatched by these instructions.
-
+If required, the owner asks an independent [Product & UX Reviewer](../.agents/product-ux-reviewer.md)
+to review the same head. A user can also run this reviewer directly.
+The reviewer checks user value, clarity and simpler options.
+It returns APPROVED, CHANGES REQUIRED or REVIEW INCOMPLETE.
+Axiom cannot approve when a required review is missing or stale.
+The owner decides scope changes. The reviewer does not merge code.
+No automatic agent dispatch is added.
 
 ## Handoff prompts
 
@@ -103,20 +97,16 @@ are task templates, not commands or claims of an executed challenge/review.
 > Act as Axiom in a separate non-author run. Read AGENTS.md and .agents/axiom.md.
 > Review <PR> from <base SHA> to <head SHA>; changed files: <list>; diff: <path>.
 > Accepted contract/adjudication: <paths>; evidence: <commands, output, manifest>.
-> Verify target binding, applicable invariants and acceptance criteria. Screen
-> for material Product & UX Review needs and record REQUIRED / NOT REQUIRED with
-> diff-based reasons. Separate evidenced blockers, missing required checks and
-> nonblocking observations.
+> Verify the target, contract and evidence. State if Product & UX Review is
+> REQUIRED or NOT REQUIRED, with a reason. Separate defects, missing checks
+> and nonblocking observations.
 > Return the revision-bound code verdict, CI evidence and merge-authority status.
 > Do not edit files/issues, run commands or merge.
 
-**Conditional product review (only when Axiom requires it):**
+**Product review (direct request or Axiom referral):**
 
-> Act as product-ux-reviewer in a fresh, independent run. Read AGENTS.md and
-> .agents/product-ux-reviewer.md. Review <PR> from <base SHA> to <head SHA>;
-> changed files: <list>; accepted product contract: <path>; Axiom referral:
-> <finding>; observable evidence: <captured output and screenshots>. Compare
-> the current experience with the proposed one and the smallest alternative,
-> including no change. Report evidenced defects separately from preferences.
-> Return APPROVED / CHANGES REQUIRED / REVIEW INCOMPLETE for Axiom. Do not edit,
-> run commands, approve code or merge.
+> Act as product-ux-reviewer. Read AGENTS.md and .agents/product-ux-reviewer.md.
+> Review <PR> from <base SHA> to <head SHA>. Read the accepted contract and
+> captured user output. Compare the experience with a simpler option and no
+> change. Separate material defects from style preferences. Return APPROVED /
+> CHANGES REQUIRED / REVIEW INCOMPLETE. Do not edit, run commands or merge.

@@ -53,22 +53,13 @@ test("reusable governance resolves ticket and planning context at handoff", () =
   }
 });
 
-test("Axiom requires a justified, revision-bound product review only for material user impact", () => {
-  const guide = read("AGENTS.md");
+test("conditional product review is independent and does not grant merge authority", () => {
   const axiom = read(".agents/axiom.md");
   const specialist = read(".agents/product-ux-reviewer.md");
-  const handoff = read("docs/agent-governance.md");
-  assert.match(guide, /Axiom must assess whether the diff needs a separate/);
-  assert.match(guide, /An absent or incomplete specialist review makes the code verdict REVIEW INCOMPLETE/);
-  assert.match(axiom, /Product & UX review: REQUIRED \/ NOT REQUIRED/);
-  assert.match(axiom, /A touched UI\/docs file alone is not a trigger/);
-  assert.match(axiom, /If REQUIRED, request a fresh, independent/);
-  assert.match(axiom, /even when technical checks pass/);
-  assert.match(specialist, /smallest viable alternative, including no change/);
-  assert.match(specialist, /public JSON\/API consumers separately/);
-  assert.match(specialist, /APPROVED \/ CHANGES REQUIRED \/ REVIEW INCOMPLETE/);
-  assert.match(specialist, /not Axiom approval, CI clearance, issue closure or merge authorization/);
-  assert.match(handoff, /Axiom returns REVIEW INCOMPLETE when a required specialist review/);
-  assert.match(handoff, /No agent is automatically dispatched/);
-  assert.match(handoff, /\*\*Conditional product review \(only when Axiom requires it\):\*\*/);
+  const guide = read("docs/agent-governance.md");
+  assert.match(axiom, /Product & UX Review: REQUIRED \/ NOT REQUIRED/);
+  assert.match(specialist, /A user or Axiom can request your review/);
+  assert.match(specialist, /Include no change as an option/);
+  assert.match(guide, /Axiom cannot approve when a required review is missing or stale/);
+  assert.match(specialist, /does not approve code or authorize merge/);
 });

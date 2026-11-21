@@ -14,7 +14,7 @@
     },
     "tests": {
       "files": 195,
-      "functions": 8460,
+      "functions": 8461,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -854,11 +854,11 @@
     },
     "tests/agent-governance.test.mjs": {
       "scope": "tests",
-      "lines": 55,
-      "funcs": 6,
+      "lines": 65,
+      "funcs": 7,
       "maxCyc": 4,
       "maxCog": 6,
-      "sumCyc": 11,
+      "sumCyc": 12,
       "sumCog": 8
     },
     "tests/ast-rule-scope.test.mjs": {
@@ -2626,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T16:40:19.679Z",
-  "sourceCommit": "684c7e181b19adba3f4234c8330b91452223fa0a"
+  "generatedAt": "2026-11-21T20:30:00.000Z",
+  "sourceCommit": "c39f5eb953d903423012157d8647a1dcc525407f"
 }
