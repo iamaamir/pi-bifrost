@@ -919,6 +919,19 @@ def main() -> int:
                 "tierPolicies": {"restricted": {"fallbackTiers": []}},
             },
         ),
+        (
+            "strict-no-route-pending-inspect",
+            True,
+            [(0.5, "restricted keep this text\r"), (0.5, "\x03"), (0.5, "/bifrost inspect\r")],
+            {
+                "schemaVersion": 2,
+                "classifier": {"enabled": False},
+                "default": "general",
+                "models": {"general": ["fake/healthy"], "restricted": ["missing-strict-model"]},
+                "rules": [{"pattern": "restricted", "model": "restricted"}],
+                "tierPolicies": {"restricted": {"fallbackTiers": []}},
+            },
+        ),
         ("preview-dismiss", True, [(0.5, "/bifrost classifier off\r"), (0.5, "/bifrost preview hello\r"), (0.5, "\x1b")]),
         ("disabled", False, []),
         (
@@ -1046,6 +1059,12 @@ def main() -> int:
                 strict_text = (OUT / "strict-no-route.txt").read_text(errors="ignore")
                 if "restricted keep this text" not in strict_text or "turn was not sent" not in strict_text:
                     raise AssertionError("strict no-route did not show the rejection and restore the typed prompt")
+            if name == "strict-no-route-pending-inspect":
+                pending_text = (OUT / "strict-no-route-pending-inspect.txt").read_text(errors="ignore")
+                if "turn was not sent" not in pending_text:
+                    raise AssertionError("pending-state scenario did not reject the no-route turn")
+                if "Bifrost registry refresh pending: true (refresh required; not a completion record)" not in pending_text:
+                    raise AssertionError("inspect did not show pending refresh after a no-route turn")
             if name == "auto-large-pool":
                 large_pool_text = (OUT / "auto-large-pool.txt").read_text(errors="ignore").lower()
                 if "(bifrost) auto" not in large_pool_text:

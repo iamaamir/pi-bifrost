@@ -1,9 +1,10 @@
 import type { ModelsRefreshResult } from "@earendil-works/pi-ai";
 
 /**
- * Fixed automatic registry-refresh interval. This is Bifrost's internal host
- * safety/performance policy, not a user setting and not a provider-data
- * freshness claim. Forced refreshes can still run before it elapses.
+ * Fixed freshness threshold for automatic registry refresh, checked only on
+ * eligible routing/input events. It is not a periodic polling schedule, not a
+ * user setting and not a provider-data freshness claim. Forced refreshes can
+ * still run before the threshold elapses.
  */
 export const REGISTRY_REFRESH_TTL_MS = 30_000;
 
