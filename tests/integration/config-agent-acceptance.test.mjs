@@ -26,6 +26,7 @@ let probeRequests;
 let scripted;
 let lastApplyReport;
 let lastCheckReport;
+let lastPreviewReport;
 
 const PATCH = {
   schemaVersion: 2,
@@ -58,14 +59,48 @@ function toolCallSse(response, name, args) {
   response.end(`data: ${JSON.stringify({ id: "fake-tool", object: "chat.completion.chunk", choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }] })}\n\ndata: [DONE]\n\n`);
 }
 
-// The scripted model: turn 1 calls check, turn 2 copies the digests the check
-// report printed (exactly what the SKILL tells an agent to do) into apply, and
-// turn 3 ends the turn with plain text.
+const DIGEST_KEYS = ["proposalDigest", "sourceDigest", "effectiveDigest", "catalogDigest", "classifierRuntimeDigest"];
+
+function reportFromMessages(messages, header) {
+  return (messages ?? [])
+    .map((message) => message.content)
+    .find((content) => typeof content === "string" && content.includes(header)) ?? "";
+}
+
+function digestsFromTranscript(text) {
+  const digests = {};
+  for (const key of DIGEST_KEYS) {
+    const match = text.match(new RegExp(`${key}: ([0-9a-f]{64}|absent)`));
+    assert.ok(match, `report must print ${key} for the model to copy: ${text.slice(-1200)}`);
+    digests[key] = match[1];
+  }
+  return digests;
+}
+
+function scriptedPreviewCall() {
+  scripted.push("preview_requested");
+  return toolCallSse(responseGlobal, "bifrost_config", {
+    operation: "preview",
+    source: "project",
+    patch: PATCH,
+    prompts: ["", " ".repeat(2_000) + "SENSITIVE-TAIL", "task 3", ...Array.from({ length: 7 }, (_, index) => `task ${index + 4} ${"x".repeat(2_010)}`)],
+  });
+}
+
+let responseGlobal;
+
+// The scripted model: turn 1 checks, turn 2 previews representative prompts,
+// turn 3 copies the check digests into apply, and turn 4 ends with plain text.
+// The preview path is offline and must not trigger any provider request.
 function startFakeProvider() {
   requests = [];
   probeRequests = 0;
   scripted = [];
+  lastApplyReport = undefined;
+  lastCheckReport = undefined;
+  lastPreviewReport = undefined;
   server = createServer((request, response) => {
+    responseGlobal = response;
     response.on("error", () => {});
     if (request.method === "GET" && request.url === "/v1/models") {
       return json(response, 200, { object: "list", data: [{ id: "agentconfig", object: "model" }] });
@@ -89,21 +124,21 @@ function startFakeProvider() {
         lastApplyReport = text.match(/--- bifrost configuration apply ---[\s\S]{0,1200}/)?.[0] ?? text.slice(-1500);
         return textSse(response, "configuration applied");
       }
-      if (text.includes("bifrost candidate check")) {
-        if (scripted.filter((entry) => entry === "apply").length >= 3) return textSse(response, "giving up");
-        lastCheckReport = (payload.messages ?? [])
-          .map((message) => message.content)
-          .find((content) => typeof content === "string" && content.includes("--- bifrost candidate check ---")) ?? "";
-        const digests = {};
-        for (const key of ["proposalDigest", "sourceDigest", "effectiveDigest", "catalogDigest", "classifierRuntimeDigest"]) {
-          // Match against the JSON-encoded transcript, so stop at whitespace or
-          // a JSON escape (\\n): a broader match would drag the line break in.
-          const match = text.match(new RegExp(`${key}: ([0-9a-f]{64}|absent)`));
-          assert.ok(match, `check report must print ${key} for the model to copy: ${text.slice(-1200)}`);
-          digests[key] = match[1];
-        }
+      if (text.includes("bifrost candidate preview (offline)") && !scripted.includes("preview_seen")) {
+        scripted.push("preview_seen");
+        lastPreviewReport = reportFromMessages(payload.messages, "--- bifrost candidate preview (offline) ---");
         scripted.push("apply");
-        return toolCallSse(response, "bifrost_config", { operation: "apply", source: "project", patch: PATCH, ...digests });
+        return toolCallSse(response, "bifrost_config", { operation: "apply", source: "project", patch: PATCH, ...digestsFromTranscript(text) });
+      }
+      if (text.includes("bifrost candidate check")) {
+        if (!scripted.includes("preview_requested")) {
+          lastCheckReport = reportFromMessages(payload.messages, "--- bifrost candidate check ---");
+          return scriptedPreviewCall();
+        }
+        if (scripted.filter((entry) => entry === "apply").length >= 3) return textSse(response, "giving up");
+        lastCheckReport ||= reportFromMessages(payload.messages, "--- bifrost candidate check ---");
+        scripted.push("apply");
+        return toolCallSse(response, "bifrost_config", { operation: "apply", source: "project", patch: PATCH, ...digestsFromTranscript(text) });
       }
       scripted.push("check");
       // Ask for the opt-in live probe on the one check this turn runs, so the
@@ -303,8 +338,12 @@ describe("config agent tool Pi acceptance", { concurrency: 1, timeout: 180_000 }
       const stateBefore = readFileSync(statePath, "utf8");
       await rpc.userTurn("please configure my routing e2e-config-agent-marker");
 
-      // The scripted sequence ran: check first, then apply with copied digests.
-      assert.deepEqual([...new Set(scripted)].sort(), ["apply", "check", "final"].sort(), `scripted turns: ${JSON.stringify(scripted)}`);
+      // The scripted sequence ran: check, preview, apply with copied digests, final.
+      assert.deepEqual(
+        [...new Set(scripted)].sort(),
+        ["apply", "check", "final", "preview_requested", "preview_seen"].sort(),
+        `scripted turns: ${JSON.stringify(scripted)}`,
+      );
 
       const dialogs = rpc.records.filter((record) => record.type === "extension_ui_request" && ["confirm", "select", "editor", "custom"].includes(record.method));
       assert.deepEqual(dialogs, [], "RPC apply must not request a weaker approval");
@@ -317,6 +356,15 @@ describe("config agent tool Pi acceptance", { concurrency: 1, timeout: 180_000 }
       assert.equal(probeRequests, 1, "the check must send exactly one probe request");
       assert.equal(existsSync(join(env.work, ".pi", "bifrost-probe.json")), false,
         "a candidate probe must not replace the init cache");
+
+      // The model-issued preview tool result is visible to the calling agent as a
+      // text report. It must diagnose omission/truncation without echoing coverage
+      // prompt text or making any provider request beyond the scripted check probe.
+      assert.match(lastPreviewReport ?? "", /--- bifrost candidate preview \(offline\) ---/);
+      assert.match(lastPreviewReport ?? "", /note: preview considered the first 8 of 10 supplied prompts; 2 were blank or not text \(1 was blank in the first 2,000 characters inspected\), so 6 were evaluated\./);
+      assert.match(lastPreviewReport ?? "", /note: prompts 4, 5, 6, 7, 8 exceeded 2,000 characters; each route was computed from the first 2,000 characters\./);
+      assert.doesNotMatch(lastPreviewReport ?? "", /SENSITIVE-TAIL/);
+
       assert.match(lastApplyReport ?? "", /approval_required/);
       assert.equal(readFileSync(savedPath, "utf8"), before, "RPC apply must preserve exact source bytes");
       assert.equal(readFileSync(statePath, "utf8"), stateBefore, "config inspection and apply must preserve legacy runtime bytes");
@@ -330,8 +378,8 @@ describe("config agent tool Pi acceptance", { concurrency: 1, timeout: 180_000 }
       const closed = await rpc.close();
       assert.equal(closed.code, 0, rpc.stderr);
       assert.equal(closed.violations, "", "Pi attempted a non-fixture network connection");
-      // Only the scripted model was talked to; the fixture is the sole origin.
-      assert.ok(requests.length >= 3, `expected the scripted turns, saw ${requests.length}`);
+      // Scripted turns + one explicit check probe only; the preview tool call made no provider request.
+      assert.equal(requests.length, 5, `expected scripted turns + one probe, saw ${requests.length}: ${JSON.stringify(requests)}`);
       assert.ok(requests.every((entry) => entry.model === "agentconfig"), JSON.stringify(requests));
     } finally {
       rpc.close().catch(() => {});
