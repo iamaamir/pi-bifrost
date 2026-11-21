@@ -77,17 +77,15 @@ function digestsFromTranscript(text) {
   return digests;
 }
 
-function scriptedPreviewCall() {
+function scriptedPreviewCall(response) {
   scripted.push("preview_requested");
-  return toolCallSse(responseGlobal, "bifrost_config", {
+  return toolCallSse(response, "bifrost_config", {
     operation: "preview",
     source: "project",
     patch: PATCH,
     prompts: ["", " ".repeat(2_000) + "SENSITIVE-TAIL", "task 3", ...Array.from({ length: 7 }, (_, index) => `task ${index + 4} ${"x".repeat(2_010)}`)],
   });
 }
-
-let responseGlobal;
 
 // The scripted model: turn 1 checks, turn 2 previews representative prompts,
 // turn 3 copies the check digests into apply, and turn 4 ends with plain text.
@@ -100,7 +98,6 @@ function startFakeProvider() {
   lastCheckReport = undefined;
   lastPreviewReport = undefined;
   server = createServer((request, response) => {
-    responseGlobal = response;
     response.on("error", () => {});
     if (request.method === "GET" && request.url === "/v1/models") {
       return json(response, 200, { object: "list", data: [{ id: "agentconfig", object: "model" }] });
@@ -133,7 +130,7 @@ function startFakeProvider() {
       if (text.includes("bifrost candidate check")) {
         if (!scripted.includes("preview_requested")) {
           lastCheckReport = reportFromMessages(payload.messages, "--- bifrost candidate check ---");
-          return scriptedPreviewCall();
+          return scriptedPreviewCall(response);
         }
         if (scripted.filter((entry) => entry === "apply").length >= 3) return textSse(response, "giving up");
         lastCheckReport ||= reportFromMessages(payload.messages, "--- bifrost candidate check ---");
