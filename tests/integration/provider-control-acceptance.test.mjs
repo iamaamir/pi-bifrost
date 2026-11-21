@@ -370,7 +370,7 @@ describe("provider pause control acceptance against pinned Pi", { timeout: 300_0
 
       const reset = await runPi({ home, work, model: "fake-a/healthy", messages: ["/bifrost reliability reset --provider fake-a"] });
       assert.equal(reset.code, 0, reset.stderr);
-      assert.match(`${reset.stdout}\n${reset.stderr}`, /Provider fake-a cooldown was reset/u);
+      assert.match(`${reset.stdout}\n${reset.stderr}`, /Provider cooldown reset: fake-a cooldown was reset/u);
       const scopes = providerState(work).value.scopes;
       const scopeFor = (provider) => Object.entries(scopes).find(([key]) => key.includes(`bifrost-provider-usage/${provider}`))?.[1];
       assert.equal(scopeFor("fake-a")?.openUntil, undefined,

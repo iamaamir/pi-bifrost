@@ -1,20 +1,82 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { CONFIG_DIR_NAME, ModelSelectorComponent, getAgentDir, type ModelRuntime } from "@earendil-works/pi-coding-agent";
+import {
+  CONFIG_DIR_NAME,
+  ModelSelectorComponent,
+  getAgentDir,
+  type ModelRuntime,
+} from "@earendil-works/pi-coding-agent";
 import { createHash } from "node:crypto";
-import { constants, closeSync, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readSync, writeFileSync } from "node:fs";
+import {
+  constants,
+  closeSync,
+  existsSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
-import { loadRuntimeState, runtimeStatePath, type ClassifierEnablement, type RuntimeStateIssue } from "./runtime-state.ts";
+import {
+  loadRuntimeState,
+  runtimeStatePath,
+  type ClassifierEnablement,
+  type RuntimeStateIssue,
+} from "./runtime-state.ts";
 import type { BifrostConfig, ClassifierConfig } from "./config.ts";
-import { BUNDLED_PUBLIC_INIT_DEFAULTS, DEFAULT_CLASSIFIER_CRITERIA, DEFAULT_RULES, MAX_CONFIG_SOURCE_BYTES, PROMPT_ONLY_FIELDS, classifierConfigErrors, classifierTotalTimeoutIssue, schemaVersionAtLeast, validateConfig, validateEconomicConfig, validateTierPolicyConfig } from "./config.ts";
-import { loadConfigForReload, loadConfigWithSourceOverride, readBoundedConfigText, type ConfigLoadDiagnostic } from "./config-load.ts";
-import { applyConfigMigration, ConfigMigrationError, parseConfigMigrationArgs, planConfigMigration, readConfigMigrationSource } from "./config-migration.ts";
+import {
+  BUNDLED_PUBLIC_INIT_DEFAULTS,
+  DEFAULT_CLASSIFIER_CRITERIA,
+  DEFAULT_RULES,
+  MAX_CONFIG_SOURCE_BYTES,
+  PROMPT_ONLY_FIELDS,
+  classifierConfigErrors,
+  classifierTotalTimeoutIssue,
+  schemaVersionAtLeast,
+  validateConfig,
+  validateEconomicConfig,
+  validateTierPolicyConfig,
+} from "./config.ts";
+import {
+  loadConfigForReload,
+  loadConfigWithSourceOverride,
+  type ConfigLoadDiagnostic,
+} from "./config-load.ts";
+import {
+  applyConfigMigration,
+  ConfigMigrationError,
+  parseConfigMigrationArgs,
+  planConfigMigration,
+  readConfigMigrationSource,
+} from "./config-migration.ts";
 import type { CacheEntry } from "./cache.ts";
-import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
-import { buildRouteDecisionSummary, type ClassificationPipeline, type ClassificationResult, type ClassificationSource, type ClassifierAttemptSummary, type RouteDecisionSummary } from "./classification-pipeline.ts";
+import {
+  cachePath,
+  loadCache,
+  saveCache,
+  DEFAULT_MAX_ENTRIES,
+  DEFAULT_THRESHOLD,
+} from "./cache.ts";
+import {
+  buildRouteDecisionSummary,
+  type ClassificationPipeline,
+  type ClassificationResult,
+  type ClassificationSource,
+  type ClassifierAttemptSummary,
+  type RouteDecisionSummary,
+} from "./classification-pipeline.ts";
 import { setupDebug, debug, debugMeasure } from "./debug.ts";
-import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT, readRecentCompleteProbeReport } from "./probe.ts";
+import {
+  runProbe,
+  probeOptionsFromConfig,
+  PROBE_PROMPT_TEXT,
+  readRecentCompleteProbeReport,
+  failureDetails,
+} from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
-import { showBifrostResult } from "./result-viewer.ts";
+import { showBifrostResult, showInitReview } from "./result-viewer.ts";
 import {
   findCandidates,
   buildTierResolutionOptions,
@@ -27,26 +89,52 @@ import {
   type AffinityRoutingContext,
 } from "./routing.ts";
 import { reasonLabel } from "./virtual-routing.ts";
-import type { ReliabilityStore } from "./reliability-store.ts";
+import { ReliabilityStore } from "./reliability-store.ts";
 import type { ReliabilityV2Store } from "./reliability-v2-store.ts";
 import { ReliabilityV2StoreError } from "./reliability-v2-store.ts";
 import type { ProviderCooldownStore } from "./provider-cooldowns.ts";
 import { projectProviderCooldownsForRouting, providerScopeModelKey } from "./provider-cooldowns.ts";
-import { emptyReliabilityState, getCircuitState, hasActiveAllowanceCooldown, resolveReliabilityConfig } from "./reliability.ts";
-import { createProviderCooldownStore, createReliabilityV2Store, reliabilityV2Config, reliabilityV2Path } from "./runtime-reliability-v2.ts";
+import {
+  emptyReliabilityState,
+  getCircuitState,
+  hasActiveAllowanceCooldown,
+  resolveReliabilityConfig,
+} from "./reliability.ts";
+import {
+  createProviderCooldownStore,
+  createReliabilityV2Store,
+  reliabilityV2Config,
+  reliabilityV2Path,
+} from "./runtime-reliability-v2.ts";
 import { projectReliabilityV2ForRouting } from "./reliability-v2-routing.ts";
-import { classifierMetricsEnabled, type ClassifierMetricsState, type ClassifierMetricsStore } from "./classifier-metrics.ts";
+import {
+  classifierMetricsEnabled,
+  type ClassifierMetricsState,
+  type ClassifierMetricsStore,
+} from "./classifier-metrics.ts";
 import type { EffectiveBackend } from "./classifier-detection.ts";
-import { CLASSIFIER_BACKEND_IDS, TYPE_SAFE_API_KEY_ENV, TYPE_SAFE_ENDPOINT, TYPE_SAFE_MODEL, type ClassifierBackend } from "./classifier-backends.ts";
+import {
+  CLASSIFIER_BACKEND_IDS,
+  TYPE_SAFE_API_KEY_ENV,
+  TYPE_SAFE_ENDPOINT,
+  TYPE_SAFE_MODEL,
+  type ClassifierBackend,
+} from "./classifier-backends.ts";
 import { piClassificationSupported } from "./classifier-pi-native.ts";
 import { resolveTypeSafeApiKey, type TypeSafeCredentialSource } from "./typesafe-classifier.ts";
-import { inspectDiagnostics, validateDiagnostics, type BifrostDiagnostic, type InspectDiagnosticsReport, type ValidateDiagnosticsReport } from "./diagnostics.ts";
+import {
+  inspectDiagnostics,
+  validateDiagnostics,
+  type BifrostDiagnostic,
+  type InspectDiagnosticsReport,
+  type ValidateDiagnosticsReport,
+} from "./diagnostics.ts";
 import type { EconomicDiagnostic, EconomicSnapshot, ReservePolicy } from "./economic-signals.ts";
 import { reconcileEconomicSnapshot } from "./economic-config.ts";
 import { resolvePiAffinityMode, type AffinityAnchor } from "./affinity.ts";
 import {
   buildInitOwnershipReceipt,
-  buildInitMembershipPlan,
+  buildInitActionPlan,
   parseReconciliationCommandArgs,
   runReconciliationCommand,
   type ReconciliationCommandReport,
@@ -55,6 +143,11 @@ import {
   type ReconciliationRegistrySnapshot,
   type ReconciliationSourceSnapshot,
 } from "./reconciliation-command.ts";
+import {
+  parseOwnershipSnapshot,
+  tierOwnership,
+  type ReconciliationOwnershipSnapshot,
+} from "./reconciliation.ts";
 import {
   applyReconciliationTransaction,
   assertOwnershipPayload,
@@ -68,6 +161,8 @@ import { isBifrostAuto, isVirtualModel } from "./virtual-model.ts";
 import { hasExplicitExtensionRoutingFile, hasUserBootstrapFiles } from "./auto-setup.ts";
 import { getCostReportData } from "./cost-report.ts";
 import { formatCostText, showCostView } from "./ui/cost-view.ts";
+import { log as logImportant, type NoticeLevel } from "./ui/notice.ts";
+import { setProbeProgress } from "./ui/probe-progress.ts";
 
 // ── Mutable state shared across commands ────────────────────
 
@@ -87,9 +182,20 @@ export interface BifrostState {
   enabled: boolean;
   legacyClassifierEnabled?: boolean;
   classifierRuntimeStateIssue?: RuntimeStateIssue;
-  getClassifierEnablementForSession: (session: ExtensionContext["sessionManager"], config?: BifrostConfig) => ClassifierEnablement;
-  setClassifierSessionOverride: (session: ExtensionContext["sessionManager"], enabled?: boolean) => void;
-  classifyForSession: (ctx: ExtensionContext, text: string, signal?: AbortSignal, options?: { readonly offline?: boolean }) => Promise<ClassificationResult>;
+  getClassifierEnablementForSession: (
+    session: ExtensionContext["sessionManager"],
+    config?: BifrostConfig,
+  ) => ClassifierEnablement;
+  setClassifierSessionOverride: (
+    session: ExtensionContext["sessionManager"],
+    enabled?: boolean,
+  ) => void;
+  classifyForSession: (
+    ctx: ExtensionContext,
+    text: string,
+    signal?: AbortSignal,
+    options?: { readonly offline?: boolean },
+  ) => Promise<ClassificationResult>;
   pinned: boolean;
   cacheEntries: CacheEntry[];
   reliabilityStore: ReliabilityStore;
@@ -100,9 +206,17 @@ export interface BifrostState {
   bootstrapModelsInMemory?: boolean;
   reliabilityV2ConfigValid?: boolean;
   reliabilityV2StateError?: string;
-  onConfigInstalled?: (config: BifrostConfig, previousConfig: BifrostConfig, validatedReload?: boolean, ctx?: ExtensionContext) => void;
+  onConfigInstalled?: (
+    config: BifrostConfig,
+    previousConfig: BifrostConfig,
+    validatedReload?: boolean,
+    ctx?: ExtensionContext,
+  ) => void;
   onInitStarted?: (session: ExtensionContext["sessionManager"]) => BifrostConfig | undefined;
-  onManualControl?: (session: ExtensionContext["sessionManager"], action?: "on" | "off" | "pin" | "unpin") => void;
+  onManualControl?: (
+    session: ExtensionContext["sessionManager"],
+    action?: "on" | "off" | "pin" | "unpin",
+  ) => void;
   /** Read-only projection of the current branch-local successful Auto anchor. */
   getAffinityAnchor?: (ctx: ExtensionContext) => AffinityAnchor | undefined;
   /**
@@ -124,13 +238,18 @@ export interface BifrostState {
   lastRegistryRefreshAt?: number;
   forceRegistryRefresh?: boolean;
   /** Per-provider, content-free registry refresh evidence for offline reconciliation. */
-  registryInventoryEvidence?: Readonly<Record<string, { status: "complete" | "partial" | "stale"; refreshedAt: number }>>;
+  registryInventoryEvidence?: Readonly<
+    Record<string, { status: "complete" | "partial" | "stale"; refreshedAt: number }>
+  >;
   /** Recorded when detection fills an absent classifier.backend; status and test report read it (fix 12). */
   classifierDetection?: { backend: ClassifierBackend; reason: string };
 }
 
 type ClassifierRuntimeState = Pick<BifrostState, "config" | "getClassifierEnablementForSession">;
-type BifrostModeStatusState = Pick<BifrostState, "enabled" | "pinned" | "config" | "economicPolicyValid" | "getClassifierEnablementForSession">;
+type BifrostModeStatusState = Pick<
+  BifrostState,
+  "enabled" | "pinned" | "config" | "economicPolicyValid" | "getClassifierEnablementForSession"
+>;
 
 function classifierEnablementFor(
   state: ClassifierRuntimeState,
@@ -147,13 +266,27 @@ function installConfigIfTierPoliciesValid(
   validatedReload = false,
 ): boolean {
   const errors = validateTierPolicyConfig(config).filter((issue) => issue.severity === "error");
-  errors.push(...validateConfig(config).filter((issue) => issue.severity === "error"
-    && (issue.code?.startsWith("config.reliability_") || issue.code?.startsWith("config.affinity_"))));
+  errors.push(
+    ...validateConfig(config).filter(
+      (issue) =>
+        issue.severity === "error" &&
+        (issue.code?.startsWith("config.reliability_") ||
+          issue.code?.startsWith("config.affinity_")),
+    ),
+  );
   const totalTimeoutIssue = classifierTotalTimeoutIssue(config);
   if (totalTimeoutIssue) errors.push(totalTimeoutIssue);
   if (errors.length > 0) {
-    debug("config", "reload_rejected", { category: "validation_failed", issueCount: errors.length });
-    log(ctx, `Bifrost config reload rejected: ${errors.map((issue) => issue.message).join(" ")}`, "error");
+    debug("config", "reload_rejected", {
+      category: "validation_failed",
+      issueCount: errors.length,
+    });
+    logImportant(
+      ctx,
+      "Config reload rejected",
+      errors.map((issue) => issue.message).join(" "),
+      "error",
+    );
     return false;
   }
   const previousConfig = state.config;
@@ -169,7 +302,9 @@ function installConfigIfTierPoliciesValid(
   state.economicSnapshot = reconciled.snapshot;
   state.economicPolicy = reconciled.policy;
   state.economicHistoryPolicy = reconciled.historyPolicy;
-  state.economicPolicyValid = validateEconomicConfig(config).every((issue) => issue.severity !== "error");
+  state.economicPolicyValid = validateEconomicConfig(config).every(
+    (issue) => issue.severity !== "error",
+  );
   state.economicDiagnostics = reconciled.diagnostics;
   state.economicQuarantinedSourceRevisions = reconciled.quarantinedSourceRevisions;
   state.onConfigInstalled?.(config, previousConfig, validatedReload, ctx);
@@ -183,22 +318,31 @@ function installReloadedConfig(
   ctx: ExtensionContext,
 ): boolean {
   if (loaded.diagnostics.length > 0) {
-    debug("config", "reload_rejected", { category: "source_invalid", issueCount: loaded.diagnostics.length });
-    log(ctx, `Bifrost config reload rejected: ${loaded.diagnostics.map(({ message }) => message).join(" ")}`, "error");
+    debug("config", "reload_rejected", {
+      category: "source_invalid",
+      issueCount: loaded.diagnostics.length,
+    });
+    logImportant(
+      ctx,
+      "Config reload rejected",
+      loaded.diagnostics.map(({ message }) => message).join(" "),
+      "error",
+    );
     return false;
   }
   const installed = installConfigIfTierPoliciesValid(state, loaded.config, ctx, true);
   if (installed && loaded.warnings.length > 0) {
-    log(ctx, `Bifrost config loaded with warnings: ${loaded.warnings.map(({ message }) => message).join(" ")}`, "warning");
+    logImportant(
+      ctx,
+      "Configuration loaded with warnings",
+      loaded.warnings.map(({ message }) => message).join(" "),
+      "warning",
+    );
   }
   return installed;
 }
 
-export function log(
-  ctx: ExtensionContext,
-  message: string,
-  type?: "info" | "warning" | "error",
-) {
+export function log(ctx: ExtensionContext, message: string, type?: "info" | "warning" | "error") {
   if (ctx.hasUI) {
     ctx.ui.notify(message, type ?? "info");
   } else {
@@ -222,6 +366,21 @@ export function uiDone(ctx: ExtensionContext) {
   }
 }
 
+/**
+ * Reports one `/bifrost init` outcome: what happened, what changed, and at
+ * most one next step. It appends that line as the `init` notice card, which is
+ * the terminal state of the run; headless prints the same shape on stderr.
+ */
+function reportInitOutcome(
+  ctx: ExtensionContext,
+  outcome: string,
+  changed: string,
+  next: string | undefined,
+  level: NoticeLevel,
+): void {
+  logImportant(ctx, "init", `${outcome}. ${next ? `${changed} ${next}` : changed}`, level);
+}
+
 function promptClassifierModelAvailable(
   ctx: ExtensionContext,
   model: ClassifierConfig["model"],
@@ -239,7 +398,8 @@ async function requestPromptClassifierModel(ctx: ExtensionContext): Promise<stri
     },
   };
   const selected = await ctx.ui.custom<string | null>((tui, _theme, _keybindings, done) => {
-    const onSelect = (model: { provider: string; id: string }) => done(`${model.provider}/${model.id}`);
+    const onSelect = (model: { provider: string; id: string }) =>
+      done(`${model.provider}/${model.id}`);
     const onCancel = () => done(null);
     return new ModelSelectorComponent(
       tui,
@@ -260,6 +420,19 @@ function uiOutput(ctx: ExtensionContext, lines: string[]) {
     ctx.ui.setWidget("bifrost-output", lines);
   } else {
     for (const line of lines) console.error(`[bifrost] ${line}`);
+  }
+}
+
+async function renderInitPreview(ctx: ExtensionContext, lines: readonly string[]): Promise<boolean> {
+  if (ctx.mode !== "tui" || !ctx.hasUI) {
+    uiOutput(ctx, [...lines]);
+    return true;
+  }
+
+  try {
+    return await showBifrostResult(ctx, "Bifrost · Setup preview", lines);
+  } catch {
+    return false;
   }
 }
 
@@ -300,18 +473,22 @@ function formatCandidateLines(
     const skippedCandidate = skipped.get(key);
     const reserve = reserves.get(key);
     if (skippedCandidate) {
-      if (skippedCandidate.reason === "provider_not_allowed") return `xx ${key} (${reasonLabel("provider_not_allowed")})`;
+      if (skippedCandidate.reason === "provider_not_allowed")
+        return `xx ${key} (${reasonLabel("provider_not_allowed")})`;
       // Sign-in and every other non-circuit skip carry no openUntil; printing
       // "open circuit until unknown" for them was a lie in the old code.
-      if (skippedCandidate.reason === "sign_in_unavailable") return `xx ${key} (${reasonLabel("sign_in_unavailable")})`;
+      if (skippedCandidate.reason === "sign_in_unavailable")
+        return `xx ${key} (${reasonLabel("sign_in_unavailable")})`;
       const until = skippedCandidate.openUntil
         ? new Date(skippedCandidate.openUntil).toISOString()
         : "unknown";
       return `xx ${key} (open circuit until ${until})`;
     }
-    if (reserve?.mode === "policy" && reserve.disposition === "rejected") return `xx ${key} (reserve policy)`;
+    if (reserve?.mode === "policy" && reserve.disposition === "rejected")
+      return `xx ${key} (reserve policy)`;
     const marker = key === selectedKey ? "=>" : "  ";
-    const reserveNote = reserve?.mode === "observe" && reserve.wouldReject ? "; reserve would reject" : "";
+    const reserveNote =
+      reserve?.mode === "observe" && reserve.wouldReject ? "; reserve would reject" : "";
     return `${marker} ${key} ($${(m.cost.input + m.cost.output).toFixed(2)}/1M tokens, ctx ${m.contextWindow}${reserveNote})`;
   });
 }
@@ -348,7 +525,10 @@ type AffinityInspectEvidence = {
   anchor?: { model: string; provider: string; lastSuccessfulAt: string; ageMs: number };
 };
 
-function inspectAffinity(state: BifrostState, ctx: ExtensionContext): AffinityInspectEvidence | undefined {
+function inspectAffinity(
+  state: BifrostState,
+  ctx: ExtensionContext,
+): AffinityInspectEvidence | undefined {
   const surface = isBifrostAuto(ctx.model) && state.enabled && !state.pinned ? "auto" : "physical";
   const { mode, source } = resolvePiAffinityMode(state.config.affinity?.mode, surface);
   if (mode === "off") return { mode, source, status: "disabled" };
@@ -385,14 +565,16 @@ export function resolveTierDisplay(
   };
   let reliabilityState = state.reliabilityStore.getState();
   if (state.enabled && state.config.reliability?.enabled !== false && state.providerCooldownStore) {
-    const registryModels = typeof ctx.modelRegistry.getAll === "function"
-      ? ctx.modelRegistry.getAll() : ctx.modelRegistry.getAvailable();
+    const registryModels =
+      typeof ctx.modelRegistry.getAll === "function"
+        ? ctx.modelRegistry.getAll()
+        : ctx.modelRegistry.getAvailable();
     reliabilityState = projectProviderCooldownsForRouting(
       reliabilityState,
       state.providerCooldownStore,
       registryModels,
-      state.config.reliability?.cooldownOnAllowanceExhausted !== false
-        && state.config.reliability?.allowanceCooldownScope !== "model",
+      state.config.reliability?.cooldownOnAllowanceExhausted !== false &&
+        state.config.reliability?.allowanceCooldownScope !== "model",
     );
   }
   // Preview reuses the session's cached exclusions instead of resolving auth
@@ -400,12 +582,14 @@ export function resolveTierDisplay(
   // next Auto turn would actually select.
   const signInMode = state.enabled && state.config.signInEligibility === "exclude";
   const signInExcluded = signInMode ? state.getSignInExclusions?.(ctx) : undefined;
-  const excludedBySignIn = signInExcluded && signInExcluded.size > 0
-    ? (model: { readonly provider: string }) => signInExcluded.has(model.provider)
-    : undefined;
-  const signInNote = signInMode && signInExcluded === undefined
-    ? "sign-in eligibility is enabled but has not been resolved in this session; this view may name a provider the next Auto turn skips"
-    : undefined;
+  const excludedBySignIn =
+    signInExcluded && signInExcluded.size > 0
+      ? (model: { readonly provider: string }) => signInExcluded.has(model.provider)
+      : undefined;
+  const signInNote =
+    signInMode && signInExcluded === undefined
+      ? "sign-in eligibility is enabled but has not been resolved in this session; this view may name a provider the next Auto turn skips"
+      : undefined;
   const { options, resolution: resolved } = resolveConfiguredTier(
     ctx,
     tier,
@@ -413,7 +597,10 @@ export function resolveTierDisplay(
     reliabilityState,
     state.config.reliability,
     undefined,
-    state.config.economics && state.economicPolicyValid && state.economicPolicy && state.economicSnapshot
+    state.config.economics &&
+      state.economicPolicyValid &&
+      state.economicPolicy &&
+      state.economicSnapshot
       ? { policy: state.economicPolicy, snapshot: state.economicSnapshot }
       : undefined,
     undefined,
@@ -429,7 +616,9 @@ export function resolveTierDisplay(
     resolved.primary,
     resolved.selectedTier === tier ? selectedKey : undefined,
   );
-  const fallbackResolution = explicitBoundary ? resolved.attemptedTiers?.[1]?.resolution : resolved.fallback;
+  const fallbackResolution = explicitBoundary
+    ? resolved.attemptedTiers?.[1]?.resolution
+    : resolved.fallback;
   const fallbackCandidateLines = fallbackResolution
     ? formatCandidateLines(
         fallbackResolution,
@@ -446,17 +635,19 @@ export function resolveTierDisplay(
     fallbackCandidateLines,
     ...(signInNote ? { signInNote } : {}),
     defaultTier,
-    ...(explicitBoundary ? {
-      explicitBoundary: true as const,
-      attemptedTiers: (resolved.attemptedTiers ?? []).map((attempt) => ({
-        tier: attempt.tier,
-        strategy: attempt.strategy,
-        candidates: formatCandidateLines(
-          attempt.resolution,
-          resolved.selectedTier === attempt.tier ? selectedKey : undefined,
-        ),
-      })),
-    } : {}),
+    ...(explicitBoundary
+      ? {
+          explicitBoundary: true as const,
+          attemptedTiers: (resolved.attemptedTiers ?? []).map((attempt) => ({
+            tier: attempt.tier,
+            strategy: attempt.strategy,
+            candidates: formatCandidateLines(
+              attempt.resolution,
+              resolved.selectedTier === attempt.tier ? selectedKey : undefined,
+            ),
+          })),
+        }
+      : {}),
     resolution: resolved,
   };
 }
@@ -478,11 +669,15 @@ export function buildInitProposal(
   classifierBackend?: ClassifierBackend,
 ): Record<string, unknown> {
   const tierKeys = Object.keys(models);
-  const firstPopulatedTier = Object.entries(models).find(([, candidates]) => candidates.length > 0)?.[0];
+  const firstPopulatedTier = Object.entries(models).find(
+    ([, candidates]) => candidates.length > 0,
+  )?.[0];
   // Prefer general regardless of discovery order; otherwise use first populated tier.
-  const defaultTier = (models.general?.length ?? 0) > 0
-    ? "general"
-    : firstPopulatedTier ?? (tierKeys.includes("general") ? "general" : tierKeys[0] ?? "general");
+  const defaultTier =
+    (models.general?.length ?? 0) > 0
+      ? "general"
+      : (firstPopulatedTier ??
+        (tierKeys.includes("general") ? "general" : (tierKeys[0] ?? "general")));
   const categoryStrategies: Record<string, RoutingStrategy> = {};
   for (const t of tierKeys) {
     categoryStrategies[t] = PROPOSAL_STRATEGIES[t] ?? "first";
@@ -496,8 +691,12 @@ export function buildInitProposal(
     classifier: {
       enabled: true,
       ...(classifierBackend ? { backend: classifierBackend } : {}),
-      ...(classifierBackend !== CLASSIFIER_BACKEND_IDS.typesafe && classifierModel ? { model: classifierModel, method: "auto" as const } : {}),
-      ...(classifierBackend === CLASSIFIER_BACKEND_IDS.typesafe ? { typesafe: { model: TYPE_SAFE_MODEL }, criteria: DEFAULT_CLASSIFIER_CRITERIA } : {}),
+      ...(classifierBackend !== CLASSIFIER_BACKEND_IDS.typesafe && classifierModel
+        ? { model: classifierModel, method: "auto" as const }
+        : {}),
+      ...(classifierBackend === CLASSIFIER_BACKEND_IDS.typesafe
+        ? { typesafe: { model: TYPE_SAFE_MODEL }, criteria: DEFAULT_CLASSIFIER_CRITERIA }
+        : {}),
     },
     models,
     rules: DEFAULT_RULES,
@@ -506,10 +705,34 @@ export function buildInitProposal(
 
 // ── Command handlers ────────────────────────────────────────
 
-const isForced = (args:string):boolean => args?.split(/\s+/).includes("-f");
+/** Human-readable names for probe failure reasons (see failureDetails in probe.ts). */
+const REASON_LABELS: Record<string, string> = {
+  provider_error: "provider errors",
+  http_error: "HTTP errors",
+  rate_limited: "rate limited",
+  allowance_exhausted: "allowance exhausted",
+  authentication_or_access: "authentication failed",
+  unsupported_parameter: "unsupported parameters",
+  unsupported_api: "unsupported API",
+  empty_response: "empty responses",
+  not_eligible: "not eligible",
+  timeout: "timed out",
+  unknown: "unknown errors",
+};
+
+const isForced = (args: string): boolean => args?.split(/\s+/).includes("-f");
 const MAX_RECONCILIATION_OWNERSHIP_BYTES = 5_000_000;
 
-function reconciliationPaths(source: ReconciliationConfigSource): { configPath: string; ownershipPath: string; journalPath: string } {
+/** An empty v2 payload records that no tier is proven Bifrost-managed. */
+function emptyOwnershipBytes(scope: ReconciliationConfigSource): Buffer {
+  return Buffer.from(JSON.stringify({ version: 2, scope, tiers: {} }, null, 2) + "\n", "utf8");
+}
+
+function reconciliationPaths(source: ReconciliationConfigSource): {
+  configPath: string;
+  ownershipPath: string;
+  journalPath: string;
+} {
   const cwd = process.cwd();
   if (source === "workspace") {
     const metadataDirectory = join(cwd, CONFIG_DIR_NAME);
@@ -527,34 +750,41 @@ function reconciliationPaths(source: ReconciliationConfigSource): { configPath: 
   };
 }
 
-function readReconciliationSource(source: ReconciliationConfigSource): ReconciliationSourceSnapshot {
+function readReconciliationSource(
+  source: ReconciliationConfigSource,
+): ReconciliationSourceSnapshot {
   const paths = reconciliationPaths(source);
   const configBytes = readBoundedRegularSnapshot(paths.configPath) ?? null;
   const ownershipBytes = readBoundedRegularSnapshot(paths.ownershipPath) ?? null;
-  if (configBytes && configBytes.byteLength > MAX_CONFIG_SOURCE_BYTES
-    || ownershipBytes && ownershipBytes.byteLength > MAX_RECONCILIATION_OWNERSHIP_BYTES) {
+  if (
+    (configBytes && configBytes.byteLength > MAX_CONFIG_SOURCE_BYTES) ||
+    (ownershipBytes && ownershipBytes.byteLength > MAX_RECONCILIATION_OWNERSHIP_BYTES)
+  ) {
     throw new Error("source exceeds reconciliation bounds");
   }
   return { ...paths, source, configBytes, ownershipBytes };
 }
 
 function readInheritedConfigSnapshot(path: string): string | null {
-  if (!existsSync(path)) return null;
-  const { text } = readBoundedConfigText(path);
-  if (text === undefined) throw new Error("unsafe inherited config");
-  return text;
+  const bytes = readBoundedRegularSnapshot(path);
+  if (bytes === undefined) return null;
+  if (bytes.byteLength > MAX_CONFIG_SOURCE_BYTES) throw new Error("unsafe inherited config");
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 
 /** An unreadable receipt provides no ownership coverage; every pool stays protected as handwritten. */
 function readInheritedReceiptSnapshot(path: string): string | null {
-  try { return readInheritedConfigSnapshot(path); }
-  catch { return null; }
+  try {
+    return readInheritedConfigSnapshot(path);
+  } catch {
+    return null;
+  }
 }
 
 interface InheritedTierPool {
   readonly pool: readonly string[];
-  /** Model keys this layer's ownership receipt generated; everything else is handwritten. */
-  readonly receiptGenerated: ReadonlySet<string>;
+  /** True only when this layer's ownership receipt proves the whole pool is generated. */
+  readonly generated: boolean;
 }
 
 interface InheritedPoolSnapshot {
@@ -576,29 +806,23 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
 
 function normalizeModelPool(value: unknown): readonly string[] {
   if (typeof value === "string") return [value];
-  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }
 
-function mergeTierKeys(byTier: Map<string, Set<string>>, tier: string, keys: unknown): void {
-  const existing = byTier.get(tier) ?? new Set<string>();
-  for (const key of normalizeModelPool(keys)) existing.add(key);
-  byTier.set(tier, existing);
-}
-
-/** Receipt-generated model keys per tier; an unreadable or invalid receipt protects every pool as handwritten. */
-function receiptGeneratedKeys(text: string | null): ReadonlyMap<string, ReadonlySet<string>> {
-  const byTier = new Map<string, Set<string>>();
-  if (text === null) return byTier;
+function readReceiptSnapshot(
+  text: string | null,
+  scope: ReconciliationConfigSource,
+): ReconciliationOwnershipSnapshot | undefined {
+  if (text === null) return undefined;
   try {
     assertOwnershipPayload(Buffer.from(text, "utf8"));
-    const receipt = JSON.parse(text) as { sources?: unknown };
-    if (!isJsonObject(receipt.sources)) return byTier;
-    for (const source of Object.values(receipt.sources)) {
-      if (!isJsonObject(source) || !isJsonObject(source.generated)) continue;
-      for (const [tier, keys] of Object.entries(source.generated)) mergeTierKeys(byTier, tier, keys);
-    }
-  } catch { /* fail safe toward treating pools as handwritten */ }
-  return byTier;
+    const receipt = parseOwnershipSnapshot(JSON.parse(text));
+    return receipt?.scope === scope ? receipt : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function parseInheritedConfig(text: string): Record<string, unknown> {
@@ -616,15 +840,21 @@ function readInheritedLayerPools(layer: ReconciliationConfigSource): {
   const paths = reconciliationPaths(layer);
   const text = readInheritedConfigSnapshot(paths.configPath);
   const parsed = text === null ? {} : parseInheritedConfig(text);
+  if (parsed.models !== undefined && !isJsonObject(parsed.models)) throw new Error("invalid inherited model pools");
   const rawPools = isJsonObject(parsed.models) ? parsed.models : {};
+  if (Object.values(rawPools).some((pool) =>
+    typeof pool !== "string" && !(Array.isArray(pool) && pool.every((key) => typeof key === "string")),
+  )) throw new Error("invalid inherited model pool");
   // No pools to protect, so the receipt cannot change the decision and is not read or tracked.
   const hasPools = Object.keys(rawPools).length > 0;
   const receiptText = hasPools ? readInheritedReceiptSnapshot(paths.ownershipPath) : null;
-  const receiptKeys = receiptGeneratedKeys(receiptText);
-  const tiers = new Map(Object.entries(rawPools).map(([tier, raw]) => [tier, {
-    pool: normalizeModelPool(raw),
-    receiptGenerated: receiptKeys.get(tier) ?? new Set<string>(),
-  }]));
+  const receipt = readReceiptSnapshot(receiptText, layer);
+  const tiers = new Map(
+    Object.entries(rawPools).map(([tier, raw]) => {
+      const pool = normalizeModelPool(raw);
+      return [tier, { pool, generated: receipt ? tierOwnership(receipt, tier, raw as string | readonly string[]) === "managed" : false }];
+    }),
+  );
   return {
     path: paths.configPath,
     text,
@@ -637,30 +867,11 @@ function readInheritedPools(layers: readonly ReconciliationConfigSource[]): Inhe
   const layerPools = layers.map(readInheritedLayerPools);
   return {
     snapshots: layerPools.flatMap(({ path, text, receiptSnapshot }) =>
-      receiptSnapshot ? [{ path, text }, receiptSnapshot] : [{ path, text }]),
+      receiptSnapshot ? [{ path, text }, receiptSnapshot] : [{ path, text }],
+    ),
     tierNames: new Set(layerPools.flatMap(({ tiers }) => [...tiers.keys()])),
     effective: new Map(layerPools.flatMap(({ tiers }) => [...tiers])),
   };
-}
-
-function sameMembership(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((key, index) => key === right[index]);
-}
-
-/** Init shadows a tier when it would replace a different pool that still holds handwritten models. */
-function isShadowedTier(proposed: readonly string[], inherited: InheritedTierPool): boolean {
-  const hasHandwrittenModel = inherited.pool.some((key) => !inherited.receiptGenerated.has(key));
-  return hasHandwrittenModel && !sameMembership(proposed, inherited.pool);
-}
-
-function findShadowedTiers(
-  proposed: Readonly<Record<string, readonly string[]>>,
-  ownedTiers: Readonly<Record<string, unknown>>,
-  inherited: ReadonlyMap<string, InheritedTierPool>,
-): string[] {
-  return Object.keys(proposed)
-    .filter((tier) => !Object.hasOwn(ownedTiers, tier) && inherited.has(tier))
-    .filter((tier) => isShadowedTier(proposed[tier], inherited.get(tier)!));
 }
 
 function selectInitSource(): ReconciliationSourceSnapshot {
@@ -672,10 +883,63 @@ function selectInitSource(): ReconciliationSourceSnapshot {
   return user.configBytes !== null || user.ownershipBytes !== null ? user : project;
 }
 
+function initPoolReviewLines(label: string, pool: readonly string[] | undefined): string[] {
+  if (pool === undefined) return [`${label}: not configured`];
+  if (pool.length === 0) return [`${label}: empty`];
+  return [`${label}:`, ...pool.map((model, index) => `      ${index + 1}. ${model}`)];
+}
+
 function initSourceLabel(source: ReconciliationSourceSnapshot): string {
-  return source.source === "workspace" ? "workspace (bifrost.json)"
-    : source.source === "user" ? `user (${source.configPath})`
+  return source.source === "workspace"
+    ? "workspace (bifrost.json)"
+    : source.source === "user"
+      ? `user (${source.configPath})`
       : "project (.pi/bifrost.json)";
+}
+
+function initInheritanceReviewLines(input: {
+  source: ReconciliationConfigSource;
+  sourceModels: Readonly<Record<string, unknown>>;
+  inherited: ReadonlyMap<string, InheritedTierPool>;
+  generated: Readonly<Record<string, readonly string[]>>;
+  tiers?: readonly {
+    tier: string;
+    before: readonly string[] | undefined;
+    after: readonly string[] | undefined;
+  }[];
+}): string[] {
+  if (input.source !== "project") return [];
+  if (!input.tiers) {
+    const lines = Object.entries(input.generated).flatMap(([tier, generated]) => {
+      if (Object.hasOwn(input.sourceModels, tier)) return [];
+      const inherited = input.inherited.get(tier)?.pool;
+      if (!inherited) return [];
+      const identical = inherited.length === generated.length && inherited.every((key, index) => key === generated[index]);
+      return identical
+        ? [`  ${tier}: inherited pool kept; no project override`, ...initPoolReviewLines("    Inherited", inherited)]
+        : [`  ${tier}: project override`, ...initPoolReviewLines("    Inherited", inherited), ...initPoolReviewLines("    Project", generated)];
+    });
+    for (const [tier, inherited] of input.inherited) {
+      if (!Object.hasOwn(input.sourceModels, tier) && !Object.hasOwn(input.generated, tier))
+        lines.push(`  ${tier}: inherited pool remains effective`, ...initPoolReviewLines("    Inherited", inherited.pool));
+    }
+    return lines;
+  }
+  const reviewed = new Set(input.tiers.map(({ tier }) => tier));
+  const lines = input.tiers.flatMap(({ tier, before, after }) => {
+    const inherited = input.inherited.get(tier)?.pool;
+    if (!inherited) return [];
+    if (before === undefined && after !== undefined)
+      return [`  ${tier}: project override`, ...initPoolReviewLines("    Inherited", inherited), ...initPoolReviewLines("    Project", after)];
+    if (after === undefined)
+      return [`  ${tier}: ${before === undefined ? "inherited" : "project pool removed; inherited"} pool becomes effective`, ...initPoolReviewLines("    Inherited", inherited)];
+    return [];
+  });
+  for (const [tier, inherited] of input.inherited) {
+    if (!reviewed.has(tier) && !Object.hasOwn(input.sourceModels, tier))
+      lines.push(`  ${tier}: inherited pool remains effective`, ...initPoolReviewLines("    Inherited", inherited.pool));
+  }
+  return lines;
 }
 
 function reconciliationRegistrySnapshot(
@@ -689,7 +953,11 @@ function reconciliationRegistrySnapshot(
   const knownProviders = new Set<string>();
   try {
     const all = ctx.modelRegistry.getAll();
-    models = all.map((model) => ({ provider: model.provider, id: model.id, virtual: isVirtualModel(model) }));
+    models = all.map((model) => ({
+      provider: model.provider,
+      id: model.id,
+      virtual: isVirtualModel(model),
+    }));
     for (const model of models) if (!model.virtual) knownProviders.add(model.provider);
   } catch {
     hasRegistryError = true;
@@ -712,11 +980,14 @@ function reconciliationRegistrySnapshot(
     authConfigured = undefined;
   }
   const rawEvidence = state.registryInventoryEvidence?.[provider];
-  const refreshEvidence = rawEvidence
-    && (rawEvidence.status === "complete" || rawEvidence.status === "partial" || rawEvidence.status === "stale")
-    && Number.isFinite(rawEvidence.refreshedAt)
-    ? { status: rawEvidence.status, refreshedAt: rawEvidence.refreshedAt }
-    : undefined;
+  const refreshEvidence =
+    rawEvidence &&
+    (rawEvidence.status === "complete" ||
+      rawEvidence.status === "partial" ||
+      rawEvidence.status === "stale") &&
+    Number.isFinite(rawEvidence.refreshedAt)
+      ? { status: rawEvidence.status, refreshedAt: rawEvidence.refreshedAt }
+      : undefined;
   return {
     models,
     knownProviders: [...knownProviders],
@@ -757,48 +1028,82 @@ function prospectiveConfigValidation(
   // or a classifier change from being saved. Values that make the policy unsafe
   // are caught by the semantic checks below.
   if (loaded.diagnostics.length > 0) return { installable: false, warnings: loaded.warnings };
-  const errors = validateTierPolicyConfig(loaded.config).filter((issue) => issue.severity === "error");
+  const errors = validateTierPolicyConfig(loaded.config).filter(
+    (issue) => issue.severity === "error",
+  );
   const validation = validateConfig(loaded.config);
-  errors.push(...validation.filter((issue) => issue.severity === "error"
-    && (issue.code?.startsWith("config.reliability_") || issue.code?.startsWith("config.affinity_"))));
+  errors.push(
+    ...validation.filter(
+      (issue) =>
+        issue.severity === "error" &&
+        (issue.code?.startsWith("config.reliability_") ||
+          issue.code?.startsWith("config.affinity_")),
+    ),
+  );
   return {
     installable: errors.length === 0 && classifierTotalTimeoutIssue(loaded.config) === undefined,
     warnings: loaded.warnings,
   };
 }
 
-function prospectiveConfigInstallable(source: ReconciliationConfigSource, bytes: Uint8Array, state: BifrostState): boolean {
+function prospectiveConfigInstallable(
+  source: ReconciliationConfigSource,
+  bytes: Uint8Array,
+  state: BifrostState,
+): boolean {
   return prospectiveConfigValidation(source, bytes, state).installable;
 }
 
 function reconciliationReportLines(report: ReconciliationCommandReport): string[] {
-  const lines = ["--- config reconcile ---", `source: ${report.source}`, `status: ${report.status}`];
+  const lines = [
+    "--- config reconcile ---",
+    `source: ${report.source}`,
+    `status: ${report.status}`,
+  ];
   if (report.provider) lines.push(`provider: ${report.provider}`);
   if (report.tier) lines.push(`tier: ${report.tier}`);
   if (report.inventoryStatus) lines.push(`inventory: ${report.inventoryStatus}`);
   if (report.reason) lines.push(`reason: ${report.reason}`);
   if (report.proposalDigest) lines.push(`proposal: ${report.proposalDigest}`);
   if (report.changes.length) {
-    lines.push("changes:", ...report.changes.map((change) => `  ${change.disposition} ${change.kind} ${change.tier}: ${change.modelKey}`));
+    lines.push(
+      "changes:",
+      ...report.changes.map(
+        (change) => `  ${change.disposition} ${change.kind} ${change.tier}: ${change.modelKey}`,
+      ),
+    );
   } else lines.push("changes: none");
   if (report.warnings.length) lines.push(`warnings: ${report.warnings.join(", ")}`);
-  if (report.applyResult?.configBackupPath) lines.push(`config backup: ${report.applyResult.configBackupPath}`);
-  if (report.applyResult?.ownershipBackupPath) lines.push(`ownership backup: ${report.applyResult.ownershipBackupPath}`);
+  if (report.applyResult?.configBackupPath)
+    lines.push(`config backup: ${report.applyResult.configBackupPath}`);
+  if (report.applyResult?.ownershipBackupPath)
+    lines.push(`ownership backup: ${report.applyResult.ownershipBackupPath}`);
   if (report.reason === "operator_repair_required") {
-    lines.push("repair: verify no Bifrost writer is active, inspect and remove only its exact stale reconciliation lock files, then retry recover.");
+    lines.push(
+      "repair: verify no Bifrost writer is active, inspect and remove only its exact stale reconciliation lock files, then retry recover.",
+    );
   }
   lines.push("-----------------------");
   return lines;
 }
 
-function emitReconciliationReport(ctx: ExtensionContext, report: ReconciliationCommandReport, json: boolean): void {
+function emitReconciliationReport(
+  ctx: ExtensionContext,
+  report: ReconciliationCommandReport,
+  json: boolean,
+): void {
   if (json) {
-    console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify({
-      ...report,
-      ...(report.reason === "operator_repair_required"
-        ? { operatorGuidance: "verify_no_active_writer_remove_exact_stale_locks_then_retry_recover" }
-        : {}),
-    })}`);
+    console.error(
+      `${BIFROST_JSON_PREFIX}${JSON.stringify({
+        ...report,
+        ...(report.reason === "operator_repair_required"
+          ? {
+              operatorGuidance:
+                "verify_no_active_writer_remove_exact_stale_locks_then_retry_recover",
+            }
+          : {}),
+      })}`,
+    );
   } else {
     uiOutput(ctx, reconciliationReportLines(report));
   }
@@ -808,24 +1113,48 @@ function blockedReconciliationReport(
   request: ReconciliationCommandRequest,
   reason: "source_invalid" | "store_io_failure",
 ): ReconciliationCommandReport {
-  return { action: request.action, source: request.source, status: "blocked", reason, changes: [], warnings: [] };
+  return {
+    action: request.action,
+    source: request.source,
+    status: "blocked",
+    reason,
+    changes: [],
+    warnings: [],
+  };
 }
 
-async function handleReconciliationCommand(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
+async function handleReconciliationCommand(
+  args: string,
+  ctx: ExtensionContext,
+  state: BifrostState,
+): Promise<void> {
   const commandArgs = args.replace(/^config\s+reconcile(?:\s+|$)/iu, "");
   const parsed = parseReconciliationCommandArgs(commandArgs);
   if (!parsed.ok) {
-    log(ctx, "usage: /bifrost config reconcile [--source project|workspace|user] [--tier <tier> --provider <provider>] [--refresh | --apply --proposal <digest> | --recover] [--json]", "warning");
+    log(
+      ctx,
+      "usage: /bifrost config reconcile [--source project|workspace|user] [--tier <tier> --provider <provider>] [--refresh | --apply --proposal <digest> | --recover] [--json]",
+      "warning",
+    );
     return;
   }
   const request = parsed.request;
   let source: ReconciliationSourceSnapshot;
   try {
     if (request.action === "recover") {
-      source = { ...reconciliationPaths(request.source), source: request.source, configBytes: null, ownershipBytes: null };
+      source = {
+        ...reconciliationPaths(request.source),
+        source: request.source,
+        configBytes: null,
+        ownershipBytes: null,
+      };
     } else source = readReconciliationSource(request.source);
   } catch {
-    emitReconciliationReport(ctx, blockedReconciliationReport(request, "source_invalid"), request.json);
+    emitReconciliationReport(
+      ctx,
+      blockedReconciliationReport(request, "source_invalid"),
+      request.json,
+    );
     return;
   }
 
@@ -833,51 +1162,86 @@ async function handleReconciliationCommand(args: string, ctx: ExtensionContext, 
     const initial = reconciliationRegistrySnapshot(ctx, state, request.provider);
     if (!initial.knownProviders.includes(request.provider)) {
       const { refresh: _refresh, ...previewRequest } = request;
-      const report = runReconciliationCommand(previewRequest, { source, registry: initial }, {
-        validateMergedConfig: () => false,
-        apply: applyReconciliationTransaction,
-        recover: recoverReconciliationTransaction,
-      });
+      const report = runReconciliationCommand(
+        previewRequest,
+        { source, registry: initial },
+        {
+          validateMergedConfig: () => false,
+          apply: applyReconciliationTransaction,
+          recover: recoverReconciliationTransaction,
+        },
+      );
       emitReconciliationReport(ctx, report, request.json);
       return;
     }
-    if (ctx.hasUI && !(await ctx.ui.confirm(
-      "Refresh provider model catalog?",
-      `Contact ${request.provider} to refresh its model catalog before previewing. This will not apply config changes.`,
-    ))) {
-      log(ctx, "catalog refresh cancelled; no config proposal was made");
+    if (
+      ctx.hasUI &&
+      !(await ctx.ui.confirm(
+        "Refresh provider model catalog?",
+        `Contact ${request.provider} to refresh its model catalog before previewing. This will not apply config changes.`,
+      ))
+    ) {
+      logImportant(ctx, "Catalog refresh cancelled", "No config proposal was made.", "info");
       return;
     }
     uiBusy(ctx, `Refreshing ${request.provider} model catalog...`);
     try {
       const outcome = await waitForRegistryRefresh(
-        (signal) => ctx.modelRegistry.refresh({ allowNetwork: true, force: true, providers: [request.provider], signal }),
+        (signal) =>
+          ctx.modelRegistry.refresh({
+            allowNetwork: true,
+            force: true,
+            providers: [request.provider],
+            signal,
+          }),
         ctx.signal,
-        (result) => setRegistryProviderEvidence(state, request.provider, projectProviderRefreshEvidence(
-          result,
-          request.provider,
-          initial.knownProviders,
-          Date.now(),
-        )),
+        (result) =>
+          setRegistryProviderEvidence(
+            state,
+            request.provider,
+            projectProviderRefreshEvidence(
+              result,
+              request.provider,
+              initial.knownProviders,
+              Date.now(),
+            ),
+          ),
       );
       if (outcome === "aborted") {
-        setRegistryProviderEvidence(state, request.provider, { status: "stale", refreshedAt: Date.now() });
-        emitReconciliationReport(ctx, {
-          action: "preview", source: request.source, status: "aborted", reason: "inventory_stale",
-          provider: request.provider, tier: request.tier, changes: [], warnings: [],
-        }, request.json);
+        setRegistryProviderEvidence(state, request.provider, {
+          status: "stale",
+          refreshedAt: Date.now(),
+        });
+        emitReconciliationReport(
+          ctx,
+          {
+            action: "preview",
+            source: request.source,
+            status: "aborted",
+            reason: "inventory_stale",
+            provider: request.provider,
+            tier: request.tier,
+            changes: [],
+            warnings: [],
+          },
+          request.json,
+        );
         return;
       }
     } catch {
-      setRegistryProviderEvidence(state, request.provider, { status: "stale", refreshedAt: Date.now() });
+      setRegistryProviderEvidence(state, request.provider, {
+        status: "stale",
+        refreshedAt: Date.now(),
+      });
     } finally {
       uiDone(ctx);
     }
   }
 
-  const registry = request.action === "recover"
-    ? reconciliationRegistrySnapshot(ctx, state, "")
-    : reconciliationRegistrySnapshot(ctx, state, request.provider);
+  const registry =
+    request.action === "recover"
+      ? reconciliationRegistrySnapshot(ctx, state, "")
+      : reconciliationRegistrySnapshot(ctx, state, request.provider);
   // A planned change that would load with structural warnings must say so
   // before the user commits it; the committed case reloads, which reports them.
   let prospectiveWarnings: readonly ConfigLoadDiagnostic[] = [];
@@ -890,12 +1254,17 @@ async function handleReconciliationCommand(args: string, ctx: ExtensionContext, 
     apply: applyReconciliationTransaction,
     recover: recoverReconciliationTransaction,
   };
-  const planRequest: ReconciliationCommandRequest = request.action === "preview" && request.refresh
-    ? (({ refresh: _refresh, ...previewRequest }) => previewRequest)(request)
-    : request;
+  const planRequest: ReconciliationCommandRequest =
+    request.action === "preview" && request.refresh
+      ? (({ refresh: _refresh, ...previewRequest }) => previewRequest)(request)
+      : request;
   const report = runReconciliationCommand(planRequest, { source, registry }, dependencies);
   if (report.status === "ready" && prospectiveWarnings.length > 0) {
-    log(ctx, `Bifrost config would load with warnings: ${prospectiveWarnings.map(({ message }) => message).join(" ")}`, "warning");
+    log(
+      ctx,
+      `Bifrost config would load with warnings: ${prospectiveWarnings.map(({ message }) => message).join(" ")}`,
+      "warning",
+    );
   }
   if (report.status === "committed") {
     const loaded = loadConfigForReload(process.cwd(), state.extensionDir);
@@ -909,7 +1278,11 @@ async function handleReconciliationCommand(args: string, ctx: ExtensionContext, 
   emitReconciliationReport(ctx, report, request.json);
 }
 
-function emitConfigMigrationReport(ctx: ExtensionContext, report: Record<string, unknown>, json: boolean): void {
+function emitConfigMigrationReport(
+  ctx: ExtensionContext,
+  report: Record<string, unknown>,
+  json: boolean,
+): void {
   if (json) {
     console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(report)}`);
     return;
@@ -917,77 +1290,140 @@ function emitConfigMigrationReport(ctx: ExtensionContext, report: Record<string,
   const lines = [
     `Config migration: ${String(report.status)} (${String(report.source)} source).`,
     ...(typeof report.reason === "string" ? [`No changes made: ${report.reason}.`] : []),
-    ...(typeof report.proposalDigest === "string" ? [`Review digest: ${report.proposalDigest}`] : []),
+    ...(typeof report.proposalDigest === "string"
+      ? [`Review digest: ${report.proposalDigest}`]
+      : []),
     ...(typeof report.backupPath === "string" ? [`Exact backup: ${report.backupPath}`] : []),
-    ...(report.status === "committed" ? ["Run /bifrost reload to activate the migrated configuration."] : []),
+    ...(report.status === "committed"
+      ? ["Run /bifrost reload to activate the migrated configuration."]
+      : []),
   ];
   uiOutput(ctx, lines);
 }
 
-async function handleConfigMigrationCommand(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
+async function handleConfigMigrationCommand(
+  args: string,
+  ctx: ExtensionContext,
+  state: BifrostState,
+): Promise<void> {
   const commandArgs = args.replace(/^config\s+migrate(?:\s+|$)/iu, "");
   const parsed = parseConfigMigrationArgs(commandArgs);
   if (!parsed.ok) {
-    log(ctx, "usage: /bifrost config migrate [--source project|workspace|user] [--apply --proposal <digest>] [--json]", "warning");
+    log(
+      ctx,
+      "usage: /bifrost config migrate [--source project|workspace|user] [--apply --proposal <digest>] [--json]",
+      "warning",
+    );
     return;
   }
   const request = parsed.request;
   const sourcePath = reconciliationPaths(request.source).configPath;
   let sourceBytes: Buffer;
-  try { sourceBytes = readConfigMigrationSource(sourcePath); }
-  catch {
-    emitConfigMigrationReport(ctx, { version: 1, source: request.source, status: "blocked", reason: "source_invalid" }, request.json);
+  try {
+    sourceBytes = readConfigMigrationSource(sourcePath);
+  } catch {
+    emitConfigMigrationReport(
+      ctx,
+      { version: 1, source: request.source, status: "blocked", reason: "source_invalid" },
+      request.json,
+    );
     return;
   }
 
   const plan = planConfigMigration(request.source, sourceBytes);
   if (plan.status === "blocked") {
-    emitConfigMigrationReport(ctx, { version: 1, source: request.source, status: "blocked", reason: plan.reason }, request.json);
+    emitConfigMigrationReport(
+      ctx,
+      { version: 1, source: request.source, status: "blocked", reason: plan.reason },
+      request.json,
+    );
     return;
   }
   if (plan.status === "current") {
-    emitConfigMigrationReport(ctx, { version: 1, source: request.source, status: "current" }, request.json);
+    emitConfigMigrationReport(
+      ctx,
+      { version: 1, source: request.source, status: "current" },
+      request.json,
+    );
     return;
   }
 
   if (!prospectiveConfigInstallable(request.source, plan.replacementBytes, state)) {
-    emitConfigMigrationReport(ctx, {
-      version: 1, source: request.source, status: "blocked", reason: "merged_config_invalid",
-    }, request.json);
+    emitConfigMigrationReport(
+      ctx,
+      {
+        version: 1,
+        source: request.source,
+        status: "blocked",
+        reason: "merged_config_invalid",
+      },
+      request.json,
+    );
     return;
   }
 
   if (!request.apply) {
-    emitConfigMigrationReport(ctx, {
-      version: 1, source: request.source, status: "ready",
-      proposalDigest: plan.proposalDigest,
-      changes: [{ path: "schemaVersion", from: plan.beforeVersion ?? "absent", to: 2 }],
-    }, request.json);
+    emitConfigMigrationReport(
+      ctx,
+      {
+        version: 1,
+        source: request.source,
+        status: "ready",
+        proposalDigest: plan.proposalDigest,
+        changes: [{ path: "schemaVersion", from: plan.beforeVersion ?? "absent", to: 2 }],
+      },
+      request.json,
+    );
     return;
   }
   if (request.proposalDigest !== plan.proposalDigest) {
-    emitConfigMigrationReport(ctx, { version: 1, source: request.source, status: "blocked", reason: "proposal_mismatch" }, request.json);
+    emitConfigMigrationReport(
+      ctx,
+      { version: 1, source: request.source, status: "blocked", reason: "proposal_mismatch" },
+      request.json,
+    );
     return;
   }
 
   try {
-    const backupPath = applyConfigMigration({ sourcePath, expectedSourceBytes: sourceBytes, replacementBytes: plan.replacementBytes });
-    emitConfigMigrationReport(ctx, {
-      version: 1, source: request.source, status: "committed",
-      proposalDigest: plan.proposalDigest, backupPath,
-      changes: [{ path: "schemaVersion", from: plan.beforeVersion ?? "absent", to: 2 }],
-    }, request.json);
+    const backupPath = applyConfigMigration({
+      sourcePath,
+      expectedSourceBytes: sourceBytes,
+      replacementBytes: plan.replacementBytes,
+    });
+    emitConfigMigrationReport(
+      ctx,
+      {
+        version: 1,
+        source: request.source,
+        status: "committed",
+        proposalDigest: plan.proposalDigest,
+        backupPath,
+        changes: [{ path: "schemaVersion", from: plan.beforeVersion ?? "absent", to: 2 }],
+      },
+      request.json,
+    );
   } catch (error) {
     const migrationError = error instanceof ConfigMigrationError ? error : undefined;
-    emitConfigMigrationReport(ctx, {
-      version: 1, source: request.source, status: "blocked",
-      reason: migrationError?.code ?? "apply_failed",
-      ...(migrationError?.backupPath ? { backupPath: migrationError.backupPath } : {}),
-    }, request.json);
+    emitConfigMigrationReport(
+      ctx,
+      {
+        version: 1,
+        source: request.source,
+        status: "blocked",
+        reason: migrationError?.code ?? "apply_failed",
+        ...(migrationError?.backupPath ? { backupPath: migrationError.backupPath } : {}),
+      },
+      request.json,
+    );
   }
 }
 
-async function handleConfigCommand(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
+async function handleConfigCommand(
+  args: string,
+  ctx: ExtensionContext,
+  state: BifrostState,
+): Promise<void> {
   if (/^config\s+migrate(?:\s|$)/iu.test(args.trim())) {
     await handleConfigMigrationCommand(args, ctx, state);
     return;
@@ -995,17 +1431,85 @@ async function handleConfigCommand(args: string, ctx: ExtensionContext, state: B
   await handleReconciliationCommand(args, ctx, state);
 }
 
-async function handleInit(
-  args: string,
-  ctx: ExtensionContext,
-  state: BifrostState,
-): Promise<void> {
+type InitReviewValue = null | boolean | number | string | InitReviewValue[] | { [key: string]: InitReviewValue };
+
+function initReviewValue(value: unknown, key?: string): InitReviewValue {
+  if (key && /api.?key|secret|password|credential|system.?prompt|endpoint|(?:access|auth|refresh|bearer|session).?token|^token$/iu.test(key)) {
+    return "[redacted]";
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "number") {
+    return value;
+  }
+  if (Array.isArray(value)) return value.map((item) => initReviewValue(item));
+  if (typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([nestedKey, nested]) => [
+      nestedKey,
+      initReviewValue(nested, nestedKey),
+    ]));
+  }
+  return String(value);
+}
+
+function initReviewSettingLines(key: string, value: unknown): string[] {
+  const serialized = JSON.stringify(initReviewValue(value, key), null, 2).split("\n");
+  if (serialized.length === 1) return [`    ${key}  ${serialized[0]}`];
+  return [`    ${key}:`, ...serialized.map((line) => `      ${line}`)];
+}
+
+async function handleInit(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
   const tokens = args.trim().split(/\s+/).slice(1);
-  if (tokens.some((token) => !["-f", "--write", "-g"].includes(token))) {
-    log(ctx, "usage: /bifrost init [-f] [--write] [-g]", "warning");
+  const unknownArgument = tokens.find((token) => !["-f", "--write", "-g"].includes(token));
+  if (unknownArgument) {
+    reportInitOutcome(
+      ctx,
+      "not started",
+      "Nothing was read or written.",
+      `Unknown argument: ${unknownArgument}. Usage: /bifrost init [-f] [--write] [-g].`,
+      "warning",
+    );
     return;
   }
   const selectedSource: ReconciliationConfigSource = tokens.includes("-g") ? "user" : "project";
+  const writeWithoutPrompt = tokens.includes("--write");
+  if (!ctx.hasUI && !writeWithoutPrompt) {
+    reportInitOutcome(
+      ctx,
+      "stopped before saving",
+      "Nothing was probed or saved.",
+      "Run /bifrost init in a host with confirmation, or pass --write to save without confirmation.",
+      "warning",
+    );
+    return;
+  }
+  try {
+    const preflight = readReconciliationSource(selectedSource);
+    if (preflight.configBytes !== null) {
+      const targetConfig = parseInheritedConfig(Buffer.from(preflight.configBytes).toString("utf8"));
+      if (targetConfig.models !== undefined) {
+        if (!targetConfig.models || typeof targetConfig.models !== "object" || Array.isArray(targetConfig.models)) {
+          throw new Error("invalid target model pools");
+        }
+        for (const pool of Object.values(targetConfig.models)) {
+          if (typeof pool !== "string" && !(Array.isArray(pool) && pool.every((key) => typeof key === "string"))) {
+            throw new Error("invalid target model pool");
+          }
+        }
+      }
+    }
+    if (preflight.ownershipBytes !== null) {
+      assertOwnershipPayload(preflight.ownershipBytes);
+    }
+    if (selectedSource === "project") readInheritedPools(["user", "workspace"]);
+  } catch {
+    reportInitOutcome(
+      ctx,
+      "blocked",
+      "Nothing was probed or saved; a config file could not be read safely.",
+      "Check your selected and inherited config files, then retry.",
+      "error",
+    );
+    return;
+  }
   const bootstrapOriginalConfig = state.onInitStarted?.(ctx.sessionManager);
   const initConfig = bootstrapOriginalConfig ?? state.config;
   clearBifrostWidgets(ctx);
@@ -1013,13 +1517,23 @@ async function handleInit(
   let refreshedCatalogKeys: string[] | undefined;
   let refreshedProviders: string[] = [];
   if (typeof ctx.modelRegistry.refresh === "function") {
-    state.registryInventoryEvidence = Object.freeze(Object.fromEntries(
-      Object.entries(state.registryInventoryEvidence ?? {}).map(([provider, evidence]) => [provider, { ...evidence, status: "stale" as const }]),
-    ));
+    state.registryInventoryEvidence = Object.freeze(
+      Object.fromEntries(
+        Object.entries(state.registryInventoryEvidence ?? {}).map(([provider, evidence]) => [
+          provider,
+          { ...evidence, status: "stale" as const },
+        ]),
+      ),
+    );
     uiBusy(ctx, "Refreshing Pi's model catalog...");
     try {
       const outcome = await waitForRegistryRefresh(
-        (signal) => ctx.modelRegistry.refresh({ allowNetwork: true, force: true, ...(signal ? { signal } : {}) }),
+        (signal) =>
+          ctx.modelRegistry.refresh({
+            allowNetwork: true,
+            force: true,
+            ...(signal ? { signal } : {}),
+          }),
         ctx.signal,
         (result) => {
           let knownProviders: string[] = [];
@@ -1028,11 +1542,17 @@ async function handleInit(
             knownProviders = [...new Set(catalog.map((model) => model.provider))];
             refreshedProviders = knownProviders;
             refreshedCatalogKeys = catalog.map(modelKey).sort();
+          } catch {
+            /* failed catalog snapshots stay stale */
           }
-          catch { /* failed catalog snapshots stay stale */ }
           const refreshedAt = Date.now();
           for (const provider of knownProviders) {
-            const evidence = projectProviderRefreshEvidence(result, provider, knownProviders, refreshedAt);
+            const evidence = projectProviderRefreshEvidence(
+              result,
+              provider,
+              knownProviders,
+              refreshedAt,
+            );
             state.registryInventoryEvidence = Object.freeze({
               ...(state.registryInventoryEvidence ?? {}),
               [provider]: Object.freeze(evidence),
@@ -1042,35 +1562,60 @@ async function handleInit(
       );
       if (outcome === "aborted") {
         state.forceRegistryRefresh = true;
-        log(ctx, "Model catalog refresh was cancelled; no configuration was changed.", "warning");
+        reportInitOutcome(
+          ctx,
+          "cancelled",
+          "Nothing was saved.",
+          "Run /bifrost init again to refresh the catalog.",
+          "info",
+        );
         return;
       }
       state.forceRegistryRefresh = false;
       if (refreshedCatalogKeys) {
         initRefreshReceipt = {
           catalogKeys: refreshedCatalogKeys,
-          evidence: new Map(refreshedProviders.flatMap((provider) => {
-            const evidence = state.registryInventoryEvidence?.[provider];
-            return evidence ? [[provider, evidence] as const] : [];
-          })),
+          evidence: new Map(
+            refreshedProviders.flatMap((provider) => {
+              const evidence = state.registryInventoryEvidence?.[provider];
+              return evidence ? [[provider, evidence] as const] : [];
+            }),
+          ),
         };
       }
     } catch {
       state.forceRegistryRefresh = true;
-      log(ctx, "Pi's model catalog could not be refreshed; using the available catalog snapshot.", "warning");
-    } finally { uiDone(ctx); }
+      logImportant(
+        ctx,
+        "Catalog refresh unavailable",
+        "Using the available catalog snapshot.",
+        "warning",
+      );
+    } finally {
+      uiDone(ctx);
+    }
   }
   // Reuse recent probe data; otherwise manual init probes before proposing model pools.
-  const probePath = join(process.cwd(), ".pi", "bifrost-probe.json");
+  const initStateDirectory = selectedSource === "user" ? getAgentDir() : join(process.cwd(), CONFIG_DIR_NAME);
+  const probePath = join(initStateDirectory, "bifrost-probe.json");
   const available = ctx.modelRegistry.getAvailable().filter((model) => !isVirtualModel(model));
-  let workingModels: { provider: string; model: string; cost: { input: number; output: number }; duration_ms: number }[] = [];
+  let workingModels: {
+    provider: string;
+    model: string;
+    cost: { input: number; output: number };
+    duration_ms: number;
+  }[] = [];
   let probeLoaded = false;
   let ranProbe = false;
   let probeAge = "";
+  const authFailedProbeProviders = new Set<string>();
 
   if (!isForced(args)) {
     const cachedResults = readRecentCompleteProbeReport(probePath, available);
     if (cachedResults) {
+      for (const result of cachedResults) {
+        if (failureDetails(result)?.reason === "authentication_or_access") authFailedProbeProviders.add(result.provider);
+      }
       workingModels = cachedResults
         .filter((result) => result.status === "ok")
         .map((result) => ({
@@ -1090,45 +1635,58 @@ async function handleInit(
     log(ctx, `Probing ${availableCount} models to find working ones...`);
     let okCount = 0;
     let errCount = 0;
-    const lastModels: string[] = [];
 
     uiBusy(ctx, `Probing ${availableCount} models...`);
-    const probeRun = await runProbe(ctx, {
-      ...probeOptionsFromConfig(initConfig.probe),
-      signal: ctx.signal,
-      onProgress: (done, total, last) => {
-        if (last.status === "ok") okCount++;
-        else if (last.status === "error" || last.status === "timeout") errCount++;
-        lastModels.push(`${last.provider}/${last.model}: ${last.status} (${last.duration_ms}ms)`);
-        if (lastModels.length > 5) lastModels.shift();
+    let probeRun: Awaited<ReturnType<typeof runProbe>>;
+    try {
+      probeRun = await runProbe(ctx, {
+        ...probeOptionsFromConfig(initConfig.probe),
+        path: probePath,
+        signal: ctx.signal,
 
-        if (ctx.hasUI) {
-          ctx.ui.setWidget("bifrost-probe", [
-            `Probing models: ${done}/${total}`,
-            `  ok: ${okCount}  errors: ${errCount}`,
-            "",
-            ...lastModels,
-          ]);
-        }
-      },
-    });
-    uiDone(ctx);
-    // The probe widget must never outlive the probe: every later exit path renders
-    // its feedback in the chat, and a stale progress panel reads as "still probing".
-    if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
+        onProgress: (done, total, last) => {
+          if (last.status === "ok") okCount++;
+          else if (last.status === "error" || last.status === "timeout") errCount++;
+
+          setProbeProgress(ctx, { done, total, okCount, errCount });
+        },
+      });
+    } finally {
+      // The probe widget must never outlive the probe: every later exit path
+      // renders its feedback in the chat, and a stale progress panel reads as
+      // "still probing". A rejected probe skips the code below, so clear here.
+      uiDone(ctx);
+      if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
+    }
     if (probeRun.cancelled || ctx.signal?.aborted) {
-      log(ctx, "Init probing was cancelled; no configuration was changed.", "warning");
+      reportInitOutcome(
+        ctx,
+        "cancelled",
+        "Nothing was saved.",
+        "Probe results from this run were discarded; run /bifrost init again to retry.",
+        "info",
+      );
       return;
     }
     const { results } = probeRun;
-    state.reliabilityStore.applyOutcomes(
-      results.map((r) =>
-        r.status === "ok"
-          ? { model: `${r.provider}/${r.model}`, ok: true as const, source: "probe" }
-          : { model: `${r.provider}/${r.model}`, ok: false as const, source: "probe", reason: r.error ?? r.status }
-      ),
-      Date.now()
-    );
+    for (const result of results) {
+      if (failureDetails(result)?.reason === "authentication_or_access") authFailedProbeProviders.add(result.provider);
+    }
+    if (selectedSource !== "user") {
+      state.reliabilityStore.applyOutcomes(
+        results.map((r) =>
+          r.status === "ok"
+            ? { model: `${r.provider}/${r.model}`, ok: true as const, source: "probe" }
+            : {
+                model: `${r.provider}/${r.model}`,
+                ok: false as const,
+                source: "probe",
+                reason: r.error ?? r.status,
+              },
+        ),
+        Date.now(),
+      );
+    }
 
     workingModels = results
       .filter((r) => r.status === "ok")
@@ -1148,23 +1706,42 @@ async function handleInit(
     log(ctx, `Probe complete: ok=${ok} error=${errors} timeout=${timeouts} skipped=${skipped}.`);
   }
   if (probeLoaded && workingModels.length === 0) {
-    log(ctx, "No usable models found. Check API keys, network, and credits; no configuration was changed.", "error");
+    reportInitOutcome(
+      ctx,
+      "failed — no working models",
+      "Nothing was saved.",
+      "Check API keys, credits, and network, then retry.",
+      "error",
+    );
     return;
   }
 
   let refreshRemainsCurrent = false;
   if (ranProbe && initRefreshReceipt && !ctx.signal?.aborted && !state.forceRegistryRefresh) {
     try {
-      const currentKeys = ctx.modelRegistry.getAll().filter((model) => !isBifrostAuto(model)).map(modelKey).sort();
-      refreshRemainsCurrent = currentKeys.length === initRefreshReceipt.catalogKeys.length
-        && currentKeys.every((key, index) => key === initRefreshReceipt!.catalogKeys[index])
-        && [...initRefreshReceipt.evidence].every(([provider, evidence]) =>
-          state.registryInventoryEvidence?.[provider] === evidence);
-    } catch { /* an unreadable catalog cannot extend this command's refresh evidence */ }
+      const currentKeys = ctx.modelRegistry
+        .getAll()
+        .filter((model) => !isBifrostAuto(model))
+        .map(modelKey)
+        .sort();
+      refreshRemainsCurrent =
+        currentKeys.length === initRefreshReceipt.catalogKeys.length &&
+        currentKeys.every((key, index) => key === initRefreshReceipt!.catalogKeys[index]) &&
+        [...initRefreshReceipt.evidence].every(
+          ([provider, evidence]) => state.registryInventoryEvidence?.[provider] === evidence,
+        );
+    } catch {
+      /* an unreadable catalog cannot extend this command's refresh evidence */
+    }
   }
 
-  if (probeLoaded && workingModels.length > 0) {
-    log(ctx, `Using ${workingModels.length} probe-verified models (${probeAge}).`);
+  if (probeLoaded && workingModels.length > 0 && ctx.mode !== "tui") {
+    logImportant(
+      ctx,
+      "Using verified models",
+      `${workingModels.length} working models (${probeAge}).`,
+      "info",
+    );
   }
 
   const models: Record<string, string[]> = {};
@@ -1175,9 +1752,7 @@ async function handleInit(
 
     // If probe data is loaded, skip models that failed or timed out.
     if (probeLoaded) {
-      const working = workingModels.find(
-        (w) => w.provider === m.provider && w.model === m.id,
-      );
+      const working = workingModels.find((w) => w.provider === m.provider && w.model === m.id);
       if (!working) continue;
     }
 
@@ -1191,7 +1766,13 @@ async function handleInit(
   }
 
   if (probeLoaded && Object.values(models).every((pool) => pool.length === 0)) {
-    log(ctx, "No probe-verified models remain in Pi's current catalog; no configuration was changed.", "error");
+    reportInitOutcome(
+      ctx,
+      "failed — no working models",
+      "Nothing was saved.",
+      "Check API keys, credits, and network, then retry.",
+      "error",
+    );
     return;
   }
   const probeVerified = new Set(Object.values(models).flat());
@@ -1204,59 +1785,131 @@ async function handleInit(
       models[tier].sort((a, b) => (speedMap.get(a) ?? Infinity) - (speedMap.get(b) ?? Infinity));
     }
   }
-
   let source: ReconciliationSourceSnapshot;
-  try { source = readReconciliationSource(selectedSource); }
-  catch {
-    log(ctx, "Init could not safely snapshot the current config; no files were changed.", "error");
+  try {
+    source = readReconciliationSource(selectedSource);
+  } catch {
+    reportInitOutcome(
+      ctx,
+      "blocked",
+      "Nothing was saved; the current config could not be read safely.",
+      "Check that the config file is readable, then retry.",
+      "error",
+    );
     return;
   }
   let sourceConfig: Record<string, unknown> = {};
   if (source.configBytes !== null) {
     try {
       const parsed: unknown = JSON.parse(Buffer.from(source.configBytes).toString("utf8"));
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid config root");
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+        throw new Error("invalid config root");
       sourceConfig = parsed as Record<string, unknown>;
     } catch {
-      log(ctx, "Init could not safely read the selected config; no files were changed.", "error");
+      reportInitOutcome(
+        ctx,
+        "blocked",
+        "Nothing was saved; the selected config could not be parsed.",
+        "Fix the config file, then run /bifrost init again.",
+        "error",
+      );
       return;
     }
   }
-  const sourceModels = sourceConfig.models && typeof sourceConfig.models === "object" && !Array.isArray(sourceConfig.models)
-    ? sourceConfig.models as Record<string, unknown> : {};
+  const sourceModels =
+    sourceConfig.models &&
+    typeof sourceConfig.models === "object" &&
+    !Array.isArray(sourceConfig.models)
+      ? (sourceConfig.models as Record<string, unknown>)
+      : {};
+  const hasConfiguredTiers = Object.keys(sourceModels).length > 0;
+  const ownership = source.ownershipBytes === null
+    ? undefined
+    : parseOwnershipSnapshot(JSON.parse(Buffer.from(source.ownershipBytes).toString("utf8")));
+  const hasDeletedTierIntent = ownership?.scope === source.source
+    && Object.keys(ownership.tiers).some((tier) => !(tier in sourceModels));
   let inheritedSources: readonly InheritedPoolSnapshot[] = [];
   let inheritedTiers: ReadonlySet<string> = new Set<string>();
+  let inheritedEffective: ReadonlyMap<string, InheritedTierPool> = new Map();
   if (selectedSource === "project") {
     try {
       const inherited = readInheritedPools(["user", "workspace"]);
       inheritedSources = inherited.snapshots;
       inheritedTiers = inherited.tierNames;
-      const shadowedTiers = findShadowedTiers(models, sourceModels, inherited.effective);
-      if (shadowedTiers.length > 0) {
-        log(ctx, `Init would shadow inherited model pools (${shadowedTiers.join(", ")}); no configuration was changed. Edit the existing source, use /bifrost init -g for global config, or review /bifrost config reconcile --source workspace.`, "warning");
-        return;
-      }
+      inheritedEffective = inherited.effective;
     } catch {
-      log(ctx, "Init could not safely read inherited config; no configuration was changed.", "error");
+      reportInitOutcome(
+        ctx,
+        "blocked",
+        "Nothing was saved; your inherited config could not be read safely.",
+        "Fix your global or workspace config, then retry.",
+        "error",
+      );
       return;
     }
   }
-  const sourceClassifier = sourceConfig.classifier && typeof sourceConfig.classifier === "object" && !Array.isArray(sourceConfig.classifier)
-    ? sourceConfig.classifier as Record<string, unknown>
-    : {};
-  const configLayers = loadConfigForReload(process.cwd(), state.extensionDir);
+  if (selectedSource === "project" && !hasConfiguredTiers) {
+    const availableProviders = new Set(available.map((model) => model.provider));
+    const inheritedPoolHasCompleteInventory = (pool: readonly string[]) => pool.every((key) => {
+      const separator = key.indexOf("/");
+      const provider = key.slice(0, separator);
+      const evidence = state.registryInventoryEvidence?.[provider];
+      if (!provider || separator < 1 || !availableProviders.has(provider) || state.forceRegistryRefresh) return false;
+      let authConfigured: boolean | undefined;
+      try {
+        authConfigured = ctx.modelRegistry.getProviderAuthStatus(provider)?.configured;
+      } catch {
+        authConfigured = undefined;
+      }
+      const now = Date.now();
+      return authConfigured === true && !authFailedProbeProviders.has(provider) &&
+        evidence?.status === "complete" && now >= evidence.refreshedAt &&
+        (now - evidence.refreshedAt < REGISTRY_REFRESH_TTL_MS ||
+          (refreshRemainsCurrent && initRefreshReceipt?.evidence.get(provider) === evidence));
+    });
+    for (const [tier, inherited] of inheritedEffective) {
+      const generated = models[tier];
+      if (!generated) continue;
+      const identical = generated.length === inherited.pool.length &&
+        generated.every((key, index) => key === inherited.pool[index]);
+      const completeInventory = inheritedPoolHasCompleteInventory(inherited.pool);
+      if (!writeWithoutPrompt && !identical && !completeInventory) {
+        reportInitOutcome(
+          ctx,
+          "blocked",
+          `Nothing was saved; inherited ${tier} pool cannot be safely replaced because its provider inventory is unknown, unsigned-in, or stale.`,
+          "Sign in to each inherited provider and refresh its model catalog, then rerun /bifrost init to review the replacement.",
+          "warning",
+        );
+        return;
+      }
+      if (writeWithoutPrompt || (identical && !hasDeletedTierIntent)) delete models[tier];
+    }
+  }
+  const generatedPools = Object.fromEntries(
+    Object.entries(models).map(([tier, pool]) => [tier, [...pool]]),
+  );
+  const sourceClassifier =
+    sourceConfig.classifier &&
+    typeof sourceConfig.classifier === "object" &&
+    !Array.isArray(sourceConfig.classifier)
+      ? (sourceConfig.classifier as Record<string, unknown>)
+      : {};
+  // SAFETY: bundled public defaults are serialized config fields; this view only indexes them by config key.
   const publicDefaults = BUNDLED_PUBLIC_INIT_DEFAULTS as unknown as Record<string, unknown>;
-  const layerOrder = ["global", "workspace", "project"] as const;
-  const targetLayer = source.source === "project" ? "project" : source.source === "workspace" ? "workspace" : "global";
-  const targetLayerIndex = layerOrder.indexOf(targetLayer);
-  const inheritedFields = new Set(configLayers.sourceFields
-    .filter(({ layer }) => layer !== "effective" && layerOrder.indexOf(layer as typeof layerOrder[number]) < targetLayerIndex)
-    .flatMap(({ fields }) => fields));
+  const inheritedFields = new Set(
+    selectedSource === "project"
+      ? loadConfigForReload(process.cwd(), state.extensionDir).sourceFields
+          .filter(({ layer }) => ["global", "workspace"].includes(layer))
+          .flatMap(({ fields }) => fields)
+      : [],
+  );
   const detectedClassifier = state.effectiveClassifierBackend(initConfig, ctx);
   const classifierEnabled = classifierEnablementFor(state, ctx, initConfig).enabled;
-  const needsDetectedPromptModel = classifierEnabled
-    && detectedClassifier.backend === CLASSIFIER_BACKEND_IDS.prompt
-    && initConfig.classifier?.model === undefined;
+  const needsDetectedPromptModel =
+    classifierEnabled &&
+    detectedClassifier.backend === CLASSIFIER_BACKEND_IDS.prompt &&
+    initConfig.classifier?.model === undefined;
   let classifierModel: string | undefined;
   if (needsDetectedPromptModel) {
     const reliability = state.reliabilityStore.getState();
@@ -1271,18 +1924,29 @@ async function handleInit(
     const eligibleKeys = new Set(eligible.map(modelKey));
     const probeChoices = probeLoaded
       ? workingModels
-        .filter((model) => eligibleKeys.has(`${model.provider}/${model.model}`)
-          && (model.cost.input + model.cost.output) < 2)
-        .sort((left, right) => left.duration_ms - right.duration_ms)
+          .filter(
+            (model) =>
+              eligibleKeys.has(`${model.provider}/${model.model}`) &&
+              model.cost.input + model.cost.output < 2,
+          )
+          .sort((left, right) => left.duration_ms - right.duration_ms)
       : [];
     classifierModel = probeChoices[0]
       ? `${probeChoices[0].provider}/${probeChoices[0].model}`
-      : !probeLoaded && eligible[0] ? modelKey(eligible[0]) : undefined;
+      : !probeLoaded && eligible[0]
+        ? modelKey(eligible[0])
+        : undefined;
     if (!classifierModel) {
-      log(ctx, "No working models found for classifier. Init will omit classifier.model; regex fallback remains available.", "warning");
+      logImportant(
+        ctx,
+        "Classifier model unavailable",
+        "Init will omit classifier.model; regex fallback remains available.",
+        "warning",
+      );
     }
   }
-  const effectiveClassifierSummary = !classifierEnabled ? "off"
+  const effectiveClassifierSummary = !classifierEnabled
+    ? "off"
     : detectedClassifier.backend !== CLASSIFIER_BACKEND_IDS.prompt
       ? `${detectedClassifier.backend} (${detectedClassifier.auto ? "detected default" : "configured"})`
       : initConfig.classifier?.model
@@ -1293,7 +1957,9 @@ async function handleInit(
 
   const proposal = buildInitProposal(
     models,
-    inheritedFields.has("classifier") || sourceConfig.classifier !== undefined ? undefined : classifierModel,
+    inheritedFields.has("classifier") || sourceConfig.classifier !== undefined
+      ? undefined
+      : classifierModel,
     state.extensionDir,
     sourceClassifier.backend as ClassifierBackend | undefined,
   ) as Record<string, unknown> & { classifier: Record<string, unknown> };
@@ -1308,29 +1974,55 @@ async function handleInit(
   };
   proposal.reliability = publicDefaults.reliability ?? resolveReliabilityConfig(undefined);
   proposal.debug = publicDefaults.debug ?? { enabled: false };
-  for (const key of ["schemaVersion", "tierPolicies", "economics", "affinity", "routingScope", "probe"] as const) {
+  for (const key of [
+    "schemaVersion",
+    "tierPolicies",
+    "economics",
+    "affinity",
+    "routingScope",
+    "probe",
+  ] as const) {
     if (sourceConfig[key] !== undefined) proposal[key] = sourceConfig[key];
     else if (publicDefaults[key] !== undefined) proposal[key] = publicDefaults[key];
   }
   proposal.enabled = sourceConfig.enabled ?? publicDefaults.enabled ?? true;
   proposal.strategy = sourceConfig.strategy ?? publicDefaults.strategy ?? "first";
   const proposedStrategies = proposal.categoryStrategies as Record<string, RoutingStrategy>;
-  proposal.categoryStrategies = Object.fromEntries(Object.keys(models).map((tier) => [
-    tier,
-    (sourceConfig.categoryStrategies as Record<string, RoutingStrategy> | undefined)?.[tier]
-      ?? (publicDefaults.categoryStrategies as Record<string, RoutingStrategy> | undefined)?.[tier]
-      ?? proposedStrategies[tier]
-      ?? "first",
-  ]));
-  const finalTiers = new Set([...Object.keys(models), ...Object.keys(sourceModels), ...inheritedTiers]);
+  proposal.categoryStrategies = Object.fromEntries(
+    Object.keys(models).map((tier) => [
+      tier,
+      (sourceConfig.categoryStrategies as Record<string, RoutingStrategy> | undefined)?.[tier] ??
+        (publicDefaults.categoryStrategies as Record<string, RoutingStrategy> | undefined)?.[
+          tier
+        ] ??
+        proposedStrategies[tier] ??
+        "first",
+    ]),
+  );
+  const finalTiers = new Set([
+    ...Object.keys(models),
+    ...Object.keys(sourceModels),
+    ...inheritedTiers,
+  ]);
   proposal.rules = sourceConfig.rules ?? DEFAULT_RULES.filter(({ model }) => finalTiers.has(model));
   const defaultTier = sourceConfig.default ?? publicDefaults.default;
-  if (typeof defaultTier === "string" && models[defaultTier]?.length) proposal.default = defaultTier;
+  if (typeof defaultTier === "string" && models[defaultTier]?.length)
+    proposal.default = defaultTier;
   let transaction: Parameters<typeof applyReconciliationTransaction>[0];
   let receiptOnly = false;
   let changes: readonly { kind: "add" | "remove"; tier: string; modelKey: string }[];
+  let plannedTierReview:
+    | readonly {
+        tier: string;
+        before: readonly string[] | undefined;
+        after: readonly string[] | undefined;
+        ownershipBefore: string;
+        ownershipAfter: string;
+      }[]
+    | undefined;
   let settingsAdded = false;
-  if (source.configBytes !== null) {
+  let actionSelectionApproved = false;
+  if (source.configBytes !== null && (hasConfiguredTiers || hasDeletedTierIntent)) {
     const byProvider = new Map<string, Record<string, string[]>>();
     for (const model of available) {
       if (isBifrostAuto(model)) continue;
@@ -1342,32 +2034,273 @@ async function handleInit(
       if (probeLoaded && !probeVerified.has(key)) continue;
       byTier[tier] = [...(byTier[tier] ?? []), key];
     }
-    const inventories = [...byProvider.entries()].map(([provider, modelsByTier]) => {
+    const inventoryProviders = new Set(byProvider.keys());
+    const availableProviders = new Set(available.map((model) => model.provider));
+    const affectedPoolProviders = new Set<string>();
+    const addPoolProviders = (pool: readonly string[] | undefined) => {
+      for (const key of pool ?? []) {
+        const separator = key.indexOf("/");
+        if (separator > 0 && separator < key.length - 1 && !key.slice(0, separator).includes("/")) {
+          affectedPoolProviders.add(key.slice(0, separator));
+        }
+      }
+    };
+    for (const [tier, inherited] of inheritedEffective) {
+      if (models[tier] && (models[tier].length !== inherited.pool.length ||
+        models[tier].some((key, index) => key !== inherited.pool[index]))) {
+        addPoolProviders(inherited.pool);
+      }
+    }
+    for (const tier of Object.keys(ownership?.tiers ?? {})) {
+      const pool = sourceModels[tier];
+      if (models[tier] && (typeof pool === "string" || (Array.isArray(pool) && pool.every((key) => typeof key === "string"))) &&
+        tierOwnership(ownership, tier, pool) === "managed") {
+        addPoolProviders(typeof pool === "string" ? [pool] : pool);
+      }
+    }
+    for (const provider of affectedPoolProviders) {
+      if (!availableProviders.has(provider)) inventoryProviders.add(provider);
+    }
+    const inventories = [...inventoryProviders].map((provider) => {
+      const modelsByTier = byProvider.get(provider) ?? {};
       const evidence = state.registryInventoryEvidence?.[provider];
       let authConfigured: boolean | undefined;
-      try { authConfigured = ctx.modelRegistry.getProviderAuthStatus(provider)?.configured; }
-      catch { authConfigured = undefined; }
+      try {
+        authConfigured = ctx.modelRegistry.getProviderAuthStatus(provider)?.configured;
+      } catch {
+        authConfigured = undefined;
+      }
       const now = Date.now();
-      const fresh = evidence?.status === "complete" && now >= evidence.refreshedAt
-        && (now - evidence.refreshedAt < REGISTRY_REFRESH_TTL_MS
-          || refreshRemainsCurrent && initRefreshReceipt?.evidence.get(provider) === evidence);
-      const status = state.forceRegistryRefresh ? "stale" as const
-        : authConfigured === false ? "auth_failed" as const
-          : fresh && authConfigured === true ? "complete" as const : "stale" as const;
+      const fresh =
+        evidence?.status === "complete" &&
+        now >= evidence.refreshedAt &&
+        (now - evidence.refreshedAt < REGISTRY_REFRESH_TTL_MS ||
+          (refreshRemainsCurrent && initRefreshReceipt?.evidence.get(provider) === evidence));
+      const status = state.forceRegistryRefresh || !availableProviders.has(provider)
+        ? ("stale" as const)
+        : authConfigured === false || authFailedProbeProviders.has(provider)
+          ? ("auth_failed" as const)
+          : fresh && authConfigured === true
+            ? ("complete" as const)
+            : ("stale" as const);
       return { provider, status, modelsByTier };
     });
-    const plan = buildInitMembershipPlan(
-      source,
-      inventories,
-      (selected, bytes) => prospectiveConfigInstallable(selected, bytes, state),
-      source.source === "workspace" ? initConfig.models : undefined,
+    const validateMergedConfig = (selected: ReconciliationConfigSource, bytes: Uint8Array) =>
+      prospectiveConfigInstallable(selected, bytes, state);
+    const actionPlans = new Map(
+      (["keep", "merge", "defaults"] as const).map((action) => [
+        action,
+        buildInitActionPlan({
+          action,
+          source,
+          inventories,
+          generated: models,
+          inheritedTiers,
+          inheritedPools: new Map([...inheritedEffective].map(([tier, value]) => [tier, value.pool])),
+          validateMergedConfig,
+        }),
+      ]),
     );
+    const keepPlan = actionPlans.get("keep")!;
+    const proposedSettings = Object.keys(proposal).filter(
+      (key) => key !== "$schema" && key !== "models" && !inheritedFields.has(key) && sourceConfig[key] === undefined,
+    );
+    const planSignature = (candidate: (typeof keepPlan)) =>
+      `${candidate.status}:${candidate.reason ?? ""}:${candidate.transaction ? Buffer.from(candidate.transaction.nextConfigBytes).toString("base64") : ""}:${candidate.transaction ? Buffer.from(candidate.transaction.nextOwnershipBytes).toString("base64") : ""}`;
+    const keepSignature = planSignature(keepPlan);
+    const actionHasCompleteRemovalInventory = (candidate: (typeof keepPlan)) =>
+      candidate.tiers.every(({ tier, before, after }) => {
+        const retained = new Set(after ?? []);
+        const inherited = inheritedEffective.get(tier)?.pool;
+        const changedInherited = inherited !== undefined && JSON.stringify(after) !== JSON.stringify(inherited);
+        const affected = changedInherited ? inherited : (before ?? []).filter((model) => !retained.has(model));
+        return affected.every((model) =>
+          inventories.find(({ provider }) => provider === model.slice(0, model.indexOf("/")))?.status === "complete");
+      });
+    const availableActions = (["keep", "merge", "defaults"] as const).filter((action) => {
+      const candidate = actionPlans.get(action)!;
+      return (
+        actionHasCompleteRemovalInventory(candidate) && (
+        (candidate.status === "ready" && candidate.transaction !== undefined) ||
+        (candidate.status === "blocked" && candidate.reason === "no_changes")
+      ) && (action === "keep" || planSignature(candidate) !== keepSignature));
+    });
+    const hasUnavailableAction = (["keep", "merge", "defaults"] as const).some((action) => {
+      const candidate = actionPlans.get(action)!;
+      return candidate.reason !== undefined && candidate.reason !== "no_changes";
+    });
+    if (availableActions.length === 0) {
+      reportInitOutcome(
+        ctx,
+        "blocked",
+        "Nothing was saved; no model update is safe with the current inventory.",
+        "Refresh the provider catalog, then rerun /bifrost init.",
+        "warning",
+      );
+      return;
+    }
+    const actionSelectionRequired =
+      availableActions.length > 1 ||
+      (availableActions.length === 1 && (availableActions[0] !== "keep" || hasUnavailableAction));
+    let selectedAction: (typeof availableActions)[number] = "keep";
+    if (actionSelectionRequired && !writeWithoutPrompt) {
+      const actionLabel = (action: (typeof availableActions)[number] | "defaults") =>
+        action === "keep" ? "Keep my models" : action === "merge" ? "Merge new models" : "Bifrost defaults";
+      const retainedTierLine = ({ tier, before, after, ownershipBefore }: (typeof keepPlan.tiers)[number]) => {
+        if (ownershipBefore === "deleted" && before === undefined && after === undefined) return `    ${tier}: remains deleted`;
+        if (ownershipBefore === "user" && JSON.stringify(before) === JSON.stringify(after))
+          return `    ${tier}: custom pool retained`;
+        return undefined;
+      };
+      const compareLines = [
+        "◆ Bifrost · Review model choices",
+        `  Save to ${initSourceLabel(source)}`,
+        ...(selectedSource === "project" ? ["  Global/workspace files stay unchanged."] : []),
+        "  Unlisted tiers remain unchanged.",
+        `  Classifier ${effectiveClassifierSummary}`,
+        ...(proposedSettings.length
+          ? ["  Settings added:", ...proposedSettings.flatMap((key) => initReviewSettingLines(key, proposal[key]))]
+          : []),
+        "",
+      ];
+      compareLines.push(...(["keep", "merge", "defaults"] as const)
+        .filter((candidateAction) => !availableActions.includes(candidateAction))
+        .map((candidateAction) => {
+          const candidate = actionPlans.get(candidateAction)!;
+          const label = actionLabel(candidateAction);
+          const equivalentAction = availableActions.find((availableAction) =>
+            planSignature(actionPlans.get(availableAction)!) === planSignature(candidate),
+          );
+          if (equivalentAction) {
+            return `  ${label}: same outcome as ${actionLabel(equivalentAction)}.`;
+          }
+          const unavailableReason = candidate.reason === "prospective_config_invalid"
+            ? "the proposed config failed validation"
+            : candidate.reason === "source_invalid"
+              ? "the selected config needs repair"
+              : "not safe with current model results";
+          return `  ${label} unavailable: ${unavailableReason}.`;
+        }));
+      for (const action of availableActions) {
+        const candidate = actionPlans.get(action)!;
+        compareLines.push(`  ${actionLabel(action)}:`);
+        compareLines.push(...candidate.tiers
+          .filter(({ before, after, ownershipBefore, ownershipAfter }) =>
+            JSON.stringify(before) !== JSON.stringify(after) ||
+            ownershipBefore !== ownershipAfter ||
+            ownershipBefore === "user" ||
+            ownershipBefore === "deleted",
+          )
+          .flatMap((tier) => {
+            if (selectedSource === "project" && tier.before === undefined && tier.after !== undefined && inheritedEffective.has(tier.tier))
+              return [];
+            const retainedLine = retainedTierLine(tier);
+            if (retainedLine) {
+              return tier.ownershipBefore === "user"
+                ? [retainedLine, ...initPoolReviewLines("      Model", tier.before)]
+                : [retainedLine];
+            }
+            return [
+              `    ${tier.tier}${tier.ownershipBefore !== tier.ownershipAfter && JSON.stringify(tier.before) === JSON.stringify(tier.after) ? " (reset to Bifrost defaults)" : ""}`,
+              ...initPoolReviewLines("      Before", tier.before),
+              ...initPoolReviewLines("      After", tier.after),
+            ];
+          }));
+        compareLines.push(...initInheritanceReviewLines({
+          source: selectedSource,
+          sourceModels,
+          inherited: inheritedEffective,
+          generated: models,
+          tiers: candidate.tiers,
+        }).map((line) => `  ${line.trimStart()}`));
+      }
+      if (ctx.mode === "tui" && ctx.hasUI) {
+        const labels = availableActions.map((action) =>
+          action === "keep" ? "Keep my models (default)" : action === "merge" ? "Merge new models" : "Bifrost defaults",
+        );
+        try {
+          const selection = await showInitReview(ctx, compareLines.slice(0, 12), compareLines, labels);
+          const selectedIndex = selection ? labels.findIndex((label) => label === selection) : -1;
+          if (selectedIndex >= 0) {
+            selectedAction = availableActions[selectedIndex];
+            actionSelectionApproved = true;
+          } else {
+            clearBifrostWidgets(ctx);
+            reportInitOutcome(ctx, "cancelled", "Nothing was saved.", "Run /bifrost init again to review choices.", "info");
+            return;
+          }
+        } catch {
+          if (!await renderInitPreview(ctx, compareLines)) {
+            clearBifrostWidgets(ctx);
+            reportInitOutcome(ctx, "blocked", "Nothing was saved; the complete setup preview could not be displayed.", "Rerun /bifrost init in Pi's interactive terminal to review the full preview.", "error");
+            return;
+          }
+        }
+      } else if (!await renderInitPreview(ctx, compareLines)) {
+        clearBifrostWidgets(ctx);
+        reportInitOutcome(ctx, "blocked", "Nothing was saved; the complete setup preview could not be displayed.", "Rerun /bifrost init in Pi's interactive terminal to review the full preview.", "error");
+        return;
+      }
+    }
+    if (!writeWithoutPrompt && actionSelectionRequired && !actionSelectionApproved) {
+      const labels: string[] = availableActions.map((action) =>
+        action === "keep" ? "Keep my models (default)" : action === "merge" ? "Merge new models" : "Bifrost defaults",
+      );
+      const selectedLabel = await ctx.ui.select(
+        `Bifrost · Update ${selectedSource === "user" ? "global" : "project"} model pools?`,
+        labels,
+      );
+      const selectedIndex = selectedLabel ? labels.indexOf(selectedLabel) : -1;
+      if (selectedIndex < 0) {
+        clearBifrostWidgets(ctx);
+        reportInitOutcome(ctx, "cancelled", "Nothing was saved.", "Run /bifrost init again to review choices.", "info");
+        return;
+      }
+      selectedAction = availableActions[selectedIndex];
+      actionSelectionApproved = true;
+    }
+    if (!availableActions.includes(selectedAction)) {
+      reportInitOutcome(
+        ctx,
+        "blocked",
+        "Nothing was saved; the selected model action is unavailable.",
+        "Choose an available action explicitly, then rerun /bifrost init.",
+        "warning",
+      );
+      return;
+    }
+    const plan = actionPlans.get(selectedAction)!;
+    if (
+      !writeWithoutPrompt &&
+      selectedAction === "keep" &&
+      plan.status === "blocked" &&
+      plan.reason === "no_changes" &&
+      proposedSettings.length === 0
+    ) {
+      reportInitOutcome(
+        ctx,
+        "unchanged",
+        "No distinct model update needs review; nothing was saved.",
+        undefined,
+        "info",
+      );
+      return;
+    }
+    plannedTierReview = plan.tiers;
     if (plan.status !== "ready" || !plan.transaction) {
       if (plan.reason === "no_changes" && plan.status === "blocked") {
-        const existing = JSON.parse(Buffer.from(source.configBytes!).toString("utf8")) as Record<string, unknown>;
+        const existing = JSON.parse(Buffer.from(source.configBytes!).toString("utf8")) as Record<
+          string,
+          unknown
+        >;
         let addedSetting = false;
         for (const [key, value] of Object.entries(proposal)) {
-          if (key !== "$schema" && (key === "models" || !inheritedFields.has(key)) && existing[key] === undefined) {
+          if (
+            key !== "$schema" &&
+            key !== "models" &&
+            !inheritedFields.has(key) &&
+            existing[key] === undefined
+          ) {
             existing[key] = value;
             addedSetting = true;
           }
@@ -1375,10 +2308,19 @@ async function handleInit(
         if (addedSetting) {
           settingsAdded = true;
           const nextConfigBytes = Buffer.from(JSON.stringify(existing, null, 2) + "\n", "utf8");
-          const ownershipBytes = source.ownershipBytes ?? Buffer.from(JSON.stringify({ version: 1, sources: {} }, null, 2) + "\n", "utf8");
-          if (nextConfigBytes.byteLength > MAX_CONFIG_SOURCE_BYTES
-            || !prospectiveConfigInstallable(source.source, nextConfigBytes, state)) {
-            log(ctx, "Init's proposed config is invalid or exceeds the safe write limit; no files were changed.", "error");
+          const ownershipBytes =
+            source.ownershipBytes ?? emptyOwnershipBytes(source.source);
+          if (
+            nextConfigBytes.byteLength > MAX_CONFIG_SOURCE_BYTES ||
+            !prospectiveConfigInstallable(source.source, nextConfigBytes, state)
+          ) {
+            reportInitOutcome(
+              ctx,
+              "blocked",
+              "Nothing was saved; the proposed config is invalid or too large.",
+              "Inspect the existing config, then retry.",
+              "error",
+            );
             return;
           }
           transaction = {
@@ -1386,14 +2328,22 @@ async function handleInit(
             ownershipPath: source.ownershipPath,
             journalPath: source.journalPath,
             expectedConfigDigest: createHash("sha256").update(source.configBytes!).digest("hex"),
-            expectedOwnershipDigest: source.ownershipBytes ? createHash("sha256").update(source.ownershipBytes).digest("hex") : null,
+            expectedOwnershipDigest: source.ownershipBytes
+              ? createHash("sha256").update(source.ownershipBytes).digest("hex")
+              : null,
             nextConfigBytes,
             nextOwnershipBytes: ownershipBytes,
           };
           changes = [];
         } else {
           if (source.ownershipBytes !== null) {
-            log(ctx, "The refreshed catalog has no safe membership or settings changes; no files were changed.");
+            reportInitOutcome(
+              ctx,
+              "unchanged",
+              "Nothing changed; the pools already match what init would write.",
+              undefined,
+              "info",
+            );
             return;
           }
           // Empty ownership claims make existing entries explicitly manual without rewriting config.
@@ -1405,31 +2355,71 @@ async function handleInit(
             expectedConfigDigest: createHash("sha256").update(source.configBytes!).digest("hex"),
             expectedOwnershipDigest: null,
             nextConfigBytes: source.configBytes!,
-            nextOwnershipBytes: Buffer.from(JSON.stringify({ version: 1, sources: {} }, null, 2) + "\n", "utf8"),
+            nextOwnershipBytes: emptyOwnershipBytes(source.source),
           };
           changes = [];
         }
       } else {
-      log(ctx, plan.status === "advisory"
-        ? "Pi's model inventory is incomplete or stale, so Init cannot safely change memberships. Refresh the catalog and retry; no files were changed."
-        : plan.reason === "no_changes"
-          ? "The refreshed catalog has no safe membership changes; no files were changed."
-          : "Init could not safely prepare a membership update (" + (plan.reason ?? "unknown source state") + "); no files were changed.",
-      plan.reason === "no_changes" ? undefined : "warning");
-      return;
+        if (plan.status === "advisory") {
+          reportInitOutcome(
+            ctx,
+            "paused",
+            "Nothing was saved; the model inventory is incomplete or stale.",
+            "Run /bifrost init -f to refresh the catalog, then retry.",
+            "warning",
+          );
+        } else if (plan.reason === "no_changes") {
+          reportInitOutcome(
+            ctx,
+            "unchanged",
+            "Nothing changed; the pools already match what init would write.",
+            undefined,
+            "info",
+          );
+        } else {
+          reportInitOutcome(
+            ctx,
+            "blocked",
+            plan.reason === "source_invalid"
+              ? "Nothing was saved; the existing configuration is invalid."
+              : plan.reason === "prospective_config_invalid"
+                ? "Nothing was saved; the proposed configuration failed validation."
+                : `Nothing was saved; the pool changes could not be prepared (${plan.reason ?? "unknown reason"}).`,
+            "Fix the configuration and retry.",
+            "error",
+          );
+        }
+        return;
       }
     } else {
-      const reconciled = JSON.parse(Buffer.from(plan.transaction.nextConfigBytes).toString("utf8")) as Record<string, unknown>;
+      const reconciled = JSON.parse(
+        Buffer.from(plan.transaction.nextConfigBytes).toString("utf8"),
+      ) as Record<string, unknown>;
       for (const [key, value] of Object.entries(proposal)) {
-        if (key !== "$schema" && (key === "models" || !inheritedFields.has(key)) && reconciled[key] === undefined) {
+        if (
+          key !== "$schema" &&
+          key !== "models" &&
+          !inheritedFields.has(key) &&
+          reconciled[key] === undefined
+        ) {
           reconciled[key] = value;
           settingsAdded = true;
         }
       }
-      const nextConfigBytes = Buffer.from(JSON.stringify(reconciled, null, 2) + "\n", "utf8");
-      if (nextConfigBytes.byteLength > MAX_CONFIG_SOURCE_BYTES
-        || !prospectiveConfigInstallable(source.source, nextConfigBytes, state)) {
-        log(ctx, "Init's proposed config is invalid or exceeds the safe write limit; no files were changed.", "error");
+      const nextConfigBytes = settingsAdded
+        ? Buffer.from(JSON.stringify(reconciled, null, 2) + "\n", "utf8")
+        : plan.transaction.nextConfigBytes;
+      if (
+        nextConfigBytes.byteLength > MAX_CONFIG_SOURCE_BYTES ||
+        !prospectiveConfigInstallable(source.source, nextConfigBytes, state)
+      ) {
+        reportInitOutcome(
+          ctx,
+          "blocked",
+          "Nothing was saved; the proposed config is invalid or too large.",
+          "Inspect the existing config, then retry.",
+          "error",
+        );
         return;
       }
       transaction = { ...plan.transaction, nextConfigBytes };
@@ -1437,123 +2427,310 @@ async function handleInit(
     }
   } else {
     if (source.ownershipBytes !== null) {
-      log(ctx, "Init found an ownership receipt without its config and cannot safely replace it.", "error");
+      reportInitOutcome(
+        ctx,
+        "blocked",
+        "Nothing was saved; a saved ownership file exists without its config.",
+        "Review the target directory, then retry.",
+        "error",
+      );
       return;
     }
-    const ownership = buildInitOwnershipReceipt(models);
+    const ownership = buildInitOwnershipReceipt(source.source, models);
     if (!ownership) {
-      log(ctx, "Init could not create a safe exact-membership ownership receipt; no files were changed.", "error");
+      reportInitOutcome(
+        ctx,
+        "blocked",
+        "Nothing was saved; the ownership file for this init could not be created.",
+        "Retry; if it fails again, inspect the target directory.",
+        "error",
+      );
       return;
     }
-    const installProposal = Object.fromEntries(Object.entries(proposal)
-      .filter(([key]) => key === "$schema" || key === "models" || !inheritedFields.has(key)));
-    const configBytes = Buffer.from(JSON.stringify(installProposal, null, 2) + "\n", "utf8");
+    const installProposal = Object.fromEntries(
+      Object.entries(proposal).filter(
+        ([key]) => key === "$schema" || key === "models" || !inheritedFields.has(key),
+      ),
+    );
+    const nextConfig = source.configBytes === null
+      ? installProposal
+      : { ...installProposal, ...sourceConfig, models };
+    const configBytes = Buffer.from(JSON.stringify(nextConfig, null, 2) + "\n", "utf8");
     const ownershipBytes = Buffer.from(JSON.stringify(ownership, null, 2) + "\n", "utf8");
-    if (configBytes.byteLength > MAX_CONFIG_SOURCE_BYTES
-      || ownershipBytes.byteLength > 5_000_000
-      || !prospectiveConfigInstallable(source.source, configBytes, state)) {
-      log(ctx, "Init's proposed config is invalid or exceeds the safe write limit; no files were changed.", "error");
+    if (
+      configBytes.byteLength > MAX_CONFIG_SOURCE_BYTES ||
+      ownershipBytes.byteLength > 5_000_000 ||
+      !prospectiveConfigInstallable(source.source, configBytes, state)
+    ) {
+      reportInitOutcome(
+        ctx,
+        "blocked",
+        "Nothing was saved; the proposed config is invalid or too large.",
+        "Inspect the existing config, then retry.",
+        "error",
+      );
       return;
     }
     transaction = {
       configPath: source.configPath,
       ownershipPath: source.ownershipPath,
       journalPath: source.journalPath,
-      expectedConfigDigest: null,
-      expectedOwnershipDigest: null,
+      expectedConfigDigest: source.configBytes
+        ? createHash("sha256").update(source.configBytes).digest("hex")
+        : null,
+      expectedOwnershipDigest: source.ownershipBytes
+        ? createHash("sha256").update(source.ownershipBytes).digest("hex")
+        : null,
       nextConfigBytes: configBytes,
       nextOwnershipBytes: ownershipBytes,
     };
-    settingsAdded = true;
-    changes = Object.entries(models).flatMap(([tier, keys]) => keys.map((key) => ({ kind: "add" as const, tier, modelKey: key })));
+    settingsAdded = Object.keys(installProposal).some(
+      (key) => key !== "$schema" && key !== "models" && sourceConfig[key] === undefined,
+    );
+    changes = Object.entries(models).flatMap(([tier, keys]) =>
+      keys.map((key) => ({ kind: "add" as const, tier, modelKey: key })),
+    );
   }
-  const savedPools = (JSON.parse(Buffer.from(transaction.nextConfigBytes).toString("utf8")) as Record<string, unknown>).models as Record<string, unknown>;
-  const savedModelKeys = Object.values(savedPools).flatMap((pool) =>
-    typeof pool === "string" ? [pool] : Array.isArray(pool) ? pool.filter((key): key is string => typeof key === "string") : []);
-  const unverifiedSavedCount = probeLoaded ? savedModelKeys.filter((key) => !probeVerified.has(key)).length : 0;
+  const savedPools = (
+    JSON.parse(Buffer.from(transaction.nextConfigBytes).toString("utf8")) as Record<string, unknown>
+  ).models as Record<string, unknown> | undefined;
+  const savedModelKeys = Object.values(savedPools ?? {}).flatMap((pool) =>
+    typeof pool === "string"
+      ? [pool]
+      : Array.isArray(pool)
+        ? pool.filter((key): key is string => typeof key === "string")
+        : [],
+  );
+  const unverifiedSavedCount = probeLoaded
+    ? savedModelKeys.filter((key) => !probeVerified.has(key)).length
+    : 0;
   const added = changes.filter((change) => change.kind === "add");
   const removed = changes.filter((change) => change.kind === "remove");
-  const tierSummary = [...new Set(changes.map((change) => change.tier))].sort()
-    .map((tier) => tier + ": +" + added.filter((change) => change.tier === tier).length
-      + "/-" + removed.filter((change) => change.tier === tier).length)
-    .slice(0, 5);
-  const deltaSummary = "memberships: +" + added.length + " / -" + removed.length
-    + (tierSummary.length ? " (" + tierSummary.join(", ") + ")" : "");
-  uiOutput(ctx, [
-    "--- init ---",
-    `source: ${probeLoaded ? `probe (${workingModels.length} working)` : `registry (${available.length} listed)`}`,
-    `save target: ${initSourceLabel(source)}`,
-    deltaSummary,
-    `classifier: ${effectiveClassifierSummary}`,
-    settingsAdded ? "settings: standard routing defaults added where missing" : "",
-    `uncategorized: ${uncategorized.length}`,
-    "proposed config: classifier and routing defaults detected from Pi's available models",
-    "----------------",
-    probeLoaded ? "" : "Catalog entries are listed models, not a health check.",
-    uncategorized.length ? "Uncategorized models stay out of generated pools." : "",
-    unverifiedSavedCount ? `${unverifiedSavedCount} saved model membership(s) were not probe-verified; handwritten entries are preserved.` : "",
-  ].filter(Boolean));
+  const changedTiers = plannedTierReview
+    ? plannedTierReview
+        .filter(({ before, after, ownershipBefore, ownershipAfter }) =>
+          JSON.stringify(before) !== JSON.stringify(after) ||
+          ownershipBefore !== ownershipAfter ||
+          ownershipBefore === "user" ||
+          ownershipBefore === "deleted",
+        )
+        .map(({ tier }) => tier)
+    : [...new Set([...changes.map((change) => change.tier), ...(!hasConfiguredTiers ? Object.keys(generatedPools) : [])])].sort();
+  const poolLines = changedTiers.flatMap((tier) => {
+    const reviewedTier = plannedTierReview?.find((entry) => entry.tier === tier);
+    if (!reviewedTier && !hasConfiguredTiers && generatedPools[tier]) {
+      return [`  ${tier}:`, ...generatedPools[tier].map((key, index) => `    ${index + 1}. ${key}`)];
+    }
+    if (reviewedTier) {
+      if (selectedSource === "project" && reviewedTier.before === undefined && reviewedTier.after !== undefined && inheritedEffective.has(tier))
+        return [];
+      if (reviewedTier.ownershipBefore === "deleted" && reviewedTier.before === undefined && reviewedTier.after === undefined)
+        return [`  ${tier}: remains deleted`];
+      if (reviewedTier.ownershipBefore === "user" && JSON.stringify(reviewedTier.before) === JSON.stringify(reviewedTier.after))
+        return [`  ${tier}: custom pool retained`, ...initPoolReviewLines("    Model", reviewedTier.before)];
+      return [
+        `  ${tier}${reviewedTier.ownershipBefore !== reviewedTier.ownershipAfter && JSON.stringify(reviewedTier.before) === JSON.stringify(reviewedTier.after) ? " (reset to Bifrost defaults)" : ""}`,
+        ...initPoolReviewLines("    Before", reviewedTier.before),
+        ...initPoolReviewLines("    After", reviewedTier.after),
+      ];
+    }
+    const additions = added.filter((change) => change.tier === tier).map((change) => change.modelKey);
+    const removals = removed.filter((change) => change.tier === tier).map((change) => change.modelKey);
+    return [
+      `  ${tier}:`,
+      ...(additions.length ? ["    Added:", ...additions.map((key, index) => `      ${index + 1}. ${key}`)] : ["    No additions"]),
+      ...(removals.length ? ["    Removed:", ...removals.map((key, index) => `      ${index + 1}. ${key}`)] : []),
+    ];
+  });
+  const inheritedOverrideLines = initInheritanceReviewLines({
+    source: selectedSource,
+    sourceModels,
+    inherited: inheritedEffective,
+    generated: generatedPools,
+    tiers: plannedTierReview,
+  });
+
+  const savedConfigForPreview = JSON.parse(
+    Buffer.from(transaction.nextConfigBytes).toString("utf8"),
+  ) as Record<string, unknown>;
+  const addedSettings = Object.keys(proposal).filter(
+    (key) => key !== "$schema" && key !== "models" && !inheritedFields.has(key) && sourceConfig[key] === undefined,
+  );
+  const settingsReviewLines = addedSettings.flatMap((key) =>
+    initReviewSettingLines(key, savedConfigForPreview[key]),
+  );
+  const previewLines = [
+    "◆ Bifrost · Setup preview",
+    "",
+    probeLoaded
+      ? `  ✓ ${workingModels.length} working models (${probeAge})`
+      : `  ${available.length} catalog models (not tested)`,
+    "",
+    `  Models      +${added.length} / -${removed.length}`,
+    ...(hasConfiguredTiers ? ["  Unlisted tiers remain unchanged."] : []),
+    ...poolLines,
+    ...(inheritedOverrideLines.length
+      ? ["  Project-only overrides (global/workspace files unchanged):", ...inheritedOverrideLines]
+      : []),
+    `  Classifier  ${effectiveClassifierSummary}`,
+    `  Save to     ${initSourceLabel(source)}`,
+    ...(settingsAdded ? ["  Settings added:", ...settingsReviewLines] : []),
+    ...(uncategorized.length ? [`  ! ${uncategorized.length} uncategorized models excluded`] : []),
+    ...(unverifiedSavedCount
+      ? [` ⚠️ ${unverifiedSavedCount} unverified models kept`]
+      : []),
+  ];
+
+  if (!writeWithoutPrompt && !actionSelectionApproved) {
+    if (ctx.mode === "tui") ctx.ui.setWidget("bifrost-probe", undefined);
+    const needsApproval = !hasConfiguredTiers || settingsAdded;
+    if (ctx.mode === "tui" && ctx.hasUI && needsApproval) {
+      try {
+        const result = await showInitReview(ctx, previewLines.slice(0, 12), previewLines, ["Approve and save", "Cancel"]);
+        if (result !== "Approve and save") {
+          clearBifrostWidgets(ctx);
+          reportInitOutcome(ctx, "declined", "Nothing was saved; recent probe results are reused for an hour unless you pass -f or the catalog changes.", "Run /bifrost init again to review and save.", "info");
+          return;
+        }
+        actionSelectionApproved = true;
+      } catch {
+        if (!await renderInitPreview(ctx, previewLines)) {
+          clearBifrostWidgets(ctx);
+          reportInitOutcome(ctx, "blocked", "Nothing was saved; the complete setup preview could not be displayed.", "Rerun /bifrost init in Pi's interactive terminal to review the full preview.", "error");
+          return;
+        }
+      }
+    } else if (!await renderInitPreview(ctx, previewLines)) {
+      clearBifrostWidgets(ctx);
+      reportInitOutcome(ctx, "blocked", "Nothing was saved; the complete setup preview could not be displayed.", "Rerun /bifrost init in Pi's interactive terminal to review the full preview.", "error");
+      return;
+    }
+  }
 
   if (uncategorized.length > 0) {
-    log(ctx, `${uncategorized.length} model(s) uncategorized — edit ${source.configPath} to assign them.`);
+    logImportant(
+      ctx,
+      "Uncategorized models",
+      `${uncategorized.length} model(s) are not in any tier. Edit ${source.configPath} to assign them.`,
+      "warning",
+    );
   }
 
-  const writeWithoutPrompt = args.trim().split(/\s+/).includes("--write");
-  if (!ctx.hasUI && !writeWithoutPrompt) {
-    log(ctx, "run in TUI or use --write to persist", "warning");
-    return;
-  }
-
-  const ok = writeWithoutPrompt || await ctx.ui.confirm(
-    "Save Bifrost setup?",
-    `Save ${deltaSummary} to ${initSourceLabel(source)}?`,
-  );
+  const ok =
+    writeWithoutPrompt ||
+    actionSelectionApproved ||
+    ((!hasConfiguredTiers || settingsAdded) &&
+      (await ctx.ui.confirm("Save Bifrost setup?", "Apply the changes shown above?")));
+  // The review card is stale from here on: every remaining exit either saves or
+  // reports why not, and the footer card must be the terminal state.
+  clearBifrostWidgets(ctx);
   if (!ok) {
-    log(ctx, "config not written");
+    reportInitOutcome(
+      ctx,
+      "declined",
+      "Nothing was saved; recent probe results are reused for an hour unless you pass -f or the catalog changes.",
+      "Run /bifrost init again to review and save.",
+      "info",
+    );
     return;
   }
 
   if (ctx.signal?.aborted) {
-    log(ctx, "Init was cancelled before the reviewed update could be saved.", "warning");
+    reportInitOutcome(
+      ctx,
+      "cancelled",
+      "The reviewed update was not saved.",
+      "Run /bifrost init again to review and save.",
+      "info",
+    );
     return;
   }
-  const currentKeys = ctx.modelRegistry.getAvailable().filter((model) => !isBifrostAuto(model)).map(modelKey).sort();
-  const plannedKeys = available.filter((model) => !isBifrostAuto(model)).map(modelKey).sort();
+  const currentKeys = ctx.modelRegistry
+    .getAvailable()
+    .filter((model) => !isBifrostAuto(model))
+    .map(modelKey)
+    .sort();
+  const plannedKeys = available
+    .filter((model) => !isBifrostAuto(model))
+    .map(modelKey)
+    .sort();
   let refreshReceiptChanged = false;
   if (refreshRemainsCurrent && initRefreshReceipt) {
     try {
-      const currentCatalogKeys = ctx.modelRegistry.getAll().filter((model) => !isBifrostAuto(model)).map(modelKey).sort();
-      refreshReceiptChanged = state.forceRegistryRefresh === true
-        || currentCatalogKeys.length !== initRefreshReceipt.catalogKeys.length
-        || currentCatalogKeys.some((key, index) => key !== initRefreshReceipt!.catalogKeys[index])
-        || [...initRefreshReceipt.evidence].some(([provider, evidence]) =>
-          state.registryInventoryEvidence?.[provider] !== evidence);
-    } catch { refreshReceiptChanged = true; }
+      const currentCatalogKeys = ctx.modelRegistry
+        .getAll()
+        .filter((model) => !isBifrostAuto(model))
+        .map(modelKey)
+        .sort();
+      refreshReceiptChanged =
+        state.forceRegistryRefresh === true ||
+        currentCatalogKeys.length !== initRefreshReceipt.catalogKeys.length ||
+        currentCatalogKeys.some((key, index) => key !== initRefreshReceipt!.catalogKeys[index]) ||
+        [...initRefreshReceipt.evidence].some(
+          ([provider, evidence]) => state.registryInventoryEvidence?.[provider] !== evidence,
+        );
+    } catch {
+      refreshReceiptChanged = true;
+    }
   }
-  if (refreshReceiptChanged || currentKeys.length !== plannedKeys.length
-    || currentKeys.some((key, index) => key !== plannedKeys[index])) {
-    log(ctx, "Pi's model inventory changed while Init was awaiting confirmation; no files were changed. Retry to review the new memberships.", "warning");
+  if (
+    refreshReceiptChanged ||
+    currentKeys.length !== plannedKeys.length ||
+    currentKeys.some((key, index) => key !== plannedKeys[index])
+  ) {
+    reportInitOutcome(
+      ctx,
+      "stale review",
+      "Nothing was saved; Pi's model inventory changed while awaiting confirmation.",
+      "Run /bifrost init again to review the new models.",
+      "warning",
+    );
     return;
   }
   let currentSource: ReconciliationSourceSnapshot;
-  try { currentSource = readReconciliationSource(selectedSource); }
-  catch {
-    log(ctx, "The config destination changed while Init was awaiting confirmation; no files were changed.", "warning");
+  try {
+    currentSource = readReconciliationSource(selectedSource);
+  } catch {
+    reportInitOutcome(
+      ctx,
+      "blocked",
+      "Nothing was saved; the config destination could not be checked.",
+      "Run /bifrost init again.",
+      "warning",
+    );
     return;
   }
   try {
     for (const { path, text } of inheritedSources) {
       if (readInheritedConfigSnapshot(path) !== text) {
-        log(ctx, "Inherited config changed while Init was awaiting confirmation; no files were changed. Retry to review the new configuration.", "warning");
+        reportInitOutcome(
+          ctx,
+          "stale review",
+          "Nothing was saved; your inherited config changed while awaiting confirmation.",
+          "Run /bifrost init again to review the new configuration.",
+          "warning",
+        );
         return;
       }
     }
   } catch {
-    log(ctx, "Inherited config could not be checked; no files were changed.", "warning");
+    reportInitOutcome(
+      ctx,
+      "blocked",
+      "Nothing was saved; your inherited config could not be checked.",
+      "Run /bifrost init again.",
+      "warning",
+    );
     return;
   }
   if (currentSource.source !== source.source || currentSource.configPath !== source.configPath) {
-    log(ctx, "The config destination changed while Init was awaiting confirmation; no files were changed.", "warning");
+    reportInitOutcome(
+      ctx,
+      "stale review",
+      "Nothing was saved; the config destination changed while awaiting confirmation.",
+      "Run /bifrost init again.",
+      "warning",
+    );
     return;
   }
   const targetDirectory = dirname(source.configPath);
@@ -1572,18 +2749,34 @@ async function handleInit(
     } else {
       applyReconciliationTransaction(transaction);
     }
-  }
-  catch (error) {
+  } catch (error) {
     const locked = error instanceof ReconciliationStoreError && error.code === "locked";
-    log(ctx, locked
-      ? "Init could not acquire reconciliation locks. Verify no Bifrost writer is active and repair only exact stale lock files before retrying."
-      : "Init could not safely commit the reviewed membership update; existing files were preserved.", "error");
+    reportInitOutcome(
+      ctx,
+      locked ? "blocked by a lock" : "failed",
+      locked
+        ? "Nothing was saved; another Bifrost writer holds the lock."
+        : `The reviewed update to ${source.configPath} could not be confirmed.`,
+      locked
+        ? "Verify no other Bifrost writer is active and remove only exact stale lock files, then retry."
+        : `Inspect the file and run /bifrost config reconcile --source ${selectedSource} --recover before retrying.`,
+      "error",
+    );
     return;
   }
 
   // Auto-reload so the extension picks up the new config immediately.
   const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
-  if (!installReloadedConfig(state, loadedConfig, ctx)) return;
+  if (!installReloadedConfig(state, loadedConfig, ctx)) {
+    reportInitOutcome(
+      ctx,
+      "failed",
+      "The configuration was written but could not be reloaded.",
+      "Fix the diagnostics above, then run /bifrost reload.",
+      "error",
+    );
+    return;
+  }
   const runtimeState = loadRuntimeState(runtimeStatePath(process.cwd()), {
     enabled: state.config.enabled ?? true,
     pinned: false,
@@ -1596,17 +2789,25 @@ async function handleInit(
   state.reliabilityStore.reload(state.config.reliability, process.cwd());
   state.classifierMetricsStore.reload({
     cwd: process.cwd(),
-    enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
+    enabled: classifierMetricsEnabled(
+      state.config,
+      state.effectiveClassifierBackend(state.config).backend,
+    ),
   });
-  log(ctx, `updated ${initSourceLabel(source)} and reloaded config`);
-  log(ctx, `Bifrost active with ${Object.keys(state.config.models ?? {}).length} tier(s). Try a prompt.`);
-  const classifier = state.effectiveClassifierBackend(state.config, ctx);
-  log(ctx, `Classifier: ${classifier.backend} (${classifier.auto ? "detected default" : "configured"}). Use /bifrost classifier to change it.`);
 
-  // Clear the init widget so it doesn't persist in the TUI.
-  if (ctx.hasUI) {
-    ctx.ui.setWidget("bifrost-output", []);
-  }
+  const tierCount = Object.keys(state.config.models ?? {}).length;
+  const tiers = `${tierCount} tier${tierCount === 1 ? "" : "s"}`;
+  reportInitOutcome(
+    ctx,
+    "saved",
+    // Saving does not switch routing on: /bifrost off persists across reloads,
+    // so report the state the user is actually in.
+    state.enabled
+      ? `Saved ${source.configPath} and reloaded. Bifrost is active with ${tiers}.`
+      : `Saved ${source.configPath} and reloaded. Bifrost is configured with ${tiers}, but routing is off.`,
+    state.enabled ? "Send a prompt to try it." : "Run /bifrost on to route prompts.",
+    "success",
+  );
 }
 
 function increasedMetric(
@@ -1632,13 +2833,16 @@ export function buildClassifierTestReport(input: {
   const outcome = increasedMetric(after.outcomes, before.outcomes);
   // A rejected judgment still names the tier it proposed. Prefer that over the
   // metrics delta, which is absent whenever metrics are disabled.
-  const attemptedTier = result.classifierAttempt?.backend === backend ? result.classifierAttempt.tier : undefined;
-  const observedTier = judgment?.backend === backend
-    ? judgment.tier
-    : attemptedTier ?? increasedMetric(after.tiers, before.tiers);
+  const attemptedTier =
+    result.classifierAttempt?.backend === backend ? result.classifierAttempt.tier : undefined;
+  const observedTier =
+    judgment?.backend === backend
+      ? judgment.tier
+      : attemptedTier ?? increasedMetric(after.tiers, before.tiers);
 
   const acceptedConfidence = judgment?.backend === backend ? judgment.confidence : undefined;
-  const attemptedConfidence = result.classifierAttempt?.backend === backend ? result.classifierAttempt.confidence : undefined;
+  const attemptedConfidence =
+    result.classifierAttempt?.backend === backend ? result.classifierAttempt.confidence : undefined;
   let observedConfidence = increasedMetric(after.confidenceBands, before.confidenceBands) ?? "n/a";
   if (acceptedConfidence !== undefined) {
     observedConfidence = String(acceptedConfidence);
@@ -1650,14 +2854,17 @@ export function buildClassifierTestReport(input: {
   const configuredModel = Array.isArray(rawPromptModel) ? rawPromptModel.join(", ") : rawPromptModel;
   // A rejected attempt's confidence belongs to the model that produced it, which
   // may be auto-resolved from the catalog and differ from configured values.
-  const attemptedModel = result.classifierAttempt?.backend === backend ? result.classifierAttempt.model : undefined;
-  const model = judgment?.backend === backend
-    ? judgment.model
-    : attemptedModel ?? (backend === CLASSIFIER_BACKEND_IDS.typesafe
-      ? classifier?.typesafe?.model ?? TYPE_SAFE_MODEL
-      : backend === CLASSIFIER_BACKEND_IDS.piNative
-        ? classifier?.piNative?.model ?? "catalog default"
-        : configuredModel);
+  const attemptedModel =
+    result.classifierAttempt?.backend === backend ? result.classifierAttempt.model : undefined;
+  const model =
+    judgment?.backend === backend
+      ? judgment.model
+      : attemptedModel ??
+        (backend === CLASSIFIER_BACKEND_IDS.typesafe
+          ? classifier?.typesafe?.model ?? TYPE_SAFE_MODEL
+          : backend === CLASSIFIER_BACKEND_IDS.piNative
+            ? classifier?.piNative?.model ?? "catalog default"
+            : configuredModel);
   const finalResult = result.kind === "unclassified" ? "unclassified" : result.tier;
   const finalSource = result.kind === "classified" ? result.source : result.kind;
   const accepted = result.kind === "classified" && judgment?.backend === backend;
@@ -1675,7 +2882,8 @@ export function buildClassifierTestReport(input: {
     `metric delta: +${Math.max(0, after.total - before.total)} observation(s)`,
     `classifier fallback: ${result.classifierAttempt?.fallbackKind ?? "none"}`,
   ];
-  if (backend === CLASSIFIER_BACKEND_IDS.typesafe) lines.push(`credential: ${credential ?? "missing"}`);
+  if (backend === CLASSIFIER_BACKEND_IDS.typesafe)
+    lines.push(`credential: ${credential ?? "missing"}`);
   if (backend !== CLASSIFIER_BACKEND_IDS.prompt && after.total > before.total) {
     lines.push(`outcome: ${outcome ?? "recorded"}`);
   }
@@ -1687,17 +2895,27 @@ async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState):
   const classifier = state.config.classifier;
   const enablement = classifierEnablementFor(state, ctx);
   if (enablement.runtimeStateIssue) {
-    log(ctx, "Classifier is paused because runtime state is invalid. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.", "error");
+    logImportant(
+      ctx,
+      "Classifier test blocked",
+      "Runtime state is invalid. Repair .pi/bifrost-state.json, then run /bifrost reload.",
+      "error",
+    );
     return;
   }
   if (!enablement.enabled) {
-    log(ctx, "Classifier is disabled; run /bifrost classifier on first", "warning");
+    logImportant(
+      ctx,
+      "Classifier test unavailable",
+      "Classifier is disabled; run /bifrost classifier on first.",
+      "warning",
+    );
     return;
   }
   const effective = state.effectiveClassifierBackend(state.config, ctx);
   const errors = classifierConfigErrors(state.config, effective.backend, true);
   if (errors.length > 0) {
-    log(ctx, `Classifier test blocked by configuration errors: ${errors.join(" ")}`, "error");
+    logImportant(ctx, "Classifier test blocked", errors.join(" "), "error");
     return;
   }
   const before = state.classifierMetricsStore.snapshot();
@@ -1712,17 +2930,22 @@ async function handleClassifierTest(ctx: ExtensionContext, state: BifrostState):
     syncBifrostModeStatus(ctx, state);
   }
   const after = state.classifierMetricsStore.snapshot();
-  const credential = effective.backend === CLASSIFIER_BACKEND_IDS.typesafe
-    ? resolveTypeSafeApiKey().source
-    : undefined;
-  await uiResult(ctx, "Classifier test", buildClassifierTestReport({
-    classifier,
-    result,
-    before,
-    after,
-    credential,
-    effectiveBackend: effective,
-  }));
+  const credential =
+    effective.backend === CLASSIFIER_BACKEND_IDS.typesafe
+      ? resolveTypeSafeApiKey().source
+      : undefined;
+  await uiResult(
+    ctx,
+    "Classifier test",
+    buildClassifierTestReport({
+      classifier,
+      result,
+      before,
+      after,
+      credential,
+      effectiveBackend: effective,
+    }),
+  );
 }
 
 /**
@@ -1746,7 +2969,12 @@ async function handleBenchmark(
   const categories = Object.keys(state.config.models ?? {});
 
   if (categories.length === 0) {
-    log(ctx, "no categories configured; run /bifrost init first", "warning");
+    logImportant(
+      ctx,
+      "Benchmark unavailable",
+      "No categories configured; run /bifrost init first.",
+      "warning",
+    );
     return;
   }
 
@@ -1776,7 +3004,11 @@ async function handleBenchmark(
     lines.push(`  ${tierName} (${display.strategy} → ${display.selectedTier ?? PREVIEW_NONE}):`);
     if (display.fallbackReason) lines.push(`    fallback: ${display.fallbackReason}`);
     lines.push(...display.requestedCandidateLines.map((line) => `    ${line}`));
-    if (display.fallbackCandidateLines.length > 0 && display.defaultTier && display.defaultTier !== tierName) {
+    if (
+      display.fallbackCandidateLines.length > 0 &&
+      display.defaultTier &&
+      display.defaultTier !== tierName
+    ) {
       lines.push(`    fallback candidates (${display.defaultTier}):`);
       lines.push(...display.fallbackCandidateLines.map((line) => `    ${line}`));
     }
@@ -1832,7 +3064,11 @@ export type BifrostPreviewSuccess = {
   readonly defaultTier?: string;
   readonly selected?: string;
   readonly fallbackBoundary?: "explicit";
-  readonly attemptedTiers?: Array<{ readonly tier: string; readonly strategy: string; readonly candidates: string[] }>;
+  readonly attemptedTiers?: Array<{
+    readonly tier: string;
+    readonly strategy: string;
+    readonly candidates: string[];
+  }>;
 };
 
 /** No routing decision was made, so no accepted routing decision is reported. Diagnostic classifier-attempt detail may still be present for unclassified outcomes. */
@@ -1861,7 +3097,10 @@ const PREVIEW_SUB = "preview";
  * loses that many leading characters; pass the real subcommand, or pass `""` to
  * parse a bare prompt with nothing removed.
  */
-export function parsePreviewArgs(args: string, sub: string): { prompt: string; json: boolean; trace?: true; offline?: true } {
+export function parsePreviewArgs(
+  args: string,
+  sub: string,
+): { prompt: string; json: boolean; trace?: true; offline?: true } {
   let rest = args.slice(sub.length).trim();
   let json = false;
   let trace = false;
@@ -1869,14 +3108,23 @@ export function parsePreviewArgs(args: string, sub: string): { prompt: string; j
   while (rest.startsWith("--json") || rest.startsWith("--trace") || rest.startsWith("--offline")) {
     const flag = /^(--json|--trace|--offline)(?=\s|$)/.exec(rest)?.[1];
     if (!flag) break;
-    if ((flag === "--json" && json) || (flag === "--trace" && trace) || (flag === "--offline" && offline)) break;
+    if (
+      (flag === "--json" && json) ||
+      (flag === "--trace" && trace) ||
+      (flag === "--offline" && offline)
+    )
+      break;
     json ||= flag === "--json";
     trace ||= flag === "--trace";
     offline ||= flag === "--offline";
     rest = rest.slice(flag.length).trimStart();
   }
   const parsed = { prompt: rest.trim(), json };
-  return { ...parsed, ...(trace ? { trace: true as const } : {}), ...(offline ? { offline: true as const } : {}) };
+  return {
+    ...parsed,
+    ...(trace ? { trace: true as const } : {}),
+    ...(offline ? { offline: true as const } : {}),
+  };
 }
 
 /** Build the failure half of the report. Pure: no classification, no display, no side effects. */
@@ -1917,10 +3165,12 @@ export function buildPreviewReport(input: {
     ...(display.signInNote !== undefined ? { signInNote: display.signInNote } : {}),
     ...(display.defaultTier !== undefined ? { defaultTier: display.defaultTier } : {}),
     ...(display.selected !== undefined ? { selected: display.selected } : {}),
-    ...(display.explicitBoundary ? {
-      fallbackBoundary: "explicit" as const,
-      attemptedTiers: display.attemptedTiers ?? [],
-    } : {}),
+    ...(display.explicitBoundary
+      ? {
+          fallbackBoundary: "explicit" as const,
+          attemptedTiers: display.attemptedTiers ?? [],
+        }
+      : {}),
   };
 }
 
@@ -1981,28 +3231,41 @@ export function renderTracePreview(trace: BifrostTracePreview): string[] {
     `outcome: ${trace.outcome}`,
     ...(trace.error ? [`error: ${trace.error}`] : []),
     `classification: ${trace.classification.source}${trace.classification.tier ? ` → ${trace.classification.tier}` : ""}`,
-    `classifier disclosure: ${trace.classifierDisclosure.enabled
-      ? "enabled; the configured classifier may receive the preview prompt"
-      : "disabled; preview prompt is not sent to a classifier"}`,
+    `classifier disclosure: ${
+      trace.classifierDisclosure.enabled
+        ? "enabled; the configured classifier may receive the preview prompt"
+        : "disabled; preview prompt is not sent to a classifier"
+    }`,
   ];
   if (trace.classification.classifier) {
     lines.push(`classifier: ${trace.classification.classifier.backend}`);
-    if (trace.classification.classifier.model !== undefined) lines.push(`classifier model: ${trace.classification.classifier.model}`);
-    if (trace.classification.classifier.confidence !== undefined) lines.push(`classifier confidence: ${trace.classification.classifier.confidence}`);
+    if (trace.classification.classifier.model !== undefined)
+      lines.push(`classifier model: ${trace.classification.classifier.model}`);
+    if (trace.classification.classifier.confidence !== undefined)
+      lines.push(`classifier confidence: ${trace.classification.classifier.confidence}`);
   }
   const traceAttempt = trace.classifierAttempt;
   if (traceAttempt && shouldRenderClassifierAttempt(traceAttempt, trace.classification.classifier)) {
     lines.push(...classifierAttemptLines(traceAttempt));
   }
-  const renderPool = (label: string, pool: RouteDecisionSummary["requested"] | RouteDecisionSummary["fallback"]) => {
+  const renderPool = (
+    label: string,
+    pool: RouteDecisionSummary["requested"] | RouteDecisionSummary["fallback"],
+  ) => {
     if (!pool) return;
     lines.push(`${label}: ${pool.tier} (${pool.strategy})`);
     for (const candidate of pool.candidates) {
-      const evidence = candidate.exclusionEvidence?.map(({ code, source }) => `${code} from ${source}`).join(", ");
-      lines.push(`  ${candidate.status}: ${candidate.model}${candidate.exclusion ? ` (${candidate.exclusion})` : ""}${evidence ? `; evidence: ${evidence}` : ""}`);
+      const evidence = candidate.exclusionEvidence
+        ?.map(({ code, source }) => `${code} from ${source}`)
+        .join(", ");
+      lines.push(
+        `  ${candidate.status}: ${candidate.model}${candidate.exclusion ? ` (${candidate.exclusion})` : ""}${evidence ? `; evidence: ${evidence}` : ""}`,
+      );
     }
     for (const entry of pool.unresolvedPatterns ?? []) {
-      const evidence = entry.exclusionEvidence.map(({ code, source }) => `${code} from ${source}`).join(", ");
+      const evidence = entry.exclusionEvidence
+        .map(({ code, source }) => `${code} from ${source}`)
+        .join(", ");
       lines.push(`  excluded: ${entry.pattern} (${entry.exclusion}); evidence: ${evidence}`);
     }
   };
@@ -2015,12 +3278,18 @@ export function renderTracePreview(trace: BifrostTracePreview): string[] {
   }
   if (trace.fallbackReason) lines.push(`fallback reason: ${trace.fallbackReason}`);
   if (trace.affinity) {
-    lines.push(`affinity: ${trace.affinity.mode} (${trace.affinity.status}; source=${trace.affinity.modeSource ?? "config"}; selection=${trace.affinity.selection})`);
+    lines.push(
+      `affinity: ${trace.affinity.mode} (${trace.affinity.status}; source=${trace.affinity.modeSource ?? "config"}; selection=${trace.affinity.selection})`,
+    );
     if (trace.affinity.status !== "not_applicable" && trace.affinity.anchor) {
-      lines.push(`  anchor: ${trace.affinity.anchor.modelKey} at ${formatDiagnosticTimestamp(trace.affinity.anchor.lastSuccessfulDispatchAt)}`);
+      lines.push(
+        `  anchor: ${trace.affinity.anchor.modelKey} at ${formatDiagnosticTimestamp(trace.affinity.anchor.lastSuccessfulDispatchAt)}`,
+      );
     }
-    if (trace.affinity.strategyWinner) lines.push(`  strategy winner: ${trace.affinity.strategyWinner}`);
-    if (trace.affinity.selectedModel) lines.push(`  selected model: ${trace.affinity.selectedModel}`);
+    if (trace.affinity.strategyWinner)
+      lines.push(`  strategy winner: ${trace.affinity.strategyWinner}`);
+    if (trace.affinity.selectedModel)
+      lines.push(`  selected model: ${trace.affinity.selectedModel}`);
     if (trace.affinity.selectedTier) lines.push(`  selected tier: ${trace.affinity.selectedTier}`);
   }
   if (trace.selectedStrategy) lines.push(`selected strategy: ${trace.selectedStrategy}`);
@@ -2040,11 +3309,13 @@ export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
     `source:    ${report.source}`,
     // The JSON report omits absent fields; the human view keeps the historical
     // "none" / "n/a" placeholders so the TUI output does not change.
-    ...(report.backend ? [
-      `backend:   ${report.backend}`,
-      `model:     ${report.model ?? "none"}`,
-      `confidence:${report.confidence === undefined ? " n/a" : ` ${report.confidence}`}`,
-    ] : []),
+    ...(report.backend
+      ? [
+          `backend:   ${report.backend}`,
+          `model:     ${report.model ?? "none"}`,
+          `confidence:${report.confidence === undefined ? " n/a" : ` ${report.confidence}`}`,
+        ]
+      : []),
     ...(showAttempt && attempt ? classifierAttemptLines(attempt) : []),
     `tier:      ${report.tier}`,
     `strategy:  ${report.strategy}`,
@@ -2053,16 +3324,20 @@ export function renderPreviewReport(report: BifrostPreviewSuccess): string[] {
     ...(report.signInNote ? [`sign-in:  ${report.signInNote}`] : []),
     `requested candidates (${report.tier}):`,
     ...report.requestedCandidates,
-    ...(report.fallbackCandidates.length > 0 && report.defaultTier && report.defaultTier !== report.tier
+    ...(report.fallbackCandidates.length > 0 &&
+    report.defaultTier &&
+    report.defaultTier !== report.tier
       ? [`fallback candidates (${report.defaultTier}):`, ...report.fallbackCandidates]
       : []),
-    ...(report.fallbackBoundary === "explicit" ? [
-      "fallback boundary: explicit",
-      ...(report.attemptedTiers ?? []).flatMap((attemptedTier, index) => [
-        `attempt ${index + 1} (${attemptedTier.tier}, ${attemptedTier.strategy}):`,
-        ...attemptedTier.candidates.map((candidate) => `  ${candidate}`),
-      ]),
-    ] : []),
+    ...(report.fallbackBoundary === "explicit"
+      ? [
+          "fallback boundary: explicit",
+          ...(report.attemptedTiers ?? []).flatMap((attempt, index) => [
+            `attempt ${index + 1} (${attempt.tier}, ${attempt.strategy}):`,
+            ...attempt.candidates.map((candidate) => `  ${candidate}`),
+          ]),
+        ]
+      : []),
     `selected:  ${report.selected ?? PREVIEW_NONE}`,
     "---------------",
   ];
@@ -2075,6 +3350,7 @@ function renderPreviewFailureReport(report: BifrostPreviewFailure): string[] {
     `prompt:    ${report.prompt}`,
     "source:    unclassified",
     ...(attempt ? classifierAttemptLines(attempt) : []),
+    ...(report.error === "unclassified" ? ["reason: no tier matched"] : []),
     `result:    ${report.error}`,
     "selected:  none",
     "---------------",
@@ -2086,11 +3362,18 @@ function emitPreviewReport(report: BifrostPreviewReport): void {
   console.error(`${BIFROST_JSON_PREFIX}${serializePreviewReport(report)}`);
 }
 
-function hasInvalidRoutingConfig(state: Pick<BifrostState, "tierPolicyValid" | "economicPolicyValid" | "reliabilityV2ConfigValid" | "affinityConfigValid">): boolean {
-  return state.tierPolicyValid === false
-    || state.economicPolicyValid === false
-    || state.reliabilityV2ConfigValid === false
-    || state.affinityConfigValid === false;
+function hasInvalidRoutingConfig(
+  state: Pick<
+    BifrostState,
+    "tierPolicyValid" | "economicPolicyValid" | "reliabilityV2ConfigValid" | "affinityConfigValid"
+  >,
+): boolean {
+  return (
+    state.tierPolicyValid === false ||
+    state.economicPolicyValid === false ||
+    state.reliabilityV2ConfigValid === false ||
+    state.affinityConfigValid === false
+  );
 }
 
 async function handlePreview(
@@ -2112,9 +3395,17 @@ async function handlePreview(
         error: "usage",
         classification: { source: "unclassified" },
       };
-      console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(buildTracePreview(summary, classifierEnabled && !offline))}`);
+      console.error(
+        `${BIFROST_JSON_PREFIX}${JSON.stringify(buildTracePreview(summary, classifierEnabled && !offline))}`,
+      );
     } else if (json) emitPreviewReport(buildPreviewFailure(prompt, "usage"));
-    log(ctx, json ? `usage: /bifrost preview ${offline ? "--offline " : ""}${trace ? "--trace " : ""}--json <prompt>` : `usage: /bifrost preview ${offline ? "--offline " : ""}${trace ? "--trace " : ""}<prompt>`, "warning");
+    log(
+      ctx,
+      json
+        ? `usage: /bifrost preview ${offline ? "--offline " : ""}${trace ? "--trace " : ""}--json <prompt>`
+        : `usage: /bifrost preview ${offline ? "--offline " : ""}${trace ? "--trace " : ""}<prompt>`,
+      "warning",
+    );
     return;
   }
 
@@ -2132,11 +3423,21 @@ async function handlePreview(
       if (json) console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(report)}`);
       else await uiResult(ctx, "Bifrost route trace", renderTracePreview(report));
     } else if (json) emitPreviewReport(buildPreviewFailure(prompt, "config_invalid"));
-    log(ctx, "Preview is unavailable because a configuration source is invalid. Run /bifrost validate and repair the reported source.", "error");
+    logImportant(
+      ctx,
+      "Preview unavailable",
+      "A configuration source is invalid. Run /bifrost validate and repair the reported source.",
+      "error",
+    );
     return;
   }
   if (trace && classifierEnabled && !offline) {
-    log(ctx, "Preview may send the prompt to the configured classifier", "warning");
+    logImportant(
+      ctx,
+      "Classifier privacy",
+      "Preview may send the prompt to the configured classifier.",
+      "warning",
+    );
   }
   setBifrostStatus(ctx, "previewing prompt...", "accent");
   uiBusy(ctx, "Classifying preview prompt...");
@@ -2161,11 +3462,23 @@ async function handlePreview(
     } else if (classification.classifierAttempt) {
       await uiResult(ctx, "Bifrost preview", renderPreviewFailureReport(failure));
     }
-    log(ctx, "no tier matched", "warning");
+    logImportant(
+      ctx,
+      "No route matched",
+      "No configured tier matched the prompt (no tier matched).",
+      "warning",
+    );
     return;
   }
 
-  const display = resolveTierDisplay(classification.tier, state, ctx, classification.kind === "classified" && classification.source === "inline" ? "explicit_tier" : "automatic");
+  const display = resolveTierDisplay(
+    classification.tier,
+    state,
+    ctx,
+    classification.kind === "classified" && classification.source === "inline"
+      ? "explicit_tier"
+      : "automatic",
+  );
   if (trace) {
     const options = buildTierResolutionOptions(classification.tier, state.config);
     const summary = buildRouteDecisionSummary(classification, {
@@ -2249,26 +3562,83 @@ function spaced(word: string, handler: CommandFn): CommandEntry {
 export const BIFROST_COMMAND_OPTIONS: readonly CommandSpec[] = [
   // Reflected pairs first. The dashboard puts a reflected pair ahead of every
   // other row, in the order these states are first mentioned here.
-  { value: "on", description: "Enable routing", reflects: { state: "enabled", sets: true, note: "already on" } },
-  { value: "off", description: "Disable routing", reflects: { state: "enabled", sets: false, note: "already off" } },
-  { value: "pin", description: "Lock current model", reflects: { state: "pinned", sets: true, note: "already pinned" } },
-  { value: "unpin", description: "Resume routing", reflects: { state: "pinned", sets: false, note: "already unpinned" } },
+  {
+    value: "on",
+    description: "Enable routing",
+    reflects: { state: "enabled", sets: true, note: "already on" },
+  },
+  {
+    value: "off",
+    description: "Disable routing",
+    reflects: { state: "enabled", sets: false, note: "already off" },
+  },
+  {
+    value: "pin",
+    description: "Lock current model",
+    reflects: { state: "pinned", sets: true, note: "already pinned" },
+  },
+  {
+    value: "unpin",
+    description: "Resume routing",
+    reflects: { state: "pinned", sets: false, note: "already unpinned" },
+  },
   // Common commands, in menu order. The two prompt commands lead because both
   // prefill the editor rather than run: keep them adjacent.
-  { value: PREVIEW_SUB, description: "Preview routing for a prompt", argumentHint: `[--offline] [--trace] [--json] <prompt>`, menu: "common" },
-  { value: "benchmark", description: "Classify a benchmark prompt", argumentHint: "<prompt>", menu: "common" },
+  {
+    value: PREVIEW_SUB,
+    description: "Preview routing for a prompt",
+    argumentHint: `[--offline] [--trace] [--json] <prompt>`,
+    menu: "common",
+  },
+  {
+    value: "benchmark",
+    description: "Classify a benchmark prompt",
+    argumentHint: "<prompt>",
+    menu: "common",
+  },
   { value: "providers", description: "List available providers", menu: "common" },
   { value: "probe", description: "Probe working models", menu: "common" },
-  { value: "init", description: "Refresh model catalog and save setup (pass -f to probe)", aliases: ["init -f"], menu: "common" },
+  {
+    value: "init",
+    description: "Refresh model catalog and save setup (pass -f to probe)",
+    aliases: ["init -f"],
+    menu: "common",
+  },
   { value: "classifier status", description: "Show classifier state", menu: "common" },
   { value: "reload", description: "Reload config after editing", menu: "common" },
-  { value: "validate", description: "Validate loaded config and model references", argumentHint: "[--json]", menu: "common" },
-  { value: "inspect", description: "Inspect configured models and local health", argumentHint: "[--json]", menu: "common" },
-  { value: "config reconcile", description: "Preview or apply exact generated model membership", argumentHint: "[flags]" },
-  { value: "config migrate", description: "Preview or apply an explicit schema migration", argumentHint: "[--source project|workspace|user] [--apply --proposal <digest>]" },
+  {
+    value: "validate",
+    description: "Validate loaded config and model references",
+    argumentHint: "[--json]",
+    menu: "common",
+  },
+  {
+    value: "inspect",
+    description: "Inspect configured models and local health",
+    argumentHint: "[--json]",
+    menu: "common",
+  },
+  {
+    value: "config reconcile",
+    description: "Preview or apply exact generated model membership",
+    argumentHint: "[flags]",
+  },
+  {
+    value: "config migrate",
+    description: "Preview or apply an explicit schema migration",
+    argumentHint: "[--source project|workspace|user] [--apply --proposal <digest>]",
+  },
   { value: "reliability", description: "Show provider cooldowns" },
-  { value: "reliability reset", description: "Clear one provider cooldown", argumentHint: "--provider <provider-id>" },
-  { value: "reliability migrate", description: "Prepare receipt-owned reliability v2", argumentHint: "[--fresh]" },
+  {
+    value: "reliability reset",
+    description: "Clear one provider cooldown",
+    argumentHint: "--provider <provider-id>",
+  },
+  {
+    value: "reliability migrate",
+    description: "Prepare receipt-owned reliability v2",
+    argumentHint: "[--fresh]",
+  },
   // Everything else, in declaration order.
   { value: "cache stats", description: "Show classification cache" },
   { value: "cost", description: "Show recorded session usage and cost estimate" },
@@ -2299,11 +3669,13 @@ export function getBifrostCommandCompletions(prefix: string) {
   // an already-complete command makes Pi accept the suggestion first and
   // leave the command text stuck in the editor until a second Enter.
   if (entries.some((entry) => entry.value === normalized)) return null;
-  const items = entries.filter((entry) => entry.value.startsWith(normalized)).map((entry) => ({
-    value: entry.value,
-    label: entry.value,
-    description: entry.description,
-  }));
+  const items = entries
+    .filter((entry) => entry.value.startsWith(normalized))
+    .map((entry) => ({
+      value: entry.value,
+      label: entry.value,
+      description: entry.description,
+    }));
   return items.length > 0 ? items : null;
 }
 
@@ -2312,28 +3684,54 @@ function formatBifrostCommandChoice(command: CommandSpec): string {
   return `/bifrost ${command.value}${hint} — ${command.description}`;
 }
 
-function parseDiagnosticJsonFlag(args: string, command: "validate" | "inspect"): boolean | undefined {
+function parseDiagnosticJsonFlag(
+  args: string,
+  command: "validate" | "inspect",
+): boolean | undefined {
   const rest = args.slice(command.length).trim();
   if (!rest) return false;
   if (rest === "--json") return true;
   return undefined;
 }
 
-async function handleReliabilityCommand(args: string, ctx: ExtensionContext, state: BifrostState): Promise<void> {
+async function handleReliabilityCommand(
+  args: string,
+  ctx: ExtensionContext,
+  state: BifrostState,
+): Promise<void> {
   const rest = args.trim().slice("reliability".length).trim();
   if (!rest) {
     try {
-      const store = state.providerCooldownStore ?? createProviderCooldownStore(process.cwd(), state.config.reliability);
+      const store =
+        state.providerCooldownStore ??
+        createProviderCooldownStore(process.cwd(), state.config.reliability);
       const paused = store.list();
       if (paused.length === 0) {
-        log(ctx, "No provider cooldowns or recovery trials are active.");
+        logImportant(
+          ctx,
+          "No cooldowns active",
+          "No provider cooldowns or recovery trials are active.",
+          "info",
+        );
         return;
       }
-      log(ctx, ["Provider cooldowns:", ...paused.map((item) =>
-        `  ${item.providerId}: ${item.openUntil === undefined ? "cooldown expired" : `paused until ${new Date(item.openUntil).toISOString()}`}${item.trialActive ? "; recovery trial active" : item.recoveryPending ? "; recovery trial available" : ""}`),
-      ].join("\n"));
+      log(
+        ctx,
+        [
+          "Provider cooldowns:",
+          ...paused.map(
+            (item) =>
+              `  ${item.providerId}: ${item.openUntil === undefined ? "cooldown expired" : `paused until ${new Date(item.openUntil).toISOString()}`}${item.trialActive ? "; recovery trial active" : item.recoveryPending ? "; recovery trial available" : ""}`,
+          ),
+        ].join("\n"),
+      );
     } catch {
-      log(ctx, "Provider cooldown state is invalid or unavailable; inspect the project .pi provider reliability sidecar.", "error");
+      logImportant(
+        ctx,
+        "Cooldown state unavailable",
+        "Provider cooldown state is invalid or unavailable; inspect .pi/bifrost-provider-reliability.json.",
+        "error",
+      );
     }
     return;
   }
@@ -2347,53 +3745,120 @@ async function handleReliabilityCommand(args: string, ctx: ExtensionContext, sta
     let knownProviders = new Set<string>();
     try {
       for (const model of ctx.modelRegistry.getAll()) knownProviders.add(model.provider);
-    } catch { /* configured provider IDs remain available below */ }
+    } catch {
+      /* configured provider IDs remain available below */
+    }
     for (const tiers of Object.values(state.config.models ?? {})) {
       for (const key of tiers ?? []) knownProviders.add(key.slice(0, key.indexOf("/")));
     }
     if (state.config.default) {
-      for (const key of state.config.models?.[state.config.default] ?? []) knownProviders.add(key.slice(0, key.indexOf("/")));
+      for (const key of state.config.models?.[state.config.default] ?? [])
+        knownProviders.add(key.slice(0, key.indexOf("/")));
     }
-    try { providerScopeModelKey("usage", providerId); }
-    catch { log(ctx, "Provider ID is outside the supported reliability namespace.", "warning"); return; }
+    try {
+      providerScopeModelKey("usage", providerId);
+    } catch {
+      logImportant(
+        ctx,
+        "Provider reset blocked",
+        "Provider ID is outside the supported reliability namespace.",
+        "warning",
+      );
+      return;
+    }
     let store: ProviderCooldownStore;
     try {
-      store = state.providerCooldownStore ?? createProviderCooldownStore(process.cwd(), state.config.reliability);
-      if (!knownProviders.has(providerId) && !store.list().some((item) => item.providerId === providerId)) {
-        log(ctx, `Provider ${providerId} is not configured or present in cooldown state; nothing was reset.`, "warning");
+      store =
+        state.providerCooldownStore ??
+        createProviderCooldownStore(process.cwd(), state.config.reliability);
+      if (
+        !knownProviders.has(providerId) &&
+        !store.list().some((item) => item.providerId === providerId)
+      ) {
+        logImportant(
+          ctx,
+          "Provider reset skipped",
+          `${providerId} is not configured or present in cooldown state. Nothing was reset.`,
+          "warning",
+        );
         return;
       }
       const result = await store.reset(providerId);
-      log(ctx, result === "trial_active"
-        ? `Provider ${providerId} has an active recovery trial; cooldown reset was stopped.`
-        : result === "reset" ? `Provider ${providerId} cooldown was reset.` : `Provider ${providerId} has no active cooldown.`);
+      logImportant(
+        ctx,
+        result === "reset" ? "Provider cooldown reset" : "Provider reset skipped",
+        result === "trial_active"
+          ? `${providerId} has an active recovery trial; cooldown reset was stopped.`
+          : result === "reset"
+            ? `${providerId} cooldown was reset.`
+            : `${providerId} has no active cooldown.`,
+        result === "reset" ? "success" : "info",
+      );
     } catch {
-      log(ctx, `Provider ${providerId} cooldown could not be reset; provider state was left unchanged.`, "error");
+      logImportant(
+        ctx,
+        "Provider reset failed",
+        `${providerId} cooldown could not be reset; provider state was left unchanged.`,
+        "error",
+      );
     }
     return;
   }
   if (rest !== "migrate" && rest !== "migrate --fresh") {
-    log(ctx, "usage: /bifrost reliability [reset --provider <provider-id> | migrate [--fresh]]", "warning");
+    log(
+      ctx,
+      "usage: /bifrost reliability [reset --provider <provider-id> | migrate [--fresh]]",
+      "warning",
+    );
     return;
   }
   const stateVersion = state.config.reliability?.stateVersion;
-  const reliabilityConfigErrors = validateConfig(state.config).filter((issue) => issue.severity === "error" && issue.code?.startsWith("config.reliability_"));
-  if (reliabilityConfigErrors.length > 0 || !state.reliabilityV2ConfigValid
-    || (stateVersion === 2 && !schemaVersionAtLeast(state.config.schemaVersion, 2))) {
-    log(ctx, "Repair the reliability settings and validate the config before preparing the v2 sidecar.", "error");
+  const reliabilityConfigErrors = validateConfig(state.config).filter(
+    (issue) => issue.severity === "error" && issue.code?.startsWith("config.reliability_"),
+  );
+  if (
+    reliabilityConfigErrors.length > 0 ||
+    !state.reliabilityV2ConfigValid ||
+    (stateVersion === 2 && !schemaVersionAtLeast(state.config.schemaVersion, 2))
+  ) {
+    logImportant(
+      ctx,
+      "Reliability migration blocked",
+      "Repair the reliability settings and validate the config before preparing the v2 sidecar.",
+      "error",
+    );
     return;
   }
   let store: ReliabilityV2Store;
-  try { store = createReliabilityV2Store(process.cwd(), state.config.reliability); }
-  catch { log(ctx, "Reliability migration could not prepare a safe sidecar location; no files were changed.", "error"); return; }
+  try {
+    store = createReliabilityV2Store(process.cwd(), state.config.reliability);
+  } catch {
+    logImportant(
+      ctx,
+      "Reliability migration blocked",
+      "Could not prepare a safe sidecar location. No files were changed.",
+      "error",
+    );
+    return;
+  }
   try {
     store.readSnapshot();
     if (stateVersion === 2) state.reliabilityV2Store = store;
-    log(ctx, "Reliability v2 sidecar already exists and was left unchanged.");
+    logImportant(
+      ctx,
+      "Reliability migration skipped",
+      "Reliability v2 sidecar already exists and was left unchanged.",
+      "info",
+    );
     return;
   } catch (error) {
     if (!(error instanceof ReliabilityV2StoreError) || error.code !== "uninitialized_state") {
-      log(ctx, "An existing reliability v2 sidecar is invalid or unsafe; repair it explicitly before migration.", "error");
+      logImportant(
+        ctx,
+        "Reliability migration blocked",
+        "An existing v2 sidecar is invalid or unsafe; repair it explicitly before migration.",
+        "error",
+      );
       return;
     }
   }
@@ -2411,20 +3876,32 @@ async function handleReliabilityCommand(args: string, ctx: ExtensionContext, sta
       requireSourceAbsent: fresh,
     });
     state.reliabilityV2Store = store;
-    log(ctx, result.status === "seeded"
-      ? "Reliability v2 sidecar initialized. Auto routing can now use receipt-owned circuit trials; model selection was not changed."
-      : "Reliability v2 sidecar already exists and was left unchanged.");
+    logImportant(
+      ctx,
+      result.status === "seeded"
+        ? "Reliability v2 sidecar initialized"
+        : "Reliability migration skipped",
+      result.status === "seeded"
+        ? "Auto routing can now use receipt-owned circuit trials; model selection was not changed."
+        : "Reliability v2 sidecar already exists and was left unchanged.",
+      result.status === "seeded" ? "success" : "info",
+    );
   } catch (error) {
     const code = error instanceof ReliabilityV2StoreError ? error.code : "migration_failed";
-    log(ctx, code === "source_lock_contended"
-      ? "Reliability migration stopped safely because its v1 source lock is busy. Stop other Pi sessions that may write the source and ensure this session has no active or queued generation. If the lock remains, inspect the exact default `.pi/bifrost-reliability.json.migration.lock` or custom `reliability.path` plus `.migration.lock`; remove only a proven stale lock, never based on age or PID alone. V1 state and backup were left untouched; no v2 state was committed."
-      : code === "source_missing"
-        ? "No v1 reliability file exists; pass --fresh only if you intend to initialize an empty v2 sidecar."
-        : code === "source_exists"
-          ? "--fresh is allowed only when no v1 reliability file exists; existing v1 state was left unchanged."
-      : code === "source_changed"
-        ? "Reliability migration stopped because the v1 source changed during migration. No v2 state was committed; review the source and retry."
-        : `Reliability migration stopped safely (${code}); existing files were preserved.`, "error");
+    logImportant(
+      ctx,
+      "Reliability migration failed",
+      code === "source_lock_contended"
+        ? "The v1 source lock is busy. Existing state and backup were left untouched; no v2 state was committed."
+        : code === "source_missing"
+          ? "No v1 reliability file exists; pass --fresh only if you intend to initialize an empty v2 sidecar."
+          : code === "source_exists"
+            ? "--fresh is allowed only when no v1 reliability file exists; existing v1 state was left unchanged."
+            : code === "source_changed"
+              ? "The v1 source changed during migration. No v2 state was committed; review the source and retry."
+              : `Migration stopped safely (${code}); existing files were preserved.`,
+      "error",
+    );
   }
 }
 
@@ -2432,9 +3909,11 @@ const MAX_RELIABILITY_MIGRATION_SOURCE_BYTES = 16 * 1024 * 1024;
 
 function readBoundedRegularSnapshot(path: string): Buffer | undefined {
   let pathStat;
-  try { pathStat = lstatSync(path); }
-  catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return undefined;
+  try {
+    pathStat = lstatSync(path);
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")
+      return undefined;
     throw new Error("unsafe source");
   }
   if (!pathStat.isFile() || pathStat.isSymbolicLink()) throw new Error("unsafe source");
@@ -2442,8 +3921,13 @@ function readBoundedRegularSnapshot(path: string): Buffer | undefined {
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     const before = fstatSync(fd);
-    if (!before.isFile() || before.dev !== pathStat.dev || before.ino !== pathStat.ino
-      || before.size > MAX_RELIABILITY_MIGRATION_SOURCE_BYTES) throw new Error("unsafe source");
+    if (
+      !before.isFile() ||
+      before.dev !== pathStat.dev ||
+      before.ino !== pathStat.ino ||
+      before.size > MAX_RELIABILITY_MIGRATION_SOURCE_BYTES
+    )
+      throw new Error("unsafe source");
     const bytes = Buffer.alloc(MAX_RELIABILITY_MIGRATION_SOURCE_BYTES + 1);
     let offset = 0;
     while (offset < bytes.length) {
@@ -2453,8 +3937,14 @@ function readBoundedRegularSnapshot(path: string): Buffer | undefined {
     }
     if (offset > MAX_RELIABILITY_MIGRATION_SOURCE_BYTES) throw new Error("source too large");
     const after = fstatSync(fd);
-    if (after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size
-      || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs || offset !== before.size) {
+    if (
+      after.dev !== before.dev ||
+      after.ino !== before.ino ||
+      after.size !== before.size ||
+      after.mtimeMs !== before.mtimeMs ||
+      after.ctimeMs !== before.ctimeMs ||
+      offset !== before.size
+    ) {
       throw new Error("source changed");
     }
     return Buffer.from(bytes.subarray(0, offset));
@@ -2485,7 +3975,12 @@ interface EconomicInspectEvidence {
       readonly applicability: "current" | "reset" | "expired" | "future";
     }[];
   }[];
-  readonly diagnostics: readonly { readonly code: string; readonly severity: string; readonly source?: string; readonly scope?: string }[];
+  readonly diagnostics: readonly {
+    readonly code: string;
+    readonly severity: string;
+    readonly source?: string;
+    readonly scope?: string;
+  }[];
 }
 
 interface ReliabilityV2InspectEvidence {
@@ -2494,8 +3989,20 @@ interface ReliabilityV2InspectEvidence {
   readonly revision?: number;
   readonly observationsEnabled: boolean;
   readonly cooldownOnAllowanceExhausted: boolean;
-  readonly scopes?: readonly { readonly model: string; readonly generation: number; readonly recentFailureCount: number; readonly openUntil?: number }[];
-  readonly observations?: readonly { readonly model: string; readonly category: string; readonly categoryEvidence: string; readonly observedAt: number; readonly retryAt?: number; readonly source: string }[];
+  readonly scopes?: readonly {
+    readonly model: string;
+    readonly generation: number;
+    readonly recentFailureCount: number;
+    readonly openUntil?: number;
+  }[];
+  readonly observations?: readonly {
+    readonly model: string;
+    readonly category: string;
+    readonly categoryEvidence: string;
+    readonly observedAt: number;
+    readonly retryAt?: number;
+    readonly source: string;
+  }[];
   readonly observationCount?: number;
   readonly reasonCode?: string;
 }
@@ -2504,21 +4011,39 @@ function inspectReliabilityV2(state: BifrostState): ReliabilityV2InspectEvidence
   if (state.config.reliability?.stateVersion !== 2) return undefined;
   const observationsEnabled = state.config.reliability.observations?.enabled === true;
   try {
-    if (!state.reliabilityV2Store) throw new ReliabilityV2StoreError("uninitialized_state", "unavailable");
+    if (!state.reliabilityV2Store)
+      throw new ReliabilityV2StoreError("uninitialized_state", "unavailable");
     const snapshot = state.reliabilityV2Store.readSnapshot();
     const projected = Object.entries(snapshot.scopes).flatMap(([scopeKey, scope]) => {
       const match = /^model:(\d+):(.+)$/.exec(scopeKey);
       const model = match && Number(match[1]) === match[2]!.length ? match[2] : undefined;
-      return model ? [{ model, generation: scope.generation, recentFailureCount: scope.failures.length, ...(scope.openUntil === undefined ? {} : { openUntil: scope.openUntil }) }] : [];
+      return model
+        ? [
+            {
+              model,
+              generation: scope.generation,
+              recentFailureCount: scope.failures.length,
+              ...(scope.openUntil === undefined ? {} : { openUntil: scope.openUntil }),
+            },
+          ]
+        : [];
     });
-    const observations = Object.values(snapshot.settledOutcomes).flatMap((outcome) => outcome.observation ? [{
-      model: outcome.observation.modelKey,
-      category: outcome.observation.category,
-      categoryEvidence: outcome.observation.categoryEvidence,
-      observedAt: outcome.observation.observedAt,
-      ...(outcome.observation.retryAt === undefined ? {} : { retryAt: outcome.observation.retryAt }),
-      source: outcome.observation.source,
-    }] : []);
+    const observations = Object.values(snapshot.settledOutcomes).flatMap((outcome) =>
+      outcome.observation
+        ? [
+            {
+              model: outcome.observation.modelKey,
+              category: outcome.observation.category,
+              categoryEvidence: outcome.observation.categoryEvidence,
+              observedAt: outcome.observation.observedAt,
+              ...(outcome.observation.retryAt === undefined
+                ? {}
+                : { retryAt: outcome.observation.retryAt }),
+              source: outcome.observation.source,
+            },
+          ]
+        : [],
+    );
     return {
       version: 2,
       status: "initialized",
@@ -2548,24 +4073,31 @@ function inspectEconomicEvidence(state: BifrostState, now = Date.now()): Economi
   if (!policy) return { mode: "off", sources: [], diagnostics: [] };
   const signals = state.economicSnapshot?.signals ?? [];
   const sources = policy.sources.map((source) => {
-    const signal = signals.find((item) => item.sourceId === source.id && item.scopeRef === source.scopeRef);
+    const signal = signals.find(
+      (item) => item.sourceId === source.id && item.scopeRef === source.scopeRef,
+    );
     const freshness = !signal
-      ? "missing" as const
+      ? ("missing" as const)
       : now < signal.observedAt
-        ? "future" as const
-        : signal.expiresAt <= now ? "expired" as const : "current" as const;
-    const periods = signal ? signal.windows.map((window) => ({
-      window: window.id,
-      period: window.period.id,
-      unit: window.unit,
-      applicability: now < signal.observedAt
-        ? "future" as const
+        ? ("future" as const)
         : signal.expiresAt <= now
-          ? "expired" as const
-          : window.resetsAt !== undefined && window.resetsAt <= now
-            ? "reset" as const
-            : "current" as const,
-    })) : [];
+          ? ("expired" as const)
+          : ("current" as const);
+    const periods = signal
+      ? signal.windows.map((window) => ({
+          window: window.id,
+          period: window.period.id,
+          unit: window.unit,
+          applicability:
+            now < signal.observedAt
+              ? ("future" as const)
+              : signal.expiresAt <= now
+                ? ("expired" as const)
+                : window.resetsAt !== undefined && window.resetsAt <= now
+                  ? ("reset" as const)
+                  : ("current" as const),
+        }))
+      : [];
     return {
       source: source.id,
       scope: source.scopeRef,
@@ -2589,7 +4121,15 @@ function inspectEconomicEvidence(state: BifrostState, now = Date.now()): Economi
 
 function renderDiagnostic(item: BifrostDiagnostic): string {
   const fieldPath = item.path && DIAGNOSTIC_FIELD_PATHS.has(item.path) ? `path=${item.path}` : "";
-  const location = [fieldPath, item.tier ? `tier=${item.tier}` : "", item.entryIndex !== undefined ? `entry=${item.entryIndex}` : "", item.ruleIndex !== undefined ? `rule=${item.ruleIndex}` : "", item.model ? `model=${item.model}` : ""].filter(Boolean).join(" ");
+  const location = [
+    fieldPath,
+    item.tier ? `tier=${item.tier}` : "",
+    item.entryIndex !== undefined ? `entry=${item.entryIndex}` : "",
+    item.ruleIndex !== undefined ? `rule=${item.ruleIndex}` : "",
+    item.model ? `model=${item.model}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
   return `  ${item.severity} ${item.code}${location ? ` (${location})` : ""}: ${item.repair}`;
 }
 
@@ -2603,61 +4143,109 @@ function classifierConflictNote(
   source: string,
 ): string {
   if (source === "session") return "explicit session-only override is active";
-  if (!conflict.configured && conflict.saved) return "configured off takes precedence; /bifrost classifier on overrides only this session";
+  if (!conflict.configured && conflict.saved)
+    return "configured off takes precedence; /bifrost classifier on overrides only this session";
   return "classification paused. /bifrost classifier on or off affects only this session. To resume configured behavior after restart, back up .pi/bifrost-state.json, remove only classifierEnabled, then run /bifrost reload";
 }
 
-function renderDiagnosticLines(report: ValidateDiagnosticsReport | (InspectDiagnosticsReport & { economics?: EconomicInspectEvidence; reliabilityV2?: ReliabilityV2InspectEvidence; affinity?: AffinityInspectEvidence })): string[] {
-  const lines = [report.kind === "validation" ? "--- validation (loaded effective config) ---" : "--- inspection (local snapshot) ---"];
+function renderDiagnosticLines(
+  report:
+    | ValidateDiagnosticsReport
+    | (InspectDiagnosticsReport & {
+        economics?: EconomicInspectEvidence;
+        reliabilityV2?: ReliabilityV2InspectEvidence;
+        affinity?: AffinityInspectEvidence;
+      }),
+): string[] {
+  const lines = [
+    report.kind === "validation"
+      ? "--- validation (loaded effective config) ---"
+      : "--- inspection (local snapshot) ---",
+  ];
   if (report.kind === "validation") {
     lines.push("config source: loaded effective config (run /bifrost reload after editing files)");
   }
-  lines.push(`classifier runtime: ${report.classifier.enabled ? "enabled" : "disabled"} (${report.classifier.source}); configured=${report.classifier.configuredEnabled ? "on" : "off"}; readiness=${report.classifier.readiness}${report.classifier.backend ? `; backend=${report.classifier.backend}` : ""}`);
-  if (report.classifier.legacyConflict) lines.push(`classifier conflict: saved=${report.classifier.legacyConflict.saved}, configured=${report.classifier.legacyConflict.configured}; ${classifierConflictNote(report.classifier.legacyConflict, report.classifier.source)}`);
-  if (report.classifier.runtimeStateIssue) lines.push(`classifier runtime state: invalid (${report.classifier.runtimeStateIssue}); classification is paused by default. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.`);
+  lines.push(
+    `classifier runtime: ${report.classifier.enabled ? "enabled" : "disabled"} (${report.classifier.source}); configured=${report.classifier.configuredEnabled ? "on" : "off"}; readiness=${report.classifier.readiness}${report.classifier.backend ? `; backend=${report.classifier.backend}` : ""}`,
+  );
+  if (report.classifier.legacyConflict)
+    lines.push(
+      `classifier conflict: saved=${report.classifier.legacyConflict.saved}, configured=${report.classifier.legacyConflict.configured}; ${classifierConflictNote(report.classifier.legacyConflict, report.classifier.source)}`,
+    );
+  if (report.classifier.runtimeStateIssue)
+    lines.push(
+      `classifier runtime state: invalid (${report.classifier.runtimeStateIssue}); classification is paused by default. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.`,
+    );
   for (const error of report.classifier.errors) lines.push(`classifier error: ${error}`);
   if (report.kind === "inspection") {
     lines.push(`observed: ${formatDiagnosticTimestamp(report.observedAt)}`);
-    lines.push(`registry: ${report.registry.knownModelCount} known, ${report.registry.availableModelCount} available`);
-    lines.push(`reliability policy: ${report.reliabilityPolicy.enabled ? "enabled" : "disabled"}; usage/billing cooldown=${report.reliabilityPolicy.cooldownOnAllowanceExhausted ? "on" : "off"} (${report.reliabilityPolicy.allowanceCooldownScope} scope); provider rate-limit throttles=on`);
+    lines.push(
+      `registry: ${report.registry.knownModelCount} known, ${report.registry.availableModelCount} available`,
+    );
+    lines.push(
+      `reliability policy: ${report.reliabilityPolicy.enabled ? "enabled" : "disabled"}; usage/billing cooldown=${report.reliabilityPolicy.cooldownOnAllowanceExhausted ? "on" : "off"} (${report.reliabilityPolicy.allowanceCooldownScope} scope); provider rate-limit throttles=on`,
+    );
     if (report.registry.bifrostLastRefreshAgeMs !== undefined) {
-      lines.push(`Bifrost last registry refresh age: ${report.registry.bifrostLastRefreshAgeMs} ms`);
+      lines.push(
+        `Bifrost last registry refresh age: ${report.registry.bifrostLastRefreshAgeMs} ms`,
+      );
     }
     for (const tier of report.tiers) {
       lines.push(`${tier.tier}: ${tier.configuredEntryCount} configured entries`);
       for (const candidate of tier.candidates) {
         const failure = candidate.failureEvidence
-          ? `, lastFailure=${candidate.failureEvidence.category}, evidence=${candidate.failureEvidence.evidence}, scope=${candidate.failureEvidence.scope}` : "";
-        lines.push(`  ${candidate.model}: available=${candidate.available}, auth=${candidate.auth}, circuit=${candidate.circuit}${candidate.openUntil === undefined ? "" : ` until ${formatDiagnosticTimestamp(candidate.openUntil)}`}${failure}`);
+          ? `, lastFailure=${candidate.failureEvidence.category}, evidence=${candidate.failureEvidence.evidence}, scope=${candidate.failureEvidence.scope}`
+          : "";
+        lines.push(
+          `  ${candidate.model}: available=${candidate.available}, auth=${candidate.auth}, circuit=${candidate.circuit}${candidate.openUntil === undefined ? "" : ` until ${formatDiagnosticTimestamp(candidate.openUntil)}`}${failure}`,
+        );
       }
     }
     if (report.economics) {
       lines.push(`reserve policy: ${report.economics.mode}`);
       for (const source of report.economics.sources) {
         const age = source.observedAgeMs === undefined ? "" : ` age=${source.observedAgeMs}ms`;
-        const periods = source.periods.map((period) => `${period.window}:${period.period}(${period.applicability})`).join(", ") || "none";
-        lines.push(`  source=${source.source} scope=${source.scope} authority=${source.authority} freshness=${source.freshness}${age} periods=${periods}`);
+        const periods =
+          source.periods
+            .map((period) => `${period.window}:${period.period}(${period.applicability})`)
+            .join(", ") || "none";
+        lines.push(
+          `  source=${source.source} scope=${source.scope} authority=${source.authority} freshness=${source.freshness}${age} periods=${periods}`,
+        );
       }
       for (const diagnostic of report.economics.diagnostics) {
-        lines.push(`  ${diagnostic.severity} ${diagnostic.code}${diagnostic.source ? ` source=${diagnostic.source}` : ""}${diagnostic.scope ? ` scope=${diagnostic.scope}` : ""}`);
+        lines.push(
+          `  ${diagnostic.severity} ${diagnostic.code}${diagnostic.source ? ` source=${diagnostic.source}` : ""}${diagnostic.scope ? ` scope=${diagnostic.scope}` : ""}`,
+        );
       }
     }
     if (report.reliabilityV2) {
       const reliability = report.reliabilityV2;
-      lines.push(`reliability v2: ${reliability.status}${reliability.revision === undefined ? "" : ` revision=${reliability.revision}`} observations=${reliability.observationsEnabled ? "on" : "off"} allowanceCooldown=${reliability.cooldownOnAllowanceExhausted ? "on" : "off"}`);
+      lines.push(
+        `reliability v2: ${reliability.status}${reliability.revision === undefined ? "" : ` revision=${reliability.revision}`} observations=${reliability.observationsEnabled ? "on" : "off"} allowanceCooldown=${reliability.cooldownOnAllowanceExhausted ? "on" : "off"}`,
+      );
       if (reliability.reasonCode) lines.push(`  reason=${reliability.reasonCode}`);
       for (const scope of reliability.scopes ?? []) {
-        lines.push(`  model=${scope.model} generation=${scope.generation} recentFailures=${scope.recentFailureCount}${scope.openUntil === undefined ? "" : ` openUntil=${formatDiagnosticTimestamp(scope.openUntil)}`}`);
+        lines.push(
+          `  model=${scope.model} generation=${scope.generation} recentFailures=${scope.recentFailureCount}${scope.openUntil === undefined ? "" : ` openUntil=${formatDiagnosticTimestamp(scope.openUntil)}`}`,
+        );
       }
       for (const observation of reliability.observations ?? []) {
-        lines.push(`  observation model=${observation.model} category=${observation.category} evidence=${observation.categoryEvidence} at=${formatDiagnosticTimestamp(observation.observedAt)}${observation.retryAt === undefined ? "" : ` retryAt=${formatDiagnosticTimestamp(observation.retryAt)}`} source=${observation.source}`);
+        lines.push(
+          `  observation model=${observation.model} category=${observation.category} evidence=${observation.categoryEvidence} at=${formatDiagnosticTimestamp(observation.observedAt)}${observation.retryAt === undefined ? "" : ` retryAt=${formatDiagnosticTimestamp(observation.retryAt)}`} source=${observation.source}`,
+        );
       }
-      if ((reliability.observationCount ?? 0) > 200) lines.push(`  ... ${reliability.observationCount! - 200} more observations`);
+      if ((reliability.observationCount ?? 0) > 200)
+        lines.push(`  ... ${reliability.observationCount! - 200} more observations`);
     }
     if (report.affinity) {
-      lines.push(`affinity: ${report.affinity.mode} (${report.affinity.status}; source=${report.affinity.source})`);
+      lines.push(
+        `affinity: ${report.affinity.mode} (${report.affinity.status}; source=${report.affinity.source})`,
+      );
       if (report.affinity.anchor) {
-        lines.push(`  last successful model=${report.affinity.anchor.model} provider=${report.affinity.anchor.provider} at=${report.affinity.anchor.lastSuccessfulAt} age=${report.affinity.anchor.ageMs}ms`);
+        lines.push(
+          `  last successful model=${report.affinity.anchor.model} provider=${report.affinity.anchor.provider} at=${report.affinity.anchor.lastSuccessfulAt} age=${report.affinity.anchor.ageMs}ms`,
+        );
       }
     }
   }
@@ -2680,60 +4268,95 @@ async function handleDiagnosticsCommand(
   }
   const v2Evidence = command === "inspect" ? inspectReliabilityV2(state) : undefined;
   let reliabilityState = state.reliabilityStore.getState();
-  if (v2Evidence?.status === "initialized" && state.reliabilityV2Store && state.config.reliability) {
+  if (
+    v2Evidence?.status === "initialized" &&
+    state.reliabilityV2Store &&
+    state.config.reliability
+  ) {
     try {
-      reliabilityState = projectReliabilityV2ForRouting(state.reliabilityV2Store.readSnapshot(), reliabilityV2Config(state.config.reliability), Date.now());
-    } catch { /* unavailable evidence is reported separately; do not fabricate a health snapshot */ }
+      reliabilityState = projectReliabilityV2ForRouting(
+        state.reliabilityV2Store.readSnapshot(),
+        reliabilityV2Config(state.config.reliability),
+        Date.now(),
+      );
+    } catch {
+      /* unavailable evidence is reported separately; do not fabricate a health snapshot */
+    }
   }
-  if (command === "inspect" && state.enabled && state.config.reliability?.enabled !== false && state.providerCooldownStore) {
+  if (
+    command === "inspect" &&
+    state.enabled &&
+    state.config.reliability?.enabled !== false &&
+    state.providerCooldownStore
+  ) {
     try {
-      const registryModels = typeof ctx.modelRegistry.getAll === "function"
-        ? ctx.modelRegistry.getAll() : ctx.modelRegistry.getAvailable();
+      const registryModels =
+        typeof ctx.modelRegistry.getAll === "function"
+          ? ctx.modelRegistry.getAll()
+          : ctx.modelRegistry.getAvailable();
       reliabilityState = projectProviderCooldownsForRouting(
         reliabilityState,
         state.providerCooldownStore,
         registryModels,
-        state.config.reliability?.cooldownOnAllowanceExhausted !== false
-          && state.config.reliability?.allowanceCooldownScope !== "model",
+        state.config.reliability?.cooldownOnAllowanceExhausted !== false &&
+          state.config.reliability?.allowanceCooldownScope !== "model",
       );
-    } catch { /* provider state is local-only; an unreadable sidecar adds no health evidence */ }
+    } catch {
+      /* provider state is local-only; an unreadable sidecar adds no health evidence */
+    }
   }
   const affinityEvidence = command === "inspect" ? inspectAffinity(state, ctx) : undefined;
   const classifierRuntime = classifierEnablementFor(state, ctx);
-  const report = command === "validate"
-    ? validateDiagnostics({
-      config: state.config,
-      registry: ctx.modelRegistry,
-      effectiveClassifierBackend: state.effectiveClassifierBackend(state.config, ctx).backend,
-      classifierEnabled: classifierRuntime.enabled,
-      classifierEnablementSource: classifierRuntime.source,
-      ...(classifierRuntime.legacyConflict ? { classifierConflict: classifierRuntime.legacyConflict } : {}),
-      ...(classifierRuntime.runtimeStateIssue ? { classifierRuntimeStateIssue: classifierRuntime.runtimeStateIssue } : {}),
-    })
-    : {
-      ...inspectDiagnostics({
-      config: state.config,
-      registry: ctx.modelRegistry,
-      reliabilityState,
-      reliabilityConfig: state.config.reliability,
-      lastRegistryRefreshAt: state.lastRegistryRefreshAt,
-      classifierEnabled: classifierRuntime.enabled,
-      classifierEnablementSource: classifierRuntime.source,
-      effectiveClassifierBackend: state.effectiveClassifierBackend(state.config, ctx).backend,
-      ...(classifierRuntime.legacyConflict ? { classifierConflict: classifierRuntime.legacyConflict } : {}),
-      ...(classifierRuntime.runtimeStateIssue ? { classifierRuntimeStateIssue: classifierRuntime.runtimeStateIssue } : {}),
-      }),
-      economics: inspectEconomicEvidence(state),
-      ...(affinityEvidence ? { affinity: affinityEvidence } : {}),
-      ...(v2Evidence ? { reliabilityV2: v2Evidence } : {}),
-      modelPoolSource: state.bootstrapModelsInMemory ? "session_catalog_in_memory" : "configured",
-    };
+  const report =
+    command === "validate"
+      ? validateDiagnostics({
+          config: state.config,
+          registry: ctx.modelRegistry,
+          effectiveClassifierBackend: state.effectiveClassifierBackend(state.config, ctx).backend,
+          classifierEnabled: classifierRuntime.enabled,
+          classifierEnablementSource: classifierRuntime.source,
+          ...(classifierRuntime.legacyConflict
+            ? { classifierConflict: classifierRuntime.legacyConflict }
+            : {}),
+          ...(classifierRuntime.runtimeStateIssue
+            ? { classifierRuntimeStateIssue: classifierRuntime.runtimeStateIssue }
+            : {}),
+        })
+      : {
+          ...inspectDiagnostics({
+            config: state.config,
+            registry: ctx.modelRegistry,
+            reliabilityState,
+            reliabilityConfig: state.config.reliability,
+            lastRegistryRefreshAt: state.lastRegistryRefreshAt,
+            classifierEnabled: classifierRuntime.enabled,
+            classifierEnablementSource: classifierRuntime.source,
+            effectiveClassifierBackend: state.effectiveClassifierBackend(state.config, ctx).backend,
+            ...(classifierRuntime.legacyConflict
+              ? { classifierConflict: classifierRuntime.legacyConflict }
+              : {}),
+            ...(classifierRuntime.runtimeStateIssue
+              ? { classifierRuntimeStateIssue: classifierRuntime.runtimeStateIssue }
+              : {}),
+          }),
+          economics: inspectEconomicEvidence(state),
+          ...(affinityEvidence ? { affinity: affinityEvidence } : {}),
+          ...(v2Evidence ? { reliabilityV2: v2Evidence } : {}),
+          modelPoolSource: state.bootstrapModelsInMemory
+            ? "session_catalog_in_memory"
+            : "configured",
+        };
   if (json) {
     console.error(`${BIFROST_JSON_PREFIX}${JSON.stringify(report)}`);
     return;
   }
   const lines = renderDiagnosticLines(report);
-  if (command === "inspect") lines.splice(-1, 0, `model pool source: ${state.bootstrapModelsInMemory ? "Pi catalog (in memory; run /bifrost init to refresh and save)" : "configuration"}`);
+  if (command === "inspect")
+    lines.splice(
+      -1,
+      0,
+      `model pool source: ${state.bootstrapModelsInMemory ? "Pi catalog (in memory; run /bifrost init to refresh and save)" : "configuration"}`,
+    );
   await uiResult(ctx, `Bifrost ${command}`, lines);
 }
 
@@ -2762,13 +4385,14 @@ function reflectedIsInert(spec: CommandSpec, state: Pick<BifrostState, Reflected
 // commands, then everything else. Ordering is all `menu` and `reflects` decide;
 // nothing here decides membership.
 function dashboardCommands(state: Pick<BifrostState, ReflectedState>): CommandSpec[] {
-  const reflectedStates = BIFROST_COMMAND_OPTIONS
-    .map((spec) => spec.reflects?.state)
-    .filter((reflects): reflects is ReflectedState => Boolean(reflects));
+  const reflectedStates = BIFROST_COMMAND_OPTIONS.map((spec) => spec.reflects?.state).filter(
+    (reflects): reflects is ReflectedState => Boolean(reflects),
+  );
   // Groups follow the order the registry first mentions them, so the pair order
   // is registry order too and needs no second list.
   const groupOf = (reflects: ReflectedState): number => reflectedStates.indexOf(reflects);
-  const tierOf = (spec: CommandSpec): number => (spec.reflects ? 0 : spec.menu === "common" ? 1 : 2);
+  const tierOf = (spec: CommandSpec): number =>
+    spec.reflects ? 0 : spec.menu === "common" ? 1 : 2;
 
   const rows = BIFROST_COMMAND_OPTIONS.map((spec) => {
     const inert = reflectedIsInert(spec, state);
@@ -2807,7 +4431,11 @@ async function pickBifrostCommand(
 
 export function nextClassifierConfig(
   current: Record<string, unknown>,
-  choice: { backend: ClassifierBackend; promptModel?: string | null; piNativeModel?: string | null },
+  choice: {
+    backend: ClassifierBackend;
+    promptModel?: string | null;
+    piNativeModel?: string | null;
+  },
 ): Record<string, unknown> {
   const next: Record<string, unknown> = { ...current, backend: choice.backend };
   if (choice.backend === CLASSIFIER_BACKEND_IDS.prompt) {
@@ -2817,12 +4445,16 @@ export function nextClassifierConfig(
   }
   for (const field of PROMPT_ONLY_FIELDS) delete next[field];
   if (choice.backend === CLASSIFIER_BACKEND_IDS.typesafe) {
-    const existing = next.typesafe && typeof next.typesafe === "object" && !Array.isArray(next.typesafe)
-      ? next.typesafe as Record<string, unknown> : {};
+    const existing =
+      next.typesafe && typeof next.typesafe === "object" && !Array.isArray(next.typesafe)
+        ? (next.typesafe as Record<string, unknown>)
+        : {};
     next.typesafe = { ...existing, model: TYPE_SAFE_MODEL };
   } else {
-    const existing = next.piNative && typeof next.piNative === "object" && !Array.isArray(next.piNative)
-      ? next.piNative as Record<string, unknown> : {};
+    const existing =
+      next.piNative && typeof next.piNative === "object" && !Array.isArray(next.piNative)
+        ? (next.piNative as Record<string, unknown>)
+        : {};
     const piNative = { ...existing };
     if (choice.piNativeModel === null) delete piNative.model;
     else if (choice.piNativeModel !== undefined) piNative.model = choice.piNativeModel;
@@ -2837,33 +4469,61 @@ function persistBootstrapConfig(
   ctx: ExtensionContext,
   state: BifrostState,
   sourceAtStart: ReconciliationSourceSnapshot,
-  classifierChoice?: { backend: ClassifierBackend; promptModel?: string | null; piNativeModel?: string | null },
+  classifierChoice?: {
+    backend: ClassifierBackend;
+    promptModel?: string | null;
+    piNativeModel?: string | null;
+  },
   configGenerationAtStart = state.configGeneration ?? 0,
 ): boolean {
   if (!state.bootstrapModelsInMemory) return true;
   let source: ReconciliationSourceSnapshot;
-  try { source = selectInitSource(); }
-  catch {
-    log(ctx, "Cannot safely save Bifrost's in-memory model setup because a config source is invalid.", "error");
+  try {
+    source = selectInitSource();
+  } catch {
+    logImportant(
+      ctx,
+      "Classifier update blocked",
+      "A config source is invalid. No files were changed.",
+      "error",
+    );
     return false;
   }
-  const userFiles = hasUserBootstrapFiles(process.cwd(), getAgentDir(), CONFIG_DIR_NAME, join(state.extensionDir, "bifrost.json"));
+  const userFiles = hasUserBootstrapFiles(
+    process.cwd(),
+    getAgentDir(),
+    CONFIG_DIR_NAME,
+    join(state.extensionDir, "bifrost.json"),
+  );
   const isEmptyConfig = (bytes: Uint8Array | null): boolean => {
     if (!bytes) return false;
     try {
       const parsed: unknown = JSON.parse(Buffer.from(bytes).toString("utf8"));
-      return Boolean(parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        && Object.getPrototypeOf(parsed) === Object.prototype && Object.keys(parsed).length === 0);
-    } catch { return false; }
+      return Boolean(
+        parsed &&
+          typeof parsed === "object" &&
+          !Array.isArray(parsed) &&
+          Object.getPrototypeOf(parsed) === Object.prototype &&
+          Object.keys(parsed).length === 0,
+      );
+    } catch {
+      return false;
+    }
   };
-  const freshEmptyConfig = isEmptyConfig(sourceAtStart.configBytes) && isEmptyConfig(source.configBytes)
-    && Buffer.from(sourceAtStart.configBytes!).equals(Buffer.from(source.configBytes!));
-  const stillFresh = (sourceAtStart.configBytes === null && source.configBytes === null || freshEmptyConfig)
-    && sourceAtStart.ownershipBytes === null && source.ownershipBytes === null
-    && sourceAtStart.source === source.source && state.bootstrapModelsInMemory
-    && (state.configGeneration ?? 0) === configGenerationAtStart
-    && !userFiles.userConfig && !userFiles.routeFile
-    && !hasExplicitExtensionRoutingFile(join(state.extensionDir, "bifrost.json"));
+  const freshEmptyConfig =
+    isEmptyConfig(sourceAtStart.configBytes) &&
+    isEmptyConfig(source.configBytes) &&
+    Buffer.from(sourceAtStart.configBytes!).equals(Buffer.from(source.configBytes!));
+  const stillFresh =
+    ((sourceAtStart.configBytes === null && source.configBytes === null) || freshEmptyConfig) &&
+    sourceAtStart.ownershipBytes === null &&
+    source.ownershipBytes === null &&
+    sourceAtStart.source === source.source &&
+    state.bootstrapModelsInMemory &&
+    (state.configGeneration ?? 0) === configGenerationAtStart &&
+    !userFiles.userConfig &&
+    !userFiles.routeFile &&
+    !hasExplicitExtensionRoutingFile(join(state.extensionDir, "bifrost.json"));
   if (!stillFresh && !classifierChoice) {
     state.bootstrapModelsInMemory = false;
     return true;
@@ -2872,24 +4532,48 @@ function persistBootstrapConfig(
   if (source.configBytes !== null) {
     try {
       const parsed: unknown = JSON.parse(Buffer.from(source.configBytes).toString("utf8"));
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)
-        || Object.getPrototypeOf(parsed) !== Object.prototype) throw new Error("invalid config object");
+      if (
+        !parsed ||
+        typeof parsed !== "object" ||
+        Array.isArray(parsed) ||
+        Object.getPrototypeOf(parsed) !== Object.prototype
+      )
+        throw new Error("invalid config object");
       current = parsed as Record<string, unknown>;
     } catch {
-      log(ctx, "Cannot safely update the classifier because the selected config is invalid JSON.", "error");
+      logImportant(
+        ctx,
+        "Classifier update blocked",
+        "The selected config is invalid JSON. No files were changed.",
+        "error",
+      );
       return false;
     }
   } else if (source.ownershipBytes !== null) {
-    log(ctx, "Cannot save Bifrost's starter setup because an ownership receipt exists without its config.", "error");
+    logImportant(
+      ctx,
+      "Classifier update blocked",
+      "An ownership file exists without its config. No files were changed.",
+      "error",
+    );
     return false;
   }
-  const currentClassifier = current.classifier && typeof current.classifier === "object" && !Array.isArray(current.classifier)
-    ? current.classifier as Record<string, unknown>
-    : source.configBytes === null && state.config.classifier
-      ? state.config.classifier as unknown as Record<string, unknown> : {};
-  if (classifierChoice) current.classifier = nextClassifierConfig(currentClassifier, classifierChoice);
-  const generatedModels = Object.fromEntries(Object.entries(state.config.models ?? {})
-    .map(([tier, pool]) => [tier, typeof pool === "string" ? [pool] : pool])) as Record<string, readonly string[]>;
+  const currentClassifier =
+    current.classifier &&
+    typeof current.classifier === "object" &&
+    !Array.isArray(current.classifier)
+      ? (current.classifier as Record<string, unknown>)
+      : source.configBytes === null && state.config.classifier
+        ? (state.config.classifier as unknown as Record<string, unknown>)
+        : {};
+  if (classifierChoice)
+    current.classifier = nextClassifierConfig(currentClassifier, classifierChoice);
+  const generatedModels = Object.fromEntries(
+    Object.entries(state.config.models ?? {}).map(([tier, pool]) => [
+      tier,
+      typeof pool === "string" ? [pool] : pool,
+    ]),
+  ) as Record<string, readonly string[]>;
   if (stillFresh) {
     const generatedDefault = state.config.default;
     if (!generatedDefault || Object.keys(generatedModels).length === 0) {
@@ -2898,9 +4582,14 @@ function persistBootstrapConfig(
         return true;
       }
     } else {
-      const receipt = buildInitOwnershipReceipt(generatedModels);
+      const receipt = buildInitOwnershipReceipt(source.source, generatedModels);
       if (!receipt) {
-        log(ctx, "Cannot safely save Bifrost's generated model pools and default; no files were changed.", "error");
+        logImportant(
+          ctx,
+          "Starter setup blocked",
+          "Could not safely save generated model pools and default. No files were changed.",
+          "error",
+        );
         return false;
       }
       current.models = generatedModels;
@@ -2913,23 +4602,35 @@ function persistBootstrapConfig(
   }
   const configBytes = Buffer.from(JSON.stringify(current, null, 2) + "\n", "utf8");
   const ownership = stillFresh
-    ? buildInitOwnershipReceipt(generatedModels)
+    ? buildInitOwnershipReceipt(source.source, generatedModels)
     : source.ownershipBytes
       ? undefined
-      : buildInitOwnershipReceipt({});
+      : buildInitOwnershipReceipt(source.source, {});
   const ownershipBytes = ownership
     ? Buffer.from(JSON.stringify(ownership, null, 2) + "\n", "utf8")
-    : source.ownershipBytes ? Buffer.from(source.ownershipBytes) : undefined;
-  if (!ownershipBytes || configBytes.byteLength > MAX_CONFIG_SOURCE_BYTES
-    || ownershipBytes.byteLength > MAX_RECONCILIATION_OWNERSHIP_BYTES
-    || !prospectiveConfigInstallable(source.source, configBytes, state)) {
-    log(ctx, "The requested classifier config is invalid or exceeds a safe write limit; no files were changed.", "error");
+    : source.ownershipBytes
+      ? Buffer.from(source.ownershipBytes)
+      : undefined;
+  if (
+    !ownershipBytes ||
+    configBytes.byteLength > MAX_CONFIG_SOURCE_BYTES ||
+    ownershipBytes.byteLength > MAX_RECONCILIATION_OWNERSHIP_BYTES ||
+    !prospectiveConfigInstallable(source.source, configBytes, state)
+  ) {
+    logImportant(
+      ctx,
+      "Classifier update blocked",
+      "The requested config is invalid or exceeds the safe write limit. No files were changed.",
+      "error",
+    );
     return false;
   }
   const expectedConfigDigest = source.configBytes
-    ? createHash("sha256").update(source.configBytes).digest("hex") : null;
+    ? createHash("sha256").update(source.configBytes).digest("hex")
+    : null;
   const expectedOwnershipDigest = source.ownershipBytes
-    ? createHash("sha256").update(source.ownershipBytes).digest("hex") : null;
+    ? createHash("sha256").update(source.ownershipBytes).digest("hex")
+    : null;
   const targetDirectory = dirname(source.configPath);
   if (!existsSync(targetDirectory)) mkdirSync(targetDirectory, { recursive: true });
   const ownershipDirectory = dirname(source.ownershipPath);
@@ -2945,25 +4646,49 @@ function persistBootstrapConfig(
       nextOwnershipBytes: ownershipBytes,
     });
   } catch {
-    log(ctx, "Could not safely save the classifier and starter model setup; existing files were preserved.", "error");
+    logImportant(
+      ctx,
+      "Classifier update failed",
+      "Could not confirm whether the classifier and starter setup was saved. Run `/bifrost config reconcile --source " +
+        source.source +
+        " --recover` to check or finish any interrupted save before retrying.",
+      "error",
+    );
     return false;
   }
   state.bootstrapModelsInMemory = false;
-  if (stillFresh) log(ctx, "Saving Bifrost's detected starter model pools with your classifier choice.");
+  if (stillFresh)
+    logImportant(
+      ctx,
+      "Starter models saved",
+      "Detected model pools were saved with your classifier choice.",
+      "success",
+    );
   return true;
 }
 
 async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState): Promise<void> {
   if (!ctx.hasUI) {
-    log(ctx, "Choose classifier backend in Pi UI: prompt, typesafe, or pi-native", "warning");
+    logImportant(
+      ctx,
+      "Classifier selection unavailable",
+      "Choose classifier backend in Pi UI: prompt, typesafe, or pi-native.",
+      "warning",
+    );
     return;
   }
   let bootstrapSourceAtStart: ReconciliationSourceSnapshot | undefined;
   const configGenerationAtStart = state.configGeneration ?? 0;
   if (state.bootstrapModelsInMemory) {
-    try { bootstrapSourceAtStart = selectInitSource(); }
-    catch {
-      log(ctx, "Cannot safely change the classifier because a config source is invalid.", "error");
+    try {
+      bootstrapSourceAtStart = selectInitSource();
+    } catch {
+      logImportant(
+        ctx,
+        "Classifier update blocked",
+        "A config source is invalid. No files were changed.",
+        "error",
+      );
       return;
     }
   }
@@ -2972,23 +4697,38 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
     `${CLASSIFIER_BACKEND_IDS.typesafe} — use Jev (requires Pi auth.json or ${TYPE_SAFE_API_KEY_ENV})`,
   ];
   if (piClassificationSupported(ctx.modelRegistry)) {
-    backendOptions.push(`${CLASSIFIER_BACKEND_IDS.piNative} — use Pi native classify (requires Pi TypeSafe auth)`);
+    backendOptions.push(
+      `${CLASSIFIER_BACKEND_IDS.piNative} — use Pi native classify (requires Pi TypeSafe auth)`,
+    );
   }
   const selected = await ctx.ui.select("Classifier backend", backendOptions);
   if (!selected) return;
-  const backend = selected.startsWith(CLASSIFIER_BACKEND_IDS.typesafe) ? CLASSIFIER_BACKEND_IDS.typesafe
-    : selected.startsWith(CLASSIFIER_BACKEND_IDS.piNative) ? CLASSIFIER_BACKEND_IDS.piNative
-    : CLASSIFIER_BACKEND_IDS.prompt;
+  const backend = selected.startsWith(CLASSIFIER_BACKEND_IDS.typesafe)
+    ? CLASSIFIER_BACKEND_IDS.typesafe
+    : selected.startsWith(CLASSIFIER_BACKEND_IDS.piNative)
+      ? CLASSIFIER_BACKEND_IDS.piNative
+      : CLASSIFIER_BACKEND_IDS.prompt;
   let selectedPromptModel: string | undefined;
-  const needsPromptModel = backend === CLASSIFIER_BACKEND_IDS.prompt
-    && !promptClassifierModelAvailable(ctx, state.config.classifier?.model);
+  const needsPromptModel =
+    backend === CLASSIFIER_BACKEND_IDS.prompt &&
+    !promptClassifierModelAvailable(ctx, state.config.classifier?.model);
   if (needsPromptModel) {
     if (ctx.modelRegistry.getAvailable().length === 0) {
-      log(ctx, "No Pi models available for prompt classifier; regex fallback remains active.", "warning");
+      logImportant(
+        ctx,
+        "Classifier model unavailable",
+        "No Pi models are available; regex fallback remains active.",
+        "warning",
+      );
     } else {
-      selectedPromptModel = await requestPromptClassifierModel(ctx) ?? undefined;
+      selectedPromptModel = (await requestPromptClassifierModel(ctx)) ?? undefined;
       if (!selectedPromptModel) {
-        log(ctx, "Prompt classifier model selection cancelled", "warning");
+        logImportant(
+          ctx,
+          "Model selection cancelled",
+          "Prompt classifier configuration was not changed.",
+          "info",
+        );
         return;
       }
     }
@@ -2997,45 +4737,86 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
   if (backend === CLASSIFIER_BACKEND_IDS.piNative) {
     let catalogModels: string[] = [];
     try {
-      catalogModels = (await ctx.modelRegistry.getAvailableOfType("classifier", "typesafe"))
-        .map((model) => `${model.provider}/${model.id}`);
+      catalogModels = (await ctx.modelRegistry.getAvailableOfType("classifier", "typesafe")).map(
+        (model) => `${model.provider}/${model.id}`,
+      );
     } catch {
-      log(ctx, "Pi classifier catalog unavailable; choose catalog default and check credentials before use.", "warning");
+      logImportant(
+        ctx,
+        "Classifier catalog unavailable",
+        "Could not load the typesafe classifier catalog. Check credentials, then retry.",
+        "warning",
+      );
     }
     if (catalogModels.length === 0) {
-      log(ctx, `No TypeSafe classifier available now; run /login or set ${TYPE_SAFE_API_KEY_ENV} before use.`, "warning");
+      logImportant(
+        ctx,
+        "TypeSafe classifier unavailable",
+        `Run /login or set ${TYPE_SAFE_API_KEY_ENV} before use.`,
+        "warning",
+      );
     }
-    const picked = await ctx.ui.select("Pi native classifier model", ["Catalog default", ...catalogModels]);
+    const picked = await ctx.ui.select("Pi native classifier model", [
+      "Catalog default",
+      ...catalogModels,
+    ]);
     if (!picked) return;
     selectedPiNativeModel = picked === "Catalog default" ? null : picked;
   }
   const path = join(process.cwd(), CONFIG_DIR_NAME, "bifrost.json");
   let current: Record<string, unknown> = {};
   try {
-    current = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown> : {};
+    current = existsSync(path)
+      ? (JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>)
+      : {};
   } catch {
-    log(ctx, "Cannot update classifier: .pi/bifrost.json is invalid JSON", "error");
+    logImportant(ctx, "Classifier update blocked", ".pi/bifrost.json is invalid JSON.", "error");
     return;
   }
-  const classifier = current.classifier && typeof current.classifier === "object" && !Array.isArray(current.classifier)
-    ? current.classifier as Record<string, unknown> : {};
+  const classifier =
+    current.classifier &&
+    typeof current.classifier === "object" &&
+    !Array.isArray(current.classifier)
+      ? (current.classifier as Record<string, unknown>)
+      : {};
   const choice = {
     backend,
-    promptModel: backend === CLASSIFIER_BACKEND_IDS.prompt
-      ? selectedPromptModel ?? (needsPromptModel ? null : undefined) : undefined,
+    promptModel:
+      backend === CLASSIFIER_BACKEND_IDS.prompt
+        ? (selectedPromptModel ?? (needsPromptModel ? null : undefined))
+        : undefined,
     piNativeModel: selectedPiNativeModel,
   };
   if (bootstrapSourceAtStart) {
-    if (!persistBootstrapConfig(ctx, state, bootstrapSourceAtStart, choice, configGenerationAtStart)) return;
+    if (
+      !persistBootstrapConfig(ctx, state, bootstrapSourceAtStart, choice, configGenerationAtStart)
+    )
+      return;
     const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
     if (!installReloadedConfig(state, loadedConfig, ctx)) return;
     state.classifierMetricsStore.reload({
       cwd: process.cwd(),
-      enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
+      enabled: classifierMetricsEnabled(
+        state.config,
+        state.effectiveClassifierBackend(state.config).backend,
+      ),
     });
-    log(ctx, `classifier backend set to ${backend}; config reloaded`);
-    if (backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
-      log(ctx, `TypeSafe credential missing; use ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`, "warning");
+    logImportant(
+      ctx,
+      "Classifier backend updated",
+      `${backend}; configuration reloaded.`,
+      "success",
+    );
+    if (
+      backend === CLASSIFIER_BACKEND_IDS.typesafe &&
+      resolveTypeSafeApiKey().source === "missing"
+    ) {
+      logImportant(
+        ctx,
+        "TypeSafe credential missing",
+        `Use ~/.pi/agent/auth.json or set ${TYPE_SAFE_API_KEY_ENV}.`,
+        "warning",
+      );
     }
     return;
   }
@@ -3046,11 +4827,19 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
   if (!installReloadedConfig(state, loadedConfig, ctx)) return;
   state.classifierMetricsStore.reload({
     cwd: process.cwd(),
-    enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
+    enabled: classifierMetricsEnabled(
+      state.config,
+      state.effectiveClassifierBackend(state.config).backend,
+    ),
   });
-  log(ctx, `classifier backend set to ${backend}; config reloaded`);
+  logImportant(ctx, "Classifier backend updated", `${backend}; configuration reloaded.`, "success");
   if (backend === CLASSIFIER_BACKEND_IDS.typesafe && resolveTypeSafeApiKey().source === "missing") {
-    log(ctx, `TypeSafe credential missing; use ~/.pi/agent/auth.json or ${TYPE_SAFE_API_KEY_ENV}`, "warning");
+    logImportant(
+      ctx,
+      "TypeSafe credential missing",
+      `Use ~/.pi/agent/auth.json or set ${TYPE_SAFE_API_KEY_ENV}.`,
+      "warning",
+    );
   }
 }
 
@@ -3061,7 +4850,11 @@ async function handleClassifierChoose(ctx: ExtensionContext, state: BifrostState
  * reload path. Shared by `/bifrost reload` and by an approved agent apply, so
  * both activate a saved configuration exactly the same way.
  */
-export function reloadBifrostConfig(state: BifrostState, ctx: ExtensionContext): boolean {
+export function reloadBifrostConfig(
+  state: BifrostState,
+  ctx: ExtensionContext,
+  announceSuccess = false,
+): boolean {
   const done = debugMeasure("command", "reload");
   const loadedConfig = loadConfigForReload(process.cwd(), state.extensionDir);
   if (!installReloadedConfig(state, loadedConfig, ctx)) {
@@ -3079,14 +4872,23 @@ export function reloadBifrostConfig(state: BifrostState, ctx: ExtensionContext):
   state.enabled = runtimeState.enabled;
   state.legacyClassifierEnabled = runtimeState.legacyClassifierEnabled;
   state.classifierRuntimeStateIssue = runtimeState.runtimeStateIssue;
-  state.cacheEntries = loadCache(cachePath(process.cwd(), state.config.cache?.path), (state.config.cache?.ttlHours ?? 720) * 60 * 60 * 1000);
+  state.cacheEntries = loadCache(
+    cachePath(process.cwd(), state.config.cache?.path),
+    (state.config.cache?.ttlHours ?? 720) * 60 * 60 * 1000,
+  );
   state.reliabilityStore.reload(state.config.reliability, process.cwd());
   state.classifierMetricsStore.reload({
     cwd: process.cwd(),
-    enabled: classifierMetricsEnabled(state.config, state.effectiveClassifierBackend(state.config).backend),
+    enabled: classifierMetricsEnabled(
+      state.config,
+      state.effectiveClassifierBackend(state.config).backend,
+    ),
   });
   syncBifrostModeStatus(ctx, state);
   clearBifrostWidgets(ctx);
+  if (announceSuccess && loadedConfig.warnings.length === 0) {
+    logImportant(ctx, "Bifrost config reloaded", "Configuration is active.", "success");
+  }
   done();
   debug("command", "reloaded", {
     enabled: state.enabled,
@@ -3103,24 +4905,39 @@ export function createCommandRouter(
     exact("cost", async (_, ctx) => {
       const entries = ctx.sessionManager.getEntries();
       const data = getCostReportData(ctx.sessionManager.getBranch(), entries);
-      if (!await showCostView(ctx, data)) await uiResult(ctx, "Session usage", formatCostText(data));
+      if (!(await showCostView(ctx, data)))
+        await uiResult(ctx, "Session usage", formatCostText(data));
     }),
     exact("on", (_, ctx) => {
       state.onManualControl?.(ctx.sessionManager, "on");
       state.enabled = true;
-      state.saveModeState();
+      const persisted = state.saveModeState() !== false;
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
-      log(ctx, "Bifrost enabled");
+      logImportant(
+        ctx,
+        "Bifrost enabled",
+        persisted
+          ? "Routing is enabled; this choice survives a restart."
+          : "Routing is enabled for this session; the mode state could not be saved.",
+        persisted ? "success" : "warning",
+      );
     }),
     exact("off", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
       state.onManualControl?.(ctx.sessionManager, "off");
       state.enabled = false;
-      state.saveModeState();
+      const persisted = state.saveModeState() !== false;
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
-      log(ctx, "Bifrost disabled");
+      logImportant(
+        ctx,
+        "Bifrost disabled",
+        persisted
+          ? "Routing is disabled; this choice survives a restart."
+          : "Routing is disabled for this session; the mode state could not be saved.",
+        persisted ? "success" : "warning",
+      );
     }),
     exact("pin", async (_, ctx) => {
       if (state.selectPhysicalFromVirtual && !(await state.selectPhysicalFromVirtual(ctx))) return;
@@ -3128,18 +4945,24 @@ export function createCommandRouter(
       state.pinned = true;
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
-      log(ctx, "Bifrost pinned");
+      logImportant(ctx, "Bifrost pinned", "Automatic model switching is disabled.", "success");
     }),
     exact("unpin", (_, ctx) => {
       state.onManualControl?.(ctx.sessionManager, "unpin");
       state.pinned = false;
       syncBifrostModeStatus(ctx, state);
       clearBifrostWidgets(ctx);
-      log(ctx, "Bifrost unpinned");
+      logImportant(
+        ctx,
+        "Bifrost unpinned",
+        state.enabled
+          ? "Automatic model switching is enabled."
+          : "The model is unpinned, but routing is off. Run /bifrost on to route prompts.",
+        "success",
+      );
     }),
     exact("reload", (_, ctx) => {
-      if (!reloadBifrostConfig(state, ctx)) return;
-      log(ctx, "Bifrost config reloaded");
+      reloadBifrostConfig(state, ctx, true);
     }),
 
     spaced("validate", (args, ctx) => handleDiagnosticsCommand("validate", args, ctx, state)),
@@ -3168,17 +4991,34 @@ export function createCommandRouter(
     exact("probe", async (_, ctx) => {
       const available = ctx.modelRegistry.getAvailable();
       if (available.length === 0) {
-        log(ctx, "No models available in registry.", "warning");
+        logImportant(ctx, "No models available", "The model registry is empty.", "warning");
         return;
       }
       clearBifrostWidgets(ctx);
       uiBusy(ctx, `Probing ${available.length} models...`);
       log(ctx, `Probing ${available.length} model(s) with "${PROBE_PROMPT_TEXT}"...`);
 
-      const probeRun = await runProbe(ctx, { ...probeOptionsFromConfig(state.config.probe), signal: ctx.signal });
-      uiDone(ctx);
+      let okCount = 0;
+      let errCount = 0;
+      let probeRun: Awaited<ReturnType<typeof runProbe>>;
+      try {
+        probeRun = await runProbe(ctx, {
+          ...probeOptionsFromConfig(state.config.probe),
+          signal: ctx.signal,
+          onProgress: (done, total, last) => {
+            if (last.status === "ok") okCount++;
+            else if (last.status === "error" || last.status === "timeout") errCount++;
+            setProbeProgress(ctx, { done, total, okCount, errCount });
+          },
+        });
+      } finally {
+        // Clear on every exit: a cancelled or thrown probe must not leave a
+        // frozen progress bar that still reads as "probing".
+        uiDone(ctx);
+        if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
+      }
       if (probeRun.cancelled || ctx.signal?.aborted) {
-        log(ctx, "Probe was cancelled; partial results were not saved.", "warning");
+        logImportant(ctx, "Probe cancelled", "Partial results were not saved.", "info");
         return;
       }
       const { results, path } = probeRun;
@@ -3186,9 +5026,14 @@ export function createCommandRouter(
         results.map((r) =>
           r.status === "ok"
             ? { model: `${r.provider}/${r.model}`, ok: true as const, source: "probe" }
-            : { model: `${r.provider}/${r.model}`, ok: false as const, source: "probe", reason: r.error ?? r.status }
+            : {
+                model: `${r.provider}/${r.model}`,
+                ok: false as const,
+                source: "probe",
+                reason: r.error ?? r.status,
+              },
         ),
-        Date.now()
+        Date.now(),
       );
 
       const ok = results.filter((r) => r.status === "ok");
@@ -3223,14 +5068,70 @@ export function createCommandRouter(
       lines.push("", `full results → ${path}`);
       uiOutput(ctx, lines);
 
-      if (ok.length < results.length) {
-        log(
+      const notWorking = results.length - ok.length;
+      // Group failures by the existing reason classifier: the card should explain
+      // *why* models failed, not list 400 near-duplicate errors. Raw per-model
+      // errors stay in .pi/bifrost-probe.json.
+      const failureReasons = new Map<string, { count: number; models: string[] }>();
+      for (const r of [...errs, ...timeouts]) {
+        const reason = failureDetails(r)?.reason ?? "unknown";
+        const entry = failureReasons.get(reason) ?? { count: 0, models: [] };
+        entry.count++;
+        entry.models.push(`${r.provider}/${r.model}`);
+        failureReasons.set(reason, entry);
+      }
+      const sortedReasons = [...failureReasons.entries()].sort((a, b) => b[1].count - a[1].count);
+      const topReasons = sortedReasons.slice(0, 5);
+      const countWidth = String(Math.max(0, ...sortedReasons.map(([, r]) => r.count))).length;
+      const labelWidth = Math.max(
+        ...topReasons.map(([reason]) => (REASON_LABELS[reason] ?? reason).length),
+      );
+      const details = [
+        `${errs.length} failed · ${timeouts.length} timed out${
+          skipped.length > 0 ? ` · ${skipped.length} skipped` : ""
+        }`,
+        ...topReasons.map(([reason, r]) => {
+          // Small groups: name every model (the names are the answer). Large
+          // groups: the count is the answer; per-model names stay in the file.
+          const names = r.count <= 3 ? ` — ${r.models.join(", ")}` : "";
+          return `${(REASON_LABELS[reason] ?? reason).padEnd(labelWidth)} ×${String(r.count).padStart(countWidth)}${names}`;
+        }),
+        ...(sortedReasons.length > topReasons.length
+          ? [`${sortedReasons.length - topReasons.length} more failure reasons`]
+          : []),
+        "full errors: .pi/bifrost-probe.json",
+      ];
+      // Expanded view (ctrl+o): every failure group with its complete model list.
+      const expandedDetails = [
+        `${errs.length} failed · ${timeouts.length} timed out${
+          skipped.length > 0 ? ` · ${skipped.length} skipped` : ""
+        }`,
+        ...sortedReasons.flatMap(([reason, r]) => [
+          `${REASON_LABELS[reason] ?? reason} ×${r.count}`,
+          ...r.models.map((m) => `· ${m}`),
+        ]),
+        "full errors: .pi/bifrost-probe.json",
+      ];
+      if (ok.length === 0) {
+        logImportant(
           ctx,
-          `${ok.length}/${results.length} models responded. Check ${path} for details.`,
+          "No usable models",
+          `0 of ${results.length} models are working`,
+          "error",
+          details,
+          expandedDetails,
+        );
+      } else if (notWorking > 0) {
+        logImportant(
+          ctx,
+          "Probe finished with failures",
+          `${ok.length} of ${results.length} models are working`,
           "warning",
+          details,
+          expandedDetails,
         );
       } else if (ok.length > 0) {
-        log(ctx, `All ${ok.length} models responded successfully.`);
+        logImportant(ctx, "Probe complete", `All ${ok.length} models are working.`, "success");
       }
 
       // Clear the probe widget so results don't persist in the TUI.
@@ -3260,7 +5161,12 @@ export function createCommandRouter(
       saveCache(path, []);
       state.cacheEntries = [];
       state.invalidatePipeline();
-      log(ctx, "cache cleared");
+      logImportant(
+        ctx,
+        "Cache cleared",
+        "All cached classification entries were removed.",
+        "success",
+      );
     }),
 
     // Classifier
@@ -3268,54 +5174,95 @@ export function createCommandRouter(
     exact("classifier", (_, ctx) => handleClassifierChoose(ctx, state)),
     exact("classifier on", (_, ctx) => {
       if (state.classifierRuntimeStateIssue) {
-        log(ctx, "Classifier remains disabled because runtime state is invalid. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.", "error");
+        logImportant(
+          ctx,
+          "Classifier enable blocked",
+          "Runtime state is invalid. Repair .pi/bifrost-state.json, then run /bifrost reload.",
+          "error",
+        );
         return;
       }
       const effective = state.effectiveClassifierBackend(state.config, ctx);
       const errors = classifierConfigErrors(state.config, effective.backend, true);
       if (errors.length > 0) {
-        log(ctx, `Classifier remains disabled because its configuration is invalid: ${errors.join(" ")}`, "error");
+        logImportant(
+          ctx,
+          "Classifier enable blocked",
+          `Configuration is invalid: ${errors.join(" ")}`,
+          "error",
+        );
         return;
       }
       state.setClassifierSessionOverride(ctx.sessionManager, true);
       syncBifrostModeStatus(ctx, state);
       debug("command", "classifier_toggle", { enabled: true, persistence: "session" });
-      log(ctx, `Classifier enabled for this Pi session. Backend ${effective.backend} can receive current prompts; configuration was not changed.`);
+      logImportant(
+        ctx,
+        "Classifier enabled",
+        `Backend ${effective.backend} can receive current prompts; configuration was not changed.`,
+        "success",
+      );
     }),
     exact("classifier off", (_, ctx) => {
       state.setClassifierSessionOverride(ctx.sessionManager, false);
       syncBifrostModeStatus(ctx, state);
       debug("command", "classifier_toggle", { enabled: false, persistence: "session" });
-      log(ctx, "Classifier disabled for this Pi session; configuration was not changed.");
+      logImportant(
+        ctx,
+        "Classifier disabled",
+        "Disabled for this Pi session; configuration was not changed.",
+        "info",
+      );
     }),
     exact("classifier inherit", (_, ctx) => {
       state.setClassifierSessionOverride(ctx.sessionManager, undefined);
       const enablement = classifierEnablementFor(state, ctx);
       syncBifrostModeStatus(ctx, state);
       if (enablement.source === "legacy-conflict" && enablement.legacyConflict) {
-        log(ctx, `Classifier session override cleared; ${classifierConflictNote(enablement.legacyConflict, enablement.source)}.`, "warning");
+        logImportant(
+          ctx,
+          "Classifier override cleared",
+          classifierConflictNote(enablement.legacyConflict, enablement.source) + ".",
+          "warning",
+        );
       } else if (enablement.runtimeStateIssue) {
-        log(ctx, `Classifier remains disabled because runtime state is invalid. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.`, "error");
+        logImportant(
+          ctx,
+          "Classifier remains disabled",
+          "Runtime state is invalid. Repair .pi/bifrost-state.json, then run /bifrost reload.",
+          "error",
+        );
       } else {
-        log(ctx, `Classifier now follows configuration for this session (${enablement.enabled ? "enabled" : "disabled"}).`);
+        logImportant(
+          ctx,
+          "Classifier override cleared",
+          `Classifier now follows configuration for this session (${enablement.enabled ? "enabled" : "disabled"}).`,
+          "info",
+        );
       }
     }),
     exact("classifier status", (_, ctx) => {
       const rawModel = state.config.classifier?.model;
-      const modelId = Array.isArray(rawModel)
-        ? rawModel.join(", ")
-        : (rawModel ?? "none");
+      const modelId = Array.isArray(rawModel) ? rawModel.join(", ") : (rawModel ?? "none");
       const classifier = state.config.classifier;
       const effective = state.effectiveClassifierBackend(state.config, ctx);
       const backend = effective.backend;
       const label = effective.auto ? `auto: ${backend} (${effective.reason})` : backend;
-      const credential = backend === CLASSIFIER_BACKEND_IDS.typesafe ? resolveTypeSafeApiKey().source : undefined;
-      const fallback = classifier?.fallback ?? (backend === CLASSIFIER_BACKEND_IDS.typesafe ? "prompt" : modelId === "none" ? "regex" : "prompt");
-      const detail = backend === CLASSIFIER_BACKEND_IDS.typesafe
-        ? `backend=${label} model=${classifier?.typesafe?.model ?? TYPE_SAFE_MODEL} endpoint=${TYPE_SAFE_ENDPOINT} minConfidence=${classifier?.minConfidence ?? 0.8} credential=${credential} fallback=${fallback} fallbackModel=${fallback === "regex" ? "none" : modelId}`
-        : backend === CLASSIFIER_BACKEND_IDS.piNative
-          ? `backend=${label} model=${classifier?.piNative?.model ?? "catalog default"} minConfidence=${classifier?.minConfidence ?? 0.8} fallback=${fallback} fallbackModel=${fallback === "regex" ? "none" : modelId}`
-          : `backend=${label} model=${modelId} endpoint=${classifier?.endpoint ?? "registry"} method=${classifier?.method ?? "auto"}`;
+      const credential =
+        backend === CLASSIFIER_BACKEND_IDS.typesafe ? resolveTypeSafeApiKey().source : undefined;
+      const fallback =
+        classifier?.fallback ??
+        (backend === CLASSIFIER_BACKEND_IDS.typesafe
+          ? "prompt"
+          : modelId === "none"
+            ? "regex"
+            : "prompt");
+      const detail =
+        backend === CLASSIFIER_BACKEND_IDS.typesafe
+          ? `backend=${label} model=${classifier?.typesafe?.model ?? TYPE_SAFE_MODEL} endpoint=${TYPE_SAFE_ENDPOINT} minConfidence=${classifier?.minConfidence ?? 0.8} credential=${credential} fallback=${fallback} fallbackModel=${fallback === "regex" ? "none" : modelId}`
+          : backend === CLASSIFIER_BACKEND_IDS.piNative
+            ? `backend=${label} model=${classifier?.piNative?.model ?? "catalog default"} minConfidence=${classifier?.minConfidence ?? 0.8} fallback=${fallback} fallbackModel=${fallback === "regex" ? "none" : modelId}`
+            : `backend=${label} model=${modelId} endpoint=${classifier?.endpoint ?? "registry"} method=${classifier?.method ?? "auto"}`;
       const metrics = state.classifierMetricsStore.snapshot();
       const runtime = classifierEnablementFor(state, ctx);
       const errors = classifierConfigErrors(state.config, backend, runtime.enabled);
@@ -3323,12 +5270,25 @@ export function createCommandRouter(
       const lines = [
         `classifier: enabled=${runtime.enabled} (${runtime.source})`,
         `configured=${classifier?.enabled === false ? "off" : "on"}`,
-        ...(conflict ? [`legacy saved classifierEnabled=${conflict.saved} conflicts with configured=${conflict.configured}; ${classifierConflictNote(conflict, runtime.source)}`] : []),
-        ...(runtime.runtimeStateIssue ? [`runtime-state=invalid (${runtime.runtimeStateIssue}); classification is paused. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.`] : []),
+        ...(conflict
+          ? [
+              `legacy saved classifierEnabled=${conflict.saved} conflicts with configured=${conflict.configured}; ${classifierConflictNote(conflict, runtime.source)}`,
+            ]
+          : []),
+        ...(runtime.runtimeStateIssue
+          ? [
+              `runtime-state=invalid (${runtime.runtimeStateIssue}); classification is paused. Repair .pi/bifrost-state.json: it must be a JSON object, and enabled and classifierEnabled must be booleans if present. Then run /bifrost reload.`,
+            ]
+          : []),
         `readiness=${runtime.runtimeStateIssue ? "blocked" : !runtime.enabled ? "inactive" : errors.length > 0 ? "blocked" : "ready"}`,
         ...errors.map((message) => `error=${message}`),
         detail,
-        ...(backend !== CLASSIFIER_BACKEND_IDS.prompt ? [`observations=${metrics.total} (persisted aggregate)`, `outcomes=${JSON.stringify(metrics.outcomes)}`] : []),
+        ...(backend !== CLASSIFIER_BACKEND_IDS.prompt
+          ? [
+              `observations=${metrics.total} (persisted aggregate)`,
+              `outcomes=${JSON.stringify(metrics.outcomes)}`,
+            ]
+          : []),
       ];
       uiOutput(ctx, lines);
     }),
@@ -3369,9 +5329,11 @@ export function createCommandRouter(
     if (!trimmed) {
       debug("command", "dashboard");
       if (!ctx.hasUI) {
-        log(
+        logImportant(
           ctx,
-          `Bifrost: enabled=${state.enabled} pinned=${state.pinned} current=${modelKey(ctx.model)}`,
+          "Bifrost status",
+          `enabled=${state.enabled} pinned=${state.pinned} current=${modelKey(ctx.model)}`,
+          "info",
         );
         return;
       }
@@ -3405,7 +5367,7 @@ export function createCommandRouter(
 
     debug("command", "picker", { command: sub });
     if (!ctx.hasUI) {
-      log(ctx, `Unknown /bifrost subcommand: ${trimmed}`, "warning");
+      logImportant(ctx, "Unknown command", `/bifrost ${trimmed}`, "warning");
       return;
     }
 
@@ -3414,7 +5376,12 @@ export function createCommandRouter(
 
     if (selected.argumentHint) {
       ctx.ui.setEditorText(`/bifrost ${selected.value} `);
-      log(ctx, `Prefilled /bifrost ${selected.value}`);
+      logImportant(
+        ctx,
+        "Command drafted",
+        `/bifrost ${selected.value} — add its arguments in the editor.`,
+        "info",
+      );
       return;
     }
 

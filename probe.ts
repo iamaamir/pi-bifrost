@@ -64,10 +64,12 @@ export interface RunProbeOptions {
   /** Allow a second, session-backed request when the streaming attempt returns
    * no text. Callers that promise exactly one request per model pass `false`. */
   sessionFallback?: boolean;
-  /** Write the results to the `.pi/bifrost-probe.json` cache that `/bifrost init`
-   * reads. A one-off candidate check passes `false`: its narrow transport would
-   * otherwise replace the init answer for the whole TTL. */
+  /** Write results to the cache that `/bifrost init` reads. A one-off candidate
+   * check passes `false`: its narrow transport would otherwise replace the init
+   * answer for the whole TTL. */
   persist?: boolean;
+  /** Override default project cache path when init targets another config scope. */
+  path?: string;
   timeoutMs?: number;
   concurrency?: number;
   signal?: AbortSignal;
@@ -150,7 +152,7 @@ function probeDebug(runId: string, event: string, meta: Record<string, unknown>)
 
 const SAFE_PARAMETER_NAMES = new Set(["temperature", "max_tokens", "max_output_tokens", "max_completion_tokens", "reasoning", "service_tier"]);
 
-function failureDetails(result: ProbeResult): { reason: string; httpStatus?: number; parameter?: string } | undefined {
+export function failureDetails(result: ProbeResult): { reason: string; httpStatus?: number; parameter?: string } | undefined {
   if (result.status === "ok") return undefined;
   if (result.error === "model is no longer eligible") return { reason: "not_eligible" };
   if (result.error?.startsWith("unsupported api:")) return { reason: "unsupported_api" };
@@ -207,7 +209,7 @@ export async function runProbe(
   options: RunProbeOptions = {},
 ): Promise<{ results: ProbeResult[]; path: string; cancelled?: true }> {
   const runId = randomUUID();
-  const outputPath = join(process.cwd(), ".pi", "bifrost-probe.json");
+  const outputPath = options.path ?? join(process.cwd(), ".pi", "bifrost-probe.json");
   const catalog = ctx.modelRegistry.getAvailable().filter(isGenerativeModel);
   const available = (options.models ?? catalog).filter(isGenerativeModel);
   const total = available.length;
@@ -250,12 +252,14 @@ export async function runProbe(
   // Use minimum of requested concurrency and total models, but at least 1
   const effectiveConcurrency = Math.max(1, Math.min(concurrency, total));
   const workers = Array.from({ length: effectiveConcurrency }, () => worker());
-  try {
-    await Promise.all(workers);
-  } catch (error) {
+  const workerOutcomes = await Promise.allSettled(workers);
+  const failedWorker = workerOutcomes.find(
+    (outcome): outcome is PromiseRejectedResult => outcome.status === "rejected",
+  );
+  if (failedWorker) {
     const partial = results.filter((result): result is ProbeResult => result !== undefined);
     reportProbeCompletion(runId, partial, catalog.length, { cache: "not_written", cacheReason: "worker_failed" });
-    throw error;
+    throw failedWorker.reason;
   }
 
   if (signal?.aborted) {

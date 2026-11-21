@@ -96,11 +96,17 @@ function makeHarness(options: {
 }
 
 async function captureStderr(run: () => Promise<void>): Promise<string[]> {
-  const original = console.error;
+  const originalError = console.error;
+  const originalWarn = console.warn;
   const captured: string[] = [];
-  console.error = (...values: unknown[]) => { captured.push(values.map(String).join(" ")); };
+  const capture = (...values: unknown[]) => { captured.push(values.map(String).join(" ")); };
+  console.error = capture;
+  console.warn = capture;
   try { await run(); }
-  finally { console.error = original; }
+  finally {
+    console.error = originalError;
+    console.warn = originalWarn;
+  }
   return captured;
 }
 
@@ -117,7 +123,7 @@ async function discoveryFailureScenario(createRouter: typeof createCommandRouter
     const configPath = join(configDir, "bifrost.json");
     const original = Buffer.from(JSON.stringify({ models: { general: ["openai/retired"] }, custom: true }));
     fs.writeFileSync(configPath, original);
-    fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify(buildInitOwnershipReceipt({ general: ["openai/retired"] })));
+    fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify(buildInitOwnershipReceipt("project", { general: ["openai/retired"] })));
     const h = makeHarness({
       evidence: { openai: { status: "complete", refreshedAt: Date.now() } },
       refresh: async () => { throw new Error("PRIVATE_DISCOVERY_FAILURE"); },
@@ -163,6 +169,7 @@ describe("config reconciliation command router", () => {
       fs.mkdirSync(configDir, { recursive: true });
       const original = Buffer.from(JSON.stringify({ enabled: true, models: { general: ["manual/model"] }, retained: { yes: true } }, null, 2) + "\n");
       fs.writeFileSync(join(configDir, "bifrost.json"), original);
+      fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify(buildInitOwnershipReceipt("project", { general: ["manual/model"] })));
       const evidence = { openai: { status: "complete" as const, refreshedAt: Date.now() } };
       let refreshCalls = 0;
       const h = makeHarness({ evidence, refresh: async () => { refreshCalls++; throw new Error("must not refresh preview/apply"); } });
@@ -186,8 +193,8 @@ describe("config reconciliation command router", () => {
       const updated = JSON.parse(fs.readFileSync(join(configDir, "bifrost.json"), "utf8")) as { models: Record<string, string[]>; retained: unknown };
       assert.deepEqual(updated.models.general, ["manual/model", "openai/new-model"]);
       assert.deepEqual(updated.retained, { yes: true });
-      const receipt = JSON.parse(fs.readFileSync(join(configDir, "bifrost-reconcile-ownership.json"), "utf8")) as { sources: Record<string, { generated: Record<string, string[]> }> };
-      assert.deepEqual(Object.values(receipt.sources).flatMap((source) => source.generated.general ?? []), ["openai/new-model"]);
+      const receipt = JSON.parse(fs.readFileSync(join(configDir, "bifrost-reconcile-ownership.json"), "utf8")) as { tiers: Record<string, unknown> };
+      assert.deepEqual(receipt.tiers, { general: { state: "generated", models: ["manual/model", "openai/new-model"] } });
       assert.ok(fs.existsSync(String((applied.applyResult as { configBackupPath?: string }).configBackupPath)));
       assert.deepEqual(fs.readFileSync(String((applied.applyResult as { configBackupPath?: string }).configBackupPath)), original);
     });
@@ -205,7 +212,7 @@ describe("config reconciliation command router", () => {
   it("fault control: complete-on-refresh-failure turns the named advisory assertion RED in an isolated source copy", async () => {
     const sourcePath = new URL("../commands.ts", import.meta.url);
     const original = fs.readFileSync(sourcePath, "utf8");
-    const staleCatch = '    } catch {\n      setRegistryProviderEvidence(state, request.provider, { status: "stale", refreshedAt: Date.now() });\n    } finally {';
+    const staleCatch = '    } catch {\n      setRegistryProviderEvidence(state, request.provider, {\n        status: "stale",\n        refreshedAt: Date.now(),\n      });\n    } finally {';
     assert.equal(original.split(staleCatch).length - 1, 1, "refresh failure catch anchor must be unique");
     const mutant = original.replace(staleCatch, staleCatch.replace('status: "stale"', 'status: "complete"'));
     assert.notEqual(mutant, original, "controlled fault must change the production command source");
@@ -241,7 +248,7 @@ describe("config reconciliation command router", () => {
       fs.mkdirSync(configDir, { recursive: true });
       const configPath = join(configDir, "bifrost.json");
       fs.writeFileSync(configPath, JSON.stringify({ models: { general: ["openai/retired"] } }));
-      const receipt = buildInitOwnershipReceipt({ general: ["openai/retired"] });
+      const receipt = buildInitOwnershipReceipt("project", { general: ["openai/retired"] });
       fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify(receipt));
       let refreshCalls = 0;
       const h = makeHarness({
@@ -272,6 +279,7 @@ describe("config reconciliation command router", () => {
         models: { general: ["manual/model"] },
         unsupportedField: 1,
       }));
+      fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify(buildInitOwnershipReceipt("project", { general: ["manual/model"] })));
       const h = makeHarness({ evidence: { openai: { status: "complete", refreshedAt: Date.now() } } });
       const lines = await captureStderr(() => createCommandRouter(h.state)(
         "config reconcile --tier general --provider openai --json",
@@ -318,7 +326,7 @@ describe("config reconciliation command router", () => {
       const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models: Record<string, string[]> };
       const receipt = JSON.parse(fs.readFileSync(join(configDir, "bifrost-reconcile-ownership.json"), "utf8"));
       assert.deepEqual(fs.readFileSync(configPath), originalConfig);
-      assert.deepEqual(receipt.sources, {});
+      assert.deepEqual(receipt.tiers, { general: { state: "user" } });
       assert.equal(config.models.general.includes("openai/cached-model"), true);
       assert.equal(config.models.general.includes("manual/legacy"), true);
     });
@@ -349,10 +357,10 @@ describe("config reconciliation command router", () => {
       const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
       const ctx = h.ctx as unknown as {
         hasUI: boolean;
-        ui: { confirm: () => Promise<boolean>; notify: () => void };
+        ui: { select: () => Promise<string | undefined>; notify: () => void };
       };
       ctx.hasUI = true;
-      ctx.ui = { confirm: async () => false, notify: () => {} };
+      ctx.ui = { select: async () => undefined, notify: () => {} };
       await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
       assert.equal(fs.existsSync(join(configDir, "bifrost-reconcile-ownership.json")), false);
     });
@@ -391,6 +399,505 @@ describe("config reconciliation command router", () => {
       assert.deepEqual(Object.keys(saved.models), ["quick"]);
       assert(saved.rules.length > 0);
       assert(saved.rules.every(({ model }) => model === "quick"));
+    });
+  });
+
+  it("does not apply unsafe Keep with --write when managed provider inventory is missing", async () => {
+      await withCwd(async (cwd) => {
+        const configDir = join(cwd, ".pi");
+        fs.mkdirSync(configDir, { recursive: true });
+        const configPath = join(configDir, "bifrost.json");
+        const ownershipPath = join(configDir, "bifrost-reconcile-ownership.json");
+        const originalConfig = Buffer.from(JSON.stringify({ models: { general: ["missing-provider/retired"] } }));
+        const originalOwnership = Buffer.from(JSON.stringify(buildInitOwnershipReceipt("project", {
+          general: ["missing-provider/retired"],
+        })));
+        fs.writeFileSync(configPath, originalConfig);
+        fs.writeFileSync(ownershipPath, originalOwnership);
+        writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+          { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+        ]);
+        const h = makeHarness({
+          models: [makeModel("openai", "new-model", 1, 1)],
+          evidence: { "missing-provider": { status: "complete", refreshedAt: Date.now() } },
+        });
+
+        const outcome = await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
+
+        assert.ok(outcome.some((line) => line.includes("no model update is safe")), "headless --write must report no safe action");
+        assert.deepEqual(fs.readFileSync(configPath), originalConfig, "no safe action means --write must not apply Keep");
+        assert.deepEqual(fs.readFileSync(ownershipPath), originalOwnership, "ownership receipt must remain unchanged");
+      });
+    });
+
+  it("pauses settings-only inherited replacement when refresh fails", async () => {
+    await withCwd(async (cwd) => {
+      const agentDir = process.env.PI_CODING_AGENT_DIR!;
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+        default: "general", models: { general: ["openai/retired"] },
+      }));
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      const configPath = join(configDir, "bifrost.json");
+      const original = Buffer.from(JSON.stringify({ classifier: { enabled: false } }));
+      fs.writeFileSync(configPath, original);
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({
+        models: [makeModel("openai", "new-model", 1, 1)],
+        refresh: async () => { throw new Error("inventory unavailable"); },
+      });
+
+      await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
+
+      const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
+      assert.deepEqual(saved.models, {}, "safe Keep saves no inherited pool override");
+      assert.deepEqual(loadConfigForReload(cwd, h.state.extensionDir).config.models?.general, ["openai/retired"]);
+      assert.notDeepEqual(fs.readFileSync(configPath), original, "safe Keep may save settings without replacing inherited pools");
+    });
+  });
+
+  it("pauses inherited replacement when referenced provider is absent", async () => {
+    await withCwd(async (cwd) => {
+      const agentDir = process.env.PI_CODING_AGENT_DIR!;
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+        default: "general", models: { general: ["missing-provider/retired"] },
+      }));
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      const configPath = join(configDir, "bifrost.json");
+      const original = Buffer.from("{}\n");
+      fs.writeFileSync(configPath, original);
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({
+        models: [makeModel("openai", "new-model", 1, 1)],
+        evidence: { "missing-provider": { status: "complete", refreshedAt: Date.now() } },
+      });
+
+      const outcome = await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
+
+      const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
+      assert.deepEqual(saved.models, {}, "safe Keep must not freeze absent-provider inheritance");
+      assert.deepEqual(loadConfigForReload(cwd, h.state.extensionDir).config.models?.general, ["missing-provider/retired"]);
+      assert.ok(outcome.length > 0);
+    });
+  });
+
+  it("allows stale inventory for fresh setup without inherited pools", async () => {
+    await withCwd(async (cwd) => {
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      const configPath = join(configDir, "bifrost.json");
+      fs.writeFileSync(configPath, "{}\n");
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({
+        models: [makeModel("openai", "new-model", 1, 1)],
+        refresh: async () => { throw new Error("inventory unavailable"); },
+      });
+
+      await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
+
+      const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
+      assert.deepEqual(saved.models?.general, ["openai/new-model"]);
+    });
+  });
+
+  for (const initialConfig of [{}, { classifier: { enabled: false } }]) {
+    it(`uses fresh-init confirmation for ${Object.keys(initialConfig).length ? "settings-only" : "empty"} project config with inherited tiers`, async () => {
+      await withCwd(async (cwd) => {
+        const agentDir = process.env.PI_CODING_AGENT_DIR!;
+        fs.mkdirSync(agentDir, { recursive: true });
+        fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+          classifier: { enabled: false },
+          default: "general",
+          models: { general: ["openai/cached-model"] },
+        }));
+        const configDir = join(cwd, ".pi");
+        fs.mkdirSync(configDir, { recursive: true });
+        const configPath = join(configDir, "bifrost.json");
+        fs.writeFileSync(configPath, JSON.stringify(initialConfig));
+        writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+          { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+        ]);
+        const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
+        let confirmations = 0;
+        let selections = 0;
+        const ctx = h.ctx as unknown as {
+          hasUI: boolean;
+          ui: { confirm: () => Promise<boolean>; notify: () => void; select: (_title: string, choices: string[]) => Promise<string> };
+        };
+        ctx.hasUI = true;
+        ctx.ui = {
+          confirm: async () => { confirmations++; return true; },
+          notify: () => {},
+          select: async (_title, choices) => { selections++; return choices[0]!; },
+        };
+
+        const preview = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+
+        assert.equal(selections, 0, "fresh setup must not ask existing-model action choices");
+        assert.equal(confirmations, 1, "fresh setup asks one Yes/No confirmation");
+        const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { classifier?: { enabled?: boolean }; models?: Record<string, string[]> };
+        assert.equal(saved.models?.general, undefined, "identical inherited pool must not be copied into project config");
+        assert.equal(saved.classifier?.enabled, initialConfig.classifier?.enabled);
+        const effective = loadConfigForReload(cwd, h.state.extensionDir).config;
+        assert.deepEqual(effective.models?.general, ["openai/cached-model"], "effective inherited pool remains unchanged");
+        assert.match(preview.join("\n"), /general: inherited pool remains effective[\s\S]*Inherited:[\s\S]*1\. openai\/cached-model/);
+      });
+    });
+  }
+
+  it("renders actual Keep comparison row and reports preserved custom/deleted tiers", async () => {
+    await withCwd(async (cwd) => {
+      const agentDir = process.env.PI_CODING_AGENT_DIR!;
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+        classifier: { enabled: false },
+        default: "general",
+        models: { general: ["openai/cached-model"] },
+      }));
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      const configPath = join(configDir, "bifrost.json");
+      fs.writeFileSync(configPath, JSON.stringify({
+        classifier: { enabled: false },
+        models: { custom: ["manual/custom-model"] },
+      }));
+      const receipt = buildInitOwnershipReceipt("project", { custom: ["manual/custom-model"], deleted: [] })!;
+      fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify({
+        ...receipt,
+        tiers: { custom: { state: "user" }, deleted: { state: "deleted" } },
+      }));
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({ models: [makeModel("openai", "new-model", 1, 1)] });
+      const ctx = h.ctx as unknown as {
+        hasUI: boolean;
+        ui: { confirm: () => Promise<boolean>; notify: () => void; select: (_title: string, choices: string[]) => Promise<string> };
+      };
+      ctx.hasUI = true;
+      ctx.ui = {
+        confirm: async () => true,
+        notify: () => {},
+        select: async (_title, choices) => {
+          assert(choices.includes("Bifrost defaults"));
+          return "Bifrost defaults";
+        },
+      };
+
+      const rendered = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+      const comparison = rendered.join("\n");
+      assert.match(comparison, /Review model choices/);
+      assert.match(comparison, /Keep my models:\n\[bifrost\]     custom: custom pool retained\n\[bifrost\]       Model:\n\[bifrost\]       1\. manual\/custom-model\n\[bifrost\]     deleted: remains deleted\n\[bifrost\]   general: inherited pool remains effective/);
+    });
+  });
+
+  for (const initialConfig of [undefined, { classifier: { enabled: false } }]) {
+    it(`does not save a fresh inherited override after failed forced refresh (${initialConfig ? "settings-only" : "absent"} project config)`, async () => {
+      await withCwd(async (cwd) => {
+        const agentDir = process.env.PI_CODING_AGENT_DIR!;
+        fs.mkdirSync(agentDir, { recursive: true });
+        fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+          default: "general",
+          models: { general: ["openai/old-model"] },
+        }));
+        const configDir = join(cwd, ".pi");
+        fs.mkdirSync(configDir, { recursive: true });
+        const configPath = join(configDir, "bifrost.json");
+        if (initialConfig) fs.writeFileSync(configPath, JSON.stringify(initialConfig));
+        writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+          { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+        ]);
+        const h = makeHarness({
+          models: [makeModel("openai", "new-model", 1, 1)],
+          evidence: { openai: { status: "complete", refreshedAt: Date.now() } },
+          refresh: async () => { throw new Error("forced refresh failed"); },
+        });
+        const ctx = h.ctx as unknown as {
+          hasUI: boolean;
+          ui: { confirm: () => Promise<boolean>; notify: () => void };
+        };
+        ctx.hasUI = true;
+        ctx.ui = { confirm: async () => true, notify: () => {} };
+
+        const before = initialConfig === undefined ? undefined : fs.readFileSync(configPath);
+        const output = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+
+        assert.ok(output.length > 0, "init reports refresh state");
+        if (initialConfig === undefined) assert.equal(fs.existsSync(configPath), false);
+        else assert.deepEqual(fs.readFileSync(configPath), before, "blocked replacement must not save other settings");
+        assert.equal(fs.existsSync(join(configDir, "bifrost-reconcile-ownership.json")), false);
+        assert.deepEqual(loadConfigForReload(cwd, h.state.extensionDir).config.models?.general, ["openai/old-model"]);
+      });
+    });
+  }
+
+  it("does not save fresh override for inherited provider absent from refreshed catalog", async () => {
+    await withCwd(async (cwd) => {
+      const agentDir = process.env.PI_CODING_AGENT_DIR!;
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+        default: "general", models: { general: ["missing-provider/old-model"] },
+      }));
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      const configPath = join(configDir, "bifrost.json");
+      const configBytes = Buffer.from("{}\n");
+      fs.writeFileSync(configPath, configBytes);
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({
+        models: [makeModel("openai", "new-model", 1, 1)],
+        evidence: { "missing-provider": { status: "complete", refreshedAt: Date.now() } },
+      });
+      const ctx = h.ctx as unknown as { hasUI: boolean; ui: { confirm: () => Promise<boolean>; notify: () => void } };
+      ctx.hasUI = true;
+      ctx.ui = { confirm: async () => true, notify: () => {} };
+
+      const output = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+
+      assert.ok(output.length > 0, "init reports refresh state");
+      assert.deepEqual(fs.readFileSync(configPath), configBytes);
+      assert.equal(fs.existsSync(join(configDir, "bifrost-reconcile-ownership.json")), false);
+      assert.deepEqual(loadConfigForReload(cwd, h.state.extensionDir).config.models?.general, ["missing-provider/old-model"]);
+    });
+  });
+
+  it("lets interactive fresh init confirm a differing inherited pool override", async () => {
+    await withCwd(async (cwd) => {
+      const agentDir = process.env.PI_CODING_AGENT_DIR!;
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+        default: "general",
+        models: { general: ["openai/old-model"] },
+      }));
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      const configPath = join(configDir, "bifrost.json");
+      fs.writeFileSync(configPath, "{}\n");
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({
+        models: [makeModel("openai", "new-model", 1, 1)],
+        evidence: { openai: { status: "complete", refreshedAt: Date.now() } },
+      });
+      const ctx = h.ctx as unknown as {
+        hasUI: boolean;
+        ui: { confirm: () => Promise<boolean>; notify: () => void };
+      };
+      ctx.hasUI = true;
+      ctx.ui = { confirm: async () => true, notify: () => {} };
+
+      const preview = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+
+      const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
+      assert.deepEqual(saved.models?.general, ["openai/new-model"]);
+      assert.match(preview.join("\n"), /general: project override[\s\S]*Inherited:[\s\S]*1\. openai\/old-model[\s\S]*Project:[\s\S]*1\. openai\/new-model/);
+    });
+  });
+
+  for (const initialConfig of [undefined, { classifier: { enabled: false } }]) {
+    it(`keeps differing inherited pool unchanged for --write (${initialConfig ? "existing" : "absent"} project config)`, async () => {
+      await withCwd(async (cwd) => {
+        const agentDir = process.env.PI_CODING_AGENT_DIR!;
+        fs.mkdirSync(agentDir, { recursive: true });
+        fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+          default: "general", models: { general: ["openai/old-model"] },
+        }));
+        const configDir = join(cwd, ".pi");
+        fs.mkdirSync(configDir, { recursive: true });
+        const configPath = join(configDir, "bifrost.json");
+        if (initialConfig) fs.writeFileSync(configPath, JSON.stringify(initialConfig));
+        writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+          { status: "ok", provider: "openai", model: "new-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+        ]);
+        const h = makeHarness({ models: [makeModel("openai", "new-model", 1, 1)] });
+
+        await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
+
+        const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
+        assert.equal(saved.models?.general, undefined, "--write must not create local tier over inherited pool");
+        assert.deepEqual(loadConfigForReload(cwd, h.state.extensionDir).config.models?.general, ["openai/old-model"]);
+      });
+    });
+  }
+
+  it("Defaults keeps identical inherited tier inherited alongside local and deleted tiers", async () => {
+    await withCwd(async (cwd) => {
+      const agentDir = process.env.PI_CODING_AGENT_DIR!;
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+        classifier: { enabled: false },
+        default: "general",
+        models: { general: ["openai/cached-model"] },
+      }));
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      const configPath = join(configDir, "bifrost.json");
+      fs.writeFileSync(configPath, JSON.stringify({ models: { custom: ["manual/local-model"] } }));
+      const receipt = buildInitOwnershipReceipt("project", { custom: ["manual/local-model"], deleted: [] })!;
+      fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify({
+        ...receipt,
+        tiers: { custom: { state: "user" }, deleted: { state: "deleted" } },
+      }));
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
+      const ctx = h.ctx as unknown as {
+        hasUI: boolean;
+        ui: { confirm: () => Promise<boolean>; notify: () => void; select: (_title: string, choices: string[]) => Promise<string> };
+      };
+      ctx.hasUI = true;
+      ctx.ui = { confirm: async () => true, notify: () => {}, select: async () => "Bifrost defaults" };
+
+      await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+      const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
+      assert.deepEqual(saved.models?.custom, ["manual/local-model"], "unlisted local tier remains saved");
+      assert.equal(saved.models?.general, undefined, "identical inherited tier is not written locally");
+      assert.equal(saved.models?.deleted, undefined, "deleted tier stays omitted");
+      assert.deepEqual(loadConfigForReload(cwd, h.state.extensionDir).config.models?.general, ["openai/cached-model"], "inheritance stays effective");
+      const savedReceipt = JSON.parse(fs.readFileSync(join(configDir, "bifrost-reconcile-ownership.json"), "utf8")) as {
+        tiers: Record<string, { state: string }>;
+      };
+      assert.deepEqual(savedReceipt.tiers.deleted, { state: "deleted" }, "deleted-tier restoration remains available to explicit Defaults");
+    });
+  });
+
+  it("lets interactive Defaults restore identical inherited pool for deleted tier while Keep protects it", async () => {
+    for (const selected of ["Bifrost defaults", "Keep my models (default)"]) {
+      await withCwd(async (cwd) => {
+        const agentDir = process.env.PI_CODING_AGENT_DIR!;
+        fs.mkdirSync(agentDir, { recursive: true });
+        fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+          classifier: { enabled: false },
+          default: "general",
+          models: { general: ["openai/cached-model"] },
+        }));
+        const configDir = join(cwd, ".pi");
+        fs.mkdirSync(configDir, { recursive: true });
+        const configPath = join(configDir, "bifrost.json");
+        fs.writeFileSync(configPath, "{}\n");
+        const receipt = buildInitOwnershipReceipt("project", { general: [] })!;
+        fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify({
+          ...receipt,
+          tiers: { general: { state: "deleted" } },
+        }));
+        writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+          { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+        ]);
+        const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
+        const ctx = h.ctx as unknown as {
+          hasUI: boolean;
+          ui: { confirm: () => Promise<boolean>; notify: () => void; select: (_title: string, choices: string[]) => Promise<string> };
+        };
+        ctx.hasUI = true;
+        ctx.ui = {
+          confirm: async () => true,
+          notify: () => {},
+          select: async (_title, choices) => {
+            assert(choices.includes(selected), `missing ${selected}: ${choices.join(", ")}`);
+            return selected;
+          },
+        };
+
+        const preview = await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+        const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
+        if (selected === "Bifrost defaults") {
+          assert.deepEqual(saved.models?.general, ["openai/cached-model"], "Defaults restores deleted only-tier pool");
+          assert.match(preview.join("\n"), /general: project override[\s\S]*Inherited:[\s\S]*1\. openai\/cached-model[\s\S]*Project:[\s\S]*1\. openai\/cached-model/);
+        } else {
+          assert.equal(saved.models?.general, undefined, "Keep preserves deleted intent");
+          assert.match(preview.join("\n"), /general: remains deleted/);
+        }
+      });
+    }
+  });
+
+  it("keeps trusted deleted-tier intent protected during fresh setup detection", async () => {
+    await withCwd(async (cwd) => {
+      const agentDir = process.env.PI_CODING_AGENT_DIR!;
+      fs.mkdirSync(agentDir, { recursive: true });
+      fs.writeFileSync(join(agentDir, "bifrost.json"), JSON.stringify({
+        default: "general",
+        models: { general: ["openai/cached-model"] },
+      }));
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      const configPath = join(configDir, "bifrost.json");
+      fs.writeFileSync(configPath, "{}\n");
+      const receipt = buildInitOwnershipReceipt("project", { general: [] })!;
+      fs.writeFileSync(join(configDir, "bifrost-reconcile-ownership.json"), JSON.stringify({
+        ...receipt,
+        tiers: { general: { state: "deleted" } },
+      }));
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
+      await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
+      const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models?: Record<string, string[]> };
+      const savedReceipt = JSON.parse(fs.readFileSync(join(configDir, "bifrost-reconcile-ownership.json"), "utf8")) as {
+        tiers: Record<string, { state: string }>;
+      };
+      assert.equal(saved.models?.general, undefined, "deleted inherited tier must not be recreated");
+      assert.deepEqual(savedReceipt.tiers.general, { state: "deleted" });
+    });
+  });
+
+  it("confirms interactive settings-only top-up when init has no model changes", async () => {
+    await withCwd(async (cwd) => {
+      const configDir = join(cwd, ".pi");
+      fs.mkdirSync(configDir, { recursive: true });
+      const configPath = join(configDir, "bifrost.json");
+      fs.writeFileSync(configPath, JSON.stringify({
+        default: "general",
+        models: { general: ["openai/cached-model"] },
+      }));
+      fs.writeFileSync(
+        join(configDir, "bifrost-reconcile-ownership.json"),
+        JSON.stringify(buildInitOwnershipReceipt("project", { general: ["openai/cached-model"] })),
+      );
+      writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
+        { status: "ok", provider: "openai", model: "cached-model", cost_input: 1, cost_output: 1, duration_ms: 10 },
+      ]);
+      const h = makeHarness({ models: [makeModel("openai", "cached-model", 1, 1)] });
+      let confirmations = 0;
+      let selections = 0;
+      const ctx = h.ctx as unknown as {
+        hasUI: boolean;
+        ui: {
+          confirm: () => Promise<boolean>;
+          notify: () => void;
+          select: (_title: string, choices: string[]) => Promise<string>;
+        };
+      };
+      ctx.hasUI = true;
+      ctx.ui = {
+        confirm: async () => { confirmations++; return true; },
+        notify: () => {},
+        select: async (_title, choices) => { selections++; return choices[0]; },
+      };
+
+      await captureStderr(() => createCommandRouter(h.state)("init", h.ctx));
+
+      assert.equal(selections, 0, "no distinct model action should require selection");
+      const saved = JSON.parse(fs.readFileSync(configPath, "utf8")) as Record<string, unknown>;
+      assert.deepEqual(saved.strategy, BUNDLED_PUBLIC_INIT_DEFAULTS.strategy);
+      assert.deepEqual(saved.cache, BUNDLED_PUBLIC_INIT_DEFAULTS.cache);
+      assert.deepEqual(saved.reliability, BUNDLED_PUBLIC_INIT_DEFAULTS.reliability);
+      assert.deepEqual(saved.classifier, BUNDLED_PUBLIC_INIT_DEFAULTS.classifier);
+      assert.equal(confirmations, 1, "settings-only changes require explicit user confirmation");
     });
   });
 
@@ -472,7 +979,7 @@ describe("config reconciliation command router", () => {
       const configPath = join(configDir, "bifrost.json");
       const ownershipPath = join(configDir, "bifrost-reconcile-ownership.json");
       const originalConfig = Buffer.from('{ "models" : { "general" : ["openai/managed"] }, "manual" : true }\n');
-      const originalOwnership = Buffer.from(JSON.stringify(buildInitOwnershipReceipt({ general: ["openai/managed"] })));
+      const originalOwnership = Buffer.from(JSON.stringify(buildInitOwnershipReceipt("project", { general: ["openai/managed"] })));
       fs.writeFileSync(configPath, originalConfig);
       fs.writeFileSync(ownershipPath, originalOwnership);
       writeRecentProbeCache(join(configDir, "bifrost-probe.json"), [
@@ -481,10 +988,10 @@ describe("config reconciliation command router", () => {
       const h = makeHarness({ models: [makeModel("openai", "new-model", 1, 1)] });
       await captureStderr(() => createCommandRouter(h.state)("init --write", h.ctx));
       const updated = JSON.parse(fs.readFileSync(configPath, "utf8")) as { models: Record<string, string[]>; manual: boolean };
-      const updatedOwnership = JSON.parse(fs.readFileSync(ownershipPath, "utf8")) as { sources: Record<string, { generated: Record<string, string[]> }> };
+      const updatedOwnership = JSON.parse(fs.readFileSync(ownershipPath, "utf8")) as { tiers: Record<string, { models: string[] }> };
       assert.deepEqual(updated.models.general, ["openai/new-model"]);
       assert.equal(updated.manual, true);
-      assert.equal(Object.values(updatedOwnership.sources).flatMap((source) => source.generated.general ?? []).includes("openai/new-model"), true);
+      assert.deepEqual(updatedOwnership.tiers.general, { state: "generated", models: ["openai/new-model"] });
     });
   });
 });

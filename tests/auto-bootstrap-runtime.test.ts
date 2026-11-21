@@ -294,10 +294,8 @@ describe("automatic setup through registered Pi hooks", () => {
       await flushImmediate();
       await flushImmediate();
       assert.equal(existsSync(join(process.cwd(), ".pi", "bifrost.json")), true);
-      const receipt = JSON.parse(readFileSync(join(process.cwd(), ".pi", "bifrost-reconcile-ownership.json"), "utf8")) as {
-        sources: Record<string, { generated: Record<string, string[]> }>;
-      };
-      assert.deepEqual(Object.values(receipt.sources).flatMap((source) => source.generated.quick ?? []), ["fixture/quick"]);
+      const receipt = JSON.parse(readFileSync(join(process.cwd(), ".pi", "bifrost-reconcile-ownership.json"), "utf8"));
+      assert.deepEqual(receipt, { version: 2, scope: "project", tiers: { quick: { state: "generated", models: ["fixture/quick"] } } });
       const probeReport = JSON.parse(readFileSync(join(process.cwd(), ".pi", "bifrost-probe.json"), "utf8")) as Array<{ status: string }>;
       assert.deepEqual(probeReport.map((result) => result.status), ["ok"]);
       const reloaded = loadConfigForReload(process.cwd(), fileURLToPath(new URL("..", import.meta.url))).config;

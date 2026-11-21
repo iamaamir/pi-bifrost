@@ -1,27 +1,26 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import pty
 import re
 import select
-import fcntl
-import termios
-import struct
 import signal
-import shutil
+import struct
 import subprocess
 import tempfile
+import termios
 import threading
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Iterable
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / "screenshots" / "ui-smoke"
@@ -379,10 +378,8 @@ def load_font(size: int) -> Any:
     _, _, ImageFont = pillow()
     for item in candidates:
         if Path(item).exists():
-            try:
+            with suppress(OSError, ValueError):
                 return ImageFont.truetype(item, size=size)
-            except Exception:
-                pass
     return ImageFont.load_default()
 
 
@@ -592,6 +589,17 @@ def wait_stable(path: Path, timeout: float = 8.0, stable_for: float = 0.6) -> No
     raise TimeoutError(f"log not stable: {path}")
 
 
+def stop_process_group(proc: subprocess.Popen[Any], timeout: float = 3) -> None:
+    with suppress(ProcessLookupError):
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        with suppress(ProcessLookupError):
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        proc.wait()
+
+
 def capture(
     name: str,
     enabled: bool,
@@ -751,13 +759,12 @@ def capture(
             if "systemPrompt" in classifier or "criteria" in classifier:
                 raise AssertionError("fresh background config copied inherited classifier prompt content")
             receipt = json.loads(ownership_path.read_text())
-            generated = [
-                model
-                for source in receipt.get("sources", {}).values()
-                for models in source.get("generated", {}).values()
-                for model in models
-            ]
-            if sorted(generated) != sorted(memberships):
+            expected_receipt = {
+                "version": 2,
+                "scope": "project",
+                "tiers": {tier: {"state": "generated", "models": models} for tier, models in saved["models"].items()},
+            }
+            if receipt != expected_receipt:
                 raise AssertionError("fresh background ownership receipt does not match saved generated memberships")
             first_run = " ".join((log_path.read_text(errors="ignore") if log_path.exists() else "").split()).lower()
             if "save bifrost setup?" in first_run or "choose classifier" in first_run or "select classifier" in first_run:
@@ -780,14 +787,18 @@ def capture(
             if not ownership_path.is_file():
                 raise AssertionError("manual init did not save the generated-membership ownership receipt")
             receipt = json.loads(ownership_path.read_text())
+            if receipt.get("version") != 2 or receipt.get("scope") != "project":
+                raise AssertionError("manual init ownership scope/version is incorrect")
+            if receipt.get("tiers", {}).get("general") != {"state": "user"}:
+                raise AssertionError("manual init claimed a user-managed tier")
             generated = [
                 model
-                for source in receipt.get("sources", {}).values()
-                for models in source.get("generated", {}).values()
-                for model in models
+                for tier in receipt.get("tiers", {}).values()
+                if tier.get("state") == "generated"
+                for model in tier["models"]
             ]
             if "fake/usage-exhausted" in generated or not {"fake/healthy", "fake/classifier"}.issubset(generated):
-                raise AssertionError("manual init ownership receipt does not match successful probe results")
+                raise AssertionError(f"manual init ownership receipt does not match successful probe results: {receipt}")
             if saved.get("customSetting") != {"preserve": True}:
                 raise AssertionError("manual init changed an unrelated config field")
             if saved.get("classifier") != {
@@ -797,13 +808,31 @@ def capture(
                 "criteria": {"general": "keep this criterion"},
             }:
                 raise AssertionError("manual init changed explicit classifier settings")
-            init_screen = " ".join((log_path.read_text(errors="ignore") if log_path.exists() else "").split()).lower()
-            if init_screen.count("save bifrost setup?") != 1:
-                raise AssertionError("manual init must ask exactly once to save the refreshed setup")
+            # The preview card colors the pool delta, so strip SGR/OSC before matching copy.
+            init_screen = " ".join(re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\\\)", "", log_path.read_text(errors="ignore") if log_path.exists() else "").split()).lower()
+            if "review model choices" not in init_screen:
+                raise AssertionError("manual init did not review existing model pools before saving")
+            if not all(label in init_screen for label in (
+                "keep my models (default)", "merge new models",
+                "bifrost defaults: same outcome as keep my models.",
+            )):
+                raise AssertionError("manual init did not show Keep, Merge, and equivalent Defaults choices")
+            if "save to project (.pi/bifrost.json)" not in init_screen:
+                raise AssertionError("manual init did not identify the project config destination")
+            if "global/workspace files stay unchanged" not in init_screen or "unlisted tiers remain unchanged" not in init_screen:
+                raise AssertionError("manual init omitted the existing-init scope copy")
+            if "ctrl+o summary" not in init_screen or "custom pool retained" not in init_screen or "manual/keep" not in init_screen:
+                raise AssertionError("manual init did not reveal the late retained-pool diff before selection")
+            if "save bifrost setup?" in init_screen:
+                raise AssertionError("manual init showed obsolete fresh-setup confirmation copy")
             if "choose classifier" in init_screen or "select classifier" in init_screen:
                 raise AssertionError("manual init opened a classifier picker after save")
-            if "save memberships: +2 / -0" not in init_screen or "to project (.pi/bifrost.json)" not in init_screen:
-                raise AssertionError("manual init did not preview the exact project membership changes")
+            # #246: saved outcome stays visible as a terminal notice card, with
+            # explicit destination, active state, and next-step copy.
+            if "saved. saved " not in init_screen or "/.pi/bifrost.json and reloaded." not in init_screen:
+                raise AssertionError("manual init did not show the current saved destination copy")
+            if "bifrost is active with 2 tiers" not in init_screen or "send a prompt to try it" not in init_screen:
+                raise AssertionError("manual init did not show the current active-state and next-step copy")
 
         time.sleep(2.0)
         assert_no_network_violations(home)
@@ -815,21 +844,9 @@ def capture(
         return png_path
     finally:
         stop.set()
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        try:
+        stop_process_group(proc)
+        with suppress(OSError):
             os.close(master)
-        except OSError:
-            pass
         tmp.cleanup()
 
 
@@ -848,7 +865,8 @@ def main() -> int:
         (
             "init-refresh",
             True,
-            [(0.5, "/bifrost init\r"), (2.0, "\r")],
+            # Expand full diff; PgDn scrolls one row, so page through late pool/action details before Keep.
+            [(0.5, "/bifrost init\r"), (1.0, "\x0f"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.2, "j"), (0.5, "\r"), (0.5, "\x1b")],
             {
                 "schemaVersion": 2,
                 "strategy": "first",
@@ -1050,9 +1068,9 @@ def main() -> int:
                     raise AssertionError("large-pool Auto routing did not restore the Auto status in the footer")
             if name == "reload-invalid-economics":
                 reload_text = " ".join((OUT / "reload-invalid-economics.txt").read_text(errors="ignore").split())
-                prefix = "Bifrost config reload rejected:"
+                title = "Config reload rejected"
                 body = "workspace config economics contains an invalid source-local policy."
-                if reload_text.count(prefix) != 1 or reload_text.count(body) != 1:
+                if reload_text.count(title) != 1 or reload_text.count(body) != 1:
                     raise AssertionError("invalid economics reload should report the rejection once in the current UI")
                 if "hello after rejected reload" not in reload_text or "healthy" not in reload_text:
                     raise AssertionError("last-good routing config did not remain active after the rejected reload")

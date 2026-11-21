@@ -11,9 +11,9 @@ it("proves missing Auto targets cannot escape an explicit boundary through stick
   // One policy fault removes the same boundary from its two redundant callers.
   // It proves their combined contract, not individual-guard sensitivity.
   REPLAY_GUARD_MUTATORS[guard] = (source) => {
-    const anchor = "routeFailure?.explicitBoundary || v2Active ? undefined :";
+    const anchor = "routeFailure?.explicitBoundary || ";
     assert.equal(source.split(anchor).length, 3, "the fault must target exactly fallback and sticky admission");
-    return source.replaceAll(anchor, "v2Active ? undefined :");
+    return source.replaceAll(anchor, "");
   };
   try {
     const receipt = await runReplayGuardFaultProof({

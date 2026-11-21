@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, TurnEndEvent, AgentBeforeSettleEvent, SessionMessageEntry, ModelRouteRequest, InputEventResult } from "@earendil-works/pi-coding-agent";
+import { registerBifrostNotices } from "./ui/notice.ts";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { fileURLToPath } from "node:url";
@@ -646,6 +647,7 @@ function classifierRetryAt(value: string, now: number): number | undefined {
 }
 
 export default function bifrostExtension(pi: ExtensionAPI) {
+  registerBifrostNotices(pi);
   const extensionDir = fileURLToPath(new URL(".", import.meta.url));
 
   // Setup debug logging first — so startup errors are captured.
@@ -1438,7 +1440,7 @@ export default function bifrostExtension(pi: ExtensionAPI) {
         try { lstatSync(path); warn(); return; }
         catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") { warn(); return; } }
       }
-      const ownership = buildInitOwnershipReceipt(generatedModels, record.originalConfig.models ?? {});
+      const ownership = buildInitOwnershipReceipt("project", generatedModels, record.originalConfig.models ?? {});
       if (!ownership) return;
       if (!stillOwned()) {
         if (ownsPersistence()) warn();

@@ -76,21 +76,15 @@ The command:
 1. refreshes Pi's model catalog;
 2. proposes `quick`, `general`, and `frontier` pools from available chat models;
 3. detects a classifier backend and selects an available chat model when prompt classification needs one;
-4. shows the catalog source, the save target, the membership changes, the classifier choice, and the count of uncategorized models, then asks one time before it saves. Add `--write` to remove that question.
+4. shows the catalog source, save target, model-pool changes, classifier choice, and uncategorized count; when model-pool choices differ, review **Keep my models** (default), **Merge new models**, or **Bifrost defaults** before saving. Unavailable choices are explained.
 
 After init saves, inspect the pools and status. Edit the saved configuration before your first generation if you need different pools or strategies, then run `/bifrost reload`.
 
-Init reuses probe results from the last hour only when they cover the current catalog. If no recent results exist, or the catalog changed, it probes models before it proposes pools. Pass `-f` to force fresh probes. By default, init saves to the project config `.pi/bifrost.json`. To save to your global user config at `~/.pi/agent/bifrost.json`, use `/bifrost init -g`. Init does not write the workspace `bifrost.json`. Pass `--write` to save without the confirmation question. A TUI and an RPC session can answer that question, because Pi reports `hasUI` as true in RPC. A non-interactive run, or a session that gives Bifrost no UI, must pass `--write` to save:
+Init reuses probe results from the last hour when they cover the current catalog. If no matching recent results exist, it probes models before it proposes pools. Pass `-f` to force fresh probes. If the host cannot ask for confirmation, pass `--write` to save with the default **Keep my models** choice without review or confirmation; otherwise init stops before catalog refresh or probing. `--write` skips review/confirmation whenever init can show them. By default, init saves to the project config `.pi/bifrost.json`. To save to your global user config at `~/.pi/agent/bifrost.json`, use `/bifrost init -g`. Init does not write the workspace `bifrost.json`. The displayed save target is the only config file init updates. The selected choice changes model pools in the selected file; init may also add missing settings there. Existing other fields and other config layers stay unchanged, and inherited settings remain inherited rather than copied into the selected file. The review identifies inherited pools that would be overridden by a project pool; confirming the reviewed choice can create a project-only override without changing global/workspace files.
 
-```text
-/bifrost init --write
-/bifrost init -f --write
-/bifrost init --write -g
-```
+For project init, a proposed override of an inherited global or workspace pool is shown before saving. The global and workspace files remain unchanged. Init blocks replacement when the inherited provider inventory is unknown, unsigned-in, or stale. Use `/bifrost init -g` when you intend to update the global config.
 
-Without `--write`, a session that gives Bifrost no UI refreshes the catalog and shows the proposal, then stops before it writes and logs `run in TUI or use --write to persist`. `--write` removes only the question; the guard for inherited pools stays in effect. A failed commit can leave a reconciliation journal. Run `/bifrost config reconcile --recover` for a project save, or `/bifrost config reconcile --source user --recover` after `-g`, to report or resume it. The displayed save target is the one init will update. Init preserves handwritten model entries and other fields in that file and leaves other configuration layers unchanged. Settings inherited from lower layers remain inherited rather than copied into the selected file.
-
-If a proposed project pool would replace a handwritten pool in your global or workspace config with different models, init stops without saving. Pools that init generated before (tracked by an ownership receipt) and empty pools do not block init. Edit the existing pool, or review a workspace update with `/bifrost config reconcile --source workspace --tier general --provider openai`. Use `/bifrost init -g` when you intend to update the global config.
+A failed save can leave a reconciliation journal. For a project save, run `/bifrost config reconcile --recover`. After `-g`, run `/bifrost config reconcile --source user --recover` before retrying.
 
 Probe requests can use provider credits or reach rate limits. If no model passes, init leaves configuration unchanged.
 
@@ -122,7 +116,7 @@ See [Troubleshooting](troubleshooting.md#lower-probe-pressure) for symptoms and 
 Before confirming, check:
 
 1. The save target shown by init is the configuration you intend to update.
-2. The membership-change summary and uncategorized count look reasonable.
+2. The selected model-pool choice and membership changes look reasonable, including any project-only inherited-pool override.
 3. The classifier choice matches your privacy and cost requirements.
 
 The confirmation summary does not show every model ID, strategy, or default tier. After saving, run `/bifrost inspect` to review pools and status. Edit the saved configuration before your first generation if needed.
