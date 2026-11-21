@@ -2262,7 +2262,42 @@ describe("nested patches merge instead of replacing a whole field (#237)", () =>
       assert.match(text, /proposalDigest: [0-9a-f]{64}/, "the apply digests survive");
       assert.match(text, /Session-local proposalHandle: [0-9a-f]{12}/, "the proposal handle survives");
       const report = text.split("\nSession-local proposalHandle:")[0]!;
-      assert.ok(report.split("\n").length <= 121, `the report stays bounded: ${report.split("\n").length} lines`);
+      assert.ok(report.split("\n").length <= 120, `the report stays bounded: ${report.split("\n").length} lines`);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("bounds the report when warnings and probe failures are numerous", async () => {
+    const dead = Array.from({ length: 24 }, (_, index) => makeModel("dead", `m${index}`, 1, 1, 8_000));
+    const live = Array.from({ length: 12 }, (_, index) => makeModel("live", `m${index}`, 1, 1, 8_000));
+    const harness = freshHarness({
+      available: [...dead, ...live],
+      // Every dead provider refuses its sign-in, so each tier warns once.
+      providerAuthResult: (provider) => provider === "dead" ? new Error("refresh failed") : { auth: { apiKey: "resolved" } },
+      probeModels: (models) => models.map((model) => ({ model, status: "error" as const, reason: "down" })),
+    });
+    try {
+      const models: Record<string, string[]> = {};
+      for (let index = 0; index < dead.length; index++) models[`tier${index}`] = [`dead/m${index}`];
+      models.live = live.map((model) => `${model.provider}/${model.id}`);
+      const candidate = { schemaVersion: 2, default: "tier0", models };
+
+      const result = await harness.run({ operation: "check", candidate, probe: true });
+      const details = detailsOf<ConfigAgentCheckResult>(result);
+      const warnings = details.issues.filter((issue) => issue.severity === "warning");
+      const failed = (details.liveProbe ?? []).filter((entry) => entry.status === "error");
+      assert.ok(warnings.length > 12, `fixture must exceed the warning budget: ${warnings.length}`);
+      assert.ok(failed.length > 8, `fixture must exceed the probe-failure budget: ${failed.length}`);
+
+      const report = contentOf(result).split("\nSession-local proposalHandle:")[0]!;
+      const lines = report.split("\n");
+      assert.ok(lines.length <= 120, `the report stays bounded: ${lines.length} lines`);
+      assert.match(report, /warnings:/);
+      assert.match(report, /more warning\(s\) omitted/);
+      assert.match(report, /more failed probe\(s\) omitted/);
+      assert.match(report, /write eligible: true/);
+      assert.match(report, /proposalDigest: [0-9a-f]{64}/);
     } finally {
       harness.cleanup();
     }
@@ -2281,23 +2316,30 @@ describe("nested patches merge instead of replacing a whole field (#237)", () =>
           "gpt.4": ["beta/code"],
           "a/b~c": ["gamma/review"],
           "line\nbreak": ["beta/code"],
+          // Same characters, different key: a literal backslash-u-0-0-0-a.
+          "line\\u000abreak": ["beta/code"],
         },
       };
 
       const { details, result } = await checkedCandidate(harness, { patch });
       const fields = details.nestedChanges.map((change) => change.field).sort();
 
-      assert.deepEqual(fields, ["/models/a~1b~0c", "/models/gpt.4", "/models/line\\u000abreak"]);
+      // Paths stay unique: the newline is stored as itself, not encoded to the
+      // same text as the literal escape.
+      assert.deepEqual(fields, ["/models/a~1b~0c", "/models/gpt.4", "/models/line\nbreak", "/models/line\\u000abreak"]);
       const report = contentOf(result);
       assert.match(report, /add \/models\/gpt\.4: /);
       assert.match(report, /add \/models\/a~1b~0c: /);
+      // Display escapes both, so the two keys remain distinguishable on one line.
       assert.match(report, /add \/models\/line\\u000abreak: /);
+      assert.match(report, /add \/models\/line\\\\u000abreak: /);
 
       await harness.run(applyParams(details, { patch }));
       const dialog = harness.confirmations()[0]?.details ?? "";
       assert.match(dialog, /add "\/models\/gpt\.4"/);
       assert.match(dialog, /add "\/models\/a~1b~0c"/);
-      // The dialog prints the path as JSON, so the pointer's own escape shows doubled.
+      // JSON renders the newline as \n and the literal escape as \\u000a.
+      assert.match(dialog, /add "\/models\/line\\nbreak"/);
       assert.match(dialog, /add "\/models\/line\\\\u000abreak"/);
     } finally {
       harness.cleanup();
