@@ -183,6 +183,29 @@ When a check can be wrong in two directions, prove it goes red before believing
 it when it is green. A negative result from an unvalidated harness is not
 evidence.
 
+### Fault-control checks by hand
+
+A contract test is only evidence once you have seen it fail for the right
+reason. Do this one guard at a time:
+
+1. Back up the file you are about to change (`cp config-agent-report.ts /tmp/bak`).
+2. Break exactly one rule: remove an escape, raise a cap, delete an early return.
+3. Run only the owning file, and check that the expected test is the one that goes
+   red, for the expected assertion, e.g.
+   `node --test --experimental-strip-types tests/config-agent.test.ts`.
+4. Restore the backup and re-run the file. Green again, or the failure was not
+   caused by the mutation.
+5. Record the mutation, the test name, and both counts in the PR body.
+
+A file-wide pass count is not enough. If raising `MAX_PROBE_FAILURE_LINES` leaves
+139 of 140 tests green, the one that failed must be the budget test. A mutation
+that turns nothing red means the guard is untested; one that turns several
+unrelated tests red means the test is over-coupled and will be distrusted later.
+
+Examples from the config-agent report work: dropping backslash doubling in
+`displayPath()` reddened only the ambiguous-paths test; charging the truncation
+marker to the budget reddened only the report bound, at 121 lines.
+
 ## Continuous integration
 
 | Workflow | Trigger | Checks |
