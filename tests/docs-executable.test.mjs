@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, posix, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -18,7 +18,9 @@ function markdownFiles(directory) {
   const found = [];
   for (const entry of readdirSync(join(ROOT, directory), { withFileTypes: true })) {
     if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
-    const path = join(directory, entry.name);
+    // The identity is a POSIX path on every platform; only the filesystem
+    // access below uses the native join.
+    const path = posix.join(directory, entry.name);
     if (entry.isDirectory()) found.push(...markdownFiles(path));
     else if (entry.name.endsWith(".md")) found.push(path);
   }

@@ -24,18 +24,88 @@ function markdownFiles(directory) {
 
 const DOCUMENTS = [...markdownFiles("docs"), ...ROOT_DOCUMENTS.filter((name) => existsSync(join(ROOT, name)))];
 
-/** Text outside fenced code blocks and HTML comments, where links are inert. */
+/**
+ * Text where a link is real: fenced code and HTML comments are inert on GitHub.
+ *
+ * A line scanner, not chained replacements. Removing a comment with one regex
+ * lets a second removal re-form a marker inside the result, and a fence without a
+ * closing marker leaves its contents scanned as prose. GitHub renders both as
+ * inert, so the checker must too.
+ */
 function prose(markdown) {
-  return markdown
-    .replace(/<!--[\s\S]*?-->/gu, "")
-    .replace(/^```[\s\S]*?^```/gmu, "")
-    .replace(/^~~~[\s\S]*?^~~~/gmu, "");
+  const lines = [];
+  const comment = { open: false };
+  let fence = null;
+  for (const line of markdown.split(/\r?\n/u)) {
+    if (fence !== null) {
+      if (closesFence(line, fence)) fence = null;
+      continue;
+    }
+    const opened = /^\s*(`{3,}|~{3,})/u.exec(line);
+    if (opened) {
+      fence = opened[1];
+      continue;
+    }
+    const text = stripComments(line, comment);
+    if (text !== null) lines.push(text);
+  }
+  return lines.join("\n");
+}
+
+/** Whether a line ends a fence: only its marker, at least as long as the opener. */
+function closesFence(line, fence) {
+  const trimmed = line.trim();
+  return trimmed.length >= fence.length && trimmed[0] === fence[0] && /^[`~]+$/u.test(trimmed);
+}
+
+/** A line without its comments, or null when the line ends inside a comment. */
+function stripComments(text, comment) {
+  let rest = text;
+  if (comment.open) {
+    const end = rest.indexOf("-->");
+    if (end === -1) return null;
+    rest = rest.slice(end + 3);
+    comment.open = false;
+  }
+  for (;;) {
+    const start = rest.indexOf("<!--");
+    if (start === -1) return rest;
+    const end = rest.indexOf("-->", start + 4);
+    if (end === -1) {
+      comment.open = true;
+      return rest.slice(0, start);
+    }
+    rest = rest.slice(0, start) + rest.slice(end + 3);
+  }
+}
+
+/** A link target as a repository-relative path, or null when it leaves the repository. */
+function resolveTarget(file, path) {
+  if (path === "") return file;
+  const resolved =
+    path.startsWith("/") ? posix.normalize(path.slice(1)) : posix.normalize(posix.join(posix.dirname(file), path));
+  return resolved.startsWith("..") ? null : resolved;
+}
+
+/** Inline HTML removed in one pass, so a tag cannot re-form inside the result. */
+function stripInlineHtml(text) {
+  let result = "";
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] === "<") {
+      const end = text.indexOf(">", index + 1);
+      if (end !== -1) {
+        index = end;
+        continue;
+      }
+    }
+    result += text[index];
+  }
+  return result;
 }
 
 /** GitHub's heading slug: lowercase, punctuation removed, spaces to hyphens. */
 function slugify(heading) {
-  return heading
-    .replace(/<[^>]*>/gu, "")
+  return stripInlineHtml(heading)
     .replace(/!?\[([^\]]*)\]\([^)]*\)/gu, "$1")
     .replace(/[`*_~]/gu, "")
     .toLowerCase()
@@ -46,17 +116,22 @@ function slugify(heading) {
     .replace(/\s/gu, "-");
 }
 
-/** Every anchor GitHub generates for a document, with duplicate suffixes. */
+/**
+ * Every anchor GitHub generates for a document, with duplicate suffixes.
+ *
+ * The suffix keeps counting until the candidate is unused, so headings `A`, `A`,
+ * and `A-1` produce `a`, `a-1`, and `a-1-1`. Counting occurrences of the base slug
+ * alone made the third heading collide with the second.
+ */
 function anchors(markdown) {
-  const seen = new Map();
   const result = new Set();
   for (const line of prose(markdown).split(/\r?\n/u)) {
     const heading = /^#{1,6}\s+(.*?)\s*#*\s*$/u.exec(line);
     if (!heading) continue;
     const base = slugify(heading[1]);
-    const count = seen.get(base) ?? 0;
-    seen.set(base, count + 1);
-    result.add(count === 0 ? base : `${base}-${count}`);
+    let candidate = base;
+    for (let suffix = 1; result.has(candidate); suffix += 1) candidate = `${base}-${suffix}`;
+    result.add(candidate);
   }
   return result;
 }
@@ -85,8 +160,10 @@ function linkProblems({ documents, read = (file) => readFileSync(join(ROOT, file
       const [rawPath, rawAnchor] = target.split("#", 2);
       const path = decodeURIComponent(rawPath);
       const anchor = rawAnchor === undefined ? undefined : decodeURIComponent(rawAnchor);
-      const resolved = path === "" ? file : posix.normalize(posix.join(posix.dirname(file), path));
-      if (resolved.startsWith("..")) {
+      // A leading slash is repository-root absolute on GitHub, not relative to
+      // the linking document's directory.
+      const resolved = resolveTarget(file, path);
+      if (resolved === null) {
         problems.push(`${file}: ${target} leaves the repository`);
         continue;
       }
@@ -136,8 +213,30 @@ test("fault control: a missing file, a renamed heading, and an escaped path are 
 
   const escape = linkProblems({ documents: ["docs/a.md"], read: () => "[out](../../etc/passwd)\n", exists: () => true, isDirectory: () => false });
   assert.deepEqual(escape, ["docs/a.md: ../../etc/passwd leaves the repository"]);
+  const rooted = linkProblems({
+    documents: ["docs/a.md"],
+    read: () => "[readme](/README.md)\n",
+    exists: (file) => file === "README.md",
+    isDirectory: () => false,
+  });
+  assert.deepEqual(rooted, [], "a leading slash resolves from the repository root");
+
+  // Fenced content and comments are inert on GitHub, even when unterminated.
+  const inert = linkProblems({
+    documents: ["docs/a.md"],
+    read: () => "[live](b.md)\n```\n[gone](missing.md)\n```\n<!-- [also gone](missing.md) -->\n```\n[still gone](missing.md)\n",
+    exists: (file) => file === "docs/b.md",
+    isDirectory: () => false,
+  });
+  assert.deepEqual(inert, [], "links in fences and comments are not checked");
 
   assert.deepEqual(anchors("# Hello, World!\n## `check:complexity` gate\n"), new Set(["hello-world", "checkcomplexity-gate"]));
   assert.deepEqual(anchors("# [linked](x.md) heading\n"), new Set(["linked-heading"]));
+  assert.deepEqual(
+    anchors("## A\n## A\n## A-1\n"),
+    new Set(["a", "a-1", "a-1-1"]),
+    "a generated anchor is taken, so the next candidate needs a second suffix",
+  );
+  assert.deepEqual(anchors("## <em>tagged</em> heading\n"), new Set(["tagged-heading"]));
   assert.deepEqual(relativeLinks("[a](x.md) [b](https://e.com/x) [c](#local) ![i](img.png)\n"), ["x.md", "#local", "img.png"]);
 });
