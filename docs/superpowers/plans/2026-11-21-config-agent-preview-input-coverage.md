@@ -28,7 +28,7 @@
 - Report only what actually happened; a clean preview says nothing.
 - The code slices to the first 8 before skipping blanks, so a blank entry inside the first 8 consumes a slot. Keep that order and word the note accurately.
 - Truncation is recorded only after the blank/non-string checks, because only evaluated prompts have a computed route. An overlong blank/whitespace prompt is skipped, not reported as truncated.
-- Prompt evaluation uses `raw.slice(0, MAX_PROMPT_CHARS)` then `trim().length === 0` as today; do not scan raw strings beyond `.length` and that slice. Distinguish a fully blank input from a prompt whose inspected prefix was blank: count the latter separately with `raw.trim().length > 0` only after the inspected-prefix blank check, and report "(N had no text in the first 2,000 characters inspected)". Never echo prompt text.
+- Prompt evaluation uses `raw.slice(0, MAX_PROMPT_CHARS)` then `trim().length === 0` as today; do not scan raw strings beyond `.length` and that slice. If the inspected prefix is blank and `raw.length > MAX_PROMPT_CHARS`, record it as a blank-inspected-prefix case without scanning the uninspected tail; this is a bounded diagnostic and can include an overlong all-whitespace prompt. Coverage notes do not echo prompt text; representative prompt rows in the report still show the evaluated prompt slice as before.
 - Truncation positions are 1-based positions in the considered first-8 window (`index + 1` over `consideredPrompts.entries()`), i.e. countable supplied slots, not prompt text.
 - `renderPreview()` appends `note: ...` lines before `boundedWithTail(lines, tail)`. `boundedWithTail` preserves only `tail`; a large case list can drop late notes. To satisfy #261's "never silently assert..." acceptance without changing the 120-line cap, move preview notes into the preserved tail (notes first, then digests, then separator) and keep digest lines present.
 - The `resolved.status !== "completed"` branch stays untouched: preview passes no abort signal and router resolve returns only `completed` or `aborted` (`router.ts:85-95,682-730`); preview already continues on non-completed.
@@ -49,14 +49,14 @@ Adversarial cases to keep honest:
 - **Single multi-megabyte prompt:** only `.length` and `slice(0, 2_000)` run; note must not copy, echo, or scan prompt text beyond that. No `trim()` on raw mega-string.
 - **Exactly 2,000 UTF-16 code units:** `raw.length > MAX_PROMPT_CHARS` is false; no truncation note. (JS `.length/slice` use UTF-16 code units; this matches existing `MAX_PROMPT_CHARS` behavior.)
 - **Overlong blank/whitespace prompt (e.g. 2,500 spaces):** sliced prompt trims empty, so it is skipped, not evaluated, and must not emit a truncation note. Do not trim raw input.
-- **Prompt whose first 2,000 chars are whitespace but char 2,001+ is non-whitespace:** it was not evaluated because the inspected prefix was blank. The diagnostic must distinguish this from a fully blank input: "blank or not text (N had no text in the first 2,000 characters inspected)". Do not scan the whole raw string or echo prompt text.
+- **Prompt whose first 2,000 chars are whitespace but char 2,001+ is non-whitespace:** it was not evaluated because the inspected prefix was blank. Report it as a blank-inspected-prefix case: "blank or not text (N was/were blank in the first 2,000 characters inspected)". Because the check is bounded (no tail scan), an overlong all-whitespace prompt is reported the same way; do not scan the whole raw string. Coverage notes must not echo prompt text.
 - **Blank/non-string/sparse entries inside first 8:** consume considered slots; count as skipped, never evaluated. `typeof raw !== "string"` covers `undefined`, numbers, objects, arrays, null.
 - **More than 8 prompts:** note names supplied count; considered window is first 8 only. Prompt 9+ is never evaluated and never gets a truncation note.
 - **All 8 considered entries skipped in an over-limit request:** report considered/skipped/0 evaluated. No truncation note.
 - **8 or fewer supplied with skipped entries:** report skipped count; do not claim limit reached.
 - **Over-limit plus truncation:** emit both notes. Truncation positions are 1-based in considered window.
 - **Empty/omitted prompts:** no coverage notes; existing notes unchanged.
-- **Report bounding:** coverage notes and digests are in the preserved tail; detail lines can be truncated, but omission/truncation notices cannot disappear. Verify the final report length stays <= 120 lines (+ the truncation marker behavior already defined by `boundedWithTail`).
+- **Report bounding:** coverage notes and digests are in the preserved tail; detail lines can be truncated, but omission/truncation notices cannot disappear. Verify the final report length is exactly 120 lines (the truncation marker is counted inside `MAX_REPORT_LINES` by `boundedWithTail`).
 
 ## #261 acceptance mapping
 
@@ -94,13 +94,13 @@ Add these tests inside the existing preview `describe` block, after the last tes
         await harness.run({ operation: "preview", candidate: threeRoleGoal, prompts }),
       );
       assert.equal(details.cases.length, 8);
-      assert.equal(details.notes.some((note) => /supplied prompts|exceeded/.test(note)), false);
+      assert.equal(details.notes.some((note) => /supplied prompts|exceeded|blank/.test(note)), false);
 
       const none = detailsOf<ConfigAgentPreviewResult>(
         await harness.run({ operation: "preview", candidate: threeRoleGoal, prompts: [] }),
       );
       assert.deepEqual(none.cases, []);
-      assert.equal(none.notes.some((note) => /supplied prompts|exceeded/.test(note)), false);
+      assert.equal(none.notes.some((note) => /supplied prompts|exceeded|blank/.test(note)), false);
     } finally {
       harness.cleanup();
     }
@@ -174,7 +174,7 @@ Add these tests inside the existing preview `describe` block, after the last tes
       );
       assert.equal(details.cases.length, 1);
       assert.deepEqual(details.cases.map((c) => c.prompt), ["task 3"]);
-      assert.ok(details.notes.includes("preview skipped 2 of 3 supplied prompts as blank or not text (1 had no text in the first 2,000 characters inspected), so 1 was evaluated."));
+      assert.ok(details.notes.includes("preview skipped 2 of 3 supplied prompts as blank or not text (1 was blank in the first 2,000 characters inspected), so 1 was evaluated."));
       assert.equal(details.notes.some((note) => /exceeded 2,000 characters/.test(note)), false);
       assert.ok(details.notes.every((note) => !note.includes("SENSITIVE-TAIL")));
     } finally {
@@ -240,7 +240,7 @@ Add these tests inside the existing preview `describe` block, after the last tes
       assert.match(text, /note: prompt 2 exceeded 2,000 characters; each route was computed from the first 2,000 characters\./);
       assert.match(text, /proposalDigest: [a-f0-9]{64}/);
       assert.match(text, /catalogDigest: [a-f0-9]{64}/);
-      assert.ok(lines.length <= 121, `report should respect 120-line bound (+ optional truncation marker), got ${lines.length}`);
+      assert.equal(lines.length, 120, `report should respect 120-line bound, got ${lines.length}`);
       assert.ok(lines.some((line) => line.includes("more line(s)")), "expected report to be bounded in this fixture");
     } finally {
       harness.cleanup();
@@ -255,68 +255,40 @@ Expected: FAIL on the new note-content assertions because no coverage note is pr
 
 - [ ] **Step 3: Replace the case-loop preamble**
 
-Replace this block in `previewConfigCandidate()`:
+Add coverage accounting around the existing prompt loop in `previewConfigCandidate()`. The implementation extracts small helpers (`createPreviewPromptCoverage`, `previewPromptFromRaw`, `previewDecidedBy`, `previewCaseConfidence`, `previewPromptCoverageNotes`) to keep complexity bounded; the behavior is equivalent to this logic:
 
 ```ts
-  const tierNames = new Set(Object.keys(routerConfig.models ?? {}));
-  const cases: ConfigAgentPreviewCase[] = [];
-  for (const raw of (request.prompts ?? []).slice(0, MAX_PROMPTS)) {
-    if (typeof raw !== "string") continue;
-    const prompt = raw.slice(0, MAX_PROMPT_CHARS);
-    if (prompt.trim().length === 0) continue;
+const promptCoverage = createPreviewPromptCoverage(request.prompts ?? []);
+for (const [index, raw] of promptCoverage.consideredPrompts.entries()) {
+  if (typeof raw !== "string") { promptCoverage.skippedPrompts += 1; continue; }
+  const inspectedPrompt = raw.slice(0, MAX_PROMPT_CHARS);
+  if (inspectedPrompt.trim().length === 0) {
+    promptCoverage.skippedPrompts += 1;
+    // Bounded: no tail scan. A prompt longer than the inspected prefix may have
+    // uninspected content after a blank inspected prefix.
+    if (raw.length > MAX_PROMPT_CHARS) promptCoverage.blankInspectedPrefixPrompts += 1;
+    continue;
+  }
+  if (raw.length > MAX_PROMPT_CHARS) promptCoverage.truncatedPromptPositions.push(index + 1);
+  // evaluate inspectedPrompt...
+}
 ```
 
-with:
-
-```ts
-  const tierNames = new Set(Object.keys(routerConfig.models ?? {}));
-  const suppliedPrompts = request.prompts ?? [];
-  const consideredPrompts = suppliedPrompts.slice(0, MAX_PROMPTS);
-  let skippedPrompts = 0;
-  let blankInspectedPrefixPrompts = 0;
-  const truncatedPrompts: number[] = [];
-  const cases: ConfigAgentPreviewCase[] = [];
-  for (const [index, raw] of consideredPrompts.entries()) {
-    if (typeof raw !== "string") {
-      skippedPrompts += 1;
-      continue;
-    }
-    const prompt = raw.slice(0, MAX_PROMPT_CHARS);
-    if (prompt.trim().length === 0) {
-      skippedPrompts += 1;
-      if (raw.trim().length > 0) blankInspectedPrefixPrompts += 1;
-      continue;
-    }
-    if (raw.length > MAX_PROMPT_CHARS) truncatedPrompts.push(index + 1);
-```
-
-The rest of the loop body is unchanged. Truncation is recorded only after the blank check, because only evaluated prompts have a computed route. Do not trim or otherwise scan `raw` beyond `.length` and the first-2000 slice.
+Do not trim or otherwise scan `raw` beyond `.length` and the first-2000 slice.
 
 - [ ] **Step 4: Append the coverage notes**
 
 Immediately before `return { ...base, status: "ok", cases, tiers, routing, notes };`, after the existing `if (catalog.available.length === 0)` block, add:
 
 ```ts
-  const promptLimit = MAX_PROMPT_CHARS.toLocaleString("en-US");
-  const inspectedPrefixNote = blankInspectedPrefixPrompts > 0
-    ? ` (${blankInspectedPrefixPrompts} had no text in the first ${promptLimit} characters inspected)`
-    : "";
-  if (suppliedPrompts.length > MAX_PROMPTS) {
-    notes.push(
-      skippedPrompts > 0
-        ? `preview considered the first ${consideredPrompts.length} of ${suppliedPrompts.length} supplied prompts; ${skippedPrompts} ${skippedPrompts === 1 ? "was" : "were"} blank or not text${inspectedPrefixNote}, so ${cases.length} ${cases.length === 1 ? "was" : "were"} evaluated.`
-        : `preview considered the first ${consideredPrompts.length} of ${suppliedPrompts.length} supplied prompts.`,
-    );
-  } else if (skippedPrompts > 0) {
-    notes.push(`preview skipped ${skippedPrompts} of ${suppliedPrompts.length} supplied prompts as blank or not text${inspectedPrefixNote}, so ${cases.length} ${cases.length === 1 ? "was" : "were"} evaluated.`);
-  }
-  if (truncatedPrompts.length > 0) {
-    const label = truncatedPrompts.length === 1 ? "prompt" : "prompts";
-    notes.push(`${label} ${truncatedPrompts.join(", ")} exceeded ${promptLimit} characters; each route was computed from the first ${promptLimit} characters.`);
-  }
+notes.push(...previewPromptCoverageNotes(promptCoverage, cases.length));
 ```
 
-Appending keeps existing notes first and emits no coverage notes for clean previews.
+`previewPromptCoverageNotes` emits no notes for clean previews. It reports:
+- over limit: `preview considered the first 8 of N supplied prompts; ...` (and skipped/evaluated counts when any were skipped)
+- skipped within limit: `preview skipped X of N supplied prompts as blank or not text..., so Y evaluated.`
+- blank-inspected-prefix qualifier: `(N was/were blank in the first 2,000 characters inspected)` (bounded; can include an overlong all-whitespace prompt)
+- truncation: `prompt(s) P... exceeded 2,000 characters; each route was computed from the first 2,000 characters.`
 
 - [ ] **Step 4b: Preserve coverage notes in the bounded report**
 

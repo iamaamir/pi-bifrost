@@ -147,8 +147,8 @@
       "funcs": 186,
       "maxCyc": 69,
       "maxCog": 74,
-      "sumCyc": 788,
-      "sumCog": 778
+      "sumCyc": 789,
+      "sumCog": 780
     },
     "config-approval.ts": {
       "scope": "source",
@@ -2626,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T11:18:40.139Z",
-  "sourceCommit": "d34920754c9bda8570ed11e46c3e0d42549e4d2f"
+  "generatedAt": "2026-11-21T13:07:09.017Z",
+  "sourceCommit": "cd9fe31809be516ad207958ab296b103e9cff60a"
 }

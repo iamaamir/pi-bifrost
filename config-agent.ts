@@ -1628,8 +1628,8 @@ function previewPromptFromRaw(raw: unknown, index: number, coverage: PreviewProm
   const inspectedPrompt = raw.slice(0, MAX_PROMPT_CHARS);
   if (inspectedPrompt.trim().length === 0) {
     coverage.skippedPrompts += 1;
-    // Bounded: only inspect .length and the first MAX_PROMPT_CHARS. If the raw prompt
-    // is longer than the inspected prefix, it had uninspected content after a blank prefix.
+    // Bounded: only inspect .length and the first MAX_PROMPT_CHARS. A prompt longer than
+    // the inspected prefix may have uninspected content after a blank inspected prefix.
     if (raw.length > MAX_PROMPT_CHARS) coverage.blankInspectedPrefixPrompts += 1;
     return undefined;
   }
@@ -1672,7 +1672,7 @@ function previewPromptCoverageNotes(coverage: PreviewPromptCoverage, evaluatedPr
   const notes: string[] = [];
   const promptLimit = MAX_PROMPT_CHARS.toLocaleString("en-US");
   const inspectedPrefixNote = coverage.blankInspectedPrefixPrompts > 0
-    ? ` (${coverage.blankInspectedPrefixPrompts} had no text in the first ${promptLimit} characters inspected)`
+    ? ` (${coverage.blankInspectedPrefixPrompts} ${coverage.blankInspectedPrefixPrompts === 1 ? "was" : "were"} blank in the first ${promptLimit} characters inspected)`
     : "";
 
   if (coverage.suppliedPrompts.length > MAX_PROMPTS) {
