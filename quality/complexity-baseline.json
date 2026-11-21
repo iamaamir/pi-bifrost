@@ -4,12 +4,12 @@
   "scopes": {
     "source": {
       "files": 94,
-      "functions": 2804,
+      "functions": 2805,
       "maxCyc": 190,
       "maxCog": 262,
       "cycGt30": 59,
       "cycGt50": 19,
-      "cogGt30": 84,
+      "cogGt30": 83,
       "cogGt50": 40
     },
     "tests": {
@@ -143,12 +143,12 @@
     },
     "config-agent.ts": {
       "scope": "source",
-      "lines": 2615,
-      "funcs": 178,
+      "lines": 2629,
+      "funcs": 179,
       "maxCyc": 69,
       "maxCog": 76,
-      "sumCyc": 766,
-      "sumCog": 775
+      "sumCyc": 769,
+      "sumCog": 774
     },
     "config-approval.ts": {
       "scope": "source",
@@ -2626,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T08:56:53.542Z",
-  "sourceCommit": "5b837d65c25c2ea46965803c086693ff917301f4"
+  "generatedAt": "2026-11-21T09:04:26.211Z",
+  "sourceCommit": "d2df608e60dc729f354628b46545dade7d5dbd91"
 }
