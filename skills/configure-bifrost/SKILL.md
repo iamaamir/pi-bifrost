@@ -38,19 +38,19 @@ goal needs something Bifrost does not do, say so.
    for the fields, strategies, and worked examples. Start from the user's
    current source and effective config. Keep existing tiers, rules, classifier
    settings, and fallbacks unless the stated goal needs a specific change.
-   `patch` merges only top-level keys: changing `models`, `rules`,
-   `classifier`, or `tierPolicies` replaces that entire value in the selected
-   source. Read that source file and carry forward its unrelated entries before
-   replacing one of those fields. Do not flatten inherited settings from other
-   layers unless the user asks. Prefer a focused `patch` over a complete
-   `candidate`; `patch` merges top-level fields only, so a nested object such as
-   `classifier` is replaced as a whole. Preserve its unrelated members when
-   changing one nested setting.
+   Do not flatten inherited settings from other layers unless the user asks.
+   Prefer a focused `patch` over a complete `candidate`. `patch` deep-merges:
+   nested objects merge key by key, so changing `classifier.minConfidence`
+   keeps every other classifier setting in that source, and changing one tier
+   in `models` keeps the other tiers. Arrays and scalars replace the whole
+   value, and `null` is stored as a value. A patch cannot delete a nested key
+   by leaving it out: use top-level `remove`, or a `candidate` that omits it,
+   when the user asks for a removal.
 
    A valid candidate can still discard unrelated policy. After `check`, compare
    every reported replacement/removal and the effective before/after values
-   with the user's goal. Restore any unrelated tier, rule, classifier setting,
-   or fallback that disappeared. If you cannot tell whether a removal is
+   with the user's goal. Restore any unrelated tier, rule, classifier setting, or
+   fallback that disappeared. If you cannot tell whether a removal is
    necessary, ask; do not present it as an assumed tradeoff. A passing check
    proves validity, not that the candidate matches the goal.
 4. **Check the candidate.** Call `bifrost_config` with
@@ -148,7 +148,8 @@ goal needs something Bifrost does not do, say so.
 
 - `source`: `project` (`.pi/bifrost.json`, default), `workspace`
   (`./bifrost.json`), or `user` (`~/.pi/agent/bifrost.json`).
-- `patch`: top-level fields to merge into the selected source.
+- `patch`: fields to deep-merge into the selected source; nested objects merge,
+  arrays and scalars replace.
 - `candidate`: the complete new content of the selected source (mutually
   exclusive with `patch`).
 - `remove`: top-level fields to delete; only with `patch`.
@@ -171,11 +172,11 @@ provides them. Consequences:
 - A file-based `.pi/bifrost-routes.json` (or `./bifrost-routes.json`) overrides
   `rules` entirely while it exists. `inspect` reports it.
 
-**A proposed source replaces only what the user asked for.** Use `patch` to add
-or change named top-level fields; the other sources and unrelated keys stay
-untouched. Nested objects within a replaced field must carry forward unrelated
-members. `apply` writes exactly one source atomically, and reports the exact
-fields it adds, replaces, and removes.
+**A proposed source changes only what the user asked for.** Use `patch` to set
+named fields; nested objects merge, so other sources, unrelated keys, and
+sibling settings inside a touched object stay untouched. `apply` writes exactly
+one source atomically, and reports the exact paths it adds, replaces, and
+removes.
 
 **Only claim what Bifrost does.** Read
 [references/configuration-reference.md](references/configuration-reference.md)

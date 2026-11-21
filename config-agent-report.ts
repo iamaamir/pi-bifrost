@@ -141,8 +141,11 @@ function renderCheck(result: ConfigAgentCheckResult): string {
     lines.push("------------------------------");
     return bounded(lines).join("\n");
   }
-  lines.push(result.changes.length === 0 ? "changes: none" : "changes:");
-  for (const change of result.changes) lines.push(`  ${changeLine(change)}`);
+  // A deep-merged patch changes nested fields, so report those paths. The plan
+  // computes this list from the same source pair as `changes`, so the two are
+  // non-empty together.
+  lines.push(result.nestedChanges.length === 0 ? "changes: none" : "changes:");
+  for (const change of result.nestedChanges) lines.push(`  ${changeLine(change)}`);
   lines.push("tiers after the change:");
   for (const tier of result.routingAfter?.tiers ?? []) {
     lines.push(`  ${tier.tier} (${tier.strategy})${tier.fallbackTiers ? ` fallback: [${tier.fallbackTiers.join(", ")}]` : ""}: ${tier.pool.join(", ") || "empty"}`);
@@ -245,7 +248,7 @@ function renderApply(result: ConfigAgentApplyResult): string {
     `applied: ${result.applied}; reloaded: ${result.reloaded}; verified: ${result.verified}`,
   ];
   if (result.reason) lines.push(`reason: ${result.reason}`);
-  for (const change of result.changes) lines.push(`  ${changeLine(change)}`);
+  for (const change of result.nestedChanges) lines.push(`  ${changeLine(change)}`);
   if (result.routing) {
     const classifier = result.routing.classifier;
     lines.push(`active default tier: ${result.routing.defaultTier ?? "none"}; tiers: ${result.routing.tiers.map((tier) => tier.tier).join(", ") || "none"}`);
