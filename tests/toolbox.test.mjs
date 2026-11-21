@@ -15,6 +15,7 @@ import {
   parseKnip,
   parseOsv,
   parseRuleGlobs,
+  parseTrackedFiles,
   parseSemgrep,
   ruleScopeFindings,
   runAstGrep,
@@ -99,6 +100,17 @@ test("parses rule file globs from block and inline lists", () => {
     files: ["tests/**/*.mjs", "tests/**/*.js"],
     ignores: [],
   });
+  assert.deepEqual(
+    parseRuleGlobs("ignores: ['tests/**']\n"),
+    { files: null, ignores: ["tests/**"] },
+    "an absent files key must stay distinct from an empty list",
+  );
+  assert.deepEqual(parseRuleGlobs("files: []\n"), { files: [], ignores: [] });
+});
+
+test("reads NUL-separated tracked file names without git quoting", () => {
+  assert.deepEqual(parseTrackedFiles("caf\u00e9.ts\0docs/a b.md\0"), ["caf\u00e9.ts", "docs/a b.md"]);
+  assert.deepEqual(parseTrackedFiles(""), []);
 });
 
 test("flags ast-grep rules whose scope matches no repository file", () => {
@@ -106,14 +118,18 @@ test("flags ast-grep rules whose scope matches no repository file", () => {
   const rules = [
     { id: "root-only", files: ["*.ts"], ignores: ["tests/**", "ui/**", "scripts/**"] },
     { id: "tests-only", files: ["tests/**/*.mjs"], ignores: [] },
-    { id: "no-files-key", files: [], ignores: [] },
+    { id: "no-files-key", files: null, ignores: [] },
+    { id: "empty-files", files: [], ignores: [] },
     { id: "inert", files: ["/*.ts"], ignores: [] },
   ];
   const findings = ruleScopeFindings(rules, files);
-  assert.equal(findings.length, 1);
-  assert.equal(findings[0].rule, "ast-grep-empty-scope");
-  assert.equal(findings[0].file, "rules/inert.yml");
-  assert.match(findings[0].message, /matches no repository files/);
+  assert.deepEqual(
+    findings.map((finding) => finding.file),
+    ["rules/empty-files.yml", "rules/inert.yml"],
+    "an absent files key is unrestricted; an empty one matches nothing",
+  );
+  assert.ok(findings.every((finding) => finding.rule === "ast-grep-empty-scope"));
+  assert.match(findings[1].message, /matches no repository files/);
 });
 
 test("fails ast checks when the tracked file list cannot verify rule scope", () => {

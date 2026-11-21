@@ -4,7 +4,7 @@
   "scopes": {
     "source": {
       "files": 94,
-      "functions": 2798,
+      "functions": 2799,
       "maxCyc": 190,
       "maxCog": 262,
       "cycGt30": 59,
@@ -14,7 +14,7 @@
     },
     "tests": {
       "files": 191,
-      "functions": 8326,
+      "functions": 8329,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -755,12 +755,12 @@
     },
     "scripts/toolbox.mjs": {
       "scope": "source",
-      "lines": 632,
-      "funcs": 59,
+      "lines": 644,
+      "funcs": 60,
       "maxCyc": 13,
       "maxCog": 20,
-      "sumCyc": 204,
-      "sumCog": 180
+      "sumCyc": 206,
+      "sumCog": 181
     },
     "scripts/verify-release.mjs": {
       "scope": "source",
@@ -2411,11 +2411,11 @@
     },
     "tests/toolbox.test.mjs": {
       "scope": "tests",
-      "lines": 347,
-      "funcs": 28,
+      "lines": 363,
+      "funcs": 31,
       "maxCyc": 4,
       "maxCog": 3,
-      "sumCyc": 37,
+      "sumCyc": 40,
       "sumCog": 9
     },
     "tests/tooling-config.test.mjs": {
@@ -2590,6 +2590,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-20T12:07:15.942Z",
-  "sourceCommit": "5634ed908c748b1d63a6cd2dbeabf2ce1f1d41b4"
+  "generatedAt": "2026-11-21T07:32:37.239Z",
+  "sourceCommit": "297f2a68f9bbc9f8d5b3ffe64659f8cc37404dca"
 }

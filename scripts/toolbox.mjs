@@ -86,12 +86,15 @@ export function toolExecutable(command, platform = process.platform) {
 
 function spawnCapture(command, args, { cwd = ROOT, env } = {}) {
   const executable = toolExecutable(command);
-  const result = spawnSync(executable, args, {
+  // Windows needs a shell for the `.cmd` shims, and that shell splits the
+  // command line, so a checkout path containing a space must be quoted there.
+  const shell = process.platform === "win32";
+  const result = spawnSync(shell ? `"${executable}"` : executable, args, {
     cwd,
     env: binEnv(env),
     encoding: "utf8",
     maxBuffer: MAX_CAPTURE_BYTES,
-    shell: process.platform === "win32",
+    shell,
   });
   if (result.error?.code === "ENOENT") return { missing: true, stdout: "", stderr: "" };
   return {
@@ -164,7 +167,7 @@ export function parseAstGrep(stdout) {
 // files use plain block or inline string lists, so a YAML dependency is not
 // worth it here.
 export function parseRuleGlobs(text) {
-  const globs = { files: [], ignores: [] };
+  const globs = { files: null, ignores: [] };
   let key = null;
   for (const raw of String(text).split(/\r?\n/)) {
     const line = raw.trim();
@@ -180,6 +183,7 @@ export function parseRuleGlobs(text) {
     const block = /^(files|ignores):\s*$/.exec(line);
     if (block) {
       key = block[1];
+      globs[key] ??= [];
       continue;
     }
     if (key && line.startsWith("- ")) {
@@ -228,7 +232,9 @@ export function ruleScopeFindings(rules, files) {
     ];
   }
   return rules.flatMap(({ id, files: include, ignores }) => {
-    const patterns = include.length > 0 ? include : ["**"];
+    // ast-grep reads an absent `files` key as unrestricted but an explicit
+    // empty list as matching nothing, so the two cannot share a fallback.
+    const patterns = include === null ? ["**"] : include;
     const eligible = files.some(
       (file) =>
         patterns.some((glob) => fileMatchesGlob(file, glob)) &&
@@ -367,10 +373,16 @@ function loadRuleScopes(root = ROOT) {
     .map((file) => ({ id: file.replace(/\.yml$/, ""), ...parseRuleGlobs(readFileSync(join(dir, file), "utf8")) }));
 }
 
+// NUL-separated output, because `git ls-files` otherwise quotes non-ASCII names
+// (`"caf\u00e9.ts"`), and the quotes stop every glob from matching them.
+export function parseTrackedFiles(stdout) {
+  return stdout.split("\0").filter(Boolean);
+}
+
 function trackedFiles(root = ROOT) {
-  const result = spawnCapture("git", ["ls-files"], { cwd: root });
+  const result = spawnCapture("git", ["ls-files", "-z"], { cwd: root });
   if (result.missing || result.status !== 0) return null;
-  return result.stdout.split("\n").filter(Boolean);
+  return parseTrackedFiles(result.stdout);
 }
 
 export function runAstGrep(runTool, { rules = loadRuleScopes(), files = trackedFiles() } = {}) {
