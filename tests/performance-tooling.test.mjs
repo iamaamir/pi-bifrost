@@ -392,7 +392,10 @@ test("the developer guide describes the full security audit as dispatch-only", (
 // gate missing from it is silently unasked for. Pinned as an exact list: adding
 // a fast gate means editing the template and this assertion together.
 function templateGates(text) {
-  return [...text.matchAll(/^- \[ \] `npm run (check:[a-z0-9:-]+)`/gmu)].map((match) => match[1]);
+  // A checkbox inside an HTML comment is not rendered, so it asks for nothing.
+  // GitHub hides an unterminated comment to the end, hence the `$` branch.
+  const visible = text.replace(/<!--[\s\S]*?(?:-->|$)/gu, "");
+  return [...visible.matchAll(/^- \[ \] `npm run (check:[a-z0-9:-]+)`/gmu)].map((match) => match[1]);
 }
 
 test("the pull request template asks for evidence on every fast gate", () => {
@@ -419,6 +422,11 @@ test("fault control: dropping a gate from the template is visible", () => {
   const commented = template.replace(/^- \[ \] `npm run check:ast`.*$/mu, "<!-- npm run check:ast -->");
   assert.deepEqual(templateGates(commented), ["check:duplication", "check:complexity"],
     "a commented-out gate must not count as asked for");
+  const blockCommented = template.replace(/^(- \[ \] `npm run check:complexity`.*)$/mu, "<!--\n$1\n-->");
+  assert.deepEqual(templateGates(blockCommented), ["check:ast", "check:duplication"],
+    "a gate inside a multi-line HTML comment must not count as asked for");
+  assert.deepEqual(templateGates("<!--\n- [ ] `npm run check:ast`\n"), [],
+    "an unterminated comment hides the rest, as it does on GitHub");
 });
 
 test("the agent guide links to the developer tooling guide", () => {

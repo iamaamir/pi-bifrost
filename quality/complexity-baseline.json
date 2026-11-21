@@ -1988,7 +1988,7 @@
     },
     "tests/performance-tooling.test.mjs": {
       "scope": "tests",
-      "lines": 429,
+      "lines": 437,
       "funcs": 66,
       "maxCyc": 9,
       "maxCog": 13,
@@ -2590,6 +2590,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T07:32:37.239Z",
-  "sourceCommit": "297f2a68f9bbc9f8d5b3ffe64659f8cc37404dca"
+  "generatedAt": "2026-11-21T07:35:13.093Z",
+  "sourceCommit": "0eecfbbe3df9d005156d1ff91f9c1f347022192d"
 }
