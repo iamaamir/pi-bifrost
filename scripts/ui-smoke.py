@@ -1024,6 +1024,8 @@ def main() -> int:
                 inspect_text = (OUT / "inspect.txt").read_text(errors="ignore")
                 if "inspection (local snapshot)" not in inspect_text or "registry:" not in inspect_text:
                     raise AssertionError("inspect UI did not render its local snapshot labels")
+                if "Bifrost registry refresh TTL: 30000 ms (fixed internal policy; not user-configurable)" not in inspect_text:
+                    raise AssertionError("inspect UI did not render the fixed registry refresh policy")
             if name == "inspect-reserve":
                 reserve_text = (OUT / "inspect-reserve.txt").read_text(errors="ignore")
                 if "reserve policy: observe" not in reserve_text or "source=manual-estimate scope=example-provider authority=estimated" not in reserve_text:

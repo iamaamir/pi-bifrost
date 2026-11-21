@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { REGISTRY_REFRESH_TTL_MS } from "./registry-refresh.ts";
 
-export const REGISTRY_REFRESH_TTL_MS = 30_000;
+export { REGISTRY_REFRESH_TTL_MS };
 
 export interface RegistryRefreshState {
   lastRegistryRefreshAt?: number;
