@@ -2006,7 +2006,7 @@
     },
     "tests/mutation-workflow.test.mjs": {
       "scope": "tests",
-      "lines": 2595,
+      "lines": 2600,
       "funcs": 226,
       "maxCyc": 8,
       "maxCog": 13,
@@ -2626,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T07:35:43.382Z",
-  "sourceCommit": "9b7797a1804b17dd53dbfac15573a3952f609110"
+  "generatedAt": "2026-11-21T07:35:44.049Z",
+  "sourceCommit": "804a81084a016db37ee39a8e9ebdaf9ee6c24253"
 }
