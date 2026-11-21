@@ -24,6 +24,14 @@ Any user-visible Pi UI change (menus, overlays, dialogs, footer/status, notices,
 
 Embed the relevant screenshots in the PR body's **Evidence** section, labelled with the tested UI state, exact command/result, and reviewed head SHA. Cover changed and relevant failure/empty states, inspect the images for visual regressions, and scrub credentials, private prompts and other sensitive content before sharing. CI uploads smoke screenshots as artifacts, but a CI artifact link alone does not replace images in the PR body. Do not commit generated screenshots.
 
+To attach without committing images, use GitHub CLI v2.99.0 or newer:
+
+```bash
+gh pr edit <PR> --attach 'screenshots/ui-smoke/example.png#Changed UI state'
+```
+
+This appends the uploaded image to the existing PR body. To place it specifically under **Evidence**, first save the existing body with `gh pr view <PR> --json body --jq .body > /tmp/pr-body.md`, add `![Changed UI state](screenshots/ui-smoke/example.png)` under that heading, then run `gh pr edit <PR> --body-file /tmp/pr-body.md --attach screenshots/ui-smoke/example.png`. Confirm the rendered image in the PR; preserve all existing description sections.
+
 Screenshots supplement, not replace, behavioral assertions and passing checks. For a non-UI change, mark visual evidence N/A with a brief reason.
 
 ## Release feature map
