@@ -32,6 +32,7 @@ All notable changes to pi-bifrost are documented here.
 - `classifier.totalTimeoutMs` sets one bounded deadline across classification attempts; existing per-backend limits continue to apply.
 
 ### Changed
+- `/bifrost debug` now prints the resolved debug log path, its rotation target, and the fixed 10 MiB rotation bound instead of the raw `debug` configuration object. Control characters in a configured path are rendered as escapes, so a newline cannot split the status line and a terminal escape cannot run. The debug-log guide states exactly when rotation renames a file, that the single rotated file is replaced on the next rotation, which events are lost, and how shutdown and exit flushes behave. No configuration field, log content, or retention behavior changes.
 - Classification cache now preserves token order and defaults to exact prompt matches. Set `cache.threshold` below `1` to opt into fuzzy Jaccard matches. The cache semantic key version changes, so existing entries become misses and repopulate safely.
 
 ### Fixed

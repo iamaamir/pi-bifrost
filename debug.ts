@@ -16,6 +16,14 @@ export interface DebugConfig {
   path?: string;
 }
 
+/** Read-only view of the installed logger for `/bifrost debug`. */
+export interface DebugLogInfo {
+  enabled: boolean;
+  path: string | null;
+  rotatedPath: string | null;
+  maxBytes: number;
+}
+
 const DEFAULT_MAX_SIZE_MB = 10;
 
 let debugEnabled = false;
@@ -32,14 +40,17 @@ let flushScheduled = false;
 let flushing = false;
 let activeFlush: Promise<void> | undefined;
 
+function rotatedLogPath(path: string): string {
+  return path.endsWith(".jsonl")
+    ? path.slice(0, -".jsonl".length) + ".old.jsonl"
+    : `${path}.old`;
+}
+
 async function rotateIfNeeded(path: string): Promise<void> {
   try {
     const info = await stat(path).catch(() => null);
     if (info && info.size > maxSizeBytes) {
-      const rotatedPath = path.endsWith(".jsonl")
-        ? path.slice(0, -".jsonl".length) + ".old.jsonl"
-        : `${path}.old`;
-      await rename(path, rotatedPath).catch(() => {});
+      await rename(path, rotatedLogPath(path)).catch(() => {});
     }
   } catch { /* ignore */ }
 }
@@ -96,6 +107,16 @@ export function isDebugEnabled(): boolean {
   return debugEnabled;
 }
 
+/** Report the effective log location and fixed rotation policy without I/O. */
+export function debugLogInfo(): DebugLogInfo {
+  return {
+    enabled: debugEnabled,
+    path: debugPath,
+    rotatedPath: debugPath ? rotatedLogPath(debugPath) : null,
+    maxBytes: maxSizeBytes,
+  };
+}
+
 /** Best-effort bounded drain for awaited host shutdown hooks. */
 export async function flushDebug(timeoutMs = 250): Promise<void> {
   if (!debugEnabled || !debugPath || !Number.isFinite(timeoutMs) || timeoutMs <= 0) return;
@@ -119,13 +140,11 @@ export async function flushDebug(timeoutMs = 250): Promise<void> {
 
 export function setupDebug(cfg: DebugConfig, cwd: string) {
   debugEnabled = cfg.enabled ?? false;
-  if (cfg.path) {
-    debugPath = cfg.path.startsWith("/") || cfg.path.startsWith("~")
+  debugPath = cfg.path
+    ? cfg.path.startsWith("/") || cfg.path.startsWith("~")
       ? cfg.path.replace(/^~/, process.env.HOME ?? "/tmp")
-      : `${cwd}/${cfg.path}`;
-  } else {
-    debugPath = `${cwd}/.pi/bifrost-debug.jsonl`;
-  }
+      : `${cwd}/${cfg.path}`
+    : `${cwd}/.pi/bifrost-debug.jsonl`;
 
   if (debugEnabled) {
     try {

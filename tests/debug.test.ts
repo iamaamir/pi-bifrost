@@ -3,11 +3,63 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
-import { debug, debugMeasure, flushDebug, isDebugEnabled, setupDebug } from "../debug.ts";
+import { debug, debugLogInfo, debugMeasure, flushDebug, isDebugEnabled, setupDebug } from "../debug.ts";
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 describe("structured debug logger", () => {
+  it("reports the effective log location and fixed rotation policy", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "bifrost-debug-info-"));
+    try {
+      setupDebug({ enabled: false }, directory);
+      assert.deepEqual(debugLogInfo(), {
+        enabled: false,
+        path: `${directory}/.pi/bifrost-debug.jsonl`,
+        rotatedPath: `${directory}/.pi/bifrost-debug.old.jsonl`,
+        maxBytes: 10 * 1024 * 1024,
+      });
+
+      setupDebug({ enabled: false, path: "trace" }, directory);
+      assert.equal(debugLogInfo().path, `${directory}/trace`);
+      assert.equal(debugLogInfo().rotatedPath, `${directory}/trace.old`);
+
+      const originalHome = process.env.HOME;
+      process.env.HOME = directory;
+      try {
+        setupDebug({ enabled: false, path: "~/trace.jsonl" }, directory);
+        assert.equal(debugLogInfo().path, `${directory}/trace.jsonl`);
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+
+      setupDebug({ enabled: true, path: `${directory}/trace.jsonl` }, directory);
+      assert.equal(debugLogInfo().enabled, true);
+      assert.equal(debugLogInfo().path, `${directory}/trace.jsonl`);
+    } finally {
+      setupDebug({ enabled: false, path: `${directory}/trace.jsonl` }, directory);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rotates only after the file exceeds the fixed limit", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "bifrost-debug-boundary-"));
+    const path = join(directory, "trace.jsonl");
+    try {
+      await writeFile(path, Buffer.alloc(10 * 1024 * 1024, 0x61));
+      setupDebug({ enabled: true, path }, directory);
+      debug("test", "exactly-at-limit");
+      await flushDebug(1_000);
+
+      await assert.rejects(stat(`${path}.old`), "a file at exactly 10 MiB must not rotate");
+      const appended = (await readFile(path, "utf8")).slice(10 * 1024 * 1024).trim();
+      assert.equal(JSON.parse(appended).event, "exactly-at-limit");
+    } finally {
+      setupDebug({ enabled: false, path }, directory);
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("can enable a valid path after an earlier directory setup failure", async () => {
     const directory = await mkdtemp(join(tmpdir(), "bifrost-debug-recover-"));
     const blocker = join(directory, "not-a-directory");
