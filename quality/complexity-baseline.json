@@ -4,7 +4,7 @@
   "scopes": {
     "source": {
       "files": 94,
-      "functions": 2822,
+      "functions": 2824,
       "maxCyc": 190,
       "maxCog": 262,
       "cycGt30": 58,
@@ -14,7 +14,7 @@
     },
     "tests": {
       "files": 195,
-      "functions": 8453,
+      "functions": 8457,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -125,12 +125,12 @@
     },
     "commands.ts": {
       "scope": "source",
-      "lines": 3428,
+      "lines": 3431,
       "funcs": 254,
       "maxCyc": 161,
       "maxCog": 261,
-      "sumCyc": 1178,
-      "sumCog": 1215
+      "sumCyc": 1181,
+      "sumCog": 1218
     },
     "config-agent-report.ts": {
       "scope": "source",
@@ -206,12 +206,12 @@
     },
     "debug.ts": {
       "scope": "source",
-      "lines": 205,
-      "funcs": 19,
+      "lines": 224,
+      "funcs": 21,
       "maxCyc": 15,
       "maxCog": 17,
-      "sumCyc": 65,
-      "sumCog": 60
+      "sumCyc": 68,
+      "sumCog": 59
     },
     "diagnostics.ts": {
       "scope": "source",
@@ -890,11 +890,11 @@
     },
     "tests/bifrost-commands.test.ts": {
       "scope": "tests",
-      "lines": 4164,
-      "funcs": 619,
+      "lines": 4182,
+      "funcs": 621,
       "maxCyc": 6,
       "maxCog": 9,
-      "sumCyc": 755,
+      "sumCyc": 757,
       "sumCog": 167
     },
     "tests/cache-properties.test.ts": {
@@ -1205,11 +1205,11 @@
     },
     "tests/debug.test.ts": {
       "scope": "tests",
-      "lines": 126,
-      "funcs": 19,
+      "lines": 168,
+      "funcs": 21,
       "maxCyc": 3,
       "maxCog": 2,
-      "sumCyc": 21,
+      "sumCyc": 23,
       "sumCog": 2
     },
     "tests/diagnostics.test.ts": {
@@ -1619,7 +1619,7 @@
     },
     "tests/integration/auto-virtual.test.mjs": {
       "scope": "tests",
-      "lines": 1575,
+      "lines": 1581,
       "funcs": 222,
       "maxCyc": 9,
       "maxCog": 21,
@@ -2626,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T15:05:13.296Z",
-  "sourceCommit": "abeb0ff6f9229cf2702854444c060d5420ae69c2"
+  "generatedAt": "2026-11-21T16:16:10.935Z",
+  "sourceCommit": "20bf35e274ec895a27e3f5662dfe8724b9cbf5a7"
 }

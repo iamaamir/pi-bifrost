@@ -1357,6 +1357,12 @@ describe("auto virtual production path", { timeout: 240_000, concurrency: 1 }, (
       await rpc.userTurn("/bifrost debug");
       assert.match(rpc.stderr, /pinned: true/,
         "status after the follow-up must show that the failed turn did not clear the manual pin");
+      assert.match(rpc.stderr, /debug: on/,
+        "status must report the effective debug state rather than the raw config object");
+      assert.match(rpc.stderr, /debugLog: .*\.pi\/bifrost-debug\.jsonl/,
+        "status must print the resolved debug log path");
+      assert.match(rpc.stderr, /debugRotation: 10 MiB per file → .*bifrost-debug\.old\.jsonl \(replaced at each rotation\)/,
+        "status must print the fixed rotation target and replacement behavior");
       const after = await fakeStats(server.port);
       assert.equal((after.attempts.fail ?? 0) - (before.attempts.fail ?? 0), 2,
         "one failed prompt and one fresh follow-up must produce two total requests, not a replay");

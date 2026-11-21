@@ -11,7 +11,7 @@ import { applyConfigMigration, ConfigMigrationError, parseConfigMigrationArgs, p
 import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
 import { buildRouteDecisionSummary, type ClassificationPipeline, type ClassificationResult, type ClassificationSource, type ClassifierAttemptSummary, type RouteDecisionSummary } from "./classification-pipeline.ts";
-import { setupDebug, debug, debugMeasure } from "./debug.ts";
+import { setupDebug, debug, debugLogInfo, debugMeasure } from "./debug.ts";
 import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT, readRecentCompleteProbeReport } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
 import { showBifrostResult } from "./result-viewer.ts";
@@ -3337,6 +3337,7 @@ export function createCommandRouter(
     exact("debug", (_, ctx) => {
       const rules = state.config.rules ?? [];
       const tiers = Object.keys(state.config.models ?? {});
+      const debugLog = debugLogInfo();
       const lines = [
         "--- config ---",
         `cwd: ${process.cwd()}`,
@@ -3346,7 +3347,9 @@ export function createCommandRouter(
         `default: ${state.config.default}`,
         `strategy: ${state.config.strategy}`,
         `tiers: ${tiers.join(", ")}`,
-        `debug: ${JSON.stringify(state.config.debug)}`,
+        `debug: ${debugLog.enabled ? "on" : "off"}`,
+        `debugLog: ${debugLog.path ?? "(not initialized)"}`,
+        `debugRotation: ${debugLog.maxBytes / (1024 * 1024)} MiB per file${debugLog.rotatedPath ? ` → ${debugLog.rotatedPath}` : ""} (replaced at each rotation)`,
         `cache: ${state.cacheEntries.length} entries (retention ${state.config.cache?.ttlHours ?? 720}h)`,
         `reliability: ${JSON.stringify(state.config.reliability ?? {})}`,
         `openCircuits: ${openCircuitCount(state)}`,

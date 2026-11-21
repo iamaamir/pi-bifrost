@@ -14,6 +14,7 @@ import { emptyReliabilityV2State } from "../reliability-v2.ts";
 import { buildInitOwnershipReceipt } from "../reconciliation-command.ts";
 import { REGISTRY_REFRESH_TTL_MS } from "../ux-status.ts";
 import { loadConfigForReload } from "../config-load.ts";
+import { flushDebug, setupDebug } from "../debug.ts";
 import { resolveClassifierEnablement } from "../runtime-state.ts";
 
 it("renders missing configured entries in text route traces", () => {
@@ -765,6 +766,23 @@ describe("bifrost command ui", () => {
       commandCtx.ui.setEditorText("/bifrost preview ");
     });
     assert.deepEqual(calls.filter((call) => call.kind === "editor").map((call) => call.value), ["", "/bifrost preview "]);
+  });
+
+  it("prints the effective debug log path and fixed rotation target", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "bifrost-debug-status-"));
+    const path = join(directory, "trace.jsonl");
+    const { ctx } = makeCtx();
+    setupDebug({ enabled: true, path }, directory);
+    try {
+      const lines = await captureCommandText(() => createCommandRouter(makeState() as never)("debug", printModeCtx(ctx)));
+      assert.ok(lines.includes("debug: on"));
+      assert.ok(lines.includes(`debugLog: ${path}`));
+      assert.ok(lines.includes(`debugRotation: 10 MiB per file → ${join(directory, "trace.old.jsonl")} (replaced at each rotation)`));
+      await flushDebug(1_000);
+    } finally {
+      setupDebug({ enabled: false }, directory);
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("opens dashboard for root command", async () => {
