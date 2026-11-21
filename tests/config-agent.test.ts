@@ -1895,12 +1895,14 @@ describe("preview is offline, deterministic, and non-mutating", () => {
       };
       const synthetic: ConfigAgentPreviewResult = {
         ...details,
+        notes: [...details.notes, "tier\nname"],
         cases: Array.from({ length: 8 }, () => bigCase),
       };
       const text = reportText(synthetic);
       const lines = text.split("\n");
       assert.match(text, /note: preview considered the first 8 of 11 supplied prompts\./);
       assert.match(text, /note: prompt 2 exceeded 2,000 characters; each route was computed from the first 2,000 characters\./);
+      assert.match(text, /note: tier\\nname/);
       assert.match(text, /proposalDigest: [a-f0-9]{64}/);
       assert.match(text, /catalogDigest: [a-f0-9]{64}/);
       assert.equal(lines.length, 120, `report should respect 120-line bound, got ${lines.length}`);

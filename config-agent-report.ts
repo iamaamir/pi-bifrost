@@ -290,7 +290,7 @@ function renderPreview(result: ConfigAgentPreviewResult): string {
       if (entry.unavailable.length > 0) lines.push(`    known but unavailable: ${entry.unavailable.join(", ")}`);
     }
   }
-  const noteLines = result.notes.map((note) => `note: ${note}`);
+  const noteLines = result.notes.map((note) => `note: ${note.replace(/\r\n|\r|\n/g, "\\n")}`);
   const tail = [...noteLines, ...digestLines(result.proposalDigest, result.guards), "-------------------------------------------"];
   return boundedWithTail(lines, tail).join("\n");
 }
