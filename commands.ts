@@ -263,6 +263,17 @@ function uiOutput(ctx: ExtensionContext, lines: string[]) {
   }
 }
 
+/**
+ * Render a filesystem path on one line. Backslashes double so output escapes
+ * cannot be confused with literal backslashes; newlines and other control
+ * characters cannot split the status line or reach the terminal raw.
+ */
+function displayPath(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/[\u0000-\u001f\u007f]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 async function uiResult(ctx: ExtensionContext, title: string, lines: string[]): Promise<void> {
   if (await showBifrostResult(ctx, title, lines)) return;
   for (const line of lines) console.error(`[bifrost] ${line}`);
@@ -3348,8 +3359,8 @@ export function createCommandRouter(
         `strategy: ${state.config.strategy}`,
         `tiers: ${tiers.join(", ")}`,
         `debug: ${debugLog.enabled ? "on" : "off"}`,
-        `debugLog: ${debugLog.path ?? "(not initialized)"}`,
-        `debugRotation: ${debugLog.maxBytes / (1024 * 1024)} MiB per file${debugLog.rotatedPath ? ` → ${debugLog.rotatedPath}` : ""} (replaced at each rotation)`,
+        `debugLog: ${debugLog.path ? displayPath(debugLog.path) : "(not initialized)"}`,
+        `debugRotation: ${debugLog.maxBytes / (1024 * 1024)} MiB per file${debugLog.rotatedPath ? ` → ${displayPath(debugLog.rotatedPath)}` : ""} (replaced at each rotation)`,
         `cache: ${state.cacheEntries.length} entries (retention ${state.config.cache?.ttlHours ?? 720}h)`,
         `reliability: ${JSON.stringify(state.config.reliability ?? {})}`,
         `openCircuits: ${openCircuitCount(state)}`,

@@ -785,6 +785,24 @@ describe("bifrost command ui", () => {
     }
   });
 
+  it("renders control characters in configured debug paths as escapes", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "bifrost-debug-status-escape-"));
+    const rawPath = join(directory, "trace\n\u001b[31mred.jsonl");
+    const escapedPath = join(directory, "trace\\u000a\\u001b[31mred.jsonl");
+    const { ctx } = makeCtx();
+    setupDebug({ enabled: true, path: rawPath }, directory);
+    try {
+      const lines = await captureCommandText(() => createCommandRouter(makeState() as never)("debug", printModeCtx(ctx)));
+      assert.ok(lines.includes(`debugLog: ${escapedPath}`), `expected escaped debugLog line, got:\n${lines.join("\n")}`);
+      assert.ok(lines.includes(`debugRotation: 10 MiB per file → ${join(directory, "trace\\u000a\\u001b[31mred.old.jsonl")} (replaced at each rotation)`));
+      assert.ok(lines.every((line) => !line.includes("\u001b")), "raw terminal control characters must not reach command output");
+      await flushDebug(1_000);
+    } finally {
+      setupDebug({ enabled: false }, directory);
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("opens dashboard for root command", async () => {
     const { ctx, calls } = makeCtx();
     const state = makeState();

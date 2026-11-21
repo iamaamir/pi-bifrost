@@ -23,6 +23,16 @@ describe("structured debug logger", () => {
       assert.equal(debugLogInfo().path, `${directory}/trace`);
       assert.equal(debugLogInfo().rotatedPath, `${directory}/trace.old`);
 
+      const originalHome = process.env.HOME;
+      process.env.HOME = directory;
+      try {
+        setupDebug({ enabled: false, path: "~/trace.jsonl" }, directory);
+        assert.equal(debugLogInfo().path, `${directory}/trace.jsonl`);
+      } finally {
+        if (originalHome === undefined) delete process.env.HOME;
+        else process.env.HOME = originalHome;
+      }
+
       setupDebug({ enabled: true, path: `${directory}/trace.jsonl` }, directory);
       assert.equal(debugLogInfo().enabled, true);
       assert.equal(debugLogInfo().path, `${directory}/trace.jsonl`);
