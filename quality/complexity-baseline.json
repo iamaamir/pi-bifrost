@@ -1097,7 +1097,7 @@
     },
     "tests/config-agent.test.ts": {
       "scope": "tests",
-      "lines": 3894,
+      "lines": 3896,
       "funcs": 414,
       "maxCyc": 12,
       "maxCog": 11,
@@ -2626,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T14:57:07.956Z",
-  "sourceCommit": "b4453ca0e7440d55018217f17cb0431669f14dfb"
+  "generatedAt": "2026-11-21T15:05:13.296Z",
+  "sourceCommit": "abeb0ff6f9229cf2702854444c060d5420ae69c2"
 }
