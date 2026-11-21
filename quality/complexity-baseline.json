@@ -4,17 +4,17 @@
   "scopes": {
     "source": {
       "files": 94,
-      "functions": 2801,
+      "functions": 2804,
       "maxCyc": 190,
       "maxCog": 262,
       "cycGt30": 59,
       "cycGt50": 19,
-      "cogGt30": 83,
+      "cogGt30": 84,
       "cogGt50": 40
     },
     "tests": {
       "files": 195,
-      "functions": 8391,
+      "functions": 8409,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -134,7 +134,7 @@
     },
     "config-agent-report.ts": {
       "scope": "source",
-      "lines": 270,
+      "lines": 273,
       "funcs": 21,
       "maxCyc": 48,
       "maxCog": 74,
@@ -143,12 +143,12 @@
     },
     "config-agent.ts": {
       "scope": "source",
-      "lines": 2525,
-      "funcs": 175,
+      "lines": 2615,
+      "funcs": 178,
       "maxCyc": 69,
       "maxCog": 76,
-      "sumCyc": 744,
-      "sumCog": 738
+      "sumCyc": 766,
+      "sumCog": 775
     },
     "config-approval.ts": {
       "scope": "source",
@@ -1097,12 +1097,12 @@
     },
     "tests/config-agent.test.ts": {
       "scope": "tests",
-      "lines": 3158,
-      "funcs": 356,
+      "lines": 3552,
+      "funcs": 374,
       "maxCyc": 12,
       "maxCog": 11,
-      "sumCyc": 489,
-      "sumCog": 146
+      "sumCyc": 514,
+      "sumCog": 153
     },
     "tests/config-approval.test.ts": {
       "scope": "tests",
@@ -2626,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T07:35:48.979Z",
-  "sourceCommit": "5ce46f63a95c1eb51e338254523e7574b62d45e6"
+  "generatedAt": "2026-11-21T08:56:53.542Z",
+  "sourceCommit": "5b837d65c25c2ea46965803c086693ff917301f4"
 }

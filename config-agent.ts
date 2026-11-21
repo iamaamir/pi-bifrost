@@ -270,6 +270,12 @@ export interface ConfigAgentCheckResult {
   readonly guards: ConfigAgentGuards | null;
   readonly changes: readonly ConfigAgentChange[];
   readonly nextSource: Record<string, unknown> | null;
+  /**
+   * Path-level changes for reporting. `changes` stays top-level so existing
+   * summaries keep their field names; this list recurses into merged objects so
+   * a partial patch shows the exact nested fields it touched.
+   */
+  readonly nestedChanges: readonly ConfigAgentChange[];
   readonly effectiveAfter: Record<string, unknown> | null;
   readonly effectiveBefore: Record<string, unknown> | null;
   readonly issues: readonly ConfigAgentIssueSummary[];
@@ -349,6 +355,8 @@ export interface ConfigAgentApplyResult {
   readonly reloaded: boolean;
   readonly verified: boolean;
   readonly changes: readonly ConfigAgentChange[];
+  /** Path-level changes, matching the list the check and approval showed. */
+  readonly nestedChanges: readonly ConfigAgentChange[];
   readonly effectiveConfig: Record<string, unknown> | null;
   readonly routing: ConfigAgentRoutingSummary | null;
   readonly reason?: string;
@@ -1245,6 +1253,68 @@ interface CandidatePlan {
   readonly nextSource: Record<string, unknown>;
   readonly nextText: string;
   readonly changes: ConfigAgentChange[];
+  readonly nestedChanges: ConfigAgentChange[];
+}
+
+/**
+ * Keys that would rewrite an object's prototype if assigned by index. Host JSON
+ * can carry an own "__proto__" property even though the schema never declares
+ * one, and `parsed.__proto__ = value` would silently change behaviour instead of
+ * being rejected by schema validation.
+ */
+const UNSAFE_PATCH_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+
+function unsafePatchKey(value: unknown): string | null {
+  const pending: unknown[] = [value];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!isPlainRecord(current)) continue;
+    for (const key of Object.keys(current)) {
+      if (UNSAFE_PATCH_KEYS.has(key)) return key;
+      pending.push(current[key]);
+    }
+  }
+  return null;
+}
+
+/**
+ * Merge one patch value into the value it targets. Plain objects merge key by
+ * key so a partial edit keeps unspecified siblings at any depth; arrays,
+ * scalars, and `null` replace the previous value outright, and `null` is a
+ * stored value rather than a delete marker.
+ *
+ * Neither argument is mutated: merged objects are new, and untouched subtrees
+ * are shared by reference because nothing downstream writes into them. A key the
+ * patch omits therefore survives, which means a patch cannot delete a nested key
+ * by omission; top-level `remove` or a full `candidate` express a deletion.
+ */
+function mergePatchValue(base: unknown, patch: unknown): unknown {
+  if (!isPlainRecord(base) || !isPlainRecord(patch)) return patch;
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(patch)) merged[key] = mergePatchValue(base[key], value);
+  return merged;
+}
+
+/**
+ * Path-level change list for reporting. Objects recurse so a deep merge shows
+ * the fields it actually touched, while arrays stay one entry at their path
+ * because an element-by-element list would imply a merge that does not happen.
+ * `changes` keeps the established top-level contract for approval summaries.
+ */
+function diffNestedChanges(before: unknown, after: unknown, path: string, changes: ConfigAgentChange[]): void {
+  if (isPlainRecord(before) && isPlainRecord(after)) {
+    for (const key of Object.keys(before).sort()) {
+      const nested = path ? `${path}.${key}` : key;
+      if (!Object.hasOwn(after, key)) changes.push({ kind: "remove", field: nested, before: before[key] });
+      else diffNestedChanges(before[key], after[key], nested, changes);
+    }
+    for (const key of Object.keys(after).sort()) {
+      if (!Object.hasOwn(before, key)) changes.push({ kind: "add", field: path ? `${path}.${key}` : key, after: after[key] });
+    }
+    return;
+  }
+  if (canonicalJson(before) === canonicalJson(after)) return;
+  changes.push({ kind: "replace", field: path, before, after });
 }
 
 function planCandidate(
@@ -1260,7 +1330,7 @@ function planCandidate(
   const candidate = request.candidate;
   const remove = request.remove ?? [];
   const fail = (reason: string): CandidatePlan => ({
-    ok: false, reason, source, sourcePath: current.path, current, nextSource: base, nextText: "", changes: [],
+    ok: false, reason, source, sourcePath: current.path, current, nextSource: base, nextText: "", changes: [], nestedChanges: [],
   });
   if (candidate !== undefined && !isPlainRecord(candidate)) return fail("candidate must be a JSON object");
   if (patch !== undefined && !isPlainRecord(patch)) return fail("patch must be a JSON object");
@@ -1270,21 +1340,33 @@ function planCandidate(
   if (candidate !== undefined && remove.length > 0) return fail("remove applies only to patch");
   if (remove.some((key) => typeof key !== "string" || key.length === 0)) return fail("remove entries must be non-empty strings");
   if (current.readError) return fail(`the selected source ${current.readError}`);
+  if (patch !== undefined) {
+    const unsafe = unsafePatchKey(patch);
+    if (unsafe !== null) return fail(`the patch contains an unsafe key "${unsafe}"`);
+    // Check the patch before merging so an absurdly deep argument is rejected
+    // instead of exhausting the stack in the recursive merge below.
+    if (exceedsConfigNestingDepth(patch)) return fail("configuration exceeds the nesting depth limit");
+  }
   let nextSource: Record<string, unknown>;
   if (candidate !== undefined) {
     nextSource = { ...candidate };
   } else {
     nextSource = { ...base };
     for (const key of remove) delete nextSource[key];
-    for (const [key, value] of Object.entries(patch ?? {})) nextSource[key] = value;
+    // Merge against the post-removal value: a key both removed and patched
+    // starts from nothing, matching the previous delete-then-assign order.
+    for (const [key, value] of Object.entries(patch ?? {})) nextSource[key] = mergePatchValue(nextSource[key], value);
   }
   if (exceedsConfigNestingDepth(base) || exceedsConfigNestingDepth(nextSource)) return fail("configuration exceeds the nesting depth limit");
   const changes = diffFields(base, nextSource);
   if (changes.length === 0 && !allowUnchanged) return fail("the selected source already matches this proposal");
+  const nestedChanges: ConfigAgentChange[] = [];
+  diffNestedChanges(base, nextSource, "", nestedChanges);
   return {
     ok: true, source, sourcePath: current.path, current, nextSource,
     nextText: serializeSource(nextSource),
     changes,
+    nestedChanges,
   };
 }
 
@@ -1333,6 +1415,7 @@ function emptyCheckResult(
     proposalDigest: null,
     guards: null,
     changes: [],
+    nestedChanges: [],
     nextSource: null,
     effectiveAfter: null,
     effectiveBefore: null,
@@ -1421,6 +1504,7 @@ export function checkConfigCandidate(input: ConfigAgentCheckInput): ConfigAgentC
       classifierRuntimeDigest: classifierRuntimeDigest(runtimeBefore, runtimeAfter),
     },
     changes: plan.changes,
+    nestedChanges: plan.nestedChanges,
     nextSource: plan.nextSource,
     effectiveAfter: after.config as unknown as Record<string, unknown>,
     effectiveBefore: before.config as unknown as Record<string, unknown>,
@@ -1651,14 +1735,17 @@ function approvalText(value: string): string {
 }
 
 function approvalDetails(checked: ConfigAgentCheckResult): string | null {
+  // The path-level list shows the fields a deep-merged patch actually changed
+  // instead of two whole parent objects; it is empty exactly when nothing changed.
+  const changes = checked.nestedChanges;
   const lines = [
     `Source: ${checked.source} (${approvalJson(checked.sourcePath)})`,
     `Proposal: ${shortDigest(checked.proposalDigest)}`,
-    checked.changes.length === 0
+    changes.length === 0
       ? "Changes: none"
-      : `Changes: ${checked.changes.map((change) => `${change.kind} ${approvalJson(change.field)}`).join(", ")}`,
+      : `Changes: ${changes.map((change) => `${change.kind} ${approvalJson(change.field)}`).join(", ")}`,
   ];
-  for (const change of checked.changes) {
+  for (const change of changes) {
     if (change.kind === "add") lines.push(`  ${approvalJson(change.field)}: ${approvalJson(change.after)}`);
     else if (change.kind === "remove") lines.push(`  ${approvalJson(change.field)}: ${approvalJson(change.before)} (removed)`);
     else lines.push(`  ${approvalJson(change.field)}: ${approvalJson(change.before)} -> ${approvalJson(change.after)}`);
@@ -1867,6 +1954,7 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
     source: "project" as ConfigAgentSource,
     sourcePath: "",
     changes: [],
+    nestedChanges: [],
     effectiveConfig: null,
     routing: null,
   };
@@ -1882,6 +1970,7 @@ export async function applyConfigCandidate(input: ConfigAgentApplyInput): Promis
     source: checked.source,
     sourcePath: checked.sourcePath,
     changes: checked.changes,
+    nestedChanges: checked.nestedChanges,
   };
   /** Every gate that refuses an already-proposed change has the same shape:
    * nothing was written, and the agent must re-run check. */
@@ -2180,7 +2269,7 @@ const CONFIG_CANDIDATE_SCHEMA = Type.Record(Type.String(), Type.Unknown(), {
   description: "Complete replacement content for the selected config source. Only fields supported by schema.json are written.",
 });
 const CONFIG_PATCH_SCHEMA = Type.Record(Type.String(), Type.Unknown(), {
-  description: "Shallow merge into selected source. Each supplied top-level value replaces that whole field; nested objects are not deep-merged.",
+  description: "Deep merge into selected source. Nested objects merge key by key, so a partial edit keeps unspecified siblings; arrays and scalars replace the whole value, and null is stored as a value rather than deleting. Keys the patch omits are kept; use top-level `remove` or a full `candidate` to delete something.",
 });
 
 const ConfigAgentParameters = Type.Object({
@@ -2451,7 +2540,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
           if (params.proposalHandle && (!saved || saved.sessionId !== sessionId || saved.handle !== params.proposalHandle || !handleOnly)) {
             result = {
               operation: "apply", status: "usage", source: null, sourcePath: "", applied: false, reloaded: false,
-              verified: false, changes: [], effectiveConfig: null, routing: null,
+              verified: false, changes: [], nestedChanges: [], effectiveConfig: null, routing: null,
               reason: "unknown proposal handle or extra candidate fields", notes: ["Nothing was written. Run check again, then apply using only its proposalHandle."],
             };
             break;
@@ -2466,6 +2555,7 @@ export function createBifrostConfigTool(deps: ConfigAgentToolDeps): ToolDefiniti
               reloaded: false,
               verified: false,
               changes: [],
+              nestedChanges: [],
               effectiveConfig: null,
               routing: null,
               reason: "configuration approval requires Pi TUI; RPC clients cannot prove complete proposal visibility",

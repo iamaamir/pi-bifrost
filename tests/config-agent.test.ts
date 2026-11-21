@@ -1797,6 +1797,400 @@ describe("config layers stay respected", () => {
   });
 });
 
+describe("nested patches merge instead of replacing a whole field (#237)", () => {
+  it("changes only the named classifier field and keeps its siblings", async () => {
+    const harness = freshHarness();
+    try {
+      const classifier = {
+        enabled: true,
+        backend: "pi-native",
+        piNative: { model: "alpha/strong" },
+        criteria: { general: "general work" },
+        fallback: "regex",
+        minConfidence: 0.7,
+      };
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"] },
+        classifier,
+      });
+
+      const { details } = await checkedCandidate(harness, { patch: { classifier: { minConfidence: 0.5 } } });
+
+      assert.deepEqual(details.nextSource?.classifier, { ...classifier, minConfidence: 0.5 });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("keeps other model tiers and replaces only the named pool", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"], quick: ["beta/code"], frontier: ["gamma/review"] },
+      });
+
+      const { details } = await checkedCandidate(harness, { patch: { models: { general: ["gamma/review"] } } });
+
+      assert.deepEqual(details.nextSource?.models, {
+        general: ["gamma/review"],
+        quick: ["beta/code"],
+        frontier: ["gamma/review"],
+      });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("merges objects three levels deep and keeps every sibling object", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"], quick: ["beta/code"] },
+        classifier: {
+          enabled: true,
+          backend: "pi-native",
+          criteria: { general: "general work" },
+          piNative: { model: "alpha/strong", timeoutMs: 4000, maxAttempts: 2, metrics: { enabled: true } },
+        },
+        tierPolicies: { general: { fallbackTiers: [] }, quick: { fallbackTiers: ["general"] } },
+      });
+
+      const { details } = await checkedCandidate(harness, {
+        patch: {
+          classifier: { piNative: { metrics: { enabled: false } } },
+          tierPolicies: { quick: { fallbackTiers: [] } },
+        },
+      });
+
+      assert.deepEqual(details.nextSource?.classifier, {
+        enabled: true,
+        backend: "pi-native",
+        criteria: { general: "general work" },
+        piNative: { model: "alpha/strong", timeoutMs: 4000, maxAttempts: 2, metrics: { enabled: false } },
+      });
+      assert.deepEqual(details.nextSource?.tierPolicies, {
+        general: { fallbackTiers: [] },
+        quick: { fallbackTiers: [] },
+      });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("replaces arrays outright, keeping their order and duplicate entries", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong", "beta/code"] },
+      });
+
+      const { details } = await checkedCandidate(harness, {
+        patch: { models: { general: ["beta/code", "alpha/strong", "beta/code"] } },
+      });
+
+      assert.deepEqual(details.nextSource?.models, { general: ["beta/code", "alpha/strong", "beta/code"] });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("treats null as a value and an empty object as no change", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"] },
+        classifier: { enabled: true, backend: "pi-native", criteria: { general: "general work" } },
+        cache: { enabled: true, maxEntries: 500 },
+      });
+
+      const { details } = await checkedCandidate(harness, {
+        patch: { classifier: { criteria: { frontier: null }, minConfidence: 0.4 }, cache: {} },
+      });
+
+      assert.deepEqual(details.nextSource?.classifier, {
+        enabled: true,
+        backend: "pi-native",
+        criteria: { general: "general work", frontier: null },
+        minConfidence: 0.4,
+      });
+      assert.deepEqual(details.nextSource?.cache, { enabled: true, maxEntries: 500 });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("keeps top-level remove and full candidate replacement behaviour", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        strategy: "random",
+        models: { general: ["alpha/strong"] },
+        classifier: { enabled: true, backend: "pi-native", criteria: { general: "general work" } },
+      });
+
+      const { details } = await checkedCandidate(harness, {
+        patch: { classifier: { minConfidence: 0.5 } },
+        remove: ["strategy"],
+      });
+      assert.equal(Object.hasOwn(details.nextSource ?? {}, "strategy"), false);
+      assert.deepEqual(details.nextSource?.classifier, {
+        enabled: true,
+        backend: "pi-native",
+        criteria: { general: "general work" },
+        minConfidence: 0.5,
+      });
+
+      const replaced = await checkedCandidate(harness, {
+        candidate: { schemaVersion: 2, default: "general", models: { general: ["alpha/strong"] } },
+      });
+      assert.deepEqual(replaced.details.nextSource, {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"] },
+      });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("lets a remove and a patch on the same key start from nothing", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"] },
+        tierPolicies: { general: { fallbackTiers: ["general"] } },
+      });
+
+      const { details } = await checkedCandidate(harness, {
+        patch: { tierPolicies: { general: { fallbackTiers: [] } } },
+        remove: ["tierPolicies"],
+      });
+
+      // The old delete-then-assign order replaced the removed value outright;
+      // merging into the deleted value would silently resurrect its siblings.
+      assert.deepEqual(details.nextSource?.tierPolicies, { general: { fallbackTiers: [] } });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("does not copy inherited layer values into the edited source", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile("bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"] },
+        classifier: { fallbackToRegex: true, model: "alpha/strong" },
+      });
+      harness.writeFile(".pi/bifrost.json", {
+        classifier: { enabled: true, backend: "pi-native", criteria: { general: "project work" } },
+      });
+
+      const { details } = await checkedCandidate(harness, {
+        source: "project",
+        patch: { classifier: { minConfidence: 0.5 } },
+      });
+
+      assert.deepEqual(details.nextSource?.classifier, {
+        enabled: true,
+        backend: "pi-native",
+        criteria: { general: "project work" },
+        minConfidence: 0.5,
+      });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("writes the merged source through approval and reloads it", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"] },
+        classifier: { enabled: true, backend: "pi-native", criteria: { general: "general work" }, minConfidence: 0.7 },
+      });
+      const params = { patch: { classifier: { minConfidence: 0.5 } } };
+
+      const { details } = await checkedCandidate(harness, params);
+      const applyResult = await harness.run(applyParams(details, params));
+      const applied = detailsOf<ConfigAgentApplyResult>(applyResult);
+
+      assert.equal(applied.status, "ok");
+      assert.equal(applied.applied, true);
+      assert.equal(applied.reloaded, true);
+      assert.match(contentOf(applyResult), /replace classifier\.minConfidence: 0\.7 -> 0\.5/);
+      const stored = JSON.parse(harness.readFile(".pi/bifrost.json") ?? "{}") as Record<string, unknown>;
+      assert.deepEqual(stored.classifier, {
+        enabled: true,
+        backend: "pi-native",
+        criteria: { general: "general work" },
+        minConfidence: 0.5,
+      });
+      const reloaded = loadConfigForReload(harness.cwd, harness.extensionDir).config;
+      assert.equal(reloaded.classifier?.minConfidence, 0.5);
+      assert.deepEqual(reloaded.classifier?.criteria, { general: "general work" });
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("shows the nested path it changed in the check report and approval details", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"] },
+        classifier: { enabled: true, backend: "pi-native", minConfidence: 0.7 },
+      });
+      const params = { patch: { classifier: { minConfidence: 0.5 } } };
+
+      const { details, result } = await checkedCandidate(harness, params);
+      const report = contentOf(result);
+      assert.match(report, /replace classifier\.minConfidence: 0\.7 -> 0\.5/);
+      assert.doesNotMatch(report, /replace classifier:/, "the report names the leaf, not the parent object");
+
+      await harness.run(applyParams(details, params));
+      const dialog = harness.confirmations()[0]?.details ?? "";
+      assert.match(dialog, /replace "classifier\.minConfidence"/);
+      assert.match(dialog, /"classifier\.minConfidence": 0\.7 -> 0\.5/, "the exact before and after values stay visible");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("rejects unsafe keys in a patch without touching Object.prototype", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"] },
+        classifier: { enabled: true, backend: "pi-native" },
+      });
+
+      // JSON.parse builds an own "__proto__" property instead of setting the prototype.
+      const unsafe = JSON.parse('{"__proto__":{"polluted":true}}') as Record<string, unknown>;
+      const result = await harness.run({ operation: "check", patch: { classifier: unsafe } });
+      const details = detailsOf<ConfigAgentCheckResult>(result);
+
+      assert.equal(details.status, "usage");
+      assert.match(details.notes.join(" "), /unsafe key/);
+      assert.equal(({} as Record<string, unknown>).polluted, undefined);
+      assert.equal(Object.hasOwn(details.nextSource ?? {}, "polluted"), false);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("reports a nested removal instead of hiding it behind the parent object", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"] },
+        classifier: { enabled: true, backend: "pi-native", criteria: { general: "general work" } },
+      });
+
+      const { details, result } = await checkedCandidate(harness, {
+        candidate: {
+          schemaVersion: 2,
+          default: "general",
+          models: { general: ["alpha/strong"] },
+          classifier: { enabled: true, backend: "pi-native" },
+        },
+      });
+
+      assert.ok(details.nestedChanges.some((change) => change.kind === "remove" && change.field === "classifier.criteria"));
+      assert.match(contentOf(result), /remove classifier\.criteria \(was \{"general":"general work"\}\)/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("does not mutate the caller's patch or the stored source", async () => {
+    const harness = freshHarness();
+    try {
+      const source = {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"] },
+        classifier: { enabled: true, backend: "pi-native", criteria: { general: "general work" } },
+      };
+      harness.writeFile(".pi/bifrost.json", source);
+      const patch = { classifier: { piNative: { metrics: { enabled: false } }, criteria: { general: "changed" } } };
+      const patchSnapshot = structuredClone(patch);
+      const sourceSnapshot = structuredClone(source);
+
+      await checkedCandidate(harness, { patch });
+
+      assert.deepEqual(patch, patchSnapshot);
+      assert.deepEqual(JSON.parse(harness.readFile(".pi/bifrost.json") ?? "null"), sourceSnapshot);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("still applies the shipped schema to a merged field", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"] },
+        classifier: { enabled: true, backend: "pi-native" },
+      });
+
+      const result = await harness.run({ operation: "check", patch: { classifier: { notAField: true } } });
+      const details = detailsOf<ConfigAgentCheckResult>(result);
+
+      assert.equal(details.status, "rejected");
+      assert.ok(details.issues.some((issue) => issue.code === "config.schema_unsupported_field"), JSON.stringify(details.issues));
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("rejects a patch that exceeds the nesting limit", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"] },
+      });
+
+      let deep: Record<string, unknown> = { leaf: true };
+      for (let i = 0; i < 140; i++) deep = { nested: deep };
+      const result = await harness.run({ operation: "check", patch: { deep } });
+      const details = detailsOf<ConfigAgentCheckResult>(result);
+
+      assert.equal(details.status, "usage");
+      assert.match(details.notes.join(" "), /nesting depth/);
+    } finally {
+      harness.cleanup();
+    }
+  });
+});
+
 describe("apply requires approval, matching digests, and proves the result", () => {
   const candidate = {
     schemaVersion: 2 as const,
@@ -2036,7 +2430,7 @@ describe("apply requires approval, matching digests, and proves the result", () 
       assert.equal(confirmations.length, 1);
       assert.equal(confirmations[0]?.title, "Apply this Bifrost configuration?");
       assert.match(confirmations[0]?.details ?? "", /Source: project/);
-      assert.match(confirmations[0]?.details ?? "", /replace "models"/);
+      assert.match(confirmations[0]?.details ?? "", /add "models\.deep"/);
       assert.match(confirmations[0]?.details ?? "", /"deep" \("first"\): \["alpha\/strong"\]/);
       assert.match(confirmations[0]?.details ?? "", /No other config source is modified/);
 
@@ -2774,7 +3168,7 @@ describe("confirmation-window races and preview fidelity", () => {
       const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
       assert.equal(applied.status, "ok");
       const dialog = harness.confirmations()[0]?.details ?? "";
-      assert.match(dialog, /replace "tierPolicies"/, "the change kind and field stay");
+      assert.match(dialog, /replace "tierPolicies\.work\.fallbackTiers"/, "the change kind and field stay");
       assert.match(dialog, /fallbackTiers/, "the changed value path is visible");
       assert.match(dialog, /"review"/, "the value the user approved away is visible");
       assert.match(dialog, /->/, "before and after are separated");
