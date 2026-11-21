@@ -127,9 +127,9 @@ make "the gate measured nothing" a failure.
 - Duplication can drift upward within the 3.3% budget. The committed audit
   records the current headroom. Trend history is tracked in #291 rather than in
   this ADR.
-- The gates run on Linux CI and macOS locally; there is no Windows leg. Windows
-  separator handling is normalized before comparison and unit-tested with
-  `path.win32`, but a native Windows run remains unproven.
+- The gates run on Linux CI and macOS locally; there is no Windows leg. Where a
+  target name meets a filesystem path, the mutation tools normalize the separator
+  to `/`, but a native Windows run remains unproven and untested.
 
 ## Alternatives considered
 
