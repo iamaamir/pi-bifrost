@@ -24,13 +24,20 @@ Any user-visible Pi UI change (menus, overlays, dialogs, footer/status, notices,
 
 Embed the relevant screenshots in the PR body's **Evidence** section, labelled with the tested UI state, exact command/result, and reviewed head SHA. Cover changed and relevant failure/empty states, inspect the images for visual regressions, and scrub credentials, private prompts and other sensitive content before sharing. CI uploads smoke screenshots as artifacts, but a CI artifact link alone does not replace images in the PR body. Do not commit generated screenshots.
 
-To attach without committing images, use GitHub CLI v2.99.0 or newer:
+To attach without committing images, use GitHub CLI v2.99.0 or newer. Preserve the existing PR description and insert the image under **Evidence** (or its UI smoke screenshots subsection):
 
 ```bash
-gh pr edit <PR> --attach 'screenshots/ui-smoke/example.png#Changed UI state'
+PR=123
+IMAGE=screenshots/ui-smoke/example.png
+BODY=$(mktemp)
+gh pr view "$PR" --json body --jq '.body' > "$BODY"
+# Edit "$BODY" to add under Evidence: ![Changed UI state](screenshots/ui-smoke/example.png)
+gh pr edit "$PR" --body-file "$BODY" --attach "$IMAGE"
+gh pr view "$PR" --web
+rm -f "$BODY"
 ```
 
-This appends the uploaded image to the existing PR body. To place it specifically under **Evidence**, first save the existing body with `gh pr view <PR> --json body --jq .body > /tmp/pr-body.md`, add `![Changed UI state](screenshots/ui-smoke/example.png)` under that heading, then run `gh pr edit <PR> --body-file /tmp/pr-body.md --attach screenshots/ui-smoke/example.png`. Confirm the rendered image in the PR; preserve all existing description sections.
+The image reference must match the attached local path so `gh` replaces it with the hosted URL in place. `gh pr edit --attach` alone appends media to the **end** of the PR body instead; do not use that shortcut for required Evidence screenshots. Confirm the rendered image and preserve all other PR sections.
 
 Screenshots supplement, not replace, behavioral assertions and passing checks. For a non-UI change, mark visual evidence N/A with a brief reason.
 
