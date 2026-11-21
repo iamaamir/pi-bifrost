@@ -1304,6 +1304,11 @@ test("a target in a subdirectory keeps a flat report and artifact name", () => {
   assert.equal(reportNameFor("scripts/toolbox.mjs"), "scripts__toolbox.mjs.json");
   assert.equal(reportNameFor("scripts/toolbox.mjs", 2), "scripts__toolbox.mjs.shard2.json");
   assert.equal(reportNameFor("cache.ts"), "cache.ts.json", "a root target keeps its name");
+  assert.equal(
+    new Set(targetNames().map(reportStem)).size,
+    targetNames().length,
+    "a flat stem must stay unique, or two targets would share one report file",
+  );
 
   const plan = planMatrix({ requested: "scripts/toolbox.mjs", shards: "2" });
   assert.equal(plan.include.length, 2);

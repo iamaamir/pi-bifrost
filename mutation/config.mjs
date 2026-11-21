@@ -195,6 +195,18 @@ export const TEST_RUNNER = "bun";
 export const BUN_RUNNER_PLUGIN = "@hughescr/stryker-bun-runner";
 
 /**
+ * Targets that Stryker measures in place instead of in a sandbox.
+ *
+ * The sandbox always excludes `.git`, so a bound test that runs `git ls-files`
+ * sees an empty index and fails before any mutant is measured. The gate scripts
+ * read the tracked-file list, so they need the real checkout. In-place mutation
+ * writes the mutated bytes into the checkout and puts the originals back when
+ * the run ends. Use it only for the scheduled measurement and a deliberate
+ * local run.
+ */
+export const IN_PLACE_TARGETS = new Set(["scripts/toolbox.mjs"]);
+
+/**
  * Per-target runner override. Absent means `TEST_RUNNER`.
  *
  * An entry carries the reason it exists, and a test requires one, so an override
@@ -209,17 +221,6 @@ export const BUN_RUNNER_PLUGIN = "@hughescr/stryker-bun-runner";
  * a no-op there, and a `node:fs` mock cannot be undone). It now injects the fault
  * by editing a private source copy, so it runs on both runtimes.
  */
-/**
- * Targets that Stryker measures in place instead of in a sandbox.
- *
- * The sandbox always excludes `.git`, so a bound test that runs `git ls-files`
- * sees an empty index and fails before any mutant is measured. The gate scripts
- * read the tracked-file list, so they need the real checkout. In-place mutation
- * writes the mutated bytes into the checkout and puts the originals back when
- * the run ends. Use it only for the scheduled measurement and a deliberate
- * local run.
- */
-export const IN_PLACE_TARGETS = new Set(["scripts/toolbox.mjs"]);
 
 export const RUNNER_OVERRIDES = {
   "routing.ts": {
