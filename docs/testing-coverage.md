@@ -18,6 +18,29 @@ Before review, run `npm run verify:release` on a clean, frozen candidate. Attach
 
 Describe the changed behavior, relevant test boundaries, and checks actually run. Include failures and limitations. The retained named checks validate execution, not semantic adequacy or file coverage. The reviewer must judge whether tests exercise the changed behavior and whether assertions can detect the reported regression. Use a focused fault control when needed. Do not claim automatic coverage from the acceptance runner.
 
+### Visual evidence for UI changes
+
+Any user-visible Pi UI change (menus, overlays, dialogs, footer/status, notices, progress or terminal layout) requires real-Pi smoke tests and representative PNG screenshots captured by those tests. Run `npm run test:ui` on the final candidate, plus `npm run test:ui:reliability` when applicable, with the existing isolated fake providers. If the changed state is missing from smoke coverage, extend its scenario and assertions. Website UI changes require real browser captures as described in `AGENTS.md` instead.
+
+Embed the relevant screenshots in the PR body's **Evidence** section, labelled with the tested UI state, exact command/result, and reviewed head SHA. Cover changed and relevant failure/empty states, inspect the images for visual regressions, and scrub credentials, private prompts and other sensitive content before sharing. CI uploads smoke screenshots as artifacts, but a CI artifact link alone does not replace images in the PR body. Do not commit generated screenshots.
+
+To attach without committing images, use GitHub CLI v2.99.0 or newer. Preserve the existing PR description and insert the image under **Evidence** (or its UI smoke screenshots subsection):
+
+```bash
+PR=123
+IMAGE=screenshots/ui-smoke/example.png
+BODY=$(mktemp)
+gh pr view "$PR" --json body --jq '.body' > "$BODY"
+# Edit "$BODY" to add under Evidence: ![Changed UI state](screenshots/ui-smoke/example.png)
+gh pr edit "$PR" --body-file "$BODY" --attach "$IMAGE"
+gh pr view "$PR" --web
+rm -f "$BODY"
+```
+
+The image reference must match the attached local path so `gh` replaces it with the hosted URL in place. `gh pr edit --attach` alone appends media to the **end** of the PR body instead; do not use that shortcut for required Evidence screenshots. Confirm the rendered image and preserve all other PR sections.
+
+Screenshots supplement, not replace, behavioral assertions and passing checks. For a non-UI change, mark visual evidence N/A with a brief reason.
+
 ## Release feature map
 
 The requirement IDs come from [the PRD](../PRD.md). These rows name test boundaries, not percentages of coverage. More than one row can use the same user scenario.
