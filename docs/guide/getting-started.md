@@ -80,7 +80,7 @@ The command:
 
 After init saves, inspect the pools and status. Edit the saved configuration before your first generation if you need different pools or strategies, then run `/bifrost reload`.
 
-Init reuses probe results from the last hour only when they cover the current catalog. If no recent results exist, or the catalog changed, it probes models before it proposes pools. Pass `-f` to force fresh probes. By default, init saves to the project config `.pi/bifrost.json`. To save to your global user config at `~/.pi/agent/bifrost.json`, use `/bifrost init -g`. Init does not write the workspace `bifrost.json`. Pass `--write` to save without the confirmation question. A TUI and an RPC session can answer that question, because Pi reports `hasUI` as true in RPC. A non-interactive run, or a session that gives Bifrost no UI, must pass `--write` to save:
+Init reuses a recent complete probe report only when it covers the current catalog and the report file is within the fixed one-hour reuse window. If init cannot safely reuse that report, it probes models before it proposes pools. When it reuses a report, init shows the report file age and file modification time; that age is file metadata, not guaranteed provider-data freshness. Pass `-f` to force fresh probes. By default, init saves to the project config `.pi/bifrost.json`. To save to your global user config at `~/.pi/agent/bifrost.json`, use `/bifrost init -g`. Init does not write the workspace `bifrost.json`. Pass `--write` to save without the confirmation question. A TUI and an RPC session can answer that question, because Pi reports `hasUI` as true in RPC. A non-interactive run, or a session that gives Bifrost no UI, must pass `--write` to save:
 
 ```text
 /bifrost init --write

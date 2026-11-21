@@ -12,7 +12,7 @@ import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
 import { buildRouteDecisionSummary, type ClassificationPipeline, type ClassificationResult, type ClassificationSource, type ClassifierAttemptSummary, type RouteDecisionSummary } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugLogInfo, debugMeasure } from "./debug.ts";
-import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT, readRecentCompleteProbeReport } from "./probe.ts";
+import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT, readRecentCompleteProbeReport, describeProbeReportCacheHit, describeProbeReuseReason, describeProbeReuseSource } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
 import { showBifrostResult } from "./result-viewer.ts";
 import {
@@ -517,7 +517,8 @@ export function buildInitProposal(
 
 // ── Command handlers ────────────────────────────────────────
 
-const isForced = (args:string):boolean => args?.split(/\s+/).includes("-f");
+const isForced = (args: string): boolean => args?.split(/\s+/).includes("-f");
+
 const MAX_RECONCILIATION_OWNERSHIP_BYTES = 5_000_000;
 
 function reconciliationPaths(source: ReconciliationConfigSource): { configPath: string; ownershipPath: string; journalPath: string } {
@@ -1074,36 +1075,22 @@ async function handleInit(
   // Reuse recent probe data; otherwise manual init probes before proposing model pools.
   const probePath = join(process.cwd(), ".pi", "bifrost-probe.json");
   const available = ctx.modelRegistry.getAvailable().filter((model) => !isVirtualModel(model));
-  let workingModels: { provider: string; model: string; cost: { input: number; output: number }; duration_ms: number }[] = [];
-  let probeLoaded = false;
+  const forced = isForced(args);
+  const reused = forced ? undefined : readRecentCompleteProbeReport(probePath, available);
+  let workingModels = reused ? reused.results.filter((r) => r.status === "ok").map((r) => ({
+    provider: r.provider, model: r.model, cost: { input: r.cost_input ?? 0, output: r.cost_output ?? 0 }, duration_ms: r.duration_ms ?? 0,
+  })) : [];
+  let probeLoaded = Boolean(reused);
   let ranProbe = false;
-  let probeAge = "";
-
-  if (!isForced(args)) {
-    const cachedResults = readRecentCompleteProbeReport(probePath, available);
-    if (cachedResults) {
-      workingModels = cachedResults
-        .filter((result) => result.status === "ok")
-        .map((result) => ({
-          provider: result.provider,
-          model: result.model,
-          cost: { input: result.cost_input ?? 0, output: result.cost_output ?? 0 },
-          duration_ms: result.duration_ms ?? 0,
-        }));
-      probeAge = "within the past hour";
-      probeLoaded = true;
-    }
-  }
-
+  let probeAge = reused ? describeProbeReportCacheHit(reused) : "";
   if (!probeLoaded) {
     ranProbe = true;
-    const availableCount = available.length;
-    log(ctx, `Probing ${availableCount} models to find working ones...`);
+    log(ctx, `Probing ${available.length} models to find working ones... (${describeProbeReuseReason(forced)})`);
     let okCount = 0;
     let errCount = 0;
     const lastModels: string[] = [];
 
-    uiBusy(ctx, `Probing ${availableCount} models...`);
+    uiBusy(ctx, `Probing ${available.length} models...`);
     const probeRun = await runProbe(ctx, {
       ...probeOptionsFromConfig(initConfig.probe),
       signal: ctx.signal,
@@ -1175,7 +1162,7 @@ async function handleInit(
   }
 
   if (probeLoaded && workingModels.length > 0) {
-    log(ctx, `Using ${workingModels.length} probe-verified models (${probeAge}).`);
+    log(ctx, `Using ${workingModels.length} probe-verified models ${describeProbeReuseSource(ranProbe, probeAge)}`);
   }
 
   const models: Record<string, string[]> = {};

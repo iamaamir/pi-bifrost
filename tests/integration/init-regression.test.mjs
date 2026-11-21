@@ -471,6 +471,8 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(cached.code, 0, cached.stderr);
       assert.equal(cached.violations, "");
       assert.deepEqual(requests, [], "ordinary init must reuse a complete recent report without new provider requests");
+      assert.match(cached.stderr + cached.stdout, /cached probe report \(report file age .*; file mtime \d{4}-\d{2}-\d{2}T/u);
+      assert.match(cached.stderr + cached.stdout, /No new model probes were sent; registry refresh and other commands may still use network\./u);
       const configPath = join(env.work, ".pi", "bifrost.json");
       const cachedConfigBytes = readFileSync(configPath);
       const cachedConfig = JSON.parse(cachedConfigBytes);
@@ -488,6 +490,9 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(forced.code, 0, forced.stderr);
       assert.equal(forced.violations, "");
       assert.deepEqual([...new Set(requests)], ["healthy", "credits-exhausted"], "forced init must disregard even a complete recent cache");
+      assert.match(forced.stderr + forced.stdout, /-f requested a fresh probe; cached probe reports were not reused\./u);
+      assert.match(forced.stderr + forced.stdout, /from this fresh probe run \(just now\)/u);
+      assert.doesNotMatch(forced.stderr + forced.stdout, /from a cached probe report/u);
       const forcedBytes = readFileSync(configPath);
       const forcedConfig = JSON.parse(forcedBytes);
       assert.equal(Object.values(forcedConfig.models).flat().includes("fake/credits-exhausted"), false);

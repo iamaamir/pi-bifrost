@@ -89,7 +89,7 @@ Classify existing output call sites by importance, lifetime, surface and cleanup
 | Next — constrained by #235 | Guided setup | Low-friction init progress, exact review and single approval | Reuse existing discovery/generation; no provider/tier/classifier wizard. Keep fresh Yes/No, existing Keep/Merge/Defaults, protected inheritance and headless behavior from #235/#243–#256. |
 | Next | Config editor | Change enabled/default/strategy/classifier in TUI | Explicit save, validation, rollback. |
 | Next | Missing-model repair | Suggest available replacements | Never rewrite user config without confirm. |
-| Next | Stale probe indicator | Report age and re-probe action | Init currently uses one-hour freshness. |
+| Partial | Stale probe indicator | Report age and re-probe action | Init now reports reused probe report file age and mtime as file metadata; a richer interactive stale/re-probe indicator remains future UI work. |
 | Partial | Actionable errors | Outcome → explanation → one useful next step | #240 improves init and important failures in review; other commands remain. Describe write/reload results truthfully; never promise unchanged files after an uncertain transaction or suggest reloading an invalid file as repair. |
 
 ## P2 — cache and classifier management
