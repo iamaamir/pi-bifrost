@@ -1317,6 +1317,34 @@ function diffNestedChanges(before: unknown, after: unknown, path: string, change
   changes.push({ kind: "replace", field: path, before, after });
 }
 
+/**
+ * Compose the next source layer. A candidate replaces the source; a patch
+ * deep-merges onto it after `remove` deletes top-level keys. Returns a reason
+ * instead of throwing so the caller keeps its single failure shape.
+ */
+function composeNextSource(
+  base: Record<string, unknown>,
+  request: ConfigAgentRequest,
+): { nextSource: Record<string, unknown> } | { reason: string } {
+  const patch = request.patch;
+  const candidate = request.candidate;
+  const remove = request.remove ?? [];
+  if (patch !== undefined) {
+    const unsafe = unsafePatchKey(patch);
+    if (unsafe !== null) return { reason: `the patch contains an unsafe key "${unsafe}"` };
+    // Check the patch before merging so an absurdly deep argument is rejected
+    // instead of exhausting the stack in the recursive merge below.
+    if (exceedsConfigNestingDepth(patch)) return { reason: "configuration exceeds the nesting depth limit" };
+  }
+  if (candidate !== undefined) return { nextSource: { ...candidate } };
+  const nextSource: Record<string, unknown> = { ...base };
+  for (const key of remove) delete nextSource[key];
+  // Merge against the post-removal value: a key both removed and patched starts
+  // from nothing, matching the previous delete-then-assign order.
+  for (const [key, value] of Object.entries(patch ?? {})) nextSource[key] = mergePatchValue(nextSource[key], value);
+  return { nextSource };
+}
+
 function planCandidate(
   cwd: string,
   extensionDir: string,
@@ -1340,23 +1368,9 @@ function planCandidate(
   if (candidate !== undefined && remove.length > 0) return fail("remove applies only to patch");
   if (remove.some((key) => typeof key !== "string" || key.length === 0)) return fail("remove entries must be non-empty strings");
   if (current.readError) return fail(`the selected source ${current.readError}`);
-  if (patch !== undefined) {
-    const unsafe = unsafePatchKey(patch);
-    if (unsafe !== null) return fail(`the patch contains an unsafe key "${unsafe}"`);
-    // Check the patch before merging so an absurdly deep argument is rejected
-    // instead of exhausting the stack in the recursive merge below.
-    if (exceedsConfigNestingDepth(patch)) return fail("configuration exceeds the nesting depth limit");
-  }
-  let nextSource: Record<string, unknown>;
-  if (candidate !== undefined) {
-    nextSource = { ...candidate };
-  } else {
-    nextSource = { ...base };
-    for (const key of remove) delete nextSource[key];
-    // Merge against the post-removal value: a key both removed and patched
-    // starts from nothing, matching the previous delete-then-assign order.
-    for (const [key, value] of Object.entries(patch ?? {})) nextSource[key] = mergePatchValue(nextSource[key], value);
-  }
+  const composed = composeNextSource(base, request);
+  if ("reason" in composed) return fail(composed.reason);
+  const { nextSource } = composed;
   if (exceedsConfigNestingDepth(base) || exceedsConfigNestingDepth(nextSource)) return fail("configuration exceeds the nesting depth limit");
   const changes = diffFields(base, nextSource);
   if (changes.length === 0 && !allowUnchanged) return fail("the selected source already matches this proposal");
