@@ -141,7 +141,7 @@ function classifierOutcomeLabel(outcome: TypeSafeObservation["outcome"]): string
 
 function hasRecentCompleteFailedProbeReport(path: string, catalog: readonly Model<Api>[]): boolean {
   const report = readRecentCompleteProbeReport(path, catalog);
-  return !!report && report.every((result) => result.status === "error" || result.status === "timeout");
+  return !!report && report.results.every((result) => result.status === "error" || result.status === "timeout");
 }
 
 function classifierFallbackLabel(result: ClassificationResult): string {

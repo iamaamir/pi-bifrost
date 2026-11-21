@@ -75,6 +75,40 @@ export interface RunProbeOptions {
 
 export type ProbeCatalogModel = Pick<Model<Api>, "provider" | "id">;
 
+export interface ProbeReportCacheHit {
+  /** Validated complete report outcomes for the current catalog. */
+  results: ProbeResult[];
+  /** Report-file age in milliseconds at read time (`now - mtimeMs`). */
+  ageMs: number;
+  /** Report-file modification time in milliseconds. */
+  mtimeMs: number;
+}
+
+export function formatProbeReportAge(ageMs: number): string {
+  const safeMs = Math.max(0, ageMs);
+  if (safeMs < 60_000) return `${Math.round(safeMs / 1000)}s`;
+  if (safeMs < 3_600_000) return `${Math.round(safeMs / 60_000)}m`;
+  const hours = safeMs / 3_600_000;
+  return hours < 10 ? `${hours.toFixed(1)}h` : `${Math.round(hours)}h`;
+}
+
+export function describeProbeReportCacheHit(hit: ProbeReportCacheHit): string {
+  const savedAt = new Date(hit.mtimeMs);
+  const savedAtIso = Number.isNaN(savedAt.getTime()) ? "unknown time" : savedAt.toISOString();
+  return `report file age ${formatProbeReportAge(hit.ageMs)}; file mtime ${savedAtIso}`;
+}
+
+export function describeProbeReuseReason(forced: boolean): string {
+  return forced
+    ? "-f requested a fresh probe; cached probe reports were not reused."
+    : "No recent validated probe report was reused for this catalog; file age, catalog changes, and report validity can prevent reuse.";
+}
+
+export function describeProbeReuseSource(ranProbe: boolean, probeAge: string): string {
+  if (ranProbe) return `from this fresh probe run (${probeAge})`;
+  return `from a cached probe report (${probeAge}; file mtime age, not guaranteed provider-data freshness). No new model probes were sent; registry refresh and other commands may still use network.`;
+}
+
 /** Accept only reports that contain one actual outcome for every physical model. */
 export function validateCompleteProbeReport(
   value: unknown,
@@ -113,7 +147,7 @@ export function readRecentCompleteProbeReport(
   path: string,
   catalog: readonly ProbeCatalogModel[],
   now = Date.now(),
-): ProbeResult[] | undefined {
+): ProbeReportCacheHit | undefined {
   let fd: number | undefined;
   try {
     fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -127,7 +161,8 @@ export function readRecentCompleteProbeReport(
     if (after.dev !== before.dev || after.ino !== before.ino || after.size !== before.size
       || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs
       || Buffer.byteLength(text) !== before.size) return undefined;
-    return validateCompleteProbeReport(JSON.parse(text) as unknown, catalog);
+    const results = validateCompleteProbeReport(JSON.parse(text) as unknown, catalog);
+    return results ? { results, ageMs, mtimeMs: before.mtimeMs } : undefined;
   } catch {
     return undefined;
   } finally {
