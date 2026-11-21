@@ -2634,6 +2634,9 @@ function renderDiagnosticLines(report: ValidateDiagnosticsReport | (InspectDiagn
     if (report.registry.bifrostLastRefreshAgeMs !== undefined) {
       lines.push(`Bifrost last registry refresh age: ${report.registry.bifrostLastRefreshAgeMs} ms`);
     }
+    if (report.registry.bifrostRegistryRefreshTtlMs !== undefined) {
+      lines.push(`Bifrost registry refresh TTL: ${report.registry.bifrostRegistryRefreshTtlMs} ms`);
+    }
     for (const tier of report.tiers) {
       lines.push(`${tier.tier}: ${tier.configuredEntryCount} configured entries`);
       for (const candidate of tier.candidates) {

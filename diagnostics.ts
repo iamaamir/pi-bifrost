@@ -6,6 +6,7 @@ import { validateEffectiveConfigStructure } from "./config-schema.ts";
 import { findCandidates, modelKey } from "./routing.ts";
 import { getCircuitState, type ReliabilityConfig, type ReliabilityState } from "./reliability.ts";
 import { isVirtualModel } from "./virtual-model.ts";
+import { REGISTRY_REFRESH_TTL_MS } from "./ux-status.ts";
 import type { RuntimeStateIssue } from "./runtime-state.ts";
 
 export type DiagnosticSeverity = "error" | "warning" | "info";
@@ -103,6 +104,7 @@ export interface InspectDiagnosticsReport {
     readonly knownModelCount: number | "unknown";
     readonly availableModelCount: number | "unknown";
     readonly bifrostLastRefreshAgeMs?: number;
+    readonly bifrostRegistryRefreshTtlMs?: number;
   };
   readonly tiers: readonly InspectedTier[];
   readonly reliabilityPolicy: {
@@ -400,7 +402,7 @@ export function inspectDiagnostics(input: InspectDiagnosticsInput): InspectDiagn
       knownModelCount: knownModels?.length ?? "unknown",
       availableModelCount: availableModels?.length ?? "unknown",
       ...(input.lastRegistryRefreshAt !== undefined && Number.isFinite(input.lastRegistryRefreshAt)
-        ? { bifrostLastRefreshAgeMs: Math.max(0, now - input.lastRegistryRefreshAt) }
+        ? { bifrostLastRefreshAgeMs: Math.max(0, now - input.lastRegistryRefreshAt), bifrostRegistryRefreshTtlMs: REGISTRY_REFRESH_TTL_MS }
         : {}),
     },
     tiers,
