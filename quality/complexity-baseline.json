@@ -14,7 +14,7 @@
     },
     "tests": {
       "files": 195,
-      "functions": 8384,
+      "functions": 8391,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -1268,11 +1268,11 @@
     },
     "tests/docs-links.test.mjs": {
       "scope": "tests",
-      "lines": 243,
-      "funcs": 33,
+      "lines": 268,
+      "funcs": 40,
       "maxCyc": 12,
       "maxCog": 27,
-      "sumCyc": 77,
+      "sumCyc": 83,
       "sumCog": 77
     },
     "tests/duplication-audit.test.mjs": {
@@ -2626,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T07:35:44.049Z",
-  "sourceCommit": "804a81084a016db37ee39a8e9ebdaf9ee6c24253"
+  "generatedAt": "2026-11-21T07:35:48.979Z",
+  "sourceCommit": "5ce46f63a95c1eb51e338254523e7574b62d45e6"
 }
