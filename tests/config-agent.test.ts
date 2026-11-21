@@ -1834,7 +1834,7 @@ describe("preview is offline, deterministic, and non-mutating", () => {
       );
       assert.equal(details.cases.length, 1);
       assert.deepEqual(details.cases.map((c) => c.prompt), ["task 3"]);
-      assert.ok(details.notes.includes("preview skipped 2 of 3 supplied prompts as blank or not text (1 had no text in the first 2,000 characters inspected), so 1 was evaluated."));
+      assert.ok(details.notes.includes("preview skipped 2 of 3 supplied prompts as blank or not text (1 was blank in the first 2,000 characters inspected), so 1 was evaluated."));
       assert.equal(details.notes.some((note) => /exceeded 2,000 characters/.test(note)), false);
       assert.ok(details.notes.every((note) => !note.includes("SENSITIVE-TAIL")));
     } finally {
