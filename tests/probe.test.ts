@@ -734,8 +734,15 @@ describe("probe concurrency and resilience", () => {
       writeFileSync(path, JSON.stringify(report));
       const recent = new Date(Date.now() - 60_000);
       utimesSync(path, recent, recent);
-      assert.deepEqual(readRecentCompleteProbeReport(path, catalog), report);
-      assert.deepEqual(readRecentCompleteProbeReport(path, catalog, statSync(path).mtimeMs - 0.5), report);
+      const expectedMtimeMs = statSync(path).mtimeMs;
+      const hit = readRecentCompleteProbeReport(path, catalog);
+      assert.deepEqual(hit?.results, report);
+      assert.equal(hit?.mtimeMs, expectedMtimeMs);
+      assert.equal(typeof hit?.ageMs, "number");
+      assert.ok((hit?.ageMs ?? -1) >= 0);
+      const recentHit = readRecentCompleteProbeReport(path, catalog, statSync(path).mtimeMs - 0.5);
+      assert.deepEqual(recentHit?.results, report);
+      assert.equal(recentHit?.mtimeMs, expectedMtimeMs);
       assert.equal(readRecentCompleteProbeReport(path, catalog, statSync(path).mtimeMs - 1), undefined);
       const future = new Date(Date.now() + 60_000);
       utimesSync(path, future, future);

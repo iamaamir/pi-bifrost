@@ -1659,6 +1659,10 @@ describe("bifrost command ui", () => {
       assert.deepEqual(saved.classifier, { backend: "prompt", enabled: false, model: "fixture/manual-classifier" });
       assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("Probing models")), false);
       assert.equal(calls.some((call) => call.kind === "select"), false);
+      const reusedNotice = calls.find((call) => call.kind === "notify" && String(call.value).includes("cached probe report"));
+      assert.ok(reusedNotice, "expected cached probe report provenance in init output");
+      assert.match(String(reusedNotice?.value), /report file age .*; file mtime \d{4}-\d{2}-\d{2}T/);
+      assert.match(String(reusedNotice?.value), /No new model probes were sent; registry refresh and other commands may still use network\./);
     } finally {
       process.chdir(previousCwd);
       rmSync(tempDir, { recursive: true, force: true });
@@ -3103,6 +3107,8 @@ describe("command aliases", () => {
       await createCommandRouter(state as never)("init -f", ctx as never);
       assert.equal(calls.some((call) => call.kind === "select" && call.title === "Bifrost commands"), false);
       assert(calls.some((call) => call.kind === "notify" && String(call.value).startsWith("info:Probing")));
+      assert(calls.some((call) => call.kind === "notify" && String(call.value).includes("-f requested a fresh probe; cached probe reports were not reused")));
+      assert.equal(calls.some((call) => call.kind === "notify" && String(call.value).includes("from a cached probe report")), false);
     } finally {
       process.chdir(previousCwd);
       rmSync(tempDir, { recursive: true, force: true });
