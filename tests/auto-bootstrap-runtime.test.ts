@@ -651,6 +651,7 @@ describe("automatic setup through registered Pi hooks", () => {
       } as unknown as ModelRouteRequest;
       const route = harness.routeDefinition()!.route as (request: ModelRouteRequest, ctx: ExtensionContext) => Promise<{ model: Model<Api> }>;
       assert.equal((await route(request, harness.ctx)).model, harness.model);
+      assert.equal(harness.refreshCalls(), 0, "classifier off suppresses automatic registry refresh on input and route");
     } finally { harness.cleanup(); }
   });
 

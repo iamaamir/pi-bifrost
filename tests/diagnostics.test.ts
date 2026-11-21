@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { inspectDiagnostics, validateDiagnostics, type DiagnosticRegistry } from "../diagnostics.ts";
@@ -43,6 +44,14 @@ function registry(options: {
     getApiKeyAndHeaders: () => { if (counters) counters.forbidden += 1; throw new Error("credential access forbidden"); },
   };
 }
+
+describe("diagnostics import boundary", () => {
+  it("sources the refresh policy from a host-neutral module, not the Pi status adapter", () => {
+    const source = readFileSync(new URL("../diagnostics.ts", import.meta.url), "utf8");
+    assert.equal(/from\s+["']\.\/ux-status\.ts["']/u.test(source), false);
+    assert.equal(/from\s+["']\.\/registry-refresh\.ts["']/u.test(source), true);
+  });
+});
 
 describe("offline diagnostics", () => {
   it("validates active config and registry references without exposing config prose", () => {
@@ -108,6 +117,8 @@ describe("offline diagnostics", () => {
       assert.equal(report.registry.knownModelCount, 1);
       assert.equal(report.registry.availableModelCount, 0);
       assert.equal(report.registry.bifrostLastRefreshAgeMs, 50);
+      assert.equal(report.registry.bifrostRegistryRefreshTtlMs, 30_000);
+      assert.equal(report.registry.forceRegistryRefresh, false);
       assert.equal(report.tiers[0]?.candidates[0]?.model, "fixture/allowed");
       assert.equal(report.tiers[0]?.candidates[0]?.available, false);
       assert.equal(report.tiers[0]?.candidates[0]?.auth, "configured");
@@ -220,7 +231,22 @@ describe("offline diagnostics", () => {
     });
     assert.deepEqual(report.tiers[0]?.candidates, []);
     assert.equal("bifrostLastRefreshAgeMs" in report.registry, false);
+    assert.equal(report.registry.bifrostRegistryRefreshTtlMs, 30_000);
+    assert.equal(report.registry.forceRegistryRefresh, false);
     assert.deepEqual(report.diagnostics, []);
+  });
+
+  it("reports a pending registry refresh without claiming a completed refresh", () => {
+    const report = inspectDiagnostics({
+      config: config(),
+      registry: registry({ all: [], available: [] }),
+      reliabilityState: emptyReliabilityState(),
+      now: 500,
+      forceRegistryRefresh: true,
+    });
+    assert.equal(report.registry.forceRegistryRefresh, true);
+    assert.equal(report.registry.bifrostRegistryRefreshTtlMs, 30_000);
+    assert.equal("bifrostLastRefreshAgeMs" in report.registry, false);
   });
 
   it("surfaces unsupported capability enforcement with a safe field path", () => {
