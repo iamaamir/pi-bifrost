@@ -1307,16 +1307,15 @@ function mergePatchValue(base: unknown, patch: unknown): unknown {
 }
 
 /**
- * Path for one nested change. JSON Pointer segments keep a key containing "."
- * or "/" unambiguous, and control characters are escaped so one change can
- * never break the report into extra lines.
+ * Path for one nested change: JSON Pointer segments, so a key containing "."
+ * or "/" stays unambiguous. Only the two JSON Pointer escapes apply here:
+ * encoding a control character would make two different keys (an actual
+ * newline and a literal "\\u000a") produce the same path. Display sites
+ * escape control characters instead, where escaping cannot merge keys.
  */
 function changePath(segments: readonly string[]): string {
   return segments
-    .map((segment) => `/${segment
-      .replace(/~/g, "~0")
-      .replace(/\//g, "~1")
-      .replace(/[\u0000-\u001f\u007f]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`)}`)
+    .map((segment) => `/${segment.replace(/~/g, "~0").replace(/\//g, "~1")}`)
     .join("");
 }
 

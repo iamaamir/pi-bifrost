@@ -16,6 +16,7 @@ import {
   type ConfigAgentInspectResult,
   type ConfigAgentModel,
   type ConfigAgentPreviewResult,
+  type ConfigAgentProbeResult,
   type ConfigAgentToolResult,
 } from "./config-agent.ts";
 
@@ -23,6 +24,11 @@ const MAX_REPORT_LINES = 120;
 /** Changes get their own budget: a long proposal must not push warnings, probe
  * scope, write eligibility, or the apply digests out of the report. */
 const MAX_CHANGE_LINES = 40;
+/** The protected tail still needs budgets of its own, or a candidate that warns
+ * on every model would grow the report without limit. Omitted entries keep a
+ * count so the truncation is visible rather than silent. */
+const MAX_WARNING_LINES = 12;
+const MAX_PROBE_FAILURE_LINES = 8;
 
 // ── Rendering ──────────────────────────────────────────────────
 
@@ -31,18 +37,24 @@ function modelLine(model: ConfigAgentModel): string {
 }
 
 function bounded(lines: readonly string[]): string[] {
-  return lines.length <= MAX_REPORT_LINES ? [...lines] : [...lines.slice(0, MAX_REPORT_LINES), `... ${lines.length - MAX_REPORT_LINES} more line(s)`];
+  if (lines.length <= MAX_REPORT_LINES) return [...lines];
+  // The marker is one of the MAX_REPORT_LINES, not an extra line above it.
+  const room = MAX_REPORT_LINES - 1;
+  return [...lines.slice(0, room), `... ${lines.length - room} more line(s)`];
 }
 
 /**
  * Bound the report body but never drop `tail`. The agent copies the tail
  * (the apply digests) off this report, so truncation may only shorten the
- * optional detail above it.
+ * optional detail above it. The truncation marker is charged to the same
+ * budget, and the tail's own detail lines are capped by their builders, so
+ * the result never exceeds MAX_REPORT_LINES.
  */
 function boundedWithTail(lines: readonly string[], tail: readonly string[]): string[] {
-  const room = MAX_REPORT_LINES - tail.length;
-  if (lines.length <= room) return [...lines, ...tail];
-  return [...lines.slice(0, Math.max(room, 0)), `... ${lines.length - Math.max(room, 0)} more line(s)`, ...tail];
+  const available = MAX_REPORT_LINES - tail.length;
+  if (lines.length <= available) return [...lines, ...tail];
+  const room = Math.max(available - 1, 0);
+  return [...lines.slice(0, room), `... ${lines.length - room} more line(s)`, ...tail];
 }
 
 function renderInspect(result: ConfigAgentInspectResult): string {
@@ -90,8 +102,19 @@ function renderInspect(result: ConfigAgentInspectResult): string {
   return bounded(lines).join("\n");
 }
 
+/**
+ * Render a pointer on one line without merging distinct keys: backslashes
+ * double, so a key with a literal "\\u000a" reads differently from one with a
+ * real newline. The stored path stays unescaped, which keeps it unique.
+ */
+function displayPath(field: string): string {
+  return field
+    .replace(/\\/g, "\\\\")
+    .replace(/[\u0000-\u001f\u007f]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+}
+
 function changeLine(change: ConfigAgentChange): string {
-  const base = `${change.kind} ${change.field}`;
+  const base = `${change.kind} ${displayPath(change.field)}`;
   if (change.kind === "add") return `${base}: ${compactValue(change.after)}`;
   if (change.kind === "remove") return `${base} (was ${compactValue(change.before)})`;
   return `${base}: ${compactValue(change.before)} -> ${compactValue(change.after)}`;
@@ -111,7 +134,13 @@ function changeLines(changes: readonly ConfigAgentChange[]): string[] {
 function warningLines(result: ConfigAgentCheckResult): string[] {
   const warnings = result.issues.filter((issue) => issue.severity === "warning");
   if (warnings.length === 0) return [];
-  return ["warnings:", ...warnings.map((warning) => `  ${warning.message}`)];
+  const shown = warnings.slice(0, MAX_WARNING_LINES);
+  const lines = ["warnings:", ...shown.map((warning) => `  ${warning.message}`)];
+  const omitted = warnings.length - shown.length;
+  if (omitted > 0) {
+    lines.push(`  ... ${omitted} more warning(s) omitted; the tool result's issues list carries every message`);
+  }
+  return lines;
 }
 
 /** Probe scope and outcome. The denominator is what was requested, not what came
@@ -138,10 +167,17 @@ function probeLines(result: ConfigAgentCheckResult): string[] {
     lines.push(`live probe (one tiny prompt per model): ${answered.length}/${requested} answered${skipped.length > 0 ? `, ${skipped.length} skipped` : ""}${result.liveProbe.length < requested ? `, ${requested - result.liveProbe.length} without a reported outcome` : ""}`);
     if (skipped.length > 0) lines.push(`  ${skipped.length} model${skipped.length === 1 ? "" : "s"} skipped: the check was cancelled, or the model was not asked; a cancelled request may already have been sent and charged`);
     if (result.liveProbe.length < requested) lines.push(`  ${requested - result.liveProbe.length} model${requested - result.liveProbe.length === 1 ? "" : "s"} were requested but produced no outcome; treat them as unverified, not as passing`);
-    for (const entry of failed) {
-      lines.push(`  ${entry.model}: ${entry.status}${entry.reason ? ` -- ${entry.reason}` : ""}`);
-    }
+    lines.push(...failedProbeLines(failed));
   }
+  return lines;
+}
+
+/** Failed probes only; their count is capped so the protected tail cannot grow
+ * past the report budget, and the omission stays visible. */
+function failedProbeLines(failed: readonly ConfigAgentProbeResult[]): string[] {
+  const lines = failed.slice(0, MAX_PROBE_FAILURE_LINES).map((entry) => `  ${entry.model}: ${entry.status}${entry.reason ? ` -- ${entry.reason}` : ""}`);
+  const omitted = failed.length - MAX_PROBE_FAILURE_LINES;
+  if (omitted > 0) lines.push(`  ... ${omitted} more failed probe(s) omitted; the tool result's liveProbe list carries every outcome`);
   return lines;
 }
 
