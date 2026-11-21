@@ -14,7 +14,7 @@
     },
     "tests": {
       "files": 195,
-      "functions": 8454,
+      "functions": 8453,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -1691,12 +1691,12 @@
     },
     "tests/integration/config-agent-acceptance.test.mjs": {
       "scope": "tests",
-      "lines": 410,
-      "funcs": 56,
-      "maxCyc": 20,
-      "maxCog": 26,
-      "sumCyc": 113,
-      "sumCog": 80
+      "lines": 411,
+      "funcs": 55,
+      "maxCyc": 11,
+      "maxCog": 15,
+      "sumCyc": 104,
+      "sumCog": 67
     },
     "tests/integration/config-approval-tui.test.mjs": {
       "scope": "tests",
@@ -2626,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T14:02:17.534Z",
-  "sourceCommit": "5e8dbf65d86fe2478d87c963204c4929a78e37f7"
+  "generatedAt": "2026-11-21T14:17:01.903Z",
+  "sourceCommit": "0438c0e14408bd4c68f5c0224d5743a03d172354"
 }
