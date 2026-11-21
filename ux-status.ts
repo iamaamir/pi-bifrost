@@ -1,9 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-/** Fixed automatic registry-refresh interval. This is an internal host safety/
- * performance policy, not a user configuration setting; forced refreshes may
- * bypass it. */
-export const REGISTRY_REFRESH_TTL_MS = 30_000;
+export { REGISTRY_REFRESH_TTL_MS } from "./registry-refresh.ts";
 
 export interface RegistryRefreshState {
   lastRegistryRefreshAt?: number;

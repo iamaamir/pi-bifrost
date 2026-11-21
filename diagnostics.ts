@@ -5,7 +5,7 @@ import type { ClassifierBackend } from "./classifier-backends.ts";
 import { validateEffectiveConfigStructure } from "./config-schema.ts";
 import { findCandidates, modelKey } from "./routing.ts";
 import { getCircuitState, type ReliabilityConfig, type ReliabilityState } from "./reliability.ts";
-import { REGISTRY_REFRESH_TTL_MS } from "./ux-status.ts";
+import { REGISTRY_REFRESH_TTL_MS } from "./registry-refresh.ts";
 import { isVirtualModel } from "./virtual-model.ts";
 import type { RuntimeStateIssue } from "./runtime-state.ts";
 

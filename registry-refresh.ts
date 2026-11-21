@@ -1,5 +1,9 @@
 import type { ModelsRefreshResult } from "@earendil-works/pi-ai";
 
+/** Fixed automatic registry-refresh interval. Internal host safety/performance
+ * policy, not a user configuration setting; forced refreshes may bypass it. */
+export const REGISTRY_REFRESH_TTL_MS = 30_000;
+
 export interface ProviderRefreshEvidence {
   readonly status: "complete" | "partial" | "stale";
   readonly refreshedAt: number;
