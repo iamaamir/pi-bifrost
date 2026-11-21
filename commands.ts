@@ -527,6 +527,92 @@ function reconciliationPaths(source: ReconciliationConfigSource): { configPath: 
   };
 }
 
+/**
+ * Describe an Init commit failure without claiming the files were preserved.
+ *
+ * `applyReconciliationTransaction` installs the staged config before it writes the
+ * ownership sidecar and the final journal records, so a failure after that rename
+ * leaves the reviewed memberships on disk.
+ */
+export function describeInitCommitFailure(failure: {
+  readonly locked: boolean;
+  readonly receiptOnly: boolean;
+  readonly configPath: string;
+  readonly nextConfigBytes: Uint8Array;
+  readonly journalPath: string;
+  readonly target: string;
+  readonly recoveryCommand: string;
+}): string {
+  if (failure.locked) return "Init could not acquire reconciliation locks. Verify no Bifrost writer is active and repair only exact stale lock files before retrying.";
+  if (failure.receiptOnly) return "Init could not safely commit the reviewed membership update; existing files were preserved.";
+  // `applyReconciliationTransaction` writes the journal before it renames either
+  // target. A journal therefore means a rename may already have happened, while
+  // its absence proves none did. Matching config bytes prove only the current
+  // content, because an ownership-only plan never changes the config.
+  const journal = inspectJournalState(failure.journalPath);
+  const installed = inspectInstalledConfig(failure.configPath, failure.nextConfigBytes);
+  if (journal === "absent") {
+    if (installed === "matches") {
+      return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration, but no reconciliation journal was written, so ${failure.recoveryCommand} has nothing to recover. Retry Init to finish updating the ownership record.`;
+    }
+    if (installed === "unknown") {
+      // Unreadable proves nothing either way; promise neither outcome.
+      return `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. No reconciliation journal was written; inspect that file before you retry.`;
+    }
+    return "Init could not safely commit the reviewed membership update; existing files were preserved.";
+  }
+  if (journal === "unknown") {
+    // A failed check cannot be reported as absence: recovery degrades to
+    // `nothing_to_recover`, so asking for it first is safe even with no journal.
+    const advice = `Run ${failure.recoveryCommand} before you retry; it reports nothing to recover when no journal exists.`;
+    if (installed === "matches") {
+      return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration, but Init could not check whether a reconciliation journal is pending. ${advice}`;
+    }
+    if (installed === "unknown") {
+      return `Init could not finish the reviewed membership update, and could not read ${failure.target} or check whether a reconciliation journal is pending. Inspect that file. ${advice}`;
+    }
+    return `Init could not finish the reviewed membership update. ${failure.target} does not hold the planned configuration, and Init could not check whether a reconciliation journal is pending, so the new memberships may already be partly installed. ${advice}`;
+  }
+  if (installed === "matches") {
+    return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration and a reconciliation journal is pending. Run ${failure.recoveryCommand} before you retry.`;
+  }
+  if (installed === "unknown") {
+    return `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. A reconciliation journal is pending; inspect that file, then run ${failure.recoveryCommand} before you retry.`;
+  }
+  // The journal can reach `config_installed` before a later conflict throws, so
+  // differing bytes no longer prove the rename did not happen.
+  return `Init could not finish the reviewed membership update. ${failure.target} does not hold the planned configuration, but a reconciliation journal is pending, so the new memberships may already be partly installed. Run ${failure.recoveryCommand} before you retry.`;
+}
+
+/** "unknown" is an unsafe or unreadable file, which is not the same as a config that differs. */
+type InstalledConfigState = "matches" | "differs" | "unknown";
+
+/** "unknown" is a failed check, which must not be reported as a missing journal. */
+type JournalState = "present" | "absent" | "unknown";
+
+function inspectJournalState(path: string): JournalState {
+  try {
+    lstatSync(path);
+    return "present";
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : "unknown";
+  }
+}
+
+/** Reject non-regular, oversized and unstable files instead of blocking or allocating on them. */
+function inspectInstalledConfig(configPath: string, nextConfigBytes: Uint8Array): InstalledConfigState {
+  let installed: Buffer | undefined;
+  try {
+    installed = readBoundedRegularSnapshot(configPath);
+  } catch {
+    return "unknown";
+  }
+  // A missing config holds nothing, so the preserved wording stays true.
+  if (installed === undefined) return "differs";
+  if (installed.byteLength > MAX_CONFIG_SOURCE_BYTES) return "unknown";
+  return installed.equals(Buffer.from(nextConfigBytes)) ? "matches" : "differs";
+}
+
 function readReconciliationSource(source: ReconciliationConfigSource): ReconciliationSourceSnapshot {
   const paths = reconciliationPaths(source);
   const configBytes = readBoundedRegularSnapshot(paths.configPath) ?? null;
@@ -1575,9 +1661,17 @@ async function handleInit(
   }
   catch (error) {
     const locked = error instanceof ReconciliationStoreError && error.code === "locked";
-    log(ctx, locked
-      ? "Init could not acquire reconciliation locks. Verify no Bifrost writer is active and repair only exact stale lock files before retrying."
-      : "Init could not safely commit the reviewed membership update; existing files were preserved.", "error");
+    log(ctx, describeInitCommitFailure({
+      locked,
+      receiptOnly,
+      configPath: transaction.configPath,
+      nextConfigBytes: transaction.nextConfigBytes,
+      journalPath: transaction.journalPath,
+      target: initSourceLabel(source),
+      recoveryCommand: source.source === "user"
+        ? "/bifrost config reconcile --source user --recover"
+        : "/bifrost config reconcile --recover",
+    }), "error");
     return;
   }
 
