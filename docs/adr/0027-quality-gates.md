@@ -83,7 +83,7 @@ make "the gate measured nothing" a failure.
   describes an older tree cannot merge. Every recorded field is compared, not
   only maxima, so line and function drift fails too.
 - A pull request can regenerate the committed baseline in its own change, so
-  the budget and staleness checks cannot see a lowered maximum. CI also compares
+  the budget and staleness checks cannot see a raised maximum. CI also compares
   the tree against the baseline recorded at the base revision
   (`npm run check:complexity:base -- <base-sha>`). A new file is judged against
   that record's scope maxima. When the base revision has no baseline, the gate

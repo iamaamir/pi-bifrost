@@ -130,9 +130,10 @@ baseline that omits a real file.
 ### Comparison against the base revision
 
 The committed baseline lives in the candidate. A pull request can therefore
-lower a recorded maximum and regenerate the baseline in the same change. The
+raise a recorded maximum and regenerate the baseline in the same change. The
 budget check and the staleness check cannot see that move, because both read the
-candidate file.
+candidate file. An intentional reduction is always permitted; the comparison
+only rejects a ceiling above the one the base revision recorded.
 
 `npm run check:complexity:base -- <rev>` compares the working tree with the
 baseline that `<rev>` records. CI runs it on pull requests with the base commit

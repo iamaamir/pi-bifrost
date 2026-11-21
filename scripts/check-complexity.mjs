@@ -15,7 +15,7 @@
  *
  * `--baseline-ref` compares this tree against the baseline recorded at a git
  * revision. A pull request can regenerate the committed baseline in the same
- * change, so the committed file cannot prove the branch did not lower a ceiling;
+ * change, so the committed file cannot prove the branch did not raise a ceiling;
  * the base revision can.
  *
  * Exit codes: 0 clean/updated, 1 regression or stale baseline, 2 error or
