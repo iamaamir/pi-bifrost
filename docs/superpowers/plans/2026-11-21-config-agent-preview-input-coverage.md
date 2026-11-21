@@ -120,7 +120,7 @@ Add these tests inside the existing preview `describe` block, after the last tes
     }
   });
 
-  it("reports skipped entries instead of counting them as evaluated", async () => {
+  it("reports skipped blank or non-text entries instead of counting them as evaluated", async () => {
     const harness = freshHarness();
     try {
       const prompts: unknown[] = ["task 1", "", "task 3", "   ", 42, "task 6", "task 7", "task 8", "task 9"];
@@ -321,9 +321,9 @@ If the report-bounding test does not naturally exceed 120 lines with the chosen 
 
 - [ ] **Step 6: Mutation-check the guards**
 
-Comment out all three coverage `notes.push(...)` calls added in Step 4 and re-run `node --test --experimental-strip-types tests/config-agent.test.ts`. Expected: coverage note-content assertions fail; silent-preview/length/exact-2000/non-echo assertions still pass. Restore.
+Comment out the coverage-note append in Step 4 (`notes.push(...previewPromptCoverageNotes(promptCoverage, cases.length));`) and re-run `node --test --experimental-strip-types tests/config-agent.test.ts`. Expected: coverage note-content assertions fail; silent-preview/length/exact-2000/non-echo assertions still pass. Restore.
 
-Then temporarily revert Step 4b (move notes back to body, before `boundedWithTail`) and re-run. Expected: the "keeps coverage notes visible when preview report exceeds the 120-line bound" test fails while digest assertions may still pass. Restore Step 4b and re-run green. Record failure counts/output as evidence.
+Then temporarily revert Step 4b (move notes back to body, before `boundedWithTail`) and re-run. Expected: the "keeps coverage notes and digests visible when preview report exceeds the 120-line bound" test fails while digest assertions may still pass. Restore Step 4b and re-run green. Record failure counts/output as evidence.
 
 - [ ] **Step 7: Run the repo checks**
 
