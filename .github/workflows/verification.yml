@@ -82,6 +82,14 @@ jobs:
           name: verification-failure-${{ github.event.pull_request.head.sha || github.sha }}
           path: screenshots/
           if-no-files-found: ignore
+      - name: Upload successful Pi UI smoke screenshots
+        if: steps.acceptance.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-smoke-screenshots-${{ github.event.pull_request.head.sha || github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: screenshots/ui-smoke/*.png
+          if-no-files-found: error
+          retention-days: 14
       - name: Upload candidate-bound manifest
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

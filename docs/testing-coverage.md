@@ -18,6 +18,14 @@ Before review, run `npm run verify:release` on a clean, frozen candidate. Attach
 
 Describe the changed behavior, relevant test boundaries, and checks actually run. Include failures and limitations. The retained named checks validate execution, not semantic adequacy or file coverage. The reviewer must judge whether tests exercise the changed behavior and whether assertions can detect the reported regression. Use a focused fault control when needed. Do not claim automatic coverage from the acceptance runner.
 
+### Visual evidence for UI changes
+
+Any user-visible Pi UI change (menus, overlays, dialogs, footer/status, notices, progress or terminal layout) requires real-Pi smoke tests and representative PNG screenshots captured by those tests. Run `npm run test:ui` on the final candidate, plus `npm run test:ui:reliability` when applicable, with the existing isolated fake providers. If the changed state is missing from smoke coverage, extend its scenario and assertions. Website UI changes require real browser captures as described in `AGENTS.md` instead.
+
+Embed the relevant screenshots in the PR body's **Evidence** section, labelled with the tested UI state, exact command/result, and reviewed head SHA. Cover changed and relevant failure/empty states, inspect the images for visual regressions, and scrub credentials, private prompts and other sensitive content before sharing. CI uploads smoke screenshots as artifacts, but a CI artifact link alone does not replace images in the PR body. Do not commit generated screenshots.
+
+Screenshots supplement, not replace, behavioral assertions and passing checks. For a non-UI change, mark visual evidence N/A with a brief reason.
+
 ## Release feature map
 
 The requirement IDs come from [the PRD](../PRD.md). These rows name test boundaries, not percentages of coverage. More than one row can use the same user scenario.

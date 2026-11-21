@@ -12,6 +12,14 @@ What proves the change works: before/after output, or the exact test that went
 from red to green. Paste real output; never retype it.
 -->
 
+### UI smoke screenshots (required for UI changes)
+
+<!-- Embed PNG captures from the real Pi smoke test (or browser captures for website UI), not local paths or CI artifact links. Label the changed states and relevant failure/empty states. If the existing smoke suite does not capture the change, extend it. See docs/testing-coverage.md. -->
+UI impact: <!-- affected UI surface(s), or N/A — no visible UI change -->
+Test command + observed result: <!-- exact output; N/A for non-UI -->
+Reviewed head SHA: <!-- N/A for non-UI -->
+Screenshots: <!-- ![tested state](uploaded-image-url); N/A for non-UI -->
+
 ### Gate evidence
 
 <!--
