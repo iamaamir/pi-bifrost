@@ -2,7 +2,9 @@
 
 The lifecycle in [AGENTS.md](../AGENTS.md#delivery-lifecycle) is the authority.
 The [Issue Challenger](../.agents/issue-challenger.md) checks readiness before coding;
-[Axiom](../.agents/axiom.md) checks the actual final candidate. Use separate fresh
+[Axiom](../.agents/axiom.md) checks the actual final candidate. Axiom screens the
+diff for material product/UX changes and refers qualifying candidates to the
+[Product & UX Reviewer](../.agents/product-ux-reviewer.md). Use separate fresh
 runs from the implementation author, with the accepted contract and evidence,
 rather than the author's full conversation. An author may not approve their own work.
 
@@ -35,7 +37,7 @@ The definitions reuse the existing `.agents/*.md` layout. Installed
 pi-subagents 0.88.1 documents legacy project discovery there; `.pi/agents` can
 override a same-name definition. Inspect the selected definition and effective
 tools before relying on it. Use project scope and explicit fresh context when
-launching through pi-subagents. Both roles declare only read, grep, find and ls;
+launching through pi-subagents. All three roles declare only read, grep, find and ls;
 they request live GitHub snapshots and executed checks from the owner. Tool
 allowlists and prose are not an operating-system security boundary. Do not
 assume a different host supports this metadata or silently grant extra tools.
@@ -50,6 +52,26 @@ This check validates documentation structure and selected instruction contracts.
 It does not launch a model, establish behavioral compliance or replace release
 verification. Axiom's code verdict, current CI results and merge authority remain
 separate. Review/repair bounds never turn a missing gate into a pass.
+
+## Conditional Product & UX Review
+
+Axiom reports `REQUIRED` or `NOT REQUIRED` for every candidate, with a reason
+from the actual diff. A separate review is required when a change makes a
+material user-facing choice, such as a new configuration option, meaningful
+status/error wording, command interaction, recovery action, public output
+contract or user task. A file path alone does not qualify a change. Purely
+mechanical changes and trivial copy edits normally do not trigger the review.
+
+Axiom returns REVIEW INCOMPLETE when a required specialist review of the same
+head is missing, incomplete or stale. The owner launches the specialist as a
+fresh non-author run and supplies the accepted contract, diff and captured
+observable output. The reviewer returns APPROVED, CHANGES REQUIRED or REVIEW
+INCOMPLETE with specific evidence. Axiom incorporates the result and rechecks
+only affected behavior after fixes. A material contract change needs owner
+adjudication before implementation. The specialist never merges, changes the
+issue or replaces existing technical/CI gates; the usual correction-round limit
+still applies. No agent is automatically dispatched by these instructions.
+
 
 ## Handoff prompts
 
@@ -81,7 +103,20 @@ are task templates, not commands or claims of an executed challenge/review.
 > Act as Axiom in a separate non-author run. Read AGENTS.md and .agents/axiom.md.
 > Review <PR> from <base SHA> to <head SHA>; changed files: <list>; diff: <path>.
 > Accepted contract/adjudication: <paths>; evidence: <commands, output, manifest>.
-> Verify target binding, applicable invariants and acceptance criteria. Separate
-> evidenced blockers, missing required checks and nonblocking observations.
+> Verify target binding, applicable invariants and acceptance criteria. Screen
+> for material Product & UX Review needs and record REQUIRED / NOT REQUIRED with
+> diff-based reasons. Separate evidenced blockers, missing required checks and
+> nonblocking observations.
 > Return the revision-bound code verdict, CI evidence and merge-authority status.
 > Do not edit files/issues, run commands or merge.
+
+**Conditional product review (only when Axiom requires it):**
+
+> Act as product-ux-reviewer in a fresh, independent run. Read AGENTS.md and
+> .agents/product-ux-reviewer.md. Review <PR> from <base SHA> to <head SHA>;
+> changed files: <list>; accepted product contract: <path>; Axiom referral:
+> <finding>; observable evidence: <captured output and screenshots>. Compare
+> the current experience with the proposed one and the smallest alternative,
+> including no change. Report evidenced defects separately from preferences.
+> Return APPROVED / CHANGES REQUIRED / REVIEW INCOMPLETE for Axiom. Do not edit,
+> run commands, approve code or merge.
