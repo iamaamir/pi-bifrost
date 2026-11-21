@@ -1691,7 +1691,7 @@
     },
     "tests/integration/config-agent-acceptance.test.mjs": {
       "scope": "tests",
-      "lines": 411,
+      "lines": 408,
       "funcs": 55,
       "maxCyc": 11,
       "maxCog": 15,
@@ -2626,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T14:17:01.903Z",
-  "sourceCommit": "0438c0e14408bd4c68f5c0224d5743a03d172354"
+  "generatedAt": "2026-11-21T14:57:07.956Z",
+  "sourceCommit": "b4453ca0e7440d55018217f17cb0431669f14dfb"
 }
