@@ -54,6 +54,13 @@ targets: cache.ts, classifier-semantics.ts, inline-override.ts, reliability.ts, 
 matrix legs: 7 (concurrency 4)
 projected wall clock: 34.5m of the 60m planning budget, 1 wave(s) of 7 leg(s) across 8 lanes (per-leg hard bound 48m)
 the projection is a planning objective, not a deadline: GitHub enforces no workflow-wide wall clock
+  cache.ts: mutate cache.ts
+  classifier-semantics.ts: mutate classifier-semantics.ts
+  inline-override.ts: mutate inline-override.ts
+  reliability.ts: mutate reliability.ts
+  reliability-v2.ts: mutate reliability-v2.ts
+  routing.ts: mutate routing.ts
+  scripts/toolbox.mjs: mutate scripts/toolbox.mjs
 ```
 
 Sharding is currently unused. Seven legs fit in one wave, so the plan projects

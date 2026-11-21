@@ -145,7 +145,7 @@ pass.
 
 ## Documented commands and links
 
-Two tests read the documents in `docs/` and the root guides.
+Three tests read the documents in `docs/` and the root guides.
 
 `tests/docs-executable.test.mjs` resolves each `npm run <script>` and each
 `node scripts/<file>` that a document shows. It makes sure that the script is in
