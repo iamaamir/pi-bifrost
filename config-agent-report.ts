@@ -20,6 +20,9 @@ import {
 } from "./config-agent.ts";
 
 const MAX_REPORT_LINES = 120;
+/** Changes get their own budget: a long proposal must not push warnings, probe
+ * scope, write eligibility, or the apply digests out of the report. */
+const MAX_CHANGE_LINES = 40;
 
 // ── Rendering ──────────────────────────────────────────────────
 
@@ -94,6 +97,54 @@ function changeLine(change: ConfigAgentChange): string {
   return `${base}: ${compactValue(change.before)} -> ${compactValue(change.after)}`;
 }
 
+/** Change list on its own budget, with a count so an omitted tail is never
+ * mistaken for the whole proposal. */
+function changeLines(changes: readonly ConfigAgentChange[]): string[] {
+  if (changes.length === 0) return [];
+  const shown = changes.slice(0, MAX_CHANGE_LINES);
+  const lines = ["changes:", ...shown.map((change) => `  ${changeLine(change)}`)];
+  const omitted = changes.length - shown.length;
+  if (omitted > 0) lines.push(`  ... ${omitted} more change(s) omitted`);
+  return lines;
+}
+
+function warningLines(result: ConfigAgentCheckResult): string[] {
+  const warnings = result.issues.filter((issue) => issue.severity === "warning");
+  if (warnings.length === 0) return [];
+  return ["warnings:", ...warnings.map((warning) => `  ${warning.message}`)];
+}
+
+/** Probe scope and outcome. The denominator is what was requested, not what came
+ * back: a transport that returned fewer outcomes must not read as a full pass. */
+function probeLines(result: ConfigAgentCheckResult): string[] {
+  const lines: string[] = [];
+  if (result.probePlan && result.probePlan.length > 0) {
+    const planned = result.liveProbe ? "live probe targets" : "live probe not run";
+    lines.push(`${planned}: ${result.probePlan.length} model(s), one request each -- ${result.probePlan.join(", ")}`);
+    if (!result.liveProbe) lines.push("  run it only with probe: true after the user agrees; a plain check sends nothing");
+  }
+  // A skipped model was never asked, so it is neither a pass nor a failure.
+  if (result.probeSkipped && result.probeSkipped.length > 0) {
+    lines.push(`live probe skipped: ${result.probeSkipped.length} model(s) whose provider's sign-in does not resolve for this session -- ${result.probeSkipped.map((entry) => entry.model).join(", ")}`);
+    lines.push("  skipped is not a probe failure; these models were not asked");
+  }
+  // Failures only, plus a count. A succeeded probe carries no decision, and one
+  // line per model would crowd out the change list above it.
+  if (result.liveProbe) {
+    const answered = result.liveProbe.filter((entry) => entry.status === "ok");
+    const skipped = result.liveProbe.filter((entry) => entry.status === "skipped");
+    const failed = result.liveProbe.filter((entry) => entry.status === "error" || entry.status === "timeout");
+    const requested = result.probePlan?.length ?? result.liveProbe.length;
+    lines.push(`live probe (one tiny prompt per model): ${answered.length}/${requested} answered${skipped.length > 0 ? `, ${skipped.length} skipped` : ""}${result.liveProbe.length < requested ? `, ${requested - result.liveProbe.length} without a reported outcome` : ""}`);
+    if (skipped.length > 0) lines.push(`  ${skipped.length} model${skipped.length === 1 ? "" : "s"} skipped: the check was cancelled, or the model was not asked; a cancelled request may already have been sent and charged`);
+    if (result.liveProbe.length < requested) lines.push(`  ${requested - result.liveProbe.length} model${requested - result.liveProbe.length === 1 ? "" : "s"} were requested but produced no outcome; treat them as unverified, not as passing`);
+    for (const entry of failed) {
+      lines.push(`  ${entry.model}: ${entry.status}${entry.reason ? ` -- ${entry.reason}` : ""}`);
+    }
+  }
+  return lines;
+}
+
 const MAX_VALUE_CHARS = 100;
 
 function compactValue(value: unknown): string {
@@ -138,14 +189,12 @@ function renderCheck(result: ConfigAgentCheckResult): string {
     lines.push("nothing was written");
     for (const issue of result.issues.filter((issue) => issue.severity === "error")) lines.push(`  error: ${issue.message}`);
     for (const note of result.notes) lines.push(`  ${note}`);
-    lines.push("------------------------------");
-    return bounded(lines).join("\n");
+    return boundedWithTail(lines, [...warningLines(result), "------------------------------"]).join("\n");
   }
   // A deep-merged patch changes nested fields, so report those paths. The plan
   // computes this list from the same source pair as `changes`, so the two are
   // non-empty together.
-  lines.push(result.nestedChanges.length === 0 ? "changes: none" : "changes:");
-  for (const change of result.nestedChanges) lines.push(`  ${changeLine(change)}`);
+  lines.push(...(result.nestedChanges.length === 0 ? ["changes: none"] : changeLines(result.nestedChanges)));
   lines.push("tiers after the change:");
   for (const tier of result.routingAfter?.tiers ?? []) {
     lines.push(`  ${tier.tier} (${tier.strategy})${tier.fallbackTiers ? ` fallback: [${tier.fallbackTiers.join(", ")}]` : ""}: ${tier.pool.join(", ") || "empty"}`);
@@ -156,43 +205,13 @@ function renderCheck(result: ConfigAgentCheckResult): string {
   }
   if (result.newlyEligibleModels.length > 0) lines.push(`newly referenced models that are available: ${result.newlyEligibleModels.join(", ")}`);
   if (result.removedModels.length > 0) lines.push(`models no longer referenced by any tier: ${result.removedModels.join(", ")}`);
-  const warnings = result.issues.filter((issue) => issue.severity === "warning");
-  if (warnings.length > 0) {
-    lines.push("warnings:");
-    for (const warning of warnings) lines.push(`  ${warning.message}`);
-  }
-  // Scope and cost are stated whether or not the probe ran, so a caller can ask
-  // before spending anything. The denominator is what was requested, not what
-  // came back: a transport that returned fewer outcomes must not read as a full
-  // pass.
-  if (result.probePlan && result.probePlan.length > 0) {
-    const planned = result.liveProbe ? "live probe targets" : "live probe not run";
-    lines.push(`${planned}: ${result.probePlan.length} model(s), one request each -- ${result.probePlan.join(", ")}`);
-    if (!result.liveProbe) lines.push("  run it only with probe: true after the user agrees; a plain check sends nothing");
-  }
-  // A skipped model was never asked, so it is neither a pass nor a failure.
-  // Name it separately instead of folding it into the probe denominator.
-  if (result.probeSkipped && result.probeSkipped.length > 0) {
-    lines.push(`live probe skipped: ${result.probeSkipped.length} model(s) whose provider's sign-in does not resolve for this session -- ${result.probeSkipped.map((entry) => entry.model).join(", ")}`);
-    lines.push("  skipped is not a probe failure; these models were not asked");
-  }
-  // Failures only, plus a count. A succeeded probe carries no decision, and one
-  // line per model would push the warnings above it out of the bounded report.
-  if (result.liveProbe) {
-    const answered = result.liveProbe.filter((entry) => entry.status === "ok");
-    const skipped = result.liveProbe.filter((entry) => entry.status === "skipped");
-    const failed = result.liveProbe.filter((entry) => entry.status === "error" || entry.status === "timeout");
-    const requested = result.probePlan?.length ?? result.liveProbe.length;
-    lines.push(`live probe (one tiny prompt per model): ${answered.length}/${requested} answered${skipped.length > 0 ? `, ${skipped.length} skipped` : ""}${result.liveProbe.length < requested ? `, ${requested - result.liveProbe.length} without a reported outcome` : ""}`);
-    if (skipped.length > 0) lines.push(`  ${skipped.length} model${skipped.length === 1 ? "" : "s"} skipped: the check was cancelled, or the model was not asked; a cancelled request may already have been sent and charged`);
-    if (result.liveProbe.length < requested) lines.push(`  ${requested - result.liveProbe.length} model${requested - result.liveProbe.length === 1 ? "" : "s"} were requested but produced no outcome; treat them as unverified, not as passing`);
-    for (const entry of failed) {
-      lines.push(`  ${entry.model}: ${entry.status}${entry.reason ? ` -- ${entry.reason}` : ""}`);
-    }
-  }
   for (const note of result.notes) lines.push(`note: ${note}`);
-  lines.push(`write eligible: ${result.writeEligible}`);
+  // Safety data is never truncated: a long change or tier list may not push the
+  // warnings, probe scope, write eligibility, or apply digests out of the report.
   const tail = [
+    ...warningLines(result),
+    ...probeLines(result),
+    `write eligible: ${result.writeEligible}`,
     ...(result.writeEligible ? digestLines(result.proposalDigest, result.guards) : []),
     "------------------------------",
   ];
@@ -248,7 +267,7 @@ function renderApply(result: ConfigAgentApplyResult): string {
     `applied: ${result.applied}; reloaded: ${result.reloaded}; verified: ${result.verified}`,
   ];
   if (result.reason) lines.push(`reason: ${result.reason}`);
-  for (const change of result.nestedChanges) lines.push(`  ${changeLine(change)}`);
+  lines.push(...changeLines(result.nestedChanges));
   if (result.routing) {
     const classifier = result.routing.classifier;
     lines.push(`active default tier: ${result.routing.defaultTier ?? "none"}; tiers: ${result.routing.tiers.map((tier) => tier.tier).join(", ") || "none"}`);

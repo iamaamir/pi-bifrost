@@ -1257,20 +1257,31 @@ interface CandidatePlan {
 }
 
 /**
- * Keys that would rewrite an object's prototype if assigned by index. Host JSON
- * can carry an own "__proto__" property even though the schema never declares
- * one, and `parsed.__proto__ = value` would silently change behaviour instead of
- * being rejected by schema validation.
+ * The one key that rewrites an object's prototype when written by index: a host
+ * JSON patch can carry an own "__proto__" property even though the schema never
+ * declares one. `constructor` and `prototype` are ordinary own-property writes,
+ * and tier/criteria/scope maps may legitimately use either name, so they stay
+ * valid data keys.
  */
-const UNSAFE_PATCH_KEYS: ReadonlySet<string> = new Set(["__proto__", "constructor", "prototype"]);
+const UNSAFE_PATCH_KEY = "__proto__";
 
+/**
+ * Walk every reachable value, including arrays and objects inside them, so an
+ * unsafe key cannot hide behind a container the merge replaces wholesale. Array
+ * elements are never index-assigned by the merge, but scanning them keeps the
+ * guard independent of today's item schemas.
+ */
 function unsafePatchKey(value: unknown): string | null {
   const pending: unknown[] = [value];
   while (pending.length > 0) {
     const current = pending.pop();
+    if (Array.isArray(current)) {
+      for (const entry of current) pending.push(entry);
+      continue;
+    }
     if (!isPlainRecord(current)) continue;
     for (const key of Object.keys(current)) {
-      if (UNSAFE_PATCH_KEYS.has(key)) return key;
+      if (key === UNSAFE_PATCH_KEY) return key;
       pending.push(current[key]);
     }
   }
@@ -1296,25 +1307,39 @@ function mergePatchValue(base: unknown, patch: unknown): unknown {
 }
 
 /**
+ * Path for one nested change. JSON Pointer segments keep a key containing "."
+ * or "/" unambiguous, and control characters are escaped so one change can
+ * never break the report into extra lines.
+ */
+function changePath(segments: readonly string[]): string {
+  return segments
+    .map((segment) => `/${segment
+      .replace(/~/g, "~0")
+      .replace(/\//g, "~1")
+      .replace(/[\u0000-\u001f\u007f]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`)}`)
+    .join("");
+}
+
+/**
  * Path-level change list for reporting. Objects recurse so a deep merge shows
  * the fields it actually touched, while arrays stay one entry at their path
  * because an element-by-element list would imply a merge that does not happen.
  * `changes` keeps the established top-level contract for approval summaries.
  */
-function diffNestedChanges(before: unknown, after: unknown, path: string, changes: ConfigAgentChange[]): void {
+function diffNestedChanges(before: unknown, after: unknown, segments: readonly string[], changes: ConfigAgentChange[]): void {
   if (isPlainRecord(before) && isPlainRecord(after)) {
     for (const key of Object.keys(before).sort()) {
-      const nested = path ? `${path}.${key}` : key;
-      if (!Object.hasOwn(after, key)) changes.push({ kind: "remove", field: nested, before: before[key] });
+      const nested = [...segments, key];
+      if (!Object.hasOwn(after, key)) changes.push({ kind: "remove", field: changePath(nested), before: before[key] });
       else diffNestedChanges(before[key], after[key], nested, changes);
     }
     for (const key of Object.keys(after).sort()) {
-      if (!Object.hasOwn(before, key)) changes.push({ kind: "add", field: path ? `${path}.${key}` : key, after: after[key] });
+      if (!Object.hasOwn(before, key)) changes.push({ kind: "add", field: changePath([...segments, key]), after: after[key] });
     }
     return;
   }
   if (canonicalJson(before) === canonicalJson(after)) return;
-  changes.push({ kind: "replace", field: path, before, after });
+  changes.push({ kind: "replace", field: changePath(segments), before, after });
 }
 
 /**
@@ -1375,7 +1400,7 @@ function planCandidate(
   const changes = diffFields(base, nextSource);
   if (changes.length === 0 && !allowUnchanged) return fail("the selected source already matches this proposal");
   const nestedChanges: ConfigAgentChange[] = [];
-  diffNestedChanges(base, nextSource, "", nestedChanges);
+  diffNestedChanges(base, nextSource, [], nestedChanges);
   return {
     ok: true, source, sourcePath: current.path, current, nextSource,
     nextText: serializeSource(nextSource),
