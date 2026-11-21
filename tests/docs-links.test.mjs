@@ -37,25 +37,29 @@ function prose(markdown) {
   const comment = { open: false };
   let fence = null;
   for (const line of markdown.split(/\r?\n/u)) {
+    // A fenced body is literal text, so a comment marker inside it is not a
+    // comment and a comment cannot hide the closing fence.
     if (fence !== null) {
       if (closesFence(line, fence)) fence = null;
       continue;
     }
-    const opened = /^\s*(`{3,}|~{3,})/u.exec(line);
+    // A comment hides everything up to `-->`, including a fence opener.
+    const text = stripComments(line, comment);
+    if (text === null) continue;
+    const opened = /^\s*(`{3,}|~{3,})/u.exec(text);
     if (opened) {
       fence = opened[1];
       continue;
     }
-    const text = stripComments(line, comment);
-    if (text !== null) lines.push(text);
+    lines.push(text);
   }
   return lines.join("\n");
 }
 
-/** Whether a line ends a fence: only its marker, at least as long as the opener. */
+/** Whether a line ends a fence: only the opener's marker, at least as long as the opener. */
 function closesFence(line, fence) {
   const trimmed = line.trim();
-  return trimmed.length >= fence.length && trimmed[0] === fence[0] && /^[`~]+$/u.test(trimmed);
+  return trimmed.length >= fence.length && [...trimmed].every((char) => char === fence[0]);
 }
 
 /** A line without its comments, or null when the line ends inside a comment. */
@@ -229,6 +233,27 @@ test("fault control: a missing file, a renamed heading, and an escaped path are 
     isDirectory: () => false,
   });
   assert.deepEqual(inert, [], "links in fences and comments are not checked");
+
+  // A fence opener inside an open comment must not hide what follows the `-->`.
+  const commentedFence = linkProblems({
+    documents: ["docs/a.md"],
+    read: () => "<!--\n~~~\n-->\n\n[broken](missing.md)\n",
+    exists: () => false,
+    isDirectory: () => false,
+  });
+  assert.deepEqual(
+    commentedFence,
+    ["docs/a.md: missing.md does not exist"],
+    "a fence opener inside an HTML comment is inert",
+  );
+
+  const mixedCloser = linkProblems({
+    documents: ["docs/a.md"],
+    read: () => "~~~\n~~~`\n[inside](missing.md)\n~~~~\n[live](b.md)\n",
+    exists: (file) => file === "docs/b.md",
+    isDirectory: () => false,
+  });
+  assert.deepEqual(mixedCloser, [], "a closer must use the opener's marker character");
 
   assert.deepEqual(anchors("# Hello, World!\n## `check:complexity` gate\n"), new Set(["hello-world", "checkcomplexity-gate"]));
   assert.deepEqual(anchors("# [linked](x.md) heading\n"), new Set(["linked-heading"]));
