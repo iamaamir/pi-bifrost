@@ -9,7 +9,7 @@
 // rather than weak tests.
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   IN_PLACE_TARGETS,
@@ -54,7 +54,10 @@ function importedModules(testFile) {
   for (const match of source.matchAll(IMPORT_PATTERN)) {
     const specifier = match[1];
     if (!specifier.startsWith(".")) continue;
-    modules.add(relative(ROOT, join(dirname(join(ROOT, testFile)), specifier)));
+    // Target names use forward slashes. `relative()` uses the platform separator,
+    // so a Windows checkout would key this consumer as `scripts\toolbox.mjs` and
+    // find no binding for `scripts/toolbox.mjs`. The replace is a no-op on POSIX.
+    modules.add(relative(ROOT, join(dirname(join(ROOT, testFile)), specifier)).split(sep).join("/"));
   }
   return modules;
 }
