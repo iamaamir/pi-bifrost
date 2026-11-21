@@ -125,12 +125,12 @@
     },
     "commands.ts": {
       "scope": "source",
-      "lines": 3442,
+      "lines": 3445,
       "funcs": 256,
       "maxCyc": 161,
       "maxCog": 261,
-      "sumCyc": 1183,
-      "sumCog": 1218
+      "sumCyc": 1184,
+      "sumCog": 1220
     },
     "config-agent-report.ts": {
       "scope": "source",
@@ -215,7 +215,7 @@
     },
     "diagnostics.ts": {
       "scope": "source",
-      "lines": 425,
+      "lines": 427,
       "funcs": 28,
       "maxCyc": 24,
       "maxCog": 34,
@@ -2626,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T16:40:19.679Z",
-  "sourceCommit": "684c7e181b19adba3f4234c8330b91452223fa0a"
+  "generatedAt": "2026-11-21T18:21:25.765Z",
+  "sourceCommit": "2bc64dc78201cf4e2b4b0812efa2ce1731e0563f"
 }
