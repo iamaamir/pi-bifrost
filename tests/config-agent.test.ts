@@ -2035,7 +2035,7 @@ describe("nested patches merge instead of replacing a whole field (#237)", () =>
       assert.equal(applied.status, "ok");
       assert.equal(applied.applied, true);
       assert.equal(applied.reloaded, true);
-      assert.match(contentOf(applyResult), /replace classifier\.minConfidence: 0\.7 -> 0\.5/);
+      assert.match(contentOf(applyResult), /replace \/classifier\/minConfidence: 0\.7 -> 0\.5/);
       const stored = JSON.parse(harness.readFile(".pi/bifrost.json") ?? "{}") as Record<string, unknown>;
       assert.deepEqual(stored.classifier, {
         enabled: true,
@@ -2064,13 +2064,54 @@ describe("nested patches merge instead of replacing a whole field (#237)", () =>
 
       const { details, result } = await checkedCandidate(harness, params);
       const report = contentOf(result);
-      assert.match(report, /replace classifier\.minConfidence: 0\.7 -> 0\.5/);
-      assert.doesNotMatch(report, /replace classifier:/, "the report names the leaf, not the parent object");
+      assert.match(report, /replace \/classifier\/minConfidence: 0\.7 -> 0\.5/);
+      assert.doesNotMatch(report, /replace \/classifier:/, "the report names the leaf, not the parent object");
 
       await harness.run(applyParams(details, params));
       const dialog = harness.confirmations()[0]?.details ?? "";
-      assert.match(dialog, /replace "classifier\.minConfidence"/);
-      assert.match(dialog, /"classifier\.minConfidence": 0\.7 -> 0\.5/, "the exact before and after values stay visible");
+      assert.match(dialog, /replace "\/classifier\/minConfidence"/);
+      assert.match(dialog, /"\/classifier\/minConfidence": 0\.7 -> 0\.5/, "the exact before and after values stay visible");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("allows constructor and prototype as tier names but rejects __proto__ inside arrays", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"] },
+      });
+
+      // `constructor` and `prototype` are ordinary own-property writes; a tier may
+      // legitimately carry either name, so only `__proto__` is unsafe.
+      const allowed = await checkedCandidate(harness, {
+        patch: { models: { constructor: ["beta/code"], prototype: ["gamma/review"] } },
+      });
+      assert.deepEqual(allowed.details.nextSource?.models, {
+        general: ["alpha/strong"],
+        constructor: ["beta/code"],
+        prototype: ["gamma/review"],
+      });
+      assert.equal(Object.getPrototypeOf(allowed.details.nextSource?.models), Object.prototype);
+      assert.equal(({} as Record<string, unknown>).polluted, undefined);
+
+      // An array element is never index-assigned by the merge, but the guard has
+      // to see it: future or looser item schemas must not become a bypass.
+      const inArray = JSON.parse('{"__proto__":{"polluted":true},"pattern":"x","model":"general"}');
+      for (const patch of [
+        { rules: [inArray] },
+        { rules: [[inArray]] },
+        { economics: { sources: [inArray] } },
+      ]) {
+        const result = await harness.run({ operation: "check", patch });
+        const details = detailsOf<ConfigAgentCheckResult>(result);
+        assert.equal(details.status, "usage", JSON.stringify(details.notes));
+        assert.match(details.notes.join(" "), /unsafe key/);
+      }
+      assert.equal(({} as Record<string, unknown>).polluted, undefined);
     } finally {
       harness.cleanup();
     }
@@ -2119,8 +2160,8 @@ describe("nested patches merge instead of replacing a whole field (#237)", () =>
         },
       });
 
-      assert.ok(details.nestedChanges.some((change) => change.kind === "remove" && change.field === "classifier.criteria"));
-      assert.match(contentOf(result), /remove classifier\.criteria \(was \{"general":"general work"\}\)/);
+      assert.ok(details.nestedChanges.some((change) => change.kind === "remove" && change.field === "/classifier/criteria"));
+      assert.match(contentOf(result), /remove \/classifier\/criteria \(was \{"general":"general work"\}\)/);
     } finally {
       harness.cleanup();
     }
@@ -2164,6 +2205,100 @@ describe("nested patches merge instead of replacing a whole field (#237)", () =>
 
       assert.equal(details.status, "rejected");
       assert.ok(details.issues.some((issue) => issue.code === "config.schema_unsupported_field"), JSON.stringify(details.issues));
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("replaces a rules array wholesale, keeping order and duplicates", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"], quick: ["beta/code"] },
+        rules: [{ pattern: "old-work", model: "general" }],
+      });
+      const rules = [
+        { pattern: "second", model: "quick" },
+        { pattern: "first", model: "general" },
+        { pattern: "second", model: "quick" },
+      ];
+
+      const { details } = await checkedCandidate(harness, { patch: { rules } });
+
+      assert.deepEqual(details.nextSource?.rules, rules);
+      assert.equal((details.nextSource?.rules as unknown[]).length, 3, "the old rule is not carried into the replacement");
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("keeps warnings, probe scope, write eligibility, and digests with many nested changes", async () => {
+    const harness = freshHarness({
+      providerAuthStatus: () => ({ configured: true, source: "stored" }),
+      providerAuthResult: (provider) => provider === "alpha"
+        ? new Error("stored credential could not be refreshed")
+        : { auth: { apiKey: "resolved-value-not-reported" } },
+    });
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"] },
+      });
+      const bulk = Object.fromEntries(Array.from({ length: 80 }, (_, index) => [`bulk${index}`, ["beta/code"]]));
+
+      const result = await harness.run({ operation: "check", patch: { models: bulk } });
+      const details = detailsOf<ConfigAgentCheckResult>(result);
+      const text = contentOf(result);
+
+      assert.equal(details.status, "ok", JSON.stringify(details.issues));
+      assert.ok(details.nestedChanges.length > 40, `fixture must exceed the change budget: ${details.nestedChanges.length}`);
+      assert.match(text, /more change\(s\) omitted/, "the report counts what it omitted");
+      assert.match(text, /warnings:/, "a warning survives a long change list");
+      assert.match(text, /live probe not run: \d+ model\(s\)/, "the probe scope survives");
+      assert.match(text, /write eligible: true/, "write eligibility survives");
+      assert.match(text, /proposalDigest: [0-9a-f]{64}/, "the apply digests survive");
+      assert.match(text, /Session-local proposalHandle: [0-9a-f]{12}/, "the proposal handle survives");
+      const report = text.split("\nSession-local proposalHandle:")[0]!;
+      assert.ok(report.split("\n").length <= 121, `the report stays bounded: ${report.split("\n").length} lines`);
+    } finally {
+      harness.cleanup();
+    }
+  });
+
+  it("renders unambiguous paths for keys with dots, slashes, and control characters", async () => {
+    const harness = freshHarness();
+    try {
+      harness.writeFile(".pi/bifrost.json", {
+        schemaVersion: 2,
+        default: "general",
+        models: { general: ["alpha/strong"] },
+      });
+      const patch = {
+        models: {
+          "gpt.4": ["beta/code"],
+          "a/b~c": ["gamma/review"],
+          "line\nbreak": ["beta/code"],
+        },
+      };
+
+      const { details, result } = await checkedCandidate(harness, { patch });
+      const fields = details.nestedChanges.map((change) => change.field).sort();
+
+      assert.deepEqual(fields, ["/models/a~1b~0c", "/models/gpt.4", "/models/line\\u000abreak"]);
+      const report = contentOf(result);
+      assert.match(report, /add \/models\/gpt\.4: /);
+      assert.match(report, /add \/models\/a~1b~0c: /);
+      assert.match(report, /add \/models\/line\\u000abreak: /);
+
+      await harness.run(applyParams(details, { patch }));
+      const dialog = harness.confirmations()[0]?.details ?? "";
+      assert.match(dialog, /add "\/models\/gpt\.4"/);
+      assert.match(dialog, /add "\/models\/a~1b~0c"/);
+      // The dialog prints the path as JSON, so the pointer's own escape shows doubled.
+      assert.match(dialog, /add "\/models\/line\\\\u000abreak"/);
     } finally {
       harness.cleanup();
     }
@@ -2430,7 +2565,7 @@ describe("apply requires approval, matching digests, and proves the result", () 
       assert.equal(confirmations.length, 1);
       assert.equal(confirmations[0]?.title, "Apply this Bifrost configuration?");
       assert.match(confirmations[0]?.details ?? "", /Source: project/);
-      assert.match(confirmations[0]?.details ?? "", /add "models\.deep"/);
+      assert.match(confirmations[0]?.details ?? "", /add "\/models\/deep"/);
       assert.match(confirmations[0]?.details ?? "", /"deep" \("first"\): \["alpha\/strong"\]/);
       assert.match(confirmations[0]?.details ?? "", /No other config source is modified/);
 
@@ -2507,8 +2642,9 @@ describe("apply requires approval, matching digests, and proves the result", () 
       assert.equal(applied.status, "ok");
       const message = harness.confirmations()[0]!.details;
       assert.doesNotMatch(message, /[^\x20-\x7e\n]/);
-      const line = message.split("\n").find((row) => row.startsWith('  "description": '))!;
-      assert.equal(JSON.parse(line.slice('  "description": '.length)), description);
+      const prefix = '  "/description": ';
+      const line = message.split("\n").find((row) => row.startsWith(prefix))!;
+      assert.equal(JSON.parse(line.slice(prefix.length)), description);
       assert.match(line, /\\u0020/);
       assert.equal(JSON.parse(harness.readFile(".pi/bifrost.json")!).description, description);
     } finally { harness.cleanup(); }
@@ -3168,7 +3304,7 @@ describe("confirmation-window races and preview fidelity", () => {
       const applied = detailsOf<ConfigAgentApplyResult>(await harness.run(applyParams(details, { candidate })));
       assert.equal(applied.status, "ok");
       const dialog = harness.confirmations()[0]?.details ?? "";
-      assert.match(dialog, /replace "tierPolicies\.work\.fallbackTiers"/, "the change kind and field stay");
+      assert.match(dialog, /replace "\/tierPolicies\/work\/fallbackTiers"/, "the change kind and field stay");
       assert.match(dialog, /fallbackTiers/, "the changed value path is visible");
       assert.match(dialog, /"review"/, "the value the user approved away is visible");
       assert.match(dialog, /->/, "before and after are separated");
