@@ -3984,6 +3984,8 @@ describe("diagnostics commands", () => {
     assert.equal(report.registry.knownModelCount, 1);
     assert.equal(report.registry.availableModelCount, 1);
     assert.equal(report.registry.bifrostLastRefreshAgeMs >= 0, true);
+    assert.equal(report.registry.bifrostRegistryRefreshTtlMs, 30_000);
+    assert.equal(report.registry.forceRegistryRefresh, false);
     assert.deepEqual(report.reliabilityPolicy, {
       enabled: true, cooldownOnAllowanceExhausted: true, allowanceCooldownScope: "provider",
     });
@@ -4116,9 +4118,33 @@ describe("diagnostics commands", () => {
     })).join("\n");
     assert.match(output, /loaded effective config \(run \/bifrost reload after editing files\)/);
     assert.match(output, /Bifrost last registry refresh age:/);
+    assert.match(output, /Bifrost registry refresh TTL: 30000 ms \(fixed internal policy; not user-configurable\)/);
+    assert.doesNotMatch(output, /Bifrost registry refresh pending:/);
     assert.match(output, /usage\/billing cooldown=on \(provider scope\)/);
     assert.doesNotMatch(output, /provider data freshness/i);
     assert.doesNotMatch(output, /PRIVATE_(?:AUTH|LABEL)_SENTINEL/);
+  });
+
+  it("reports pending registry refresh state in JSON and text without claiming completion", async () => {
+    const h = diagnosticHarness();
+    (h.state as any).forceRegistryRefresh = true;
+    (h.context as unknown as { mode: string }).mode = "cli";
+    const lines = await withStubs(() => createCommandRouter(h.state as never)("inspect --json", h.context as never));
+    const report = JSON.parse(lines.find((line) => line.startsWith(BIFROST_JSON_PREFIX))!.slice(BIFROST_JSON_PREFIX.length));
+    assert.equal(report.registry.forceRegistryRefresh, true);
+    assert.equal(report.registry.bifrostRegistryRefreshTtlMs, 30_000);
+    assert.deepEqual(h.counters(), { registryReads: 2, networkCalls: 0, writes: 0 });
+
+    const text = (await withStubs(() => createCommandRouter(h.state as never)("inspect", h.context as never))).join("\n");
+    assert.match(text, /Bifrost registry refresh pending: true \(refresh required; not a completion record\)/);
+    assert.deepEqual(h.counters(), { registryReads: 4, networkCalls: 0, writes: 0 });
+  });
+
+  it("reports the fixed registry refresh interval in debug output", async () => {
+    const h = diagnosticHarness();
+    (h.context as unknown as { mode: string }).mode = "cli";
+    const output = (await withStubs(() => createCommandRouter(h.state as never)("debug", h.context as never))).join("\n");
+    assert.match(output, /registryRefresh: 30000 ms \(fixed internal policy; not user-configurable\)/);
   });
 
   it("shows a sanitized strict-config field path in text validation output", async () => {

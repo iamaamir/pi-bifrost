@@ -5,6 +5,7 @@ import type { ClassifierBackend } from "./classifier-backends.ts";
 import { validateEffectiveConfigStructure } from "./config-schema.ts";
 import { findCandidates, modelKey } from "./routing.ts";
 import { getCircuitState, type ReliabilityConfig, type ReliabilityState } from "./reliability.ts";
+import { REGISTRY_REFRESH_TTL_MS } from "./registry-refresh.ts";
 import { isVirtualModel } from "./virtual-model.ts";
 import type { RuntimeStateIssue } from "./runtime-state.ts";
 
@@ -88,6 +89,8 @@ export interface InspectDiagnosticsInput {
   readonly now?: number;
   /** Bifrost's local refresh completion time, not a provider-data timestamp. */
   readonly lastRegistryRefreshAt?: number;
+  /** True when a refresh is still required; not proof that one completed. */
+  readonly forceRegistryRefresh?: boolean;
   readonly classifierEnabled?: boolean;
   readonly classifierEnablementSource?: ClassifierDiagnosticStatus["source"];
   readonly effectiveClassifierBackend?: ClassifierBackend;
@@ -103,6 +106,10 @@ export interface InspectDiagnosticsReport {
     readonly knownModelCount: number | "unknown";
     readonly availableModelCount: number | "unknown";
     readonly bifrostLastRefreshAgeMs?: number;
+    /** Fixed internal interval; present even when no refresh age is known. */
+    readonly bifrostRegistryRefreshTtlMs: number;
+    /** True when a refresh is still pending; not proof that one completed. */
+    readonly forceRegistryRefresh: boolean;
   };
   readonly tiers: readonly InspectedTier[];
   readonly reliabilityPolicy: {
@@ -402,6 +409,8 @@ export function inspectDiagnostics(input: InspectDiagnosticsInput): InspectDiagn
       ...(input.lastRegistryRefreshAt !== undefined && Number.isFinite(input.lastRegistryRefreshAt)
         ? { bifrostLastRefreshAgeMs: Math.max(0, now - input.lastRegistryRefreshAt) }
         : {}),
+      bifrostRegistryRefreshTtlMs: REGISTRY_REFRESH_TTL_MS,
+      forceRegistryRefresh: input.forceRegistryRefresh === true,
     },
     tiers,
     reliabilityPolicy: {
