@@ -132,6 +132,23 @@ different digest fails closed with `complexity-policy-changed`. A candidate
 label is not sufficient authority for a policy change; the protected workflow
 does not accept the self-authorizing override.
 
+### Lint exception
+
+Zizmor reports `dangerous-triggers` for every `pull_request_target` workflow.
+`complexity-gate.yml` carries a line-scoped
+`# zizmor: ignore[dangerous-triggers]` comment with the reason inline. That is an
+explicit workaround, not evidence that the trigger is safe by itself. Zizmor
+warns that avoiding pull-request code execution is not sufficient in every
+workflow; the controls specific to this judge are the base-ref checkout, PR
+refs treated as data, base-only dependency installation, a read-only token, and
+the boundary tests.
+
+No automatic in-repo replacement both preserves the protected judge and clears
+the audit. `pull_request` runs candidate workflow code; `workflow_run` is also a
+dangerous trigger; `schedule` or manual operation adds latency. An external
+trusted check is the clean replacement. The suppression is scoped to this
+trigger and must not be widened.
+
 The ruleset must require the protected workflow's `complexity-trusted` context
 for the check to block merges. CODEOWNERS routes policy paths to the owner, but
 code-owner review is only blocking when the ruleset requires it. That is a

@@ -151,6 +151,13 @@ branch. It fetches the PR head and merge refs, measures both the PR delta and th
 proposed merge result as data, and uploads the evidence. It never installs or
 executes candidate code. A candidate label is not by itself an approval.
 
+Zizmor flags `pull_request_target` as a dangerous trigger. The workflow uses a
+line-scoped `# zizmor: ignore[dangerous-triggers]` annotation with the reason
+inline. This is a documented exception, not a claim that the trigger is safe by
+itself. Zizmor's preferred `pull_request` alternative cannot be the protected
+judge because it runs candidate workflow code. Removing the exception requires
+an external trusted check or a different protected design; do not widen it.
+
 The existing verification complexity job remains the bootstrap/local path until
 the protected workflow is present on the target branch. The ruleset must require
 the protected `complexity-trusted` context for that check to block merges. The
