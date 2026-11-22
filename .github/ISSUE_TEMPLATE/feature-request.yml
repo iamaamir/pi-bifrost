@@ -1,0 +1,34 @@
+name: Feature request
+description: Suggest an improvement to Bifrost.
+body:
+  - type: markdown
+    attributes:
+      value: Describe the problem you want to solve. You do not need to design the implementation.
+  - type: textarea
+    id: need
+    attributes:
+      label: What are you trying to do?
+      description: Explain the problem or limitation.
+      placeholder: I want to understand why a model was not selected.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What would help?
+      description: Describe the result you want, if you know.
+    validations:
+      required: false
+  - type: textarea
+    id: workaround
+    attributes:
+      label: How do you handle this today (optional)?
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Other context (optional)
+      description: Examples or related issues can help. Remove private information.
+    validations:
+      required: false

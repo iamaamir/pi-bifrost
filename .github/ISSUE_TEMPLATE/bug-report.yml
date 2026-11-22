@@ -1,0 +1,51 @@
+name: Bug report
+description: Report unexpected behavior in Bifrost.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe what happened, even if you cannot reproduce it.
+        Remove API keys, private prompts, and other secrets from logs or screenshots.
+        For a security vulnerability, check the Security tab for private reporting.
+        Do not post exploit details in a public issue.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Explain what did not work. A short description is enough.
+      placeholder: Bifrost selected a different model than I expected.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How can we reproduce it (if known)?
+      description: List steps if possible. If it happens at random, say when.
+      placeholder: |
+        1. Open Pi with Bifrost enabled.
+        2. Run /bifrost inspect.
+        3. Observe ...
+    validations:
+      required: false
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      description: Leave this blank if you are not sure.
+    validations:
+      required: false
+  - type: input
+    id: environment
+    attributes:
+      label: Environment (if known)
+      description: Bifrost version, Pi version, operating system, or relevant provider.
+      placeholder: macOS, Pi version ..., Bifrost version ...
+    validations:
+      required: false
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, screenshots, or other details (optional)
+      description: Share only redacted details. Do not post secrets or private prompt text.
+    validations:
+      required: false
