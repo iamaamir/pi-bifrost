@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 const workflow = readFileSync(new URL("../.github/workflows/complexity-gate.yml", import.meta.url), "utf8");
 
 test("the trusted complexity gate runs from the protected base and measures the PR as data", () => {
-  assert.match(workflow, /^on:\n {2}pull_request_target:/mu);
+  assert.match(workflow, /^on:\n(?: {2}#[^\n]*\n)* {2}pull_request_target:/mu);
   assert.match(workflow, /ref: \$\{\{ github\.event\.pull_request\.base\.ref \}\}/u);
   assert.match(workflow, /persist-credentials: false/u);
   assert.match(workflow, /refs\/pull\/\$\{PR_NUMBER\}\/head/u);

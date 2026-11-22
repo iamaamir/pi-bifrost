@@ -7,6 +7,8 @@ name: Complexity gate
 # workflow is executed. The resolved revisions and policy digests are recorded
 # in the artifact so a verdict can be replayed after the refs move.
 on:
+  # zizmor: ignore[dangerous-triggers] The protected base workflow is the judge:
+  # it runs base code only, fetches the PR as Git data, and never executes it.
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
 
