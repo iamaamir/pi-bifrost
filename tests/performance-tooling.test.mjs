@@ -244,6 +244,10 @@ const ON_DEMAND_CHECKS = {
     why: "checks repository paths cited in tracker issues; needs a live issue and gh",
     evidence: /node scripts\/check-issue-refs\.mjs/u,
   },
+  "check:pr-evidence": {
+    why: "compares a pull request body with the live head and optional removed phrases; needs a live PR and gh",
+    evidence: /node scripts\/check-pr-evidence\.mjs/u,
+  },
 };
 
 function uncoveredGates(names, commands, equivalents, onDemand = {}) {
@@ -278,7 +282,10 @@ test("every check: script is covered by CI or by asserted exception evidence", (
   assert.equal(gates.length >= 10, true, `expected the gate inventory, found ${gates.join(", ")}`);
   assert.deepEqual(uncoveredGates(gates, workflowCommands(workflowSources), CI_EQUIVALENTS, ON_DEMAND_CHECKS), []);
   assert.deepEqual(staleEvidence(CI_EQUIVALENTS, workflowSources), []);
-  assert.deepEqual(staleEvidence(ON_DEMAND_CHECKS, trackerGuide), []);
+  // An on-demand check may be documented in either developer guide; its
+  // evidence line still has to exist.
+  assert.deepEqual(staleEvidence(ON_DEMAND_CHECKS, `${guide}\n${trackerGuide}`), []);
+  assert.deepEqual(staleEvidence(ON_DEMAND_CHECKS, "no evidence"), ["check:issue-refs", "check:pr-evidence"]);
 });
 
 test("every check: script appears in the developer guide", () => {

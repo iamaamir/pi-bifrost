@@ -48,6 +48,7 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run check:secrets:history` | Full-history secret scan (slow) | gitleaks |
 | `npm run check:deps` | Lockfile vulnerabilities (OSV) | osv-scanner |
 | `npm run check:issue-refs` | Repository paths cited in tracker issues; on demand, not a gate (see [`tracker-workflow.md`](tracker-workflow.md)) | `gh` |
+| `npm run check:pr-evidence` | A pull request body's head/base claims against the live PR, plus opt-in scans for removed user-visible phrases; on demand, not a gate (see [`testing-coverage.md`](testing-coverage.md#revision-bound-pr-evidence)) | `gh`, git |
 | `npm run toolbox:doctor` | Tool availability and install hints | none |
 | `npm run test:quick` | Quick local tier: typecheck + root tests minus the four heavy files (see `scripts/test-quick.mjs`) | `npm ci` |
 | `scripts/git-hooks/pre-push` | Optional pre-push gate running `test:quick` plus the fast gates (`check:ast`, `check:duplication`, `check:complexity`); enable with `git config core.hooksPath scripts/git-hooks`, bypass with `--no-verify` | `npm ci` |
@@ -164,6 +165,26 @@ change.
 These tests do not prove that a command prints the output that a document shows.
 A captured output block is evidence only when it names the revision, and when a
 clean working tree produced it.
+
+## Pull request evidence
+
+Run the read-only check against the live PR before requesting or refreshing
+review:
+
+```bash
+node scripts/check-pr-evidence.mjs 123
+node scripts/check-pr-evidence.mjs 123 --forbid "report file age" --forbid "file mtime"
+```
+
+`npm run check:pr-evidence -- <pr>` is the same check. It fails when a body head
+claim (`Reviewed head SHA`, `Final head`, `Head`) does not match the live head,
+when a current-base claim does not match the live base, when a historical base
+is not an ancestor of the head, when a declared revision is malformed, or when a
+required check cannot be verified locally. `--forbid` also fails when a removed
+user-visible phrase still appears. The output reports the forbidden phrases
+checked (`none` when none were supplied). The phrase scan is a heuristic and
+cannot prove that no semantic claim remains. The check never edits the PR body.
+See [revision-bound PR evidence](testing-coverage.md#revision-bound-pr-evidence).
 
 ## Before you verify a change
 

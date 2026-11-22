@@ -41,6 +41,32 @@ The image reference must match the attached local path so `gh` replaces it with 
 
 Screenshots supplement, not replace, behavioral assertions and passing checks. For a non-UI change, mark visual evidence N/A with a brief reason.
 
+### Revision-bound PR evidence
+
+Before requesting or refreshing review, compare the body with the live revision:
+
+1. Fetch the PR's current head and base: `gh pr view <pr> --json headRefOid,baseRefOid`.
+2. Run `npm run check:pr-evidence -- <pr>`. It fails when a body head claim (`Reviewed head SHA`, `Final head`, `Head`) does not match the live head, when a current-base claim does not match the live base, when a historical base is not an ancestor of the head, when a declared revision is malformed, or when a required check cannot be verified locally. A PR that declares no revision is not a failure.
+3. Pass every user-visible phrase the change removed, for example `--forbid "report file age" --forbid "file mtime"`. The scan is a heuristic and can miss a rephrased claim. A removal note that quotes the old wording also trips the scan; rephrase the note or accept the finding.
+4. The output reports the live head and base, each claim, the forbidden phrases checked (`none` when none were supplied), and any findings. An unperformed scan is never reported as successful.
+
+Historical base claims (`Original base`, `Rebased onto`, `Rebase targets`) are checked as ancestors of the head. Other base claims are treated as the current base and must match the live base exactly. A declared revision with no valid SHA is a malformed claim and fails. A PR that declares no revision is not a failure.
+5. Re-capture screenshots and text evidence on the final head. If a capture is from an earlier head, label it prior-head and state why it remains representative. Never present a prior-head capture as final-head evidence.
+5. Record the original base and final head in Verification, and re-run the check after any push that changes the head.
+
+The check does not edit the body and does not replace review.
+
+### Transient CLI notices
+
+`npm run test:ui` is the first capture path for a user-visible notice. When the notice frame is transient or the smoke renderer drops it, capture the deterministic command output instead:
+
+- Use the same isolated fake-provider scenario as the behavioral test, with `--no-session` and one command prompt.
+- Render the captured notice text to PNG locally. Label it a text capture, not a TUI frame.
+- Put the exact command, observed text and head SHA in the PR body.
+- Keep the automated text assertion authoritative. The image illustrates the contract; it does not replace the assertion.
+
+Do not add a one-off renderer to the repository for a single capture.
+
 ## Release feature map
 
 The requirement IDs come from [the PRD](../PRD.md). These rows name test boundaries, not percentages of coverage. More than one row can use the same user scenario.
