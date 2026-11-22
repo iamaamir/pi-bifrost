@@ -30,9 +30,6 @@ const allowedPort = allowed ? Number(allowed.port) : null;
 
 function isAllowed(host, port) {
   if (denyAll) return false;
-  // Test tooling (for example Stryker's logging client) connects via the
-  // "localhost" loopback alias, not the numeric address. The alias is only a
-  // candidate; its resolved address is checked before the socket connects.
   if (allowLoopback) return (host === "127.0.0.1" || host === "localhost") && Number(port) > 0;
   return allowed && host === allowed.hostname && Number(port) === allowedPort;
 }
@@ -50,12 +47,12 @@ function deny(message) {
 
 const connect = net.Socket.prototype.connect;
 net.Socket.prototype.connect = function (...args) {
-  const { options, host } = parseConnectArgs(args);
+  const { options, host, rest } = parseConnectArgs(args);
   if (!isAllowed(host, options.port)) {
     deny("blocked socket connection to " + host + ":" + options.port);
   }
   const guardedArgs = allowLoopback && host === "localhost"
-    ? withGuardedLookup(args, options, host, recordViolation)
+    ? withGuardedLookup(args, options, host, rest, recordViolation)
     : args;
   return connect.apply(this, guardedArgs);
 };
@@ -68,7 +65,9 @@ dgram.Socket.prototype.send = function (...args) {
 const fetch = globalThis.fetch;
 globalThis.fetch = (input, ...args) => {
   const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
-  const localAllowed = url.protocol === "http:" && isAllowed(url.hostname, url.port);
+  // The localhost alias is reserved for the Stryker TCP path; fetch keeps its
+  // original hostname contract and does not gain the alias allowance.
+  const localAllowed = url.protocol === "http:" && url.hostname !== "localhost" && isAllowed(url.hostname, url.port);
   if (!localAllowed) deny("blocked fetch to " + url.origin);
   return fetch(input, ...args);
 };
