@@ -588,6 +588,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(result.violations, "", "Pi attempted a non-fixture network connection");
       assert.equal(result.code, 0, result.stderr);
       assert.ok(requests.length > 0 && requests.every((model) => model === "credits-exhausted"));
+      assert.match(result.stderr + result.stdout, /No usable models found from this fresh probe run/u);
       assert.deepEqual(readFileSync(join(env.work, ".pi", "bifrost.json")), original);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
@@ -611,15 +612,20 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
     const env = fixture(port, ["credits-exhausted"]);
     const original = Buffer.from('{"enabled":true,"models":{"general":["handwritten/model"]}}\n');
     writeFileSync(join(env.work, ".pi", "bifrost.json"), original);
-    writeFileSync(join(env.work, ".pi", "bifrost-probe.json"), JSON.stringify([
+    const probePath = join(env.work, ".pi", "bifrost-probe.json");
+    writeFileSync(probePath, JSON.stringify([
       { provider: "fake", model: "credits-exhausted", status: "error", cost_input: 0, cost_output: 0, duration_ms: 10 },
     ]));
+    const recent = new Date(Date.now() - 60_000);
+    utimesSync(probePath, recent, recent);
     try {
       const result = await runInit({ ...env, args: "--write" });
       assert.equal(result.timedOut, false);
       assert.equal(result.violations, "");
       assert.equal(result.code, 0, result.stderr);
       assert.deepEqual(requests, []);
+      assert.match(result.stderr + result.stdout, /No usable models found from (?:a|the) cached probe report \(report file age .*; file mtime \d{4}-\d{2}-\d{2}T/u);
+      assert.match(result.stderr + result.stdout, /file mtime age, not guaranteed provider-data freshness\)/u);
       assert.deepEqual(readFileSync(join(env.work, ".pi", "bifrost.json")), original);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });

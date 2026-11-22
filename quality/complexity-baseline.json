@@ -4,7 +4,7 @@
   "scopes": {
     "source": {
       "files": 94,
-      "functions": 2830,
+      "functions": 2832,
       "maxCyc": 190,
       "maxCog": 262,
       "cycGt30": 58,
@@ -278,11 +278,11 @@
     },
     "probe.ts": {
       "scope": "source",
-      "lines": 427,
-      "funcs": 28,
+      "lines": 440,
+      "funcs": 29,
       "maxCyc": 27,
       "maxCog": 33,
-      "sumCyc": 134,
+      "sumCyc": 135,
       "sumCog": 127
     },
     "provider-cooldowns.ts": {
@@ -1790,7 +1790,7 @@
     },
     "tests/integration/init-regression.test.mjs": {
       "scope": "tests",
-      "lines": 728,
+      "lines": 734,
       "funcs": 54,
       "maxCyc": 10,
       "maxCog": 15,
@@ -2051,7 +2051,7 @@
     },
     "tests/probe.test.ts": {
       "scope": "tests",
-      "lines": 811,
+      "lines": 813,
       "funcs": 106,
       "maxCyc": 5,
       "maxCog": 6,

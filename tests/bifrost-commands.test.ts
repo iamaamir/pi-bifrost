@@ -1669,6 +1669,32 @@ describe("bifrost command ui", () => {
     }
   });
 
+  it("reports cached report provenance when a reused complete report has no usable models", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "bifrost-init-cached-all-failed-"));
+    const previousCwd = process.cwd();
+    process.chdir(tempDir);
+    try {
+      const piDir = join(tempDir, ".pi");
+      mkdirSync(piDir);
+      writeRecentProbeCache(join(piDir, "bifrost-probe.json"), [
+        { provider: "fixture", model: "chat", status: "error", error: "provider rejected probe", cost_input: 0, cost_output: 0, duration_ms: 10 },
+      ]);
+      const { ctx, calls } = makeCtx([{ provider: "fixture", id: "chat" }]);
+      let probes = 0;
+      (ctx as any).modelRegistry.streamSimple = () => { probes++; return { result: async () => ({ role: "assistant", content: [{ type: "text", text: "ok" }], usage: { totalTokens: 1 }, stopReason: "stop" }) }; };
+      await createCommandRouter(makeState() as never)("init", ctx as never);
+      assert.equal(probes, 0, "cached all-failed report must not trigger new probes");
+      const notices = calls.filter((call) => call.kind === "notify").map((call) => String(call.value));
+      const error = notices.find((value) => value.includes("No usable models found") && value.includes("cached probe report"));
+      assert.ok(error, `expected cached provenance on no-usable-models exit, got: ${JSON.stringify(notices)}`);
+      assert.match(error ?? "", /report file age .*; file mtime \d{4}-\d{2}-\d{2}T/);
+      assert.match(error ?? "", /file mtime age, not guaranteed provider-data freshness/);
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("re-probes malformed or incomplete recent caches instead of accepting a partial pool", async () => {
     const invalidReports: unknown[] = [
       [],

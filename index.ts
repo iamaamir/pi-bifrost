@@ -106,7 +106,7 @@ import { projectProviderRefreshEvidence, waitForRegistryRefresh } from "./regist
 import { buildBootstrapPools, canBootstrapModels, hasBlockingRuntimePreferences, hasExplicitExtensionRoutingFile, hasUserBootstrapFiles, serializeBootstrapConfig } from "./auto-setup.ts";
 import { buildInitOwnershipReceipt } from "./reconciliation-command.ts";
 import { applyReconciliationTransaction } from "./reconciliation-store.ts";
-import { probeOptionsFromConfig, readRecentCompleteProbeReport, runProbe } from "./probe.ts";
+import { probeOptionsFromConfig, readRecentCompleteProbeReportCacheHit, runProbe } from "./probe.ts";
 
 type IdentityObject = object;
 
@@ -140,7 +140,7 @@ function classifierOutcomeLabel(outcome: TypeSafeObservation["outcome"]): string
 }
 
 function hasRecentCompleteFailedProbeReport(path: string, catalog: readonly Model<Api>[]): boolean {
-  const report = readRecentCompleteProbeReport(path, catalog);
+  const report = readRecentCompleteProbeReportCacheHit(path, catalog);
   return !!report && report.results.every((result) => result.status === "error" || result.status === "timeout");
 }
 

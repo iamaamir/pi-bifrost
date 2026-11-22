@@ -143,7 +143,7 @@ export function validateCompleteProbeReport(
 }
 
 /** Read a recent, complete cache from one no-follow file descriptor snapshot. */
-export function readRecentCompleteProbeReport(
+export function readRecentCompleteProbeReportCacheHit(
   path: string,
   catalog: readonly ProbeCatalogModel[],
   now = Date.now(),
@@ -168,6 +168,19 @@ export function readRecentCompleteProbeReport(
   } finally {
     if (fd !== undefined) closeSync(fd);
   }
+}
+
+/**
+ * Compatibility wrapper: returns the validated report array, preserving the
+ * pre-transparency return contract. New callers that need report age/mtime
+ * should use readRecentCompleteProbeReportCacheHit().
+ */
+export function readRecentCompleteProbeReport(
+  path: string,
+  catalog: readonly ProbeCatalogModel[],
+  now = Date.now(),
+): ProbeResult[] | undefined {
+  return readRecentCompleteProbeReportCacheHit(path, catalog, now)?.results;
 }
 
 /** RunProbe options derived from config (`probe.concurrency`/`probe.timeoutMs`).
