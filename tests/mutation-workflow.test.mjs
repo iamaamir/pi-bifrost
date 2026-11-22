@@ -273,6 +273,22 @@ test("the measurement fails only when it is unusable, never on a low score", () 
   assert.match(empty[0], /no module reports/u);
 });
 
+test("nightly enforces usability while dispatch and callers can opt out", () => {
+  const step = jobs.summarise.split("- name: Fail on an unusable measurement")[1];
+  assert.ok(step, "the usability-enforcement step must exist");
+  const condition = step.match(/^\s+if: \$\{\{ (.+) \}\}$/mu)?.[1];
+  assert.ok(condition, "the step must carry an if: condition");
+  // Repository-authored workflow YAML, never prompt or configuration input.
+  // nosemgrep: bifrost-no-eval
+  const enforce = (eventName, failOnUnusable) => Boolean(
+    new Function("github", "inputs", `return (${condition});`)({ event_name: eventName }, { fail_on_unusable: failOnUnusable }));
+  assert.equal(enforce("schedule", false), true, "nightly has no inputs, so the event guard must enforce");
+  assert.equal(enforce("workflow_dispatch", true), true);
+  assert.equal(enforce("workflow_dispatch", false), false, "manual dispatch keeps the opt-out");
+  assert.equal(enforce("workflow_call", true), true);
+  assert.equal(enforce("workflow_call", false), false, "a reusable caller keeps the opt-out");
+});
+
 test("the timeout tolerance scales with the mutant count", () => {
   assert.equal(timeoutTolerance(0), TIMEOUT_TOLERANCE.minimum);
   assert.equal(timeoutTolerance(100), TIMEOUT_TOLERANCE.minimum, "small runs keep the floor");

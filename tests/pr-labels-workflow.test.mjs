@@ -71,8 +71,18 @@ test("the router uses only a read-only pull_request trigger", () => {
   assert.match(router, /^on:\n {2}pull_request:\n {4}types: \[labeled, synchronize\]$/mu);
   assert.doesNotMatch(router, /pull_request_target/u);
   assert.match(router, /^permissions:\n {2}contents: read$/mu);
-  assert.match(router, /^ {2}group: pr-labels-\$\{\{ github\.event\.pull_request\.number \}\}$/mu);
-  assert.match(router, /^ {2}cancel-in-progress: true$/mu);
+  assert.doesNotMatch(router, /^concurrency:/mu, "no workflow-wide group may cancel a sibling check");
+});
+
+test("each check owns a per-PR concurrency group", () => {
+  const groups = ROUTES.map((route) => {
+    const block = jobs[route.job];
+    const expected = "    group: pr-labels-" + route.job + "-${{ github.event.pull_request.number }}";
+    assert.ok(block.includes(expected), `${route.job} must own a per-PR group`);
+    assert.match(block, /^ {6}cancel-in-progress: true$/mu);
+    return block.match(/^ {6}group: (.+)$/mu)[1];
+  });
+  assert.equal(new Set(groups).size, groups.length, "no two checks may share a group");
 });
 
 test("applying a label runs only its own job", () => {

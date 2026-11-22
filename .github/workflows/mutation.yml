@@ -284,9 +284,9 @@ jobs:
           retention-days: 30
       - name: Fail on an unusable measurement
         # Never fail on a low score: the score is the measurement, not a gate.
-        # Fail when the run cannot be trusted as a measurement. A caller may
-        # switch this off to inspect a partial run.
-        if: ${{ inputs.fail_on_unusable }}
+        # A schedule has no `inputs` context, so the event guard is what keeps
+        # the nightly honest. Dispatch and reusable callers keep the opt-out.
+        if: ${{ github.event_name == 'schedule' || inputs.fail_on_unusable }}
         env:
           TIMEOUT_TOLERANCE: ${{ inputs.timeout_tolerance }}
         run: node mutation/workflow.mjs require-usable mutation-out/summary.json

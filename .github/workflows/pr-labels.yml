@@ -6,16 +6,14 @@ name: PR labels
 # still attached. Removing a label produces no run and stops future reruns.
 # Checks execute PR code, so this stays on `pull_request` with a read-only token.
 # Local `uses:` stays `./...`: the pinned actionlint 1.7.12 cannot parse `$/`.
+# Concurrency is per job: a new label must not cancel a different running check,
+# but a new commit still cancels an outdated run of the same check.
 on:
   pull_request:
     types: [labeled, synchronize]
 
 permissions:
   contents: read
-
-concurrency:
-  group: pr-labels-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
 
 jobs:
   campaign:
@@ -25,6 +23,9 @@ jobs:
       (github.event.action == 'synchronize' &&
        contains(github.event.pull_request.labels.*.name, 'ci:campaign'))
     uses: ./.github/workflows/campaign.yml # zizmor: ignore[self-repository]
+    concurrency:
+      group: pr-labels-campaign-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
 
   pi-compatibility:
     if: >-
@@ -33,6 +34,9 @@ jobs:
       (github.event.action == 'synchronize' &&
        contains(github.event.pull_request.labels.*.name, 'ci:pi-compatibility'))
     uses: ./.github/workflows/pi-compatibility.yml # zizmor: ignore[self-repository]
+    concurrency:
+      group: pr-labels-pi-compatibility-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
 
   mutation:
     # Diagnostic only: unlike release-gates, this check is not required for a merge.
@@ -42,3 +46,6 @@ jobs:
       (github.event.action == 'synchronize' &&
        contains(github.event.pull_request.labels.*.name, 'ci:mutation'))
     uses: ./.github/workflows/mutation.yml # zizmor: ignore[self-repository]
+    concurrency:
+      group: pr-labels-mutation-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
