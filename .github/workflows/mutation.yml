@@ -1,7 +1,9 @@
 name: Mutation measurement
 
-# Scheduled mutation testing. This is a measurement job, not a release gate: it
-# is never required for a merge and never runs on pull requests. A full
+# Mutation measurement. This is a measurement job, not a release gate: it is
+# never required for a merge. It runs automatically only on the nightly schedule
+# from the default branch. The `ci:mutation` PR label can also request a
+# diagnostic run through the PR-label router; that check is not required. A full
 # measurement is too slow to gate on, and a per-pull-request subset would measure
 # a different, incomparable population. One nightly run over the whole target set
 # keeps the score comparable over time.

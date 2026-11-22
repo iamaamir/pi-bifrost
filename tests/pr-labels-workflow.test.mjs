@@ -52,19 +52,28 @@ function conditionFor(job) {
   return match[1].trim().replace(/\s+/gu, " ");
 }
 
+/**
+ * Parse the two supported condition arms into data. Any other shape fails the
+ * test, so a workflow edit cannot silently change routing semantics.
+ */
+function routeArms(job) {
+  const arms = conditionFor(job).split(" || ").map((arm) => arm.trim().replace(/^\((.*)\)$/u, "$1"));
+  assert.equal(arms.length, 2, `${job} must have a labeled arm and a synchronize arm`);
+  return arms.map((arm) => {
+    const parts = arm.split(" && ").map((part) => part.trim());
+    assert.equal(parts.length, 2, `${job}: each arm must guard an action and a label`);
+    const action = parts[0].match(/^github\.event\.action == '([a-z_]+)'$/u)?.[1];
+    assert.ok(action, `${job}: unsupported action guard ${parts[0]}`);
+    const labeled = parts[1].match(/^github\.event\.label\.name == '([^']+)'$/u);
+    const attached = parts[1].match(/^contains\(github\.event\.pull_request\.labels\.\*\.name, '([^']+)'\)$/u);
+    assert.ok(labeled || attached, `${job}: unsupported label check ${parts[1]}`);
+    return { action, label: (labeled ?? attached)[1], match: labeled ? "new-label" : "attached-label" };
+  });
+}
+
 function runsFor(job, { action, label, labels = [] }) {
-  const github = {
-    event: {
-      action,
-      label: label ? { name: label } : undefined,
-      pull_request: { labels: labels.map((name) => ({ name })) },
-    },
-  };
-  const expression = conditionFor(job).replaceAll("github.event.pull_request.labels.*.name", "labels");
-  const contains = (collection, value) => collection.includes(value);
-  // Repository-authored workflow YAML, never prompt or configuration input.
-  // nosemgrep: bifrost-no-eval
-  return Boolean(new Function("github", "labels", "contains", `return (${expression});`)(github, labels, contains));
+  return routeArms(job).some((arm) =>
+    action === arm.action && (arm.match === "new-label" ? label === arm.label : labels.includes(arm.label)));
 }
 
 test("the router uses only a read-only pull_request trigger", () => {
@@ -83,6 +92,15 @@ test("each check owns a per-PR concurrency group", () => {
     return block.match(/^ {6}group: (.+)$/mu)[1];
   });
   assert.equal(new Set(groups).size, groups.length, "no two checks may share a group");
+});
+
+test("each route declares a labeled and a synchronize arm for its own label", () => {
+  for (const route of ROUTES) {
+    const arms = routeArms(route.job);
+    assert.deepEqual(arms.map((arm) => arm.action), ["labeled", "synchronize"]);
+    assert.deepEqual(arms.map((arm) => arm.match), ["new-label", "attached-label"]);
+    assert.deepEqual(arms.map((arm) => arm.label), [route.label, route.label]);
+  }
 });
 
 test("applying a label runs only its own job", () => {
