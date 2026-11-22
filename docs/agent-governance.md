@@ -96,7 +96,7 @@ are task templates, not commands or claims of an executed challenge/review.
 
 > Act as Axiom in a separate non-author run. Read AGENTS.md and .agents/axiom.md.
 > Review <PR> from <base SHA> to <head SHA>; changed files: <list>; diff: <path>.
-> Accepted contract/adjudication: <paths>; evidence: <commands, output, manifest>.
+> Accepted contract/adjudication: <paths>; evidence: <commands, output, manifest, check:pr-evidence result>.
 > Verify the target, contract and evidence. State if Product & UX Review is
 > REQUIRED or NOT REQUIRED, with a reason. Separate defects, missing checks
 > and nonblocking observations.

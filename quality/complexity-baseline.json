@@ -3,8 +3,8 @@
   "note": "Cyclomatic: McCabe-style (base 1 + branches/logical ops). Cognitive: Sonar-inspired approximation (structural/nesting increments, simplified logical chains) for relative hotspots, not exact Sonar parity. Ratchet: source/test scope counts (>30,>50) and maxima must not increase; per-file maxima must not increase for baselined files; new files must not exceed scope baseline maxima.",
   "scopes": {
     "source": {
-      "files": 94,
-      "functions": 2831,
+      "files": 95,
+      "functions": 2847,
       "maxCyc": 190,
       "maxCog": 262,
       "cycGt30": 58,
@@ -13,8 +13,8 @@
       "cogGt50": 38
     },
     "tests": {
-      "files": 195,
-      "functions": 8479,
+      "files": 196,
+      "functions": 8521,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -599,6 +599,15 @@
       "maxCog": 14,
       "sumCyc": 68,
       "sumCog": 53
+    },
+    "scripts/check-pr-evidence.mjs": {
+      "scope": "source",
+      "lines": 235,
+      "funcs": 16,
+      "maxCyc": 12,
+      "maxCog": 21,
+      "sumCyc": 62,
+      "sumCog": 72
     },
     "scripts/ci-report-publish.mjs": {
       "scope": "source",
@@ -2024,7 +2033,7 @@
     },
     "tests/performance-tooling.test.mjs": {
       "scope": "tests",
-      "lines": 437,
+      "lines": 444,
       "funcs": 66,
       "maxCyc": 9,
       "maxCog": 13,
@@ -2039,6 +2048,15 @@
       "maxCog": 5,
       "sumCyc": 139,
       "sumCog": 30
+    },
+    "tests/pr-evidence.test.mjs": {
+      "scope": "tests",
+      "lines": 201,
+      "funcs": 42,
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 49,
+      "sumCog": 7
     },
     "tests/preload/fast-check-seed.mjs": {
       "scope": "tests",
@@ -2626,6 +2644,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-22T08:34:15.925Z",
-  "sourceCommit": "a453e0017b52b2ced38a0829529e89cfe86bbe96"
+  "generatedAt": "2026-11-22T10:38:22.894Z",
+  "sourceCommit": "debebc75a9a51abc74cb1cbb23e0e56002b3ef7f"
 }

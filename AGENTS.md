@@ -138,6 +138,8 @@ A passing suite is a floor, not proof. Run the checks, then show what they do no
 
 Confirm the target before reviewing: base and head refs, both SHAs, and the changed-file list. Abort if the diff does not match the branch under discussion. A review of the wrong branch yields confident findings about unrelated code and costs a full round.
 
+Before requesting or refreshing review, run `npm run check:pr-evidence -- <pr>` against the live pull request and record its output with the evidence. A body head claim that does not match the live head, or a removed user-visible phrase that still appears, is a finding to fix, not a note to explain away. See [revision-bound PR evidence](docs/testing-coverage.md#revision-bound-pr-evidence).
+
 ## Git
 
 Use Conventional Commits. Keep commits atomic and scoped. Do not commit unrelated changes, generated prototypes, screenshots, research, or ADR drafts unless explicitly requested.

@@ -81,6 +81,7 @@
     "test:ui:reliability": "bash scripts/ui-reliability-fake-provider.sh",
     "verify:release": "node scripts/verify-release.mjs",
     "check:issue-refs": "node scripts/check-issue-refs.mjs",
+    "check:pr-evidence": "node scripts/check-pr-evidence.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "tsc --noEmit",
     "benchmark:jev": "node --experimental-strip-types scripts/jev-benchmark.ts",
