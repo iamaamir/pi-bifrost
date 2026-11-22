@@ -2634,9 +2634,9 @@ function renderDiagnosticLines(report: ValidateDiagnosticsReport | (InspectDiagn
     if (report.registry.bifrostLastRefreshAgeMs !== undefined) {
       lines.push(`Bifrost last registry refresh age: ${report.registry.bifrostLastRefreshAgeMs} ms`);
     }
-    lines.push(`Bifrost registry refresh TTL: ${report.registry.bifrostRegistryRefreshTtlMs} ms (fixed internal policy; not user-configurable)`);
+    lines.push(`Registry refresh threshold: ${report.registry.bifrostRegistryRefreshTtlMs / 1000}s`);
     if (report.registry.forceRegistryRefresh) {
-      lines.push("Bifrost registry refresh pending: true (refresh required; not a completion record)");
+      lines.push("Model catalog: refresh needed");
     }
     for (const tier of report.tiers) {
       lines.push(`${tier.tier}: ${tier.configuredEntryCount} configured entries`);
@@ -3366,7 +3366,7 @@ export function createCommandRouter(
         `debug: ${debugLog.enabled ? "on" : "off"}`,
         `debugLog: ${debugLog.path ? displayPath(debugLog.path) : "(not initialized)"}`,
         `debugRotation: ${debugLog.maxBytes / (1024 * 1024)} MiB per file${debugLog.rotatedPath ? ` → ${displayPath(debugLog.rotatedPath)}` : ""} (replaced at each rotation)`,
-        `registryRefresh: ${REGISTRY_REFRESH_TTL_MS} ms (fixed internal policy; not user-configurable)`,
+        `Registry refresh threshold: ${REGISTRY_REFRESH_TTL_MS / 1000}s`,
         `cache: ${state.cacheEntries.length} entries (retention ${state.config.cache?.ttlHours ?? 720}h)`,
         `reliability: ${JSON.stringify(state.config.reliability ?? {})}`,
         `openCircuits: ${openCircuitCount(state)}`,
