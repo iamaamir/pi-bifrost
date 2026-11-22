@@ -12,7 +12,7 @@ import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
 import { buildRouteDecisionSummary, type ClassificationPipeline, type ClassificationResult, type ClassificationSource, type ClassifierAttemptSummary, type RouteDecisionSummary } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugLogInfo, debugMeasure } from "./debug.ts";
-import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT, readRecentCompleteProbeReport, describeProbeReportCacheHit, describeProbeReuseReason, describeProbeReuseSource } from "./probe.ts";
+import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT, readRecentCompleteProbeReportCacheHit, describeProbeReportCacheHit, describeProbeReuseReason, describeProbeReuseSource } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
 import { showBifrostResult } from "./result-viewer.ts";
 import {
@@ -518,6 +518,49 @@ export function buildInitProposal(
 // ── Command handlers ────────────────────────────────────────
 
 const isForced = (args: string): boolean => args?.split(/\s+/).includes("-f");
+
+async function runInitProbe(
+  ctx: ExtensionContext,
+  state: BifrostState,
+  initConfig: BifrostConfig,
+  available: readonly { provider: string; id: string }[],
+): Promise<{ workingModels: { provider: string; model: string; cost: { input: number; output: number }; duration_ms: number }[] } | undefined> {
+  let okCount = 0;
+  let errCount = 0;
+  const lastModels: string[] = [];
+  uiBusy(ctx, `Probing ${available.length} models...`);
+  const probeRun = await runProbe(ctx, {
+    ...probeOptionsFromConfig(initConfig.probe),
+    signal: ctx.signal,
+    onProgress: (done, total, last) => {
+      if (last.status === "ok") okCount++;
+      else if (last.status === "error" || last.status === "timeout") errCount++;
+      lastModels.push(`${last.provider}/${last.model}: ${last.status} (${last.duration_ms}ms)`);
+      if (lastModels.length > 5) lastModels.shift();
+      if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", [`Probing models: ${done}/${total}`, `  ok: ${okCount}  errors: ${errCount}`, "", ...lastModels]);
+    },
+  });
+  uiDone(ctx);
+  // The probe widget must never outlive the probe: every later exit path renders
+  // its feedback in the chat, and a stale progress panel reads as "still probing".
+  if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
+  if (probeRun.cancelled || ctx.signal?.aborted) {
+    log(ctx, "Init probing was cancelled; no configuration was changed.", "warning");
+    return undefined;
+  }
+  const { results } = probeRun;
+  state.reliabilityStore.applyOutcomes(results.map((r) => r.status === "ok"
+    ? { model: `${r.provider}/${r.model}`, ok: true as const, source: "probe" }
+    : { model: `${r.provider}/${r.model}`, ok: false as const, source: "probe", reason: r.error ?? r.status }), Date.now());
+  const ok = results.filter((r) => r.status === "ok").length;
+  const errors = results.filter((r) => r.status === "error").length;
+  const timeouts = results.filter((r) => r.status === "timeout").length;
+  const skipped = results.filter((r) => r.status === "skipped").length;
+  log(ctx, `Probe complete: ok=${ok} error=${errors} timeout=${timeouts} skipped=${skipped}.`);
+  return { workingModels: results.filter((r) => r.status === "ok").map((r) => ({
+    provider: r.provider, model: r.model, cost: { input: r.cost_input ?? 0, output: r.cost_output ?? 0 }, duration_ms: r.duration_ms ?? 0,
+  })) };
+}
 
 const MAX_RECONCILIATION_OWNERSHIP_BYTES = 5_000_000;
 
@@ -1076,77 +1119,24 @@ async function handleInit(
   const probePath = join(process.cwd(), ".pi", "bifrost-probe.json");
   const available = ctx.modelRegistry.getAvailable().filter((model) => !isVirtualModel(model));
   const forced = isForced(args);
-  const reused = forced ? undefined : readRecentCompleteProbeReport(probePath, available);
+  const reused = forced ? undefined : readRecentCompleteProbeReportCacheHit(probePath, available);
   let workingModels = reused ? reused.results.filter((r) => r.status === "ok").map((r) => ({
     provider: r.provider, model: r.model, cost: { input: r.cost_input ?? 0, output: r.cost_output ?? 0 }, duration_ms: r.duration_ms ?? 0,
   })) : [];
-  let probeLoaded = Boolean(reused);
   let ranProbe = false;
   let probeAge = reused ? describeProbeReportCacheHit(reused) : "";
-  if (!probeLoaded) {
+
+  if (!reused) {
     ranProbe = true;
     log(ctx, `Probing ${available.length} models to find working ones... (${describeProbeReuseReason(forced)})`);
-    let okCount = 0;
-    let errCount = 0;
-    const lastModels: string[] = [];
-
-    uiBusy(ctx, `Probing ${available.length} models...`);
-    const probeRun = await runProbe(ctx, {
-      ...probeOptionsFromConfig(initConfig.probe),
-      signal: ctx.signal,
-      onProgress: (done, total, last) => {
-        if (last.status === "ok") okCount++;
-        else if (last.status === "error" || last.status === "timeout") errCount++;
-        lastModels.push(`${last.provider}/${last.model}: ${last.status} (${last.duration_ms}ms)`);
-        if (lastModels.length > 5) lastModels.shift();
-
-        if (ctx.hasUI) {
-          ctx.ui.setWidget("bifrost-probe", [
-            `Probing models: ${done}/${total}`,
-            `  ok: ${okCount}  errors: ${errCount}`,
-            "",
-            ...lastModels,
-          ]);
-        }
-      },
-    });
-    uiDone(ctx);
-    // The probe widget must never outlive the probe: every later exit path renders
-    // its feedback in the chat, and a stale progress panel reads as "still probing".
-    if (ctx.hasUI) ctx.ui.setWidget("bifrost-probe", []);
-    if (probeRun.cancelled || ctx.signal?.aborted) {
-      log(ctx, "Init probing was cancelled; no configuration was changed.", "warning");
-      return;
-    }
-    const { results } = probeRun;
-    state.reliabilityStore.applyOutcomes(
-      results.map((r) =>
-        r.status === "ok"
-          ? { model: `${r.provider}/${r.model}`, ok: true as const, source: "probe" }
-          : { model: `${r.provider}/${r.model}`, ok: false as const, source: "probe", reason: r.error ?? r.status }
-      ),
-      Date.now()
-    );
-
-    workingModels = results
-      .filter((r) => r.status === "ok")
-      .map((r) => ({
-        provider: r.provider,
-        model: r.model,
-        cost: { input: r.cost_input ?? 0, output: r.cost_output ?? 0 },
-        duration_ms: r.duration_ms ?? 0,
-      }));
-    probeLoaded = true;
+    const probeRun = await runInitProbe(ctx, state, initConfig, available);
+    if (!probeRun) return;
+    workingModels = probeRun.workingModels;
     probeAge = "just now";
-
-    const ok = results.filter((r) => r.status === "ok").length;
-    const errors = results.filter((r) => r.status === "error").length;
-    const timeouts = results.filter((r) => r.status === "timeout").length;
-    const skipped = results.filter((r) => r.status === "skipped").length;
-    log(ctx, `Probe complete: ok=${ok} error=${errors} timeout=${timeouts} skipped=${skipped}.`);
   }
+  const probeLoaded = true;
   if (probeLoaded && workingModels.length === 0) {
-    log(ctx, "No usable models found. Check API keys, network, and credits; no configuration was changed.", "error");
+    log(ctx, `No usable models found ${describeProbeReuseSource(ranProbe, probeAge).replace(/\.$/, "")}. Check API keys, network, and credits; no configuration was changed.`, "error");
     return;
   }
 

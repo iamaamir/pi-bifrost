@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runProbe, DEFAULT_PROBE_CONCURRENCY, probeOptionsFromConfig, readRecentCompleteProbeReport, validateCompleteProbeReport } from "../probe.ts";
+import { runProbe, DEFAULT_PROBE_CONCURRENCY, probeOptionsFromConfig, readRecentCompleteProbeReport, readRecentCompleteProbeReportCacheHit, validateCompleteProbeReport } from "../probe.ts";
 import { flushDebug, setupDebug } from "../debug.ts";
 import { delay } from "./helpers.ts";
 import { streamSimple as streamCodexSimple } from "@earendil-works/pi-ai/api/openai-codex-responses";
@@ -735,21 +735,23 @@ describe("probe concurrency and resilience", () => {
       const recent = new Date(Date.now() - 60_000);
       utimesSync(path, recent, recent);
       const expectedMtimeMs = statSync(path).mtimeMs;
-      const hit = readRecentCompleteProbeReport(path, catalog);
+      const hit = readRecentCompleteProbeReportCacheHit(path, catalog);
       assert.deepEqual(hit?.results, report);
       assert.equal(hit?.mtimeMs, expectedMtimeMs);
       assert.equal(typeof hit?.ageMs, "number");
       assert.ok((hit?.ageMs ?? -1) >= 0);
-      const recentHit = readRecentCompleteProbeReport(path, catalog, statSync(path).mtimeMs - 0.5);
+      // Compatibility wrapper preserves the pre-transparency array contract.
+      assert.deepEqual(readRecentCompleteProbeReport(path, catalog), report);
+      const recentHit = readRecentCompleteProbeReportCacheHit(path, catalog, statSync(path).mtimeMs - 0.5);
       assert.deepEqual(recentHit?.results, report);
       assert.equal(recentHit?.mtimeMs, expectedMtimeMs);
-      assert.equal(readRecentCompleteProbeReport(path, catalog, statSync(path).mtimeMs - 1), undefined);
+      assert.equal(readRecentCompleteProbeReportCacheHit(path, catalog, statSync(path).mtimeMs - 1), undefined);
       const future = new Date(Date.now() + 60_000);
       utimesSync(path, future, future);
-      assert.equal(readRecentCompleteProbeReport(path, catalog), undefined);
+      assert.equal(readRecentCompleteProbeReportCacheHit(path, catalog), undefined);
       const stale = new Date(Date.now() - 2 * 60 * 60_000);
       utimesSync(path, stale, stale);
-      assert.equal(readRecentCompleteProbeReport(path, catalog), undefined);
+      assert.equal(readRecentCompleteProbeReportCacheHit(path, catalog), undefined);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
