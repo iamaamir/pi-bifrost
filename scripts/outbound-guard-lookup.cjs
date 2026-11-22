@@ -1,16 +1,33 @@
 // Resolution checks for the test-only outbound guard. Kept separate so the
 // guard's own complexity stays within its committed budget.
-const dns = require("node:dns");
-
-const OCTET = "(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)";
-const LOOPBACK = new RegExp(`^(?:::1|(?:::ffff:)?127\\.${OCTET}\\.${OCTET}\\.${OCTET})$`);
+const { isIP } = require("node:net");
+const { lookup: dnsLookup } = require("node:dns");
 
 function isLoopbackAddress(address) {
-  return typeof address === "string" && LOOPBACK.test(address.split("%", 1)[0]);
+  if (typeof address !== "string") return false;
+  const literal = address.split("%", 1)[0].toLowerCase();
+  const version = isIP(literal);
+  if (version === 4) return literal.startsWith("127.");
+  if (version !== 6) return false;
+  let canonical;
+  try {
+    canonical = new URL(`http://[${literal}]/`).hostname.slice(1, -1);
+  } catch {
+    return false;
+  }
+  if (canonical === "::1") return true;
+  if (!canonical.startsWith("::ffff:")) return false;
+  const groups = canonical.slice(7).split(":");
+  if (groups.length !== 2) return false;
+  const high = Number.parseInt(groups[0], 16);
+  const low = Number.parseInt(groups[1], 16);
+  if (!Number.isFinite(high) || !Number.isFinite(low)) return false;
+  const mapped = `${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`;
+  return isIP(mapped) === 4 && mapped.startsWith("127.");
 }
 
 function makeGuardedLookup({ host, lookup, recordViolation }) {
-  const resolve = typeof lookup === "function" ? lookup : dns.lookup;
+  const resolve = typeof lookup === "function" ? lookup : dnsLookup;
   return function guardedLookup(hostname, options, callback) {
     resolve(hostname, options, (error, address, family) => {
       if (error) return callback(error);
@@ -27,15 +44,15 @@ function makeGuardedLookup({ host, lookup, recordViolation }) {
 }
 
 function parseConnectArgs(args) {
-  const target = Array.isArray(args[0]) ? args[0][0] : args[0];
-  const options = typeof target === "object" && target !== null ? target : { port: target, host: args[1] };
-  return { options, host: options.host ?? options.hostname ?? "localhost" };
+  const normalized = Array.isArray(args[0]) ? args[0] : args;
+  const target = normalized[0];
+  const options = typeof target === "object" && target !== null ? target : { port: target, host: normalized[1] };
+  return { options, host: options.host ?? options.hostname ?? "localhost", rest: normalized.slice(1) };
 }
 
-function withGuardedLookup(args, options, host, recordViolation) {
+function withGuardedLookup(args, options, host, rest, recordViolation) {
   const guardedOptions = { ...options, lookup: makeGuardedLookup({ host, lookup: options.lookup, recordViolation }) };
-  const objectForm = typeof args[0] === "object" && args[0] !== null && !Array.isArray(args[0]);
-  return objectForm ? [guardedOptions, ...args.slice(1)] : [guardedOptions, ...args.slice(2)];
+  return [guardedOptions, ...rest];
 }
 
-module.exports = { parseConnectArgs, withGuardedLookup };
+module.exports = { isLoopbackAddress, parseConnectArgs, withGuardedLookup };
