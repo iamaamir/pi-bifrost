@@ -1037,8 +1037,8 @@ def main() -> int:
                 inspect_text = (OUT / "inspect.txt").read_text(errors="ignore")
                 if "inspection (local snapshot)" not in inspect_text or "registry:" not in inspect_text:
                     raise AssertionError("inspect UI did not render its local snapshot labels")
-                if "Bifrost registry refresh TTL: 30000 ms (fixed internal policy; not user-configurable)" not in inspect_text:
-                    raise AssertionError("inspect UI did not render the fixed registry refresh policy")
+                if "Registry refresh threshold: 30s" not in inspect_text:
+                    raise AssertionError("inspect UI did not render the registry refresh threshold")
             if name == "inspect-reserve":
                 reserve_text = (OUT / "inspect-reserve.txt").read_text(errors="ignore")
                 if "reserve policy: observe" not in reserve_text or "source=manual-estimate scope=example-provider authority=estimated" not in reserve_text:
@@ -1063,8 +1063,8 @@ def main() -> int:
                 pending_text = (OUT / "strict-no-route-pending-inspect.txt").read_text(errors="ignore")
                 if "turn was not sent" not in pending_text:
                     raise AssertionError("pending-state scenario did not reject the no-route turn")
-                if "Bifrost registry refresh pending: true (refresh required; not a completion record)" not in pending_text:
-                    raise AssertionError("inspect did not show pending refresh after a no-route turn")
+                if "Model catalog: refresh needed" not in pending_text:
+                    raise AssertionError("inspect did not show the refresh-needed state after a no-route turn")
             if name == "auto-large-pool":
                 large_pool_text = (OUT / "auto-large-pool.txt").read_text(errors="ignore").lower()
                 if "(bifrost) auto" not in large_pool_text:

@@ -4118,8 +4118,8 @@ describe("diagnostics commands", () => {
     })).join("\n");
     assert.match(output, /loaded effective config \(run \/bifrost reload after editing files\)/);
     assert.match(output, /Bifrost last registry refresh age:/);
-    assert.match(output, /Bifrost registry refresh TTL: 30000 ms \(fixed internal policy; not user-configurable\)/);
-    assert.doesNotMatch(output, /Bifrost registry refresh pending:/);
+    assert.match(output, /Registry refresh threshold: 30s/);
+    assert.doesNotMatch(output, /Model catalog: refresh needed/);
     assert.match(output, /usage\/billing cooldown=on \(provider scope\)/);
     assert.doesNotMatch(output, /provider data freshness/i);
     assert.doesNotMatch(output, /PRIVATE_(?:AUTH|LABEL)_SENTINEL/);
@@ -4136,7 +4136,7 @@ describe("diagnostics commands", () => {
     assert.deepEqual(h.counters(), { registryReads: 2, networkCalls: 0, writes: 0 });
 
     const text = (await withStubs(() => createCommandRouter(h.state as never)("inspect", h.context as never))).join("\n");
-    assert.match(text, /Bifrost registry refresh pending: true \(refresh required; not a completion record\)/);
+    assert.match(text, /Model catalog: refresh needed/);
     assert.deepEqual(h.counters(), { registryReads: 4, networkCalls: 0, writes: 0 });
   });
 
@@ -4144,7 +4144,7 @@ describe("diagnostics commands", () => {
     const h = diagnosticHarness();
     (h.context as unknown as { mode: string }).mode = "cli";
     const output = (await withStubs(() => createCommandRouter(h.state as never)("debug", h.context as never))).join("\n");
-    assert.match(output, /registryRefresh: 30000 ms \(fixed internal policy; not user-configurable\)/);
+    assert.match(output, /Registry refresh threshold: 30s/);
   });
 
   it("shows a sanitized strict-config field path in text validation output", async () => {
