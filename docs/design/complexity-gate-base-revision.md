@@ -67,7 +67,8 @@ only provided indirectly through its own git history.
   `GITHUB_BASE_SHA`, then the merge-base with `origin/main` or `main`, then
   `HEAD^`. If none resolves, the gate exits `2` and does not report a verdict.
 - A revision is extracted with a detached `git worktree` in the OS temporary
-  directory, measured, and removed. No file is written inside the repository.
+  directory, measured, and removed. No measured file or generated snapshot is
+  written into the candidate tree.
 - Measurements are bound to content, not to a user-supplied metrics file. The
   report carries the resolved target SHA, the candidate revision and dirty state,
   a SHA-256 of the measured inputs, and the resolved TypeScript version. A
