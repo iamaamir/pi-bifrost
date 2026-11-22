@@ -2,7 +2,7 @@
 # dependency resolution, and CI wiring judge their own changes. Require the owner
 # to review edits to every input the policy digest reads.
 /scripts/check-complexity.mjs @iamaamir
-/.github/workflows/static-analysis.yml @iamaamir
+/.github/workflows/ @iamaamir
 /tsconfig.json @iamaamir
 /package.json @iamaamir
 /package-lock.json @iamaamir

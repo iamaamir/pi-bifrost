@@ -61,18 +61,25 @@ only provided indirectly through its own git history.
 
 ### Measurement inputs
 
-- The candidate defaults to the working tree. In CI the checkout is clean at the
-  pull request head, so the measured content is the head revision.
+- The candidate defaults to the working tree. In CI it is passed explicitly as
+  the pull request head commit, so the measured tree is immutable. A local
+  working-tree candidate is fingerprinted before and after measurement; a change
+  fails closed instead of reporting a mixed snapshot.
 - The target comes from `--target <rev>`, then `BIFROST_COMPLEXITY_BASE`, then
-  `GITHUB_BASE_SHA`, then the merge-base with `origin/main` or `main`, then
-  `HEAD^`. If none resolves, the gate exits `2` and does not report a verdict.
+  `GITHUB_BASE_SHA`, then the merge-base with `origin/main` or `main`. There is
+  no implicit `HEAD^`; a last-commit comparison must opt in with
+  `--target HEAD^`. If none resolves, the gate exits `2` and does not report a
+  verdict.
+- CI compares a pull request head against its merge-base with the base branch.
+  A base-only policy move after divergence is not reported as a pull request
+  policy change.
 - A revision is extracted with a detached `git worktree` in the OS temporary
   directory, measured, and removed. No measured file or generated snapshot is
   written into the candidate tree.
 - Measurements are bound to content, not to a user-supplied metrics file. The
   report carries the resolved target SHA, the candidate revision and dirty state,
-  a SHA-256 of the measured inputs, and the resolved TypeScript version. A
-  hand-edited number has no input path into the verdict.
+  a SHA-256 of the measured inputs, the resolved TypeScript version, and the
+  policy digest. A hand-edited number has no input path into the verdict.
 - An incomplete walk (a file vanishing mid-analysis) or an unreadable revision
   fails closed with exit `2`. A verdict is never derived from a partial tree.
 
@@ -100,8 +107,9 @@ revisions are deterministic; no timestamp or generation provenance is compared.
 The gate is a script in the candidate, so a change to its algorithm, scope
 policy, thresholds, measurement dependency, or CI wiring could otherwise judge
 itself. The gate therefore computes a policy digest over the analyzer source,
-the static-analysis workflow, `tsconfig.json`, the complexity scripts in
-`package.json`, and the resolved TypeScript version at both revisions:
+the static-analysis and verification workflows, `tsconfig.json`, the complexity
+scripts in `package.json`, and the resolved TypeScript version at both
+revisions:
 
 - equal digests: the comparison runs normally;
 - different digests: the gate still measures both trees with one algorithm, but
@@ -110,14 +118,15 @@ the static-analysis workflow, `tsconfig.json`, the complexity scripts in
   present.
 
 CI passes the override only when the pull request carries the
-`quality-policy-change` label. A direct push to `main` is the merge of a pull
-request that already went through that gate, so the push leg runs with the
-override; branch protection remains the anchor against direct pushes. The
-residual risk is explicit: a reviewer who applies the label to a weakening
-change, or a repository that allows unreviewed pushes to `main`, can bypass it.
-The digest and both revisions are printed so the policy diff can be reviewed
-rather than inferred. `.github/CODEOWNERS` asks the owner to review the policy
-files.
+`quality-policy-change` label. The complexity job is a dependency of the
+required `release-gates` context, so a failing check blocks the merge context.
+A direct push to `main` is the merge of a pull request that already went through
+that gate, so the push leg runs with the override. The residual risk is
+explicit: a label is an acknowledgment, not an approval; the current ruleset does
+not require code-owner review, so `.github/CODEOWNERS` only routes the policy
+files to the owner until that setting is enabled. A repository that allows
+unreviewed pushes to `main` can also bypass the PR gate. The digest and both
+revisions are printed so the policy diff can be reviewed rather than inferred.
 
 The analyzer is applied to both sides in one invocation, so a metric change is
 apples-to-apples within that run. It is not possible to mix the target's
@@ -140,7 +149,14 @@ Deterministic tests at the real CLI boundary (temporary git repositories):
    still gets the new-file ceiling;
 7. rename is evaluated as remove plus add;
 8. repeated and concurrent runs against the same revisions return the same
-   verdict and digests.
+   verdict and digests;
+9. a base policy move after divergence forces no override for an untouched
+   branch when the target is the merge-base;
+10. CRLF-only policy bytes produce the same digest as the committed LF blob;
+11. an unreadable policy input returns the structured exit-`2` JSON envelope;
+12. no `main` ref does not silently fall back to `HEAD^`; the explicit
+    `--target HEAD^` form still works;
+13. an editing working-tree candidate is detected by the pre/post fingerprint.
 
 Command-level demonstration uses `--json`, and the CI step is changed from three
 complexity steps to the target-relative comparison, keeping the failure
@@ -151,5 +167,6 @@ node scripts/check-complexity.mjs --measure <rev> --json
 ```
 
 No generated complexity file is committed or written by routine changes. Each
-measurement also carries the policy digest, so a trend point is comparable only
-with points produced under the same analyzer and scope policy.
+measurement carries both the executing analyzer's policy digest and the measured
+revision's own policy digest, so a trend point is comparable only with points
+produced under the same analyzer and scope policy.

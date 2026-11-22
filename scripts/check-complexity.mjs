@@ -12,9 +12,11 @@
  *   node scripts/check-complexity.mjs [--target <rev>] [--candidate <rev>] [--json]
  *   node scripts/check-complexity.mjs --measure <rev> [--json]
  *
- * The target defaults to BIFROST_COMPLEXITY_BASE, GITHUB_BASE_SHA, the merge-base
- * with origin/main or main, then HEAD^. The candidate defaults to the working
- * tree. `--measure` prints one revision's measurements for historical trends.
+ * The target defaults to BIFROST_COMPLEXITY_BASE, GITHUB_BASE_SHA, then the
+ * merge-base with origin/main or main. There is no implicit HEAD^ fallback:
+ * pass --target HEAD^ explicitly for a local last-commit comparison. The
+ * candidate defaults to the working tree. `--measure` prints one revision's
+ * measurements for historical trends.
  *
  * A change to the analyzer, thresholds, file-selection policy, measurement
  * dependency, or CI wiring changes the policy digest at one revision and fails
@@ -36,7 +38,12 @@ const require = createRequire(path.join(ROOT, "package.json"));
 const ts = require("typescript");
 
 const EXCLUDED_DIRS = new Set(["node_modules", "dist", ".git", "coverage", "reports", ".worktrees", ".commandcode"]);
-const POLICY_FILES = ["scripts/check-complexity.mjs", ".github/workflows/static-analysis.yml", "tsconfig.json"];
+const POLICY_FILES = [
+  "scripts/check-complexity.mjs",
+  ".github/workflows/static-analysis.yml",
+  ".github/workflows/verification.yml",
+  "tsconfig.json",
+];
 const POLICY_SCRIPTS = ["check:complexity", "check:complexity:base"];
 
 function walk(dir, root = dir, skipped = []) {
@@ -281,6 +288,10 @@ function byPath(a, b) {
   return a.rel < b.rel ? -1 : 1;
 }
 
+function normalizeText(text) {
+  return text.replace(/\r\n/g, "\n");
+}
+
 function analyze({ root = ROOT, skipped = [] } = {}) {
   const files = inScopeFiles(root, skipped).sort(byPath);
   const fileData = {};
@@ -291,7 +302,7 @@ function analyze({ root = ROOT, skipped = [] } = {}) {
   for (const { file, rel, scope } of files) {
     const text = readIfPresent(file, rel, skipped);
     if (text === null) continue;
-    digest.update(`${rel}\0${text.replace(/\r\n/g, "\n")}\0`);
+    digest.update(`${rel}\0${normalizeText(text)}\0`);
     const scriptKind = /\.(mjs|cjs)$/.test(file) ? ts.ScriptKind.JS : ts.ScriptKind.TS;
     const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, scriptKind);
     const funcs = [];
@@ -389,9 +400,9 @@ function resolveTarget({ repo = ROOT, explicit = null, env = process.env } = {})
     const sha = mergeBase(repo, ref);
     if (sha) return { sha, source: `merge-base HEAD ${ref}` };
   }
-  const parent = resolveRevision(repo, "HEAD^");
-  if (parent) return { sha: parent, source: "HEAD^" };
-  return { error: "no target revision: pass --target <rev> or set BIFROST_COMPLEXITY_BASE" };
+  return {
+    error: "no target revision: pass --target <rev>, set BIFROST_COMPLEXITY_BASE, or provide origin/main or main; use --target HEAD^ explicitly for a last-commit comparison",
+  };
 }
 
 function revisionText(repo, revision, rel) {
@@ -413,15 +424,28 @@ function sha256(text) {
 
 // The policy digest covers every committed input that can change what the metric
 // means or which tree is judged. It is read from each revision's own bytes, so a
-// candidate cannot borrow the target's policy claim.
+// candidate cannot borrow the target's policy claim. Policy text is normalized
+// the same way as measured source so a CRLF checkout is not a policy change.
+function policyText(repo, revision, rel) {
+  try {
+    return { text: revisionText(repo, revision, rel) };
+  } catch (error) {
+    return { error: `could not read policy file ${rel} at ${revision ?? "the working tree"}: ${error.message}` };
+  }
+}
+
 function policyAt(repo, revision) {
   const files = {};
   for (const rel of POLICY_FILES) {
-    const text = revisionText(repo, revision, rel);
+    const read = policyText(repo, revision, rel);
+    if (read.error) return read;
+    const text = read.text;
     if (text === null) return { error: `policy file ${rel} is unavailable at ${revision ?? "the working tree"}` };
-    files[rel] = sha256(text);
+    files[rel] = sha256(normalizeText(text));
   }
-  const manifestText = revisionText(repo, revision, "package.json");
+  const manifestRead = policyText(repo, revision, "package.json");
+  if (manifestRead.error) return manifestRead;
+  const manifestText = manifestRead.text;
   if (manifestText === null) return { error: `package.json is unavailable at ${revision ?? "the working tree"}` };
   let manifest;
   try {
@@ -433,7 +457,9 @@ function policyAt(repo, revision) {
   const typescriptRange = manifest.devDependencies?.typescript ?? null;
   // The installed analyzer version can change through a lockfile-only update, so
   // record the resolved version rather than hashing the whole lockfile.
-  const lockText = revisionText(repo, revision, "package-lock.json");
+  const lockRead = policyText(repo, revision, "package-lock.json");
+  if (lockRead.error) return lockRead;
+  const lockText = lockRead.text;
   let typescriptLocked = null;
   if (lockText !== null) {
     try {
@@ -491,9 +517,29 @@ function measureRevision(repo, sha) {
   return withRevisionTree(repo, sha, (tree) => measureRoot(tree));
 }
 
-function isDirty(repo) {
-  const result = gitRun(repo, ["status", "--porcelain", "--untracked-files=normal"]);
-  return result.status === 0 ? result.stdout.trim() !== "" : null;
+// A working-tree candidate is not an immutable tree. Hash HEAD, the porcelain
+// status, and the bytes of every modified or untracked file before and after the
+// measurement; a change means the report would describe a moving target. CI
+// passes an explicit --candidate commit and does not rely on this guard.
+function candidateFingerprint(repo) {
+  const head = gitRun(repo, ["rev-parse", "HEAD"]);
+  const status = gitRun(repo, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]);
+  if (head.status !== 0 || status.status !== 0) return { error: "could not inspect the candidate worktree" };
+  const changed = gitRun(repo, ["ls-files", "-m", "-o", "--exclude-standard", "-z"]);
+  if (changed.status !== 0) return { error: "could not enumerate candidate changes" };
+  const digest = createHash("sha256");
+  digest.update(head.stdout.trim()).update("\0").update(status.stdout);
+  for (const rel of changed.stdout.split("\0").filter(Boolean).sort()) {
+    digest.update(rel).update("\0");
+    try {
+      digest.update(fs.readFileSync(path.join(repo, rel)));
+    } catch (error) {
+      // A deleted tracked path is represented in porcelain status; its missing
+      // content is intentional, not a read failure.
+      if (error?.code !== "ENOENT") return { error: `could not read candidate file ${rel}: ${error.message}` };
+    }
+  }
+  return { digest: digest.digest("hex"), dirty: status.stdout.trim() !== "" };
 }
 
 const SCOPE_RATCHET_FIELDS = ["maxCyc", "maxCog", "cycGt30", "cycGt50", "cogGt30", "cogGt50"];
@@ -670,18 +716,22 @@ function measureCommand({ json, repo, revision }) {
     return failure({ json, message: `complexity analysis failed for ${sha}: ${error.message}` });
   }
   if (result.skipped.length > 0) return failure({ json, message: incompleteError(`revision ${sha}`, result) });
-  // A trend point is comparable only when the policy that produced it matches;
-  // bind the digest so two measurements cannot be compared across policies.
-  const policy = policyAt(repo, sha);
-  if (policy.error) return failure({ json, message: policy.error });
+  // A trend point is comparable only when the policy that produced it matches.
+  // The executing policy is the current tree (the analyzer that ran); the
+  // measured revision's own policy is recorded separately for provenance.
+  const executingPolicy = policyAt(repo, null);
+  if (executingPolicy.error) return failure({ json, message: executingPolicy.error });
+  const revisionPolicy = policyAt(repo, sha);
+  if (revisionPolicy.error) return failure({ json, message: revisionPolicy.error });
   const envelope = {
     check: "complexity",
     status: "measured",
     exitCode: 0,
     revision: sha,
     inputDigest: result.report.inputDigest,
-    policyDigest: policy.digest,
-    tool: { typescriptVersion: policy.typescriptVersion },
+    policyDigest: executingPolicy.digest,
+    revisionPolicyDigest: revisionPolicy.digest,
+    tool: { typescriptVersion: ts.version },
     scopes: result.report.scopes,
     files: result.report.files,
   };
@@ -690,7 +740,10 @@ function measureCommand({ json, repo, revision }) {
 }
 
 function resolveCandidate({ repo, option: parsed }) {
-  if (!parsed.present) return { mode: "worktree", revision: resolveRevision(repo, "HEAD"), dirty: isDirty(repo) };
+  if (!parsed.present) {
+    const revision = resolveRevision(repo, "HEAD");
+    return revision ? { mode: "worktree", revision } : { error: "could not resolve candidate HEAD" };
+  }
   const sha = resolveRevision(repo, parsed.value);
   return sha
     ? { mode: "revision", revision: sha, dirty: false }
@@ -700,10 +753,23 @@ function resolveCandidate({ repo, option: parsed }) {
 function measureAndReport({ json, repo, resolved, candidate, targetPolicy, candidatePolicy, policy }) {
   let targetResult;
   let candidateResult;
+  let candidateBefore = null;
   try {
     targetResult = measureRevision(repo, resolved.sha);
     if (targetResult.skipped.length > 0) return failure({ json, message: incompleteError(`target ${resolved.sha}`, targetResult) });
-    candidateResult = candidate.mode === "revision" ? measureRevision(repo, candidate.revision) : measureRoot(repo);
+    if (candidate.mode === "worktree") {
+      candidateBefore = candidateFingerprint(repo);
+      if (candidateBefore.error) return failure({ json, message: candidateBefore.error });
+      candidate.dirty = candidateBefore.dirty;
+      candidateResult = measureRoot(repo);
+      const candidateAfter = candidateFingerprint(repo);
+      if (candidateAfter.error) return failure({ json, message: candidateAfter.error });
+      if (candidateAfter.digest !== candidateBefore.digest) {
+        return failure({ json, message: "candidate changed during analysis; rerun with --candidate <commit> against an immutable tree" });
+      }
+    } else {
+      candidateResult = measureRevision(repo, candidate.revision);
+    }
     if (candidateResult.skipped.length > 0) return failure({ json, message: incompleteError("candidate", candidateResult) });
   } catch (error) {
     return failure({ json, message: `complexity analysis failed: ${error.message}` });
@@ -760,6 +826,7 @@ function main(argv = process.argv.slice(2), env = process.env) {
 
 export {
   analyze,
+  candidateFingerprint,
   cognitive,
   compare,
   cyclomatic,

@@ -71,8 +71,10 @@ make "the gate measured nothing" a failure.
 - There is no committed complexity snapshot. The gate measures the target
   revision and the candidate from source with the same analyzer and compares
   them. The target comes from `--target`, then `BIFROST_COMPLEXITY_BASE`, then
-  `GITHUB_BASE_SHA`, then the merge-base with `origin/main` or `main`, then
-  `HEAD^`. A revision that does not resolve fails the gate with exit `2`.
+  `GITHUB_BASE_SHA`, then the merge-base with `origin/main` or `main`. There is
+  no implicit `HEAD^` fallback; a last-commit comparison must pass
+  `--target HEAD^` explicitly. A revision that does not resolve fails with exit
+  `2`.
 - The gate is a **ratchet**: per-file maxima and scope counts must not increase
   against the target measurement. New files must not exceed the target scope
   maxima. Removed files are improvements. A rename is a removal plus a new file,
@@ -89,16 +91,20 @@ make "the gate measured nothing" a failure.
   incomplete measurement fails closed with exit `2` instead of reporting a
   verdict from a partial tree.
 - The analyzer, its scope and threshold policy, the TypeScript version, and the
-  static-analysis workflow are hashed at both revisions. A differing digest
-  exits `2` with `complexity-policy-changed` unless `--allow-policy-change` is
-  present. CI allows the override only for a pull request carrying the
-  `quality-policy-change` label, and [CODEOWNERS](../../.github/CODEOWNERS) requires
-  owner review of the policy files. This is the trust boundary: the candidate
-  script cannot silently relax the check that judges it.
+  static-analysis and verification workflows are hashed at both revisions. A
+  differing digest exits `2` with `complexity-policy-changed` unless
+  `--allow-policy-change` is present. CI allows the override only for a pull
+  request carrying the `quality-policy-change` label. The complexity job is a
+  dependency of the required `release-gates` context, and
+  [CODEOWNERS](../../.github/CODEOWNERS) routes the policy files to the owner.
+  Code-owner review is blocking only when the repository ruleset requires it.
+  This is the trust boundary: the candidate script cannot silently relax the
+  check that judges it.
 - Historical values are reproduced on demand with
   `node scripts/check-complexity.mjs --measure <rev> --json`. The output is tied
-  to that revision's SHA, input digest, and policy digest; no generated trend
-  file is committed.
+  to that revision's SHA and input digest, the executing analyzer's policy
+  digest, and the measured revision's policy digest; no generated trend file is
+  committed.
 
 ### Process
 
@@ -107,8 +113,9 @@ make "the gate measured nothing" a failure.
   than a regenerated file.
 - Tightening a threshold is a deliberate change with its own evidence, not a
   side effect of a refactor.
-- CI compares a pull request against its base revision and a push against the
-  previous tip.
+- CI compares a pull request's head against its merge-base with the base branch
+  and a push against the previous tip. The complexity job is required by
+  `release-gates` rather than only by the separate static-analysis workflow.
 - Gate exit codes are covered by fault controls in
   `tests/quality-gates-fault-controls.test.mjs`, which drive `check:ast`,
   `check:duplication`, and `check:complexity` against fixture trees. A scope

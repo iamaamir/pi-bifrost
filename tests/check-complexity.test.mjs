@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import fs, { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import {
   analyze,
+  candidateFingerprint,
   cognitive,
   compare,
   cyclomatic,
@@ -133,6 +134,7 @@ function seedPolicy(dir, script = "// fixture complexity policy\n") {
   mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
   writeFileSync(join(dir, "scripts", "check-complexity.mjs"), script);
   writeFileSync(join(dir, ".github", "workflows", "static-analysis.yml"), "name: fixture\n");
+  writeFileSync(join(dir, ".github", "workflows", "verification.yml"), "name: verification-fixture\n");
   writeFileSync(join(dir, "tsconfig.json"), "{}\n");
   writeFileSync(join(dir, "package.json"), JSON.stringify({
     scripts: {
@@ -399,6 +401,45 @@ test("resolveTarget treats an explicit or environment revision as authoritative"
   }
 });
 
+test("resolveTarget requires an explicit last-commit comparison instead of assuming HEAD^", () => {
+  const { dir, base, baseBranch } = gitFixture();
+  try {
+    if (baseBranch === "main") git(dir, ["branch", "-m", "topic"]);
+    writeFileSync(join(dir, "b.ts"), `${BASE_B}\n// second\n`);
+    commit(dir, "second");
+    const resolved = resolveTarget({ repo: dir, explicit: null, env: {} });
+    assert.match(resolved.error, /no target revision/u);
+    const explicit = resolveTarget({ repo: dir, explicit: "HEAD^", env: {} });
+    assert.equal(explicit.sha, base);
+    assert.equal(explicit.source, "--target");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a moved base policy does not force an override for a branch that never edited policy", () => {
+  const { dir, base, baseBranch } = gitFixture();
+  try {
+    const candidate = branchFrom(dir, baseBranch, "untouched-policy", "change code", () => {
+      writeFileSync(join(dir, "a.ts"), `${BASE_A}\nexport const added = 1;\n`);
+    });
+    writeFileSync(join(dir, "tsconfig.json"), "{ \"strict\": true }\n");
+    const moved = commit(dir, "move base policy");
+
+    const againstMoved = runGate(dir, ["--target", moved, "--candidate", candidate]);
+    assert.equal(againstMoved.status, 2);
+    assert.equal(againstMoved.report.findings[0].rule, "complexity-policy-changed");
+
+    const mergeBase = git(dir, ["merge-base", moved, candidate]);
+    assert.equal(mergeBase, base);
+    const againstMergeBase = runGate(dir, ["--target", mergeBase, "--candidate", candidate]);
+    assert.equal(againstMergeBase.status, 0, againstMergeBase.stderr);
+    assert.equal(againstMergeBase.report.policy.changed, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("the gate passes an unchanged revision, including when measured twice", () => {
   const { dir, base } = gitFixture();
   try {
@@ -638,13 +679,60 @@ test("--measure prints a revision-bound measurement without comparing", () => {
     assert.equal(result.report.status, "measured");
     assert.equal(result.report.revision, base);
     assert.equal(result.report.scopes.source.maxCyc, 2);
-    assert.equal(result.report.policyDigest, policyAt(dir, base).digest);
+    assert.equal(result.report.policyDigest, policyAt(dir, null).digest);
+    assert.equal(result.report.revisionPolicyDigest, policyAt(dir, base).digest);
     assert.ok(Object.hasOwn(result.report.files, "a.ts"));
 
     const missing = runGate(dir, ["--measure", "no-such-ref"]);
     assert.equal(missing.status, 2);
     assert.match(missing.report.error, /could not resolve revision/u);
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("--measure binds the executing policy separately from the measured revision", () => {
+  const { dir, base, baseBranch } = gitFixture();
+  try {
+    const head = branchFrom(dir, baseBranch, "executing-policy", "edit policy", () => {
+      writeFileSync(join(dir, "tsconfig.json"), "{ \"strict\": true }\n");
+    });
+    git(dir, ["checkout", "-q", head]);
+    const result = runGate(dir, ["--measure", base]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.report.policyDigest, policyAt(dir, null).digest);
+    assert.equal(result.report.revisionPolicyDigest, policyAt(dir, base).digest);
+    assert.notEqual(result.report.policyDigest, result.report.revisionPolicyDigest,
+      "a trend point must identify the analyzer that produced it, not the historical tree's policy");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("policy digests normalize CRLF line endings", () => {
+  const { dir, base } = gitFixture();
+  try {
+    writeFileSync(join(dir, "tsconfig.json"), "{}\r\n");
+    assert.equal(policyAt(dir, null).digest, policyAt(dir, base).digest);
+    writeFileSync(join(dir, "tsconfig.json"), "{ \"strict\": true }\r\n");
+    assert.notEqual(policyAt(dir, null).digest, policyAt(dir, base).digest);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an unreadable policy input returns a structured JSON failure", { skip: process.getuid?.() === 0 }, () => {
+  const { dir, base } = gitFixture();
+  const policy = join(dir, "tsconfig.json");
+  try {
+    chmodSync(policy, 0o000);
+    const result = runGate(dir, ["--target", base]);
+    assert.equal(result.status, 2);
+    assert.equal(result.report.status, "failed");
+    assert.equal(result.report.exitCode, 2);
+    assert.match(result.report.error, /could not read policy file tsconfig\.json/u);
+  } finally {
+    chmodSync(policy, 0o644);
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -671,6 +759,20 @@ test("policy digests read each revision's own policy bytes", () => {
     const atLocked = policyAt(dir, locked);
     assert.equal(atLocked.typescriptLocked, "6.1.0");
     assert.notEqual(atLocked.digest, atBase.digest, "a lockfile-only analyzer bump must change the policy digest");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the worktree candidate fingerprint changes when a measured file changes", () => {
+  const { dir } = gitFixture();
+  try {
+    const before = candidateFingerprint(dir);
+    assert.equal(before.dirty, false);
+    writeFileSync(join(dir, "a.ts"), `${BASE_A}\nexport const changed = true;\n`);
+    const after = candidateFingerprint(dir);
+    assert.notEqual(after.digest, before.digest);
+    assert.equal(after.dirty, true);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

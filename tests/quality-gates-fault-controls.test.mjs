@@ -130,6 +130,7 @@ function complexityFixture() {
   // Content-only policy files: the gate hashes them but never executes them.
   writeFileSync(join(dir, "scripts", "check-complexity.mjs"), "// fixture policy\n");
   writeFileSync(join(dir, ".github", "workflows", "static-analysis.yml"), "name: fixture\n");
+  writeFileSync(join(dir, ".github", "workflows", "verification.yml"), "name: verification-fixture\n");
   writeFileSync(join(dir, "tsconfig.json"), "{}\n");
   writeFileSync(join(dir, "package.json"), JSON.stringify({
     scripts: {

@@ -109,15 +109,18 @@ npm run check:complexity
 ```
 
 The target comes from `--target <rev>`, then `BIFROST_COMPLEXITY_BASE`, then
-`GITHUB_BASE_SHA`, then the merge-base with `origin/main` or `main`, then
-`HEAD^`. A revision that does not resolve fails the gate; it does not silently
-fall back to a different tree. The candidate defaults to the working tree and is
-reported with its HEAD revision, a dirty flag, and a digest of the measured
-bytes. CI checks out a clean candidate at the pull request head.
+`GITHUB_BASE_SHA`, then the merge-base with `origin/main` or `main`. There is no
+implicit `HEAD^` fallback: pass `--target HEAD^` explicitly for a last-commit
+comparison. A revision that does not resolve fails the gate; it does not
+silently fall back to a different tree. The candidate defaults to the working
+tree and is reported with its HEAD revision, a dirty flag, and a digest of the
+measured bytes. A working-tree change during measurement fails closed; CI passes
+the explicit head commit instead.
 
-`npm run check:complexity:base -- <rev>` supplies the target explicitly. CI runs
-it on pull requests with the base commit SHA, and the push leg compares against
-the previous tip.
+`npm run check:complexity:base -- <rev>` supplies the target explicitly. On a
+pull request CI compares the head against its merge-base with the base branch,
+so a base-only policy move is not charged to the branch. The push leg compares
+against the previous tip.
 
 `quality/complexity-baseline.json` no longer exists. A routine change to
 measured code needs no generated file and cannot conflict with another branch
@@ -135,16 +138,18 @@ while the analyzer reads a tree, the gate exits `2` and reports no verdict.
 ### Policy changes are not silent
 
 The analyzer, its scope and threshold policy, the TypeScript version, and the
-static-analysis workflow can change what the gate reports. The gate hashes those
-inputs at both revisions. When the digests differ it exits `2` with
-`complexity-policy-changed` unless `--allow-policy-change` (or
+static-analysis and verification workflows can change what the gate reports. The
+gate hashes those inputs at both revisions. When the digests differ it exits `2`
+with `complexity-policy-changed` unless `--allow-policy-change` (or
 `BIFROST_COMPLEXITY_ALLOW_POLICY_CHANGE=1`) records a reviewed decision. CI
 passes the override only for a pull request carrying the
-`quality-policy-change` label. The policy inputs (analyzer, workflow, `tsconfig.json`,
-`package.json`, and the resolved TypeScript lock entry) are covered by
-[`.github/CODEOWNERS`](../.github/CODEOWNERS), so a weakening change needs owner
-review. The digests and both revisions are printed so the diff can be inspected
-rather than inferred.
+`quality-policy-change` label. The policy inputs (analyzer, workflows,
+`tsconfig.json`, `package.json`, and the resolved TypeScript lock entry) are
+covered by [`.github/CODEOWNERS`](../.github/CODEOWNERS), so a weakening change
+is routed to the owner. The complexity job is a dependency of the required
+`release-gates` context; CODEOWNERS review is only blocking when the repository
+ruleset requires code-owner review. The digests and both revisions are printed
+so the diff can be inspected rather than inferred.
 
 ### Historical trends
 
@@ -154,9 +159,10 @@ Measure any revision on demand; nothing is stored in the repository:
 node scripts/check-complexity.mjs --measure <rev> --json
 ```
 
-Each output is bound to the revision's SHA, a digest of the measured bytes, and
-the policy digest, so a trend can be reconstructed from history and compared
-only when the revisions and policy match.
+Each output is bound to the measured revision's SHA, a digest of the measured
+bytes, the digest of the executing analyzer policy (`policyDigest`), and the
+measured revision's own policy digest (`revisionPolicyDigest`). A trend point is
+comparable only when both the source and the analyzer that produced it match.
 
 ## Documented commands and links
 
