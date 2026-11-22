@@ -3,8 +3,8 @@
   "note": "Cyclomatic: McCabe-style (base 1 + branches/logical ops). Cognitive: Sonar-inspired approximation (structural/nesting increments, simplified logical chains) for relative hotspots, not exact Sonar parity. Ratchet: source/test scope counts (>30,>50) and maxima must not increase; per-file maxima must not increase for baselined files; new files must not exceed scope baseline maxima.",
   "scopes": {
     "source": {
-      "files": 95,
-      "functions": 2847,
+      "files": 96,
+      "functions": 2855,
       "maxCyc": 190,
       "maxCog": 262,
       "cycGt30": 58,
@@ -13,8 +13,8 @@
       "cogGt50": 38
     },
     "tests": {
-      "files": 196,
-      "functions": 8521,
+      "files": 200,
+      "functions": 8552,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -690,6 +690,15 @@
       "sumCyc": 175,
       "sumCog": 168
     },
+    "scripts/outbound-guard-lookup.cjs": {
+      "scope": "source",
+      "lines": 59,
+      "funcs": 7,
+      "maxCyc": 11,
+      "maxCog": 10,
+      "sumCyc": 28,
+      "sumCog": 20
+    },
     "scripts/perf-workload.mjs": {
       "scope": "source",
       "lines": 64,
@@ -746,12 +755,12 @@
     },
     "scripts/test-outbound-guard.cjs": {
       "scope": "source",
-      "lines": 69,
-      "funcs": 5,
+      "lines": 74,
+      "funcs": 6,
       "maxCyc": 7,
       "maxCog": 5,
       "sumCyc": 22,
-      "sumCog": 15
+      "sumCog": 14
     },
     "scripts/test-quick.mjs": {
       "scope": "source",
@@ -1509,6 +1518,15 @@
       "sumCyc": 23,
       "sumCog": 15
     },
+    "tests/fixtures/outbound-guard-connect-stub.cjs": {
+      "scope": "tests",
+      "lines": 19,
+      "funcs": 2,
+      "maxCyc": 5,
+      "maxCog": 5,
+      "sumCyc": 7,
+      "sumCog": 6
+    },
     "tests/fixtures/owned-process.mjs": {
       "scope": "tests",
       "lines": 165,
@@ -2021,6 +2039,33 @@
       "maxCog": 13,
       "sumCyc": 306,
       "sumCog": 95
+    },
+    "tests/outbound-guard-real.test.mjs": {
+      "scope": "tests",
+      "lines": 134,
+      "funcs": 6,
+      "maxCyc": 6,
+      "maxCog": 5,
+      "sumCyc": 11,
+      "sumCog": 5
+    },
+    "tests/outbound-guard-validation.test.mjs": {
+      "scope": "tests",
+      "lines": 59,
+      "funcs": 12,
+      "maxCyc": 2,
+      "maxCog": 1,
+      "sumCyc": 16,
+      "sumCog": 4
+    },
+    "tests/outbound-guard.test.mjs": {
+      "scope": "tests",
+      "lines": 123,
+      "funcs": 11,
+      "maxCyc": 9,
+      "maxCog": 8,
+      "sumCyc": 20,
+      "sumCog": 9
     },
     "tests/pack-lock.test.mjs": {
       "scope": "tests",
@@ -2644,6 +2689,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-22T10:38:22.894Z",
-  "sourceCommit": "debebc75a9a51abc74cb1cbb23e0e56002b3ef7f"
+  "generatedAt": "2026-11-22T11:36:27.958Z",
+  "sourceCommit": "c23ff815c33791488b6ee1d5b2e90208b807650f"
 }
