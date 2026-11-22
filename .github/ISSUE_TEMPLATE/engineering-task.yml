@@ -1,0 +1,51 @@
+name: Engineering task
+description: Define maintainer-owned work with a clear outcome.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for engineering work, not user bug reports.
+        State what success means. Leave implementation choices open.
+        Filing an issue does not authorize coding or merging.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and evidence
+      description: Explain the current problem. Link evidence or relevant source where possible.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Expected outcome
+      description: State what should change in observable terms. Do not prescribe the design.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Describe how to know the task is complete. For research, define the decision and evidence needed.
+    validations:
+      required: true
+  - type: textarea
+    id: boundaries
+    attributes:
+      label: Constraints and non-goals (if any)
+      description: State what must stay unchanged and what is out of scope.
+    validations:
+      required: false
+  - type: textarea
+    id: verification
+    attributes:
+      label: Risks and verification (if known)
+      description: Name important failure cases or evidence needs. The agent designs the checks.
+    validations:
+      required: false
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies and open decisions (if any)
+      description: Link related issues, blockers, or decisions that need an owner.
+    validations:
+      required: false
