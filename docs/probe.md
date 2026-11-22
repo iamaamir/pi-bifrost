@@ -66,7 +66,7 @@ Both `runProbe` options apply to `/bifrost probe` and `/bifrost init`.
 
 `/bifrost init` can reuse a recent complete probe report from `.pi/bifrost-probe.json` instead of sending new probe requests. Reuse is allowed only when the report passes complete-report validation for the current physical generative catalog and the report file's modification time is within the fixed one-hour reuse window. Catalog changes invalidate reuse because the report must cover the current catalog.
 
-When init reuses a report, it reports the report file age and file modification time. That age is file metadata, not guaranteed provider-data freshness. Reusing probe data means init did not send new model probes; it does not mean Pi made no other network request, because registry refresh is separate.
+When init reuses saved probe results, it shows their approximate age. Pass `-f` to force a fresh check. Reusing probe data means init did not send new model probes; other commands can still make network requests, such as registry refresh.
 
 `/bifrost init -f` forces a fresh probe and does not reuse a cached probe report. Manual `/bifrost probe` always runs a fresh probe. Automatic first-use bootstrap uses the same recent complete all-failed report guard to avoid repeated background probes after a total failure; run `/bifrost init -f` after fixing provider access to refresh that evidence.
 

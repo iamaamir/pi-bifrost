@@ -471,8 +471,8 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(cached.code, 0, cached.stderr);
       assert.equal(cached.violations, "");
       assert.deepEqual(requests, [], "ordinary init must reuse a complete recent report without new provider requests");
-      assert.match(cached.stderr + cached.stdout, /cached probe report \(report file age .*; file mtime \d{4}-\d{2}-\d{2}T/u);
-      assert.match(cached.stderr + cached.stdout, /No new model probes were sent; registry refresh and other commands may still use network\./u);
+      assert.match(cached.stderr + cached.stdout, /Using \d+ saved probe results \(\d+[smhd.]+ old\)\. Run \/bifrost init -f to check again\./u);
+      assert.doesNotMatch(cached.stderr + cached.stdout, /file mtime|provider-data freshness|registry refresh and other commands may still use network/i);
       const configPath = join(env.work, ".pi", "bifrost.json");
       const cachedConfigBytes = readFileSync(configPath);
       const cachedConfig = JSON.parse(cachedConfigBytes);
@@ -490,9 +490,9 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(forced.code, 0, forced.stderr);
       assert.equal(forced.violations, "");
       assert.deepEqual([...new Set(requests)], ["healthy", "credits-exhausted"], "forced init must disregard even a complete recent cache");
-      assert.match(forced.stderr + forced.stdout, /-f requested a fresh probe; cached probe reports were not reused\./u);
-      assert.match(forced.stderr + forced.stdout, /from this fresh probe run \(just now\)/u);
-      assert.doesNotMatch(forced.stderr + forced.stdout, /from a cached probe report/u);
+      assert.match(forced.stderr + forced.stdout, /Checking 2 models \(forced by -f\)\./u);
+      assert.match(forced.stderr + forced.stdout, /Using \d+ working models from this check\./u);
+      assert.doesNotMatch(forced.stderr + forced.stdout, /saved probe results \(|file mtime|provider-data freshness/i);
       const forcedBytes = readFileSync(configPath);
       const forcedConfig = JSON.parse(forcedBytes);
       assert.equal(Object.values(forcedConfig.models).flat().includes("fake/credits-exhausted"), false);
@@ -588,7 +588,7 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(result.violations, "", "Pi attempted a non-fixture network connection");
       assert.equal(result.code, 0, result.stderr);
       assert.ok(requests.length > 0 && requests.every((model) => model === "credits-exhausted"));
-      assert.match(result.stderr + result.stdout, /No usable models found from this fresh probe run/u);
+      assert.match(result.stderr + result.stdout, /No usable models found in this check\. Check API keys, network, and credits; no configuration was changed\./u);
       assert.deepEqual(readFileSync(join(env.work, ".pi", "bifrost.json")), original);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
@@ -624,8 +624,8 @@ describe("Pi init probe regression", { concurrency: 1, timeout: 120_000 }, () =>
       assert.equal(result.violations, "");
       assert.equal(result.code, 0, result.stderr);
       assert.deepEqual(requests, []);
-      assert.match(result.stderr + result.stdout, /No usable models found from (?:a|the) cached probe report \(report file age .*; file mtime \d{4}-\d{2}-\d{2}T/u);
-      assert.match(result.stderr + result.stdout, /file mtime age, not guaranteed provider-data freshness\)/u);
+      assert.match(result.stderr + result.stdout, /No usable models found in saved probe results \(\d+[smhd.]+ old\)\. Run \/bifrost init -f after checking access\. Configuration unchanged\./u);
+      assert.doesNotMatch(result.stderr + result.stdout, /file mtime|provider-data freshness|registry refresh and other commands may still use network/i);
       assert.deepEqual(readFileSync(join(env.work, ".pi", "bifrost.json")), original);
     } finally { rmSync(env.home, { recursive: true, force: true }); rmSync(env.work, { recursive: true, force: true }); }
   });
