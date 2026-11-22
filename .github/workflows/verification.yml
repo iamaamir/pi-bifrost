@@ -248,6 +248,8 @@ jobs:
             npm run --silent check:complexity:base -- "$target" --candidate "$HEAD_SHA" --json \
               | tee "$RUNNER_TEMP/complexity-evidence/delta.json"
           else
+            # Post-merge bookkeeping only: the policy decision was reviewed at
+            # the pull request boundary; this is not candidate authorization.
             target="${BEFORE_SHA:-HEAD^}"
             BIFROST_COMPLEXITY_BASE="$target" BIFROST_COMPLEXITY_ALLOW_POLICY_CHANGE=1 \
               npm run --silent check:complexity -- --candidate "$HEAD_SHA" --json \

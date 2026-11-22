@@ -77,7 +77,8 @@ jobs:
         run: npm run check:complexity:base -- "$TARGET_SHA" --candidate "$HEAD_SHA"
       # A push to main is the merge of a pull request that already passed the
       # label-gated review above; this leg re-checks the metric against the
-      # previous tip so a broken merge is still visible.
+      # previous tip so a broken merge is still visible. Its unconditional
+      # override is post-merge bookkeeping, not candidate authorization.
       - name: Complexity against the previous revision
         if: github.event_name != 'pull_request'
         env:
