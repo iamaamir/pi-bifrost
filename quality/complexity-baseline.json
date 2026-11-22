@@ -14,7 +14,7 @@
     },
     "tests": {
       "files": 195,
-      "functions": 8461,
+      "functions": 8470,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -125,12 +125,12 @@
     },
     "commands.ts": {
       "scope": "source",
-      "lines": 3442,
+      "lines": 3448,
       "funcs": 256,
       "maxCyc": 161,
       "maxCog": 261,
-      "sumCyc": 1183,
-      "sumCog": 1218
+      "sumCyc": 1184,
+      "sumCog": 1220
     },
     "config-agent-report.ts": {
       "scope": "source",
@@ -215,7 +215,7 @@
     },
     "diagnostics.ts": {
       "scope": "source",
-      "lines": 425,
+      "lines": 434,
       "funcs": 28,
       "maxCyc": 24,
       "maxCog": 34,
@@ -323,7 +323,7 @@
     },
     "registry-refresh.ts": {
       "scope": "source",
-      "lines": 92,
+      "lines": 100,
       "funcs": 11,
       "maxCyc": 15,
       "maxCog": 5,
@@ -872,7 +872,7 @@
     },
     "tests/auto-bootstrap-runtime.test.ts": {
       "scope": "tests",
-      "lines": 753,
+      "lines": 754,
       "funcs": 107,
       "maxCyc": 5,
       "maxCog": 6,
@@ -890,11 +890,11 @@
     },
     "tests/bifrost-commands.test.ts": {
       "scope": "tests",
-      "lines": 4200,
-      "funcs": 624,
+      "lines": 4226,
+      "funcs": 630,
       "maxCyc": 6,
       "maxCog": 9,
-      "sumCyc": 760,
+      "sumCyc": 766,
       "sumCog": 167
     },
     "tests/cache-properties.test.ts": {
@@ -1214,11 +1214,11 @@
     },
     "tests/diagnostics.test.ts": {
       "scope": "tests",
-      "lines": 359,
-      "funcs": 52,
+      "lines": 385,
+      "funcs": 55,
       "maxCyc": 3,
       "maxCog": 2,
-      "sumCyc": 76,
+      "sumCyc": 79,
       "sumCog": 22
     },
     "tests/discovery-properties.test.ts": {
@@ -2591,7 +2591,7 @@
     },
     "ux-status.ts": {
       "scope": "source",
-      "lines": 88,
+      "lines": 89,
       "funcs": 6,
       "maxCyc": 9,
       "maxCog": 20,
@@ -2626,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-21T20:20:51.046Z",
-  "sourceCommit": "bc2dc313db8b56626ae017abc4615910c4170fee"
+  "generatedAt": "2026-11-22T07:18:40.349Z",
+  "sourceCommit": "e1a5299fa8cc7b38ecf8a97fe9dd66e06218ba36"
 }
