@@ -132,6 +132,7 @@ function complexityFixture() {
   writeFileSync(join(dir, ".github", "workflows", "complexity-gate.yml"), "name: complexity-gate-fixture\n");
   writeFileSync(join(dir, ".github", "workflows", "static-analysis.yml"), "name: fixture\n");
   writeFileSync(join(dir, ".github", "workflows", "verification.yml"), "name: verification-fixture\n");
+  writeFileSync(join(dir, ".github", "CODEOWNERS"), "/scripts/check-complexity.mjs @owner\n");
   writeFileSync(join(dir, "tsconfig.json"), "{}\n");
   writeFileSync(join(dir, "package.json"), JSON.stringify({
     scripts: {

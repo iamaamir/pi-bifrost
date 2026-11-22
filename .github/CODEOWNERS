@@ -1,7 +1,8 @@
 # The complexity gate's trust boundary: the analyzer, measurement config and
 # dependency resolution, and CI wiring judge their own changes. Require the owner
-# to review edits to every input the policy digest reads, including the
-# protected judge workflow.
+# to review edits to every input the policy digest reads, including the owner
+# routing file and the protected judge workflow.
+/.github/CODEOWNERS @iamaamir
 /scripts/check-complexity.mjs @iamaamir
 /.github/workflows/complexity-gate.yml @iamaamir
 /.github/workflows/ @iamaamir

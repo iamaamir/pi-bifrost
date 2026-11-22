@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -107,6 +107,39 @@ test("the protected revision step rejects a stale merge ref", () => {
     const stale = runStep();
     assert.notEqual(stale.status, 0);
     assert.match(stale.stderr, /merge result is stale/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the protected gate rejects a candidate workflow that publishes its context", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bifrost-complexity-context-"));
+  try {
+    git(dir, ["init", "-q"]);
+    mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+    commitFile(dir, ".github/workflows/other.yml", "name: other\njobs:\n  complexity-trusted:\n    runs-on: ubuntu-latest\n", "duplicate context");
+    const head = git(dir, ["rev-parse", "HEAD"]);
+    const script = workflowRunBlock("Reject candidate workflows that publish the protected context");
+    const runStep = () => spawnSync("bash", ["-e"], {
+      cwd: dir,
+      env: { ...fixtureGitEnv(), HEAD_SHA: head },
+      input: script,
+      encoding: "utf8",
+    });
+
+    const rejected = runStep();
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, /publishes the protected complexity-trusted context/u);
+
+    commitFile(dir, ".github/workflows/other.yml", "name: other\njobs:\n  build:\n    runs-on: ubuntu-latest\n", "remove duplicate context");
+    const cleanHead = git(dir, ["rev-parse", "HEAD"]);
+    const accepted = spawnSync("bash", ["-e"], {
+      cwd: dir,
+      env: { ...fixtureGitEnv(), HEAD_SHA: cleanHead },
+      input: script,
+      encoding: "utf8",
+    });
+    assert.equal(accepted.status, 0, accepted.stderr);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -164,6 +164,7 @@ function seedPolicy(dir, script = "// fixture complexity policy\n") {
   writeFileSync(join(dir, ".github", "workflows", "complexity-gate.yml"), "name: complexity-gate-fixture\n");
   writeFileSync(join(dir, ".github", "workflows", "static-analysis.yml"), "name: fixture\n");
   writeFileSync(join(dir, ".github", "workflows", "verification.yml"), "name: verification-fixture\n");
+  writeFileSync(join(dir, ".github", "CODEOWNERS"), "/scripts/check-complexity.mjs @owner\n");
   writeFileSync(join(dir, "tsconfig.json"), "{}\n");
   writeFileSync(join(dir, "package.json"), JSON.stringify({
     scripts: {
@@ -611,6 +612,21 @@ test("adding a policy file is a visible policy change, not an unreadable-input e
   }
 });
 
+test("the owner-routing file is a policy input", () => {
+  const { dir, base, baseBranch } = gitFixture();
+  try {
+    const head = branchFrom(dir, baseBranch, "codeowners", "move owner routing", () => {
+      writeFileSync(join(dir, ".github", "CODEOWNERS"), "/scripts/check-complexity.mjs @someone-else\n");
+    });
+    const denied = runGate(dir, ["--target", base, "--candidate", head]);
+    assert.equal(denied.status, 2, denied.stderr);
+    assert.equal(denied.report.findings[0].rule, "complexity-policy-changed");
+    assert.ok(denied.report.policy.differences.includes(".github/CODEOWNERS"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a policy or analyzer edit fails closed and is only accepted with the explicit override", () => {
   const { dir, base, baseBranch } = gitFixture();
   try {
@@ -890,6 +906,20 @@ test("candidate fingerprint does not follow an untracked symlink", () => {
     assert.equal(after.digest, before.digest);
   } finally {
     rmSync(target, { force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("candidate fingerprint includes ignored measured source", () => {
+  const { dir } = gitFixture();
+  try {
+    writeFileSync(join(dir, ".gitignore"), "ignored.ts\n");
+    writeFileSync(join(dir, "ignored.ts"), "export const ignored = 1;\n");
+    const before = candidateFingerprint(dir);
+    writeFileSync(join(dir, "ignored.ts"), "export const ignored = 2;\n");
+    const after = candidateFingerprint(dir);
+    assert.notEqual(after.digest, before.digest, "ignored source must be bound to the worktree snapshot");
+  } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });

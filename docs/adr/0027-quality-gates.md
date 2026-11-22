@@ -77,8 +77,10 @@ make "the gate measured nothing" a failure.
   `2`.
 - The gate is a **ratchet**: per-file maxima and scope counts must not increase
   against the target measurement. New files must not exceed the target scope
-  maxima. Removed files are improvements. A rename is a removal plus a new file,
-  so the new path is judged by the scope ceiling.
+  maxima. Removed files are improvements. Git rename detection carries the old
+  path's per-file ceiling to the new path, so a detected rename cannot reset the
+  ratchet. A path Git does not detect as a rename is judged as a new file by the
+  scope ceiling.
 - Nested functions are scored separately; a parent does not absorb a child's
   branches. Expression-bodied arrow bodies are visited.
 - Paths are normalized to forward slashes before scoping or file lookup so
@@ -90,12 +92,14 @@ make "the gate measured nothing" a failure.
 - A file that disappears during analysis, an unreadable revision, or an
   incomplete measurement fails closed with exit `2` instead of reporting a
   verdict from a partial tree.
-- The analyzer, its scope and threshold policy, the TypeScript version, and the
-  static-analysis and verification workflows are hashed at both revisions. A
-  differing digest exits `2` with `complexity-policy-changed` unless
-  `--allow-policy-change` is present. CI allows the override only for a pull
-  request carrying the `quality-policy-change` label. The complexity job is a
-  dependency of the required `release-gates` context, and
+- The analyzer, its scope and threshold policy, the TypeScript version, the
+  protected complexity workflow, the static-analysis and verification workflows,
+  and the owner-routing file are hashed at both revisions. A differing digest
+  exits `2` with `complexity-policy-changed` unless `--allow-policy-change` is
+  present. The bootstrap `release-gates` path allows that override only for a
+  pull request carrying the `quality-policy-change` label. The protected
+  `complexity-trusted` workflow does not accept the override or the label. The
+  complexity job is a dependency of the required `release-gates` context, and
   [CODEOWNERS](../../.github/CODEOWNERS) routes the policy files to the owner.
   Code-owner review is blocking only when the repository ruleset requires it.
   This is the trust boundary: the candidate script cannot silently relax the
@@ -130,8 +134,9 @@ make "the gate measured nothing" a failure.
   files twice, once per revision.
 - A routine change no longer regenerates a shared file, so feature branches that
   edit different measured files cannot conflict through metrics.
-- A policy change needs the `quality-policy-change` label and owner review;
-  reviewers inspect the analyzer diff rather than trusting a regenerated
+- A policy change needs owner review and the protected repository procedure;
+  the bootstrap `quality-policy-change` label is not authority for the protected
+  judge. Reviewers inspect the analyzer diff rather than trusting a regenerated
   snapshot.
 - Duplication can drift upward within the 3.3% budget. The committed audit
   records the current headroom. Trend history is tracked in #291 rather than in

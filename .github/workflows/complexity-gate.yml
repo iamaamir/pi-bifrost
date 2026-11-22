@@ -85,6 +85,19 @@ jobs:
 
       # The judge dependencies come only from the protected checkout. The PR
       # tree is not installed, run, or resolved as a module source.
+      # A required status context is matched by name, not by workflow. Reject a
+      # candidate that publishes the same literal context from another workflow;
+      # the external app/required-workflow control remains the complete fix.
+      - name: Reject candidate workflows that publish the protected context
+        env:
+          HEAD_SHA: ${{ env.HEAD_SHA }}
+        run: |
+          set -euo pipefail
+          if git grep -n -F 'complexity-trusted' "$HEAD_SHA" -- '.github/workflows/*.yml' ':!.github/workflows/complexity-gate.yml'; then
+            echo "A candidate workflow publishes the protected complexity-trusted context" >&2
+            exit 1
+          fi
+
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24

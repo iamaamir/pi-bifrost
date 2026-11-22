@@ -161,10 +161,14 @@ an external trusted check or a different protected design; do not widen it.
 The existing verification complexity job remains the bootstrap/local path until
 the protected workflow is present on the target branch. The ruleset must require
 the protected `complexity-trusted` context for that check to block merges. The
-policy inputs (analyzer, workflows, `tsconfig.json`, `package.json`, and the
-resolved TypeScript lock entry) are covered by
+policy inputs (analyzer, workflows, `.github/CODEOWNERS`, `tsconfig.json`,
+`package.json`, and the resolved TypeScript lock entry) are covered by
 [`.github/CODEOWNERS`](../.github/CODEOWNERS), but code-owner review only blocks
-when the ruleset requires it.
+when the ruleset requires it. The protected context is matched by name, so a
+same-repository candidate workflow can create a duplicate job with that name;
+the protected workflow's artifact is evidence, not a ruleset identity. A
+complete UI-merge fix needs an app-scoped check, an organization/enterprise
+required workflow, or a ruleset path restriction on workflow changes.
 
 Policy, source, tests, and documentation resolve revisions from refs and runtime
 events. Resolved SHAs and digests belong in evidence output, not in

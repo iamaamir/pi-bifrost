@@ -43,6 +43,7 @@ const POLICY_FILES = [
   ".github/workflows/complexity-gate.yml",
   ".github/workflows/static-analysis.yml",
   ".github/workflows/verification.yml",
+  ".github/CODEOWNERS",
   "tsconfig.json",
 ];
 const POLICY_SCRIPTS = ["check:complexity", "check:complexity:base"];
@@ -557,32 +558,39 @@ function renameMap(repo, targetSha, candidateSha) {
 }
 
 // A working-tree candidate is not an immutable tree. Hash HEAD, the porcelain
-// status, and the bytes of every modified or untracked file before and after the
-// measurement; a change means the report would describe a moving target. CI
+// status, and every source file the analyzer can measure before and after the
+// measurement; a change means the report would describe a moving target. Hashing
+// the analyzer's file set, rather than Git's changed set, also covers ignored
+// source that is present in the working tree but absent from git status. CI
 // passes an explicit --candidate commit and does not rely on this guard.
 function candidateFingerprint(repo) {
   const head = gitRun(repo, ["rev-parse", "HEAD"]);
   const status = gitRun(repo, ["status", "--porcelain=v1", "-z", "--untracked-files=normal"]);
   if (head.status !== 0 || status.status !== 0) return { error: "could not inspect the candidate worktree" };
-  const changed = gitRun(repo, ["ls-files", "-m", "-o", "--exclude-standard", "-z"]);
-  if (changed.status !== 0) return { error: "could not enumerate candidate changes" };
+  const skipped = [];
+  const files = inScopeFiles(repo, skipped).sort((a, b) => a.rel.localeCompare(b.rel));
   const digest = createHash("sha256");
-  digest.update(head.stdout.trim()).update("\0").update(status.stdout);
-  for (const rel of changed.stdout.split("\0").filter(Boolean).sort()) {
+  digest.update(head.stdout.trim()).update("\0").update(status.stdout).update("\0").update(skipped.join("\0"));
+  for (const { rel, file: full } of files) {
     digest.update(rel).update("\0");
-    const full = path.join(repo, rel);
     try {
       // Hash the link target, not the referent. The analyzer skips symlinked
       // sources, so following one here would read outside the candidate tree.
       const stat = fs.lstatSync(full);
       digest.update(stat.isSymbolicLink() ? fs.readlinkSync(full) : fs.readFileSync(full));
     } catch (error) {
-      // A deleted tracked path is represented in porcelain status; its missing
-      // content is intentional, not a read failure.
-      if (error?.code !== "ENOENT") return { error: `could not read candidate file ${rel}: ${error.message}` };
+      // A path can disappear between the walk and the read. Record the absence
+      // in the fingerprint and let the analyzer report the incomplete tree; a
+      // vanished source must not become an unreadable-file verdict instead.
+      if (error?.code === "ENOENT") {
+        digest.update("missing\0");
+        skipped.push(rel);
+        continue;
+      }
+      return { error: `could not read candidate file ${rel}: ${error.message}` };
     }
   }
-  return { digest: digest.digest("hex"), dirty: status.stdout.trim() !== "" };
+  return { digest: digest.digest("hex"), dirty: status.stdout.trim() !== "" || skipped.length > 0 };
 }
 
 const SCOPE_RATCHET_FIELDS = ["maxCyc", "maxCog", "cycGt30", "cycGt50", "cogGt30", "cogGt50"];
@@ -677,7 +685,7 @@ function failure({ json, message, target, candidate, policy }) {
 }
 
 function policyFailure({ json, target, candidate, policy }) {
-  const message = "complexity policy differs between the target and the candidate; review the analyzer/scope/threshold/CI change, then re-run with --allow-policy-change (CI: quality-policy-change label)";
+  const message = "complexity policy differs between the target and the candidate; review the analyzer/scope/threshold/CI change, then re-run with --allow-policy-change locally. Protected CI does not accept that override or a candidate label.";
   const envelope = {
     check: "complexity",
     status: "failed",
@@ -692,7 +700,7 @@ function policyFailure({ json, target, candidate, policy }) {
     console.error(`FAIL complexity policy: ${policy.differences.join(", ") || "policy digest differs"}`);
     console.error(`  target ${target.revision} policy ${policy.targetDigest.slice(0, 16)}`);
     console.error(`  candidate ${candidate.revision ?? "working tree"} policy ${policy.candidateDigest.slice(0, 16)}`);
-    console.error("  review the analyzer/scope/threshold/CI change, then re-run with --allow-policy-change");
+    console.error("  review the analyzer/scope/threshold/CI change, then re-run with --allow-policy-change locally; protected CI has no candidate-controlled override");
   }
   return printEnvelope(envelope, json);
 }

@@ -128,10 +128,11 @@ The gate must not be judged by code in the candidate. The authoritative path is
   replay record after refs move.
 
 The analyzer still computes a policy digest over its source, the workflow files,
-`tsconfig.json`, the complexity scripts, and the resolved TypeScript version. A
-different digest fails closed with `complexity-policy-changed`. A candidate
-label is not sufficient authority for a policy change; the protected workflow
-does not accept the self-authorizing override.
+`.github/CODEOWNERS`, `tsconfig.json`, the complexity scripts, and the resolved
+TypeScript version. A different digest fails closed with
+`complexity-policy-changed`. A candidate label is not sufficient authority for a
+policy change; the protected workflow does not accept the self-authorizing
+override.
 
 ### Lint exception
 
@@ -151,9 +152,18 @@ trusted check is the clean replacement. The suppression is scoped to this
 trigger and must not be widened.
 
 The ruleset must require the protected workflow's `complexity-trusted` context
-for the check to block merges. CODEOWNERS routes policy paths to the owner, but
-code-owner review is only blocking when the ruleset requires it. That is a
-repository configuration dependency; it is not a commit-SHA pin in the code.
+for the check to block merges. That context is a check name, not a workflow
+identity: a same-repository candidate can add another job with the same name.
+The protected workflow rejects a candidate workflow that publishes the literal
+context, but that is defense-in-depth; a candidate can construct the name at
+runtime. A GitHub UI merge can only be made authoritative by an app-scoped
+check, an organization/enterprise required workflow, or a ruleset path
+restriction that prevents candidate workflow changes. Those are repository
+configuration dependencies, not commit-SHA pins in the code.
+
+CODEOWNERS routes policy paths, including itself, to the owner, but code-owner
+review is only blocking when the ruleset requires it. The owner must decide
+whether that control is available on this repository.
 
 ### Policy changes and bootstrap
 
