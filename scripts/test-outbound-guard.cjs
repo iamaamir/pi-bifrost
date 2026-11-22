@@ -29,7 +29,9 @@ const allowedPort = allowed ? Number(allowed.port) : null;
 
 function isAllowed(host, port) {
   if (denyAll) return false;
-  if (allowLoopback) return host === "127.0.0.1" && Number(port) > 0;
+  // Test tooling (for example Stryker's logging client) connects via the
+  // "localhost" loopback alias, not the numeric address.
+  if (allowLoopback) return (host === "127.0.0.1" || host === "localhost") && Number(port) > 0;
   return allowed && host === allowed.hostname && Number(port) === allowedPort;
 }
 function deny(message) {
