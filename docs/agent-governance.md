@@ -1,10 +1,10 @@
 # Issue challenge and final review
 
 The lifecycle in [AGENTS.md](../AGENTS.md#delivery-lifecycle) is the authority.
-The [Issue Challenger](../.agents/issue-challenger.md) checks readiness before coding;
+The [Crux](../.agents/crux.md) checks readiness before coding;
 [Axiom](../.agents/axiom.md) checks the actual final candidate. Axiom screens the
 diff for material product/UX changes and refers qualifying candidates to the
-[Product & UX Reviewer](../.agents/product-ux-reviewer.md). Use separate fresh
+[Prism](../.agents/prism.md). Use separate fresh
 runs from the implementation author, with the accepted contract and evidence,
 rather than the author's full conversation. An author may not approve their own work.
 
@@ -59,7 +59,7 @@ Axiom checks each diff for material changes to the user experience.
 It records REQUIRED or NOT REQUIRED with a reason.
 File paths alone do not trigger this review.
 
-If required, the owner asks an independent [Product & UX Reviewer](../.agents/product-ux-reviewer.md)
+If required, the owner asks an independent [Prism](../.agents/prism.md)
 to review the same head. A user can also run this reviewer directly.
 The reviewer checks user value, clarity and simpler options.
 It returns APPROVED, CHANGES REQUIRED or REVIEW INCOMPLETE.
@@ -74,8 +74,8 @@ are task templates, not commands or claims of an executed challenge/review.
 
 **Challenge:**
 
-> Act as issue-challenger, independently of the author. Read AGENTS.md and
-> .agents/issue-challenger.md. Challenge <issue> against <delivery branch and SHA>.
+> Act as Crux, independently of the author. Read AGENTS.md and
+> .agents/crux.md. Challenge <issue> against <delivery branch and SHA>.
 > Inputs: <current issue/comments and native blocker snapshot>, <applicable parent
 > plan, approved protocol and required planning documents>, <prior adjudication/report>.
 > Trace current owners and map every acceptance criterion to evidence. Preserve
@@ -105,7 +105,7 @@ are task templates, not commands or claims of an executed challenge/review.
 
 **Product review (direct request or Axiom referral):**
 
-> Act as product-ux-reviewer. Read AGENTS.md and .agents/product-ux-reviewer.md.
+> Act as Prism. Read AGENTS.md and .agents/prism.md.
 > Review <PR> from <base SHA> to <head SHA>. Read the accepted contract and
 > captured user output. Compare the experience with a simpler option and no
 > change. Separate material defects from style preferences. Return APPROVED /

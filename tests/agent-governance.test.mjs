@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
-const roles = ["issue-challenger", "axiom", "product-ux-reviewer"];
+const roles = ["crux", "axiom", "prism"];
 
 test("governance roles declare independent file-reading tools and project context", () => {
   for (const role of roles) {
@@ -31,7 +31,7 @@ test("governance documentation resolves local links", () => {
 
 test("readiness, adjudication and review remain distinct from authorization", () => {
   const guide = read("AGENTS.md");
-  const challenger = read(".agents/issue-challenger.md");
+  const challenger = read(".agents/crux.md");
   const axiom = read(".agents/axiom.md");
   assert.match(guide, /challenge → adjudication → implementation → independent review/);
   assert.match(guide, /ACCEPT \/ REJECT \/ DEFER \/ NEEDS EVIDENCE/);
@@ -55,7 +55,7 @@ test("reusable governance resolves ticket and planning context at handoff", () =
 
 test("conditional product review is independent and does not grant merge authority", () => {
   const axiom = read(".agents/axiom.md");
-  const specialist = read(".agents/product-ux-reviewer.md");
+  const specialist = read(".agents/prism.md");
   const guide = read("docs/agent-governance.md");
   assert.match(axiom, /Product & UX Review: REQUIRED \/ NOT REQUIRED/);
   assert.match(specialist, /A user or Axiom can request your review/);
