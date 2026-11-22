@@ -2,6 +2,7 @@
 const net = require("node:net");
 const dgram = require("node:dgram");
 const fs = require("node:fs");
+const { parseConnectArgs, withGuardedLookup } = require("./outbound-guard-lookup.cjs");
 
 const rawOrigin = process.env.BIFROST_TEST_ALLOWED_ORIGIN;
 const violationPath = process.env.BIFROST_TEST_NETWORK_VIOLATIONS;
@@ -30,30 +31,33 @@ const allowedPort = allowed ? Number(allowed.port) : null;
 function isAllowed(host, port) {
   if (denyAll) return false;
   // Test tooling (for example Stryker's logging client) connects via the
-  // "localhost" loopback alias, not the numeric address.
+  // "localhost" loopback alias, not the numeric address. The alias is only a
+  // candidate; its resolved address is checked before the socket connects.
   if (allowLoopback) return (host === "127.0.0.1" || host === "localhost") && Number(port) > 0;
   return allowed && host === allowed.hostname && Number(port) === allowedPort;
 }
-function deny(message) {
+function recordViolation(message) {
   try {
     fs.appendFileSync(violationPath, message + "\n", { encoding: "utf8", mode: 0o600 });
   } catch {
     process.stderr.write("[test network guard] blocked network request; violation log could not be written\n");
   }
+}
+function deny(message) {
+  recordViolation(message);
   throw new Error(message);
 }
 
 const connect = net.Socket.prototype.connect;
 net.Socket.prototype.connect = function (...args) {
-  const target = Array.isArray(args[0]) ? args[0][0] : args[0];
-  const options = typeof target === "object" && target !== null
-    ? target
-    : { port: target, host: args[1] };
-  const host = options.host ?? options.hostname ?? "localhost";
+  const { options, host } = parseConnectArgs(args);
   if (!isAllowed(host, options.port)) {
     deny("blocked socket connection to " + host + ":" + options.port);
   }
-  return connect.apply(this, args);
+  const guardedArgs = allowLoopback && host === "localhost"
+    ? withGuardedLookup(args, options, host, recordViolation)
+    : args;
+  return connect.apply(this, guardedArgs);
 };
 
 dgram.Socket.prototype.send = function (...args) {
