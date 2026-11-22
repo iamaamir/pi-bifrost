@@ -878,6 +878,22 @@ test("the worktree candidate fingerprint changes when a measured file changes", 
   }
 });
 
+test("candidate fingerprint does not follow an untracked symlink", () => {
+  const { dir } = gitFixture();
+  const target = join(tmpdir(), `bifrost-fingerprint-target-${process.pid}.ts`);
+  try {
+    writeFileSync(target, "export const before = true;\n");
+    symlinkSync(target, join(dir, "linked.ts"));
+    const before = candidateFingerprint(dir);
+    writeFileSync(target, "export const after = true;\n");
+    const after = candidateFingerprint(dir);
+    assert.equal(after.digest, before.digest);
+  } finally {
+    rmSync(target, { force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("candidate fingerprint includes staged and untracked source changes", () => {
   const { dir } = gitFixture();
   try {

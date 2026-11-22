@@ -1,8 +1,46 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { fixtureGitEnv } from "./fixtures/git-env.mjs";
 
 const workflow = readFileSync(new URL("../.github/workflows/complexity-gate.yml", import.meta.url), "utf8");
+
+function workflowRunBlock(stepName) {
+  const lines = workflow.split("\n");
+  const start = lines.findIndex((line) => line.includes(`name: ${stepName}`));
+  assert.notEqual(start, -1, `workflow step not found: ${stepName}`);
+  let index = start;
+  while (index < lines.length && lines[index] !== "        run: |") index++;
+  assert.ok(index < lines.length, `workflow step has no run block: ${stepName}`);
+  index++;
+  const body = [];
+  while (index < lines.length && lines[index].startsWith("          ")) {
+    body.push(lines[index].slice(10));
+    index++;
+  }
+  return body.join("\n") + "\n";
+}
+
+function git(dir, args) {
+  const result = spawnSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgSign=false", ...args], {
+    cwd: dir,
+    env: fixtureGitEnv(),
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr || `git ${args.join(" ")} failed`);
+  return result.stdout.trim();
+}
+
+function commitFile(dir, rel, content, message) {
+  writeFileSync(join(dir, rel), content);
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "--no-gpg-sign", "-qm", message]);
+  return git(dir, ["rev-parse", "HEAD"]);
+}
+
 
 test("the trusted complexity gate runs from the protected base and measures the PR as data", () => {
   assert.match(workflow, /^on:\n(?: {2}#[^\n]*\n)* {2}pull_request_target:/mu);
@@ -23,6 +61,55 @@ test("the trusted gate checks both the PR delta and the proposed merge result", 
   assert.match(workflow, /complexity-evidence\/delta\.json/u);
   assert.match(workflow, /complexity-evidence\/merge\.json/u);
   assert.doesNotMatch(workflow, /--allow-policy-change/u, "a candidate label must not authorize its own policy");
+});
+
+test("the protected revision step rejects a stale merge ref", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bifrost-complexity-workflow-"));
+  const envFile = join(dir, "github-env");
+  const summaryFile = join(dir, "github-summary");
+  try {
+    git(dir, ["init", "-q"]);
+    const baseBranch = git(dir, ["symbolic-ref", "--short", "HEAD"]);
+    commitFile(dir, "base.ts", "export const base = true;\n", "base");
+    const baseTip = commitFile(dir, "base-tip.ts", "export const baseTip = true;\n", "base tip");
+
+    git(dir, ["checkout", "-q", "-b", "feature", `${baseTip}~1`]);
+    const head = commitFile(dir, "head.ts", "export const head = true;\n", "head");
+    git(dir, ["checkout", "-q", baseBranch]);
+    git(dir, ["merge", "--no-edit", "feature"]);
+    const merge = git(dir, ["rev-parse", "HEAD"]);
+
+    git(dir, ["update-ref", "refs/remotes/pull/7/head", head]);
+    git(dir, ["update-ref", "refs/remotes/pull/7/merge", merge]);
+    git(dir, ["checkout", "-q", baseTip]);
+    writeFileSync(envFile, "");
+    writeFileSync(summaryFile, "");
+
+    const script = workflowRunBlock("Resolve the revisions for this run");
+    const runStep = () => spawnSync("bash", ["-e"], {
+      cwd: dir,
+      env: {
+        ...fixtureGitEnv(),
+        PR_NUMBER: "7",
+        HEAD_SHA: head,
+        GITHUB_ENV: envFile,
+        GITHUB_STEP_SUMMARY: summaryFile,
+      },
+      input: script,
+      encoding: "utf8",
+    });
+
+    const passing = runStep();
+    assert.equal(passing.status, 0, passing.stderr);
+    assert.match(readFileSync(envFile, "utf8"), new RegExp(`MERGE_SHA=${merge}`, "u"));
+
+    git(dir, ["update-ref", "refs/remotes/pull/7/merge", baseTip]);
+    const stale = runStep();
+    assert.notEqual(stale.status, 0);
+    assert.match(stale.stderr, /merge result is stale/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("the trusted gate publishes replayable evidence from the resolved revisions", () => {

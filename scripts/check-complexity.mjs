@@ -570,8 +570,12 @@ function candidateFingerprint(repo) {
   digest.update(head.stdout.trim()).update("\0").update(status.stdout);
   for (const rel of changed.stdout.split("\0").filter(Boolean).sort()) {
     digest.update(rel).update("\0");
+    const full = path.join(repo, rel);
     try {
-      digest.update(fs.readFileSync(path.join(repo, rel)));
+      // Hash the link target, not the referent. The analyzer skips symlinked
+      // sources, so following one here would read outside the candidate tree.
+      const stat = fs.lstatSync(full);
+      digest.update(stat.isSymbolicLink() ? fs.readlinkSync(full) : fs.readFileSync(full));
     } catch (error) {
       // A deleted tracked path is represented in porcelain status; its missing
       // content is intentional, not a read failure.
@@ -802,17 +806,27 @@ function measureAndReport({ json, repo, resolved, candidate, targetPolicy, candi
       if (candidateBefore.error) return failure({ json, message: candidateBefore.error });
       candidate.dirty = candidateBefore.dirty;
       candidateResult = measureRoot(repo);
-      const candidateAfter = candidateFingerprint(repo);
-      if (candidateAfter.error) return failure({ json, message: candidateAfter.error });
-      if (candidateAfter.digest !== candidateBefore.digest) {
-        return failure({ json, message: "candidate changed during analysis; rerun with --candidate <commit> against an immutable tree" });
-      }
     } else {
       candidateResult = measureRevision(repo, candidate.revision);
     }
     if (candidateResult.skipped.length > 0) return failure({ json, message: incompleteError("candidate", candidateResult) });
     const renames = renameMap(repo, resolved.sha, candidate.mode === "revision" ? candidate.revision : null);
     if (renames.error) return failure({ json, message: renames.error });
+    if (candidate.mode === "worktree") {
+      // Take the final fingerprint only after every candidate read, including
+      // rename inspection. A change after the earlier fingerprint must not
+      // produce a comparison against a tree the measurement did not describe.
+      const candidateAfter = candidateFingerprint(repo);
+      if (candidateAfter.error) return failure({ json, message: candidateAfter.error });
+      if (candidateAfter.digest !== candidateBefore.digest) {
+        return failure({ json, message: "candidate changed during analysis; rerun with --candidate <commit> against an immutable tree" });
+      }
+      const candidatePolicyAfter = policyAt(repo, null);
+      if (candidatePolicyAfter.error) return failure({ json, message: candidatePolicyAfter.error });
+      if (candidatePolicyAfter.digest !== candidatePolicy.digest) {
+        return failure({ json, message: "candidate policy changed during analysis; rerun with --candidate <commit> against an immutable tree" });
+      }
+    }
     return report({
       json,
       findings: compare(targetResult.report, candidateResult.report, renames.map),
