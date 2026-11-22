@@ -160,10 +160,20 @@ function gitFixture() {
   return { dir, base, baseBranch };
 }
 
+// The gate reads BIFROST_* from the ambient environment, so a hook or shell
+// that sets a policy override must not change what these tests assert.
+function gateEnv(overrides = {}) {
+  const env = fixtureGitEnv();
+  delete env.BIFROST_COMPLEXITY_ALLOW_POLICY_CHANGE;
+  delete env.BIFROST_COMPLEXITY_BASE;
+  delete env.GITHUB_BASE_SHA;
+  return { ...env, ...overrides };
+}
+
 function runGate(dir, args = [], env = {}) {
   const result = spawnSync(process.execPath, [SCRIPT, "--repo", dir, "--json", ...args], {
     cwd: ROOT,
-    env: { ...fixtureGitEnv(), ...env },
+    env: gateEnv(env),
     encoding: "utf8",
   });
   return {
@@ -177,7 +187,7 @@ function runGateAsync(dir, args = [], env = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [SCRIPT, "--repo", dir, "--json", ...args], {
       cwd: ROOT,
-      env: { ...fixtureGitEnv(), ...env },
+      env: gateEnv(env),
     });
     let stdout = "";
     let stderr = "";
@@ -500,7 +510,7 @@ test("missing or unavailable inputs fail closed with exit 2 and no verdict", () 
     assert.match(noMeasure.report.error, /--measure requires a value/u);
 
     const missingRepo = spawnSync(process.execPath, [SCRIPT, "--repo", join(dir, "absent"), "--json"], {
-      cwd: ROOT, env: fixtureGitEnv(), encoding: "utf8",
+      cwd: ROOT, env: gateEnv(), encoding: "utf8",
     });
     assert.equal(missingRepo.status, 2);
     assert.match(JSON.parse(missingRepo.stdout).error, /repository path not found/u);
@@ -527,7 +537,7 @@ test("an incomplete candidate or target measurement exits 2 instead of reporting
       }
       return originalRead.call(fs, file, ...rest);
     };
-    const candidateExit = main(["--repo", dir, "--target", base, "--json"], fixtureGitEnv());
+    const candidateExit = main(["--repo", dir, "--target", base, "--json"], gateEnv());
     assert.equal(candidateExit, 2);
     assert.match(printed.at(-1), /candidate analysis incomplete/u);
 
@@ -540,7 +550,7 @@ test("an incomplete candidate or target measurement exits 2 instead of reporting
       return originalRead.call(fs, file, ...rest);
     };
     printed.length = 0;
-    const targetExit = main(["--repo", dir, "--target", base, "--candidate", base, "--json"], fixtureGitEnv());
+    const targetExit = main(["--repo", dir, "--target", base, "--candidate", base, "--json"], gateEnv());
     assert.equal(targetExit, 2);
     assert.match(printed.at(-1), /target .* analysis incomplete/u);
   } finally {
