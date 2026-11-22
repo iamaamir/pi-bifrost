@@ -1,10 +1,14 @@
 # Bounded verification campaigns
 
 Issue #85. The `Verification` workflow gains an opt-in expanded campaign and a
-pinned Pi compatibility matrix. Both use the existing workflow path. No separate
-workflow was added. All seven release gates and the proposed-merge report
-publisher stay unconditional on an ordinary PR, push, or default manual
-dispatch.
+pinned Pi compatibility matrix. Their commands live in the reusable
+[`campaign.yml`](../.github/workflows/campaign.yml) and
+[`pi-compatibility.yml`](../.github/workflows/pi-compatibility.yml) workflows,
+which `Verification` calls on schedule or expanded dispatch. The same reusable
+workflows are called by [`pr-labels.yml`](../.github/workflows/pr-labels.yml)
+when a PR carries the `ci:campaign` or `ci:pi-compatibility` label. All seven
+release gates and the proposed-merge report publisher stay unconditional on an
+ordinary PR, push, or default manual dispatch.
 
 ## How to run
 
@@ -24,6 +28,21 @@ release gates.
 `campaign_repeats` is hard-bounded to 1-5 and validated by
 `scripts/campaign-run.mjs --validate-only` before any attempt starts.
 `campaign_seed` must be a signed 32-bit integer.
+
+## Pull-request labels
+
+| Label | Reusable workflow |
+|---|---|
+| `ci:campaign` | [`campaign.yml`](../.github/workflows/campaign.yml) |
+| `ci:pi-compatibility` | [`pi-compatibility.yml`](../.github/workflows/pi-compatibility.yml) |
+| `ci:mutation` | [`mutation.yml`](../.github/workflows/mutation.yml) |
+
+The single router is [`pr-labels.yml`](../.github/workflows/pr-labels.yml). Adding
+one of these labels runs only that check; pushing another commit reruns every
+label still attached. An unrelated label reruns nothing, and removing a label
+stops future automatic runs. Every routed check checks out the PR head SHA. The
+router uses `pull_request` with a read-only token, never `pull_request_target`.
+Label-triggered mutation is diagnostic and is not a required status check.
 
 ## Schedule
 

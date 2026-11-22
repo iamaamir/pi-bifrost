@@ -1,12 +1,15 @@
 # Mutation testing
 
 Mutation measurement for the core policy modules and for the structural gate.
-This is a scheduled measurement, not a release gate. It never runs on a pull request and never
-blocks a merge. The workflow run page publishes the results, and the results are
-also artifacts.
+This is a scheduled measurement, not a release gate. It never runs automatically
+on a pull request and never blocks a merge. A `ci:mutation` label can request a
+diagnostic run through the PR-label router; that check is not required. The
+workflow run page publishes the results, and the results are also artifacts.
 
 Run: [`.github/workflows/mutation.yml`](../.github/workflows/mutation.yml),
-nightly at 04:47 UTC from the default branch.
+nightly at 04:47 UTC from the default branch. The workflow is reusable
+(`workflow_call`) with the same dispatch knobs, so the router and a manual
+dispatch measure the same thing.
 
 ## Why it is not a merge gate
 
