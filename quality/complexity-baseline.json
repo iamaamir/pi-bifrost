@@ -14,7 +14,7 @@
     },
     "tests": {
       "files": 195,
-      "functions": 8470,
+      "functions": 8479,
       "maxCyc": 67,
       "maxCog": 124,
       "cycGt30": 6,
@@ -125,12 +125,12 @@
     },
     "commands.ts": {
       "scope": "source",
-      "lines": 3448,
-      "funcs": 256,
-      "maxCyc": 162,
-      "maxCog": 261,
-      "sumCyc": 1184,
-      "sumCog": 1220
+      "lines": 3424,
+      "funcs": 257,
+      "maxCyc": 151,
+      "maxCog": 241,
+      "sumCyc": 1178,
+      "sumCog": 1203
     },
     "config-agent-report.ts": {
       "scope": "source",
@@ -890,12 +890,12 @@
     },
     "tests/bifrost-commands.test.ts": {
       "scope": "tests",
-      "lines": 4226,
-      "funcs": 630,
+      "lines": 4258,
+      "funcs": 639,
       "maxCyc": 6,
       "maxCog": 9,
-      "sumCyc": 766,
-      "sumCog": 167
+      "sumCyc": 780,
+      "sumCog": 172
     },
     "tests/cache-properties.test.ts": {
       "scope": "tests",
@@ -2626,6 +2626,6 @@
       "sumCog": 53
     }
   },
-  "generatedAt": "2026-11-22T07:18:40.349Z",
-  "sourceCommit": "e1a5299fa8cc7b38ecf8a97fe9dd66e06218ba36"
+  "generatedAt": "2026-11-22T08:34:15.925Z",
+  "sourceCommit": "a453e0017b52b2ced38a0829529e89cfe86bbe96"
 }
