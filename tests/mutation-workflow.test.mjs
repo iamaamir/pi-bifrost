@@ -222,7 +222,7 @@ test("summarise runs even when a module leg fails, and uploads its output", () =
     "a failed leg must still summarise, but a failed plan has nothing to summarise",
   );
   assert.match(block, /continue-on-error: true/u, "a missing artifact must be reported, not crash the job");
-  assert.match(block, /name: mutation-summary-\$\{\{ github\.sha \}\}/u);
+  assert.match(block, /name: mutation-summary-\$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}/u);
   assert.match(block, /path: mutation-out\//u);
   assert.match(workflow, /GITHUB_STEP_SUMMARY/u, "the summary must land on the run page");
 });
@@ -277,11 +277,19 @@ test("nightly enforces usability while dispatch and callers can opt out", () => 
   const step = jobs.summarise.split("- name: Fail on an unusable measurement")[1];
   assert.ok(step, "the usability-enforcement step must exist");
   const condition = step.match(/^\s+if: \$\{\{ (.+) \}\}$/mu)?.[1];
-  assert.ok(condition, "the step must carry an if: condition");
-  // Repository-authored workflow YAML, never prompt or configuration input.
-  // nosemgrep: bifrost-no-eval
-  const enforce = (eventName, failOnUnusable) => Boolean(
-    new Function("github", "inputs", `return (${condition});`)({ event_name: eventName }, { fail_on_unusable: failOnUnusable }));
+  assert.equal(condition, "github.event_name == 'schedule' || inputs.fail_on_unusable",
+    "the step must guard the nightly by event and leave callers the opt-out");
+
+  // Pin the two arms as data, then model them directly: the schedule arm is
+  // unconditional, the input arm is the caller's opt-out. No workflow text is
+  // executed, and any change to the expression shape fails this test.
+  const parts = condition.split(" || ");
+  assert.equal(parts.length, 2);
+  const guardedEvent = parts[0].match(/^github\.event_name == '([a-z_]+)'$/u)?.[1];
+  const optOutInput = parts[1].match(/^inputs\.([a-z_]+)$/u)?.[1];
+  assert.equal(guardedEvent, "schedule");
+  assert.equal(optOutInput, "fail_on_unusable");
+  const enforce = (eventName, failOnUnusable) => eventName === guardedEvent || failOnUnusable;
   assert.equal(enforce("schedule", false), true, "nightly has no inputs, so the event guard must enforce");
   assert.equal(enforce("workflow_dispatch", true), true);
   assert.equal(enforce("workflow_dispatch", false), false, "manual dispatch keeps the opt-out");
@@ -1048,6 +1056,20 @@ test("the summary downloads every attempt, so a partial re-run still sees the le
   // The upload name still distinguishes attempts, so one cannot overwrite another
   // within a single run.
   assert.match(jobs.targets, /name: mutation-report-[^\n]*attempt-\$\{\{ github\.run_attempt \}\}/u);
+});
+
+test("artifact revision identifiers bind to the PR head when present", () => {
+  // A pull_request event's github.sha is the synthetic merge commit, not the
+  // bytes the matrix measured. Both uploads must name the head they tested.
+  const revision = "${{ github.event.pull_request.head.sha || github.sha }}";
+  for (const block of [jobs.targets, jobs.summarise]) {
+    const names = [...block.matchAll(/^ {10}name: (mutation-[^\n]+)$/gmu)].map((match) => match[1]);
+    assert.ok(names.length > 0, "the measurement must upload an artifact");
+    for (const name of names) {
+      assert.ok(name.includes(revision), `${name} must bind to the PR head revision`);
+    }
+  }
+  assert.match(jobs.summarise, /pattern: mutation-report-\*/u, "leg discovery must stay unchanged");
 });
 
 test("transport cannot be disabled, because the summary depends on it", () => {
