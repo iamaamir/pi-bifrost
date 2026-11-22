@@ -149,10 +149,10 @@ function makeWorld(overrides = {}) {
     pr: { headRefOid: HEAD, baseRefName: "main", baseRefOid: BASE, isDraft: false, body: "Refs #1", author: { login: "author-bot" }, files: ["x"] },
     diff: DIFF,
     effectiveRules: [{ type: "required_status_checks", ruleset_source_type: "Repository", ruleset_source: "org/repo", ruleset_id: 77,
-      parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: "release-gates" }] } }],
+      parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: "release-gates" }, { context: "complexity-trusted" }] } }],
     serverRuleset: { id: 77, target: "branch", enforcement: "active", bypass_actors: [], rules: [
       { type: "pull_request" },
-      { type: "required_status_checks", parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: "release-gates" }] } },
+      { type: "required_status_checks", parameters: { strict_required_status_checks_policy: true, required_status_checks: [{ context: "release-gates" }, { context: "complexity-trusted" }] } },
     ] },
     pull: { merge_commit_sha: PROPOSED_SHA },
     commits: {
@@ -273,6 +273,7 @@ const rejectionCases = [
   ["draft PR", (fixture) => { fixture.world.pr.isDraft = true; writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /draft/],
   ["wrong PR base branch", (fixture) => { fixture.world.pr.baseRefName = "feature-x"; writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /base branch/],
   ["proposed merge parents mismatch", (fixture) => { fixture.world.commits[PROPOSED_SHA].parents = [{ sha: HEAD }, { sha: BASE }]; writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /proposed merge parents/],
+  ["missing protected complexity check", (fixture) => { fixture.world.effectiveRules[0].parameters.required_status_checks = [{ context: "release-gates" }]; fixture.world.serverRuleset.rules[1].parameters.required_status_checks = [{ context: "release-gates" }]; writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /complexity-trusted/],
 ];
 
 for (const [name, mutate, pattern] of rejectionCases) {

@@ -22,6 +22,7 @@ import {
 
 const WORKFLOW_PATH = ".github/workflows/verification.yml";
 const REQUIRED_JOB = "release-gates";
+const REQUIRED_CHECKS = ["release-gates", "complexity-trusted"];
 const BASE_BRANCH = "main";
 const SHA40 = /^[0-9a-f]{40}$/;
 const SHA256_64 = /^[0-9a-f]{64}$/;
@@ -193,7 +194,7 @@ function requiresCurrentBase(rule) {
   return rule?.type === "required_status_checks"
     && rule.parameters?.strict_required_status_checks_policy === true
     && Array.isArray(rule.parameters.required_status_checks)
-    && rule.parameters.required_status_checks.some((check) => check.context === REQUIRED_JOB);
+    && REQUIRED_CHECKS.every((context) => rule.parameters.required_status_checks.some((check) => check.context === context));
 }
 
 function requireServerBaseGuard(repo, baseBranch) {
@@ -207,13 +208,13 @@ function requireServerBaseGuard(repo, baseBranch) {
       if (policy?.id !== rule.ruleset_id || policy.target !== "branch" || policy.enforcement !== "active"
         || !Array.isArray(policy.bypass_actors) || policy.bypass_actors.length !== 0 || !Array.isArray(policy.rules)
         || !policy.rules.some(requiresCurrentBase) || !policy.rules.some((item) => item.type === "pull_request")) continue;
-      return { rulesetId: rule.ruleset_id, strict: true, requiredCheck: REQUIRED_JOB, bypassActors: 0 };
+      return { rulesetId: rule.ruleset_id, strict: true, requiredChecks: REQUIRED_CHECKS, bypassActors: 0 };
     }
   } catch (error) {
     if (error instanceof ControllerError) throw error;
     fail("server-protection", "effective strict server protection could not be verified");
   }
-  fail("server-protection", "an active non-bypassable strict release-gates and pull-request ruleset is required");
+  fail("server-protection", "an active non-bypassable strict release-gates, complexity-trusted, and pull-request ruleset is required");
 }
 
 function collectEvidence(repo, number) {

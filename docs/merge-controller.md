@@ -36,8 +36,8 @@ gh pr merge <pr> --repo <repo> --merge --match-head-commit <head>
 
 The head-only merge flag cannot atomically compare a base SHA. Apply therefore
 also verifies the effective branch rules and their repository ruleset: active
-pull-request enforcement, strict `release-gates` checks, and an empty bypass
-actor list. GitHub's strict checks require the branch to be current with its
+pull-request enforcement, strict `release-gates` and `complexity-trusted` checks,
+and an empty bypass actor list. GitHub's strict checks require the branch to be current with its
 base at merge time. Missing, unsupported, truncated, or bypassable policy fails
 closed. The controller rechecks this policy before persisting intent; it never
 changes protections. This relies on the server continuing to enforce that
