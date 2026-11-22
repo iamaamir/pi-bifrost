@@ -17,10 +17,13 @@ const server = net.createServer((connection) => {
 server.listen(0, "127.0.0.1", () => {
   const port = server.address().port;
   let callbacks = 0;
+  let received = "";
   const socket = net.createConnection(port, "localhost", () => { callbacks += 1; });
   socket.on("connect", () => socket.write("PING"));
   socket.on("data", (chunk) => {
-    console.log("DATA " + chunk.toString());
+    received += chunk.toString();
+    if (received.length < 4) return;
+    console.log("DATA " + received.slice(0, 4));
     console.log("CALLBACKS " + callbacks);
     socket.end();
     server.close();
