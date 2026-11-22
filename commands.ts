@@ -12,7 +12,7 @@ import type { CacheEntry } from "./cache.ts";
 import { cachePath, loadCache, saveCache, DEFAULT_MAX_ENTRIES, DEFAULT_THRESHOLD } from "./cache.ts";
 import { buildRouteDecisionSummary, type ClassificationPipeline, type ClassificationResult, type ClassificationSource, type ClassifierAttemptSummary, type RouteDecisionSummary } from "./classification-pipeline.ts";
 import { setupDebug, debug, debugLogInfo, debugMeasure } from "./debug.ts";
-import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT, readRecentCompleteProbeReportCacheHit, describeProbeReportCacheHit, describeProbeReuseReason, describeProbeReuseSource } from "./probe.ts";
+import { runProbe, probeOptionsFromConfig, PROBE_PROMPT_TEXT, readRecentCompleteProbeReportCacheHit, describeProbeReportCacheAge, describeProbeReuseReason } from "./probe.ts";
 import { setBifrostModeStatus, setBifrostStatus } from "./ux-status.ts";
 import { showBifrostResult } from "./result-viewer.ts";
 import {
@@ -1124,19 +1124,22 @@ async function handleInit(
     provider: r.provider, model: r.model, cost: { input: r.cost_input ?? 0, output: r.cost_output ?? 0 }, duration_ms: r.duration_ms ?? 0,
   })) : [];
   let ranProbe = false;
-  let probeAge = reused ? describeProbeReportCacheHit(reused) : "";
+  const probeAge = reused ? describeProbeReportCacheAge(reused) : "";
 
   if (!reused) {
     ranProbe = true;
-    log(ctx, `Probing ${available.length} models to find working ones... (${describeProbeReuseReason(forced)})`);
+    log(ctx, `Checking ${available.length} models (${describeProbeReuseReason(forced)}).`);
     const probeRun = await runInitProbe(ctx, state, initConfig, available);
     if (!probeRun) return;
     workingModels = probeRun.workingModels;
-    probeAge = "just now";
   }
-  const probeLoaded = true;
-  if (probeLoaded && workingModels.length === 0) {
-    log(ctx, `No usable models found ${describeProbeReuseSource(ranProbe, probeAge).replace(/\.$/, "")}. Check API keys, network, and credits; no configuration was changed.`, "error");
+
+  if (workingModels.length === 0) {
+    const source = ranProbe ? "this check" : `saved probe results (${probeAge} old)`;
+    const action = ranProbe
+      ? "Check API keys, network, and credits; no configuration was changed."
+      : "Run /bifrost init -f after checking access. Configuration unchanged.";
+    log(ctx, `No usable models found in ${source}. ${action}`, "error");
     return;
   }
 
@@ -1151,8 +1154,10 @@ async function handleInit(
     } catch { /* an unreadable catalog cannot extend this command's refresh evidence */ }
   }
 
-  if (probeLoaded && workingModels.length > 0) {
-    log(ctx, `Using ${workingModels.length} probe-verified models ${describeProbeReuseSource(ranProbe, probeAge)}`);
+  if (ranProbe) {
+    log(ctx, `Using ${workingModels.length} working models from this check.`);
+  } else {
+    log(ctx, `Using ${workingModels.length} saved probe results (${probeAge} old). Run /bifrost init -f to check again.`);
   }
 
   const models: Record<string, string[]> = {};
@@ -1162,12 +1167,10 @@ async function handleInit(
     const key = `${m.provider}/${m.id}`;
 
     // If probe data is loaded, skip models that failed or timed out.
-    if (probeLoaded) {
-      const working = workingModels.find(
-        (w) => w.provider === m.provider && w.model === m.id,
-      );
-      if (!working) continue;
-    }
+    const working = workingModels.find(
+      (w) => w.provider === m.provider && w.model === m.id,
+    );
+    if (!working) continue;
 
     const tier = guessTier(m);
     if (tier) {
@@ -1178,19 +1181,17 @@ async function handleInit(
     }
   }
 
-  if (probeLoaded && Object.values(models).every((pool) => pool.length === 0)) {
-    log(ctx, "No probe-verified models remain in Pi's current catalog; no configuration was changed.", "error");
+  if (Object.values(models).every((pool) => pool.length === 0)) {
+    log(ctx, "No usable models remain in Pi's current catalog; no configuration was changed.", "error");
     return;
   }
   const probeVerified = new Set(Object.values(models).flat());
 
   // Sort each tier by probe response time (fastest first) so "first"
   // strategy picks the fastest model.
-  if (probeLoaded) {
-    const speedMap = new Map(workingModels.map((w) => [`${w.provider}/${w.model}`, w.duration_ms]));
-    for (const tier of Object.keys(models)) {
-      models[tier].sort((a, b) => (speedMap.get(a) ?? Infinity) - (speedMap.get(b) ?? Infinity));
-    }
+  const speedMap = new Map(workingModels.map((w) => [`${w.provider}/${w.model}`, w.duration_ms]));
+  for (const tier of Object.keys(models)) {
+    models[tier].sort((a, b) => (speedMap.get(a) ?? Infinity) - (speedMap.get(b) ?? Infinity));
   }
 
   let source: ReconciliationSourceSnapshot;
@@ -1257,15 +1258,13 @@ async function handleInit(
         return !circuit.open && !hasActiveAllowanceCooldown(reliability, key, Date.now());
       });
     const eligibleKeys = new Set(eligible.map(modelKey));
-    const probeChoices = probeLoaded
-      ? workingModels
-        .filter((model) => eligibleKeys.has(`${model.provider}/${model.model}`)
-          && (model.cost.input + model.cost.output) < 2)
-        .sort((left, right) => left.duration_ms - right.duration_ms)
-      : [];
+    const probeChoices = workingModels
+      .filter((model) => eligibleKeys.has(`${model.provider}/${model.model}`)
+        && (model.cost.input + model.cost.output) < 2)
+      .sort((left, right) => left.duration_ms - right.duration_ms);
     classifierModel = probeChoices[0]
       ? `${probeChoices[0].provider}/${probeChoices[0].model}`
-      : !probeLoaded && eligible[0] ? modelKey(eligible[0]) : undefined;
+      : undefined;
     if (!classifierModel) {
       log(ctx, "No working models found for classifier. Init will omit classifier.model; regex fallback remains available.", "warning");
     }
@@ -1327,7 +1326,7 @@ async function handleInit(
       const byTier = byProvider.get(model.provider) ?? {};
       byProvider.set(model.provider, byTier);
       if (!tier) continue;
-      if (probeLoaded && !probeVerified.has(key)) continue;
+      if (!probeVerified.has(key)) continue;
       byTier[tier] = [...(byTier[tier] ?? []), key];
     }
     const inventories = [...byProvider.entries()].map(([provider, modelsByTier]) => {
@@ -1458,7 +1457,7 @@ async function handleInit(
   const savedPools = (JSON.parse(Buffer.from(transaction.nextConfigBytes).toString("utf8")) as Record<string, unknown>).models as Record<string, unknown>;
   const savedModelKeys = Object.values(savedPools).flatMap((pool) =>
     typeof pool === "string" ? [pool] : Array.isArray(pool) ? pool.filter((key): key is string => typeof key === "string") : []);
-  const unverifiedSavedCount = probeLoaded ? savedModelKeys.filter((key) => !probeVerified.has(key)).length : 0;
+  const unverifiedSavedCount = savedModelKeys.filter((key) => !probeVerified.has(key)).length;
   const added = changes.filter((change) => change.kind === "add");
   const removed = changes.filter((change) => change.kind === "remove");
   const tierSummary = [...new Set(changes.map((change) => change.tier))].sort()
@@ -1469,7 +1468,7 @@ async function handleInit(
     + (tierSummary.length ? " (" + tierSummary.join(", ") + ")" : "");
   uiOutput(ctx, [
     "--- init ---",
-    `source: ${probeLoaded ? `probe (${workingModels.length} working)` : `registry (${available.length} listed)`}`,
+    `source: ${ranProbe ? `probe (${workingModels.length} working)` : `saved probe (${workingModels.length} working, ${probeAge} old)`}`,
     `save target: ${initSourceLabel(source)}`,
     deltaSummary,
     `classifier: ${effectiveClassifierSummary}`,
@@ -1477,7 +1476,7 @@ async function handleInit(
     `uncategorized: ${uncategorized.length}`,
     "proposed config: classifier and routing defaults detected from Pi's available models",
     "----------------",
-    probeLoaded ? "" : "Catalog entries are listed models, not a health check.",
+
     uncategorized.length ? "Uncategorized models stay out of generated pools." : "",
     unverifiedSavedCount ? `${unverifiedSavedCount} saved model membership(s) were not probe-verified; handwritten entries are preserved.` : "",
   ].filter(Boolean));

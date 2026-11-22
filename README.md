@@ -49,7 +49,7 @@ sequenceDiagram
     Bifrost->>Model: Use quick tier strategy
 ```
 
-Run `/bifrost init` to refresh Pi's model list or reconcile model pools. It reuses a recent complete probe report only when the report covers the current catalog and the report file age is within the fixed one-hour reuse window. If init cannot safely reuse that report, it probes models before it proposes changes. When init reuses a report, it shows the report file age and modification time; that age is file metadata, not guaranteed provider-data freshness. Pass `-f` to force fresh probes. Probes can use credits or reach rate limits. Init preserves other configuration fields and handwritten model entries. It asks once before saving, but its summary does not list every model ID or how Bifrost chooses among models. Pass `--write` to save without that question. A session that gives Bifrost no UI must use `--write` to save the proposal.
+Run `/bifrost init` to refresh Pi's model list or reconcile model pools. It reuses a recent complete saved probe report for the current catalog when possible, and probes when it cannot. Pass `-f` to force a fresh check. When init reuses saved results, it shows their approximate age. Probes can use credits or reach rate limits. Init preserves other configuration fields and handwritten model entries. It asks once before saving, but its summary does not list every model ID or how Bifrost chooses among models. Pass `--write` to save without that question. A session that gives Bifrost no UI must use `--write` to save the proposal.
 
 By default, Auto can keep a successful model for later messages in the same tier while it remains allowed. A different tier uses its own model selection rule. See [Auto routing](docs/guide/auto-routing.md).
 

@@ -86,27 +86,18 @@ export interface ProbeReportCacheHit {
 
 export function formatProbeReportAge(ageMs: number): string {
   const safeMs = Math.max(0, ageMs);
-  if (safeMs < 60_000) return `${Math.round(safeMs / 1000)}s`;
+  if (safeMs < 60_000) return `${Math.max(1, Math.round(safeMs / 1000))}s`;
   if (safeMs < 3_600_000) return `${Math.round(safeMs / 60_000)}m`;
   const hours = safeMs / 3_600_000;
   return hours < 10 ? `${hours.toFixed(1)}h` : `${Math.round(hours)}h`;
 }
 
-export function describeProbeReportCacheHit(hit: ProbeReportCacheHit): string {
-  const savedAt = new Date(hit.mtimeMs);
-  const savedAtIso = Number.isNaN(savedAt.getTime()) ? "unknown time" : savedAt.toISOString();
-  return `report file age ${formatProbeReportAge(hit.ageMs)}; file mtime ${savedAtIso}`;
+export function describeProbeReportCacheAge(hit: ProbeReportCacheHit): string {
+  return formatProbeReportAge(hit.ageMs);
 }
 
 export function describeProbeReuseReason(forced: boolean): string {
-  return forced
-    ? "-f requested a fresh probe; cached probe reports were not reused."
-    : "No recent validated probe report was reused for this catalog; file age, catalog changes, and report validity can prevent reuse.";
-}
-
-export function describeProbeReuseSource(ranProbe: boolean, probeAge: string): string {
-  if (ranProbe) return `from this fresh probe run (${probeAge})`;
-  return `from a cached probe report (${probeAge}; file mtime age, not guaranteed provider-data freshness). No new model probes were sent; registry refresh and other commands may still use network.`;
+  return forced ? "forced by -f" : "no reusable probe report";
 }
 
 /** Accept only reports that contain one actual outcome for every physical model. */

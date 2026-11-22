@@ -4,7 +4,7 @@
   "scopes": {
     "source": {
       "files": 94,
-      "functions": 2832,
+      "functions": 2831,
       "maxCyc": 190,
       "maxCog": 262,
       "cycGt30": 58,
@@ -278,12 +278,12 @@
     },
     "probe.ts": {
       "scope": "source",
-      "lines": 440,
-      "funcs": 29,
+      "lines": 431,
+      "funcs": 28,
       "maxCyc": 27,
       "maxCog": 33,
-      "sumCyc": 135,
-      "sumCog": 127
+      "sumCyc": 132,
+      "sumCog": 125
     },
     "provider-cooldowns.ts": {
       "scope": "source",
