@@ -241,15 +241,30 @@ jobs:
           BIFROST_COMPLEXITY_ALLOW_POLICY_CHANGE: ${{ contains(github.event.pull_request.labels.*.name, 'quality-policy-change') && '1' || '' }}
         run: |
           set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/complexity-evidence"
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             target="$(git merge-base "$BASE_SHA" "$HEAD_SHA")"
             test -n "$target"
-            npm run check:complexity:base -- "$target" --candidate "$HEAD_SHA"
+            npm run --silent check:complexity:base -- "$target" --candidate "$HEAD_SHA" --json \
+              | tee "$RUNNER_TEMP/complexity-evidence/delta.json"
           else
             target="${BEFORE_SHA:-HEAD^}"
             BIFROST_COMPLEXITY_BASE="$target" BIFROST_COMPLEXITY_ALLOW_POLICY_CHANGE=1 \
-              npm run check:complexity -- --candidate "$HEAD_SHA"
+              npm run --silent check:complexity -- --candidate "$HEAD_SHA" --json \
+              | tee "$RUNNER_TEMP/complexity-evidence/push.json"
           fi
+
+      # This evidence is produced by the candidate checkout and is therefore a
+      # bootstrap/local record, not the trusted judge. The protected
+      # complexity-gate workflow records the authoritative artifact after merge.
+      - name: Upload complexity evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: complexity-evidence-${{ github.event.pull_request.head.sha || github.sha }}-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/complexity-evidence
+          if-no-files-found: warn
+          retention-days: 30
 
   # Final candidate report: joins the head acceptance data, the merge
   # evidence, and the CRAP trend history, then renders and publishes the PR

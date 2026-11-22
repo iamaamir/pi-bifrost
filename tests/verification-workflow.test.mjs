@@ -103,7 +103,8 @@ test("release-gates requires every PR stage and allows only non-applicable skips
   assert.ok(complexity, "complexity job must exist");
   assert.match(complexity, /ref: \$\{\{ github\.event\.pull_request\.head\.sha \|\| github\.sha \}\}/u);
   assert.match(complexity, /git merge-base/u, "the PR target is the branch point, not a moved base tip");
-  assert.match(complexity, /npm run check:complexity:base -- "\$target" --candidate "\$HEAD_SHA"/u);
+  assert.match(complexity, /npm run --silent check:complexity:base -- "\$target" --candidate "\$HEAD_SHA" --json/u);
+  assert.match(complexity, /complexity-evidence\/delta\.json/u);
 
   const runBlock = block.match(/      - name: Require release stages for this event to succeed\n[\s\S]*?        run: \|\n((?:          .*\n)+)/u)?.[1];
   assert.ok(runBlock, "release-gates must keep its event-aware stage check");

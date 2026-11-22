@@ -42,9 +42,10 @@ not meet the objective.
 
 **C. Measure the target revision on demand (chosen).** Run the same analyzer on
 the source tree checked out at a defined target revision, in memory, and compare
-the candidate measurement against it. The target is the pull request base SHA in
-CI and the merge-base with the tracked main branch locally. No generated metrics
-file is committed. `quality/complexity-baseline.json` is deleted.
+the candidate measurement against it. The target is resolved from the pull
+request base/merge-base in CI and from the tracked main branch locally. No
+generated metrics file is committed. `quality/complexity-baseline.json` is
+deleted.
 
 **D. Minimal change: keep the file, drop only the staleness gate.** This removes
 the regeneration step but leaves stale ceilings: a branch could lower a
@@ -70,9 +71,10 @@ only provided indirectly through its own git history.
   no implicit `HEAD^`; a last-commit comparison must opt in with
   `--target HEAD^`. If none resolves, the gate exits `2` and does not report a
   verdict.
-- CI compares a pull request head against its merge-base with the base branch.
-  A base-only policy move after divergence is not reported as a pull request
-  policy change.
+- CI compares a pull request head against its merge-base with the base branch,
+  and the protected judge separately compares the proposed merge result against
+  the base tip. A base-only policy move after divergence is not reported as a
+  pull request policy change.
 - A revision is extracted with a detached `git worktree` in the OS temporary
   directory, measured, and removed. No measured file or generated snapshot is
   written into the candidate tree.
@@ -82,6 +84,8 @@ only provided indirectly through its own git history.
   policy digest. A hand-edited number has no input path into the verdict.
 - An incomplete walk (a file vanishing mid-analysis) or an unreadable revision
   fails closed with exit `2`. A verdict is never derived from a partial tree.
+  Symlinked measured paths are skipped so a candidate cannot make the judge read
+  outside the revision tree.
 
 ### Comparison policy (unchanged)
 
@@ -93,45 +97,64 @@ only provided indirectly through its own git history.
 - a new file must not exceed the target scope's maxima;
 - removed files are improvements and are not findings.
 
-Added, removed, and renamed paths are evaluated against trees, not against the
-previous file identity: a rename is a removal plus a new file, so the new path is
-judged by the scope ceiling. This is the existing semantics and is documented and
-tested.
+Removed files are improvements. Git rename detection identifies a move; the new
+path inherits the old path's per-file ceiling, so a rename cannot reset the
+ratchet. A path Git does not recognize as a rename is a new file and is judged by
+the scope ceiling. Scope maxima still apply to the resulting tree.
 
 Because the target is measured per run, branch movement needs no cache:
 re-running against the moved base re-measures it. Repeated checks of unchanged
 revisions are deterministic; no timestamp or generation provenance is compared.
 
-### Trust boundary
+### Trust boundary and protected judge
 
-The gate is a script in the candidate, so a change to its algorithm, scope
-policy, thresholds, measurement dependency, or CI wiring could otherwise judge
-itself. The gate therefore computes a policy digest over the analyzer source,
-the static-analysis and verification workflows, `tsconfig.json`, the complexity
-scripts in `package.json`, and the resolved TypeScript version at both
-revisions:
+The gate must not be judged by code in the candidate. The authoritative path is
+`.github/workflows/complexity-gate.yml`, a `pull_request_target` workflow:
 
-- equal digests: the comparison runs normally;
-- different digests: the gate still measures both trees with one algorithm, but
-  exits `2` with `complexity-policy-changed` unless
-  `--allow-policy-change` (or `BIFROST_COMPLEXITY_ALLOW_POLICY_CHANGE=1`) is
-  present.
+- GitHub runs the workflow and the analyzer from the protected target branch,
+  not from the pull request.
+- The workflow resolves the base ref once at run time, fetches the PR head and
+  proposed merge refs, and records the resolved revisions. No source, policy,
+  or test file contains a hard-coded commit SHA.
+- The PR is present only as Git objects. The judge never installs, imports, or
+  executes candidate code. It measures the base, head, and merge trees with the
+  protected analyzer.
+- It measures the PR delta against the merge-base and the proposed merge result
+  against the base tip. A clean branch-point comparison cannot hide a
+  merge-result regression.
+- The workflow uploads JSON evidence for both measurements, including the
+  resolved revisions, input digests, and policy digests. That artifact is the
+  replay record after refs move.
 
-CI passes the override only when the pull request carries the
-`quality-policy-change` label. The complexity job is a dependency of the
-required `release-gates` context, so a failing check blocks the merge context.
-A direct push to `main` is the merge of a pull request that already went through
-that gate, so the push leg runs with the override. The residual risk is
-explicit: a label is an acknowledgment, not an approval; the current ruleset does
-not require code-owner review, so `.github/CODEOWNERS` only routes the policy
-files to the owner until that setting is enabled. A repository that allows
-unreviewed pushes to `main` can also bypass the PR gate. The digest and both
-revisions are printed so the policy diff can be reviewed rather than inferred.
+The analyzer still computes a policy digest over its source, the workflow files,
+`tsconfig.json`, the complexity scripts, and the resolved TypeScript version. A
+different digest fails closed with `complexity-policy-changed`. A candidate
+label is not sufficient authority for a policy change; the protected workflow
+does not accept the self-authorizing override.
 
-The analyzer is applied to both sides in one invocation, so a metric change is
-apples-to-apples within that run. It is not possible to mix the target's
-algorithm with the candidate's numbers, which was the silent-weakening risk of
-keeping a committed snapshot.
+The ruleset must require the protected workflow's `complexity-trusted` context
+for the check to block merges. CODEOWNERS routes policy paths to the owner, but
+code-owner review is only blocking when the ruleset requires it. That is a
+repository configuration dependency; it is not a commit-SHA pin in the code.
+
+### Policy changes and bootstrap
+
+A normal policy change is a protected PR to the target branch. The old protected
+judge measures the candidate and fails closed when the policy digest differs.
+The owner reviews the analyzer/workflow diff through the protected policy path;
+after merge, the new judge becomes active automatically. There is no pin file and
+no manual SHA bump.
+
+The current migration is the one exception: the old target-branch checker does
+not have the source-comparison interface, so it cannot judge its own replacement.
+Treat this PR as a one-time owner-approved migration with independent
+source-derived equivalence evidence. The candidate checker is evidence for that
+migration, not an authority for later PRs. After merge, the protected workflow is
+the authority and the bootstrap exception is no longer used.
+
+The analyzer is still applied to both sides in one invocation, so a metric change
+is apples-to-apples within that run. The difference is who supplies the judge:
+the protected branch, not the candidate.
 
 ## Adversarial test plan
 
@@ -147,7 +170,8 @@ Deterministic tests at the real CLI boundary (temporary git repositories):
 6. two branches editing different measured files both exit `0` against the same
    base without touching any shared file, and a third branch adding a new file
    still gets the new-file ceiling;
-7. rename is evaluated as remove plus add;
+7. a detected rename keeps the old per-file ceiling; an undetected rename is a
+   new file and is judged by the scope ceiling;
 8. repeated and concurrent runs against the same revisions return the same
    verdict and digests;
 9. a base policy move after divergence forces no override for an untouched
@@ -156,11 +180,15 @@ Deterministic tests at the real CLI boundary (temporary git repositories):
 11. an unreadable policy input returns the structured exit-`2` JSON envelope;
 12. no `main` ref does not silently fall back to `HEAD^`; the explicit
     `--target HEAD^` form still works;
-13. an editing working-tree candidate is detected by the pre/post fingerprint.
+13. an editing working-tree candidate is detected by the pre/post fingerprint;
+14. a source-derived target and a serialized legacy baseline produce the same
+    ratchet findings for an ordinary change;
+15. the protected workflow measures both the PR delta and the proposed merge
+    result and uploads both evidence files.
 
-Command-level demonstration uses `--json`, and the CI step is changed from three
-complexity steps to the target-relative comparison, keeping the failure
-behavior. Historical trends are recovered on demand:
+Command-level demonstration uses `--json`, and CI keeps the target-relative
+comparison. Historical trends are recovered on demand and recorded as CI
+artifacts:
 
 ```bash
 node scripts/check-complexity.mjs --measure <rev> --json
@@ -169,4 +197,12 @@ node scripts/check-complexity.mjs --measure <rev> --json
 No generated complexity file is committed or written by routine changes. Each
 measurement carries both the executing analyzer's policy digest and the measured
 revision's own policy digest, so a trend point is comparable only with points
-produced under the same analyzer and scope policy.
+produced under the same analyzer and scope policy. The protected workflow stores
+the PR-delta and merge-result evidence as artifacts rather than in the tree.
+
+### No literal revision or line pins
+
+Policy, source, tests, and documentation resolve revisions from refs and runtime
+events. Resolved commit SHAs and digests belong in evidence output, not in
+configuration. Documentation cites files, functions, and context names rather
+than line numbers, so routine edits do not invalidate the design record.

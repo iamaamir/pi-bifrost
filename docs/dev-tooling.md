@@ -119,8 +119,9 @@ the explicit head commit instead.
 
 `npm run check:complexity:base -- <rev>` supplies the target explicitly. On a
 pull request CI compares the head against its merge-base with the base branch,
-so a base-only policy move is not charged to the branch. The push leg compares
-against the previous tip.
+so a base-only policy move is not charged to the branch. The protected judge
+also compares the proposed merge result against the base tip. The push leg
+compares against the previous tip.
 
 `quality/complexity-baseline.json` no longer exists. A routine change to
 measured code needs no generated file and cannot conflict with another branch
@@ -138,18 +139,30 @@ while the analyzer reads a tree, the gate exits `2` and reports no verdict.
 ### Policy changes are not silent
 
 The analyzer, its scope and threshold policy, the TypeScript version, and the
-static-analysis and verification workflows can change what the gate reports. The
-gate hashes those inputs at both revisions. When the digests differ it exits `2`
-with `complexity-policy-changed` unless `--allow-policy-change` (or
-`BIFROST_COMPLEXITY_ALLOW_POLICY_CHANGE=1`) records a reviewed decision. CI
-passes the override only for a pull request carrying the
-`quality-policy-change` label. The policy inputs (analyzer, workflows,
-`tsconfig.json`, `package.json`, and the resolved TypeScript lock entry) are
-covered by [`.github/CODEOWNERS`](../.github/CODEOWNERS), so a weakening change
-is routed to the owner. The complexity job is a dependency of the required
-`release-gates` context; CODEOWNERS review is only blocking when the repository
-ruleset requires code-owner review. The digests and both revisions are printed
-so the diff can be inspected rather than inferred.
+workflow files can change what the gate reports. The gate hashes those inputs at
+both revisions. When the digests differ it exits `2` with
+`complexity-policy-changed` unless the reviewed policy path authorizes the
+migration. A candidate label is not by itself an approval.
+
+The authoritative judge is
+[`complexity-gate.yml`](../.github/workflows/complexity-gate.yml). GitHub runs
+that `pull_request_target` workflow and its analyzer from the protected target
+branch. It fetches the PR head and merge refs, measures both the PR delta and the
+proposed merge result as data, and uploads the evidence. It never installs or
+executes candidate code. A candidate label is not by itself an approval.
+
+The existing verification complexity job remains the bootstrap/local path until
+the protected workflow is present on the target branch. The ruleset must require
+the protected `complexity-trusted` context for that check to block merges. The
+policy inputs (analyzer, workflows, `tsconfig.json`, `package.json`, and the
+resolved TypeScript lock entry) are covered by
+[`.github/CODEOWNERS`](../.github/CODEOWNERS), but code-owner review only blocks
+when the ruleset requires it.
+
+Policy, source, tests, and documentation resolve revisions from refs and runtime
+events. Resolved SHAs and digests belong in evidence output, not in
+configuration. Documentation cites files, functions, and context names rather
+than line numbers.
 
 ### Historical trends
 
@@ -254,6 +267,7 @@ marker to the budget reddened only the report bound, at 121 lines.
 | [`static-analysis.yml`](../.github/workflows/static-analysis.yml) | Pull request, push to `main`/`v2` | architecture, dead code, ast-grep, actionlint, Zizmor, Semgrep (baseline diff), Gitleaks, OSV (diff) |
 | [`security-audit.yml`](../.github/workflows/security-audit.yml) | Manual dispatch | full-history Gitleaks, full Semgrep, full OSV, actionlint, Zizmor |
 | [`verification.yml`](../.github/workflows/verification.yml) | Pull request, push, schedule | existing acceptance, UI, compatibility, and mutation gates |
+| [`complexity-gate.yml`](../.github/workflows/complexity-gate.yml) | `pull_request_target` | trusted complexity judge from the protected base branch; PR delta and proposed merge-result evidence |
 | [`report-publisher-checks.yml`](../.github/workflows/report-publisher-checks.yml) | Pull request, push to `main` | `node --test tests/ci-report-publish.test.mjs` for the trusted report publisher |
 | [`acceptance-report.yml`](../.github/workflows/acceptance-report.yml) | `workflow_run` of Verification | adds one marker-owned report comment to the pull request. It uses only default-branch code and never operates pull-request code |
 

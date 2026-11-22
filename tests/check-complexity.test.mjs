@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import fs, { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import fs, { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -109,9 +109,37 @@ const REGRESSED_A = [
   "",
 ].join("\n");
 
+// Close enough to BASE_A for Git's rename detection, but one branch hotter.
+const RENAMED_A = [
+  "export function choose(flag: boolean) {",
+  "  if (flag) {",
+  "    return 1;",
+  "  }",
+  "  if (!flag) {",
+  "    return 3;",
+  "  }",
+  "  return 2;",
+  "}",
+  "",
+].join("\n");
+
 const ADDED_LOW = [
   "export function addedLow(value: number) {",
   "  return value * 2;",
+  "}",
+  "",
+].join("\n");
+
+const HOT = [
+  "export function hot(a: boolean, b: boolean, c: boolean, d: boolean, e: boolean, f: boolean, g: boolean) {",
+  "  if (a) { return 1; }",
+  "  if (b) { return 2; }",
+  "  if (c) { return 3; }",
+  "  if (d) { return 4; }",
+  "  if (e) { return 5; }",
+  "  if (f) { return 6; }",
+  "  if (g) { return 7; }",
+  "  return 8;",
   "}",
   "",
 ].join("\n");
@@ -133,6 +161,7 @@ function seedPolicy(dir, script = "// fixture complexity policy\n") {
   mkdirSync(join(dir, "scripts"), { recursive: true });
   mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
   writeFileSync(join(dir, "scripts", "check-complexity.mjs"), script);
+  writeFileSync(join(dir, ".github", "workflows", "complexity-gate.yml"), "name: complexity-gate-fixture\n");
   writeFileSync(join(dir, ".github", "workflows", "static-analysis.yml"), "name: fixture\n");
   writeFileSync(join(dir, ".github", "workflows", "verification.yml"), "name: verification-fixture\n");
   writeFileSync(join(dir, "tsconfig.json"), "{}\n");
@@ -151,10 +180,11 @@ function commit(dir, message) {
   return git(dir, ["rev-parse", "HEAD"]);
 }
 
-function gitFixture() {
+function gitFixture(extraFiles = {}) {
   const dir = mkdtempSync(join(tmpdir(), "bifrost-complexity-git-"));
   writeFileSync(join(dir, "a.ts"), BASE_A);
   writeFileSync(join(dir, "b.ts"), BASE_B);
+  for (const [rel, content] of Object.entries(extraFiles)) writeFileSync(join(dir, rel), content);
   seedPolicy(dir);
   git(dir, ["init", "-q"]);
   const baseBranch = git(dir, ["symbolic-ref", "--short", "HEAD"]);
@@ -348,6 +378,18 @@ test("compare accepts unchanged files, flags increased and new-file outliers, an
   }
 });
 
+test("measured symlinks are skipped instead of followed outside the tree", () => {
+  const root = fixtureRoot();
+  try {
+    symlinkSync(join(root, "a.ts"), join(root, "linked.ts"));
+    const report = analyze({ root });
+    assert.equal(Object.hasOwn(report.files, "linked.ts"), false);
+    assert.equal(report.scopes.source.files, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("analyze reports an incomplete snapshot instead of silently dropping a file", () => {
   const root = fixtureRoot();
   const skipped = [];
@@ -490,8 +532,27 @@ test("a new file above the target scope maximum fails even though no baseline is
   }
 });
 
-test("removals and renames are evaluated as tree changes, not previous identities", () => {
+test("a source-derived target reproduces the legacy baseline ratchet", () => {
   const { dir, base, baseBranch } = gitFixture();
+  try {
+    const target = measureRevision(dir, base).report;
+    // The old committed baseline was exactly this scope/file record. Comparing
+    // against it and against the source-derived target must produce the same
+    // ratchet findings for an ordinary change.
+    const legacyBaseline = { scopes: target.scopes, files: target.files };
+    const candidate = branchFrom(dir, baseBranch, "equivalence", "add a branch", () => writeFileSync(join(dir, "a.ts"), REGRESSED_A));
+    const measured = measureRevision(dir, candidate).report;
+    const fromSource = compare(target, measured);
+    const fromBaseline = compare(legacyBaseline, measured);
+    assert.deepEqual(fromSource, fromBaseline);
+    assert.ok(fromSource.length > 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("removals are ignored and renames keep the old per-file ceiling", () => {
+  const { dir, base, baseBranch } = gitFixture({ "hot.ts": HOT });
   try {
     const removed = branchFrom(dir, baseBranch, "removed", "remove a file", () => rmSync(join(dir, "b.ts")));
     assert.equal(runGate(dir, ["--target", base, "--candidate", removed]).status, 0);
@@ -501,11 +562,50 @@ test("removals and renames are evaluated as tree changes, not previous identitie
 
     const renamedHot = branchFrom(dir, baseBranch, "renamed-hot", "rename and grow", () => {
       git(dir, ["mv", "a.ts", "renamed.ts"]);
-      writeFileSync(join(dir, "renamed.ts"), REGRESSED_A);
+      writeFileSync(join(dir, "renamed.ts"), RENAMED_A);
     });
     const hot = runGate(dir, ["--target", base, "--candidate", renamedHot]);
     assert.equal(hot.status, 1, hot.stderr);
-    assert.ok(hot.report.findings.some((f) => f.rule === "new-file-maxCyc-exceeds-scope-max" && f.file === "renamed.ts"));
+    const finding = hot.report.findings.find((f) => f.rule === "file-maxCyc-regression" && f.file === "renamed.ts");
+    assert.ok(finding, "a renamed file must not reset its ceiling to the scope maximum");
+    assert.match(finding.message, /rename from a\.ts/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an undetected rename is still judged as a new file", () => {
+  const { dir, base, baseBranch } = gitFixture();
+  try {
+    const newFile = branchFrom(dir, baseBranch, "new-file", "add a new file", () => {
+      writeFileSync(join(dir, "renamed.ts"), REGRESSED_A);
+    });
+    const result = runGate(dir, ["--target", base, "--candidate", newFile]);
+    assert.equal(result.status, 1, result.stderr);
+    assert.ok(result.report.findings.some((f) => f.rule === "new-file-maxCyc-exceeds-scope-max" && f.file === "renamed.ts"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("adding a policy file is a visible policy change, not an unreadable-input error", () => {
+  const { dir, base, baseBranch } = gitFixture();
+  try {
+    git(dir, ["checkout", "-q", "-B", "no-gate", baseBranch]);
+    rmSync(join(dir, ".github", "workflows", "complexity-gate.yml"));
+    const withoutGate = commit(dir, "remove the protected workflow");
+    git(dir, ["checkout", "-q", "-B", "restored-gate", withoutGate]);
+    writeFileSync(join(dir, ".github", "workflows", "complexity-gate.yml"), "name: complexity-gate-fixture\n");
+    const restored = commit(dir, "restore the protected workflow");
+
+    const changed = runGate(dir, ["--target", withoutGate, "--candidate", restored]);
+    assert.equal(changed.status, 2, changed.stderr);
+    assert.equal(changed.report.findings[0].rule, "complexity-policy-changed");
+    assert.ok(changed.report.policy.differences.includes(".github/workflows/complexity-gate.yml"));
+
+    const bothMissing = runGate(dir, ["--target", withoutGate, "--candidate", withoutGate]);
+    assert.equal(bothMissing.status, 2);
+    assert.match(bothMissing.report.error, /unavailable at both revisions/u);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

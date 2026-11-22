@@ -40,6 +40,7 @@ const ts = require("typescript");
 const EXCLUDED_DIRS = new Set(["node_modules", "dist", ".git", "coverage", "reports", ".worktrees", ".commandcode"]);
 const POLICY_FILES = [
   "scripts/check-complexity.mjs",
+  ".github/workflows/complexity-gate.yml",
   ".github/workflows/static-analysis.yml",
   ".github/workflows/verification.yml",
   "tsconfig.json",
@@ -60,6 +61,9 @@ function walk(dir, root = dir, skipped = []) {
   let results = [];
   for (const entry of entries) {
     if (EXCLUDED_DIRS.has(entry.name)) continue;
+    // A PR can add a symlink under a measured path; following it would read
+    // outside the revision tree. Symlinks are not source for this metric.
+    if (entry.isSymbolicLink()) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) results = results.concat(walk(full, root, skipped));
     else results.push(full);
@@ -378,16 +382,16 @@ function resolveRevision(repo, ref) {
   return result.status === 0 ? result.stdout.trim() || null : null;
 }
 
-function mergeBase(repo, ref) {
-  if (resolveRevision(repo, ref) === null) return null;
-  const result = gitRun(repo, ["merge-base", "HEAD", ref]);
+function mergeBase(repo, ref, candidate = "HEAD") {
+  if (resolveRevision(repo, ref) === null || resolveRevision(repo, candidate) === null) return null;
+  const result = gitRun(repo, ["merge-base", candidate, ref]);
   return result.status === 0 ? result.stdout.trim() || null : null;
 }
 
 // The target is a revision, never a committed measurement. An explicit or
 // environment-named revision is authoritative: if it does not resolve the gate
 // fails instead of quietly comparing against a different tree.
-function resolveTarget({ repo = ROOT, explicit = null, env = process.env } = {}) {
+function resolveTarget({ repo = ROOT, explicit = null, env = process.env, candidate = "HEAD" } = {}) {
   const fromEnv = env.BIFROST_COMPLEXITY_BASE?.trim() || env.GITHUB_BASE_SHA?.trim() || null;
   const requested = explicit ?? fromEnv;
   if (requested !== null) {
@@ -397,8 +401,8 @@ function resolveTarget({ repo = ROOT, explicit = null, env = process.env } = {})
     return { sha, source };
   }
   for (const ref of ["origin/main", "main"]) {
-    const sha = mergeBase(repo, ref);
-    if (sha) return { sha, source: `merge-base HEAD ${ref}` };
+    const sha = mergeBase(repo, ref, candidate);
+    if (sha) return { sha, source: `merge-base ${candidate} ${ref}` };
   }
   return {
     error: "no target revision: pass --target <rev>, set BIFROST_COMPLEXITY_BASE, or provide origin/main or main; use --target HEAD^ explicitly for a last-commit comparison",
@@ -436,12 +440,20 @@ function policyText(repo, revision, rel) {
 
 function policyAt(repo, revision) {
   const files = {};
+  const missing = [];
   for (const rel of POLICY_FILES) {
     const read = policyText(repo, revision, rel);
     if (read.error) return read;
     const text = read.text;
-    if (text === null) return { error: `policy file ${rel} is unavailable at ${revision ?? "the working tree"}` };
-    files[rel] = sha256(normalizeText(text));
+    // A missing file is a policy change when the other revision has it. The
+    // caller rejects the case where both revisions are missing it, so a typo in
+    // POLICY_FILES cannot silently shrink the trust boundary.
+    if (text === null) {
+      files[rel] = null;
+      missing.push(rel);
+    } else {
+      files[rel] = sha256(normalizeText(text));
+    }
   }
   const manifestRead = policyText(repo, revision, "package.json");
   if (manifestRead.error) return manifestRead;
@@ -470,7 +482,7 @@ function policyAt(repo, revision) {
     }
   }
   const digest = sha256(JSON.stringify({ files, scripts, typescriptRange, typescriptLocked, typescriptVersion: ts.version }));
-  return { digest, files, scripts, typescriptRange, typescriptLocked, typescriptVersion: ts.version };
+  return { digest, files, missing, scripts, typescriptRange, typescriptLocked, typescriptVersion: ts.version };
 }
 
 function policyDifferences(target, candidate) {
@@ -515,6 +527,33 @@ function measureRoot(root) {
 
 function measureRevision(repo, sha) {
   return withRevisionTree(repo, sha, (tree) => measureRoot(tree));
+}
+
+// Git rename detection is the only identity signal available without a
+// committed snapshot. Carry the old path's per-file ceiling forward when Git
+// recognizes a rename; otherwise the new path is judged by the scope ceiling.
+function renameMap(repo, targetSha, candidateSha) {
+  const args = ["diff", "--find-renames=50%", "--name-status", "-z", targetSha];
+  if (candidateSha) args.push(candidateSha);
+  args.push("--");
+  const result = gitRun(repo, args);
+  if (result.status !== 0) return { error: `could not inspect tree changes for renames: ${String(result.stderr ?? "").trim() || "git diff failed"}` };
+  const tokens = result.stdout.split("\0");
+  const map = {};
+  for (let index = 0; index < tokens.length;) {
+    const status = tokens[index++];
+    if (!status) continue;
+    if (status.startsWith("R")) {
+      const from = tokens[index++];
+      const to = tokens[index++];
+      if (from && to) map[to.replace(/\\/g, "/")] = from.replace(/\\/g, "/");
+    } else if (status.startsWith("C")) {
+      index += 2;
+    } else {
+      index += 1;
+    }
+  }
+  return { map };
 }
 
 // A working-tree candidate is not an immutable tree. Hash HEAD, the porcelain
@@ -564,25 +603,26 @@ function scopeFindings(baseline, current) {
 
 // A baselined file is judged against its own record; a new file is judged against
 // its scope ceiling until the first baseline that records it.
-function fileFindings(rel, data, baseline) {
-  const base = baseline.files?.[rel];
+function fileFindings(rel, data, baseline, renamedFrom = null) {
+  const base = baseline.files?.[renamedFrom ?? rel];
   const ceiling = base ?? (baseline.scopes?.[data.scope] || {});
   return increasedFields(data, ceiling, FILE_RATCHET_FIELDS).map((key) => ({
     rule: base ? `file-${key}-regression` : `new-file-${key}-exceeds-scope-max`,
     file: rel,
     line: null,
     message: base
-      ? `${key} increased: ${base[key] ?? 0} -> ${data[key] ?? 0}`
+      ? `${key} increased${renamedFrom ? ` after rename from ${renamedFrom}` : ""}: ${base[key] ?? 0} -> ${data[key] ?? 0}`
       : `new file ${key} ${data[key] ?? 0} exceeds ${data.scope} baseline max ${ceiling[key] ?? 0}`,
   }));
 }
 
-function compare(baseline, current) {
+function compare(baseline, current, renames = {}) {
   const findings = scopeFindings(baseline, current);
   for (const [rel, data] of Object.entries(current.files || {})) {
-    findings.push(...fileFindings(rel, data, baseline));
+    findings.push(...fileFindings(rel, data, baseline, renames[rel] ?? null));
   }
-  // Removed files are improvements; not reported as findings.
+  // Removed files are improvements; not reported as findings. A detected rename
+  // keeps the old path's ceiling instead of granting the new path a fresh one.
   return findings;
 }
 
@@ -771,29 +811,41 @@ function measureAndReport({ json, repo, resolved, candidate, targetPolicy, candi
       candidateResult = measureRevision(repo, candidate.revision);
     }
     if (candidateResult.skipped.length > 0) return failure({ json, message: incompleteError("candidate", candidateResult) });
+    const renames = renameMap(repo, resolved.sha, candidate.mode === "revision" ? candidate.revision : null);
+    if (renames.error) return failure({ json, message: renames.error });
+    return report({
+      json,
+      findings: compare(targetResult.report, candidateResult.report, renames.map),
+      target: targetEnvelope({ sha: resolved.sha, source: resolved.source, report: targetResult.report, policy: targetPolicy }),
+      candidate: candidateEnvelope(candidate, candidateResult.report, candidatePolicy),
+      policy,
+    });
   } catch (error) {
     return failure({ json, message: `complexity analysis failed: ${error.message}` });
   }
-  return report({
-    json,
-    findings: compare(targetResult.report, candidateResult.report),
-    target: targetEnvelope({ sha: resolved.sha, source: resolved.source, report: targetResult.report, policy: targetPolicy }),
-    candidate: candidateEnvelope(candidate, candidateResult.report, candidatePolicy),
-    policy,
-  });
 }
 
 function compareCommand({ invocation, repo }) {
   const { json, allowPolicy, env } = invocation;
-  const resolved = resolveTarget({ repo, explicit: invocation.target.present ? invocation.target.value : null, env });
-  if (resolved.error) return failure({ json, message: resolved.error });
   const candidate = resolveCandidate({ repo, option: invocation.candidate });
   if (candidate.error) return failure({ json, message: candidate.error });
+  const resolved = resolveTarget({
+    repo,
+    explicit: invocation.target.present ? invocation.target.value : null,
+    env,
+    candidate: candidate.mode === "revision" ? candidate.revision : "HEAD",
+  });
+  if (resolved.error) return failure({ json, message: resolved.error });
 
   const targetPolicy = policyAt(repo, resolved.sha);
   if (targetPolicy.error) return failure({ json, message: targetPolicy.error });
   const candidatePolicy = policyAt(repo, candidate.mode === "revision" ? candidate.revision : null);
   if (candidatePolicy.error) return failure({ json, message: candidatePolicy.error });
+
+  const missingAtBoth = targetPolicy.missing.filter((file) => candidatePolicy.missing.includes(file));
+  if (missingAtBoth.length > 0) {
+    return failure({ json, message: `policy file(s) unavailable at both revisions: ${missingAtBoth.join(", ")}` });
+  }
 
   const changed = targetPolicy.digest !== candidatePolicy.digest;
   const policy = {
@@ -836,6 +888,7 @@ export {
   main,
   measureRevision,
   policyAt,
+  renameMap,
   resolveRevision,
   resolveTarget,
   scopeOf,
