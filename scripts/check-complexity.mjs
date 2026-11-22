@@ -742,9 +742,10 @@ function measureCommand({ json, repo, revision }) {
   }
   if (result.skipped.length > 0) return failure({ json, message: incompleteError(`revision ${sha}`, result) });
   // A trend point is comparable only when the policy that produced it matches.
-  // The executing policy is the current tree (the analyzer that ran); the
-  // measured revision's own policy is recorded separately for provenance.
-  const executingPolicy = policyAt(repo, null);
+  // The executing policy is the loaded analyzer from this checkout, not the
+  // measured repository's analyzer file; the measured revision's own policy is
+  // recorded separately for provenance.
+  const executingPolicy = policyAt(ROOT, null);
   if (executingPolicy.error) return failure({ json, message: executingPolicy.error });
   const revisionPolicy = policyAt(repo, sha);
   if (revisionPolicy.error) return failure({ json, message: revisionPolicy.error });

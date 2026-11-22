@@ -786,7 +786,7 @@ test("--measure prints a revision-bound measurement without comparing", () => {
     assert.equal(result.report.status, "measured");
     assert.equal(result.report.revision, base);
     assert.equal(result.report.scopes.source.maxCyc, 2);
-    assert.equal(result.report.policyDigest, policyAt(dir, null).digest);
+    assert.equal(result.report.policyDigest, policyAt(ROOT, null).digest);
     assert.equal(result.report.revisionPolicyDigest, policyAt(dir, base).digest);
     assert.ok(Object.hasOwn(result.report.files, "a.ts"));
 
@@ -807,7 +807,7 @@ test("--measure binds the executing policy separately from the measured revision
     git(dir, ["checkout", "-q", head]);
     const result = runGate(dir, ["--measure", base]);
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.report.policyDigest, policyAt(dir, null).digest);
+    assert.equal(result.report.policyDigest, policyAt(ROOT, null).digest);
     assert.equal(result.report.revisionPolicyDigest, policyAt(dir, base).digest);
     assert.notEqual(result.report.policyDigest, result.report.revisionPolicyDigest,
       "a trend point must identify the analyzer that produced it, not the historical tree's policy");

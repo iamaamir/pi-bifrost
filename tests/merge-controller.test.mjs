@@ -76,8 +76,9 @@ if (args[0] === "api") {
   if (world.postMergeCommitError && joined.endsWith("/commits/" + world.afterMerge.mergeCommit.oid)) die(world.postMergeCommitError);
   if (world.postMergeRefError && joined.includes("/git/ref/heads/")) die(world.postMergeRefError);
   if (joined.includes("actions/workflows/verification.yml")) out({ id: world.workflowId ?? 123 });
+  if (joined.includes("actions/workflows/complexity-gate.yml")) out({ id: world.complexityWorkflowId ?? 124 });
   if (joined.includes("contents/")) out({ sha: joined.includes(world.pr.baseRefOid) ? (world.baseWorkflowSha ?? "1".repeat(40)) : (world.headWorkflowSha ?? "1".repeat(40)) });
-  if (joined.includes("/runs?head_sha=")) { const runs = joined.includes("event=push") ? (world.pushRuns ?? []) : (world.ciRuns ?? []); out({ total_count: runs.length, workflow_runs: runs }); }
+  if (joined.includes("/runs?head_sha=")) { const runs = joined.includes("event=push") ? (world.pushRuns ?? []) : joined.includes("event=pull_request_target") ? (world.complexityRuns ?? []) : (world.ciRuns ?? []); out({ total_count: runs.length, workflow_runs: runs }); }
   if (joined.includes("/artifacts?")) out({ total_count: world.artifacts.length, artifacts: world.artifacts });
   if (joined.includes("/artifacts/") && joined.endsWith("/zip")) {
     const id = Number(joined.match(/artifacts\\/(\\d+)/)[1]);
@@ -85,7 +86,7 @@ if (args[0] === "api") {
   }
   if (joined.match(/actions\\/runs\\/\\d+\\/attempts\\/\\d+$/)) {
     const id = Number(joined.match(/runs\\/(\\d+)/)[1]);
-    out(world.runDetails?.[id] ?? [...world.ciRuns, ...world.pushRuns].find(r => r.id === id && r.run_attempt === Number(joined.match(/attempts\\/(\\d+)/)[1])));
+    out(world.runDetails?.[id] ?? [...world.ciRuns, ...world.pushRuns, ...(world.complexityRuns ?? [])].find(r => r.id === id && r.run_attempt === Number(joined.match(/attempts\\/(\\d+)/)[1])));
   }
   if (joined.match(/actions\\/runs\\/\\d+\\/(?:attempts\\/\\d+\\/)?jobs/)) {
     const id = Number(joined.match(/actions\\/runs\\/(\\d+)/)[1]);
@@ -129,6 +130,15 @@ function makeRun(id, head, event, extra = {}) {
     run_started_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:30:00Z", ...extra };
 }
 
+function makeComplexityRun(id, head, base, extra = {}) {
+  return makeRun(id, base, "pull_request_target", {
+    workflow_id: 124,
+    path: ".github/workflows/complexity-gate.yml",
+    pull_requests: [{ head: { sha: head }, base: { sha: base } }],
+    ...extra,
+  });
+}
+
 function artifact(id, prefix, revision) {
   const evidence = { schemaVersion: 1, profile: "deterministic", exitCode: 0,
     source: { revisionAtStart: revision, revisionAtEnd: revision,
@@ -162,12 +172,14 @@ function makeWorld(overrides = {}) {
     },
     ciRuns: [makeRun(10, HEAD, "pull_request")],
     pushRuns: [makeRun(20, MERGE_SHA, "push")],
+    complexityRuns: [makeComplexityRun(30, HEAD, BASE)],
     artifacts: [candidate.metadata, proposed.metadata],
     archives: { 101: candidate.archive, 102: proposed.archive },
     jobs: { 10: [{ name: "release-gates", conclusion: "success", steps: [
       { name: "Upload acceptance evidence", conclusion: "success", started_at: "2026-01-01T00:09:00Z", completed_at: "2026-01-01T00:11:00Z" },
       { name: "Upload merge-result evidence", conclusion: "success", started_at: "2026-01-01T00:09:00Z", completed_at: "2026-01-01T00:11:00Z" },
-    ] }], 20: [{ name: "release-gates", conclusion: "success" }] },
+    ] }], 20: [{ name: "release-gates", conclusion: "success" }],
+    30: [{ name: "complexity-trusted", conclusion: "success" }] },
     reviews: [],
     threads: [],
     ref: { object: { sha: MERGE_SHA } },
@@ -274,6 +286,10 @@ const rejectionCases = [
   ["wrong PR base branch", (fixture) => { fixture.world.pr.baseRefName = "feature-x"; writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /base branch/],
   ["proposed merge parents mismatch", (fixture) => { fixture.world.commits[PROPOSED_SHA].parents = [{ sha: HEAD }, { sha: BASE }]; writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /proposed merge parents/],
   ["missing protected complexity check", (fixture) => { fixture.world.effectiveRules[0].parameters.required_status_checks = [{ context: "release-gates" }]; fixture.world.serverRuleset.rules[1].parameters.required_status_checks = [{ context: "release-gates" }]; writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /complexity-trusted/],
+  ["missing protected complexity-trusted run", (fixture) => { fixture.world.complexityRuns = []; writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /protected complexity-trusted/],
+  ["protected complexity-trusted run for the wrong head", (fixture) => { fixture.world.complexityRuns[0].pull_requests[0].head.sha = "0".repeat(40); writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /protected complexity-trusted/],
+  ["failed protected complexity-trusted job", (fixture) => { fixture.world.jobs[30][0].conclusion = "failure"; writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /protected complexity-trusted/],
+  ["protected complexity-trusted run from the wrong workflow", (fixture) => { fixture.world.complexityRuns[0].path = ".github/workflows/other.yml"; writeFileSync(fixture.worldPath, JSON.stringify(fixture.world)); }, /protected complexity-trusted/],
 ];
 
 for (const [name, mutate, pattern] of rejectionCases) {
