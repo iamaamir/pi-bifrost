@@ -530,33 +530,6 @@ function measureRevision(repo, sha) {
   return withRevisionTree(repo, sha, (tree) => measureRoot(tree));
 }
 
-// Git rename detection is the only identity signal available without a
-// committed snapshot. Carry the old path's per-file ceiling forward when Git
-// recognizes a rename; otherwise the new path is judged by the scope ceiling.
-function renameMap(repo, targetSha, candidateSha) {
-  const args = ["diff", "--find-renames=50%", "--name-status", "-z", targetSha];
-  if (candidateSha) args.push(candidateSha);
-  args.push("--");
-  const result = gitRun(repo, args);
-  if (result.status !== 0) return { error: `could not inspect tree changes for renames: ${String(result.stderr ?? "").trim() || "git diff failed"}` };
-  const tokens = result.stdout.split("\0");
-  const map = {};
-  for (let index = 0; index < tokens.length;) {
-    const status = tokens[index++];
-    if (!status) continue;
-    if (status.startsWith("R")) {
-      const from = tokens[index++];
-      const to = tokens[index++];
-      if (from && to) map[to.replace(/\\/g, "/")] = from.replace(/\\/g, "/");
-    } else if (status.startsWith("C")) {
-      index += 2;
-    } else {
-      index += 1;
-    }
-  }
-  return { map };
-}
-
 // A working-tree candidate is not an immutable tree. Hash HEAD, the porcelain
 // status, and every source file the analyzer can measure before and after the
 // measurement; a change means the report would describe a moving target. Hashing
@@ -613,28 +586,28 @@ function scopeFindings(baseline, current) {
   });
 }
 
-// A baselined file is judged against its own record; a new file is judged against
-// its scope ceiling until the first baseline that records it.
-function fileFindings(rel, data, baseline, renamedFrom = null) {
-  const base = baseline.files?.[renamedFrom ?? rel];
+// A baselined file is judged against its own record; a new path is judged against
+// its scope ceiling until the first baseline that records it. Rename detection is
+// deliberately not an identity signal: path identity follows ADR 0027.
+function fileFindings(rel, data, baseline) {
+  const base = baseline.files?.[rel];
   const ceiling = base ?? (baseline.scopes?.[data.scope] || {});
   return increasedFields(data, ceiling, FILE_RATCHET_FIELDS).map((key) => ({
     rule: base ? `file-${key}-regression` : `new-file-${key}-exceeds-scope-max`,
     file: rel,
     line: null,
     message: base
-      ? `${key} increased${renamedFrom ? ` after rename from ${renamedFrom}` : ""}: ${base[key] ?? 0} -> ${data[key] ?? 0}`
+      ? `${key} increased: ${base[key] ?? 0} -> ${data[key] ?? 0}`
       : `new file ${key} ${data[key] ?? 0} exceeds ${data.scope} baseline max ${ceiling[key] ?? 0}`,
   }));
 }
 
-function compare(baseline, current, renames = {}) {
+function compare(baseline, current) {
   const findings = scopeFindings(baseline, current);
   for (const [rel, data] of Object.entries(current.files || {})) {
-    findings.push(...fileFindings(rel, data, baseline, renames[rel] ?? null));
+    findings.push(...fileFindings(rel, data, baseline));
   }
-  // Removed files are improvements; not reported as findings. A detected rename
-  // keeps the old path's ceiling instead of granting the new path a fresh one.
+  // Removed files are improvements; not reported as findings.
   return findings;
 }
 
@@ -818,12 +791,10 @@ function measureAndReport({ json, repo, resolved, candidate, targetPolicy, candi
       candidateResult = measureRevision(repo, candidate.revision);
     }
     if (candidateResult.skipped.length > 0) return failure({ json, message: incompleteError("candidate", candidateResult) });
-    const renames = renameMap(repo, resolved.sha, candidate.mode === "revision" ? candidate.revision : null);
-    if (renames.error) return failure({ json, message: renames.error });
     if (candidate.mode === "worktree") {
-      // Take the final fingerprint only after every candidate read, including
-      // rename inspection. A change after the earlier fingerprint must not
-      // produce a comparison against a tree the measurement did not describe.
+      // Take the final fingerprint only after every candidate read. A change
+      // after the earlier fingerprint must not produce a comparison against a
+      // tree the measurement did not describe.
       const candidateAfter = candidateFingerprint(repo);
       if (candidateAfter.error) return failure({ json, message: candidateAfter.error });
       if (candidateAfter.digest !== candidateBefore.digest) {
@@ -837,7 +808,7 @@ function measureAndReport({ json, repo, resolved, candidate, targetPolicy, candi
     }
     return report({
       json,
-      findings: compare(targetResult.report, candidateResult.report, renames.map),
+      findings: compare(targetResult.report, candidateResult.report),
       target: targetEnvelope({ sha: resolved.sha, source: resolved.source, report: targetResult.report, policy: targetPolicy }),
       candidate: candidateEnvelope(candidate, candidateResult.report, candidatePolicy),
       policy,
@@ -910,7 +881,6 @@ export {
   main,
   measureRevision,
   policyAt,
-  renameMap,
   resolveRevision,
   resolveTarget,
   scopeOf,

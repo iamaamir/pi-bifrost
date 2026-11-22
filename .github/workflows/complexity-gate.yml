@@ -67,6 +67,15 @@ jobs:
             echo "The proposed merge result is stale for the current base and head" >&2
             exit 1
           fi
+          # Ancestry alone permits a commit with extra or reordered parents.
+          # GitHub's PR merge ref has exactly the base tip and PR head as parents.
+          merge_parents="$(git show -s --format=%P "$merge_sha")"
+          if [ "$merge_parents" != "$base_sha $event_head_sha" ]; then
+            echo "The proposed merge result does not have the intended parents" >&2
+            echo "expected: $base_sha $event_head_sha" >&2
+            echo "actual: $merge_parents" >&2
+            exit 1
+          fi
           merge_base="$(git merge-base "$base_sha" "$event_head_sha")"
           test -n "$merge_base"
           {

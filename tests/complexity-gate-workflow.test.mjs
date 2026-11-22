@@ -42,6 +42,21 @@ function commitFile(dir, rel, content, message) {
 }
 
 
+test("CODEOWNERS covers the protected judge and every policy input", () => {
+  const codeowners = readFileSync(new URL("../.github/CODEOWNERS", import.meta.url), "utf8");
+  for (const path of [
+    ".github/CODEOWNERS",
+    "scripts/check-complexity.mjs",
+    ".github/workflows/complexity-gate.yml",
+    "tsconfig.json",
+    "package.json",
+    "package-lock.json",
+  ]) {
+    assert.match(codeowners, new RegExp(`^/?${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} @iamaamir$`, "mu"));
+  }
+  assert.match(codeowners, /^\/?\.github\/workflows\/ @iamaamir$/mu, "the bootstrap workflows share the owner route");
+});
+
 test("the trusted complexity gate runs from the protected base and measures the PR as data", () => {
   assert.match(workflow, /^on:\n(?: {2}#[^\n]*\n)* {2}pull_request_target:/mu);
   assert.match(workflow, /pull_request_target:\n {4}branches: \[main\]/u);
@@ -102,6 +117,13 @@ test("the protected revision step rejects a stale merge ref", () => {
     const passing = runStep();
     assert.equal(passing.status, 0, passing.stderr);
     assert.match(readFileSync(envFile, "utf8"), new RegExp(`MERGE_SHA=${merge}`, "u"));
+
+    const mergeTree = git(dir, ["rev-parse", `${merge}^{tree}`]);
+    const wrongParents = git(dir, ["commit-tree", mergeTree, "-p", head, "-p", baseTip, "-m", "wrong parent order"]);
+    git(dir, ["update-ref", "refs/remotes/pull/7/merge", wrongParents]);
+    const wrong = runStep();
+    assert.notEqual(wrong.status, 0);
+    assert.match(wrong.stderr, /does not have the intended parents/u);
 
     git(dir, ["update-ref", "refs/remotes/pull/7/merge", baseTip]);
     const stale = runStep();

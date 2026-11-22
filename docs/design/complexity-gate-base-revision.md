@@ -97,10 +97,10 @@ only provided indirectly through its own git history.
 - a new file must not exceed the target scope's maxima;
 - removed files are improvements and are not findings.
 
-Removed files are improvements. Git rename detection identifies a move; the new
-path inherits the old path's per-file ceiling, so a rename cannot reset the
-ratchet. A path Git does not recognize as a rename is a new file and is judged by
-the scope ceiling. Scope maxima still apply to the resulting tree.
+Removed files are improvements. A rename is a removal plus a new file under ADR
+0027; Git's similarity classification is not an identity signal and cannot
+transfer the old path's per-file ceiling. The destination is judged by the scope
+ceiling, and scope maxima still apply to the resulting tree.
 
 Because the target is measured per run, branch movement needs no cache:
 re-running against the moved base re-measures it. Repeated checks of unchanged
@@ -183,6 +183,15 @@ source-derived equivalence evidence. The candidate checker is evidence for that
 migration, not an authority for later PRs. After merge, the protected workflow is
 the authority and the bootstrap exception is no longer used.
 
+A later owner policy migration must not use a candidate label. The owner verifies
+the candidate locally with the explicit `--allow-policy-change` flag, captures
+the policy and comparison evidence, then uses a repository-admin ruleset
+procedure (temporarily removing the protected required context or using the
+repository's audited admin path) to merge only after the bootstrap
+`release-gates` result is green, and immediately restores and verifies the
+protected context. That is an external repository operation, not a source-file
+override.
+
 The analyzer is still applied to both sides in one invocation, so a metric change
 is apples-to-apples within that run. The difference is who supplies the judge:
 the protected branch, not the candidate.
@@ -201,8 +210,8 @@ Deterministic tests at the real CLI boundary (temporary git repositories):
 6. two branches editing different measured files both exit `0` against the same
    base without touching any shared file, and a third branch adding a new file
    still gets the new-file ceiling;
-7. a detected rename keeps the old per-file ceiling; an undetected rename is a
-   new file and is judged by the scope ceiling;
+7. a rename is judged as a new file by the scope ceiling; Git's similarity
+   classification does not transfer the old per-file ceiling;
 8. repeated and concurrent runs against the same revisions return the same
    verdict and digests;
 9. a base policy move after divergence forces no override for an untouched

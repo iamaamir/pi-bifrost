@@ -110,6 +110,7 @@ const REGRESSED_A = [
 ].join("\n");
 
 // Close enough to BASE_A for Git's rename detection, but one branch hotter.
+// Used to prove that similarity classification cannot transfer the old ceiling.
 const RENAMED_A = [
   "export function choose(flag: boolean) {",
   "  if (flag) {",
@@ -126,20 +127,6 @@ const RENAMED_A = [
 const ADDED_LOW = [
   "export function addedLow(value: number) {",
   "  return value * 2;",
-  "}",
-  "",
-].join("\n");
-
-const HOT = [
-  "export function hot(a: boolean, b: boolean, c: boolean, d: boolean, e: boolean, f: boolean, g: boolean) {",
-  "  if (a) { return 1; }",
-  "  if (b) { return 2; }",
-  "  if (c) { return 3; }",
-  "  if (d) { return 4; }",
-  "  if (e) { return 5; }",
-  "  if (f) { return 6; }",
-  "  if (g) { return 7; }",
-  "  return 8;",
   "}",
   "",
 ].join("\n");
@@ -552,8 +539,8 @@ test("a source-derived target reproduces the legacy baseline ratchet", () => {
   }
 });
 
-test("removals are ignored and renames keep the old per-file ceiling", () => {
-  const { dir, base, baseBranch } = gitFixture({ "hot.ts": HOT });
+test("removals are ignored and a detected rename is judged as a new file", () => {
+  const { dir, base, baseBranch } = gitFixture();
   try {
     const removed = branchFrom(dir, baseBranch, "removed", "remove a file", () => rmSync(join(dir, "b.ts")));
     assert.equal(runGate(dir, ["--target", base, "--candidate", removed]).status, 0);
@@ -565,17 +552,21 @@ test("removals are ignored and renames keep the old per-file ceiling", () => {
       git(dir, ["mv", "a.ts", "renamed.ts"]);
       writeFileSync(join(dir, "renamed.ts"), RENAMED_A);
     });
+    assert.match(
+      git(dir, ["diff", "--find-renames=50%", "--name-status", base, renamedHot]),
+      /^R\d+\ta\.ts\trenamed\.ts$/mu,
+      "the fixture must be a rename Git would detect",
+    );
     const hot = runGate(dir, ["--target", base, "--candidate", renamedHot]);
     assert.equal(hot.status, 1, hot.stderr);
-    const finding = hot.report.findings.find((f) => f.rule === "file-maxCyc-regression" && f.file === "renamed.ts");
-    assert.ok(finding, "a renamed file must not reset its ceiling to the scope maximum");
-    assert.match(finding.message, /rename from a\.ts/u);
+    const finding = hot.report.findings.find((f) => f.rule === "new-file-maxCyc-exceeds-scope-max" && f.file === "renamed.ts");
+    assert.ok(finding, "Git rename detection must not grant the destination a fresh per-file ceiling");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("an undetected rename is still judged as a new file", () => {
+test("a new path that resembles a rename is judged by the scope ceiling", () => {
   const { dir, base, baseBranch } = gitFixture();
   try {
     const newFile = branchFrom(dir, baseBranch, "new-file", "add a new file", () => {

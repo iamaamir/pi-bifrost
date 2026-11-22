@@ -170,6 +170,12 @@ the protected workflow's artifact is evidence, not a ruleset identity. A
 complete UI-merge fix needs an app-scoped check, an organization/enterprise
 required workflow, or a ruleset path restriction on workflow changes.
 
+For a later owner policy migration, the owner verifies the candidate locally
+with `--allow-policy-change`, captures the comparison and policy evidence, and
+uses a repository-admin ruleset procedure outside the workflow. A candidate
+label cannot authorize the protected judge. The temporary ruleset change and its
+restoration must be recorded and verified separately.
+
 Policy, source, tests, and documentation resolve revisions from refs and runtime
 events. Resolved SHAs and digests belong in evidence output, not in
 configuration. Documentation cites files, functions, and context names rather

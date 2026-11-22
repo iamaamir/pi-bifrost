@@ -77,10 +77,8 @@ make "the gate measured nothing" a failure.
   `2`.
 - The gate is a **ratchet**: per-file maxima and scope counts must not increase
   against the target measurement. New files must not exceed the target scope
-  maxima. Removed files are improvements. Git rename detection carries the old
-  path's per-file ceiling to the new path, so a detected rename cannot reset the
-  ratchet. A path Git does not detect as a rename is judged as a new file by the
-  scope ceiling.
+  maxima. Removed files are improvements. A rename is a removal plus a new file,
+  so the new path is judged by the scope ceiling.
 - Nested functions are scored separately; a parent does not absorb a child's
   branches. Expression-bodied arrow bodies are visited.
 - Paths are normalized to forward slashes before scoping or file lookup so
