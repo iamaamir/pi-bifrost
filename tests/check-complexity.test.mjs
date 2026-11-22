@@ -878,6 +878,25 @@ test("the worktree candidate fingerprint changes when a measured file changes", 
   }
 });
 
+test("candidate fingerprint includes staged and untracked source changes", () => {
+  const { dir } = gitFixture();
+  try {
+    const clean = candidateFingerprint(dir);
+    writeFileSync(join(dir, "a.ts"), `${BASE_A}\nexport const staged = true;\n`);
+    git(dir, ["add", "a.ts"]);
+    const staged = candidateFingerprint(dir);
+    assert.equal(staged.dirty, true);
+    assert.notEqual(staged.digest, clean.digest);
+
+    writeFileSync(join(dir, "untracked.ts"), "export const untracked = true;\n");
+    const withUntracked = candidateFingerprint(dir);
+    assert.equal(withUntracked.dirty, true);
+    assert.notEqual(withUntracked.digest, staged.digest);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("measuring a revision does not leave a worktree behind", () => {
   const { dir, base } = gitFixture();
   try {

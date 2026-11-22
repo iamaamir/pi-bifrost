@@ -159,9 +159,12 @@ repository configuration dependency; it is not a commit-SHA pin in the code.
 
 A normal policy change is a protected PR to the target branch. The old protected
 judge measures the candidate and fails closed when the policy digest differs.
-The owner reviews the analyzer/workflow diff through the protected policy path;
-after merge, the new judge becomes active automatically. There is no pin file and
-no manual SHA bump.
+The workflow intentionally has no candidate-controlled override. An owner policy
+migration must use the protected repository procedure outside the workflow; a
+candidate label or environment value cannot authorize it. That procedure is a
+ruleset configuration dependency, not a source-file mechanism. After merge, the
+new judge becomes active automatically. There is no pin file and no manual SHA
+bump.
 
 The current migration is the one exception: the old target-branch checker does
 not have the source-comparison interface, so it cannot judge its own replacement.

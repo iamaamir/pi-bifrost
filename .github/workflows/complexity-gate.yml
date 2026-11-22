@@ -91,6 +91,9 @@ jobs:
           cache: npm
       - run: npm ci
 
+      # No policy override is accepted here. A candidate label or environment
+      # cannot authorize an analyzer, threshold, or workflow change; an owner
+      # policy migration must use the protected repository procedure.
       - name: Measure the PR delta and the proposed merge result
         run: |
           set -euo pipefail
