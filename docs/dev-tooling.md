@@ -140,7 +140,8 @@ inputs at both revisions. When the digests differ it exits `2` with
 `complexity-policy-changed` unless `--allow-policy-change` (or
 `BIFROST_COMPLEXITY_ALLOW_POLICY_CHANGE=1`) records a reviewed decision. CI
 passes the override only for a pull request carrying the
-`quality-policy-change` label. The policy files are listed in
+`quality-policy-change` label. The policy inputs (analyzer, workflow, `tsconfig.json`,
+`package.json`, and the resolved TypeScript lock entry) are covered by
 [`.github/CODEOWNERS`](../.github/CODEOWNERS), so a weakening change needs owner
 review. The digests and both revisions are printed so the diff can be inspected
 rather than inferred.
@@ -153,9 +154,9 @@ Measure any revision on demand; nothing is stored in the repository:
 node scripts/check-complexity.mjs --measure <rev> --json
 ```
 
-Each output is bound to the revision's SHA and a digest of the measured bytes,
-so a trend can be reconstructed from history and compared only when the
-revisions and policy match.
+Each output is bound to the revision's SHA, a digest of the measured bytes, and
+the policy digest, so a trend can be reconstructed from history and compared
+only when the revisions and policy match.
 
 ## Documented commands and links
 

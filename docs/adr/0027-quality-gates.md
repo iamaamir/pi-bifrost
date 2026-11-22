@@ -97,7 +97,8 @@ make "the gate measured nothing" a failure.
   script cannot silently relax the check that judges it.
 - Historical values are reproduced on demand with
   `node scripts/check-complexity.mjs --measure <rev> --json`. The output is tied
-  to that revision's SHA and input digest; no generated trend file is committed.
+  to that revision's SHA, input digest, and policy digest; no generated trend
+  file is committed.
 
 ### Process
 

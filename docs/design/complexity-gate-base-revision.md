@@ -150,4 +150,6 @@ behavior. Historical trends are recovered on demand:
 node scripts/check-complexity.mjs --measure <rev> --json
 ```
 
-No generated complexity file is committed or written by routine changes.
+No generated complexity file is committed or written by routine changes. Each
+measurement also carries the policy digest, so a trend point is comparable only
+with points produced under the same analyzer and scope policy.

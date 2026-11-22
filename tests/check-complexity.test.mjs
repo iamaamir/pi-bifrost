@@ -638,6 +638,7 @@ test("--measure prints a revision-bound measurement without comparing", () => {
     assert.equal(result.report.status, "measured");
     assert.equal(result.report.revision, base);
     assert.equal(result.report.scopes.source.maxCyc, 2);
+    assert.equal(result.report.policyDigest, policyAt(dir, base).digest);
     assert.ok(Object.hasOwn(result.report.files, "a.ts"));
 
     const missing = runGate(dir, ["--measure", "no-such-ref"]);

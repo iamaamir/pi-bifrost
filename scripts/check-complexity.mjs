@@ -670,13 +670,18 @@ function measureCommand({ json, repo, revision }) {
     return failure({ json, message: `complexity analysis failed for ${sha}: ${error.message}` });
   }
   if (result.skipped.length > 0) return failure({ json, message: incompleteError(`revision ${sha}`, result) });
+  // A trend point is comparable only when the policy that produced it matches;
+  // bind the digest so two measurements cannot be compared across policies.
+  const policy = policyAt(repo, sha);
+  if (policy.error) return failure({ json, message: policy.error });
   const envelope = {
     check: "complexity",
     status: "measured",
     exitCode: 0,
     revision: sha,
     inputDigest: result.report.inputDigest,
-    tool: { typescriptVersion: ts.version },
+    policyDigest: policy.digest,
+    tool: { typescriptVersion: policy.typescriptVersion },
     scopes: result.report.scopes,
     files: result.report.files,
   };
