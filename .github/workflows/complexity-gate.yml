@@ -14,6 +14,7 @@ on:
   # base-only dependency install, and read-only token below. Remove this
   # with an external trusted check or a redesign; do not widen the suppression.
   pull_request_target:
+    branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
@@ -57,6 +58,13 @@ jobs:
             echo "The fetched pull request head does not match the event head" >&2
             echo "event: $HEAD_SHA" >&2
             echo "fetched: $event_head_sha" >&2
+            exit 1
+          fi
+          # The merge ref can lag the event when base or head moves. Never
+          # measure a merge result that does not contain both current revisions.
+          if ! git merge-base --is-ancestor "$base_sha" "$merge_sha" \
+            || ! git merge-base --is-ancestor "$event_head_sha" "$merge_sha"; then
+            echo "The proposed merge result is stale for the current base and head" >&2
             exit 1
           fi
           merge_base="$(git merge-base "$base_sha" "$event_head_sha")"

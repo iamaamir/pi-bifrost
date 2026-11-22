@@ -114,8 +114,9 @@ The gate must not be judged by code in the candidate. The authoritative path is
 - GitHub runs the workflow and the analyzer from the protected target branch,
   not from the pull request.
 - The workflow resolves the base ref once at run time, fetches the PR head and
-  proposed merge refs, and records the resolved revisions. No source, policy,
-  or test file contains a hard-coded commit SHA.
+  proposed merge refs, and records the resolved revisions. It rejects a stale
+  merge ref that does not contain both the current base and event head. No
+  source, policy, or test file contains a hard-coded commit SHA.
 - The PR is present only as Git objects. The judge never installs, imports, or
   executes candidate code. It measures the base, head, and merge trees with the
   protected analyzer.

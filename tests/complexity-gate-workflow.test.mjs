@@ -6,10 +6,13 @@ const workflow = readFileSync(new URL("../.github/workflows/complexity-gate.yml"
 
 test("the trusted complexity gate runs from the protected base and measures the PR as data", () => {
   assert.match(workflow, /^on:\n(?: {2}#[^\n]*\n)* {2}pull_request_target:/mu);
+  assert.match(workflow, /pull_request_target:\n {4}branches: \[main\]/u);
   assert.match(workflow, /ref: \$\{\{ github\.event\.pull_request\.base\.ref \}\}/u);
   assert.match(workflow, /persist-credentials: false/u);
   assert.match(workflow, /refs\/pull\/\$\{PR_NUMBER\}\/head/u);
   assert.match(workflow, /refs\/pull\/\$\{PR_NUMBER\}\/merge/u);
+  assert.match(workflow, /--is-ancestor "\$base_sha" "\$merge_sha"/u);
+  assert.match(workflow, /--is-ancestor "\$event_head_sha" "\$merge_sha"/u);
   assert.doesNotMatch(workflow, /pull_request\.head\.ref/u, "the candidate branch must not choose the judge");
   assert.equal((workflow.match(/npm ci/gu) ?? []).length, 1, "dependencies must be installed only for the protected judge");
 });
