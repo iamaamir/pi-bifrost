@@ -2,6 +2,9 @@ name: Static analysis
 
 on:
   pull_request:
+    # A policy acknowledgment changes the override, so applying or removing the
+    # label must re-evaluate the gate instead of leaving the old verdict.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
     branches: [main]
   workflow_dispatch:
