@@ -93,7 +93,7 @@ jobs:
           HEAD_SHA: ${{ env.HEAD_SHA }}
         run: |
           set -euo pipefail
-          if git grep -n -F 'complexity-trusted' "$HEAD_SHA" -- '.github/workflows/*.yml' ':!.github/workflows/complexity-gate.yml'; then
+          if git grep -n -F 'complexity-trusted' "$HEAD_SHA" -- '.github/workflows/*.yml' '.github/workflows/*.yaml' ':!.github/workflows/complexity-gate.yml'; then
             echo "A candidate workflow publishes the protected complexity-trusted context" >&2
             exit 1
           fi

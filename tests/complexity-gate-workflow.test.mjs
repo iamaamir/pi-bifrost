@@ -117,7 +117,7 @@ test("the protected gate rejects a candidate workflow that publishes its context
   try {
     git(dir, ["init", "-q"]);
     mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
-    commitFile(dir, ".github/workflows/other.yml", "name: other\njobs:\n  complexity-trusted:\n    runs-on: ubuntu-latest\n", "duplicate context");
+    commitFile(dir, ".github/workflows/other.yaml", "name: other\njobs:\n  complexity-trusted:\n    runs-on: ubuntu-latest\n", "duplicate context");
     const head = git(dir, ["rev-parse", "HEAD"]);
     const script = workflowRunBlock("Reject candidate workflows that publish the protected context");
     const runStep = () => spawnSync("bash", ["-e"], {
@@ -131,7 +131,7 @@ test("the protected gate rejects a candidate workflow that publishes its context
     assert.notEqual(rejected.status, 0);
     assert.match(rejected.stderr, /publishes the protected complexity-trusted context/u);
 
-    commitFile(dir, ".github/workflows/other.yml", "name: other\njobs:\n  build:\n    runs-on: ubuntu-latest\n", "remove duplicate context");
+    commitFile(dir, ".github/workflows/other.yaml", "name: other\njobs:\n  build:\n    runs-on: ubuntu-latest\n", "remove duplicate context");
     const cleanHead = git(dir, ["rev-parse", "HEAD"]);
     const accepted = spawnSync("bash", ["-e"], {
       cwd: dir,
