@@ -68,46 +68,46 @@ make "the gate measured nothing" a failure.
 - `scripts/check-complexity.mjs` measures per-function cyclomatic and
   cognitive complexity for `.ts`, `.mjs`, and `.cjs` under root, `ui/`,
   `scripts/`, and `tests/`.
-- `quality/complexity-baseline.json` stores per-file maxima plus scope maxima
-  and counts above 30 and 50.
-- The gate is a **ratchet**: per-file maxima and scope counts must not increase.
-  New files must not exceed the scope maxima.
+- There is no committed complexity snapshot. The gate measures the target
+  revision and the candidate from source with the same analyzer and compares
+  them. The target comes from `--target`, then `BIFROST_COMPLEXITY_BASE`, then
+  `GITHUB_BASE_SHA`, then the merge-base with `origin/main` or `main`, then
+  `HEAD^`. A revision that does not resolve fails the gate with exit `2`.
+- The gate is a **ratchet**: per-file maxima and scope counts must not increase
+  against the target measurement. New files must not exceed the target scope
+  maxima. Removed files are improvements. A rename is a removal plus a new file,
+  so the new path is judged by the scope ceiling.
 - Nested functions are scored separately; a parent does not absorb a child's
   branches. Expression-bodied arrow bodies are visited.
-- Paths are normalized to forward slashes before scoping or baseline lookup so
+- Paths are normalized to forward slashes before scoping or file lookup so
   Windows and POSIX agree.
-- Regenerate the baseline with `npm run check:complexity -- --update-baseline`
-  after rebasing onto `main` or after an intentional complexity reduction.
-- `npm run check:complexity:baseline` re-measures in memory and fails with
-  `complexity-baseline-stale` when any record differs, so a baseline that
-  describes an older tree cannot merge. Every recorded field is compared, not
-  only maxima, so line and function drift fails too.
-- A pull request can regenerate the committed baseline in its own change, so
-  the budget and staleness checks cannot see a raised maximum. CI also compares
-  the tree against the baseline recorded at the base revision
-  (`npm run check:complexity:base -- <base-sha>`). A new file is judged against
-  that record's scope maxima. When the base revision has no baseline, the gate
-  fails with `complexity-base-baseline-missing`.
-- `generatedAt` and `sourceCommit` are provenance and are never compared.
-  `sourceCommit` names the generation-time HEAD, which is the baseline commit's
-  parent, because a commit cannot contain its own SHA.
-- A file that disappears while the analyzer reads the tree is skipped with a
-  warning, so a moving tree on a developer machine is not a crash. A directory
-  that disappears during the walk is recorded the same way, because its files
-  are equally absent from the snapshot. Read errors other than `ENOENT` still
-  fail, and `--update-baseline` refuses an incomplete analysis rather than
-  recording a baseline that omits real files.
+- Measurements are content-bound. The report carries the resolved target SHA,
+  the candidate revision and dirty state, and a SHA-256 of the measured bytes.
+  No metrics file is an input to a verdict, so a hand-edited number cannot
+  become evidence.
+- A file that disappears during analysis, an unreadable revision, or an
+  incomplete measurement fails closed with exit `2` instead of reporting a
+  verdict from a partial tree.
+- The analyzer, its scope and threshold policy, the TypeScript version, and the
+  static-analysis workflow are hashed at both revisions. A differing digest
+  exits `2` with `complexity-policy-changed` unless `--allow-policy-change` is
+  present. CI allows the override only for a pull request carrying the
+  `quality-policy-change` label, and [CODEOWNERS](../../.github/CODEOWNERS) requires
+  owner review of the policy files. This is the trust boundary: the candidate
+  script cannot silently relax the check that judges it.
+- Historical values are reproduced on demand with
+  `node scripts/check-complexity.mjs --measure <rev> --json`. The output is tied
+  to that revision's SHA and input digest; no generated trend file is committed.
 
 ### Process
 
-- Baselines are committed and reviewed like code.
-- The author of a change that moves a metric regenerates the affected baseline
-  in the same change. A reviewer checks that diff contains only metric updates,
-  not unrelated entries.
+- The base revision is the review anchor. A change that moves a metric is judged
+  against it, so raising a ceiling requires a visible policy decision rather
+  than a regenerated file.
 - Tightening a threshold is a deliberate change with its own evidence, not a
   side effect of a refactor.
-- CI runs the staleness check after the ratchet, so a forgotten regeneration is
-  a red build rather than a review note.
+- CI compares a pull request against its base revision and a push against the
+  previous tip.
 - Gate exit codes are covered by fault controls in
   `tests/quality-gates-fault-controls.test.mjs`, which drive `check:ast`,
   `check:duplication`, and `check:complexity` against fixture trees. A scope
@@ -119,11 +119,12 @@ make "the gate measured nothing" a failure.
 ## Consequences
 
 - CI cost is a few seconds per gate; the complexity analyzer parses roughly 280
-  files.
-- Baseline regeneration produces a large diff when the metric changes. That is
-  expected: it is the record of the new ceiling.
-- A contributor who lowers complexity should regenerate the baseline in the same
-  change, otherwise the ratchet keeps the old, higher ceiling.
+  files twice, once per revision.
+- A routine change no longer regenerates a shared file, so feature branches that
+  edit different measured files cannot conflict through metrics.
+- A policy change needs the `quality-policy-change` label and owner review;
+  reviewers inspect the analyzer diff rather than trusting a regenerated
+  snapshot.
 - Duplication can drift upward within the 3.3% budget. The committed audit
   records the current headroom. Trend history is tracked in #291 rather than in
   this ADR.

@@ -154,7 +154,7 @@ test("fault control: a renamed script, a removed flag, and a missing file are re
 });
 
 test("the documented structured-output invocation runs and keeps its envelope", () => {
-  const result = spawnSync(process.execPath, [join(ROOT, "scripts", "check-complexity.mjs"), "--json"], {
+  const result = spawnSync(process.execPath, [join(ROOT, "scripts", "check-complexity.mjs"), "--target", "HEAD", "--candidate", "HEAD", "--json"], {
     cwd: ROOT,
     encoding: "utf8",
   });

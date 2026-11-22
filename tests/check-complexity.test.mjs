@@ -2,13 +2,27 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs, { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { join, sep } from "node:path";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
-import { analyze, baselineAtRef, compare, cyclomatic, cognitive, inScopeFiles, main, resolveSourceCommit, scopeOf, stalenessFindings } from "../scripts/check-complexity.mjs";
+import {
+  analyze,
+  cognitive,
+  compare,
+  cyclomatic,
+  inScopeFiles,
+  main,
+  measureRevision,
+  policyAt,
+  resolveRevision,
+  resolveTarget,
+  scopeOf,
+} from "../scripts/check-complexity.mjs";
+import { fixtureGitEnv } from "./fixtures/git-env.mjs";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
+const SCRIPT = join(ROOT, "scripts", "check-complexity.mjs");
 const require = createRequire(join(ROOT, "package.json"));
 const ts = require("typescript");
 
@@ -62,6 +76,127 @@ function fixtureRoot() {
     ].join("\n"),
   );
   return dir;
+}
+
+const BASE_A = [
+  "export function choose(flag: boolean) {",
+  "  if (flag) {",
+  "    return 1;",
+  "  }",
+  "  return 2;",
+  "}",
+  "",
+].join("\n");
+
+const BASE_B = [
+  "export function plain(value: number) {",
+  "  return value + 1;",
+  "}",
+  "",
+].join("\n");
+
+const REGRESSED_A = [
+  "export function choose(flag: boolean, other: boolean) {",
+  "  if (flag && other) {",
+  "    return 1;",
+  "  }",
+  "  if (other) {",
+  "    return 3;",
+  "  }",
+  "  return 2;",
+  "}",
+  "",
+].join("\n");
+
+const ADDED_LOW = [
+  "export function addedLow(value: number) {",
+  "  return value * 2;",
+  "}",
+  "",
+].join("\n");
+
+function git(dir, args) {
+  const result = spawnSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgSign=false", ...args], {
+    cwd: dir,
+    env: fixtureGitEnv(),
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr || `git ${args.join(" ")} failed`);
+  return result.stdout.trim();
+}
+
+// The fixture's policy files are content-only: the gate under test hashes them
+// but never executes them. Keeping them tiny leaves the fixture's own scope
+// maxima meaningful.
+function seedPolicy(dir, script = "// fixture complexity policy\n") {
+  mkdirSync(join(dir, "scripts"), { recursive: true });
+  mkdirSync(join(dir, ".github", "workflows"), { recursive: true });
+  writeFileSync(join(dir, "scripts", "check-complexity.mjs"), script);
+  writeFileSync(join(dir, ".github", "workflows", "static-analysis.yml"), "name: fixture\n");
+  writeFileSync(join(dir, "tsconfig.json"), "{}\n");
+  writeFileSync(join(dir, "package.json"), JSON.stringify({
+    scripts: {
+      "check:complexity": "node scripts/check-complexity.mjs",
+      "check:complexity:base": "node scripts/check-complexity.mjs --target",
+    },
+    devDependencies: { typescript: "6.0.3" },
+  }, null, 2));
+}
+
+function commit(dir, message) {
+  git(dir, ["add", "-A"]);
+  git(dir, ["commit", "--no-gpg-sign", "-qm", message]);
+  return git(dir, ["rev-parse", "HEAD"]);
+}
+
+function gitFixture() {
+  const dir = mkdtempSync(join(tmpdir(), "bifrost-complexity-git-"));
+  writeFileSync(join(dir, "a.ts"), BASE_A);
+  writeFileSync(join(dir, "b.ts"), BASE_B);
+  seedPolicy(dir);
+  git(dir, ["init", "-q"]);
+  const baseBranch = git(dir, ["symbolic-ref", "--short", "HEAD"]);
+  const base = commit(dir, "base");
+  return { dir, base, baseBranch };
+}
+
+function runGate(dir, args = [], env = {}) {
+  const result = spawnSync(process.execPath, [SCRIPT, "--repo", dir, "--json", ...args], {
+    cwd: ROOT,
+    env: { ...fixtureGitEnv(), ...env },
+    encoding: "utf8",
+  });
+  return {
+    status: result.status,
+    report: result.stdout.trim() === "" ? null : JSON.parse(result.stdout),
+    stderr: result.stderr,
+  };
+}
+
+function runGateAsync(dir, args = [], env = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [SCRIPT, "--repo", dir, "--json", ...args], {
+      cwd: ROOT,
+      env: { ...fixtureGitEnv(), ...env },
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("close", (status) => resolve({
+      status,
+      report: stdout.trim() === "" ? null : JSON.parse(stdout),
+      stderr,
+    }));
+  });
+}
+
+function branchFrom(dir, baseBranch, name, message, mutate) {
+  git(dir, ["checkout", "-q", "-B", name, baseBranch]);
+  mutate();
+  const sha = commit(dir, message);
+  git(dir, ["checkout", "-q", baseBranch]);
+  return sha;
 }
 
 test("scores branch counts and does not inflate outer functions with nested function complexity", () => {
@@ -156,278 +291,390 @@ test("analyze scopes files, normalizes relative paths, and produces stable per-f
     });
     const keys = Object.keys(report.files);
     assert.deepEqual(keys, [...keys].sort());
+    assert.match(report.inputDigest, /^[a-f0-9]{64}$/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("compare accepts unchanged, flags increased and new files over scope max, and ignores removed files", () => {
+test("the input digest is stable for identical bytes and changes with content", () => {
   const root = fixtureRoot();
   try {
-    const baseline = analyze({ root });
-    const unchanged = analyze({ root });
-    assert.deepEqual(compare(baseline, unchanged), []);
+    const first = analyze({ root });
+    const second = analyze({ root });
+    assert.equal(first.inputDigest, second.inputDigest);
+    writeFileSync(join(root, "a.ts"), `${readFileSync(join(root, "a.ts"), "utf8")}\n// drift\n`);
+    assert.notEqual(first.inputDigest, analyze({ root }).inputDigest);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
-    const increased = structuredClone(unchanged);
-    increased.files["a.ts"].maxCyc = baseline.files["a.ts"].maxCyc + 1;
-    increased.scopes.source.maxCyc = baseline.scopes.source.maxCyc + 1;
-    const incFindings = compare(baseline, increased);
+test("compare accepts unchanged files, flags increased and new-file outliers, and ignores removals", () => {
+  const root = fixtureRoot();
+  try {
+    const target = analyze({ root });
+    assert.deepEqual(compare(target, analyze({ root })), []);
+
+    const increased = structuredClone(analyze({ root }));
+    increased.files["a.ts"].maxCyc = target.files["a.ts"].maxCyc + 1;
+    increased.scopes.source.maxCyc = target.scopes.source.maxCyc + 1;
+    const incFindings = compare(target, increased);
     assert.ok(incFindings.some((f) => f.rule === "file-maxCyc-regression" && f.file === "a.ts"));
-    assert.ok(incFindings.some((f) => f.rule === "scope-source-maxCyc-regression"));
 
-    const added = structuredClone(unchanged);
-    added.files["z-new.ts"] = { scope: "source", lines: 10, funcs: 1, maxCyc: baseline.scopes.source.maxCyc + 1, maxCog: 1, sumCyc: 1, sumCog: 1 };
-    added.scopes.source.files += 1;
-    added.scopes.source.functions += 1;
-    added.scopes.source.maxCyc = baseline.scopes.source.maxCyc + 1;
-    const addFindings = compare(baseline, added);
-    assert.ok(addFindings.some((f) => f.rule === "new-file-maxCyc-exceeds-scope-max" && f.file === "z-new.ts"));
+    const added = structuredClone(analyze({ root }));
+    added.files["z-new.ts"] = { scope: "source", lines: 10, funcs: 1, maxCyc: target.scopes.source.maxCyc + 1, maxCog: 1, sumCyc: 1, sumCog: 1 };
+    added.scopes.source.maxCyc = target.scopes.source.maxCyc + 1;
+    assert.ok(compare(target, added).some((f) => f.rule === "new-file-maxCyc-exceeds-scope-max" && f.file === "z-new.ts"));
 
-    const removed = structuredClone(unchanged);
+    const removed = structuredClone(analyze({ root }));
     delete removed.files["tests/a.test.ts"];
     removed.scopes.tests = { files: 0, functions: 0, maxCyc: 0, maxCog: 0, cycGt30: 0, cycGt50: 0, cogGt30: 0, cogGt50: 0 };
-    assert.deepEqual(compare(baseline, removed), []);
+    assert.deepEqual(compare(target, removed), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("staleness check accepts a regenerated baseline and reports record drift", () => {
-  const root = fixtureRoot();
-  try {
-    const baseline = analyze({ root });
-    assert.deepEqual(stalenessFindings(baseline, analyze({ root })), []);
-
-    writeFileSync(
-      join(root, "a.ts"),
-      `export function added(x: boolean) { return x ? 1 : 2; }\n${readFileSync(join(root, "a.ts"), "utf8")}`,
-    );
-    const drift = stalenessFindings(baseline, analyze({ root }));
-    assert.deepEqual(drift.map((f) => [f.rule, f.file]), [["complexity-baseline-stale", "a.ts"]]);
-    assert.match(drift[0].message, /lines \d+ -> \d+/u);
-
-    const scopeOnly = structuredClone(baseline);
-    scopeOnly.scopes.source.maxCog += 1;
-    assert.deepEqual(stalenessFindings(baseline, scopeOnly).map((f) => f.file), ["(scope)"],
-      "a drifted scope summary must fail even when every file record matches");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("staleness check reports files added after and missing from the baseline", () => {
-  const root = fixtureRoot();
-  try {
-    const baseline = analyze({ root });
-    const removed = structuredClone(baseline);
-    delete removed.files["a.ts"];
-    const removedFindings = stalenessFindings(baseline, removed);
-    assert.deepEqual(removedFindings.map((f) => f.file), ["a.ts"]);
-    assert.match(removedFindings[0].message, /no longer exists/u);
-
-    const added = structuredClone(baseline);
-    added.files["z-new.ts"] = { ...added.files["a.ts"] };
-    const addedFindings = stalenessFindings(baseline, added);
-    assert.deepEqual(addedFindings.map((f) => f.file), ["z-new.ts"]);
-    assert.match(addedFindings[0].message, /not recorded in the baseline/u);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-function vanishWhileReading(target, code = "ENOENT") {
-  const original = fs.readFileSync;
-  fs.readFileSync = (file, ...rest) => {
-    if (String(file) === target) {
-      const error = new Error(`simulated ${code} for ${target}`);
-      error.code = code;
-      throw error;
-    }
-    return original.call(fs, file, ...rest);
-  };
-  return () => {
-    fs.readFileSync = original;
-    assert.equal(fs.readFileSync, original, "the reader must be restored");
-  };
-}
-
-test("analyze skips a file that vanishes between the walk and the read", () => {
+test("analyze reports an incomplete snapshot instead of silently dropping a file", () => {
   const root = fixtureRoot();
   const skipped = [];
-  let restore;
+  const original = fs.readFileSync;
   try {
-    restore = vanishWhileReading(join(root, "a.ts"));
+    fs.readFileSync = (file, ...rest) => {
+      if (String(file) === join(root, "a.ts")) {
+        const error = new Error(`simulated ENOENT for ${file}`);
+        error.code = "ENOENT";
+        throw error;
+      }
+      return original.call(fs, file, ...rest);
+    };
     const report = analyze({ root, skipped });
     assert.deepEqual(skipped, ["a.ts"]);
     assert.equal(Object.hasOwn(report.files, "a.ts"), false);
-    assert.equal(report.scopes.source.files, 0, "a vanished file must not be counted");
   } finally {
-    restore?.();
+    fs.readFileSync = original;
     rmSync(root, { recursive: true, force: true });
   }
 });
 
 test("analyze still fails on a read error other than a vanished file", () => {
   const root = fixtureRoot();
-  let restore;
+  const original = fs.readFileSync;
   try {
-    restore = vanishWhileReading(join(root, "a.ts"), "EACCES");
+    fs.readFileSync = (file, ...rest) => {
+      if (String(file) === join(root, "a.ts")) {
+        const error = new Error(`simulated EACCES for ${file}`);
+        error.code = "EACCES";
+        throw error;
+      }
+      return original.call(fs, file, ...rest);
+    };
     assert.throws(() => analyze({ root }), /simulated EACCES/u);
   } finally {
-    restore?.();
+    fs.readFileSync = original;
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("main tolerates a vanished file for checks and refuses to write a baseline", () => {
-  const target = join(tmpdir(), `incomplete-baseline-${process.pid}-${Date.now()}.json`);
-  const originalLog = console.log;
-  const originalError = console.error;
-  const printed = { log: [], error: [] };
-  let restore;
+test("resolveTarget treats an explicit or environment revision as authoritative", () => {
+  const { dir, base } = gitFixture();
   try {
-    restore = vanishWhileReading(join(ROOT, "config.ts"));
-    // Capture instead of printing: this exercises the real baseline against the
-    // real tree, and its JSON would otherwise read like a failure in CI output.
-    console.log = (...args) => printed.log.push(args.join(" "));
-    console.error = (...args) => printed.error.push(args.join(" "));
-    const stale = main(["--check-baseline", "--json"]);
-    assert.equal(stale, 1, "a recorded file that vanished is a stale record, not a crash");
-    assert.equal(printed.error.some((line) => line.includes("skipped 1 path(s) that vanished during analysis: config.ts")), true,
-      "the vanished file must be reported on stderr, not silently dropped");
-    const update = main(["--update-baseline", "--baseline", target, "--json"]);
-    assert.equal(update, 2, "an incomplete snapshot must not become a baseline");
-    assert.equal(existsSync(target), false);
-  } finally {
-    console.log = originalLog;
-    console.error = originalError;
-    restore?.();
-    rmSync(target, { force: true });
-  }
-});
-
-test("source provenance prefers the CI SHA and degrades to null outside a repository", () => {
-  assert.equal(resolveSourceCommit({ GITHUB_SHA: "abc123" }), "abc123");
-  const outside = mkdtempSync(join(tmpdir(), "bifrost-no-git-"));
-  try {
-    assert.equal(resolveSourceCommit({}, outside), null);
-  } finally {
-    rmSync(outside, { recursive: true, force: true });
-  }
-});
-
-test("--check-baseline passes the committed record and fails a tampered one", () => {
-  const script = join(ROOT, "scripts/check-complexity.mjs");
-  const clean = spawnSync(process.execPath, [script, "--check-baseline", "--json"], { cwd: ROOT, encoding: "utf8" });
-  assert.equal(clean.status, 0, clean.stderr || clean.stdout);
-  assert.match(JSON.parse(clean.stdout).message, /Complexity baseline matches the tree/u);
-
-  const committed = JSON.parse(readFileSync(join(ROOT, "quality", "complexity-baseline.json"), "utf8"));
-  const [firstFile] = Object.keys(committed.files);
-  const tampered = structuredClone(committed);
-  tampered.files[firstFile].lines += 1;
-  const tamperedPath = join(tmpdir(), `bifrost-stale-baseline-${process.pid}-${Date.now()}.json`);
-  try {
-    writeFileSync(tamperedPath, JSON.stringify(tampered));
-    const stale = spawnSync(process.execPath, [script, "--check-baseline", "--baseline", tamperedPath, "--json"], {
-      cwd: ROOT,
-      encoding: "utf8",
-    });
-    assert.equal(stale.status, 1);
-    const parsed = JSON.parse(stale.stdout);
-    assert.equal(parsed.status, "failed");
-    assert.deepEqual(parsed.findings.map((f) => [f.rule, f.file]), [["complexity-baseline-stale", firstFile]]);
-    assert.match(parsed.findings[0].message, /lines \d+ -> \d+/u);
-  } finally {
-    rmSync(tamperedPath, { force: true });
-  }
-});
-
-function gitFixture() {
-  const dir = mkdtempSync(join(tmpdir(), "bifrost-complexity-git-"));
-  const git = (...args) => {
-    const result = spawnSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
-      cwd: dir,
-      encoding: "utf8",
-    });
-    assert.equal(result.status, 0, result.stderr);
-    return result.stdout;
-  };
-  git("init", "-q");
-  mkdirSync(join(dir, "quality"), { recursive: true });
-  const baselinePath = join(dir, "quality", "complexity-baseline.json");
-  writeFileSync(baselinePath, JSON.stringify({ version: 1, marker: "base" }));
-  git("add", "quality/complexity-baseline.json");
-  git("commit", "-q", "-m", "base");
-  return { dir, baselinePath };
-}
-
-test("reads the baseline from a revision instead of the working tree", () => {
-  const { dir, baselinePath } = gitFixture();
-  try {
-    // The candidate can rewrite the working-tree record; the comparison must
-    // use the bytes the base revision committed.
-    writeFileSync(baselinePath, JSON.stringify({ version: 1, marker: "head" }));
-    assert.equal(baselineAtRef({ ref: "HEAD", baselinePath, root: dir }).baseline.marker, "base");
-
-    assert.deepEqual(
-      baselineAtRef({ ref: "HEAD", baselinePath: join(dir, "quality", "absent.json"), root: dir }),
-      { missing: true },
-      "an absent record at the revision is a missing comparison, not an empty one",
-    );
-
-    const unknown = baselineAtRef({ ref: "no-such-ref", baselinePath, root: dir });
-    assert.match(unknown.error, /no-such-ref/u);
-
-    const outside = baselineAtRef({ ref: "HEAD", baselinePath: join(tmpdir(), "outside-baseline.json"), root: dir });
-    assert.match(outside.error, /inside the repository/u);
+    assert.deepEqual(resolveTarget({ repo: dir, explicit: base, env: {} }), { sha: base, source: "--target" });
+    assert.deepEqual(resolveTarget({ repo: dir, explicit: null, env: { BIFROST_COMPLEXITY_BASE: base } }), { sha: base, source: "BIFROST_COMPLEXITY_BASE" });
+    assert.deepEqual(resolveTarget({ repo: dir, explicit: null, env: { GITHUB_BASE_SHA: base } }), { sha: base, source: "GITHUB_BASE_SHA" });
+    assert.match(resolveTarget({ repo: dir, explicit: "no-such-ref", env: {} }).error, /could not resolve/u);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 });
 
-test("--baseline-ref fails closed and cannot be mixed with a baseline write", () => {
-  const script = join(ROOT, "scripts/check-complexity.mjs");
-  const absent = join(ROOT, "quality", `absent-baseline-${process.pid}.json`);
-  assert.equal(existsSync(absent), false, "the fixture path must not exist on disk");
-  const missing = spawnSync(process.execPath, [script, "--baseline-ref", "HEAD", "--baseline", absent, "--json"], {
-    cwd: ROOT,
-    encoding: "utf8",
-  });
-  assert.equal(missing.status, 1, missing.stderr || missing.stdout);
-  const parsed = JSON.parse(missing.stdout);
-  assert.equal(parsed.baselineRef, "HEAD");
-  assert.deepEqual(parsed.findings.map((finding) => finding.rule), ["complexity-base-baseline-missing"]);
-  assert.match(parsed.findings[0].message, /no baseline at HEAD/u);
+test("the gate passes an unchanged revision, including when measured twice", () => {
+  const { dir, base } = gitFixture();
+  try {
+    const first = runGate(dir, ["--target", base, "--candidate", base]);
+    assert.equal(first.status, 0, first.stderr);
+    assert.equal(first.report.status, "passed");
+    assert.equal(first.report.target.revision, base);
+    assert.equal(first.report.candidate.revision, base);
+    assert.equal(first.report.target.inputDigest, first.report.candidate.inputDigest);
+    assert.equal(first.report.policy.changed, false);
 
-  const combined = spawnSync(process.execPath, [script, "--baseline-ref", "HEAD", "--update-baseline", "--json"], {
-    cwd: ROOT,
-    encoding: "utf8",
-  });
-  assert.equal(combined.status, 2);
-  assert.match(JSON.parse(combined.stdout).error, /cannot be combined/u);
-
-  const noRevision = spawnSync(process.execPath, [script, "--baseline-ref", "--json"], { cwd: ROOT, encoding: "utf8" });
-  assert.equal(noRevision.status, 2);
-  assert.match(JSON.parse(noRevision.stdout).error, /requires a revision/u);
+    const second = runGate(dir, ["--target", base, "--candidate", base]);
+    assert.equal(second.status, 0, second.stderr);
+    assert.equal(second.report.target.inputDigest, first.report.target.inputDigest);
+    assert.equal(second.report.candidate.inputDigest, first.report.candidate.inputDigest);
+    assert.deepEqual(second.report.findings, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
-test("main reports a missing baseline as a deterministic error", () => {
-  const missing = join(tmpdir(), `missing-complexity-baseline-${process.pid}-${Date.now()}.json`);
-  const result = spawnSync(process.execPath, [join(ROOT, "scripts/check-complexity.mjs"), "--baseline", missing, "--json"], {
-    cwd: ROOT,
-    encoding: "utf8",
-  });
-  assert.equal(result.status, 2);
-  const parsed = JSON.parse(result.stdout);
-  assert.equal(parsed.status, "failed");
-  assert.equal(parsed.exitCode, 2);
-  assert.match(parsed.error, /complexity baseline not found/);
+test("a measured function that gains a branch fails the file and scope ratchet", () => {
+  const { dir, base, baseBranch } = gitFixture();
+  try {
+    const head = branchFrom(dir, baseBranch, "regressed", "add a branch", () => writeFileSync(join(dir, "a.ts"), REGRESSED_A));
+    const result = runGate(dir, ["--target", base, "--candidate", head]);
+    assert.equal(result.status, 1, result.stderr);
+    assert.equal(result.report.status, "failed");
+    assert.equal(result.report.exitCode, 1);
+    assert.ok(result.report.findings.some((f) => f.rule === "file-maxCyc-regression" && f.file === "a.ts"));
+    assert.ok(result.report.findings.some((f) => f.rule === "scope-source-maxCyc-regression"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
-  const result2 = spawnSync(process.execPath, [join(ROOT, "scripts/check-complexity.mjs"), "--baseline", missing], {
-    cwd: ROOT,
-    encoding: "utf8",
-  });
-  assert.equal(result2.status, 2);
-  assert.match(result2.stderr, /complexity baseline not found/);
+test("a new file above the target scope maximum fails even though no baseline is committed", () => {
+  const { dir, base, baseBranch } = gitFixture();
+  try {
+    const head = branchFrom(dir, baseBranch, "outlier", "add an outlier", () => {
+      writeFileSync(join(dir, "outlier.ts"), "export function outlier(a: boolean, b: boolean) {\n  if (a && b) { return 1; }\n  return 2;\n}\n");
+    });
+    const result = runGate(dir, ["--target", base, "--candidate", head]);
+    assert.equal(result.status, 1, result.stderr);
+    assert.ok(result.report.findings.some((f) => f.rule === "new-file-maxCyc-exceeds-scope-max" && f.file === "outlier.ts"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("removals and renames are evaluated as tree changes, not previous identities", () => {
+  const { dir, base, baseBranch } = gitFixture();
+  try {
+    const removed = branchFrom(dir, baseBranch, "removed", "remove a file", () => rmSync(join(dir, "b.ts")));
+    assert.equal(runGate(dir, ["--target", base, "--candidate", removed]).status, 0);
+
+    const renamed = branchFrom(dir, baseBranch, "renamed", "rename a file", () => git(dir, ["mv", "a.ts", "renamed.ts"]));
+    assert.equal(runGate(dir, ["--target", base, "--candidate", renamed]).status, 0);
+
+    const renamedHot = branchFrom(dir, baseBranch, "renamed-hot", "rename and grow", () => {
+      git(dir, ["mv", "a.ts", "renamed.ts"]);
+      writeFileSync(join(dir, "renamed.ts"), REGRESSED_A);
+    });
+    const hot = runGate(dir, ["--target", base, "--candidate", renamedHot]);
+    assert.equal(hot.status, 1, hot.stderr);
+    assert.ok(hot.report.findings.some((f) => f.rule === "new-file-maxCyc-exceeds-scope-max" && f.file === "renamed.ts"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a policy or analyzer edit fails closed and is only accepted with the explicit override", () => {
+  const { dir, base, baseBranch } = gitFixture();
+  try {
+    const head = branchFrom(dir, baseBranch, "policy", "edit the analyzer", () => {
+      writeFileSync(join(dir, "scripts", "check-complexity.mjs"), "// fixture complexity policy\n// relaxed thresholds\n");
+    });
+    const denied = runGate(dir, ["--target", base, "--candidate", head]);
+    assert.equal(denied.status, 2, denied.stderr);
+    assert.equal(denied.report.exitCode, 2);
+    assert.deepEqual(denied.report.findings.map((f) => f.rule), ["complexity-policy-changed"]);
+    assert.equal(denied.report.policy.changed, true);
+    assert.ok(denied.report.policy.differences.includes("scripts/check-complexity.mjs"));
+
+    const allowed = runGate(dir, ["--target", base, "--candidate", head, "--allow-policy-change"]);
+    assert.equal(allowed.status, 0, allowed.stderr);
+    assert.equal(allowed.report.policy.changed, true);
+
+    const viaEnv = runGate(dir, ["--target", base, "--candidate", head], { BIFROST_COMPLEXITY_ALLOW_POLICY_CHANGE: "1" });
+    assert.equal(viaEnv.status, 0, viaEnv.stderr);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("missing or unavailable inputs fail closed with exit 2 and no verdict", () => {
+  const { dir, base } = gitFixture();
+  try {
+    const noTarget = runGate(dir, ["--target", "no-such-ref"]);
+    assert.equal(noTarget.status, 2);
+    assert.match(noTarget.report.error, /could not resolve target revision/u);
+
+    const noCandidate = runGate(dir, ["--target", base, "--candidate", "no-such-ref"]);
+    assert.equal(noCandidate.status, 2);
+    assert.match(noCandidate.report.error, /could not resolve candidate revision/u);
+
+    const noMeasure = runGate(dir, ["--measure"]);
+    assert.equal(noMeasure.status, 2);
+    assert.match(noMeasure.report.error, /--measure requires a value/u);
+
+    const missingRepo = spawnSync(process.execPath, [SCRIPT, "--repo", join(dir, "absent"), "--json"], {
+      cwd: ROOT, env: fixtureGitEnv(), encoding: "utf8",
+    });
+    assert.equal(missingRepo.status, 2);
+    assert.match(JSON.parse(missingRepo.stdout).error, /repository path not found/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an incomplete candidate or target measurement exits 2 instead of reporting success", () => {
+  const { dir, base } = gitFixture();
+  const originalLog = console.log;
+  const originalError = console.error;
+  const originalRead = fs.readFileSync;
+  const printed = [];
+  try {
+    console.log = (...args) => printed.push(args.join(" "));
+    console.error = (...args) => printed.push(args.join(" "));
+
+    fs.readFileSync = (file, ...rest) => {
+      if (String(file) === join(dir, "a.ts")) {
+        const error = new Error(`simulated ENOENT for ${file}`);
+        error.code = "ENOENT";
+        throw error;
+      }
+      return originalRead.call(fs, file, ...rest);
+    };
+    const candidateExit = main(["--repo", dir, "--target", base, "--json"], fixtureGitEnv());
+    assert.equal(candidateExit, 2);
+    assert.match(printed.at(-1), /candidate analysis incomplete/u);
+
+    fs.readFileSync = (file, ...rest) => {
+      if (String(file).includes(`${sep}tree${sep}`) && String(file).endsWith("a.ts")) {
+        const error = new Error(`simulated ENOENT for ${file}`);
+        error.code = "ENOENT";
+        throw error;
+      }
+      return originalRead.call(fs, file, ...rest);
+    };
+    printed.length = 0;
+    const targetExit = main(["--repo", dir, "--target", base, "--candidate", base, "--json"], fixtureGitEnv());
+    assert.equal(targetExit, 2);
+    assert.match(printed.at(-1), /target .* analysis incomplete/u);
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+    fs.readFileSync = originalRead;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("two independent measured-file changes pass against one base without a shared file", () => {
+  const { dir, base, baseBranch } = gitFixture();
+  try {
+    const first = branchFrom(dir, baseBranch, "feature-a", "extend a", () => {
+      writeFileSync(join(dir, "a.ts"), `${BASE_A}${ADDED_LOW}`);
+    });
+    const second = branchFrom(dir, baseBranch, "feature-b", "extend b", () => {
+      writeFileSync(join(dir, "b.ts"), `${BASE_B}${ADDED_LOW}`);
+    });
+
+    const one = runGate(dir, ["--target", base, "--candidate", first]);
+    const two = runGate(dir, ["--target", base, "--candidate", second]);
+    assert.equal(one.status, 0, one.stderr);
+    assert.equal(two.status, 0, two.stderr);
+    assert.deepEqual(one.report.findings, []);
+    assert.deepEqual(two.report.findings, []);
+
+    // Neither run may write a generated snapshot into the repository.
+    assert.equal(existsSync(join(dir, "quality")), false);
+    assert.equal(git(dir, ["status", "--porcelain"]), "");
+    assert.notEqual(one.report.candidate.inputDigest, two.report.candidate.inputDigest);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("concurrent checks against the same base are independent and agree", async () => {
+  const { dir, base, baseBranch } = gitFixture();
+  try {
+    const first = branchFrom(dir, baseBranch, "concurrent-a", "extend a", () => {
+      writeFileSync(join(dir, "a.ts"), `${BASE_A}${ADDED_LOW}`);
+    });
+    const second = branchFrom(dir, baseBranch, "concurrent-b", "extend b", () => {
+      writeFileSync(join(dir, "b.ts"), `${BASE_B}${ADDED_LOW}`);
+    });
+    const [one, two] = await Promise.all([
+      runGateAsync(dir, ["--target", base, "--candidate", first]),
+      runGateAsync(dir, ["--target", base, "--candidate", second]),
+    ]);
+    assert.equal(one.status, 0, one.stderr);
+    assert.equal(two.status, 0, two.stderr);
+    assert.equal(one.report.target.inputDigest, two.report.target.inputDigest);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a moved target is re-measured and changes the target digest without changing the candidate", () => {
+  const { dir, base, baseBranch } = gitFixture();
+  try {
+    const candidate = branchFrom(dir, baseBranch, "moving-candidate", "extend a", () => {
+      writeFileSync(join(dir, "a.ts"), `${BASE_A}${ADDED_LOW}`);
+    });
+
+    git(dir, ["checkout", "-q", baseBranch]);
+    writeFileSync(join(dir, "b.ts"), `${BASE_B}${ADDED_LOW}`);
+    const moved = commit(dir, "move the target");
+
+    const before = runGate(dir, ["--target", base, "--candidate", candidate]);
+    const after = runGate(dir, ["--target", moved, "--candidate", candidate]);
+    assert.equal(before.status, 0, before.stderr);
+    assert.equal(after.status, 0, after.stderr);
+    assert.notEqual(before.report.target.inputDigest, after.report.target.inputDigest);
+    assert.equal(before.report.candidate.inputDigest, after.report.candidate.inputDigest);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("--measure prints a revision-bound measurement without comparing", () => {
+  const { dir, base } = gitFixture();
+  try {
+    const result = runGate(dir, ["--measure", base]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.report.status, "measured");
+    assert.equal(result.report.revision, base);
+    assert.equal(result.report.scopes.source.maxCyc, 2);
+    assert.ok(Object.hasOwn(result.report.files, "a.ts"));
+
+    const missing = runGate(dir, ["--measure", "no-such-ref"]);
+    assert.equal(missing.status, 2);
+    assert.match(missing.report.error, /could not resolve revision/u);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("policy digests read each revision's own policy bytes", () => {
+  const { dir, base, baseBranch } = gitFixture();
+  try {
+    const head = branchFrom(dir, baseBranch, "policy-digest", "edit policy", () => {
+      writeFileSync(join(dir, "tsconfig.json"), "{ \"strict\": true }\n");
+    });
+    const atBase = policyAt(dir, base);
+    const atHead = policyAt(dir, head);
+    git(dir, ["checkout", "-q", head]);
+    const inTree = policyAt(dir, null);
+    assert.notEqual(atBase.digest, atHead.digest);
+    assert.notEqual(atBase.files["tsconfig.json"], atHead.files["tsconfig.json"]);
+    assert.equal(atHead.digest, inTree.digest, "the working tree must report its own policy");
+    assert.ok(atBase.typescriptRange);
+    assert.equal(atBase.typescriptLocked, null);
+
+    const locked = branchFrom(dir, baseBranch, "locked", "bump the analyzer lock", () => {
+      writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ packages: { "node_modules/typescript": { version: "6.1.0" } } }));
+    });
+    const atLocked = policyAt(dir, locked);
+    assert.equal(atLocked.typescriptLocked, "6.1.0");
+    assert.notEqual(atLocked.digest, atBase.digest, "a lockfile-only analyzer bump must change the policy digest");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("measuring a revision does not leave a worktree behind", () => {
+  const { dir, base } = gitFixture();
+  try {
+    const report = measureRevision(dir, base);
+    assert.equal(report.skipped.length, 0);
+    assert.equal(report.report.files["a.ts"].maxCyc, 2);
+    const worktrees = spawnSync("git", ["worktree", "list", "--porcelain"], { cwd: dir, env: fixtureGitEnv(), encoding: "utf8" });
+    assert.equal(worktrees.status, 0);
+    assert.equal(worktrees.stdout.trim().split("\n").filter((line) => line.startsWith("worktree ")).length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

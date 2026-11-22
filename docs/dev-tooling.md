@@ -38,9 +38,8 @@ CI installs the same versions. Do not upgrade one side alone.
 | `npm run check:dead-code` | Unused and unlisted dependencies (`knip.jsonc`) | `npm ci` |
 | `npm run check:ast` | Structural rules, rule self-tests, and rule scope against tracked files (`sgconfig.yml`) | `npm ci` |
 | `npm run check:duplication` | Copy-paste detection and threshold (`.jscpd.json`: TypeScript and JavaScript, `minTokens 50`, `minLines 10`, budget 3.3%) | `npm ci` |
-| `npm run check:complexity` | Per-function complexity against `quality/complexity-baseline.json` | `npm ci` |
-| `npm run check:complexity:baseline` | The committed baseline matches the tree; stale records fail (see [Baselines after a rebase](#baselines-after-a-rebase)) | `npm ci` |
-| `npm run check:complexity:base` | The tree against the baseline recorded at a revision, such as the base commit of a pull request (see [Comparison against the base revision](#comparison-against-the-base-revision)) | `npm ci`, git |
+| `npm run check:complexity` | Per-function complexity against a target revision measured from source (see [Complexity against a target revision](#complexity-against-a-target-revision)) | `npm ci`, git |
+| `npm run check:complexity:base` | The tree against an explicit revision, such as the base commit of a pull request | `npm ci`, git |
 | `npm run check:contracts` | Host integration contracts read from `index.ts` and `debug.ts` (`scripts/check-contracts.mjs`) | `npm ci` |
 | `npm run check:actions` | Workflow syntax and expressions (actionlint) | actionlint |
 | `npm run check:sast` | Repository Semgrep rules | semgrep |
@@ -72,7 +71,8 @@ invocation. Every toolbox-backed check (`check:arch`, `check:dead-code`,
 `check:ast`, `check:duplication`) accepts `--root <path>` to measure another tree
 with this repository's tool binaries; the fault-control tests use it to run a real
 gate against a fixture and assert its exit code. `check:complexity` is its own
-script and uses `--baseline <path>` instead.
+script; `--repo <path>` points it at another repository and `--target <rev>`
+names the revision to compare against.
 
 The architecture rules encode existing seams: the resolve-only router may use
 Pi types but not the Pi runtime, host UI modules are imported only by the Pi
@@ -98,51 +98,64 @@ stay aligned.
 
 The Gitleaks allowlist in `.gitleaks.toml` covers only the `generic-api-key` rule. It ignores two exact synthetic canary values used by redaction fixtures regardless of file path, and additional reviewed fixture values only when their exact test-file paths also match. It does not allowlist whole files or other rules.
 
-## Baselines after a rebase
+## Complexity against a target revision
 
-`quality/complexity-baseline.json` must describe the tree in the same commit.
-After a rebase, or any change that intentionally moves a ceiling:
+No complexity snapshot is committed. The gate measures the candidate and a
+target revision from source with the same analyzer, then ratchets the candidate
+against the target:
 
 ```bash
-npm run check:complexity -- --update-baseline
+npm run check:complexity
 ```
 
-Commit the regenerated baseline with the change that moved it, and never
-hand-edit a ceiling. `npm run check:complexity:baseline` re-measures in memory
-and fails with `complexity-baseline-stale` when any record differs, so a stale
-baseline cannot merge. That covers line and function counts as well as maxima: a
-baseline describing an older tree is stale even when the ratchet still passes.
+The target comes from `--target <rev>`, then `BIFROST_COMPLEXITY_BASE`, then
+`GITHUB_BASE_SHA`, then the merge-base with `origin/main` or `main`, then
+`HEAD^`. A revision that does not resolve fails the gate; it does not silently
+fall back to a different tree. The candidate defaults to the working tree and is
+reported with its HEAD revision, a dirty flag, and a digest of the measured
+bytes. CI checks out a clean candidate at the pull request head.
 
-`generatedAt` and `sourceCommit` record provenance and are never compared.
-`sourceCommit` names the HEAD the numbers were measured from, which is the
-baseline commit's parent, because a commit cannot contain its own SHA.
+`npm run check:complexity:base -- <rev>` supplies the target explicitly. CI runs
+it on pull requests with the base commit SHA, and the push leg compares against
+the previous tip.
+
+`quality/complexity-baseline.json` no longer exists. A routine change to
+measured code needs no generated file and cannot conflict with another branch
+through one. Rebase, re-run the gate, and the new target is measured again.
 
 Tests must not write inside a measured path: root `*.ts`, `*.mjs`, `*.cjs`,
-`ui/`, `scripts/`, or `tests/`. The staleness check reads the tree, so a temporary file there fails a
-concurrent run. Write fixtures to a temp directory instead, and pin any relative
-import to an absolute URL if the fixture must run from outside the repository.
+`ui/`, `scripts/`, or `tests/`. A temporary file there becomes part of a
+concurrent candidate measurement. Write fixtures to a temp directory instead,
+and pin any relative import to an absolute URL if the fixture must run from
+outside the repository.
 
-Analysis tolerates a file that disappears while it is reading the tree: the file
-is skipped and a warning goes to stderr, so a live machine does not turn a moving
-tree into a crash. Read errors other than `ENOENT` still fail, and
-`--update-baseline` refuses an incomplete snapshot instead of recording a
-baseline that omits a real file.
+An incomplete measurement is a failure, not a warning: if a file disappears
+while the analyzer reads a tree, the gate exits `2` and reports no verdict.
 
-### Comparison against the base revision
+### Policy changes are not silent
 
-The committed baseline lives in the candidate. A pull request can therefore
-raise a recorded maximum and regenerate the baseline in the same change. The
-budget check and the staleness check cannot see that move, because both read the
-candidate file. An intentional reduction is always permitted; the comparison
-only rejects a ceiling above the one the base revision recorded.
+The analyzer, its scope and threshold policy, the TypeScript version, and the
+static-analysis workflow can change what the gate reports. The gate hashes those
+inputs at both revisions. When the digests differ it exits `2` with
+`complexity-policy-changed` unless `--allow-policy-change` (or
+`BIFROST_COMPLEXITY_ALLOW_POLICY_CHANGE=1`) records a reviewed decision. CI
+passes the override only for a pull request carrying the
+`quality-policy-change` label. The policy files are listed in
+[`.github/CODEOWNERS`](../.github/CODEOWNERS), so a weakening change needs owner
+review. The digests and both revisions are printed so the diff can be inspected
+rather than inferred.
 
-`npm run check:complexity:base -- <rev>` compares the working tree with the
-baseline that `<rev>` records. CI runs it on pull requests with the base commit
-SHA. A new file is judged against the scope maxima in that revision's record.
+### Historical trends
 
-If `<rev>` has no baseline, the gate fails with
-`complexity-base-baseline-missing`. A comparison that cannot be made is not a
-pass.
+Measure any revision on demand; nothing is stored in the repository:
+
+```bash
+node scripts/check-complexity.mjs --measure <rev> --json
+```
+
+Each output is bound to the revision's SHA and a digest of the measured bytes,
+so a trend can be reconstructed from history and compared only when the
+revisions and policy match.
 
 ## Documented commands and links
 
@@ -195,7 +208,7 @@ you edited. For the changes below a targeted test cannot see the coupling, so ru
 | If the change… | Check this before trusting a targeted run |
 | --- | --- |
 | touches `.jscpd.json`, a baseline, or any threshold or default in config | Every test that **derives** from the value, not only the ones that spell it out. Search the accessor (`duplicationThreshold`, `analyze`, `parseJscpd`) and confirm each caller passes the value explicitly. A test that inherits the committed value breaks as a side effect of a legal config change. |
-| adds or edits a file under a measured path (root `*.ts`, `*.mjs`, `*.cjs`, `ui/`, `scripts/`, `tests/`) | `npm run check:complexity:baseline`: a new file is "not recorded" until you regenerate. Regenerate in the same commit as the file. |
+| adds or edits a file under a measured path (root `*.ts`, `*.mjs`, `*.cjs`, `ui/`, `scripts/`, `tests/`) | `npm run check:complexity`: a new file must stay within the target scope maxima. No baseline is regenerated or committed. |
 | changes a number the docs state | Every place that quotes it — the ADR, this guide, a committed audit — in the same commit. A stale quote is a defect, not a lag. |
 | adds a gate command | The gate inventory test, and a command-table row. A prose mention does not make a gate "documented". |
 | runs `npm test` with uncommitted work | Commit or stash first: the acceptance contract fails a dirty candidate by design (`candidate-stable`), which looks like a regression and is not one. |

@@ -11,8 +11,8 @@ it:
 
 - `npm run check:complexity` fails when a per-file maximum or a scope hotspot
   count increases (`fileFindings`, `scopeFindings`).
-- `npm run check:complexity:baseline` re-measures the working tree and fails when
-  any recorded field differs (`stalenessFindings`).
+- the baseline-staleness gate re-measures the working tree and fails when any
+  recorded field differs (`stalenessFindings`).
 
 The second gate requires the committed record to describe the candidate exactly.
 Any change to measured code changes `lines`, `funcs`, `sumCyc`, or `sumCog`, so a

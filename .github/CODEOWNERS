@@ -1,0 +1,5 @@
+# The complexity gate's trust boundary: the analyzer, measurement config, and CI
+# wiring judge their own changes. Require the owner to review edits to them.
+/scripts/check-complexity.mjs @iamaamir
+/.github/workflows/static-analysis.yml @iamaamir
+/tsconfig.json @iamaamir
