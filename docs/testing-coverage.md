@@ -16,17 +16,13 @@ Before review, run `npm run verify:release` on a clean, frozen candidate. Attach
 
 ### Test boundaries and wiring
 
-Choose the test boundary by the behavior that changed, not by the file that changed. A pure helper test proves classification or formatting logic at that helper boundary. It does not prove command dispatch, host registration, error handling, logging, persistence, or user-visible messages. When a change touches a handler, command path, integration seam, or other side-effecting wrapper, add or rerun a test at that boundary.
+Choose tests by the behavior and execution path changed, not by file proximity. Unit tests verify a helper's decision logic, but cannot prove its caller's wiring, argument mapping, error handling, side effects, or user-visible output.
 
-When extracting or moving logic across boundaries, keep coverage at both boundaries when they carry different risk. The new helper may need focused unit tests for its decision matrix, while the old caller still needs a boundary test that proves wiring, argument mapping, error translation, and observable output. Do not treat a passing helper suite as proof that the caller still behaves correctly.
+When extracting or refactoring logic, cover both boundaries where risks differ: focused unit tests for the helper's states, edge cases, and fault classifications; boundary tests for the real caller's wiring, error translation, and observable behavior. A passing helper suite does not establish caller correctness.
 
-Select tests by risky execution path. After a refactor, rerun the tests that exercise the touched path, even if they live in a different file or suite than the edited code. A nearby unit suite can be relevant, but it is not sufficient when the changed behavior crosses a command, host, storage, network, or UI boundary.
+Exercise affected entry points with controlled dependencies or deterministic faults. Assert observable outcomes such as messages, return values, persisted state, or emitted events, not internal helper calls or mocks that bypass the wiring under test. Rerun relevant tests covering the affected paths after changes, including integration tests; a nearby unit suite is not sufficient when the behavior crosses a command, host, storage, network, or UI boundary.
 
-Write boundary tests around observable behavior. Drive the real entry point with controlled dependencies, fixtures, or deterministic faults, then assert the result the caller or user can observe: returned value, exit status, rendered message, persisted state, emitted event, or external request. Avoid proving a handler only through internal helper calls or mocked internals that bypass the wiring under test.
-
-Write unit tests for the decision matrix they own. Cover representative states, edge cases, and fault classifications at the helper boundary, and keep assertions specific enough to detect the wrong branch. Pair them with a boundary test when the helper’s output is translated into user-visible behavior or side effects.
-
-Static checks and typechecking are semantic gates, not substitutes for runtime tests. A structural lint rule cannot prove symbol resolution, runtime wiring, or user-observable behavior. A typecheck can catch an undefined identifier or type mismatch, but only when it runs cleanly in a correctly installed environment. An environment or dependency failure is not evidence that the check passed or that the code is safe; fix the environment or run the check in a known-good environment before relying on it.
+Lint, typechecking, and runtime tests provide complementary checks. Structural lint cannot prove runtime wiring or user-visible behavior; typechecking catches symbol and type errors only when it runs cleanly in a correctly installed environment. Missing dependencies or environment failures are verification failures, not evidence of correctness.
 
 ## Per-change review evidence
 
