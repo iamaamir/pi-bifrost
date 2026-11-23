@@ -594,6 +594,8 @@ export function describeInitCommitFailure(failure: {
   readonly receiptOnly: boolean;
   readonly configPath: string;
   readonly nextConfigBytes: Uint8Array;
+  readonly ownershipPath: string;
+  readonly nextOwnershipBytes: Uint8Array;
   readonly journalPath: string;
   readonly target: string;
   readonly recoveryCommand: string;
@@ -608,11 +610,18 @@ export function describeInitCommitFailure(failure: {
   const installed = inspectInstalledConfig(failure.configPath, failure.nextConfigBytes);
   if (journal === "absent") {
     if (installed === "matches") {
-      return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration, but no reconciliation journal was written, so ${failure.recoveryCommand} has nothing to recover. Retry Init to finish updating the ownership record.`;
+      const ownership = inspectInstalledOwnership(failure.ownershipPath, failure.nextOwnershipBytes);
+      if (ownership === "matches") {
+        return `Init could not confirm the reviewed membership update completed. ${failure.target} already holds the planned configuration, the ownership record matches the planned update, and no reconciliation journal is currently present. Inspect Init's status before retrying; rerunning Init may report that no files were changed.`;
+      }
+      if (ownership === "unknown") {
+        return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration, but no reconciliation journal is currently present and the ownership record could not be checked. Inspect ${failure.target} and its ownership record before you retry.`;
+      }
+      return `Init could not finish the reviewed membership update. ${failure.target} already holds the planned configuration, but no reconciliation journal is currently present and the ownership record does not hold the planned update. Inspect ${failure.target} and its ownership record before you retry.`;
     }
     if (installed === "unknown") {
       // Unreadable proves nothing either way; promise neither outcome.
-      return `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. No reconciliation journal was written; inspect that file before you retry.`;
+      return `Init could not finish the reviewed membership update and could not read ${failure.target} to check what it now holds. No reconciliation journal is currently present; inspect that file before you retry.`;
     }
     return "Init could not safely commit the reviewed membership update; existing files were preserved.";
   }
@@ -666,6 +675,18 @@ function inspectInstalledConfig(configPath: string, nextConfigBytes: Uint8Array)
   if (installed === undefined) return "differs";
   if (installed.byteLength > MAX_CONFIG_SOURCE_BYTES) return "unknown";
   return installed.equals(Buffer.from(nextConfigBytes)) ? "matches" : "differs";
+}
+
+function inspectInstalledOwnership(ownershipPath: string, nextOwnershipBytes: Uint8Array): InstalledConfigState {
+  let installed: Buffer | undefined;
+  try {
+    installed = readBoundedRegularSnapshot(ownershipPath);
+  } catch {
+    return "unknown";
+  }
+  if (installed === undefined) return "differs";
+  if (installed.byteLength > MAX_RECONCILIATION_OWNERSHIP_BYTES) return "unknown";
+  return installed.equals(Buffer.from(nextOwnershipBytes)) ? "matches" : "differs";
 }
 
 function readReconciliationSource(source: ReconciliationConfigSource): ReconciliationSourceSnapshot {
@@ -1653,6 +1674,8 @@ async function handleInit(
       receiptOnly,
       configPath: transaction.configPath,
       nextConfigBytes: transaction.nextConfigBytes,
+      ownershipPath: transaction.ownershipPath,
+      nextOwnershipBytes: transaction.nextOwnershipBytes,
       journalPath: transaction.journalPath,
       target: initSourceLabel(source),
       recoveryCommand: source.source === "user"
