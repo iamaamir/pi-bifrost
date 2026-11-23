@@ -36,6 +36,22 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Lint (errors fail, warnings advisory)
+        # Oxlint prints GitHub annotations for the first ten findings. The
+        # step summary lists all warnings and errors by rule. One run feeds both.
+        run: |
+          set -uo pipefail
+          lint_output="$(mktemp)"
+          status=0
+          npm run lint > "$lint_output" 2>&1 || status=$?
+          cat "$lint_output"
+          node scripts/lint-summary.mjs "$lint_output" >> "$GITHUB_STEP_SUMMARY" || true
+          exit "$status"
+      - name: Validate packed package metadata
+        # check:package builds dist/router because publint packs with --dry-run,
+        # which skips prepack. This job runs no other packer, so it cannot race
+        # that build or the verification workflow's pack lock.
+        run: npm run check:package
       - name: Architecture boundaries
         run: npm run check:arch
       - name: Dead code and dependency hygiene

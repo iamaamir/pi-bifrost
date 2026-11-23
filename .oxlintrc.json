@@ -1,0 +1,17 @@
+{
+  // Oxlint configuration for the pi-bifrost repository (oxlint 1.94).
+  // Config format: .oxlintrc.json (JSONC; comments allowed, ESLint v8 compatible).
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // Build output, coverage output, reports, and sibling worktrees are not lint
+  // targets; source, tests, scripts, and examples are. The Semgrep target files
+  // deliberately contain rule violations (for example eval) for semgrep --test;
+  // linting them would report intentional fixtures as findings.
+  "ignorePatterns": ["dist/**", "coverage/**", "reports/**", ".worktrees/**", "tests/semgrep/targets/**"],
+  "rules": {
+    // Control characters are intentional in this codebase: ANSI escape sequences
+    // for terminal rendering and explicit control-char validation ranges. The
+    // default `no-control-regex` warning has no way to distinguish intent, so the
+    // rule is off repository-wide rather than suppressed per line.
+    "eslint/no-control-regex": "off",
+  },
+}
