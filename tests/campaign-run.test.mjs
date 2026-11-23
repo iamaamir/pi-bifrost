@@ -192,7 +192,7 @@ test("bounds a hung attempt and fails the campaign instead of waiting forever", 
 });
 
 test("replays the same seed list for the same configuration", (t) => {
-  const out = withOutDir(t);
+  withOutDir(t);
   const args = ["--name", "replay", "--repeat", "3", "--seed-base", "1729", "--validate-only", "--", "node", "-e", ""];
   const first = JSON.parse(run(args).stdout);
   const second = JSON.parse(run(args).stdout);

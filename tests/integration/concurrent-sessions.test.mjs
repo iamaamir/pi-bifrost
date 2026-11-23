@@ -484,7 +484,7 @@ it("fails the whole parent bounded with scratch retained while denied-kill group
     for (const dir of mainScratch) {
       try {
         const receipt = JSON.parse(readFileSync(join(dir, "owned-groups.json"), "utf8"));
-        for (const id of [...(receipt.liveGroups ?? [])]) {
+        for (const id of (receipt.liveGroups ?? [])) {
           if (Number.isFinite(id) && id > 0) fileGroups.push(id);
         }
       } catch {}
@@ -539,7 +539,7 @@ it("fails the whole parent bounded with scratch retained while denied-kill group
         for (const dir of found) {
           try {
             const receipt = JSON.parse(readFileSync(join(dir, "owned-groups.json"), "utf8"));
-            for (const id of [...(receipt.liveGroups ?? [])]) {
+            for (const id of (receipt.liveGroups ?? [])) {
               if (Number.isFinite(id) && id > 0 && !groupIds.includes(id)) groupIds.push(id);
             }
           } catch {}

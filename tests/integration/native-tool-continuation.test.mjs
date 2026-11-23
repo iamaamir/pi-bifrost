@@ -20,7 +20,6 @@ it("routes real AgentSession behind tested HTTP, HTTPS, TCP, and UDP outbound fe
   const server = createServer((_request, response) => response.end("allowed loopback fixture"));
   writeFileSync(violations, "");
   const previousCredentials = Object.fromEntries(credentials.map((name) => [name, process.env[name]]));
-  let cleanupVerified = false;
   let cleanupSafe = true;
   try {
     await new Promise((resolve, reject) => {
@@ -89,7 +88,6 @@ it("routes real AgentSession behind tested HTTP, HTTPS, TCP, and UDP outbound fe
     cleanupSafe = result.groupTerminated === true;
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     assert.equal(readFileSync(violations, "utf8"), "", "faux AgentSession made blocked outbound attempt");
-    cleanupVerified = true;
   } catch (error) {
     cleanupSafe = cleanupSafe || runnerState.cleanupSafeForCaller;
     throw error;

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { exportCiReportIfConfigured } from "../scripts/ci-report.mjs";
-import { makeReportData, renderCiReport, runReportCli, validateReportData, writeCiReport } from "../scripts/ci-report.mjs";
+import { makeReportData, renderCiReport, validateReportData, writeCiReport } from "../scripts/ci-report.mjs";
 
 const temporary = [];
 after(() => temporary.forEach((path) => rmSync(path, { recursive: true, force: true })));

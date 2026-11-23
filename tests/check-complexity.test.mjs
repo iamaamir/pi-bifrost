@@ -16,7 +16,6 @@ import {
   main,
   measureRevision,
   policyAt,
-  resolveRevision,
   resolveTarget,
   scopeOf,
 } from "../scripts/check-complexity.mjs";
@@ -581,7 +580,7 @@ test("a new path that resembles a rename is judged by the scope ceiling", () => 
 });
 
 test("adding a policy file is a visible policy change, not an unreadable-input error", () => {
-  const { dir, base, baseBranch } = gitFixture();
+  const { dir, baseBranch } = gitFixture();
   try {
     git(dir, ["checkout", "-q", "-B", "no-gate", baseBranch]);
     rmSync(join(dir, ".github", "workflows", "complexity-gate.yml"));

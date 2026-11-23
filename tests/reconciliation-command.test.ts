@@ -87,8 +87,8 @@ describe("config reconciliation command boundary", () => {
     assert.equal(plan.status, "ready");
     assert.equal(plan.changes.length, 2);
     assert.deepEqual(validated?.unrelated, { retained: true });
-    assert.deepEqual((validated?.models as Record<string, unknown>).general, ["manual/model", "openai/new"]);
-    assert.deepEqual((validated?.models as Record<string, unknown>).quick, ["openai/quick"]);
+    assert.deepEqual((validated?.models as Record<string, unknown> | undefined)?.general, ["manual/model", "openai/new"]);
+    assert.deepEqual((validated?.models as Record<string, unknown> | undefined)?.quick, ["openai/quick"]);
     const receipt = JSON.parse(Buffer.from(plan.transaction!.nextOwnershipBytes).toString("utf8"));
     assert.equal(Object.values(receipt.sources).length, 2);
   });
@@ -214,8 +214,8 @@ describe("config reconciliation command boundary", () => {
       { kind: "add", disposition: "apply", tier: "general", modelKey: "openai/gpt-5.4" },
     ]);
     assert.equal(validatedSource, "project");
-    assert.deepEqual((candidate?.models as Record<string, unknown>).general, ["manual/model", "openai/gpt-5.4"]);
-    assert.deepEqual((candidate?.models as Record<string, unknown>).frontier, ["openai/old"]);
+    assert.deepEqual((candidate?.models as Record<string, unknown> | undefined)?.general, ["manual/model", "openai/gpt-5.4"]);
+    assert.deepEqual((candidate?.models as Record<string, unknown> | undefined)?.frontier, ["openai/old"]);
     assert.deepEqual(candidate?.unrelated, { retained: true });
     assert.equal(applied, false);
     assert.equal(JSON.stringify(report).includes("transactionInput"), false);
