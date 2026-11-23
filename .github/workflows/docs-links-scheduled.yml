@@ -19,8 +19,8 @@ jobs:
         with:
           persist-credentials: false
       - name: Check external links in documentation
-        # The advisory result must not fail the run on a transient remote outage.
-        continue-on-error: true
+        # `fail: false` keeps link failures advisory; a broken action or setup
+        # still turns the scheduled run red so the check cannot rot silently.
         uses: lycheeverse/lychee-action@885c65f3dc543b57c898c8099f4e08c8afd178a2 # v2.6.1
         with:
           fail: false
