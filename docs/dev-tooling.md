@@ -410,6 +410,7 @@ benchmark target.
 | publint | Integrate | Checks packed exports and types that `npm pack` does not |
 | Hyperfine | On demand | No stable CI timing threshold |
 | Node profiler | On demand | Artifacts are for local investigation |
+| CLI argument parsing | Reuse `node:util` | New scripts bind values with `parseArgs`; existing parsers keep their loops where duplicate-flag detection and exact error text are asserted, because the adapter costs more than the binding it saves |
 | ts-morph | Defer | No codemod is needed yet; adding it now would be an unused dependency |
 | Renovate | Configured | Repository config only; the hosted app still needs installation |
 | Codemode | Unavailable | This host does not provide it; do not depend on it |
