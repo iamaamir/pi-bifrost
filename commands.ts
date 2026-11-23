@@ -596,7 +596,7 @@ type InitCommitFailureContext = {
 
 /** "unknown" means the file/journal could not be inspected safely; it is not the same as absent/different. */
 type InstalledFileState = "matches" | "differs" | "unknown";
-type JournalState = "present" | "absent" | "unknown";
+type JournalState = "present" | "absent" | "unknown" | "not_inspected";
 
 interface InitCommitFailureDiagnosis {
   readonly journal: JournalState;
@@ -781,7 +781,7 @@ function describeReceiptOnlyAbsentJournalFailure(
 
 function classifyInitCommitFailure(failure: InitCommitFailureContext): { message: string; diagnosis: InitCommitFailureDiagnosis } {
   if (failure.locked) {
-    return { message: INIT_LOCK_FAILURE_MESSAGE, diagnosis: { journal: "absent", config: "unknown", ownership: "not_inspected" } };
+    return { message: INIT_LOCK_FAILURE_MESSAGE, diagnosis: { journal: "not_inspected", config: "unknown", ownership: "not_inspected" } };
   }
 
   const journal = inspectJournalState(failure.journalPath);
